@@ -8,6 +8,7 @@ import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, S
 import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import { addCard } from '../utils/connectCards';
 import { DEFAULT_LOCALE, applyLocale, isLocaleCode } from '../i18n/registry';
 import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
 
@@ -32,7 +33,8 @@ export interface SettingsJump {
     section: SettingsSection;
     /** CSS selector for the setting inside that section. */
     target: string;
-    from: SettingsSection;
+    /** The tab that sent the user here, offered as the way back; none from outside Settings. */
+    from?: SettingsSection;
 }
 
 /**
@@ -238,6 +240,8 @@ interface ChatState {
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
     /** Note a skill_use event; with a step, add it before the running tool call that brought the skill in. */
     addSkillStep: (step: AgentStep | null) => void;
+    /** Add a finished step before the running tool call it happened inside, so steps stay in time order. */
+    addStepBeforeRunningCall: (step: AgentStep) => void;
     /** Counts skill_use events, so the session panel's Skills section re-reads mid-reply. */
     skillUses: number;
     clearAgentSteps: () => void;
@@ -373,8 +377,29 @@ interface ChatState {
     setPendingPrompt: (prompt: PendingPrompt | null) => void;
 }
 
+const removedListeners = new Set<(id: string) => void>();
+
+/** Run `listener` with each chat's id when the user deletes it. Returns its unsubscribe. */
+export function onSessionRemoved(listener: (id: string) => void): () => void {
+    removedListeners.add(listener);
+    return () => removedListeners.delete(listener);
+}
+
 /** The sidebar's Memory, Scheduled tasks and Documents: opening one closes the others. */
 const NO_DESTINATION = { showMemoryDashboard: false, showSchedules: false, showDocLibrary: false };
+
+/** *steps* with *step* just before the last tool call if it is still running, else at the end. */
+function beforeRunningCall(steps: AgentStep[], step: AgentStep): AgentStep[] {
+    const next = [...steps];
+    let at = next.length;
+    for (let i = next.length - 1; i >= 0; i--) {
+        if (next[i].type !== 'tool') continue;
+        if (next[i].active) at = i;
+        break;
+    }
+    next.splice(at, 0, step);
+    return next;
+}
 
 export const useChatStore = create<ChatState>((set, get) => ({
     agents: [],
@@ -443,7 +468,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     addSession: (session) =>
         set((state) => ({ sessions: [session, ...state.sessions] })),
     // The chat's queued messages go with it; the delete button says so first.
-    removeSession: (id) =>
+    removeSession: (id) => {
         set((state) => {
             const next: Partial<ChatState> = {
                 sessions: state.sessions.filter((s) => s.id !== id),
@@ -462,7 +487,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 next.queueHolds = queueHolds;
             }
             return next;
-        }),
+        });
+        for (const listener of removedListeners) listener(id);
+    },
     updateSessionInList: (id, updates) =>
         set((state) => ({
             sessions: state.sessions.map((s) => (s.id === id ? { ...s, ...updates } : s)),
@@ -552,16 +579,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     addSkillStep: (step) =>
         set((state) => {
             if (!step) return { skillUses: state.skillUses + 1 };
-            const steps = [...state.agentSteps];
-            let at = steps.length;
-            for (let i = steps.length - 1; i >= 0; i--) {
-                if (steps[i].type !== 'tool') continue;
-                if (steps[i].active) at = i;
-                break;
-            }
-            steps.splice(at, 0, step);
-            return { agentSteps: steps, skillUses: state.skillUses + 1 };
+            return { agentSteps: beforeRunningCall(state.agentSteps, step), skillUses: state.skillUses + 1 };
         }),
+    addStepBeforeRunningCall: (step) =>
+        set((state) => ({ agentSteps: beforeRunningCall(state.agentSteps, step) })),
     skillUses: 0,
     clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
     liveStatus: null,
@@ -616,7 +637,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Streaming cards (#2108)
     cards: [],
     appendCard: (card) =>
-        set((state) => ({ cards: [...state.cards, card] })),
+        set((state) => ({ cards: addCard(state.cards, card) })),
     clearCards: () => set({ cards: [] }),
 
     // Documents

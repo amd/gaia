@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, FileText, X } from 'lucide-react';
+import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
 import { FolderChip } from './FolderChip';
 import { ModelChip } from './ModelChip';
@@ -20,6 +21,7 @@ import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { log } from '../utils/logger';
 import { requestErrorText } from '../utils/requestErrors';
+import { FlagshipMissing } from '../utils/newTask';
 import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
 import type { StartScreen } from '../types';
@@ -39,6 +41,10 @@ interface NewChatProps {
     initialText?: string;
     /** Changes each time New chat is chosen, so the box takes focus even when already shown. */
     focusRequest?: number;
+    /** The flagship isn't installed: the top notice offers it, and a refused send points there while it shows. */
+    agentMissing?: boolean;
+    /** The box opens holding a first message the missing agent refused elsewhere (Personalize, setup, files). */
+    agentRefused?: boolean;
 }
 
 /** How often the start screen is asked for again while the assistant is unavailable. */
@@ -184,7 +190,7 @@ function SetupFailed({ error }: { error: string }) {
 }
 
 /** An empty chat: a greeting and the composer over the NPU backdrop. Created on the first message. */
-export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatProps) {
+export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissing = false, agentRefused: heldRefused = false }: NewChatProps) {
     const t = useT();
     const starting = useChatStore((s) => isStarting(s.systemStatus));
     const download = useChatStore((s) => s.systemStatus?.download_progress ?? null);
@@ -193,6 +199,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
     const remote = useModelStore((s) => !!s.active?.remote);
     const [text, setText] = useSavedDraft(NEW_CHAT_DRAFT_KEY, initialText);
     const [error, setError] = useState<string | null>(null);
+    const [agentRefused, setAgentRefused] = useState(heldRefused);
     const [sending, setSending] = useState(false);
     const [start, setStart] = useState<StartScreen | null>(null);
     const [startError, setStartError] = useState<string | null>(null);
@@ -252,6 +259,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         sendingRef.current = true;
         setSending(true);
         setError(null);
+        setAgentRefused(false);
         // Cleared now, so anything typed while the chat is created is a new message.
         setText('');
         try {
@@ -270,7 +278,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
             // Nothing was sent, so every message goes back in the box.
             const held = heldRef.current.splice(0);
             setText([draft || message, ...held].join('\n\n'));
-            setError(requestErrorText(err));
+            if (err instanceof FlagshipMissing) setAgentRefused(true);
+            else setError(requestErrorText(err));
         } finally {
             sendingRef.current = false;
             setSending(false);
@@ -334,6 +343,9 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                 contentRef={innerRef}
                 composerRef={composerRef}
             />
+            <div className="new-chat-actions">
+                <BrowserPaneToggle />
+            </div>
             <div className="new-chat-inner" ref={innerRef}>
                 <h1 className="new-chat-greeting" aria-hidden={docked}>{greeting(new Date(), t)}</h1>
                 {setupError && !remote && <SetupFailed error={setupError} />}
@@ -358,6 +370,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming, t)}</p>
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
+                {agentRefused && agentMissing && <p className="new-chat-error" role="alert">{t('agentNotice.sendRefused')}</p>}
                 <TryChips onPick={fillPrompt} disabled={starting || sending} />
                 {startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>

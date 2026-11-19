@@ -44,7 +44,11 @@ from gaia.agents.base.checks import (
     runner_summary,
 )
 from gaia.agents.base.checks import summary_reports_failure as summary_counts_failure
-from gaia.agents.base.claims import passing_test_claim, reports_test_failure
+from gaia.agents.base.claims import (
+    claims_success,
+    passing_test_claim,
+    reports_test_failure,
+)
 from gaia.agents.base.tools import bare_tool_name
 
 #: How the note opens. Fixed, so a model's echo of it can be found and removed.
@@ -74,6 +78,40 @@ EXECUTED_KEY = "executed"
 
 #: Spread into a tool's pre-execution refusal: ``{**NOT_EXECUTED, "status": …}``.
 NOT_EXECUTED: Dict[str, Any] = {EXECUTED_KEY: False}
+
+#: What a tool returns instead of starting a run the turn's time limit has no
+#: room for.
+OUT_OF_TIME: Dict[str, Any] = {
+    **NOT_EXECUTED,
+    "status": "error",
+    "error": (
+        "Nothing ran: this turn's time limit is nearly up. Write the result "
+        "you have now instead of starting another run."
+    ),
+    "has_errors": True,
+    "out_of_time": True,
+}
+
+#: Replaces "raise the timeout" advice on a run the time limit cut short.
+TIME_LIMIT_CUT_RUN = (
+    "The turn's time limit cut this run short, so a longer timeout is not "
+    "available. Write the result you have now."
+)
+
+
+def time_capped(host: Any, seconds: int) -> int:
+    """*seconds* cut to the time *host*'s turn has left; 0 means start nothing.
+
+    A host that is not an Agent has no turn and no time limit.
+    """
+    cap = getattr(host, "time_capped_run_seconds", None)
+    return cap(seconds) if callable(cap) else seconds
+
+
+def cut_by_time_limit(host: Any) -> bool:
+    """True when a run that just timed out was stopped by the turn's time limit."""
+    return time_capped(host, 1) == 0
+
 
 #: On a result that looked on disk and found the path missing: nothing ran,
 #: but the absence was checked, which is what a "doesn't exist" claim needs.
@@ -340,11 +378,62 @@ def _labels(executions: List[Dict[str, Any]]) -> List[str]:
     return list(dict.fromkeys(e["check_label"] for e in executions))
 
 
+#: What makes a failure sentence one about tests: "the tool kept failing" is not.
+_ABOUT_TESTS = re.compile(
+    r"\b(?:(?:sub)?tests?|suite|specs?)\b"
+    r"|\b\d+\s+(?:fail(?:s|ed|ing|ures?)?|pass(?:es|ed|ing)?|errors?)\b",
+    re.IGNORECASE,
+)
+
+
+#: A failure denied or put in the past: "not a single test failed", "failed before my fix".
+_DENIED_FAILURE = re.compile(
+    r"\b(?:not|no|never|none|nothing|zero|\w+n['’]t)\s+(?:\w+\s+){0,4}?fail"
+    r"|\b(?:before|previously|earlier|anymore|any\s+more|no\s+longer|used\s+to)\b",
+    re.IGNORECASE,
+)
+#: A pass said apart from any failure: "now they pass", "the suite is green".
+_PASS_WORDS = re.compile(
+    r"\b(?:pass(?:es|ed|ing)?|green|fixed|clean|succeed(?:s|ed)?)\b", re.IGNORECASE
+)
+
+
+def _answer_reports(failed: List[Dict[str, Any]], answer: str) -> bool:
+    """Whether *answer* already tells the user these *failed* checks failed.
+
+    Only test runs, which is all the answer's wording can be matched to, and
+    only an answer that claims no success beside the failure: no success claim,
+    no pass said in a clause of its own, no failure denied or put in the past.
+    """
+    if not all(
+        (e.get("check_kind") or check_kind(e["check_label"])) == "test" for e in failed
+    ):
+        return False
+    labels = {e["check_label"].lower() for e in failed}
+    clauses = [c for c in re.split(r"(?<=[.!?])\s+|\n+|;", answer or "") if c.strip()]
+    reporting = [c for c in clauses if reports_test_failure(c)]
+    if any(_DENIED_FAILURE.search(c) for c in reporting):
+        return False
+    # "52 passed; 3 failed" is a count, not a claim; "now they pass" is.
+    if any(
+        _PASS_WORDS.search(re.sub(r"\b\d+\s+pass\w*", " ", c))
+        for c in clauses
+        if c not in reporting
+    ):
+        return False
+    said = any(
+        _ABOUT_TESTS.search(c) or any(label in c.lower() for label in labels)
+        for c in reporting
+    )
+    return said and not claims_success(answer)
+
+
 def build_verification_scope(
     executions: List[Dict[str, Any]],
     unchecked_change: Optional[str] = None,
     has_tests: bool = True,
     ungrounded: Sequence[str] = (),
+    answer: str = "",
 ) -> str:
     """A plain-English note when the turn's work is NOT confirmed, else ``""``.
 
@@ -356,14 +445,18 @@ def build_verification_scope(
     reason, a gap between the answer and the tool record that survived its
     correction (:func:`gaia.agents.base.grounding.unverified_reasons`). Bounded by
     ``VERIFICATION_SCOPE_MAX_CHARS`` because it rides in the answer.
+
+    Failed test runs go unmentioned when *answer* reports them itself: the
+    note is there to stop a false success, and that answer makes none.
     """
     _ran, passed, failed, blocked = _partition(executions)
     reasons: List[str] = []
-    if failed and passed:
+    reported = bool(failed) and _answer_reports(failed, answer)
+    if failed and passed and not reported:
         reasons.append(_mixed(passed, failed))
-    elif failed:
+    elif failed and not reported:
         reasons.append(f"{_names(failed)} didn't pass")
-    elif blocked and passed:
+    elif blocked and passed and not failed:
         reasons.append(f"{_names(passed)} passed")
     if blocked:
         one = len(_labels(blocked)) == 1

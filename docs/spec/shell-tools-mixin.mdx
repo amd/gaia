@@ -118,6 +118,10 @@ travels in it, spelled `2>nul`, because there the shell owns the pipeline. A
 step carrying an environment assignment is the exception: `cmd.exe` would apply
 it to the whole string, so that step runs as argv on Windows too, and gives up
 `cmd.exe`'s built-in resolution (`dir`, `type`) to keep the assignment scoped.
+Any step that runs as argv on Windows starts, for each segment, the program
+PATH finds, never one in the working folder; a program missing from PATH, or
+found only as a `.bat`/`.cmd` that needs `cmd.exe`, fails the step before any
+of its segments starts.
 
 ---
 

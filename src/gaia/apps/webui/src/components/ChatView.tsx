@@ -10,6 +10,7 @@ import { agentEventToStep } from '../utils/streamSteps';
 import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, carryMessageKeys, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
+import { useModelStore } from '../stores/modelStore';
 import { useReadAloudStore } from '../stores/readAloudStore';
 import { readsAloudWhenDone } from '../utils/autoReadAloud';
 import { useReadAloudSettings } from '../hooks/useReadAloudSettings';
@@ -26,7 +27,7 @@ import { isMediaFile } from '../utils/mediaFiles';
 import { bugReportUrl } from './UnsupportedFeature';
 import { classifyChatError, isStreamInterrupted, mayStillFinish, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
-import { connectCardProviders, hasConnectCard } from './render/ConnectAccountCard';
+import { connectCardAccounts, connectCardProviders, hasConnectCard } from './render/ConnectAccountCard';
 import { ConnectorRetryBanner } from './ConnectorRetryBanner';
 import { answerQuestion, QuestionGoneError, resolveTypedAnswer, waitingQuestionId } from './render/NeedsInputCard';
 import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } from '../types';
@@ -120,6 +121,9 @@ interface SendOptions {
     opening?: boolean;
 }
 
+/** How long the note about the closed resource strip stays up. */
+export const RESOURCES_NOTE_MS = 12_000;
+
 export function ChatView({ sessionId }: ChatViewProps) {
     const t = useT();
     const {
@@ -164,7 +168,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const handleDetachFailed = useCallback((name: string, err: unknown) => {
         setActionError(t('chat.detachFailed', { name, error: requestErrorParam(err) }));
     }, [t]);
-    // A chat made by a retired agent (chat/doc/file) can be read but not continued.
+    // A chat made by a retired agent (chat/doc/file/email) can be read but not continued.
     const retiredAgent = session?.agent_type && session.agent_type !== FLAGSHIP_AGENT_ID ? session.agent_type : null;
 
     const [liveHistoryNotice, setLiveHistoryNotice] = useState<string | null>(null);
@@ -217,6 +221,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     streamingRef.current = isStreaming;
     // Set briefly after a queued send found the chat still busy, so it waits before trying again.
     const queueHold = useChatStore((s) => !!s.queueHolds[sessionId]);
+    // A model picked during the reply is applied first, so the queued message runs on it.
+    const modelSwitching = useModelStore((s) => !!s.queued);
 
     // ── Streaming chunk buffer ──────────────────────────────────────
     // Buffer SSE chunks in a ref and flush to the store via rAF.
@@ -422,11 +428,20 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const showResources = useResourceMonitorStore((s) => s.visible);
     const setShowResources = useResourceMonitorStore((s) => s.setVisible);
     const resourcesToggleRef = useRef<HTMLButtonElement>(null);
+    // Closing with the ✕ hides the strip in every chat; say how it comes back.
+    const [resourcesClosedNote, setResourcesClosedNote] = useState(false);
     const closeResources = useCallback(() => {
         setShowResources(false);
+        setResourcesClosedNote(true);
         // The close button unmounts with the strip; keep keyboard focus nearby.
         resourcesToggleRef.current?.focus();
     }, [setShowResources]);
+    useEffect(() => {
+        if (!resourcesClosedNote) return undefined;
+        if (showResources) { setResourcesClosedNote(false); return undefined; }
+        const timer = window.setTimeout(() => setResourcesClosedNote(false), RESOURCES_NOTE_MS);
+        return () => window.clearTimeout(timer);
+    }, [resourcesClosedNote, showResources]);
 
     const jumpToMessage = useJumpToMessage(messagesScrollRef, isNearBottomRef);
 
@@ -560,6 +575,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // Build message text with attachment references
         let messageText = text;
         let optimisticUser: Message | null = null;
+        const page_elements = reattach || fromQueue ? undefined : attach.takeElements();
         if (!reattach) {
             messageText = takeDraft();
 
@@ -575,6 +591,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 content: messageText,
                 created_at: new Date().toISOString(),
                 rag_sources: null,
+                page_elements,
             };
             addMessage(userMsg);
             optimisticUser = userMsg;
@@ -795,7 +812,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                // ── Stateless confirmation card (email /query, #2109 D1) ──
+                // ── Stateless confirmation card (sidecar relay, #2109 D1) ──
                 // Informational: the sidecar run is already over, so this is
                 // a chat-flow card via the generic #2108 mechanism — NEVER
                 // the blocking PermissionPrompt/confirm_id path above. Only
@@ -1209,7 +1226,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         const controller = reattach
             ? api.attachToRun(sessionId, streamCallbacks)
-            : api.sendMessageStream(sessionId, messageText, streamCallbacks);
+            : api.sendMessageStream(sessionId, messageText, { ...streamCallbacks, pageElements: page_elements });
 
         streamController = controller;
         abortRef.current = controller;
@@ -1238,8 +1255,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [sessionId, runningHere, pollIsNewer, isStreaming]);
 
     // Listen for programmatic message dispatches from rich-content
-    // components (currently the EmailPreScanCard's Approve / Reply
-    // buttons). Wired as a window-level CustomEvent rather than prop
+    // components. Wired as a window-level CustomEvent rather than prop
     // drilling so any embedded component can reach the active session
     // without ChatView having to know about it ahead of time.
     useEffect(() => {
@@ -1387,11 +1403,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
             return;
         }
         // The opening message goes first.
-        if (queue.length === 0 || queueHold || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || initializing) return;
+        if (queue.length === 0 || queueHold || modelSwitching || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || initializing) return;
         // Only once this chat's turn is over: seen ending here, or reported idle by a poll since.
         if (isStale() || (!observedEndRef.current && !idleHere)) return;
         void dispatchNext(sessionId, sendQueued, () => mountedRef.current && !isStale() && !useChatStore.getState().isStreaming && !comparingRef.current);
-    }, [busy, queue, queueHold, idleHere, isLoadingMessages, pendingPrompt, retiredAgent, initializing, sessionId, sendQueued, isStale]);
+    }, [busy, queue, queueHold, modelSwitching, idleHere, isLoadingMessages, pendingPrompt, retiredAgent, initializing, sessionId, sendQueued, isStale]);
 
     // The meter shows what the next message will carry, so re-measure after each reply.
     const wasBusyRef = useRef(false);
@@ -1556,8 +1572,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setActionError(null);
         const failures = await addDroppedFiles(sessionId, documents);
         if (failures.length > 0) {
-            setActionError(failures.map(({ name, stage, error }) => (stage === 'unreadable'
-                ? t('docsBar.failedTitle', { name })
+            setActionError(failures.map(({ name, stage, error }) => (stage === 'unreadable' || stage === 'server'
+                ? t(stage === 'server' ? 'docsBar.serverTitle' : 'docsBar.failedTitle', { name })
                 : t(
                     stage === 'attach' ? 'chat.dropAttachFailed' : 'chat.dropUploadFailed',
                     { name, error: requestErrorParam(error) },
@@ -1578,6 +1594,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // auth-required error, offer to re-run once the account is connected.
     const lastMessage = messages.length > 0 ? messages[messages.length - 1] : undefined;
     const lastConnectProviders = useMemo(() => connectCardProviders(lastMessage), [lastMessage]);
+    const lastConnectAccounts = useMemo(() => connectCardAccounts(lastMessage), [lastMessage]);
     const lastIsConnectorError = !isStreaming
         && !isLoadingMessages
         && lastMessage?.role === 'assistant'
@@ -1665,6 +1682,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
             </header>
 
             {showResources && <ResourceMonitor onClose={closeResources} />}
+            {!showResources && resourcesClosedNote && (
+                <div className="resource-strip resource-hidden-note" role="status">
+                    <span>{t('resources.hiddenNote')}</span>
+                    <button type="button" className="resource-hidden-undo" onClick={() => setShowResources(true)}>
+                        {t('resources.show')}
+                    </button>
+                </div>
+            )}
 
             <SessionDocsBar sessionId={sessionId} onDetachFailed={handleDetachFailed} />
 
@@ -1826,7 +1851,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <ExportErrorBar message={exportError} onDismiss={clearExportError} dismissLabel={t('chat.dismissExportError')} />
                     <ExportErrorBar message={actionError} onDismiss={() => setActionError(null)} dismissLabel={t('chat.dismissError')} />
                     {lastIsConnectorError && lastMessage && (
-                        <ConnectorRetryBanner content={lastMessage.content} providers={lastConnectProviders} onRetry={handleRetryLast} />
+                        <ConnectorRetryBanner key={lastMessage.id} content={lastMessage.content} providers={lastConnectProviders} accounts={lastConnectAccounts} onRetry={handleRetryLast} />
                     )}
                     <PermissionPrompt sessionId={sessionId} />
                     <ContextWarning usage={contextUsage} />

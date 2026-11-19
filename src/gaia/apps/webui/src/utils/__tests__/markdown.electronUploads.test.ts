@@ -15,6 +15,12 @@ describe('safeUrlTransform — upload links in the desktop app', () => {
         );
     });
 
+    it('keeps an encoded name when pointing at the backend', () => {
+        expect(safeUrlTransform('/api/files/uploads/Q3%20plan.pdf')).toBe(
+            'http://127.0.0.1:51234/api/files/uploads/Q3%20plan.pdf',
+        );
+    });
+
     it('still neutralises other root-relative paths', () => {
         expect(safeUrlTransform('/Windows/System32/calc.exe')).toBe('');
     });

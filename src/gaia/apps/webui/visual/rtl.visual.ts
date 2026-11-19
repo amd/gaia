@@ -111,6 +111,16 @@ const audit = (page: Page): Promise<string[]> =>
                 problems.push(`icon squeezed to ${box.width.toFixed(1)}px: ${label(el.parentElement!)}`);
             }
 
+            // A clamped block puts its "…" at the end of its own direction, so that must be its words' direction.
+            if (style.getPropertyValue('-webkit-line-clamp') !== 'none' && el.scrollHeight > el.clientHeight + 1) {
+                const first = (el.textContent ?? '').match(/[A-Za-z؀-ۿ]/)?.[0];
+                const want = first && (arabic.test(first) ? 'rtl' : 'ltr');
+                if (want && style.direction !== want) problems.push(`clamped ${want} text is cut at the wrong end: ${label(el)}`);
+                // Aligned to its end, the last line's "…" lands past the edge and is clipped: "preparation a."
+                const toEnd = style.textAlign === 'end' || style.textAlign === (style.direction === 'rtl' ? 'left' : 'right');
+                if (toEnd) problems.push(`clamped text aligned to its end hides its "…": ${label(el)}`);
+            }
+
             const text = el.textContent?.trim() ?? '';
             if (el.querySelector(':scope > :not(i18n-label)') || !text) continue;
 
@@ -250,6 +260,8 @@ const audit = (page: Page): Promise<string[]> =>
             const r = button.getBoundingClientRect();
             if (r.left < -1 || r.right > window.innerWidth + 1) problems.push(`button runs off the window: ${label(button)}`);
             if (button.scrollWidth > button.clientWidth + 1) problems.push(`label spills out of its button: ${label(button)}`);
+            // A label that wraps inside a fixed-height button spills out above and below it.
+            if (button.scrollHeight > button.clientHeight + 1) problems.push(`label spills out of its button's height: ${label(button)}`);
             // A filled button whose words reach its edge reads as text spilling out of a pill.
             if (button.textContent?.trim() && rgb(getComputedStyle(button).backgroundColor)[3] > 0) {
                 const text = visibleTextBox(button);
@@ -270,6 +282,24 @@ const audit = (page: Page): Promise<string[]> =>
                 if (r.right > textLeft + 1 && r.left < textRight - 1 && r.bottom > box.top && r.top < box.bottom) {
                     problems.push(`icon sits on a field's text: ${label(input)}`);
                 }
+            }
+        }
+
+        // A one-line field's hint is read whole: cut mid-word it says something else, or nothing.
+        for (const input of document.querySelectorAll<HTMLInputElement>('input[placeholder]')) {
+            if (!shown(input) || input.value) continue;
+            const hint = getComputedStyle(input, '::placeholder');
+            paint.font = `${hint.fontStyle} ${hint.fontWeight} ${hint.fontSize} ${hint.fontFamily}`;
+            const s = getComputedStyle(input);
+            const room = input.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
+            const need = paint.measureText(input.placeholder.replace(/[⁦-⁩]/g, '')).width;
+            if (need > room + 1) problems.push(`placeholder cut off (${Math.round(need)}px in ${Math.round(room)}px): "${input.placeholder.slice(0, 40)}"`);
+        }
+        // A placeholder mixing Arabic and Latin inside brackets shows them reordered: "(daily-summary (مثل".
+        for (const field of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input[placeholder], textarea[placeholder]')) {
+            const own = field.placeholder.split('⁩ ⁦(')[0];
+            if (shown(field) && document.documentElement.dir === 'rtl' && arabic.test(own) && /[()]/.test(own)) {
+                problems.push(`brackets in an Arabic placeholder: "${own.slice(0, 40)}"`);
             }
         }
 
@@ -474,6 +504,42 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+const SKILL_LIST = [
+    { name: 'pdf', description: 'Make and edit PDF files. Use when the user asks for a report.', version: '1.0.0', tier: 'verified', tools: [], path: 'agent-bundled', source: 'agent-bundled' },
+    { name: 'pptx', description: 'ابنِ عروض الشرائح من ملاحظاتك. استخدمها عند طلب عرض.', version: '1.0.0', tier: 'verified', tools: [], path: 'agent-bundled', source: 'agent-bundled' },
+    { name: 'web-research', description: 'Research a topic on the web and cite every source it uses, with a long description that has to be cut short.', version: '1.0.0', tier: 'verified', tools: [], path: 'user', source: 'user' },
+];
+
+for (const locale of ['en', 'ar']) {
+    test(`typing / lists the skills above the message box (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => p.route((url) => url.pathname === '/api/skills', (route) =>
+            route.fulfill({ json: { skills: SKILL_LIST, invalid: {} } })));
+        const box = page.locator('.new-chat textarea').first();
+        await box.fill('/');
+        const menu = page.locator('.skill-menu');
+        await expect(menu.getByRole('option')).toHaveCount(3);
+        await shot(page, `skill-menu-${locale}`);
+
+        const [menuBox, composerBox] = [(await menu.boundingBox())!, (await page.locator('.new-chat .composer').boundingBox())!];
+        expect(menuBox.y + menuBox.height, 'the list covers the message box').toBeLessThanOrEqual(composerBox.y + 1);
+        expect(menuBox.y, 'the list runs off the top of the window').toBeGreaterThanOrEqual(0);
+
+        // The /name is Latin: it reads left to right and sits on the row's start edge.
+        const row = menu.getByRole('option').first();
+        const [rowBox, nameBox] = [(await row.boundingBox())!, (await row.locator('.skill-menu-name').boundingBox())!];
+        const startGap = locale === 'ar' ? rowBox.x + rowBox.width - (nameBox.x + nameBox.width) : nameBox.x - rowBox.x;
+        expect(startGap, 'the skill name is not at the start of its row').toBeLessThan(16);
+        await expect(row.locator('.skill-menu-name')).toHaveText('/pdf');
+
+        await box.fill('/pp');
+        await expect(menu.getByRole('option')).toHaveCount(1);
+        await box.press('Enter');
+        await expect(box).toHaveValue('/pptx ');
+        await expect(menu).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const BIG_LIBRARY = Array.from({ length: 600 }, (_, i) => ({
     id: `lib-${i}`, filename: `meeting-notes-${i}.txt`, filepath: `C:/library/meeting-notes-${i}.txt`, file_size: 512,
     chunk_count: 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0,
@@ -541,6 +607,58 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the memory chip opens a menu that says what Private does (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        await page.locator('.composer-chip-memory').click();
+        const menu = page.getByRole('dialog');
+        await expect(menu.locator('.popover-item')).toHaveCount(2);
+        await shot(page, `memory-menu-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+const LONG_TITLES = {
+    latin: 'My own typed question Give me a banana bread recipe with walnuts and brown butter',
+    arabic: 'سؤالي الذي كتبته بنفسي أعطني وصفة خبز الموز مع الجوز والزبدة البنية',
+};
+
+for (const locale of ['ar', 'en']) {
+    for (const [script, title] of Object.entries(LONG_TITLES)) {
+        // The hover buttons once covered a Latin title's start in Arabic: "ed question Give m…".
+        test(`a hovered ${script} chat title keeps its start in view and its "…" at its end (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => {
+                await p.route((url) => url.pathname === '/api/sessions', (route) => (route.request().method() === 'GET'
+                    ? route.fulfill({ json: { sessions: [{ ...SESSIONS[1], title }], total: 1 } })
+                    : route.fallback()));
+            });
+            const row = page.locator('.sb-row').first();
+            await row.hover();
+            await expect(row.locator('.sb-row-delete')).toBeVisible();
+            await shot(page, `sidebar-row-hover-${script}-${locale}`);
+            const m = await row.evaluate((li) => {
+                const el = li.querySelector('.sb-row-title')!;
+                const box = el.getBoundingClientRect();
+                const actions = li.querySelector('.sb-row-actions')!.getBoundingClientRect();
+                const range = document.createRange();
+                range.setStart(el.firstChild!, 0);
+                range.setEnd(el.firstChild!, 1);
+                const first = range.getBoundingClientRect();
+                return {
+                    direction: getComputedStyle(el).direction,
+                    cut: el.scrollWidth > el.clientWidth,
+                    overlap: Math.min(box.right, actions.right) - Math.max(box.left, actions.left),
+                    firstShown: first.left >= box.left - 1 && first.right <= box.right + 1,
+                };
+            });
+            expect(m.direction, 'the title reads in its own direction').toBe(script === 'latin' ? 'ltr' : 'rtl');
+            expect(m.cut, 'the title is long enough to be cut').toBe(true);
+            expect(m.firstShown, "the title's first letter is in view").toBe(true);
+            expect(m.overlap, 'rename, pin and delete cover the title').toBeLessThanOrEqual(0);
+        });
+    }
+}
+
 for (const locale of ['ar', 'en']) {
     for (const width of [1440, 390]) {
         test(`Try chips fit in ${locale} at ${width}px`, async ({ page }) => {
@@ -603,6 +721,114 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
         await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
+    });
+}
+
+const PICTURE = '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800"><rect width="1200" height="800" fill="#6a8fd8"/><circle cx="880" cy="240" r="110" fill="#ffe08a"/></svg>';
+
+async function withSentImages(page: Page): Promise<void> {
+    await page.route('**/api/files/uploads/*', (route) => route.fulfill({ status: 200, contentType: 'image/svg+xml', body: PICTURE }));
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [{
+                    id: 1, session_id: ANSWER_SESSION, role: 'user', created_at: NOW.toISOString(), rag_sources: null,
+                    content: 'ما رأيك؟\n\n![a.png](/api/files/uploads/a1.png)\n![b.png](/api/files/uploads/b2.png)\n![c.png](/api/files/uploads/c3.png)',
+                }],
+                total: 1,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`sent images are small tiles, and the viewer steps the way the page reads (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withSentImages);
+        const tiles = page.locator('.image-thumb');
+        await expect(tiles).toHaveCount(3);
+        for (const box of await tiles.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height))) {
+            expect(box).toBeLessThanOrEqual(160);
+        }
+        expect(await audit(page)).toEqual([]);
+        await tiles.first().click();
+        const dialog = page.getByRole('dialog');
+        await expect(dialog).toBeVisible();
+        const prev = await dialog.locator('.image-viewer-prev').boundingBox();
+        const next = await dialog.locator('.image-viewer-next').boundingBox();
+        expect(locale === 'ar' ? prev!.x > next!.x : prev!.x < next!.x, 'previous sits at the start edge').toBe(true);
+        const img = await dialog.locator('.image-viewer-img').boundingBox();
+        expect(img!.x).toBeGreaterThanOrEqual(0);
+        expect(img!.x + img!.width).toBeLessThanOrEqual(1400);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`image-viewer-${locale}.png`) });
+    });
+}
+
+const RAW_MODEL_ERROR = "Failed to start the query run: Failed to preload Lemonade model 'no-such-model-xyz-123' with ctx_size=65536 "
+    + "on idle server at http://localhost:64679/api/v1: Failed to auto-download 'no-such-model-xyz-123': Download failed: "
+    + 'When registering a new model, the model name must include the `user` namespace. Received: no-such-model-xyz-123';
+
+async function withFailedTurn(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Say hello.', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: RAW_MODEL_ERROR, created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [{ id: 1, type: 'error', label: 'Error', detail: RAW_MODEL_ERROR, active: false, success: false }],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a failed turn names the cause and offers Settings, with the server error under Details (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFailedTurn);
+        const reply = page.locator('.msg-error');
+        await expect(reply.locator('.msg-failed-lead')).toBeVisible();
+        await expect(reply.locator('details.msg-failed-details')).not.toHaveAttribute('open', '');
+        // Collapsed, the server's words are not on screen.
+        await expect(reply.locator('.msg-failed-details .md-content')).toBeHidden();
+        await expect(reply.locator('.msg-try-again', { hasText: '›' })).toHaveCount(1);
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`failed-turn-${locale}.png`) });
+        await reply.locator('.msg-failed-details summary').click();
+        await expect(reply.locator('.msg-failed-details .md-content')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`failed-turn-open-${locale}.png`) });
+    });
+
+    test(`a failed turn's Settings button lands on the setting it names (${locale})`, async ({ page }) => {
+        const worded = "There is no model called `no-such-model-xyz-123` to download: the model server doesn't list it. "
+            + 'If you typed this model ID yourself, clear it under Settings > Advanced > Custom model ID.';
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
+                json: {
+                    messages: [
+                        { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Say hello.', created_at: NOW.toISOString(), rag_sources: null },
+                        { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: worded, created_at: NOW.toISOString(), rag_sources: null, failed: true },
+                    ],
+                    total: 2,
+                },
+            }));
+            await p.route('**/api/settings', (route) => route.fulfill({ json: {
+                custom_model: 'no-such-model-xyz-123', model_status: { found: false, checked: true, downloaded: false, loaded: false },
+                context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+            } }));
+        });
+        await page.locator('.msg-error .msg-try-again').filter({ hasText: /Advanced|متقدم/ }).click();
+        const custom = page.locator('details[data-settings-target="custom-model"]');
+        // Opened and focused, not the top of the tab (#7861).
+        await expect(custom).toHaveAttribute('open', '');
+        await expect(custom.locator('summary')).toBeFocused();
+        await expect(custom.locator('input')).toBeInViewport();
+        await expect(page.locator('.settings-back')).toHaveCount(0);
+        await shot(page, `failed-turn-to-custom-model-${locale}`);
+        expect(await audit(page)).toEqual([]);
     });
 }
 
@@ -1004,6 +1230,44 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+async function withLongPasteAndTable(page: Page): Promise<void> {
+    const paste = Array.from({ length: 200 }, (_, i) => `row ${i + 1}: the quick brown fox`).join('\n');
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: `${paste}\nWhich databases fit a team of five?`, created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: [
+                            '## Which one to use', '',
+                            'Pick by where the data lives.', '',
+                            '### Comparison', '',
+                            '| Engine | Monthly cost | When it fits |',
+                            '|---|---|---|',
+                            '| SQLite | 0 | One app, small data, no server to run |',
+                            '| PostgreSQL | 1,200 | Many writers, extensions such as PostGIS |',
+                        ].join('\n'),
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a long paste shows its ending, and a table aligns only its numbers (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongPasteAndTable);
+        await expect(page.locator('.msg-excerpt')).toContainText('Which databases fit a team of five?');
+        const prose = page.locator('.md-table tr').nth(1).locator('td').nth(2);
+        await expect(prose).toHaveCSS('text-align', 'start');
+        await expect(page.locator('.md-table tr').nth(1).locator('td').nth(1)).toHaveClass('is-numeric');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`answer-polish-${locale}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
@@ -1300,7 +1564,8 @@ test('resource usage strip', async ({ page }) => {
     const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
     await expect(strip.locator('li')).toHaveCount(5);
     await expect(strip.getByText('45.0/63.6 GB')).toBeVisible();
-    await expect(strip.locator('li').last()).toContainText(/↑.*0.*↓.*8\.0.*Kbps/);
+    // The unit follows the Arabic figures, not only the English in brackets, which a narrow tile cuts.
+    await expect(strip.locator('li').last()).toContainText(/↑[^(]*0[^(]*↓[^(]*8\.0[^(]*Kbps/);
     // The close button sits at the row's end, which is the left in rtl.
     const closeBox = (await strip.getByRole('button').boundingBox())!;
     const firstTile = (await strip.locator('li').first().boundingBox())!;
@@ -1308,6 +1573,17 @@ test('resource usage strip', async ({ page }) => {
     await expectClearOfPanel(page);
     expect(await audit(page)).toEqual([]);
     await page.screenshot({ path: 'visual/test-results/resource-strip-ar.png' });
+});
+
+test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`);
+    await page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' }).getByRole('button').click();
+    const note = page.locator('.resource-hidden-note');
+    await expect(note).toContainText('أيقونة النبض');
+    await expect(note.getByRole('button')).toBeVisible();
+    await expectClearOfPanel(page);
+    expect(await audit(page)).toEqual([]);
+    await page.screenshot({ path: 'visual/test-results/resource-strip-ar-closed.png' });
 });
 
 test('resource usage strip with no GPU counters keeps CPU and memory', async ({ page }) => {
@@ -1389,6 +1665,77 @@ test('document being indexed', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    // The dialog was centred on its content, so its title and path box jumped as rows came and went.
+    test(`the document library stays put as rows arrive, and long names keep their end (${locale})`, async ({ page }) => {
+        const names = [
+            'Quarterly business review for the regional sales team final draft v7 (reviewed by finance).pdf',
+            'مراجعة الأعمال الفصلية لفريق المبيعات الإقليمي المسودة النهائية الإصدار السابع.docx',
+            'garden-notes.txt',
+        ];
+        let listed = false;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => route.fulfill({ json: listed
+                ? { documents: names.map((filename, i) => ({ id: `d${i}`, filename, filepath: `C:/docs/${filename}`, file_size: 4096, chunk_count: 2, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 })), total: 3, total_size_bytes: 1, total_chunks: 1 }
+                : { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 } }));
+        });
+        // Read the top once the panel's slide-in (12px) has landed, or a slow runner measures mid-slide.
+        const settledTop = async () => {
+            const modal = page.locator('.doc-modal');
+            await modal.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+            return (await modal.boundingBox())!.y;
+        };
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.empty-docs')).toBeVisible();
+        const topEmpty = await settledTop();
+        listed = true;
+        // Re-open, which lists again: the same dialog with three rows.
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.doc-modal')).toHaveCount(0);
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-row')).toHaveCount(3);
+        expect(Math.abs((await settledTop()) - topEmpty)).toBeLessThan(1);
+        const tail = page.locator('.doc-name-tail').first();
+        await expect(tail).toHaveText(/finance\)\.pdf$/);
+        await expect(tail).toBeInViewport();
+        // A name in the other script still starts at the UI's own edge.
+        const other = page.locator('.doc-name-split').nth(locale === 'ar' ? 0 : 1);
+        const [textBox, infoBox] = await other.evaluate((el) => {
+            const parts = [...el.children].map((c) => c.getBoundingClientRect());
+            const info = el.closest('.doc-info')!.getBoundingClientRect();
+            return [
+                { left: Math.min(...parts.map((r) => r.left)), right: Math.max(...parts.map((r) => r.right)) },
+                { left: info.left, right: info.right },
+            ];
+        });
+        if (locale === 'ar') expect(Math.abs(textBox.right - infoBox.right)).toBeLessThan(2);
+        else expect(Math.abs(textBox.left - infoBox.left)).toBeLessThan(2);
+        // A long Arabic name ends with ".docx" read left to right, never "docx." at its front.
+        const arabic = page.locator('.doc-name-split').nth(1);
+        const ext = await arabic.evaluate((el) => {
+            const last = el.lastElementChild!;
+            const text = last.firstChild!;
+            const box = (from: number, to: number) => {
+                const r = document.createRange();
+                r.setStart(text, from);
+                r.setEnd(text, to);
+                return r.getBoundingClientRect();
+            };
+            const at = (text.textContent ?? '').lastIndexOf('.');
+            return {
+                text: last.textContent,
+                box: last.getBoundingClientRect(),
+                dot: box(at, at + 1), word: box(at + 1, at + 5),
+            };
+        });
+        expect(ext.dot.right, 'the dot should come before "docx", read left to right').toBeLessThanOrEqual(ext.word.left + 0.5);
+        expect(ext.text).toBe('.docx');
+        // The name runs right to left, so its end, the extension, is its left-most part.
+        const headBox = await arabic.locator('.doc-name-head').boundingBox();
+        expect(ext.box.right).toBeLessThanOrEqual(headBox!.x + 0.5);
+        await shot(page, `documents-${locale}-long-names`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     // A file GAIA couldn't read used to be counted with the readable ones.
     test(`a document library with a file that could not be read (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
@@ -1427,6 +1774,31 @@ for (const locale of ['en', 'ar']) {
         await expect(stats).not.toContainText(locale === 'ar' ? 'تعذّرت قراءتها' : "couldn't be read");
         if (locale === 'ar') expect(await untranslated(page, '.doc-stats', 'bdi')).toEqual([]);
         await shot(page, `documents-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    // The chat's document bar called a server-down file unreadable while the library didn't.
+    test(`the chat's document bar with a file waiting for the model server (${locale})`, async ({ page }) => {
+        const docs = [
+            { id: 'd1', filename: 'third.md', filepath: 'C:/third.md', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'model_server_down', last_error: 'Lemonade Server is not reachable', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
+            { id: 'd2', filename: 'broken.pdf', filepath: 'C:/broken.pdf', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'corrupt', last_error: 'Could not read PDF: broken.pdf', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
+            { id: 'd3', filename: 'garden-notes.txt', filepath: 'C:/garden-notes.txt', file_size: 7270, chunk_count: 7, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
+        ];
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === '/api/documents', (route) =>
+                route.fulfill({ json: { documents: docs, total: docs.length, total_size_bytes: 9318, total_chunks: 7 } }));
+            const sessions = SESSIONS.map((s) => (s.id === ANSWER_SESSION ? { ...s, document_ids: docs.map((d) => d.id) } : s));
+            await p.route((url) => url.pathname === '/api/sessions', (route) =>
+                route.fulfill({ json: { sessions, total: sessions.length } }));
+        });
+        const label = page.locator('.doc-context-label');
+        await expect(label).toBeVisible();
+        // Same split as the library: one waiting for the server, one truly unreadable.
+        await expect(label).toContainText(locale === 'ar' ? 'بانتظار خادم النماذج: 1' : '1 waiting for the model server');
+        await expect(label).toContainText(locale === 'ar' ? 'تعذّرت قراءتها: 1' : "1 couldn't be read");
+        await expect(page.locator('.doc-pill', { hasText: 'third.md' })).toHaveAttribute('title', locale === 'ar' ? /بانتظار خادم النماذج/ : /waiting for GAIA's model server/);
+        if (locale === 'ar') expect(await untranslated(page, '.doc-context-bar', '.doc-pill-name')).toEqual([]);
+        await shot(page, `chat-docs-bar-${locale}-server-down`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -1775,6 +2147,18 @@ test.describe('English', () => {
         await page.screenshot({ path: 'visual/test-results/resource-strip-en.png' });
     });
 
+    test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, 'en');
+        await page.getByRole('button', { name: 'Hide resource usage' }).click();
+        const note = page.locator('.resource-hidden-note');
+        await expect(note).toContainText('pulse icon');
+        await expectClearOfPanel(page);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: 'visual/test-results/resource-strip-en-closed.png' });
+        await note.getByRole('button', { name: 'Show resource usage' }).click();
+        await expect(page.getByRole('region', { name: 'Resource usage on this PC' })).toBeVisible();
+    });
+
     test('resource usage strip on a wide window is one row', async ({ page }) => {
         await page.setViewportSize({ width: 1920, height: 1000 });
         await open(page, `#${ANSWER_SESSION}`, 'en');
@@ -2108,6 +2492,29 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    // A down model server showed the raw connection error under the switch.
+    test(`Local only with the model server not answering (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withSettingsPanes(p, {
+            networkPolicy: 'cloud_allowed',
+            policyNotices: [
+                {
+                    code: 'saved_models_not_checked', severity: 'warning', cause: 'model_server_down', models: ['collection.router'],
+                    reason: "couldn't check whether collection.router is a cloud model: Request failed: HTTPConnectionPool(host='127.0.0.1', port=59999): Max retries exceeded [WinError 10061]",
+                },
+                { code: 'users_server_keeps_keys', severity: 'info', url: 'http://127.0.0.1:59999' },
+            ],
+        }));
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+        await page.locator('.toggle-switch .toggle-track').first().click();
+        const notice = page.locator('.settings-error[role="alert"]');
+        await expect(notice).toBeVisible();
+        await expect(notice).not.toContainText('HTTPConnectionPool');
+        await expect(notice).not.toContainText('WinError');
+        await shot(page, `privacy-local-only-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`Delete all chats asks in a dialog (${locale})`, async ({ page }) => {
         await open(page, '', locale, withSettingsPanes);
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2239,6 +2646,57 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+// Opening and switching ease in on purpose; with reduced motion asked for, nothing moves.
+test.describe('arrivals ease in (en)', () => {
+    const openSkills = async (page: Page, motion: 'no-preference' | 'reduce') => {
+        await open(page, '', 'en', withSettingsPanes);
+        await page.emulateMedia({ reducedMotion: motion });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        await expect(page.locator('.settings-pane-title')).toBeVisible();
+    };
+
+    // The section's height on each of the 20 frames after its summary is clicked.
+    const openFrames = (page: Page) => page.locator('.settings-pane details:not([open])').first().evaluate((el) =>
+        new Promise<number[]>((done) => {
+            const heights: number[] = [];
+            (el.querySelector('summary') as HTMLElement).click();
+            const tick = () => {
+                heights.push(el.getBoundingClientRect().height);
+                if (heights.length < 20) requestAnimationFrame(tick);
+                else done(heights);
+            };
+            requestAnimationFrame(tick);
+        }));
+
+    test('a section grows open over several frames instead of jumping', async ({ page }) => {
+        await openSkills(page, 'no-preference');
+        const heights = await openFrames(page);
+        const full = heights[heights.length - 1];
+        const between = heights.filter((h) => h > heights[0] + 1 && h < full - 1);
+        expect(between.length, `heights: ${heights.map(Math.round).join(' ')}`).toBeGreaterThanOrEqual(3);
+    });
+
+    test('with reduced motion a section opens at once', async ({ page }) => {
+        await openSkills(page, 'reduce');
+        const heights = await openFrames(page);
+        // It may snap a frame late under load, but never passes through a height in between.
+        const full = heights[heights.length - 1];
+        const between = heights.filter((h) => h > heights[0] + 1 && h < full - 1);
+        expect(between, `heights: ${heights.map(Math.round).join(' ')}`).toEqual([]);
+    });
+
+    test('a Settings tab fades in when picked', async ({ page }) => {
+        await openSkills(page, 'no-preference');
+        await page.locator('.settings-pane').evaluate((el) => el.setAttribute('data-was', 'skills'));
+        await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+        // A new pane element, so its entry animation plays again, and that animation is the fade.
+        const pane = page.locator('.settings-pane');
+        await expect(pane).not.toHaveAttribute('data-was', 'skills');
+        expect(await pane.evaluate((el) => getComputedStyle(el).animationName)).toBe('fadeIn');
+    });
+});
+
 for (const locale of ['en', 'ar']) {
     test(`the model menu leads with the provider in use and asks before a download (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
@@ -2263,6 +2721,16 @@ for (const locale of ['en', 'ar']) {
         expect((await audit(page)).filter((p) => !p.startsWith('popover opens scrolled'))).toEqual([]);
     });
 }
+
+/** A Google connector holding these accounts, as GET /api/connectors sends it. */
+const MULTI_ACCOUNT_GOOGLE = (accounts: Array<{ account_id: string; email: string; status: string; is_default: boolean }>) => ({
+    id: 'google', display_name: 'Google', type: 'oauth_pkce', icon: null, category: 'email', tier: 'core',
+    description: 'Connect GAIA to your Google account for Gmail, Calendar, Drive, and more.', product_url: 'https://example.com', docs_url: null,
+    configured: accounts.some((a) => a.status === 'ok'), configurable: true, enabled: true,
+    account_id: accounts.find((a) => a.is_default && a.status === 'ok')?.email ?? null, accounts,
+    scopes: ['openid'], default_scopes: [], available_scopes: [], mcp_env_keys: [], oauth_setup_fields: [], supports_device_code: false,
+    oauth_client: { source: 'env', client_id: 'example-client', has_secret: false },
+});
 
 for (const locale of ['ar', 'en']) {
     test.describe(`settings connectors (${locale})`, () => {
@@ -2437,6 +2905,83 @@ for (const locale of ['ar', 'en']) {
             await shot(page, `connectors-${locale}-check-slow`);
             expect(await audit(page)).toEqual([]);
             if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
+        });
+
+        test('several accounts: a row each, one expired, a long address, and the disconnect question', async ({ page }) => {
+            const accounts = [
+                { account_id: 'a1', email: 'jane.with.a.rather.long.name@example.com', status: 'ok', is_default: true },
+                { account_id: 'a2', email: 'jane.work@example.com', status: 'ok', is_default: false },
+                { account_id: 'a3', email: 'jane@outlook-example.com', status: 'reauth_required', is_default: false },
+            ];
+            await openConnectors(page, [MULTI_ACCOUNT_GOOGLE(accounts)]);
+            const tile = page.locator('.connector-tile', { hasText: 'Google' });
+            await expect(tile.locator('.connector-status.failed')).toBeVisible();
+            await tile.locator('.connector-tile-header').click();
+            await expect(tile.locator('.connector-account')).toHaveCount(3);
+            await tile.locator('.connector-accounts').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-accounts-open`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
+            // Each address keeps to the start edge of its row, cut in its middle, whole on hover.
+            const address = tile.locator('.account-address').first();
+            await expect(address).toHaveAttribute('title', accounts[0].email);
+            await expect(address).toHaveText(/…@example\.com$/);
+            const edge = await tile.locator('.connector-account').first().evaluate((row) => {
+                const a = row.querySelector('.account-address')!.getBoundingClientRect();
+                const r = row.getBoundingClientRect();
+                return getComputedStyle(row).direction === 'rtl' ? r.right - a.right : a.left - r.left;
+            });
+            expect(edge, 'the address drifted off the start edge').toBeLessThan(16);
+            // Long Arabic labels push the actions to a second line rather than over the address.
+            const spilled = await tile.locator('.connector-account').evaluateAll((rows) => rows.flatMap((row) => {
+                const r = row.getBoundingClientRect();
+                return [...row.querySelectorAll('.connector-account-who, .account-address, .connector-status, button')].filter((el) => {
+                    const b = el.getBoundingClientRect();
+                    const range = document.createRange();
+                    range.selectNodeContents(el);
+                    const text = range.getBoundingClientRect();
+                    return Math.min(b.left, text.left) < r.left - 1 || Math.max(b.right, text.right) > r.right + 1
+                        || (el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0);
+                }).map((el) => `${el.className || el.tagName}: ${el.textContent}`);
+            }));
+            expect(spilled, 'an account row spills out of its box').toEqual([]);
+
+            await tile.locator('.connector-account').nth(1).locator('.connector-account-actions .btn-secondary').last().click();
+            const ask = page.locator('.confirm-sheet');
+            await expect(ask).toContainText('jane.work@example.com');
+            await shot(page, `connectors-${locale}-accounts-disconnect`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('one account: unchanged, plus a quiet link to add another', async ({ page }) => {
+            await openConnectors(page, [MULTI_ACCOUNT_GOOGLE([{ account_id: 'a1', email: 'jane@example.com', status: 'ok', is_default: true }])]);
+            const tile = page.locator('.connector-tile', { hasText: 'Google' });
+            await tile.locator('.connector-tile-header').click();
+            await expect(tile.locator('.connector-add-account')).toBeVisible();
+            await expect(tile.locator('.connector-account')).toHaveCount(0);
+            await tile.locator('.configure-actions').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-accounts-one`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a Disconnect that finds several accounts names them all and asks first', async ({ page }) => {
+            await openConnectors(page, [MULTI_ACCOUNT_GOOGLE([{ account_id: 'a1', email: 'jane@example.com', status: 'ok', is_default: true }])]);
+            // Another window added sam@ since this tile loaded, so the server refuses a plain disconnect.
+            await page.route('**/api/connectors/google', (route) => (route.request().method() === 'DELETE' ? route.fulfill({
+                status: 409,
+                json: { detail: {
+                    error: 'account_choice_required', connector_id: 'google', choices: ['jane@example.com', 'sam@example.com'],
+                    message: 'google has 2 connected accounts (jane@example.com, sam@example.com). Choose one to disconnect, or disconnect them all.',
+                } },
+            }) : route.fallback()));
+            const tile = page.locator('.connector-tile', { hasText: 'Google' });
+            await tile.locator('.connector-tile-header').click();
+            await tile.locator('.configure-actions .btn-secondary').click();
+            const ask = page.getByRole('alertdialog');
+            await expect(ask.locator('.confirm-accounts li')).toHaveCount(2);
+            await shot(page, `connectors-${locale}-disconnect-all`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.confirm-sheet', 'bdi')).toEqual([]);
         });
 
         test('phone width: a long account stays on screen', async ({ page }) => {
@@ -2669,6 +3214,44 @@ for (const locale of ['ar', 'en']) {
             await shot(page, `model-status-${locale}-${state}`);
             expect(await audit(page)).toEqual([]);
             if (locale === 'ar') expect(await untranslated(page, '.popover .model-status')).toEqual([]);
+        });
+    }
+}
+
+// The backend words a down server in English; the popover must word it itself.
+const SERVER_DOWN = (owner: 'gaia' | 'user') => ({
+    ...LOCAL_STATUS, state: 'stopped', model: null, display_name: null, placement: null, ctx_size: null, memory: null, owner,
+    error: `The model server isn't answering at ${LOCAL_STATUS.base_url}. `
+        + (owner === 'gaia' ? 'Restart starts it.' : "GAIA doesn't start a server it doesn't run; start it yourself."),
+    error_detail: `The local model server is not reachable at ${LOCAL_STATUS.base_url} (connection refused).`,
+    error_cause: 'model_server_down',
+});
+
+for (const locale of ['ar', 'en']) {
+    for (const owner of ['gaia', 'user'] as const) {
+        test(`sidebar model-status popover: server not answering, ${owner}'s server (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => { await p.route('**/api/providers/local/status', (route) => route.fulfill({ json: SERVER_DOWN(owner) })); });
+            await page.locator('.sb-location').click();
+            const alert = page.locator('.popover .model-status .settings-error[role="alert"]');
+            await expect(alert).toBeVisible();
+            await expect(alert.locator('bdi[dir="ltr"]').first()).toHaveText(LOCAL_STATUS.base_url);
+            if (locale === 'ar') await expect(alert).toContainText('خادم النماذج لا يستجيب');
+            await shot(page, `model-status-${locale}-server-down-${owner}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.popover .model-status')).toEqual([]);
+        });
+
+        test(`session panel Runs on: server not answering, ${owner}'s server (${locale})`, async ({ page }) => {
+            await open(page, `#${ANSWER_SESSION}`, locale, async (p) => { await p.route('**/api/providers/local/status', (route) => route.fulfill({ json: SERVER_DOWN(owner) })); });
+            const row = page.locator('.session-panel .sp-env-row').filter({ has: page.locator('.sp-error') });
+            await row.scrollIntoViewIfNeeded();
+            const error = row.locator('.sp-error');
+            await expect(error).toBeVisible();
+            await expect(error.locator('bdi[dir="ltr"]').first()).toHaveText(LOCAL_STATUS.base_url);
+            if (locale === 'ar') await expect(error).toContainText('خادم النماذج لا يستجيب');
+            await shot(page, `session-panel-runs-on-${locale}-server-down-${owner}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.session-panel .sp-env-row:has(.sp-error)')).toEqual([]);
         });
     }
 }
@@ -2960,6 +3543,52 @@ for (const locale of ['ar', 'en']) {
         }
     });
 }
+
+const LONG_ENGLISH = 'Run a short personal check-in that picks up where the last one left off, following up on what the user said they would do, '
+    + 'asking what changed since then, noting anything new worth remembering, comparing it with last week, listing what moved and what stalled, '
+    + 'naming anything surprising, and finishing with a single sentence I could read aloud at the Monday team meeting without any preparation at all.';
+
+/** Every clamped block on screen that cut its text, and the direction it reads in. */
+const clampedBlocks = (page: Page): Promise<string[]> =>
+    page.evaluate(() => [...document.querySelectorAll('body *')]
+        .filter((el) => getComputedStyle(el).getPropertyValue('-webkit-line-clamp') !== 'none' && el.checkVisibility() && el.scrollHeight > el.clientHeight + 1)
+        .map((el) => `${String(el.className).split(' ')[0]} ${getComputedStyle(el).direction}`));
+
+// "…one left off, following up" and "preparation a.": English clamped as if it were Arabic.
+test.describe('clamped English in Arabic ends with its own "…"', () => {
+    test('a skill description', async ({ page }) => {
+        await open(page, '', 'ar', async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/skills', (route) => route.fulfill({
+                json: { skills: [{ name: 'check-in', source: 'agent-bundled', description: LONG_ENGLISH, version: '1.0.0', always_on: false }], invalid: {} },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        await expect(page.locator('.skill-row-more')).toBeVisible();
+        await shot(page, 'clamped-skill-ar');
+        expect(await clampedBlocks(page)).toContain('skill-row-desc ltr');
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test('a schedule prompt', async ({ page }) => {
+        await open(page, '', 'ar', (p) => withSchedules(p, [{ ...SCHEDULE_ROW, id: 's9', name: 'qa-far-future', prompt: LONG_ENGLISH }]));
+        await page.locator('.sb').getByRole('button', { name: /المهام المجدولة/ }).click();
+        await expect(page.locator('.schedule-card-prompt')).toBeVisible();
+        await shot(page, 'clamped-schedule-ar');
+        expect(await clampedBlocks(page)).toContain('schedule-card-prompt ltr');
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test('an automation prompt', async ({ page }) => {
+        await open(page, '', 'ar', (p) => withAutomations(p, [{ ...AUTOMATIONS[0], prompt: LONG_ENGLISH }]));
+        await openAutomations(page);
+        await expect(page.locator('.automation-detail')).toBeVisible();
+        await shot(page, 'clamped-automation-ar');
+        expect(await clampedBlocks(page)).toContain('automation-detail ltr');
+        expect(await audit(page)).toEqual([]);
+    });
+});
 
 const LOG_LINES = [
     { text: '2026-11-04 10:05:37.798 [Info] (main) Starting Lemonade Server...', severity: 'info', tag: 'main' },
@@ -3285,7 +3914,7 @@ for (const locale of ['ar', 'en']) {
         await open(page, '', locale, async (p) => {
             await withSettingsPanes(p);
             await p.route('**/api/system/status', (route) => route.fulfill({
-                json: { ...SYSTEM_STATUS, lemonade_running: false, model_loaded: null, start_command: 'gaia init', start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.' },
+                json: { ...SYSTEM_STATUS, initialized: false, lemonade_running: false, model_loaded: null, start_command: 'gaia init', start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.' },
             }));
         });
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -3313,6 +3942,51 @@ for (const locale of ['ar', 'en']) {
         const banner = page.locator('.connection-banner');
         await expect(banner.locator('button.connection-banner__retry')).toHaveCount(2);
         await shot(page, `banner-${locale}-not-installed`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a chosen server that isn't answering says so in Advanced and Setup (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/system/status', (route) => route.fulfill({
+                json: { ...SYSTEM_STATUS, initialized: true, lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: null, start_instruction: "GAIA doesn't run this model server, so it can't start it. Start it the way you usually do." },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const row = page.locator('.status-row--has-hint').first();
+        await expect(row).toBeVisible();
+        await expect(row).not.toContainText(/gaia init|Cloud providers still work/);
+        // The backend's sentence is worded in the app's language, in the row and in the banner.
+        if (locale === 'ar') {
+            await expect(row).toContainText('لا يشغّل خادم النماذج هذا');
+            await expect(page.locator('.connection-banner')).toContainText('لا يشغّل خادم النماذج هذا');
+        }
+        await expect(page.getByRole('dialog').locator('.settings-card .btn-primary')).toHaveCount(0);
+        await expect(page.locator('.connection-banner')).not.toContainText('gaia init');
+        await shot(page, `advanced-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+        await withSetup(page);
+        await page.getByRole('dialog').locator('[data-section="setup"]').click();
+        await expect(page.locator('.settings-setup-status strong')).not.toHaveText(locale === 'en' ? 'Ready' : 'جاهز');
+        await shot(page, `setup-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`GAIA's own server that isn't answering names no command (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/system/status', (route) => route.fulfill({
+                json: { ...SYSTEM_STATUS, initialized: true, lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: null, start_instruction: null },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const card = page.getByRole('dialog').locator('.settings-card').first();
+        await expect(card.locator('.status-row--has-hint')).toHaveCount(2);
+        await expect(card).not.toContainText(/gaia |first message|أول رسالة/);
+        await expect(page.locator('.connection-banner')).not.toContainText(/gaia |run /);
+        await shot(page, `advanced-${locale}-own-server-down`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -3500,6 +4174,7 @@ for (const locale of ['ar', 'en']) {
                 const s = scene(name);
                 await open(page, '', locale, (p) => withSetup(p, s.answers));
                 await s.reach(page);
+                await shot(page, `setup-${locale}-${name}-390`);
                 expect(await audit(page)).toEqual([]);
             });
         }
@@ -3848,10 +4523,175 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const [locale, theme] of [['ar', 'light'], ['en', 'light'], ['ar', 'dark']] as const) {
+    // At 390 px its buttons once kept their width and squeezed the sentence to one word a line, 1,437 px tall.
+    test(`the model-server-down notice wraps its buttons under its words on a phone (${locale}, ${theme})`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/setup/check*', (route) => route.fulfill({
+                json: { ready: false, stage: 'server', initialized: true, steps: [] },
+            }));
+        }, theme);
+        const notice = page.locator('.app-notice');
+        await expect(notice.getByRole('button')).toHaveCount(2);
+        await shot(page, `server-down-notice-390-${locale}-${theme}`);
+        const m = await notice.evaluate((el) => {
+            const box = el.getBoundingClientRect();
+            const words = el.querySelector(':scope > span')!.getBoundingClientRect();
+            const buttons = [...el.querySelectorAll('button')].map((b) => b.getBoundingClientRect());
+            return { height: box.height, wordsShare: words.width / box.width, below: buttons.every((b) => b.top >= words.bottom - 1) };
+        });
+        expect(m.height, 'the notice hides the chat').toBeLessThan(200);
+        expect(m.wordsShare, 'the words get most of the row').toBeGreaterThan(0.6);
+        expect(m.below, 'the buttons sit under the words').toBe(true);
+        // The closed drawer waits off screen by design; this test is about the notice.
+        await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+/** No GAIA agent until the notice installs it; until then a new chat is refused as the backend refuses it. */
+async function withAgentToInstall(page: Page): Promise<void> {
+    let installed = false;
+    await page.route('**/api/agents', (route) => route.fulfill({ json: installed
+        ? { agents: [{ id: 'gaia', name: 'GAIA', description: '', source: 'installed', conversation_starters: [], models: [] }], total: 1 }
+        : { agents: [], total: 0 } }));
+    await page.route((url) => url.pathname === '/api/sessions', (route) => (route.request().method() === 'POST'
+        ? route.fulfill({ status: 422, json: { detail: "Unknown agent_type 'gaia'. Registered agent ids: chat." } })
+        : route.fallback()));
+    await page.route('**/api/agents/install', (route) => route.fulfill({ status: 202, json: { id: 'gaia', status: 'running' } }));
+    await page.route('**/api/agents/gaia/install-status', (route) => {
+        installed = true;
+        return route.fulfill({ json: { id: 'gaia', status: 'completed', percent: 100, error: null } });
+    });
+}
+
+/** The refused message waits in the New chat box under the one translated hint, which goes once the notice does. */
+async function expectHintLeavesWithNotice(page: Page, locale: string, entry: string, sent: string | RegExp): Promise<void> {
+    const hint = page.locator('.new-chat-error');
+    await expect(hint).toBeVisible();
+    await expect(hint).toHaveCount(1);
+    if (locale === 'ar') await expect(hint).toContainText(/\p{Script=Arabic}/u);
+    // Personalize, setup and the file browser once put the English sentence in a toast instead.
+    await expect(page.locator('.toast')).toHaveCount(0);
+    await expect(page.locator('.new-chat textarea').first()).toHaveValue(sent);
+    await expect(page.locator('.app-notice')).toBeVisible();
+    await shot(page, `agent-missing-hint-${entry}-${locale}`);
+    expect(await audit(page)).toEqual([]);
+    await page.locator('.app-notice').getByRole('button').click();
+    await expect(page.locator('.app-notice')).toHaveCount(0);
+    await expect(hint).toHaveCount(0);
+    await shot(page, `agent-installed-${entry}-${locale}`);
+}
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`the "install it from the notice above" line leaves with the notice (${locale})`, () => {
+        test('from the New chat box', async ({ page }) => {
+            await open(page, '', locale, withAgentToInstall);
+            await page.locator('.new-chat textarea').first().fill('Give me a banana bread recipe');
+            await page.keyboard.press('Enter');
+            await expectHintLeavesWithNotice(page, locale, 'new-chat', 'Give me a banana bread recipe');
+        });
+
+        test("from a connector's Personalize", async ({ page }) => {
+            await open(page, '', locale, async (p) => { await withConnectors(p); await withAgentToInstall(p); });
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.getByRole('dialog').locator('[data-section="connectors"]').click();
+            await expect(page.locator('.connectors-loading')).toHaveCount(0);
+            await page.locator('.connector-tile-header', { hasText: 'Google' }).click();
+            await page.locator('.connector-detail .connector-personalize button').click();
+            await expectHintLeavesWithNotice(page, locale, 'personalize', /^I just connected Google\./);
+        });
+
+        test('from the first task picked at the end of setup', async ({ page }) => {
+            const s = scene('ready');
+            await open(page, '', locale, async (p) => {
+                await withSetup(p, s.answers);
+                await p.route('**/api/onboarding/start', (route) => route.fulfill({ json: {
+                    cards: [{ skill: 'summarize', title: 'Summarize my notes', note: 'From your documents', prompt: 'Summarize the notes in my documents folder.', needs_input: false }],
+                    working_folder: { path: '/home/you', name: 'you', gaia_folder: false, choosable: true },
+                } }));
+                // Setup ends by choosing its chat model.
+                await p.route('**/api/providers/select', (route) => route.fulfill({
+                    json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true },
+                }));
+                await withAgentToInstall(p);
+            });
+            await s.reach(page);
+            await page.locator('.start-card').first().click();
+            await expectHintLeavesWithNotice(page, locale, 'setup-card', 'Summarize the notes in my documents folder.');
+        });
+
+        test("from the file browser's Ask GAIA", async ({ page }) => {
+            await open(page, '', locale, async (p) => {
+                await withOldFile(p);
+                await p.route('**/api/documents/upload-path', (route) => route.fulfill({ json: {
+                    id: 'd1', filename: OLD_FILE.name, filepath: OLD_FILE.path, file_size: OLD_FILE.size, chunk_count: 40,
+                    indexed_at: OLD_FILE.at, last_accessed_at: null, sessions_using: 0, indexing_status: 'complete',
+                } }));
+                await p.route('**/api/setup/needs/embedding', (route) => route.fulfill({
+                    json: { job: 'embedding', needed: false, model: null, disk_free_gb: null },
+                }));
+                await withAgentToInstall(p);
+            });
+            await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+            await page.getByRole('button', { name: /Browse files/ }).click();
+            await page.locator('.fb-entry').first().click();
+            await page.locator('.fb-action-btn.primary').click();
+            await expect(page.getByRole('dialog')).toHaveCount(0);
+            await expectHintLeavesWithNotice(page, locale, 'files', `Please analyze this document for me: ${OLD_FILE.name}`);
+        });
+    });
+}
+
+const arabicText = /\p{Script=Arabic}/u;
+
+test.describe('labels once left in English are in Arabic', () => {
+    test('the phone sidebar button', async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await open(page, '', 'ar');
+        await expect(page.locator('.sidebar-toggle')).toHaveAttribute('aria-label', arabicText);
+    });
+
+    test("the featured skills library's tooltip", async ({ page }) => {
+        await open(page, '', 'ar', withSettingsPanes);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        const chip = page.locator('.skill-link-chip');
+        await expect(chip).toHaveAttribute('title', arabicText);
+        // The English description belongs in the bracketed English half only.
+        const aria = (await chip.getAttribute('aria-label')) ?? '';
+        expect(aria.split('Engineering workflows').length - 1).toBeLessThanOrEqual(1);
+    });
+
+    test("the AMD gateway's offline tooltip", async ({ page }) => {
+        await open(page, '', 'ar', async (p) => {
+            await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+            await p.route(/\/api\/providers(\?|$)/, (route) => route.fulfill({ json: { providers: [
+                { id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC.' },
+                { id: 'amd', name: 'AMD LLM Gateway', remote: true, privacy_notice: '', network: { reachable: false, detail: "Can't reach llm-api.amd.com. It needs AMD's network or VPN" } },
+            ] } }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="model"]').click();
+        await expect(page.getByRole('radio', { name: /AMD/ })).toHaveAttribute('title', arabicText);
+    });
+
+    test("a memory's context and source in the Advanced table", async ({ page }) => {
+        await openMemory(page, 'ar');
+        await memoryTab(page, /Advanced/);
+        await expect(page.locator('.mem-knowledge-table tbody tr').first()).toBeVisible();
+        const english = await page.locator('.mem-knowledge-table tbody tr').evaluateAll((rows) => rows
+            .flatMap((row) => [row.children[2], row.children[5]].map((cell) => cell?.textContent?.trim() ?? ''))
+            .filter((text) => !/[؀-ۿ]/.test(text)));
+        expect(english, 'context and source cells left in English').toEqual([]);
+    });
+});
+
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await open(page, '', 'ar', withoutFlagship);
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
-    await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
+    await expect(page.getByRole('button', { name: /الذاكرة لهذه المحادثة/ })).toContainText(/\p{Script=Arabic}/u);
 });
 
 /** POST /api/chat/send streams `events`, then stays open, as a turn waiting on the user does. */
@@ -3868,6 +4708,42 @@ function streamThenWait(events: unknown[]): void {
         });
         return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
     };
+}
+
+const SPEECH_NPU_PART = [
+    { type: 'tool_start', tool: 'transcribe_media', detail: 'standup.wav' },
+    { type: 'status', phase: 'speech_model_download', message: "Downloading the speech model's NPU part (0.7 GB), no progress shown" },
+];
+const SPEECH_DOWNLOADED = [
+    ...SPEECH_NPU_PART,
+    { type: 'status', phase: 'speech_model_downloaded', message: 'Downloaded the speech model (2.4 GB)' },
+    { type: 'status', phase: 'recording', message: 'Transcribing 14s of audio' },
+];
+
+for (const locale of ['ar', 'en']) {
+    test(`the speech model's NPU part says why it has no percent (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, SPEECH_NPU_PART);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('Transcribe this recording');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.streaming-bubble')).toContainText(/no progress shown|دون عرض للتقدّم/);
+        await shot(page, `speech-npu-part-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a finished speech model download sits above the transcription still running (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, SPEECH_DOWNLOADED);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('Transcribe this recording');
+        await page.keyboard.press('Enter');
+        const live = page.locator('.streaming-bubble');
+        await expect(live.locator('.flow-done')).toBeVisible();
+        // In time order (#7865): the download finished first, so it is drawn first.
+        const [done, running] = [await live.locator('.flow-done').boundingBox(), await live.locator('.flow-tool.active').first().boundingBox()];
+        expect(done!.y).toBeLessThan(running!.y);
+        await shot(page, `speech-downloaded-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 const PYTHON_PROMPT = [{
@@ -3911,7 +4787,7 @@ for (const locale of ['ar', 'en'] as const) {
         await page.addInitScript(streamThenWait, [{
             type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-always',
             args: { file_path: '/private/tmp/plans/weekly-grocery-plan.md', content: '# Weekly grocery plan\n' },
-            always_scope: 'write_file on files in /private/tmp/plans', always_label: 'writing files in /private/tmp/plans',
+            always_scope: 'changes to files in /private/tmp/plans', always_label: 'changing files in /private/tmp/plans',
         }]);
         await open(page, `#${ANSWER_SESSION}`, locale);
         await page.locator('textarea').first().fill('save my grocery plan');
@@ -3952,8 +4828,15 @@ for (const locale of ['ar', 'en'] as const) {
         const card = page.locator('.perm-card');
         await expect(card).toBeVisible();
         const always = card.locator('.perm-btn').nth(1);
-        await expect(always).toHaveAttribute('title', `changing files in ${FOLDER}`);
-        if (locale === 'en') await expect(always).toHaveText('Always allow changing files in uxa in this chat');
+        if (locale === 'en') {
+            await expect(always).toHaveAttribute('title', `changing files in ${FOLDER}`);
+            await expect(always).toHaveText('Always allow changing files in uxa in this chat');
+        } else {
+            const title = await always.getAttribute('title');
+            expect(title?.replace(/[\u2066-\u2069]/g, '')).toBe(`تغيير الملفات في ${FOLDER}`);
+            await expect(always).not.toContainText('Documents');
+            expect(await untranslated(page, '.perm-card', 'bdi, pre, code')).toEqual([]);
+        }
         expect(await audit(page)).toEqual([]);
         await shot(page, `permission-folder-${locale}`);
     });
@@ -4158,6 +5041,32 @@ for (const locale of ['ar', 'en'] as const) {
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') await expect(rows.nth(0).locator('.flow-tool-label')).toContainText('حظرها GAIA');
         await shot(page, `refused-step-${locale}`);
+    });
+}
+
+// A call GAIA turned down itself, for a request that only asked to translate.
+const AUTO_DECLINED_STEPS = [
+    { type: 'tool_start', tool: 'run_shell_command', narration: 'Running a command' },
+    {
+        type: 'tool_result', success: false, status: 'denied', declined_by: 'agent',
+        summary: 'Not run: the request only asks for text in the reply.',
+    },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'request_user_input', narration: 'Asking you a question' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a call GAIA turned down itself reads as not needed, not as declined (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, AUTO_DECLINED_STEPS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('translate "Good morning" to French');
+        await page.keyboard.press('Enter');
+        const row = page.locator('.flow-steps.live .flow-tool').first();
+        await expect(row).toBeVisible();
+        if (locale === 'en') await expect(row.locator('.flow-tool-label')).toHaveText(/^Not run, not needed for this request: /);
+        await expect(row.locator('.flow-tool-label')).not.toContainText('You declined');
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `auto-declined-step-${locale}`);
     });
 }
 
@@ -4528,7 +5437,8 @@ test('the library path row fits a phone', async ({ page }) => {
 });
 
 test('each line of an email being approved takes its own direction', async ({ page }) => {
-    const text = 'To: dana@example.com\nSubject: Hello\n\nمرحبا، هذا اختبار.';
+    // The header becomes labelled rows; the body keeps a line per direction.
+    const text = 'To: dana@example.com\nSubject: Hello\n\nHello Dana,\nمرحبا، هذا اختبار.';
     const event = { type: 'permission_request', tool: 'send_now', args: { _exact_text: text }, confirm_id: 'c1' };
     // The prompt lasts only while its stream is open, which a routed response can't do.
     await open(page, `#${ANSWER_SESSION}`, 'ar', (p) =>
@@ -4565,6 +5475,33 @@ test('each line of an email being approved takes its own direction', async ({ pa
     expect(gaps.english).toBeLessThan(40);
     expect(gaps.arabic).toBeLessThan(40);
 });
+
+for (const locale of ['en', 'ar']) {
+    test(`an email being approved names its sending account on its own row (${locale})`, async ({ page }) => {
+        const text = 'From: jane.work@example.com\nTo: priya@example.com\nSubject: The deck\n\nHi Priya, the deck is attached.';
+        const event = { type: 'permission_request', tool: 'send_now', args: { _exact_text: text }, confirm_id: 'c1' };
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.addInitScript((line) => {
+                const realFetch = window.fetch;
+                window.fetch = (input, init) =>
+                    String(input).endsWith('/chat/send')
+                        ? Promise.resolve(new Response(new ReadableStream({
+                            start: (controller) => controller.enqueue(new TextEncoder().encode(line)),
+                        }), { headers: { 'Content-Type': 'text/event-stream' } }))
+                        : realFetch(input, init);
+            }, `data: ${JSON.stringify(event)}\n\n`),
+        );
+        await page.locator('textarea').last().fill('send it');
+        await page.keyboard.press('Enter');
+        const header = page.getByTestId('perm-mail-header');
+        await expect(header).toBeVisible();
+        await expect(header.locator('.perm-mail-from bdi')).toHaveAttribute('dir', 'ltr');
+        if (locale === 'ar') await expect(header.locator('dt').first()).toContainText('من');
+        await page.locator('.perm-card').scrollIntoViewIfNeeded();
+        await shot(page, `approval-from-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 /** The desktop app's updater in a given state; the browser preview has none. */
 function withUpdater(update: Record<string, unknown>) {

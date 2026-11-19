@@ -243,7 +243,7 @@ def test_ensure_core_can_install_refuses_before_anything_else(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Catalog merge (Agent UI + `gaia agent list`)
+# Catalog merge (Agent UI)
 # ---------------------------------------------------------------------------
 
 INDEX_ENTRY = {

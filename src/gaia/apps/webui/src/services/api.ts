@@ -6,6 +6,7 @@
 import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
 import type { LogReadResponse, LogSourcesResponse, ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
+import type { PageElementWire } from '../../services/browser-pane/contract';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
@@ -638,10 +639,16 @@ const AGENT_EVENT_TYPES = new Set([
     'followup_taken', 'followup_returned', 'followup_unavailable', 'context_usage',
 ]);
 
+/** What a send carries besides its text and callbacks. */
+export interface SendExtras {
+    /** Elements picked in the browser pane, sent as `page_elements`. */
+    pageElements?: PageElementWire[];
+}
+
 export function sendMessageStream(
     sessionId: string,
     message: string,
-    onChunkOrCallbacks: ((event: StreamEvent) => void) | StreamCallbacks,
+    onChunkOrCallbacks: ((event: StreamEvent) => void) | (StreamCallbacks & SendExtras),
     onDone?: (event: StreamEvent) => void,
     onError?: (error: Error) => void,
     agentType?: string,
@@ -673,6 +680,9 @@ export function sendMessageStream(
             session_id: sessionId,
             message,
             stream: true,
+            ...(typeof onChunkOrCallbacks !== 'function' && onChunkOrCallbacks.pageElements
+                ? { page_elements: onChunkOrCallbacks.pageElements }
+                : {}),
             ...(agentType ? { agent_type: agentType } : {}),
             ...(device ? { device } : {}),
         }),
@@ -1049,7 +1059,8 @@ export async function deleteDocument(id: string): Promise<void> {
 
 /** How far a running index has got: PDF pages read, then chunks embedded. */
 export interface IndexProgress {
-    phase: 'reading' | 'embedding';
+    /** `starting`: waiting for GAIA's model server to start, at launch. */
+    phase: 'starting' | 'reading' | 'embedding';
     done: number;
     /** Null when the count isn't known upfront (e.g. pages of a non-PDF). */
     total: number | null;

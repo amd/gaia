@@ -51,6 +51,7 @@ from ..lemonade_client import (
     runs_on_npu,
 )
 from ..lemonade_launcher import describe_client_hint
+from ..retry import StreamStalledError
 from ..surface_hints import (
     APP_WEDGED_SERVER_HINT,
     TUI_MODEL_SWITCH_HINT,
@@ -432,6 +433,21 @@ class LemonadeStreamCutOffError(LemonadeError):
     )
 
 
+class LemonadeReplyStalledError(LemonadeStreamCutOffError):
+    """A streamed reply went quiet partway through: a fragment, like any cut-off."""
+
+
+def _stalls_as_cut_offs(stream):
+    """Yield *stream*, turning a stall after the reply began into a cut-off."""
+    try:
+        yield from stream
+    except LemonadeClientError as e:
+        stall = e.__cause__
+        if isinstance(stall, StreamStalledError) and not stall.before_output:
+            raise LemonadeReplyStalledError(str(e)) from e
+        raise
+
+
 class LemonadeOutputCorruptedError(LemonadeError):
     """The reply turned into noise and was stopped before it was shown.
 
@@ -469,6 +485,35 @@ class LemonadeModelNotFoundError(LemonadeError):
             message = (
                 f"The model this agent needs (`{model_id}`) isn't installed on "
                 f"the local LLM server. {pull}. Or: {TUI_SETUP_HINT}"
+            )
+        super().__init__(user_message=message, payload=payload)
+
+
+class LemonadeUnknownModelError(LemonadeError):
+    """The model server lists no model by this name, so there is nothing to download.
+
+    A typed or stale model id: a download never starts, so neither a resend nor
+    setup helps. The fix is another model.
+    """
+
+    retryable = False
+    user_message = (
+        "The model server doesn't list this model, so it can't be downloaded. "
+        f"{TUI_MODEL_SWITCH_HINT}"
+    )
+
+    def __init__(
+        self,
+        model_id: Optional[str] = None,
+        payload: Optional[dict] = None,
+    ):
+        self.model_id = model_id
+        message = None
+        if model_id:
+            message = (
+                f"There is no model called `{model_id}` to download: the model "
+                "server doesn't list it. Check the name for a typo. "
+                f"{TUI_MODEL_SWITCH_HINT}"
             )
         super().__init__(user_message=message, payload=payload)
 
@@ -570,6 +615,9 @@ _LOAD_PREFIX_RE = re.compile(
 _QUOTED_MODEL_RE = re.compile(r"\bmodel ['\"`]([^'\"`]+)['\"`]", re.IGNORECASE)
 _WRAPPER_MODEL_RE = re.compile(
     r"failed to load(?: model)? ['\"`]?([^'\"`:\s]+)['\"`]?", re.IGNORECASE
+)
+_UNKNOWN_MODEL_RE = re.compile(
+    r"model name must include the [`'\"]?user[`'\"]? namespace", re.IGNORECASE
 )
 _ERROR_ENVELOPE_RE = re.compile(r"\{\s*['\"]error['\"]\s*:")
 _HTTP_STATUS_RE = re.compile(r"(?:status|error code:?)\s*\(?(\d{3})\b", re.IGNORECASE)
@@ -867,8 +915,7 @@ def _classify_lemonade_response(
         # profile's window, not a flat 64K: on NPU a correct load is 32K,
         # so a flat GPU threshold makes every real overflow look
         # retryable (#2884). NOTE (#1892): a client running under an
-        # exact ctx pin (LemonadeClient.ctx_size_override, e.g. the email
-        # eval's 16K envelope — see gaia_agent_email.context_budget)
+        # exact ctx pin (LemonadeClient.ctx_size_override)
         # legitimately sits below this threshold; the retryable hint is
         # wrong there, but the pinned eval path never consumes it.
         n_ctx_reported = 0
@@ -988,6 +1035,10 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     )
     if rejected:
         return LemonadeAuthRejectedError(user_message=rejected.group(0).strip())
+    # Lemonade's refusal to pull a name outside its catalog, enveloped or not.
+    if _UNKNOWN_MODEL_RE.search(raw):
+        m = re.search(r"Received:\s*([^\s'\"`]+)", raw) or _QUOTED_MODEL_RE.search(raw)
+        return LemonadeUnknownModelError(model_id=m.group(1) if m else None)
     # Lemonade's own error code beats any wording or status below.
     envelope = lemonade_error_envelope(exc)
     if envelope is not None:
@@ -1504,7 +1555,7 @@ class LemonadeProvider(LLMClient):
             in_thinking, thought = False, ""
             return out
 
-        for chunk in response:
+        for chunk in _stalls_as_cut_offs(response):
             # The usage chunk arrives last and carries no choices. It is the
             # only token accounting a streamed turn gets — see the
             # stream_options request in lemonade_client.

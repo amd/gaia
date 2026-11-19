@@ -563,7 +563,8 @@ class OutputHandler(ABC):
         *loaded* is every skill now loaded in this chat, in load order. *how*
         is ``"model"`` when the model called ``load_skill``, ``"auto"`` when
         GAIA loaded it because the model called one of its ``loads_with``
-        tools, and ``"loaded"`` when it was already loaded.
+        tools, ``"user"`` when the user typed ``/<name>``, and ``"loaded"``
+        when it was already loaded.
         """
         ...
 
@@ -2058,6 +2059,11 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                 logger.debug("Pausing file preview failed: %s", e)
 
         self.progress.start(message, show_timer=show_timer)
+
+    def report_phase(self, phase: str, message: str, **counts: int) -> None:
+        """A terminal shows a phase as its spinner line."""
+        if message:
+            self.start_progress(message)
 
     def stop_progress(self) -> None:
         """Stop the progress indicator."""

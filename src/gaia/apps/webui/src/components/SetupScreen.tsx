@@ -468,7 +468,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         const request = ++planRequest.current;
         setPlanError(null);
         try {
-            const p = await api.getSetupPlan();
+            // Setup's own plan: what a local setup downloads, wherever chat runs now.
+            const p = await api.getSetupPlan(false);
             if (request !== planRequest.current) return null;
             setPlan(p);
             return p;
@@ -665,7 +666,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             let latest = plan;
             if (!cloud && selection.defaultChat && selection.defaultChat !== latest.chat_model.id) {
                 try {
-                    latest = await api.chooseSetupChatModel(selection.defaultChat, acknowledgeNoFit);
+                    latest = await api.chooseSetupChatModel(selection.defaultChat, acknowledgeNoFit, false);
                 } catch (err) {
                     const detail = api.setupConfirmFrom(err);
                     if (detail) {
@@ -679,9 +680,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 // Whatever the choice, llama.cpp runs on the backend GAIA has tested.
                 await applyTestedBackend();
                 const vision = savedVision(catalog, selection);
-                if (vision !== (latest.vision_model ?? null)) latest = await api.chooseSetupVisionModel(vision);
+                if (vision !== (latest.vision_model ?? null)) latest = await api.chooseSetupVisionModel(vision, false);
                 for (const change of skipChanges(latest, selection)) {
-                    latest = await api.skipSetupModel(change.id, change.skipped);
+                    latest = await api.skipSetupModel(change.id, change.skipped, false);
                 }
             }
             setPlan(latest);
@@ -801,7 +802,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         setBusy(true);
         try {
             const entry = plan?.catalog?.find((e) => e.id === id);
-            if (entry?.planned) setPlan(await api.skipSetupModel(id, true));
+            if (entry?.planned) setPlan(await api.skipSetupModel(id, true, false));
             setRun((r) => r && { ...r, models: r.models?.map((m) => (m.id === id ? { ...m, state: 'skipped' } : m)) });
             // Finish repeats the last run, which must not fetch this one again.
             const { options } = lastRun.current;
@@ -1318,7 +1319,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                             spellCheck={false}
                                             value={key}
                                             onChange={(e) => setKey(e.target.value)}
-                                            placeholder={savedKey ? t('setup.key.placeholder') : t('setup.key.placeholderNew')}
+                                            placeholder={savedKey ? t.bare('setup.key.placeholder') : t.bare('setup.key.placeholderNew')}
                                         />
                                         <button type="button" className="btn-secondary setup-key-show" aria-label={t(showKey ? 'setup.key.hide' : 'setup.key.show')} title={t(showKey ? 'setup.key.hide' : 'setup.key.show')} onClick={() => setShowKey((s) => !s)}>
                                             {showKey ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}

@@ -105,7 +105,7 @@ from gaia.ports import (
 )
 from gaia.utils import awake_clock, perf_trace
 from gaia.utils.terminal import windows_hidden_popen_kwargs
-from gaia.version import parse_version
+from gaia.version import base_version, parse_version
 
 # For the module-level helpers; the client class keeps its own ``self.log``.
 log = get_logger(__name__)
@@ -576,8 +576,11 @@ def vision_off_reason(base_url: Optional[str] = None) -> str:
     return VISION_OFF_ON_NPU if installed else VISION_NOT_INSTALLED
 
 
-def resolve_default_vision_model() -> Optional[str]:
+def resolve_default_vision_model(chat_model: Optional[str] = None) -> Optional[str]:
     """The model that reads text in scans and images when nobody passed one.
+
+    *chat_model* is the model chat runs now, for a session that switched;
+    default: the model chat reopens on.
 
     None while the chat model runs on the NPU: reading images is off there, so
     no second model is loaded next to it (:func:`vision_off_reason` says why).
@@ -592,7 +595,7 @@ def resolve_default_vision_model() -> Optional[str]:
 
     config = GaiaConfig.load()
     model = resolve_default_chat_model()
-    current = config.last_model or model
+    current = chat_model or config.last_model or model
     cloud = current.startswith("claude-") or bool(
         cloud_model_provider(current) or is_cloud_model(current)
     )
@@ -1272,6 +1275,16 @@ def _free_memory_for(url: str, model_id: str):
     return npu_free_memory(_system_info(url), read_os_memory()), resident
 
 
+class _Resident(dict):
+    """``{loaded model: ctx}``, plus the chat models a chat-model load unloads."""
+
+    #: Lemonade keeps one chat model: loading another unloads these first.
+    replaced_by_chat_load: Tuple[str, ...] = ()
+    #: The GPU pool's free memory once the NPU models among them are unloaded.
+    #: Their memory is RAM, which is only part of what a GPU pool counts.
+    free_without_npu_chat: Any = None
+
+
 def _free_memory_snapshot(url: str):
     """``(FreeMemory or None, {loaded model: ctx})`` for the Lemonade at *url*.
 
@@ -1279,16 +1292,36 @@ def _free_memory_snapshot(url: str):
     :class:`~gaia.llm.model_fit.ModelFitError` when its ``/system-info`` is
     unusable.
     """
+    import dataclasses
+
     from gaia.llm.model_fit import free_memory, read_os_memory
 
-    free = free_memory(_system_info(url), read_os_memory())
+    os_memory = read_os_memory()
+    free = free_memory(_system_info(url), os_memory)
     health = LemonadeClient(base_url=url, verbose=False).health_check(timeout=10)
-    resident = {}
+    resident = _Resident()
+    chat = []
     for entry in health.get("all_models_loaded") or []:
         name = entry.get("model_name") or entry.get("id")
         if name:
             options = entry.get("recipe_options") or {}
             resident[name] = int(options.get("ctx_size") or 0)
+            if entry.get("type") in ("llm", "vlm") and entry.get("recipe") != "cloud":
+                chat.append(name)
+    if (health.get("max_models") or {}).get("llm") == 1:
+        resident.replaced_by_chat_load = tuple(chat)
+        npu_gb = 0.0
+        for name in chat:
+            leaving = find_model_requirement(name)
+            if leaving is not None and leaving.size_gb and runs_on_npu(name):
+                npu_gb += _footprint_gb(leaving, resident[name] or leaving.min_ctx_size)
+        if npu_gb and free is not None:
+            resident.free_without_npu_chat = free_memory(
+                _system_info(url),
+                dataclasses.replace(
+                    os_memory, ram_available_gb=os_memory.ram_available_gb + npu_gb
+                ),
+            )
     return free, resident
 
 
@@ -1303,14 +1336,35 @@ def _footprint_gb(requirement: "ModelRequirement", ctx: int) -> float:
 
 
 def _with_own_memory(free, resident, requirement: "ModelRequirement"):
-    """*free* plus what *requirement*'s model already holds: a reload replaces it."""
+    """*free* plus the memory this load gets back: what *requirement*'s model
+    already holds (a reload replaces it), and what the chat model it replaces
+    holds, which Lemonade unloads first. Without the second, switching between
+    a model's NPU and GPU builds is sized against the build being left.
+    """
     from gaia.llm.model_fit import FreeMemory
 
+    back = 0.0
     for name, ctx in resident.items():
         if _model_ids_match(name, requirement.model_id):
-            own = _footprint_gb(requirement, ctx or requirement.min_ctx_size)
-            return FreeMemory(free.free_gb + own, free.limit_gb + own)
-    return free
+            back += _footprint_gb(requirement, ctx or requirement.min_ctx_size)
+    if requirement.model_type in (ModelType.LLM, ModelType.VLM):
+        on_npu = runs_on_npu(requirement.model_id)
+        if not on_npu:
+            free = getattr(resident, "free_without_npu_chat", None) or free
+        for name in getattr(resident, "replaced_by_chat_load", ()):
+            leaving = find_model_requirement(name)
+            if (
+                leaving is None
+                or not leaving.size_gb
+                or _model_ids_match(name, requirement.model_id)
+                # Across the two pools the snapshot's own figure applies, or none.
+                or runs_on_npu(name) != on_npu
+            ):
+                continue
+            back += _footprint_gb(leaving, resident[name] or leaving.min_ctx_size)
+    if not back:
+        return free
+    return FreeMemory(free.free_gb + back, free.limit_gb + back)
 
 
 def free_memory_verdict(url: str, requirement: "ModelRequirement", window: int):
@@ -2177,7 +2231,7 @@ MODELS = {
         max_ctx_size=131072,
         kv_bytes_per_token=36864,
     ),
-    # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
+    # --- Gemma 4 E2B: the small on-device NPU model ---
     # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
     # ``gemma4-it:e2b``), NOT the llama.cpp GGUF variant — only the FLM build
     # runs on the Strix Halo NPU. Validated on hardware: device=npu,
@@ -5823,8 +5877,9 @@ class LemonadeClient:
             model_name: Name of the model
 
         Returns:
-            Dict with ``id``, ``downloaded``, and ``size_gb`` — the catalog's
-            ``size``, or a name-based estimate when the catalog lacks one
+            Dict with ``id``, ``downloaded``, ``size_gb`` — the catalog's
+            ``size``, or a name-based estimate when the catalog lacks one — and
+            ``listed``, False when the catalog doesn't know the model at all
 
         Raises:
             LemonadeClientError: If the catalog can't be fetched
@@ -5839,12 +5894,14 @@ class LemonadeClient:
                         float(size) if size else self._estimate_model_size(model_name)
                     ),
                     "downloaded": bool(model.get("downloaded", False)),
+                    "listed": True,
                 }
 
         return {
             "id": model_name,
             "size_gb": self._estimate_model_size(model_name),
             "downloaded": False,
+            "listed": False,
         }
 
     def _model_storage_free_bytes(self) -> Tuple[int, str]:
@@ -10850,7 +10907,7 @@ class LemonadeClient:
 
         check_lemonade_version(actual_version, self.base_url)
 
-        if actual_version != expected_version and not quiet:
+        if base_version(actual_version) != base_version(expected_version) and not quiet:
             print(
                 f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version: "
                 f"v{actual_version} (expected v{expected_version})"

@@ -353,7 +353,7 @@ require a sidecar spec at all. That is the single highest-leverage change in thi
 ```
 
 **C1 — Drop the TUI from the gaia release lane.** Remove the `build_tui.yml` call and the
-`gaia-tui-*` publish steps from `release_agent_gaia.yml`; `terminal-hub` in
+`gaia-cli-*` publish steps from `release_agent_gaia.yml`; `terminal-hub` in
 `release_components.yml` becomes the only publisher. *In flight — confirm before starting
 anything else, and confirm the npm launcher consumes `terminal-hub`.*
 

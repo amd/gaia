@@ -42,6 +42,7 @@ from gaia.agents.base.claims import (
     read_claims,
 )
 from gaia.agents.base.completion import WRITE_TOOLS, mentioned_paths
+from gaia.agents.base.text_task import instruction_part
 from gaia.agents.base.verification import is_check_execution, observed_text
 
 LOOK = "look"
@@ -940,22 +941,39 @@ def action_findings(
 
 
 #: "use your shell tool": only a shell execution answers it.
+_SHELL = r"(?:shell|terminal|command[- ]line|bash|powershell|cmd)"
 _SHELL_REQUEST = re.compile(
-    r"\b(?:use|using|with)\s+(?:your|the)\s+"
-    r"(?:shell|terminal|command[- ]line|bash|powershell|cmd)\b",
+    rf"\b(?:use|using|with)\s+(?:your|the)\s+{_SHELL}\b"
+    # "In the shell, run: dir", but not "In the terminal, can I run it?"
+    rf"|\b(?:in|from)\s+(?:your|the|a)\s+{_SHELL}[\s,:]+(?:please\s+)?(?:run|execute)\b"
+    # The shell tool named outright.
+    r"|\buse\s+(?:the\s+)?run_shell_command\b",
     re.IGNORECASE,
 )
 #: A message that opens with "run"/"execute" and a command: quoted, a known
-#: program, or "the command/script/tests/build". Not "run a web search" or "run
-#: me through it", and only the opening: a pasted README's "Run npm install" is
-#: not a request.
+#: program, "this/the command", "this:", or a program with a switch
+#: ("cmdkey /list"). Not "run a web search" or "run me through it", and only
+#: the opening: a pasted README's "Run npm install" is not a request.
+_RUN = r"(?:run|execute)(?:\s+|(?=:))(?:exactly\b\s*)?"
+#: A command spelled out: quoted, after a colon, or a program with a switch.
+_SPELLED_OUT = (
+    r"[`\"']"
+    r"|(?:(?:this|the\s+following)\b\s*(?:exact\s+)?(?:commands?\s*)?)?:"
+    # Not "Run the -v flag" or "Run me -through".
+    r"|(?!(?:a|an|the|it|me|us|them|this|that)\b)[\w.\-]+\s+(?:--?|/)[A-Za-z?]"
+)
 _COMMAND_REQUEST = re.compile(
-    r"\A\s*(?:please\s+)?(?:run|execute)\s+"
-    r"(?:[`\"']"
+    rf"\A\s*(?:(?:please|now|then|ok(?:ay)?)[\s,]+)*{_RUN}"
+    rf"(?:{_SPELLED_OUT}"
     r"|(?:git|gh|npm|npx|pip|python|py|pytest|node|go|cargo|make|cmake|docker|"
     r"ls|dir|pwd|cd|echo|cat|type|whoami|hostname|ipconfig|ping|uv|ruff|"
     r"black|mypy|tsc|yarn|pnpm|dotnet|java|mvn|gradle)\b"
-    r"|the\s+(?:command|script|tests?|test\s+suite|build|linter|lint)\b)",
+    r"|(?:the|this|that|these|the\s+following)\s+(?:exact\s+|one\s+)?"
+    r"(?:commands?|script|tests?|test\s+suite|build|linter|lint)\b)"
+    # "Can you run …" is often a question about ability: only a spelled-out
+    # command makes it a request.
+    rf"|\A\s*(?:please[\s,]+)?(?:can|could|would|will)\s+you\s+(?:please\s+)?"
+    rf"{_RUN}(?:{_SPELLED_OUT})",
     re.IGNORECASE,
 )
 _SAYS_NOT_RUN = re.compile(
@@ -1019,7 +1037,10 @@ def ungrounded(
     not look, or that its figures are unverified, has nothing left to correct
     about looking or figures — only a false report of work done still counts.
     """
-    findings = look_findings(answer, query, records, locate, history, plan_only)
+    # Files to read and commands to run come from the instruction; the figure
+    # check below reads the whole query, since figures may come from the text.
+    asked = instruction_part(query)
+    findings = look_findings(answer, asked, records, locate, history, plan_only)
     if admits_unverified(answer):
         findings = [f for f in findings if f.note == _ABSENT_NOTE]
     else:
@@ -1027,7 +1048,7 @@ def ungrounded(
     return (
         findings
         + action_findings(answer, records, may_act)
-        + request_findings(answer, query, records)
+        + request_findings(answer, asked, records)
     )
 
 

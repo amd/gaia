@@ -72,6 +72,8 @@ from gaia.agents.base.skill_suggester import (
     render_suggestion,
     suggest_env_override,
 )
+from gaia.agents.base.text_task import instruction_part
+from gaia.agents.base.tool_grants import BROWSER_PANE_SKILL
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
@@ -236,6 +238,10 @@ class GaiaAgentConfig(ChatAgentConfig):
     # "full" is the only spec whose tool_groups are the union this agent needs:
     # doc_rag + file_fs + data_scratch + web_browse + full_screenshot.
     prompt_profile: str = "full"
+
+    # The id Settings › Connectors activates MCP servers for, so the flagship
+    # offers a server's tools only once it is activated, however it was built.
+    namespaced_agent_id: Optional[str] = "installed:gaia"
 
     # None (the CLI's "not given") also resolves to the flagship limit.
     max_steps: Optional[int] = field(default_factory=flagship_max_steps)
@@ -521,16 +527,18 @@ class GaiaAgent(
 
     @property
     def skill_manager(self):
-        """Exclude the developer skill before metadata discovery in normal mode."""
+        """Exclude the developer skill before metadata discovery in normal mode,
+        and the browser-pane skill in a chat with no pane to drive."""
         if getattr(self, "_skill_manager", None) is None:
             from gaia.skills import SkillManager
 
+            excluded = () if self.config.developer_mode else (ENGINEERING_SKILL,)
+            if not self._browser_pane_attached:
+                excluded += (BROWSER_PANE_SKILL,)
             # The project's .claude/skills join the catalogue, as in Claude Code.
             self._skill_manager = SkillManager(
                 agent_skill_dirs=[*self.SKILL_DIRS, *self._bundled_skill_dirs()],
-                excluded_names=(
-                    () if self.config.developer_mode else (ENGINEERING_SKILL,)
-                ),
+                excluded_names=excluded,
                 project_dir=self._project_map_root(),
             )
         return self._skill_manager
@@ -560,15 +568,24 @@ class GaiaAgent(
         names = super()._always_on_skill_names
         return names | {ENGINEERING_SKILL} if self.config.developer_mode else names
 
-    def close(self) -> None:
+    def close(self, *, wait_for_mcp: bool = True) -> None:
         """Release this agent's watchers, HTTP session and SQLite handles now.
 
         ``ChatAgent`` puts that teardown in ``__del__``, which for an instance
         whose tool registry holds bound methods only runs when the cyclic
         collector gets to it — far too late for a sidecar that builds an agent
         per one-shot request. Every step is individually guarded and idempotent,
-        so the later ``__del__`` is harmless.
+        so the later ``__del__`` is harmless. MCP servers are stopped here and
+        waited for, so they are gone when ``close()`` returns; with
+        ``wait_for_mcp=False`` they stop on a background thread instead, for a
+        caller that something else is waiting on.
         """
+        manager = getattr(self, "_mcp_manager", None)
+        if manager is not None and wait_for_mcp:
+            try:
+                manager.disconnect_all()
+            except Exception as e:  # noqa: BLE001 — logged; the rest still runs
+                logger.error("Error stopping MCP servers during close: %s", e)
         self.__del__()
 
     def _register_tools(self) -> None:
@@ -700,6 +717,9 @@ class GaiaAgent(
             return []
         if getattr(self, "_memory_store", None) is None:
             logger.debug("[skills] no suggestions: memory store (embedder) is off")
+            return []
+        # Text handed over to translate or reword needs no skill, whatever it says.
+        if instruction_part(user_input) != (user_input or ""):
             return []
         return suggester.suggest(
             user_input,

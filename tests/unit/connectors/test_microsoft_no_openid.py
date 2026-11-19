@@ -73,19 +73,17 @@ def test_catalog_default_scopes_are_exactly_the_identity_set(spec_name):
 
 
 def test_openid_is_absent_from_every_microsoft_connect_scope_in_the_fixture():
-    """The shared fixture drives the TUI's reconnect scopes (Go) too, so a
-    stale ``openid`` there would resurrect the failing request in the TUI even
-    with the Python side fixed."""
+    """A stale ``openid`` in the shared fixture would let the identity-spelling
+    test pin the failing request back in."""
     fixture_path = (
         Path(__file__).resolve().parents[2]
         / "fixtures"
         / "connectors"
-        / "email_scopes.json"
+        / "mail_scopes.json"
     )
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     for connector_id in ("microsoft", "microsoft_work"):
         entry = fixture[connector_id]
-        assert "openid" not in entry["connect_union"], connector_id
         assert "openid" not in entry["identity_scopes"], connector_id
 
 
@@ -133,10 +131,10 @@ def _fake_async_client(response: _FakeResponse, recorder: dict):
 @pytest.mark.parametrize(
     "payload, expected",
     [
-        ({"mail": "user@contoso.com"}, "user@contoso.com"),
+        ({"id": "u1", "mail": "user@contoso.com"}, "user@contoso.com"),
         # Personal accounts null `mail` and carry the address in the UPN.
         (
-            {"mail": None, "userPrincipalName": "user@outlook.com"},
+            {"id": "u1", "mail": None, "userPrincipalName": "user@outlook.com"},
             "user@outlook.com",
         ),
     ],
@@ -152,9 +150,9 @@ def test_account_email_resolves_from_graph_me_without_an_id_token(
     )
     provider = MicrosoftOAuthProvider(client_id="test-client")
 
-    resolved = asyncio.run(flow._resolve_account_email(provider, "", "access-token"))
+    resolved = asyncio.run(flow.identify_account(provider, "", "access-token"))
 
-    assert resolved == expected
+    assert resolved == flow.AccountIdentity(account_id="u1", email=expected)
     assert recorder["url"].startswith("https://graph.microsoft.com/v1.0/me")
     assert recorder["headers"]["Authorization"] == "Bearer access-token"
 

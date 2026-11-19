@@ -110,8 +110,8 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
     """Each default chat model, and whether this PC and its Lemonade can run it.
 
     Judged as :func:`recommend_default_chat_model` judges them (registry size,
-    the server's version, then the memory free now); the size shown is
-    :func:`model_choice.download_size_gb`'s.
+    the server's version, then the memory free now); the size shown is the
+    server's catalog size.
     """
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_LADDER,
@@ -157,9 +157,7 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
         options.append(
             {
                 "id": model_id,
-                "size_gb": model_choice.download_size_gb(
-                    model_id, catalog.get(model_id)
-                ),
+                "size_gb": catalog.get(model_id, size),
                 "fits": fits,
                 "reason": reason,
             }
@@ -255,6 +253,7 @@ def _components(
     what comes to this PC, how big it is and from where. ``size_gb`` is None
     when nothing here can know it before the download starts."""
     from gaia.hub import installer as hub_installer
+    from gaia.hub.prerelease import flagship_origin
     from gaia.llm.lemonade_embedded import (
         BUNDLED_ARCHIVE_DIR_ENV,
         GITHUB_RELEASE_BASE,
@@ -287,7 +286,7 @@ def _components(
             "id": "agent",
             "version": None,
             "size_gb": None,
-            "source": "hub.amd-gaia.ai",
+            "source": flagship_origin(),
             "installed": hub_installer.read_sentinel("gaia") is not None,
         }
     )
@@ -390,7 +389,11 @@ def _catalog(
         is_embedding_model_id,
         remaining_download_gb,
     )
-    from gaia.llm.lemonade_client import is_cloud_model_entry, runs_on_npu
+    from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_LADDER,
+        is_cloud_model_entry,
+        runs_on_npu,
+    )
 
     same = model_choice.ids_match
     lemonade_list = (
@@ -441,9 +444,13 @@ def _catalog(
     for model_id in order:
         entry = entry_for(model_id)
         downloaded = bool(entry.get("downloaded")) if entry else False
-        full = model_choice.download_size_gb(
-            model_id, entry.get("size") if entry else None
-        )
+        full = entry.get("size") if entry else None
+        # The plan's fit checks run on the server's size for setup's own models;
+        # any other model shows the one size Settings shows for it.
+        if not isinstance(full, (int, float)) or not listed(
+            model_id, [*base, *DEFAULT_MODEL_LADDER]
+        ):
+            full = model_choice.download_size_gb(model_id, full)
         partial_gb = 0.0 if downloaded else round((on_disk.get(model_id) or 0) / 1e9, 2)
         remaining: Optional[float] = (
             0.0 if downloaded else remaining_download_gb(full, on_disk.get(model_id))
@@ -501,7 +508,7 @@ def _catalog(
 
 def build_plan(
     profile: str = PROFILE,
-    skip_chat_model: bool = False,
+    skip_chat_model: Optional[bool] = None,
     extra_models: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """The Lemonade, models and downloads ``gaia init --profile <profile>`` will use.
@@ -511,7 +518,8 @@ def build_plan(
     the final pick comes once the server answers. ``catalog`` is every model
     the user can pick from; ``models`` is what setup will download, without
     the ones in ``skipped_models``. *extra_models* are downloaded beside the
-    profile's, as ``gaia init --download-model`` does.
+    profile's, as ``gaia init --download-model`` does. *skip_chat_model* None
+    skips the chat model's download while chat runs on a cloud model.
     """
     from gaia.config import GaiaConfigError
     from gaia.installer.init_command import (
@@ -535,6 +543,8 @@ def build_plan(
     client = _client(lemonade["url"])
     lemonade["reachable"] = client is not None
     try:
+        if skip_chat_model is None:
+            skip_chat_model = client is not None and _chat_on_cloud(lemonade["url"])
         # With no server this still answers: the user's model, else the floor.
         choice = resolve_init_chat_model(
             client or _NoServer(),
@@ -836,19 +846,24 @@ def choose_vision_model(model_id: Optional[str]) -> None:
         raise SetupPlanError(str(e)) from e
 
 
+def _chat_on_cloud(base_url: Optional[str] = None) -> bool:
+    """Whether chat runs on a cloud model, so no local chat model is needed."""
+    from gaia.llm.lemonade_client import is_cloud_model_with_catalog, resolve_chat_model
+
+    model = resolve_chat_model()
+    return model.startswith("claude-") or is_cloud_model_with_catalog(model, base_url)
+
+
 def _job_model(job: str) -> Optional[str]:
     """The model *job* would load now, or None when no local model is involved."""
     from gaia.llm.lemonade_client import (
         DEFAULT_EMBEDDING_MODEL,
-        is_cloud_model_with_catalog,
         resolve_chat_model,
         resolve_default_vision_model,
     )
 
     if job == model_choice.ROLE_CHAT:
-        model = resolve_chat_model()
-        cloud = model.startswith("claude-") or is_cloud_model_with_catalog(model)
-        return None if cloud else model
+        return None if _chat_on_cloud() else resolve_chat_model()
     if job == model_choice.ROLE_VISION:
         return resolve_default_vision_model()
     if job == model_choice.ROLE_EMBEDDING:
@@ -902,12 +917,18 @@ def model_need(job: str) -> Dict[str, Any]:
     }
 
 
-def set_model_skipped(model_id: str, skipped: bool, profile: str = PROFILE) -> None:
+def set_model_skipped(
+    model_id: str,
+    skipped: bool,
+    profile: str = PROFILE,
+    skip_chat_model: Optional[bool] = None,
+) -> None:
     """Skip one of *profile*'s models, or take it back; saved in ``skipped_models``."""
     from gaia.config import GaiaConfigError
 
     if skipped:
-        planned = [e["id"] for e in build_plan(profile)["catalog"] if e["planned"]]
+        plan = build_plan(profile, skip_chat_model)
+        planned = [e["id"] for e in plan["catalog"] if e["planned"]]
         if not any(model_choice.ids_match(model_id, m) for m in planned):
             raise UnknownModel(
                 f"{model_id} is not one of the models setup downloads "
@@ -951,8 +972,8 @@ def remove_model(model_id: str) -> float:
             f"{model_id} was removed, but GAIA could not record it as skipped, so "
             f"the next setup downloads it again: {e}"
         ) from e
-    size = model_choice.download_size_gb(model_id, entry.get("size"))
-    return round(size, 1) if size is not None else 0.0
+    size = entry.get("size")
+    return round(float(size), 1) if isinstance(size, (int, float)) else 0.0
 
 
 def _download_entry(model_id: str):

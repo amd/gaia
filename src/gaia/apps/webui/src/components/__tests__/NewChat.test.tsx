@@ -4,9 +4,11 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
+import { useBrowserPaneStore } from '../../stores/browserPaneStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
+import { FlagshipMissing } from '../../utils/newTask';
 import newChatCss from '../NewChat.css?raw';
 import type { ActiveModel, Document, StartScreen, SystemStatus } from '../../types';
 
@@ -45,7 +47,7 @@ describe('NewChat and the document library', () => {
     it('says a new chat cannot search the library until documents are attached', async () => {
         render(<NewChat onSend={vi.fn()} />);
 
-        expect(await screen.findByText(/Your library has 2 documents; this chat can search only the ones you attach/)).toBeInTheDocument();
+        expect(await screen.findByText(/2 documents in your library. Attach the ones you want to search here./)).toBeInTheDocument();
     });
 
     it('attaches the whole library to the chat it creates', async () => {
@@ -148,6 +150,23 @@ describe('NewChat while GAIA is starting', () => {
         fireEvent.change(box, { target: { value: 'hello' } });
         fireEvent.keyDown(box, { key: 'Enter' });
         expect(onSend).toHaveBeenCalledWith('hello');
+    });
+});
+
+describe('NewChat without the GAIA agent', () => {
+    it('points a refused send at the install notice only while that notice shows', async () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        const onSend = vi.fn().mockRejectedValue(new FlagshipMissing());
+        const { rerender } = render(<NewChat onSend={onSend} agentMissing />);
+
+        const box = screen.getByLabelText('Message');
+        fireEvent.change(box, { target: { value: 'hello' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        expect(await screen.findByRole('alert')).toHaveTextContent('Install it from the notice above');
+        expect(box).toHaveValue('hello');
+
+        rerender(<NewChat onSend={onSend} agentMissing={false} />);
+        expect(screen.queryByText(/notice above/)).not.toBeInTheDocument();
     });
 });
 
@@ -598,6 +617,27 @@ describe('NewChat after first-run setup failed', () => {
         useChatStore.setState({ systemStatus: { init_state: 'ready', setup_error: null } as SystemStatus });
         render(<NewChat onSend={vi.fn()} />);
         expect(screen.queryByRole('alert')).toBeNull();
+    });
+});
+
+describe('NewChat and the browser pane', () => {
+    afterEach(() => {
+        delete window.gaiaBrowserPane;
+        useBrowserPaneStore.setState({ draftOpen: false });
+    });
+
+    it('offers the browser pane button in the desktop app', () => {
+        window.gaiaBrowserPane = {} as NonNullable<typeof window.gaiaBrowserPane>;
+        useBrowserPaneStore.setState({ draftOpen: false });
+        render(<NewChat onSend={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Show browser pane' }));
+        expect(useBrowserPaneStore.getState().draftOpen).toBe(true);
+        expect(screen.getByRole('button', { name: 'Hide browser pane' })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('has no browser pane button in a plain browser', () => {
+        render(<NewChat onSend={vi.fn()} />);
+        expect(screen.queryByRole('button', { name: /browser pane/ })).toBeNull();
     });
 });
 

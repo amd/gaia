@@ -1028,6 +1028,9 @@ run, or when the agent changed code and nothing checked it afterwards. In a
 project with a test suite only a test run covers a change, so a clean lint alone
 still gets the note. When every check passed, or nothing needed checking (a
 question, a lookup, a read, a notes file), the answer carries no note at all.
+An answer that itself reports the failed tests ("No, the suite fails: 1
+failed") and claims no success gets no note for them either; the
+`verification` data below still records the failure.
 
 The state is derived from the tool calls that actually executed during the
 turn — no extra model call — and is returned as data on the result, for
@@ -1401,6 +1404,16 @@ quota exhaustion return explicit errors. Restarting an agent invalidates its
 output handles; rerun the source tool if the session has ended. A continuation
 reads captured output rather than re-executing a potentially state-changing tool.
 
+To hand a large result to another tool, pass its handle as the argument:
+`write_file(file_path="notes.md", content="output_…")`, where the handle is the
+result's full `artifact` value (`output_` and 32 hex characters). The tool gets
+the whole archived text, and the text never enters the prompt. Only an argument
+that is exactly a handle is replaced, at any depth in lists and objects; a
+handle inside other text is left as written. The replacement happens before
+permission checks and confirmation prompts, so they see the real text. An
+unknown or expired handle stops the call with an error naming the handle.
+`read_tool_output` is the one tool that takes the handle itself.
+
 ### Exhaustive document extraction
 
 For explicit requests to list every item in a text document, the agent offers
@@ -1421,7 +1434,9 @@ The framework retains entries with exact source quotations and character spans,
 checks the source fingerprint again before completion, and appends the accumulated
 inventory to the final answer. A final model summary cannot drop retained entries.
 Ambiguous evidence keeps both entries and marks the possible repeat rather than
-dropping one. Reading every page without extracting an inventory is insufficient.
+dropping one. Reading every page without extracting an inventory is insufficient,
+with one exception: a file the request did not name, that `read_file` returned whole
+and that fits in one extraction page, owes no extraction pass.
 
 `save_extracted_items(file_path)` exports the retained inventory as JSON, CSV, or
 readable text, using the existing write permission gate. JSON records carry each

@@ -57,7 +57,9 @@ newest version (`<name>@<range>` pins one). To remove one, run
 You can also ask the GAIA agent in chat: "find a skill that does X and install
 it". It searches the hub (`search_skill_hub`) and installs (`install_skill`), but
 an installed skill is not active until it is loaded (`load_skill`), which the
-agent does when you ask it to use the skill. The agent will not install a skill
+agent does when you ask it to use the skill. To run one yourself, start a message
+with `/` and its name, as in Claude Code: `/summarize this transcript`. See
+[Skills](/guides/gaia#skills). The agent will not install a skill
 that is unsigned or asks for a dangerous permission; it tells you, and you can
 approve it yourself in a terminal with
 `gaia skill install <name> --allow-experimental` or `--yes`.
@@ -187,6 +189,44 @@ gets them subtly wrong, while an LLM writing SQL against them does not.
 - **Demonstrates** — scratchpad tables for structured analysis.
 - **Consumes** — `create_table`, `insert_data`, `query_data`, `list_tables`.
 - **Configure** — a CSV, export, or pasted table.
+
+### report-from-sources
+
+Builds a report, deck, brief or workbook from the user's files without dropping
+what the sources stress. It inventories the inputs and picks the newest file for
+each dataset, keeps a key-facts ledger per source (headline numbers, stated
+changes, notable events, risks), puts source and period on every figure, then
+checks the saved file against the ledger and against a numbered list of
+everything the user asked for.
+
+- **Demonstrates** — analyst practice as a procedure: provenance, coverage
+  checks, and verifying a saved file against the request with `run_python`.
+- **Consumes** — `list_files`, `read_file`, `run_python`.
+- **Configure** — a folder of sources and the deliverable you want.
+
+### log-triage
+
+Finds the incident in a log rather than the noise. It parses every file over its
+full time range, groups messages into templates, ranks them by severity, hosts
+hit and rarity instead of volume, finds bursts, and reports exact first and last
+timestamps, with routine baseline messages kept apart from anomalies.
+
+- **Demonstrates** — whole-file analysis with pandas in `run_python` instead of
+  reading a large file into the conversation.
+- **Consumes** — `list_files`, `read_file`, `run_python`.
+- **Configure** — one or more log files; fit the line pattern to their format.
+
+### meeting-actions
+
+Turns meeting notes, minutes or transcripts into one action tracker. It catches
+commitments said in passing ("I'll send it", "let me check") as well as
+labelled actions, records owner, due date and evidence, and merges an item that
+comes back in later meetings into one row with its latest status.
+
+- **Demonstrates** — exhaustive extraction with a regex safety net, and
+  de-duplication across documents.
+- **Consumes** — `list_files`, `read_file`, `run_python`, `write_file`.
+- **Configure** — a folder of notes, or one meeting's transcript.
 
 ### source-watch
 
@@ -360,6 +400,28 @@ account, through the mailbox the flagship's reading tools use.
 - **Consumes** — `list_inbox`, `search_email`, `read_email`.
 - **Configure** — connect Google or Microsoft with mail write access; see the
   [Email guide](/guides/email).
+
+### browser-pane
+
+Looks at and drives the page in GAIA desktop's
+[browser pane](/guides/agent-ui/desktop#gaia-uses-the-pane) beside the chat, and serves
+a site you built there.
+
+- **Demonstrates** — a skill whose tools exist for one surface: it is offered
+  only in a chat open in GAIA desktop with the pane, and anywhere else its tools
+  refuse and change nothing. Its tools run through the agent's own browser
+  mixin, which keeps asking before a site you haven't approved and before a
+  control that may not be undoable. `browser_eval` is marked
+  `requires_confirmation: true` and shows the whole script every time. It and
+  starting a dev server need a person even under Full access, like sending
+  mail.
+- **Provides** — `browser-pane/browser_screenshot`, `browser-pane/browser_logs`,
+  `browser-pane/browser_press`, `browser-pane/browser_viewport`,
+  `browser-pane/browser_tabs`, `browser-pane/browser_dialog`,
+  `browser-pane/browser_eval`, `browser-pane/browser_batch`,
+  `browser-pane/dev_server`.
+- **Configure** — nothing. See [Browser use](/guides/browser-use) for what each
+  tool asks before it runs.
 
 ### image-gen
 

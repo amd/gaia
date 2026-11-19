@@ -16,8 +16,9 @@ Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
 ``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
 ``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
 2.14), ``/sessions/{session_id}/bypass``, ``/sessions/{session_id}/internet``
-(contract >= 2.23), ``/sessions/{session_id}/grants`` (contract >= 2.26) and
-``/sessions/{session_id}/tools`` (contract >= 2.27).
+(contract >= 2.23), ``/sessions/{session_id}/grants`` (contract >= 2.26),
+``/sessions/{session_id}/tools`` (contract >= 2.27) and
+``DELETE /sessions/{session_id}`` (contract >= 2.30).
 ``needs_input`` is answered over
 ``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
 the same way over ``/tool_decision`` — but only when there is a session to
@@ -107,7 +108,8 @@ AGENT_ID = "gaia"
 #: 2.28 added the non-terminal ``context_usage`` event for a caller that sends
 #: ``turns``: the turn's first call is measured before the answer streams.
 #: 2.29 added ``final.route``: the model a ``hybrid`` session's turn ran on.
-API_VERSION = "2.29"
+#: 2.30 added ``DELETE /sessions/{id}``: end a session and stop its MCP servers.
+API_VERSION = "2.30"
 
 #: How long the stream allows the turn's context measurement before naming the
 #: failure on ``final``, and how long the loop's own fallback measurement waits.
@@ -216,7 +218,8 @@ class QueryRequest(_Strict):
             "Send the full set every turn, an empty list when none are attached: "
             "files already indexed in a retained session are skipped, so one "
             "attached mid-conversation is picked up on the next turn, and one "
-            "sent before but left out now is removed from the session's index."
+            "sent before but left out now is removed from the session's index "
+            "and can no longer be read."
         ),
     )
 
@@ -394,6 +397,15 @@ class QueryRequest(_Strict):
 class QueryCancelResponse(_Strict):
     run_id: str
     cancelled: bool
+    documents_left: Optional[int] = Field(
+        default=None,
+        description=(
+            "How many of the turn's attached documents the cancel left "
+            "unloaded. null when the run was not loading documents or had "
+            "loaded them all. The stream a host closes on cancel never carries "
+            "the loading step's result, so this is where the count comes from."
+        ),
+    )
 
 
 class QueryRespondRequest(_Strict):
@@ -537,6 +549,13 @@ class GrantsResponse(_Strict):
     grants: List[GrantView]
 
 
+class SessionDeletedResponse(_Strict):
+    """``DELETE /sessions/{id}`` (contract >= 2.30)."""
+
+    session_id: str
+    deleted: bool
+
+
 class ToolView(_Strict):
     name: str = Field(description="The tool's registered name.")
     description: str = Field(description="What it does, as the model is told.")
@@ -553,6 +572,34 @@ class ToolsResponse(_Strict):
 
     session_id: str
     tools: List[ToolView]
+
+
+class _DocumentLoad:
+    """How far a turn's attached documents have loaded, read in step with Stop."""
+
+    def __init__(self, total: int, cancel: Optional[threading.Event]) -> None:
+        self.total = total
+        self._started = 0
+        self._cancel = cancel
+        self._lock = threading.Lock()
+
+    def start_next(self) -> bool:
+        """Count the next document as started, unless the run was stopped."""
+        with self._lock:
+            if self._cancel is not None and self._cancel.is_set():
+                return False
+            self._started += 1
+            return True
+
+    def end_early(self) -> None:
+        """Count the rest as handled: a full index, not Stop, left them unloaded."""
+        with self._lock:
+            self._started = self.total
+
+    def left(self) -> int:
+        """Documents not started. Final once the cancel flag is set."""
+        with self._lock:
+            return self.total - self._started
 
 
 class _QueryRun:
@@ -579,6 +626,14 @@ class _QueryRun:
         self.query = ""
         self.pushed: List[Dict[str, Any]] = []
         self.received_turns: Optional[List[List[Dict[str, Any]]]] = None
+        #: The turn's attached documents, while and after they load.
+        self.document_load: Optional[_DocumentLoad] = None
+
+    def documents_left(self) -> Optional[int]:
+        """Attached documents a cancel left unloaded, or None when there are none."""
+        load = self.document_load
+        left = load.left() if load is not None else 0
+        return left if left > 0 and self.cancel_event.is_set() else None
 
 
 class DuplicateRunError(RuntimeError):
@@ -601,10 +656,12 @@ _MAX_FINISHED = 256
 _MISSING = object()
 
 
-def _remember_bounded(store: Dict[str, None], key: str, cap: int) -> None:
+def _remember_bounded(
+    store: Dict[str, Optional[int]], key: str, cap: int, value: Optional[int] = None
+) -> None:
     """Record ``key`` as the newest entry, dropping the oldest past ``cap``."""
     store.pop(key, None)  # re-insert at the end, so this is the newest
-    store[key] = None
+    store[key] = value
     while len(store) > cap:
         store.pop(next(iter(store)))
 
@@ -617,9 +674,9 @@ class _RunRegistry:
         #: run_ids cancelled before their ``/query`` registered. Insertion
         #: ordered, so the oldest is the one evicted at the cap.
         self._precancelled: Dict[str, None] = {}
-        #: run_ids whose run has already ended. Same shape, and the reason
-        #: ``cancel`` does not tombstone them.
-        self._finished: Dict[str, None] = {}
+        #: run_ids whose run has already ended, and the reason ``cancel`` does
+        #: not tombstone them. Each keeps the documents a cancel left unloaded.
+        self._finished: Dict[str, Optional[int]] = {}
         self._lock = threading.Lock()
 
     def add(self, run: _QueryRun) -> bool:
@@ -669,12 +726,21 @@ class _RunRegistry:
                 _remember_bounded(self._precancelled, run_id, _MAX_PRECANCELLED)
             return False
 
+    def documents_left(self, run_id: str) -> Optional[int]:
+        """Attached documents a cancel of *run_id* left unloaded, live or just ended."""
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is not None:
+                return run.documents_left()
+            return self._finished.get(run_id)
+
     def remove(self, run_id: str) -> None:
         """Retire a finished run, remembering the id so a late cancel knows it
         ended rather than treating it as one that has yet to start."""
         with self._lock:
-            self._runs.pop(run_id, None)
-            _remember_bounded(self._finished, run_id, _MAX_FINISHED)
+            run = self._runs.pop(run_id, None)
+            left = run.documents_left() if run is not None else None
+            _remember_bounded(self._finished, run_id, _MAX_FINISHED, left)
 
 
 _registry = _RunRegistry()
@@ -698,7 +764,7 @@ def _worded(event: Dict[str, Any], surface: str) -> Dict[str, Any]:
     }
 
 
-def _terminal_error_detail(exc: BaseException) -> str:
+def _terminal_error_detail(exc: BaseException, surface: str) -> str:
     """Actionable copy for a run-killing exception.
 
     A model-server failure gets its classified wording, which names the fix in
@@ -710,7 +776,7 @@ def _terminal_error_detail(exc: BaseException) -> str:
 
     typed = model_server_failure(exc)
     if typed is not None:
-        return model_server_message(typed)
+        return model_server_message(typed, surface)
     return f"{type(exc).__name__}: {exc}"
 
 
@@ -721,12 +787,14 @@ def _start_failure(exc: BaseException, surface: str) -> HTTPException:
     typed = model_server_failure(exc)
     if typed is None:
         return HTTPException(
-            status_code=500, detail=f"Failed to start the query run: {exc}"
+            status_code=500,
+            detail=surface_wording(f"Failed to start the query run: {exc}", surface),
         )
     logger.warning("%s /query could not start: %s", AGENT_ID, exc)
     # Not the caller's fault and not a bug: the model server is unavailable.
     return HTTPException(
-        status_code=503, detail=surface_wording(model_server_message(typed), surface)
+        status_code=503,
+        detail=surface_wording(model_server_message(typed, surface), surface),
     )
 
 
@@ -923,8 +991,45 @@ def _grant_unloaded(agent: Any, documents: List[str]) -> None:
             agent.path_validator.add_allowed_path(doc)
 
 
+def _granted_only_as_gaias_copy(validator: Any, doc: str) -> bool:
+    """Whether *doc* is still readable only because it sits in GAIA's documents folder.
+
+    The Agent UI grants that whole folder to every chat as its scratch space,
+    and keeps the copy of every document dropped into it there. A folder the
+    user granted is any other entry, and keeps covering *doc*.
+    """
+    if not validator.is_path_allowed(doc, prompt_user=False):
+        return False
+    from gaia.ui.utils import UnsafeGaiaHomeError, managed_documents_dir
+
+    try:
+        managed = managed_documents_dir().resolve()
+    except UnsafeGaiaHomeError:
+        # The Agent UI refuses to run on this GAIA_HOME, so it keeps no copies.
+        return False
+    real = Path(os.path.realpath(doc))
+    if not real.is_relative_to(managed):
+        return False
+    return not any(
+        real.is_relative_to(Path(os.path.realpath(root)))
+        for root in validator.allowed_paths
+        if Path(os.path.realpath(root)) != managed
+    )
+
+
 def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
-    """Take the documents attached last turn but not this one out of the index."""
+    """Take the documents attached last turn but not this one out of the index.
+
+    Their grants go too: a grant left behind lets ``query_specific_file``
+    index the file again from disk. GAIA's own copy of a document is refused
+    until it is attached again, since its folder stays granted.
+    """
+    validator = agent.path_validator
+    withheld = getattr(agent, "_withheld_documents", set())
+    for doc in withheld & set(documents):
+        validator.release_path(doc)
+    withheld -= set(documents)
+    agent._withheld_documents = withheld
     attached = getattr(agent, "_attached_documents", set())
     dropped = attached - set(documents)
     agent._attached_documents = set(documents)
@@ -932,6 +1037,10 @@ def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
         return
     rag = agent.rag
     for doc in sorted(dropped):
+        validator.remove_allowed_path(doc)
+        if _granted_only_as_gaias_copy(validator, doc):
+            validator.withhold_path(doc)
+            withheld.add(doc)
         if doc not in agent.indexed_files:
             continue
         held = rag is not None and str(Path(doc).absolute()) in rag.indexed_files
@@ -945,7 +1054,9 @@ def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
     agent.rebuild_system_prompt()
 
 
-def _index_attached_documents(agent: Any, documents: List[str], handler: Any) -> None:
+def _index_attached_documents(
+    agent: Any, documents: List[str], handler: Any, run: Optional[_QueryRun] = None
+) -> None:
     """Index the documents the caller attached to this conversation (>= 2.16).
 
     Grants each as that exact file, never its folder: the scope an in-process
@@ -953,7 +1064,8 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     session pays only for documents attached since its last turn. Loading
     stops once the index is full; the rest stay attached and load on request.
     A document attached on an earlier turn and left out of *documents* is
-    dropped.
+    dropped. *run* is told how far the load got, so its cancel can report
+    what was left.
     """
     _drop_detached_documents(agent, documents)
     agent.attached_documents = list(documents)
@@ -965,13 +1077,16 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
         # Already said when the index filled; the model is told every turn.
         _grant_unloaded(agent, pending)
         return
+    # Set before the step opens, so a Stop that lands now still gets its count.
+    load = _DocumentLoad(len(pending), getattr(agent, "_cancel_event", None))
+    if run is not None:
+        run.document_load = load
     handler.print_tool_usage(_ATTACH_TOOL)
     handler.pretty_print_json(
         {"documents": [Path(d).name for d in pending]}, title="Arguments"
     )
     rag = agent.rag
     lines: List[str] = []
-    cancel = getattr(agent, "_cancel_event", None)
     stopped = False
     filled = False
     left = 0
@@ -981,8 +1096,8 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     loaded_line: Dict[str, int] = {}
     for position, doc in enumerate(pending):
         # Stop ends the loading here; what is left stays attached for later.
-        if cancel is not None and cancel.is_set():
-            left = len(pending) - position
+        if not load.start_next():
+            left = load.left()
             stop_index = position
             stop_line = len(lines)
             lines.append(
@@ -994,6 +1109,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             break
         if rag is not None and rag.is_full():
             filled = True
+            load.end_early()
             break
         name = Path(doc).name
         reason = (
@@ -1396,9 +1512,9 @@ def _default_model_for(provider: str) -> str:
         from gaia_agent.agent import GaiaAgentConfig
 
         return GaiaAgentConfig.claude_model
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+    from gaia.llm.lemonade_client import resolve_default_chat_model
 
-    return DEFAULT_MODEL_NAME
+    return resolve_default_chat_model()
 
 
 def _switch_target(session: Any, request: "QueryRequest") -> Optional[str]:
@@ -1750,6 +1866,14 @@ async def query(request: QueryRequest):
                         "Cancel that run or wait for it to finish, then retry."
                     ),
                 )
+            # The model server or MCP connectors changed in Settings since this agent was built.
+            if await _off_loop(
+                functools.partial(session.follow_settings, **kwargs),
+                on_abandon=lambda _rebuilt: _unwind_setup(),
+            ):
+                logger.info(
+                    "session %s rebuilt for changed settings", request.session_id
+                )
             target = _switch_target(session, request)
             if target is not None:
                 # Switched in place rather than refused. Rebuilding the agent
@@ -1783,6 +1907,15 @@ async def query(request: QueryRequest):
                     display,
                 )
             agent = session.agent
+            # A vision model chosen in Settings since the last turn applies now.
+            follow = getattr(agent, "follow_model_switch", None)
+            if callable(follow):
+                # Off the loop: it reads config.json and may ask Lemonade.
+                await _off_loop(follow)
+            # Skills added or removed in Settings since the catalogue was built.
+            follow_skills = getattr(agent, "follow_installed_skills", None)
+            if callable(follow_skills):
+                await _off_loop(follow_skills)
             if request.working_directory is not None:
                 config = getattr(agent, "config", None)
                 if config is not None:
@@ -1890,7 +2023,7 @@ async def query(request: QueryRequest):
 
     def _process() -> None:
         if request.documents is not None:
-            _index_attached_documents(agent, request.documents, handler)
+            _index_attached_documents(agent, request.documents, handler, run)
         if request.turns is not None and hasattr(agent, "conversation_history"):
             # Sizing them can ask the model server for its window: never on the loop.
             agent.conversation_history = _history_from_turns(
@@ -1971,10 +2104,12 @@ async def query(request: QueryRequest):
                         process_error.__traceback__,
                     ),
                 )
-                handler.print_error(_terminal_error_detail(process_error))
+                handler.print_error(
+                    _terminal_error_detail(process_error, _wording_surface(request))
+                )
         except Exception as exc:  # surface loudly as a terminal error event
             logger.exception("%s /query run failed for run_id=%s", AGENT_ID, run.run_id)
-            handler.print_error(_terminal_error_detail(exc))
+            handler.print_error(_terminal_error_detail(exc, _wording_surface(request)))
         finally:
             run.context_done.set()
             handler.signal_done()
@@ -2194,7 +2329,12 @@ async def cancel_query(run_id: str) -> QueryCancelResponse:
     cancelled: the caller mints ``run_id`` before it POSTs ``/query``, which
     makes cancel-arrives-first a real ordering, not a hypothetical one.
     """
-    return QueryCancelResponse(run_id=run_id, cancelled=_registry.cancel(run_id))
+    cancelled = _registry.cancel(run_id)
+    return QueryCancelResponse(
+        run_id=run_id,
+        cancelled=cancelled,
+        documents_left=_registry.documents_left(run_id),
+    )
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -2408,6 +2548,31 @@ async def list_tools(session_id: str) -> ToolsResponse:
         )
     tools = await asyncio.to_thread(session.agent.describe_tools)
     return ToolsResponse(session_id=session_id, tools=tools)
+
+
+@router.delete("/sessions/{session_id}", response_model=SessionDeletedResponse)
+async def delete_session(session_id: str) -> SessionDeletedResponse:
+    """End a session and close its agent, stopping its MCP servers.
+
+    A session running a turn is a 409, not a quiet success: its agent and
+    servers are still alive, so the caller must not believe they are gone.
+    """
+    _require_valid_session_id(session_id)
+    if not await asyncio.to_thread(session_registry.delete, session_id):
+        # delete() is False for both; only a session still present is busy.
+        if session_registry.get(session_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No session {session_id!r} exists; it may have ended already.",
+            )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Session {session_id!r} is running a turn. Cancel it, then "
+                "delete the session again."
+            ),
+        )
+    return SessionDeletedResponse(session_id=session_id, deleted=True)
 
 
 @router.delete("/sessions/{session_id}/grants", response_model=GrantsResponse)
@@ -2721,6 +2886,17 @@ def _warm_chat_model(state: _StartupWarmUp) -> None:
 app = build_app()
 
 
+def _add_serve_args(parser) -> None:
+    """The flags the daemon passes when it spawns this sidecar."""
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Serve the HTTP sidecar (implied by --host/--port).",
+    )
+    parser.add_argument("--host", default=DEFAULT_HOST, help="Bind host.")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
+
+
 def serve_http(argv: List[str]) -> int:
     """Run the sidecar over HTTP. Bound to loopback by default — this speaks for
     the user's documents and memory and has no business on a LAN interface."""
@@ -2731,13 +2907,7 @@ def serve_http(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="gaia-agent --serve", description="GAIA flagship agent HTTP sidecar"
     )
-    parser.add_argument(
-        "--serve",
-        action="store_true",
-        help="Serve the HTTP sidecar (implied by --host/--port).",
-    )
-    parser.add_argument("--host", default=DEFAULT_HOST, help="Bind host.")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
+    _add_serve_args(parser)
     args = parser.parse_args(argv)
 
     # The warm-up swallows agent-build errors, so a stale GAIA_SKILL_SET or a
@@ -2753,6 +2923,22 @@ def serve_http(argv: List[str]) -> int:
     except (SkillSetError, AllowedPathsEnvError) as exc:
         print(f"gaia-agent: {exc}", file=sys.stderr)
         return 2
+
+    try:
+        from gaia.sidecar import parent_watch
+    except ImportError:  # amd-gaia older than the daemon watch; the pin allows it
+        print(
+            "WARNING: this amd-gaia cannot watch the GAIA daemon, so this agent "
+            "keeps running if the daemon is killed. "
+            "Fix: pip install --upgrade amd-gaia",
+            file=sys.stderr,
+        )
+    else:
+        try:
+            parent_watch.start()
+        except ValueError as exc:
+            print(f"gaia-agent: {exc}", file=sys.stderr)
+            return 2
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0

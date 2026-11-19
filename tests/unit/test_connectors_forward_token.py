@@ -41,7 +41,7 @@ def test_returns_token_and_expiry_when_granted_and_covered(monkeypatch):
     scopes = ["s1", "s2"]
     _patch_common(monkeypatch, granted=True, connection_scopes=scopes)
 
-    async def _fake_get_token_with_expiry(provider, *, account_email):
+    async def _fake_get_token_with_expiry(provider, *, slot):
         return ("live-access-token", 1_900_000_000.0)
 
     monkeypatch.setattr(
