@@ -1974,11 +1974,19 @@ class DeckBuilder:
         if not groups:
             return None
         if family == "bar":
-            raise OutlineError(
-                [
-                    f"slide {self._current}: per-series types and secondary axes need a column, line or area base chart, not horizontal bars."
-                ]
+            self.warn(
+                "per-series types and secondary axes need a column, line or area "
+                "base chart, so these horizontal bars were drawn as plain bars "
+                "on one axis. For a combo chart, set chart_type to 'column'."
             )
+            return None
+        if sum(len(idxs) for idxs in groups.values()) == len(series):
+            self.warn(
+                f"every series asked for its own type or axis, so all were drawn "
+                f"as {base} on one axis. For a combo chart, leave at least one "
+                "series on the base type and the primary axis."
+            )
+            return None
         plot_area = chart._chartSpace.chart.plotArea  # noqa: SLF001
         base_el = plot_area.xpath("c:barChart|c:lineChart|c:areaChart")[0]
         base_ax = [a.get("val") for a in base_el.findall(qn("c:axId"))]
@@ -2035,12 +2043,6 @@ class DeckBuilder:
                 base_el.addnext(grp)
             else:
                 base_el.addprevious(grp)
-        if not base_el.findall(qn("c:ser")):
-            raise OutlineError(
-                [
-                    f"slide {self._current}: every series was moved off the base chart; give at least one series the base type on the primary axis."
-                ]
-            )
         if new_axes:
             last_ax = plot_area.xpath("c:catAx|c:valAx|c:dateAx|c:serAx")[-1]
             for ax in reversed(new_axes):
@@ -3974,7 +3976,11 @@ def build_deck(
     verify: bool = True,
     base_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build *outline* into *output_path*. Raises OutlineError on a bad outline."""
+    """Build *outline* into *output_path*; ``warnings`` says what was drawn differently.
+
+    Raises OutlineError only when no file can be made: no slides, a bad path
+    or template, an unknown theme or preference.
+    """
     started = time.perf_counter()
     out = Path(output_path)
     if out.suffix.lower() != ".pptx":
@@ -4011,7 +4017,7 @@ def build_deck(
         "theme": builder.tokens["theme"],
         "look_from": builder.template_source,
         "text_metrics": MEASURER.method(builder.font),
-        "warnings": builder.warnings,
+        "warnings": [*normalized["warnings"], *builder.warnings],
         "notes": builder.notes,
     }
     if verify:
@@ -4054,16 +4060,14 @@ def _edit(
         )
     if position is not None and not 1 <= position <= count + 1:
         raise OutlineError([f"position {position} is outside 1..{count + 1}."])
-    problems: List[str] = []
+    warnings: List[str] = []
     first_index = replace_index or position or count + 1
     normalized = [
         normalize_slide(
-            sp, first_index + k, problems, Path(base_dir) if base_dir else None
+            sp, first_index + k, warnings, Path(base_dir) if base_dir else None
         )
         for k, sp in enumerate(specs)
     ]
-    if problems:
-        raise OutlineError(problems)
     builder = DeckBuilder(
         {"slides": normalized, "allow_split": False},
         prefs=prefs,
@@ -4097,7 +4101,7 @@ def _edit(
         "path": str(saved),
         "slides": len(builder.prs.slides),
         "changed_slides": list(range(at, at + new_count)),
-        "warnings": builder.warnings,
+        "warnings": [*warnings, *builder.warnings],
         "notes": builder.notes,
     }
     _report_issues(result, builder.issues)

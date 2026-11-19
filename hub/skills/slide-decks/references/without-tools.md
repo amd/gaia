@@ -9,5 +9,4 @@ from slidedeck.build import build_deck
 print(build_deck(outline_from_markdown(open(r"C:\Users\me\deck.md", encoding="utf-8").read()), r"C:\Users\me\deck.pptx"))
 ```
 
-The result is the same as the tool's, including `verify`; fix every issue it
-lists and build again.
+The result is the same as the tool's, including `warnings` and `verify`.

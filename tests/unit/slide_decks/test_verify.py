@@ -106,7 +106,9 @@ def test_good_deck_passes_with_a_high_score(out):
 def test_wrong_slide_count(out):
     r = build_deck({"slides": GOOD}, out())
     rep = verify_deck(r["path"], expected_slides=5, render=False)
-    assert "slide_count" in checks(rep) and rep["status"] == "fail"
+    count = [i for i in rep["issues"] if i["check"] == "slide_count"]
+    assert count[0]["severity"] == "warning" and "add_slide" in count[0]["fix"]
+    assert rep["status"] == "pass"
 
 
 def test_overflowing_text(out):

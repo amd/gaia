@@ -1,6 +1,6 @@
 # JSON outline for build_deck
 
-Use `build_deck(outline, output_path)` when Markdown can't express the slide:
+Use `build_deck(outline)` when Markdown can't express the slide:
 diagrams, timelines, combo charts, or a blueprint outline.
 
 ```json
@@ -36,11 +36,14 @@ Every slide has a `type` and may add `notes`, `source`, `subtitle` and
 - Charts: `column`, `bar`, `line`, `area`, `pie`, `doughnut`, `scatter`,
   `combo`, `auto`.
 
-## Errors
+## Warnings and errors
 
-On `status: "error"` the `problems` list names every field to fix and gives a
-corrected example for that slide type. Fix them all and call again. Do not
-switch to writing code.
+Any outline with a slide is built. A slide that cannot be drawn as its type
+(a chart with no data, say) is built as a text slide with its title, and
+`warnings` gives the `update_slide` call and a corrected example for that
+type. A misspelt field is read as the field it is closest to, and said.
+`status: "error"` means no file was made (no slides, or a path this chat may
+not use) and names the next call. Do not switch to writing code.
 
 ## Editing a deck
 

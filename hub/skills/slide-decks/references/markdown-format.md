@@ -1,11 +1,13 @@
 # Deck Markdown format
 
-`build_deck_from_markdown(markdown=..., output_path=...)` turns this Markdown
-into slides, builds them and checks them in one call.
+`build_deck_from_markdown(markdown=...)` turns this Markdown into slides,
+builds them and checks them in one call. Anything it reads or draws
+differently from what you wrote is in the result's `warnings`.
 
 ## Slides and text
 
-- `# Title` (first line) is the cover; the next paragraph is its subtitle.
+- `# Title` (first line) is an optional cover slide; the next paragraph is
+  its subtitle. A cover counts towards `expected_slides`.
 - Each `## ` line (or a `---` line) starts a slide; the heading is its title.
   Write the title as the slide's takeaway sentence.
 - A `##` slide with no content is a section divider. One titled Agenda or
@@ -22,10 +24,9 @@ into slides, builds them and checks them in one call.
   Use it for launch plans and dated roadmaps instead of boxes.
 - A `##` slide with bullets and a `> quote` shows the quote in a panel beside
   them; a `##` title with only one short line is a statement slide.
-- On a process, `Axis: More cost and effort` draws one arrow under the stages
-  naming what grows from left to right. A list of what increases across the
-  stages goes here, not in a separate table or slide. An `Axis:` line on a
-  slide with no `Diagram:` line draws its boxes as a process.
+- On a process of up to 6 steps, `Axis: More cost and effort` draws one arrow
+  under the stages with that label. An `Axis:` line on a slide with no
+  `Diagram:` line draws its boxes as a process.
 - On a diagram slide, a plain line between the `##` title and the first `###`
   is the slide's subtitle; a plain line right under a `###` heading is that
   box's bold lead line, above its bullets.
@@ -38,8 +39,9 @@ into slides, builds them and checks them in one call.
 - Two to four short top-level bullets with no sub-bullets are drawn as cards
   side by side. Write each as `**Heading** detail` or `Heading: detail` and
   the heading becomes the card's title.
-- Every number on a slide must be one the user gave or a tool returned; compute
-  shares, growth and totals with `run_python`. Otherwise leave numbers out.
+- Use numbers the user gave or a tool returned; compute shares, growth and
+  totals with `run_python`. A number with no such source is built and listed
+  in `warnings`.
 - `Must show: a; b; c` before the first slide lists the `required_items`:
   what the request needs visible on the slides.
 

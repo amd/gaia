@@ -497,7 +497,8 @@ def _carries_content(value: Any) -> bool:
     return isinstance(value, str) and (len(value) > 30 or len(value.split()) > 3)
 
 
-def _unknown_fields(raw: Dict[str, Any], stype: str) -> List[str]:
+def _unknown_fields(raw: Dict[str, Any], stype: str) -> List[Tuple[str, str]]:
+    """(field, the known field it is closest to or "") for each field a slide does not read."""
     import difflib
 
     known = COMMON_FIELDS | TYPE_FIELDS.get(stype, set())
@@ -506,14 +507,7 @@ def _unknown_fields(raw: Dict[str, Any], stype: str) -> List[str]:
         if key in known or not _carries_content(value):
             continue
         guess = difflib.get_close_matches(key, sorted(known), n=1, cutoff=0.6)
-        hint = (
-            f"did you mean '{guess[0]}'?"
-            if guess
-            else f"a {stype} slide reads: {', '.join(sorted(TYPE_FIELDS.get(stype, set()))[:12])}."
-        )
-        out.append(
-            f"unknown field '{key}' ({hint}) Its content would not appear on the slide."
-        )
+        out.append((key, guess[0] if guess else ""))
     return out
 
 
@@ -1121,32 +1115,106 @@ def _sections_as_boxes(raw: Dict[str, Any]) -> Dict[str, Any]:
     return {**rest, "type": "diagram", "diagram": "boxes", "items": sections}
 
 
+def _as_text_slide(s: Dict[str, Any], raw: Dict[str, Any]) -> Dict[str, Any]:
+    """*s* as a title-and-text slide holding whatever text *raw* carries."""
+    paras = [
+        (_text(line), -1, False)
+        for line in _as_list(raw.get("text") or raw.get("quote") or raw.get("caption"))
+        if _text(line)
+    ]
+    paras += normalize_bullets(
+        raw.get("bullets") or raw.get("points") or raw.get("takeaways")
+    )
+    if not paras:
+        for key in ("items", "steps", "stages", "milestones", "metrics"):
+            for item in _items(raw.get(key)) if isinstance(raw.get(key), list) else []:
+                line = ": ".join(
+                    x
+                    for x in (item["title"], item["text"] or _text(item.get("value")))
+                    if x
+                )
+                if line:
+                    paras.append((line, 0, False))
+            if paras:
+                break
+    kept = (
+        "index", "title", "subtitle", "notes", "source", "footnote", "takeaway",
+        "allow_split", "kind", "todo", "slot", "raw",
+    )  # fmt: skip
+    return {
+        **{k: s[k] for k in kept},
+        "type": "bullets",
+        "data_slide": False,
+        "paras": paras,
+        "pull_quote": "",
+    }
+
+
 def normalize_slide(
-    raw: Any, index: int, problems: List[str], base_dir: Optional[Path] = None
+    raw: Any, index: int, warnings: List[str], base_dir: Optional[Path] = None
 ) -> Dict[str, Any]:
+    """One slide in canonical form: always a slide the builder can draw.
+
+    A slide that cannot be drawn as its own type from what it was given is
+    built as a text slide with its title and whatever text it has; *warnings*
+    says why and gives the call that replaces it.
+    """
     where = f"slide {index}"
     if isinstance(raw, str):
         raw = {"type": "bullets", "title": raw}
     if not isinstance(raw, dict):
-        problems.append(
-            f"{where}: must be an object, got {type(raw).__name__}. For example: {EXAMPLES['bullets']}"
+        warnings.append(
+            f"{where}: must be an object, got {type(raw).__name__}, so it was "
+            f"built empty. For example: {EXAMPLES['bullets']}"
         )
-        return {"type": "bullets", "index": index, "title": "", "paras": []}
+        raw = {"type": "bullets", "title": ""}
     raw = _sections_as_boxes(_plain_fields(canonical_fields(raw)))
-    before = len(problems)
-    s = _normalize_slide(raw, index, problems, base_dir)
-    for issue in _unknown_fields(raw, s["type"]):
-        problems.append(f"slide {index} ({s['type']}): {issue}")
-    if len(problems) > before:
-        problems.append(
-            f"slide {index}: a valid {s['type']} slide looks like {EXAMPLES[s['type']]}"
+    problems: List[str] = []
+    found: List[str] = []
+    s = _normalize_slide(raw, index, problems, found, base_dir)
+    stype = s["type"]
+    unknown = _unknown_fields(raw, stype)
+    typos = {key: guess for key, guess in unknown if guess and guess not in raw}
+    if typos:
+        # A misspelt field is read as the field it is closest to, and said.
+        raw = {typos.get(k, k): v for k, v in raw.items()}
+        problems, found = [], []
+        s = _normalize_slide(raw, index, problems, found, base_dir)
+        stype = s["type"]
+    for key, guess in unknown:
+        if key in typos:
+            found.append(
+                f"slide {index} ({stype}): unknown field '{key}' was read as "
+                f"'{guess}'."
+            )
+        else:
+            reads = ", ".join(sorted(TYPE_FIELDS.get(stype, set()))[:12])
+            found.append(
+                f"slide {index} ({stype}): unknown field '{key}' is not on the "
+                f"slide. A {stype} slide reads: {reads}."
+            )
+    warnings += found
+    if problems:
+        s = _as_text_slide(s, raw)
+        why = " ".join(p.split(": ", 1)[-1] for p in problems)
+        warnings.append(
+            f"slide {index} ({stype}) was built as a text slide with its title"
+            f"{' and text' if s['paras'] else ' only'}, because: {why} To draw "
+            f"it as intended, call update_slide(deck_path=<path of this deck>, "
+            f"index=<its slide number>, slide={EXAMPLES[stype]}) with the real "
+            "content."
         )
     return s
 
 
 def _normalize_slide(
-    raw: Dict[str, Any], index: int, problems: List[str], base_dir: Optional[Path]
+    raw: Dict[str, Any],
+    index: int,
+    problems: List[str],
+    warnings: List[str],
+    base_dir: Optional[Path],
 ) -> Dict[str, Any]:
+    """*problems*: why the slide cannot be drawn as its type. *warnings*: what was drawn differently."""
     where = f"slide {index}"
     raw_type = (
         str(raw.get("type") or "").strip().lower().replace("-", "_").replace(" ", "_")
@@ -1173,8 +1241,9 @@ def _normalize_slide(
             raw_type = "bullets"
     stype = ALIASES.get(raw_type, raw_type.replace("-", "_"))
     if stype not in SLIDE_TYPES:
-        problems.append(
-            f"{where}: type {raw_type!r} is not supported. Use one of: {', '.join(SLIDE_TYPES)}."
+        warnings.append(
+            f"{where}: type {raw_type!r} is not supported, so it was built as a "
+            f"bullets slide. The types are: {', '.join(SLIDE_TYPES)}."
         )
         stype = "bullets"
     where = f"slide {index} ({stype})"
@@ -1231,7 +1300,9 @@ def _normalize_slide(
         s["paras"] = paras
         s["pull_quote"] = _text(raw.get("pull_quote")).strip(' "“”')
         if not paras:
-            problems.append(f"{where}: no 'bullets' or 'text'.")
+            warnings.append(
+                f"{where}: no 'bullets' or 'text', so it shows only its title."
+            )
     elif stype == "two_column":
         cols = []
         for key in ("left", "right"):
@@ -1301,8 +1372,9 @@ def _normalize_slide(
                 f"{where}: needs 'metrics': [{{label, value, delta?, note?}}]."
             )
         if len(metrics) > 8:
-            problems.append(
-                f"{where}: {len(metrics)} metrics; at most 8 tiles stay readable. Split them over two slides."
+            warnings.append(
+                f"{where}: {len(metrics)} metrics on one slide; at most 8 tiles "
+                "stay readable. Split them over two slides."
             )
         s["metrics"] = metrics
         s["paras"] = normalize_bullets(raw.get("bullets") or raw.get("takeaways"))
@@ -1352,8 +1424,9 @@ def _normalize_slide(
             else:
                 layout = "process"
         if layout not in DIAGRAM_LAYOUTS:
-            problems.append(
-                f"{where}: diagram {layout!r} is not supported. Use one of: {', '.join(DIAGRAM_LAYOUTS)}."
+            warnings.append(
+                f"{where}: diagram {layout!r} is not supported, so it was drawn "
+                f"as boxes. The diagrams are: {', '.join(DIAGRAM_LAYOUTS)}."
             )
             layout = "boxes"
         s["layout"] = layout
@@ -1389,15 +1462,18 @@ def _normalize_slide(
             # Boxes cannot draw an axis; the axis says the boxes are stages.
             layout = s["layout"] = "process"
         if axis and layout not in ("process", "matrix"):
-            problems.append(
+            warnings.append(
                 f"{where}: 'Axis: {_text(axis)}' is drawn only under a process "
-                "diagram, so it would not appear. Add a 'Diagram: process' line "
-                "to this slide, or move what it says into the boxes."
+                f"diagram, so this {layout} was drawn without it. To show it, "
+                "use 'Diagram: process' on this slide, or put what it says in "
+                "the boxes."
             )
         elif axis and layout == "process" and len(items) > 6:
-            problems.append(
+            warnings.append(
                 f"{where}: the Axis arrow fits under 6 steps at most and this "
-                f"process has {len(items)}, so it would not appear. Merge steps."
+                f"process has {len(items)}, so the steps were drawn in two rows "
+                f"without 'Axis: {_text(axis)}'. To show it, merge the steps "
+                "into 6 or fewer."
             )
         s["points"] = _as_list(raw.get("points"))
         s["paras"] = normalize_bullets(raw.get("bullets"))
@@ -1418,8 +1494,9 @@ def _normalize_slide(
                     (_text(e[0]), _text(e[1]), _text(e[2]) if len(e) > 2 else "")
                 )
             else:
-                problems.append(
-                    f"{where}: edge {e!r} must be [from, to] or {{from, to}}."
+                warnings.append(
+                    f"{where}: edge {e!r} was left out; an edge is [from, to] "
+                    "or {from, to}."
                 )
         if layout == "tree":
             for it in items:
@@ -1429,7 +1506,7 @@ def _normalize_slide(
                     )
         s["edges"] = edges
         if layout == "matrix" and len(items) not in (0, 4):
-            problems.append(
+            warnings.append(
                 f"{where}: a 2x2 matrix takes exactly 4 quadrants (top-left, top-right, bottom-left, bottom-right); got {len(items)}."
             )
         if layout == "matrix" and not items and not s["points"]:
@@ -1438,11 +1515,17 @@ def _normalize_slide(
             )
         elif layout != "matrix" and not items:
             problems.append(f"{where}: a {layout} diagram needs 'items'.")
-        if layout == "cycle" and not 3 <= len(items) <= 8:
-            problems.append(f"{where}: a cycle takes 3 to 8 items; got {len(items)}.")
+        if layout == "cycle" and len(items) == 1:
+            problems.append(f"{where}: a cycle needs at least 2 items; got 1.")
+        elif layout == "cycle" and items and not 3 <= len(items) <= 8:
+            warnings.append(
+                f"{where}: a cycle reads with 3 to 8 items and this one has "
+                f"{len(items)}."
+            )
         if layout in ("process",) and len(items) > 10:
-            problems.append(
-                f"{where}: {len(items)} process steps will not read; keep it to 10 or fewer (group steps into phases)."
+            warnings.append(
+                f"{where}: {len(items)} process steps will not read; group them "
+                "into 10 or fewer phases."
             )
         if layout in ("flow", "tree"):
             ids = {_text(it.get("id") or it["title"]) for it in items}
@@ -1518,12 +1601,15 @@ _COVER_TYPES = {"title", "cover", "title_slide"}
 _SOURCE_ONLY = {"source", "sources", "footnote", "citation"}
 
 
-def fold_pseudo_slides(raw: List[Any], expected: Any) -> List[Any]:
+def fold_pseudo_slides(
+    raw: List[Any], expected: Any, warnings: Optional[List[str]] = None
+) -> List[Any]:
     """Shapes models send that are not slides: a source "slide", an extra cover.
 
-    A ``{"type": "source"}`` entry becomes the line under the slide before it,
-    and a leading cover goes when the content slides alone make the count the
-    user asked for, as the Markdown reader does.
+    A ``{"type": "source"}`` entry becomes the line under the slide before it.
+    ``expected`` counts every slide in the file, a cover included, so a cover
+    in front of exactly that many content slides is left out, and *warnings*
+    says so.
     """
     out: List[Any] = []
     for item in raw:
@@ -1550,16 +1636,35 @@ def fold_pseudo_slides(raw: List[Any], expected: Any) -> List[Any]:
         and str(first.get("type") or "").lower() in _COVER_TYPES
     ):
         out = out[1:]
+        if warnings is not None:
+            warnings.append(cover_left_out(want, _text(first.get("title"))))
     return out
 
 
+def cover_left_out(want: int, title: str) -> str:
+    """The warning for a cover dropped so the file has the count asked for."""
+    return (
+        f"expected_slides is {want} and counts every slide, the cover included. "
+        f"The outline was a cover ('{title}') plus {want} slide"
+        f"{'s' if want != 1 else ''}, so the cover was left out to make {want}. "
+        f"To keep the cover, build again with expected_slides={want + 1}."
+    )
+
+
 def normalize_outline(outline: Any, base_dir: Optional[Path] = None) -> Dict[str, Any]:
-    """Validate *outline* and return it in canonical form. Raises OutlineError."""
+    """*outline* in canonical form, every slide one the builder can draw.
+
+    Raises OutlineError only when there is no slide to build. Whatever was
+    read, drawn or left out differently from what was sent is in the result's
+    ``warnings``.
+    """
     data = dict(load_outline(outline))
-    data["slides"] = fold_pseudo_slides(data["slides"], data.get("expected_slides"))
-    problems: List[str] = []
+    warnings: List[str] = [str(w) for w in _as_list(data.get("warnings"))]
+    data["slides"] = fold_pseudo_slides(
+        data["slides"], data.get("expected_slides"), warnings
+    )
     slides = [
-        normalize_slide(raw, i, problems, base_dir)
+        normalize_slide(raw, i, warnings, base_dir)
         for i, raw in enumerate(data["slides"], 1)
     ]
     expected = data.get("expected_slides") or data.get("slide_count")
@@ -1567,19 +1672,21 @@ def normalize_outline(outline: Any, base_dir: Optional[Path] = None) -> Dict[str
         try:
             expected = int(expected)
         except (TypeError, ValueError):
-            problems.append(f"expected_slides {expected!r} is not a whole number.")
+            warnings.append(
+                f"expected_slides {expected!r} is not a whole number, so the "
+                "slide count was not checked."
+            )
             expected = None
     required_raw = data.get("required_items") or data.get("must_show") or []
     if isinstance(required_raw, str):
         required_raw = [x for x in required_raw.split(";")]
     if not isinstance(required_raw, list):
-        problems.append(
-            'required_items must be a list of short strings, e.g. ["Revenue $12.4M", "3 site closures"].'
+        warnings.append(
+            "required_items was not checked: it must be a list of short strings, "
+            'e.g. ["Revenue $12.4M", "3 site closures"].'
         )
         required_raw = []
     required = [_text(x) for x in required_raw if _text(x)]
-    if problems:
-        raise OutlineError(problems)
     return {
         "title": _text(data.get("title")),
         "theme": data.get("theme"),
@@ -1594,6 +1701,7 @@ def normalize_outline(outline: Any, base_dir: Optional[Path] = None) -> Dict[str
         "figures_from_user": [
             int(i) for i in data.get("figures_from_user") or [] if str(i).isdigit()
         ],
+        "warnings": warnings,
         "slides": slides,
     }
 

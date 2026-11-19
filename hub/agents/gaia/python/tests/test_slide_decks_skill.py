@@ -256,10 +256,12 @@ def test_an_out_of_scope_logo_is_not_saved_and_a_saved_one_blocks_edits(
     assert deck.read_bytes() == before
 
 
-def test_relative_paths_and_bad_outlines_come_back_as_fixable_errors(loaded, work):
+def test_no_output_path_and_a_slide_that_cannot_be_drawn_still_build(loaded, work):
+    """The flagship's own folders are the default: a deck is saved, never refused."""
     agent, _skill, _b = loaded
-    rel = run(agent, "build_deck", outline=OUTLINE, output_path="deck.pptx")
-    assert rel["status"] == "error"
+    unnamed = run(agent, "build_deck", outline=OUTLINE)
+    assert unnamed["status"] == "ok", unnamed
+    assert Path(unnamed["path"]).parent == work and Path(unnamed["path"]).is_file()
     bad = run(
         agent,
         "build_deck",
@@ -268,8 +270,9 @@ def test_relative_paths_and_bad_outlines_come_back_as_fixable_errors(loaded, wor
         },
         output_path=str(work / "bad.pptx"),
     )
-    assert bad["status"] == "error" and len(bad["problems"]) >= 2
-    assert not (work / "bad.pptx").exists()
+    assert bad["status"] == "ok" and (work / "bad.pptx").is_file(), bad
+    assert any("update_slide(deck_path=" in w for w in bad["warnings"])
+    assert run(agent, "build_deck", outline={"slides": []})["status"] == "error"
 
 
 def test_incremental_edits_through_the_agent(loaded, work):

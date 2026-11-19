@@ -8,15 +8,18 @@ folders, writes with ``check_write`` (which asks before overwriting) — and the
 LibreOffice render runs through ``run_program`` in the call's temporary
 folder. Saved preferences come from the skill's own preference store.
 
-Each tool returns a dict; a problem the model can fix comes back as
-``{"status": "error", "error": ..., "problems": [...]}``, never a partial deck.
+A build makes the deck whenever the outline has a slide. What was read, drawn
+or left out differently from what was sent, and every quality finding, comes
+back in the result's ``warnings``, each with the call that fixes it. A tool
+returns ``{"status": "error", "error": ..., "problems": [...]}`` only when no
+file can be made (no slides, no folder to write in) or a path is outside the
+folders this chat may use.
 """
 
 from __future__ import annotations
 
 import csv
 import datetime
-import hashlib
 import io
 import json
 import re
@@ -29,14 +32,20 @@ from slidedeck import markdown as _md
 from slidedeck import style as _style
 from slidedeck.outline import (
     OutlineError,
-    fold_pseudo_slides,
+    canonical_fields,
     load_outline,
     normalize_outline,
 )
 
 from gaia.agents.base.tools import tool
-from gaia.config import gaia_home
+from gaia.agents.tools.search_scope import (
+    is_broad_root,
+    path_validator_of,
+    search_roots,
+    session_workspace,
+)
 from gaia.logger import get_logger
+from gaia.security import MISSING_REFUSAL_PREFIX
 from gaia.skills.context import (
     SkillContextError,
     check_read,
@@ -78,15 +87,16 @@ RENDER_TIMEOUT_S = 240
 MAX_PROFILE_PATH = 120
 _SKILL_DIR = Path(__file__).resolve().parent
 
+#: The smallest call that builds a deck, quoted in errors that have no other way on.
+_MINIMAL_CALL = "build_deck_from_markdown(markdown='## Slide title\\n- First point\\n- Second point')"
+
 
 def _error(exc: Exception) -> Dict[str, Any]:
     problems = getattr(exc, "problems", None) or [str(exc)]
     return {"status": "error", "error": str(exc), "problems": problems}
 
 
-#: The last build of each deck path that failed its check: (fingerprint, problems).
-_FAILED_BUILDS: Dict[str, tuple] = {}
-#: Failed checks in a row, per agent; a model that keeps missing stops and says so.
+#: Builds in a row whose check found errors, per agent; after two the model is told to stop.
 _FAILED_IN_A_ROW: Dict[int, int] = {}
 _MAX_FAILED_IN_A_ROW = 2
 
@@ -161,195 +171,16 @@ def _agent_key() -> int:
 
 
 def _whole(value: Any) -> int:
-    """A positive slide count, or 0; a bad value is left to the outline check."""
+    """A positive whole number, or 0 for anything else."""
     try:
         return max(int(value or 0), 0)
     except (TypeError, ValueError):
         return 0
 
 
-_NUMBER_WORDS = {
-    "one": 1, "single": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-}  # fmt: skip
-#: "one-slide", "single executive slide", "5 slides"; "one of the slides" is not a count.
-_COUNT_PHRASE = re.compile(
-    r"\b(\d{1,2}|" + "|".join(_NUMBER_WORDS) + r")"
-    r"(?:[\s-]+(?!(?:of|the|a|an|more|per|each|every|for|in|on|to|other|extra|"
-    r"additional|new|or|and)\b)[a-z]+){0,2}[\s-]+slides?\b",
-    re.I,
-)
-
-
-#: "a slide about X", "an image of a slide": one slide. Not "a slide deck",
-#: and not "add a slide", which grows a deck rather than sizing it.
-_ONE_SLIDE = re.compile(
-    r"(?<!\badd )(?<!\binsert )(?<!\bappend )\b(?:a|an|single)\s+"
-    r"(?:single\s+)?slide\b(?![\s-]*(?:deck|show|presentation|s\b))",
-    re.I,
-)
-
-
-def _asked_count(request: str) -> tuple:
-    """The slide count the user's message names, with the phrase; (0, "") if none or mixed."""
-    found = {}
-    for m in _COUNT_PHRASE.finditer(request or ""):
-        word = m.group(1).lower()
-        n = int(word) if word.isdigit() else _NUMBER_WORDS[word]
-        if n > 0:
-            found.setdefault(n, m.group(0))
-    if not found:
-        m = _ONE_SLIDE.search(request or "")
-        return (1, m.group(0)) if m else (0, "")
-    if len(found) != 1:
-        return 0, ""
-    return next(iter(found.items()))
-
-
-#: A line saying what grows across the stages and introducing a list, e.g.
-#: "As we move from left to right, increase:" or "Across the tiers these grow: a, b".
-_LEAD_LINE = re.compile(r"^([^\n:]*):[ \t]*(.*)$", re.M)
-_GROWTH = re.compile(r"\b(?:increas|grow|rise|rising|more)\w*", re.I)
-_ACROSS = re.compile(
-    r"\b(?:left[\s-]+to[\s-]+right|stages?|steps?|tiers?|levels?|phases?|"
-    r"moves?|progress\w*|across)\b",
-    re.I,
-)
-_LIST_ITEM = re.compile(r"^\s*(?:[*•-]|\d+[.)])\s+(.+?)\s*$")
-#: Words too generic to tell one listed dimension from another.
-_FILLER = {"number", "requirements", "requirement", "involved", "level", "amount"}
-
-
-def _grows_list(request: str) -> List[str]:
-    """What the user lists as growing across the stages; [] unless they list two or more."""
-    m = next(
-        (
-            x
-            for x in _LEAD_LINE.finditer(request or "")
-            if _GROWTH.search(x.group(1)) and _ACROSS.search(x.group(1))
-        ),
-        None,
-    )
-    if not m:
-        return []
-    inline = m.group(2).strip()
-    if inline:
-        items = [x.strip(" .") for x in re.split(r",|\band\b", inline)]
-    else:
-        items = []
-        for line in request[m.end() :].split("\n")[1:]:
-            item = _LIST_ITEM.match(line)
-            if item:
-                items.append(item.group(1))
-            elif line.strip() and items:
-                break
-    items = [x for x in items if x]
-    return items if len(items) >= 2 else []
-
-
-def _covered(item: str, axis: str) -> bool:
-    words = [
-        w
-        for w in re.findall(r"[a-z]+", item.lower())
-        if len(w) >= 4 and w not in _FILLER
-    ]
-    return not words or any(w[:5] in axis for w in words)
-
-
-#: What a build did on the user's behalf, reported in its result's notes.
-_NOTES: List[str] = []
-
-
-def _items_of(slide: Dict[str, Any]) -> List[Any]:
-    return slide.get("items") or slide.get("steps") or slide.get("stages") or []
-
-
-def _axis_from(listed: List[str]) -> str:
-    """The user's growth list as one short axis line: a word per item."""
-    words = []
-    for item in listed:
-        found = [
-            w
-            for w in re.findall(r"[A-Za-z]+", item)
-            if len(w) >= 4 and w.lower() not in _FILLER
-        ]
-        word = max(found, key=len).lower() if found else item.strip().lower()
-        if word not in words:
-            words.append(word)
-    if len(words) == 1:
-        return f"More {words[0]}"
-    return f"More {', '.join(words[:-1])} and {words[-1]}"
-
-
-def _missing_axis(slides: List[Dict[str, Any]]) -> Optional[str]:
-    """Why the slides do not show what the user listed as growing across the stages."""
-    try:
-        listed = _grows_list(_request(current()))
-    except SkillContextError:
-        return None
-    if not listed:
-        return None
-    stages = [
-        s
-        for s in slides
-        if s.get("type") == "diagram"
-        and (s.get("diagram") or s.get("layout") or "boxes") in ("process", "boxes")
-        and len(s.get("items") or s.get("steps") or s.get("stages") or []) >= 3
-    ]
-    named = "; ".join(listed)
-    if not stages:
-        shown = json.dumps(
-            [{k: v for k, v in s.items() if k != "notes"} for s in slides]
-        ).lower()
-        left_out = [x for x in listed if not _covered(x, shown)]
-        if not left_out:
-            return None
-        return (
-            "The user listed what grows across the stages, but the slides "
-            f"never show {'; '.join(left_out)}. Put the stages as '### ' boxes "
-            f"under 'Diagram: process' and name {named} on an 'Axis:' line."
-        )
-    axes = [_text_of(s.get("x_axis")).lower() for s in stages if s.get("x_axis")]
-    if not axes and len(stages) == 1 and len(_items_of(stages[0])) <= 6:
-        # The user wrote the list out, so the axis is theirs: add it, not a retry.
-        stage = stages[0]
-        stage["x_axis"] = _axis_from(listed)
-        key = "layout" if "layout" in stage and "diagram" not in stage else "diagram"
-        stage[key] = "process"
-        _NOTES.append(
-            f"Added the user's list as the stages' axis: '{stage['x_axis']}'."
-        )
-        return None
-    if not axes:
-        return (
-            "The user listed what grows across the stages, but the stages slide "
-            "has no 'Axis:' line, so that progression is missing or buried "
-            f"in a box. Add one 'Axis:' line on that slide naming: {named}. "
-            "Shorten each to a word or two, keep it under 10 words, and take it "
-            "out of the boxes."
-        )
-    left_out = [x for x in listed if not any(_covered(x, a) for a in axes)]
-    if left_out:
-        return (
-            "The 'Axis:' line leaves out what the user listed as growing: "
-            f"{'; '.join(left_out)}. Name every item of: {named}, a word or two "
-            "each, under 10 words."
-        )
-    return None
-
-
-#: The user invites invented numbers: "make up", "dummy data", "hypothetical"...
-_INVENTED = re.compile(
-    r"\b(?:make|made|making)\s+(?:\w+\s+){0,2}up\b|\binvent\w*|\bdummy\b|"
-    r"\bplaceholder\b|\bfake\b|\bhypothetical\b|\bmock\b|"
-    r"\bsample\s+(?:data|numbers|figures)\b",
-    re.I,
-)
-_LABELLED = re.compile(
-    r"illustrative|hypothetical|example|sample|not actual|made[- ]up|placeholder",
-    re.I,
-)
-
+# ----------------------------------------------------------------------
+# Content findings: reported in the result's warnings, never a refusal
+# ----------------------------------------------------------------------
 
 #: A number as written: "1,450", "12.4", "-3"; "Q3" and "v2" are labels, not numbers.
 _NUMBER = re.compile(r"(?<![\w.])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
@@ -435,12 +266,23 @@ def _derived(given: List[float]) -> List[float]:
     return out
 
 
-def _hidden_in_notes(slides: List[Dict[str, Any]], said: List[str]) -> Optional[str]:
+def _shown(slides: List[Any]) -> List[Dict[str, Any]]:
+    """What each slide puts in front of the audience: its fields without the notes."""
+    return [
+        {k: v for k, v in s.items() if k != "notes"}
+        for s in slides
+        if isinstance(s, dict)
+    ]
+
+
+def _hidden_in_notes(slides: List[Any], said: List[str]) -> Optional[str]:
     """Numbers the user gave that are only in the speaker notes, not on a slide."""
     asked = {v for text in said for _t, v in _numbers_in(text)}
     on_slides = set()
     in_notes: Dict[float, str] = {}
     for s in slides:
+        if not isinstance(s, dict):
+            continue
         shown: List[Tuple[str, float, str]] = []
         _shown_numbers(s, "body", shown)
         on_slides |= {v for _t, v, _w in shown}
@@ -450,31 +292,21 @@ def _hidden_in_notes(slides: List[Dict[str, Any]], said: List[str]) -> Optional[
     if not hidden:
         return None
     return (
-        f"{', '.join(hidden)} from the user's request is only in the speaker notes. "
-        "Requested content goes on a slide: cut other words, merge slides, or use "
-        "cards, and keep notes for extra detail."
+        f"{', '.join(hidden)} from the user's request is only in the speaker "
+        "notes, where the audience does not see it. To show it, replace that "
+        "slide with update_slide and put the number in its bullets or title."
     )
 
 
-def _invented_numbers(slides: List[Dict[str, Any]]) -> Optional[str]:
+def _unsourced_numbers(slides: List[Any], call: Any, said: List[str]) -> Optional[str]:
     """Numbers on the slides that nothing the user said or a tool returned contains."""
-    try:
-        call = current()
-    except SkillContextError:
-        return None
-    if not _request(call):
-        # No user message to check against: a library call, not a chat turn.
-        return None
-    said = _user_messages(call)
-    hidden = _hidden_in_notes(slides, said)
-    if hidden:
-        return hidden
     known = [v for text in _sources(call) for _t, v in _numbers_in(text)]
     known += _derived([v for text in said for _t, v in _numbers_in(text)])
     this_year = datetime.date.today().year
-    invited = bool(_INVENTED.search(_request(call)))
-    problems: List[str] = []
+    found: List[str] = []
     for i, s in enumerate(slides, 1):
+        if not isinstance(s, dict):
+            continue
         shown: List[Tuple[str, float, str]] = []
         _shown_numbers(s, "body", shown)
         parts = max(
@@ -490,32 +322,20 @@ def _invented_numbers(slides: List[Dict[str, Any]]) -> Optional[str]:
                 and not (where == "title" and v.is_integer() and 0 < v <= parts)
             }
         )
-        if not bad:
-            continue
-        label = s.get("title") or f"slide {i}"
-        if invited:
-            if not _LABELLED.search(
-                json.dumps({k: v for k, v in s.items() if k != "notes"})
-            ):
-                problems.append(
-                    f"The user asked for made-up numbers, so '{label}' must say so "
-                    "where it is seen: set its source to 'Illustrative data, not "
-                    "actual results', and say so in the reply."
-                )
-            continue
-        problems.append(f"'{label}': {', '.join(bad)}")
-    if not problems or invited:
-        return " ".join(problems) or None
+        if bad:
+            found.append(f"slide {i} '{s.get('title') or ''}': {', '.join(bad)}")
+    if not found:
+        return None
     return (
-        "These numbers are not in anything the user said or a tool returned, so "
-        f"they would be invented: {'; '.join(problems)}. Use only numbers from "
-        "the user's messages or a file, page or calculation you ran; compute a "
-        "share, growth or total with run_python and use its result; otherwise "
-        "drop the number or say it in words. Never make numbers up."
+        "These numbers are on the slides but in nothing the user said or a tool "
+        f"returned this conversation: {'; '.join(found)}. The deck was built "
+        "with them. Keep each one that came from the user or a source; replace "
+        "an estimate with update_slide (label it 'Illustrative'), or tell the "
+        "user which figures are estimates."
     )
 
 
-def _figures_from_user(slides: List[Dict[str, Any]]) -> List[int]:
+def _figures_from_user(slides: List[Any]) -> List[int]:
     """Slides whose every number is one the user typed or one derived from them.
 
     Those figures have no file or system to cite, so verify does not ask for a
@@ -531,6 +351,8 @@ def _figures_from_user(slides: List[Dict[str, Any]]) -> List[int]:
     known = given + _derived(given)
     out = []
     for i, s in enumerate(slides, 1):
+        if not isinstance(s, dict):
+            continue
         shown: List[Tuple[str, float, str]] = []
         _shown_numbers({k: v for k, v in s.items() if k != "source"}, "body", shown)
         if shown and all(_grounded(v, t, known) for t, v, _w in shown):
@@ -549,22 +371,13 @@ _PART_OF_WORDS = re.compile(
 )
 
 
-def _dropped_bases(slides: List[Dict[str, Any]]) -> Optional[str]:
+def _dropped_bases(slides: List[Any], said: List[str]) -> Optional[str]:
     """A user's "7 of 14" shown on a slide as a bare 7, so the base is lost."""
-    try:
-        call = current()
-    except SkillContextError:
-        return None
-    if not _request(call):
-        return None
-    shown_text = json.dumps(
-        [{k: v for k, v in s.items() if k != "notes"} for s in slides],
-        ensure_ascii=False,
-    )
+    shown_text = json.dumps(_shown(slides), ensure_ascii=False)
     kept = set(_PART_OF.findall(shown_text))
     bare = {t for t, _v in _numbers_in(shown_text)}
     lost = []
-    for text in _user_messages(call):
+    for text in said:
         for a, b in _PART_OF_WORDS.findall(text):
             if (a, b) not in kept and a in bare and a != b:
                 lost.append(f"{a} of {b}")
@@ -573,8 +386,8 @@ def _dropped_bases(slides: List[Dict[str, Any]]) -> Optional[str]:
     lost = list(dict.fromkeys(lost))
     return (
         f"The user gave {', '.join(lost)}, but the slides show the count without "
-        f"its base. Write it as the user did (e.g. '{lost[0]}') so the reader "
-        "knows out of how many."
+        f"its base. To fix, replace that slide with update_slide and write it as "
+        f"the user did (e.g. '{lost[0]}')."
     )
 
 
@@ -582,68 +395,64 @@ def _dropped_bases(slides: List[Dict[str, Any]]) -> Optional[str]:
 _EMOJI = re.compile("[🀀-🫿☀-➿🇦-🇿️]")
 
 
-def _stray_emoji(slides: List[Dict[str, Any]]) -> Optional[str]:
+def _stray_emoji(slides: List[Any], request: str) -> Optional[str]:
     """Emoji on the slides that the user did not use themselves."""
-    try:
-        request = _request(current())
-    except SkillContextError:
-        return None
-    shown = json.dumps(
-        [{k: v for k, v in s.items() if k != "notes"} for s in slides],
-        ensure_ascii=False,
-    )
+    shown = json.dumps(_shown(slides), ensure_ascii=False)
     stray = sorted({e for e in _EMOJI.findall(shown) if e not in request and e != "️"})
     if not stray:
         return None
     return (
-        f"Remove the emoji {' '.join(stray)} from the slides: many viewers and the "
-        "image export draw them as empty boxes, and they read as informal."
+        f"The slides use the emoji {' '.join(stray)}: many viewers and the image "
+        "export draw them as empty boxes. To fix, replace those slides with "
+        "update_slide, without the emoji."
     )
 
 
-def _text_of(value: Any) -> str:
-    if isinstance(value, dict):
-        return str(value.get("label") or value.get("title") or "")
-    return str(value or "")
+def _content_warnings(slides: List[Any]) -> List[str]:
+    """What the slides say that the user may not want, checked against this chat.
 
-
-def _merge_hint(count: int) -> str:
-    if count == 1:
-        return (
-            "For one slide: leave out the '# ' cover, put the parts as '### ' "
-            "boxes on a single '## ' slide, and for stages add 'Diagram: process' "
-            "with what grows across them on an 'Axis:' line instead of a "
-            "separate table or slide."
-        )
-    return (
-        "Merge slides that make one point, fold a table or list that only "
-        "explains a diagram into its 'Axis:' line or bullets, or cut the cover."
-    )
-
-
-def _hold_slide_count(expected: int) -> int:
-    """The slide count the user's message names, which ``expected`` must match.
-
-    A count error is fixed by changing the slides, so a model's own number
-    never replaces the user's, and 0 does not skip the check. With no count in
-    the message, ``expected`` is the model's choice.
+    Empty outside a chat turn: a library call has no request to check against.
     """
     try:
-        request = _request(current())
+        call = current()
     except SkillContextError:
-        return expected
-    asked, phrase = _asked_count(request)
-    if not asked:
-        return expected
-    if expected and expected != asked:
-        raise OutlineError(
-            [
-                f"The user asked for {asked} slide{'s' if asked > 1 else ''} "
-                f'("{phrase}"), so expected_slides is {asked}, not {expected}. '
-                f"Change the slides so there are exactly {asked}. " + _merge_hint(asked)
-            ]
+        return []
+    request = _request(call)
+    if not request:
+        return []
+    said = _user_messages(call)
+    found = (
+        _hidden_in_notes(slides, said),
+        _unsourced_numbers(slides, call, said),
+        _dropped_bases(slides, said),
+        _stray_emoji(slides, request),
+    )
+    return [x for x in found if x]
+
+
+def _count_warning(result: Dict[str, Any], expected: int) -> Optional[str]:
+    """Actual against expected slides, with the call that closes the gap."""
+    built = int(result.get("slides") or 0)
+    if not expected or built == expected:
+        return None
+    head = (
+        f"The deck has {built} slide{'s' if built != 1 else ''} and "
+        f"expected_slides was {expected}; every slide counts, a cover included. "
+        "It was built as written. "
+    )
+    if built < expected:
+        return head + (
+            f"To reach {expected}, add each missing slide with "
+            f"add_slide(deck_path='{result.get('path')}', slide={{\"type\": "
+            '"bullets", "title": "...", "bullets": ["..."]})'
+            "; otherwise tell the user the count."
         )
-    return asked
+    return head + (
+        f"If the user asked for exactly {expected}, build again with "
+        f"{expected} '## ' slide{'s' if expected != 1 else ''} (merge slides "
+        "that make one point; a '# ' cover line adds a slide); otherwise tell "
+        "the user the count."
+    )
 
 
 def _slides_built(data: Dict[str, Any], result: Dict[str, Any]) -> List[str]:
@@ -665,10 +474,9 @@ def _slides_built(data: Dict[str, Any], result: Dict[str, Any]) -> List[str]:
     return [f"{n}. {text}" for n, text in sorted(built)]
 
 
-def _fingerprint(*parts: Any) -> str:
-    return hashlib.sha256(
-        json.dumps(parts, sort_keys=True, default=str).encode()
-    ).hexdigest()
+# ----------------------------------------------------------------------
+# Paths: every read and write goes through gaia.skills.context
+# ----------------------------------------------------------------------
 
 
 def _saved_prefs() -> Dict[str, Any]:
@@ -684,7 +492,8 @@ def _absolute(path: str, what: str) -> Path:
     if not p.is_absolute():
         raise OutlineError(
             [
-                f"{what} must be an absolute path (got {path!r}); use the folder the user named or the one the sources are in."
+                f"{what} must be an absolute path (got {path!r}). Call again with "
+                f"the full path, e.g. {what}='C:/Users/me/Documents/{p.name}'."
             ]
         )
     return p
@@ -693,46 +502,241 @@ def _absolute(path: str, what: str) -> Path:
 def _readable(path: str, what: str) -> Path:
     resolved = check_read(_absolute(path, what))
     if not resolved.is_file():
-        raise OutlineError([f"{what} {resolved} does not exist."])
+        raise OutlineError(
+            [
+                f"{what} {resolved} does not exist. Call again with the path of "
+                "an existing file."
+            ]
+        )
     return resolved
+
+
+def _built_deck(path: str, what: str) -> Path:
+    """A deck to check, draw or edit; a missing one names the call that makes it."""
+    try:
+        return _readable(path, what)
+    except OutlineError as exc:
+        raise OutlineError(
+            [
+                f"{exc} Use the 'path' a build result returned, or build the "
+                "deck first with " + _MINIMAL_CALL
+            ]
+        ) from exc
+
+
+def _usable_file(path: Any, what: str) -> Tuple[Optional[str], str]:
+    """(resolved path, "") for a file this chat may read, else (None, why not).
+
+    A file that is not there costs only itself; the caller builds without it
+    and says so.
+
+    Raises:
+        SkillPermissionError: the file is outside the folders this chat may read.
+    """
+    if not isinstance(path, str) or not path.strip():
+        return None, f"{what} was not given as a file path"
+    p = Path(path.strip()).expanduser()
+    if not p.is_absolute():
+        return None, f"{what} {path!r} is not an absolute path"
+    try:
+        resolved = check_read(p)
+    except SkillPermissionError as exc:
+        if str(exc).startswith(MISSING_REFUSAL_PREFIX):
+            return None, f"{what} {p} does not exist"
+        raise SkillPermissionError(
+            f"{what} {p} is outside the folders this chat may read, so nothing "
+            f"was built ({exc}). Call again without that file, or ask the user "
+            "to allow its folder and call again."
+        ) from exc
+    if not resolved.is_file():
+        return None, f"{what} {resolved} does not exist"
+    return str(resolved), ""
+
+
+#: The keys a slide's picture may arrive under once its fields are canonical.
+_IMAGE_KEYS = ("path", "image", "src")
+
+
+def _slide_object(raw: Any) -> Any:
+    """A slide sent as JSON text, as the object it spells; anything else unchanged."""
+    if isinstance(raw, str) and raw.lstrip().startswith("{"):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+    return raw
+
+
+def _scoped_slides(slides: List[Any]) -> List[Any]:
+    """*slides* with every picture path checked against the folders this chat may read.
+
+    Field names are made canonical first and a slide sent as JSON text is
+    read, so ``image_path``, ``file`` and every other spelling are checked
+    like ``path``. The engine is handed only the resolved path that passed. A
+    picture that is not there is taken off its slide with the reason in
+    ``image_problem``; the engine builds the slide without it and reports it.
+
+    Raises:
+        SkillPermissionError: a picture is outside the folders this chat may read.
+    """
+    out = []
+    for i, raw in enumerate(slides, 1):
+        raw = _slide_object(raw)
+        if not isinstance(raw, dict):
+            out.append(raw)
+            continue
+        slide = canonical_fields(raw)
+        given = [slide[k] for k in _IMAGE_KEYS if slide.get(k)]
+        for key in _IMAGE_KEYS:
+            slide.pop(key, None)
+        slide.pop("image_problem", None)
+        if given:
+            first = given[0]
+            if isinstance(first, dict):
+                first = first.get("path") or first.get("src") or first.get("file")
+            path, problem = _usable_file(first, f"slide {i}: image")
+            if path:
+                slide["path"] = path
+            else:
+                slide["image_problem"] = problem
+        out.append(slide)
+    return out
+
+
+def _slide_specs(slide: Any) -> List[Any]:
+    """The slides an edit was given: one object, a list, {"slides": [...]} or JSON text of any."""
+    if isinstance(slide, str):
+        try:
+            slide = json.loads(slide)
+        except json.JSONDecodeError as exc:
+            raise OutlineError(
+                [
+                    f"slide is not valid JSON ({exc.msg}). Pass an object, e.g. "
+                    'slide={"type": "bullets", "title": "Next steps", '
+                    '"bullets": ["First", "Second"]}.'
+                ]
+            ) from exc
+    if isinstance(slide, dict) and isinstance(slide.get("slides"), list):
+        slide = slide["slides"]
+    return _scoped_slides(slide if isinstance(slide, list) else [slide])
+
+
+_FILE_PREFS = ("template_path", "logo_path")
+_TEMPLATE_TYPES = (".pptx", ".potx", ".pptm", ".potm")
+
+
+def _usable_theme(theme: Any, warnings: List[str]) -> str:
+    """*theme* if it names a theme, else "" with a warning naming the themes."""
+    name = str(theme or "").strip() if isinstance(theme, str) else ""
+    if not name:
+        return ""
+    if _style.THEME_ALIASES.get(name.lower(), name.lower()) in _style.THEMES:
+        return name
+    themes = list(_style.THEMES)
+    warnings.append(
+        f"theme {name!r} is not one of {', '.join(themes)}, so the deck was "
+        "built with the saved or default theme (this result's 'theme'). To "
+        f"change it, build again with theme='{themes[0]}'"
+        + "".join(f", '{t}'" for t in themes[1:-1])
+        + f" or '{themes[-1]}'."
+    )
+    return ""
+
+
+def _usable_template(path: Any, what: str, warnings: List[str]) -> Optional[str]:
+    """A template this chat may read, or None with a warning; the theme is used instead."""
+    if not path:
+        return None
+    resolved, problem = _usable_file(path, what)
+    if resolved and Path(resolved).suffix.lower() not in _TEMPLATE_TYPES:
+        resolved, problem = None, f"{what} {path} is not a .pptx or .potx file"
+    if not resolved:
+        warnings.append(
+            f"{problem}, so the deck was built with the skill's theme instead. "
+            f"To use a template, build again with {what}=<absolute path of a "
+            ".pptx or .potx file>."
+        )
+    return resolved
+
+
+def _usable_style(layer: Any, what: str, warnings: List[str]) -> Dict[str, Any]:
+    """*layer* (prefs or an outline's style) without the settings that cannot be used.
+
+    Each dropped setting is named in *warnings* with its valid values; the
+    deck is built from the rest.
+    """
+    if not layer:
+        return {}
+    if not isinstance(layer, dict):
+        warnings.append(
+            f"{what} was ignored: it must be an object, e.g. "
+            '{"theme": "dark", "density": "light"}.'
+        )
+        return {}
+    out: Dict[str, Any] = {}
+    for key, value in layer.items():
+        problems = _style.validate_prefs({key: value})
+        if problems:
+            warnings.append(
+                f"{what}: {' '.join(problems)} That setting was ignored and the "
+                "deck built without it."
+            )
+            continue
+        if key in _FILE_PREFS and value:
+            if key == "template_path":
+                value = _usable_template(value, f"{what} {key}", warnings)
+            else:
+                value, problem = _usable_file(value, f"{what} {key}")
+                if problem:
+                    warnings.append(f"{problem}, so the deck was built without it.")
+            if not value:
+                continue
+        out[key] = value
+    return out
 
 
 def _deck_name(outline: Dict[str, Any]) -> str:
     slides = outline.get("slides") or []
-    title = str(
-        outline.get("title") or (slides[0].get("title") if slides else "") or ""
-    )
+    first = slides[0] if slides and isinstance(slides[0], dict) else {}
+    title = str(outline.get("title") or first.get("title") or "")
     stem = re.sub(r"[^A-Za-z0-9]+", " ", title).strip()[:60].strip()
     return (stem or "Slide deck") + ".pptx"
 
 
-def _writable_deck(
-    path: str, outline: Dict[str, Any], what: str = "output_path"
-) -> Path:
-    # A bare name or no path saves in GAIA's documents folder, which every chat can write.
-    path = (path or "").strip()
-    p = Path(path).expanduser() if path else Path(_deck_name(outline))
-    if not p.is_absolute():
-        p = gaia_home() / "documents" / p
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p = _fresh_name(p)
-    if p.suffix.lower() != ".pptx":
-        raise OutlineError([f"{what} must end in .pptx, got {p.name!r}."])
-    if _SKILL_DIR == p.resolve().parent or _SKILL_DIR in p.resolve().parents:
-        raise OutlineError(
-            [
-                f"{what} is inside the skill's own folder; save the deck where the user keeps their files."
-            ]
-        )
-    if not p.parent.is_dir():
-        raise OutlineError(
-            [f"the folder {p.parent} does not exist; save into an existing folder."]
-        )
-    return check_write(p)
+def _in_skill_folder(path: Path) -> bool:
+    resolved = path.resolve()
+    return _SKILL_DIR == resolved or _SKILL_DIR in resolved.parents
 
 
-def _fresh_name(p: Path) -> Path:
-    """*p*, or "name (2).pptx" when another chat's deck already has that name."""
+def _default_folders(call: Any) -> List[Path]:
+    """Where a deck with no folder goes, best first.
+
+    The working folder, then a folder this chat was allowed, then the user's
+    Documents; a whole home folder or drive comes last.
+    """
+    agent = call.agent
+    roots = search_roots(agent) if path_validator_of(agent) is not None else []
+    work = session_workspace(agent)
+    folders = [
+        *([work] if work else []),
+        *[r for r in roots if not is_broad_root(r)],
+        Path.home() / "Documents",
+        *[r for r in roots if is_broad_root(r)],
+    ]
+    return list(dict.fromkeys(Path(f).resolve() for f in folders))
+
+
+def _may_write(call: Any, target: Path) -> bool:
+    """True when *target* may be written; never asks the user."""
+    validator = path_validator_of(call.agent)
+    if validator is None:
+        return True
+    allowed, _why = validator.validate_write(str(target), prompt_user=False)
+    return bool(allowed)
+
+
+def _fresh_name(p: Path, notes: List[str]) -> Path:
+    """*p*, or "name (2).pptx" when a file this chat did not build has that name."""
     owner = _owner()
     n = 1
     found = p
@@ -740,57 +744,86 @@ def _fresh_name(p: Path) -> Path:
         n += 1
         found = p.with_name(f"{p.stem} ({n}){p.suffix}")
     if found != p:
-        log.info(
-            "slide-decks: %s exists and this chat did not build it; saving %s",
-            p,
-            found.name,
-        )
-        _NOTES.append(
-            f"A deck named '{p.name}' already exists from another chat, so this one "
-            f"is saved as '{found.name}'. Tell the user the file name."
+        notes.append(
+            f"A file named '{p.name}' already exists that this chat did not "
+            f"build, so it was kept and this deck is saved as '{found.name}'."
         )
     return found
 
 
-def _input_paths(outline: Dict[str, Any]) -> List[str]:
-    """Every file an outline will read (images), so each is scope-checked."""
-    out = []
-    for slide in outline.get("slides") or []:
-        if isinstance(slide, dict):
-            for key in ("path", "image", "src"):
-                if isinstance(slide.get(key), str) and slide.get(key):
-                    out.append(slide[key])
-    return out
+def _writable_deck(
+    path: Any, outline: Dict[str, Any], warnings: List[str], notes: List[str]
+) -> Path:
+    """Where to save the deck, checked for writing.
 
+    An absolute *path* is used as given, its folder created if missing. With
+    no path, or only a file name, the deck goes in the first default folder
+    this chat may write to, and *notes* says which.
 
-_FILE_PREFS = ("template_path", "logo_path")
-
-
-def _check_style_files(layer: Any, what: str) -> None:
-    """Scope-check the files a style layer (prefs, outline style or theme) opens."""
-    if not isinstance(layer, dict):
-        return
-    for key in _FILE_PREFS:
-        value = layer.get(key)
-        if value is None or value == "":
+    Raises:
+        OutlineError: the skill's own folder, or no folder to write in.
+        SkillPermissionError: *path* is outside the folders this chat may write.
+    """
+    given = str(path or "").strip()
+    wanted = Path(given).expanduser() if given else Path(_deck_name(outline))
+    if wanted.suffix.lower() != ".pptx":
+        if re.fullmatch(r"\.[A-Za-z0-9]{1,5}", wanted.suffix):
+            warnings.append(
+                f"output_path ended in '{wanted.suffix}', but a deck is a .pptx "
+                f"file, so it was saved as '{wanted.stem}.pptx'."
+            )
+            wanted = wanted.with_suffix(".pptx")
+        else:
+            wanted = wanted.with_name(wanted.name + ".pptx")
+    if wanted.is_absolute():
+        if _in_skill_folder(wanted):
+            raise OutlineError(
+                [
+                    f"output_path {wanted} is inside the skill's own folder. Call "
+                    "again with output_path='' to save in the working folder, or "
+                    "with a path in the user's own folders."
+                ]
+            )
+        try:
+            out = check_write(wanted)
+        except SkillPermissionError as exc:
+            raise SkillPermissionError(
+                f"output_path {wanted} cannot be written, so nothing was built "
+                f"({exc}). Call again with output_path='' to save in the working "
+                "folder, or with a path in a folder the user has allowed."
+            ) from exc
+        out.parent.mkdir(parents=True, exist_ok=True)
+        return out
+    call = current()
+    tried = []
+    for folder in _default_folders(call):
+        target = folder / wanted.name
+        tried.append(str(folder))
+        if (
+            not folder.is_dir()
+            or _in_skill_folder(target)
+            or not _may_write(call, target)
+        ):
             continue
-        if not isinstance(value, str):
-            raise OutlineError([f"{what} {key} must be a path string."])
-        _readable(value, f"{what} {key}")
-
-
-def _check_inputs(
-    outline: Any, prefs: Dict[str, Any], template_path: str
-) -> Optional[str]:
-    data = load_outline(outline)
-    for p in _input_paths(data):
-        _readable(p, "image")
-    if template_path:
-        _readable(template_path, "template_path")
-    _check_style_files(prefs, "preference")
-    _check_style_files(data.get("style"), "style")
-    _check_style_files(data.get("theme"), "theme")
-    return None
+        target = _fresh_name(target, notes)
+        try:
+            out = check_write(target)
+        except SkillPermissionError as exc:
+            log.warning("slide-decks: cannot save to %s: %s", target, exc)
+            continue
+        notes.append(
+            f"No folder was named, so the deck was saved in {out.parent}. Tell "
+            "the user the full path."
+        )
+        return out
+    raise OutlineError(
+        [
+            "No folder this chat may write to was found (tried "
+            f"{', '.join(tried) or 'none'}). Call again with output_path set to "
+            "an absolute .pptx path in a folder the user has allowed, e.g. "
+            "output_path='C:/Users/me/Documents/deck.pptx'."
+        ]
+    )
 
 
 def _renderer():
@@ -835,6 +868,11 @@ def _renderer():
     return render
 
 
+# ----------------------------------------------------------------------
+# Tools
+# ----------------------------------------------------------------------
+
+
 @tool(display_label="Building slide deck")
 def build_deck(
     outline: dict,
@@ -842,115 +880,125 @@ def build_deck(
     theme: str = "",
     template_path: str = "",
     prefs: Optional[dict] = None,
+    expected_slides: int = 0,
 ) -> dict:
     """Build a .pptx from a JSON slide outline and check it; never hand-write python-pptx.
 
     The outline is {"slides": [...]}, each slide a "type" plus its fields
-    (references/outline-json.md). Returns status, path, slides and verify
-    {status, issues}; fix the issues and build again.
+    (references/outline-json.md). Any outline with a slide is built: read
+    the result's `warnings` for what to fix, `path` for the file.
+
+    Example: build_deck(outline={"slides": [{"type": "bullets", "title":
+    "Sales grew 7%", "bullets": ["North up 12%", "South flat"]}]})
 
     Args:
         outline: The slide outline object, or its JSON text.
-        output_path: Where to save the .pptx. Leave empty, or give just a file
-            name, to save in GAIA's documents folder.
+        output_path: Absolute .pptx path. Leave empty to save in the working
+            folder; the result's `path` says where.
         theme: light, dark or minimal; empty uses the saved preference.
         template_path: Optional .pptx/.potx whose layouts and theme to use.
         prefs: Optional style the user asked for in this request (density, colors...).
+        expected_slides: The slide count the user asked for, cover included;
+            a different count is built and reported in `warnings`. 0 skips it.
     """
-    return _build_from(outline, output_path, theme, template_path, prefs)
+    return _build_from(
+        outline, output_path, theme, template_path, prefs, None, expected_slides
+    )
+
+
+def _next_step(result: Dict[str, Any], misses: int) -> str:
+    path = result.get("path")
+    if result.get("status") == "built_with_issues":
+        if misses >= _MAX_FAILED_IN_A_ROW:
+            return (
+                f"Stop building. The deck is saved at {path}: give the user "
+                "that path and tell them which errors in verify.issues remain; "
+                "never call it verified."
+            )
+        return (
+            f"The deck is saved at {path}, and its check found errors "
+            "(verify.issues, severity 'error'). Fix each with "
+            f"update_slide(deck_path='{path}', index=<slide number>, "
+            "slide={...}), or build once more with them fixed. If you stop, "
+            "give the user the path and say which errors remain; never call "
+            "it verified."
+        )
+    if result.get("warnings"):
+        return (
+            f"The deck is saved at {path}. Read `warnings`: make the call a "
+            "warning names if the user would want it fixed, otherwise tell the "
+            "user about it. Then report the path and describe the deck only "
+            "from slides_built."
+        )
+    return (
+        f"The deck is saved at {path} and passed its check. Report it to the "
+        "user now, describing it only from slides_built; build again only if "
+        "they ask for a change."
+    )
 
 
 def _build_from(
     outline: Any,
-    output_path: str,
-    theme: str,
-    template_path: str,
+    output_path: Any,
+    theme: Any,
+    template_path: Any,
     prefs: Optional[dict],
     required_items: Optional[list] = None,
+    expected_slides: Any = 0,
 ) -> dict:
+    warnings: List[str] = []
+    notes: List[str] = []
     try:
-        saved = _saved_prefs()
-        request = dict(prefs or {})
-        problems = _style.validate_prefs(request)
-        if problems:
-            raise OutlineError(problems)
         data = dict(load_outline(outline))
-        count = _hold_slide_count(_whole(data.get("expected_slides")))
+        data["slides"] = _scoped_slides(data["slides"])
+        slides = data["slides"]
+        count = _whole(expected_slides) or _whole(data.get("expected_slides"))
         if count:
             data["expected_slides"] = count
-        data["slides"] = fold_pseudo_slides(data.get("slides") or [], count)
-        if count and count < len(data.get("slides") or []):
-            # The outline check only names the gap; say how to close it.
-            raise OutlineError(
-                [
-                    f"The outline has {len(data['slides'])} slides but the user "
-                    f"asked for {count}; keep expected_slides at {count} and "
-                    "change the slides. " + _merge_hint(count)
-                ]
-            )
-        slides = data.get("slides") or []
-        _NOTES.clear()
-        missing = (
-            _missing_axis(slides)
-            or _invented_numbers(slides)
-            or _dropped_bases(slides)
-            or _stray_emoji(slides)
-        )
-        if missing:
-            raise OutlineError([missing])
+        saved = _usable_style(_saved_prefs(), "saved preference", warnings)
+        request = _usable_style(prefs, "prefs", warnings)
+        style = _usable_style(data.get("style"), "the outline's style", warnings)
+        if isinstance(data.get("theme"), dict):
+            # Only its files are checked here; the engine reads the rest.
+            files = {k: v for k, v in data["theme"].items() if k in _FILE_PREFS}
+            data["theme"] = {
+                **{k: v for k, v in data["theme"].items() if k not in _FILE_PREFS},
+                **_usable_style(files, "the outline's theme", warnings),
+            }
+        elif data.get("theme"):
+            data["theme"] = _usable_theme(data["theme"], warnings) or None
+        data["style"] = _style.merge_prefs(style, request)
+        theme = _usable_theme(theme, warnings)
+        template = _usable_template(template_path, "template_path", warnings)
         data["figures_from_user"] = _figures_from_user(slides)
-        if request:
-            data["style"] = _style.merge_prefs(data.get("style") or {}, request)
         if required_items:
             data["required_items"] = list(
                 dict.fromkeys([*(data.get("required_items") or []), *required_items])
             )
-        _check_inputs(data, saved, template_path)
         data["owner"] = _owner()
-        out = _writable_deck(output_path, data)
-        key = _fingerprint(data, theme, template_path, saved)
-        failed = _FAILED_BUILDS.get(str(out))
-        if failed and failed[0] == key:
-            raise OutlineError(
-                [
-                    "This is the same deck as the last build, so it would fail the "
-                    "same check. Change the Markdown to fix these, or tell the user "
-                    "they are not done:",
-                    *failed[1],
-                ]
-            )
+        out = _writable_deck(output_path, data, warnings, notes)
         result = _build_engine().build_deck(
-            data, str(out), theme or None, template_path or None, saved
+            data, str(out), theme or None, template, saved
         )
+        result["warnings"] = [
+            w
+            for w in (
+                *warnings,
+                *(result.get("warnings") or []),
+                _count_warning(result, count),
+                *_content_warnings(slides),
+            )
+            if w
+        ]
+        result["notes"] = [*(result.get("notes") or []), *notes]
         if result.get("status") == "built_with_issues":
-            issues = (result.get("verify") or {}).get("issues") or []
-            problems = [
-                f"{i.get('detail')} {i.get('fix') or ''}".strip()
-                for i in issues
-                if i.get("severity") == "error"
-            ]
-            _FAILED_BUILDS[str(out)] = (key, problems)
             misses = _FAILED_IN_A_ROW.get(_agent_key(), 0) + 1
             _FAILED_IN_A_ROW[_agent_key()] = misses
-            result["next"] = (
-                "Stop building. Give the user the path and tell them which of "
-                "these errors remain; never call the deck verified."
-                if misses >= _MAX_FAILED_IN_A_ROW
-                else "The deck failed its check. Change the Markdown to fix each "
-                "error and build again; if you stop, tell the user which errors "
-                "remain. Never call it verified."
-            )
         else:
-            _FAILED_BUILDS.pop(str(out), None)
+            misses = 0
             _FAILED_IN_A_ROW.pop(_agent_key(), None)
-            result["next"] = (
-                "The deck is built and passed its check. Report it to the user "
-                "now, describing it only from slides_built; build again only if "
-                "they ask for a change."
-            )
+        result["next"] = _next_step(result, misses)
         result["slides_built"] = _slides_built(data, result)
-        if _NOTES:
-            result["notes"] = [*(result.get("notes") or []), *_NOTES]
         result["style_options"] = _style.style_offer(
             _style.resolve_tokens(request, saved)
         )
@@ -962,7 +1010,10 @@ def _build_from(
         return {
             "status": "error",
             "error": f"{type(exc).__name__}: {exc}",
-            "problems": [f"The deck could not be built: {exc}"],
+            "problems": [
+                f"The deck could not be built: {exc}. If the outline is the "
+                "cause, a call this small always builds: " + _MINIMAL_CALL
+            ],
         }
 
 
@@ -977,29 +1028,37 @@ def build_deck_from_markdown(
 ) -> dict:
     """Build and check a .pptx from Markdown: the easiest way to make a deck.
 
-    '# Title' is the cover, each '## Takeaway sentence' a slide, '-' lines
-    bullets; ```chart, ```table and ```kpi blocks take CSV
-    (references/markdown-format.md). Returns what build_deck returns.
+    Each '## Title' line starts a slide and '-' lines are its bullets; an
+    optional '# Title' line first is a cover slide. ```chart, ```table and
+    ```kpi blocks take CSV (references/markdown-format.md). Any Markdown
+    with a slide is built: read the result's `warnings` for what to fix,
+    `path` for the file.
+
+    Example (one slide): build_deck_from_markdown(markdown="## Sales grew
+    7% in Q3\\n- North up 12%\\n- South flat")
 
     Args:
         markdown: The deck as Markdown.
-        output_path: Where to save the .pptx. Leave empty, or give just a file
-            name, to save in GAIA's documents folder.
+        output_path: Absolute .pptx path. Leave empty to save in the working
+            folder; the result's `path` says where.
         theme: light, dark or minimal; empty uses the saved preference.
         prefs: Optional style the user asked for in this request.
         required_items: Facts the request needs visible on the slides; checked.
-        expected_slides: The slide count the user asked for; 0 skips the check.
-            A count the user named always applies: on a count error, change the slides.
+        expected_slides: The slide count the user asked for, cover included;
+            a different count is built and reported in `warnings`. 0 skips it.
     """
+    markdown = str(markdown or "")
     if "\n" not in markdown and "\\n" in markdown:
         # The model escaped its line breaks twice; the deck is one line otherwise.
         markdown = markdown.replace("\\n", "\n")
+    count = _whole(expected_slides)
     try:
-        count = _hold_slide_count(_whole(expected_slides))
         outline = _md.outline_from_markdown(markdown, count or None)
     except OutlineError as exc:
-        return _error(exc)
-    return _build_from(outline, output_path, theme, "", prefs, required_items)
+        return _error(
+            OutlineError([f"{p} For example: {_MINIMAL_CALL}" for p in exc.problems])
+        )
+    return _build_from(outline, output_path, theme, "", prefs, required_items, count)
 
 
 @tool(display_label="Checking slide deck", timeout=RENDER_TIMEOUT_S + 90)
@@ -1015,11 +1074,16 @@ def verify_deck(
 ) -> dict:
     """Check a saved .pptx: slide count, required items, overflow, overlaps, fonts, charts, sources, notes.
 
-    Works on any deck; renders with LibreOffice when it is installed.
+    Works on any deck; renders with LibreOffice when it is installed. A
+    build already runs this check, so call it after add_slide or
+    update_slide, or for a deck you did not build.
+
+    Example: verify_deck(path="C:/Users/me/Documents/review.pptx")
 
     Args:
         path: Absolute path of the .pptx to check.
-        expected_slides: The slide count the user asked for; 0 skips the check.
+        expected_slides: The slide count the user asked for, cover included;
+            a different count is a warning. 0 skips it.
         require_native_charts: Flag pictures of charts where charts belong.
         require_notes: Flag slides without speaker notes.
         render: Render with LibreOffice (slower, about 10-30 s).
@@ -1029,10 +1093,10 @@ def verify_deck(
 
     Returns:
         {"status": "pass"|"fail", "issues": [{slide, check, severity, fix}],
-        "slides_overview", ...}. Fix every error, rebuild, check again.
+        "slides_overview", ...}. Each issue's `fix` says what to change.
     """
     try:
-        deck = _readable(path, "path")
+        deck = _built_deck(path, "path")
         normalized = normalize_outline(outline) if outline else None
         png_dir = None
         if render_dir:
@@ -1040,15 +1104,15 @@ def verify_deck(
             if not png_dir.is_dir():
                 raise OutlineError(
                     [
-                        f"render_dir {png_dir} does not exist; give an existing folder or leave it empty."
+                        f"render_dir {png_dir} does not exist. Call again with "
+                        "render_dir='' (no slide images), or an existing folder."
                     ]
                 )
             png_dir = check_write(png_dir / "slide_01.png").parent
-        count = _hold_slide_count(_whole(expected_slides))
         renderer = _renderer() if render else None
         report = _verify_engine().verify_deck(
             str(deck),
-            expected_slides=count or None,
+            expected_slides=_whole(expected_slides) or None,
             require_native_charts=require_native_charts,
             outline=normalized,
             require_notes=require_notes,
@@ -1090,6 +1154,8 @@ def export_slide_image(
     generation: this is the real slide, text and charts as built. A deck
     request without an image ask needs no export.
 
+    Example: export_slide_image(deck_path="C:/Users/me/Documents/review.pptx", slide=1)
+
     Args:
         deck_path: The .pptx to draw, from a build result's path.
         slide: Which slide, from 1; 0 saves every slide.
@@ -1098,22 +1164,29 @@ def export_slide_image(
         width: Image width in pixels; the height follows the slide.
     """
     try:
-        deck = _readable(deck_path, "deck_path")
+        deck = _built_deck(deck_path, "deck_path")
         fmt = _image_engine().image_format(image_format)
         renderer = _renderer()
         if renderer is None:
             raise OutlineError(
                 [
                     "LibreOffice is not installed, so the slide cannot be drawn as an "
-                    f"image. The deck at {deck} is ready; install LibreOffice "
-                    "(https://www.libreoffice.org/download/) to export images."
+                    f"image. The deck at {deck} is ready: give the user that path "
+                    "and tell them to install LibreOffice "
+                    "(https://www.libreoffice.org/download/) to export images. Do "
+                    "not call export_slide_image again."
                 ]
             )
         pdf = renderer(deck)
         total = _image_engine().page_count(pdf)
         n = _whole(slide)
         if n > total:
-            raise OutlineError([f"slide {n} does not exist; the deck has {total}."])
+            raise OutlineError(
+                [
+                    f"slide {n} does not exist; the deck has {total}. Call again "
+                    f"with slide=1 to {total}, or slide=0 for every slide."
+                ]
+            )
         pages = list(range(1, total + 1)) if n == 0 else [n]
         ext = "jpg" if fmt == "jpeg" else "png"
         if output_path and len(pages) == 1:
@@ -1142,13 +1215,20 @@ def export_slide_image(
         }
 
 
-def _edit(deck_path: str, run) -> dict:
+def _edit(deck_path: str, slide: Any, run) -> dict:
     try:
-        deck = _readable(deck_path, "deck_path")
+        specs = _slide_specs(slide)
+        deck = _built_deck(deck_path, "deck_path")
         check_write(deck)
-        prefs = _saved_prefs()
-        _check_style_files(prefs, "preference")
-        return run(str(deck), prefs)
+        warnings: List[str] = []
+        prefs = _usable_style(_saved_prefs(), "saved preference", warnings)
+        result = run(str(deck), specs, prefs)
+        result["warnings"] = [
+            *warnings,
+            *(result.get("warnings") or []),
+            *_content_warnings(specs),
+        ]
+        return result
     except OutlineError as exc:
         return _error(exc)
     except SkillPermissionError as exc:
@@ -1165,24 +1245,20 @@ def add_slide(deck_path: str, slide: dict, position: int = 0) -> dict:
     Use it to build a long deck in several small calls. The slide object has
     the same fields as one entry of build_deck's outline.
 
+    Example: add_slide(deck_path="C:/Users/me/Documents/review.pptx",
+    slide={"type": "bullets", "title": "Next steps", "bullets": ["Hire two", "Ship in May"]})
+
     Args:
         deck_path: Absolute path of the .pptx to change.
         slide: One slide object, or {"slides": [...]} for several.
         position: 1-based position to insert at; 0 appends at the end.
     """
-    specs = (
-        slide.get("slides")
-        if isinstance(slide, dict) and isinstance(slide.get("slides"), list)
-        else slide
-    )
-    for p in _input_paths({"slides": specs if isinstance(specs, list) else [specs]}):
-        try:
-            _readable(p, "image")
-        except OutlineError as exc:
-            return _error(exc)
     return _edit(
         deck_path,
-        lambda d, prefs: _build_engine().add_slide(d, specs, position or None, prefs),
+        slide,
+        lambda d, specs, prefs: _build_engine().add_slide(
+            d, specs, _whole(position) or None, prefs
+        ),
     )
 
 
@@ -1190,25 +1266,28 @@ def add_slide(deck_path: str, slide: dict, position: int = 0) -> dict:
 def update_slide(deck_path: str, index: int, slide: dict) -> dict:
     """Replace slide number `index` of an existing deck with a new slide.
 
+    Example: update_slide(deck_path="C:/Users/me/Documents/review.pptx", index=2,
+    slide={"type": "bullets", "title": "Costs fell 4%", "bullets": ["Freight down", "Rent flat"]})
+
     Args:
         deck_path: Absolute path of the .pptx to change.
         index: 1-based number of the slide to replace.
         slide: The new slide object (same fields as a build_deck outline entry).
     """
-    for p in _input_paths({"slides": [slide]}):
-        try:
-            _readable(p, "image")
-        except OutlineError as exc:
-            return _error(exc)
     return _edit(
         deck_path,
-        lambda d, prefs: _build_engine().update_slide(d, index, slide, prefs),
+        slide,
+        lambda d, specs, prefs: _build_engine().update_slide(
+            d, index, specs[0] if len(specs) == 1 else specs, prefs
+        ),
     )
 
 
 @tool(display_label="Listing deck blueprints")
 def list_blueprints() -> dict:
     """List the deck blueprints (storyline templates) and their slots.
+
+    Example: list_blueprints()
 
     Returns:
         {"blueprints": [{name, use_for, default_slides, slides, slots}]}.
@@ -1223,20 +1302,22 @@ def outline_from_blueprint(
     """Make an outline from a blueprint, scaled to exactly slide_count slides.
 
     Unfilled slots come back as TODO slides; fill them (pass slots again, or
-    edit the outline) before building — verify_deck fails on any TODO.
+    edit the outline), then pass the outline to build_deck.
+
+    Example: outline_from_blueprint(name="project_status", slide_count=6)
 
     Args:
-        name: Blueprint name from list_blueprints, e.g. quarterly_review.
+        name: Blueprint name from list_blueprints.
         slide_count: Slides wanted; 0 uses the blueprint's default.
         slots: Optional {slot_id: {slide fields}}; use "id#2" for a slot's 2nd copy.
-        variant: Optional variant, e.g. 2x2, pyramid, cycle for one_slide_framework.
+        variant: Optional variant a blueprint lists, e.g. 2x2 for one_slide_framework.
 
     Returns:
         {"outline", "slots": [{slide, slot, type, filled, guidance}], "todo", "dropped"}.
     """
     try:
         return _bp.outline_from_blueprint(
-            name, slide_count or None, slots, variant or None
+            name, _whole(slide_count) or None, slots, variant or None
         )
     except OutlineError as exc:
         return _error(exc)
@@ -1247,6 +1328,8 @@ def deck_outline_from_markdown(markdown: str) -> dict:
     """Turn deck Markdown into a build_deck outline without building it.
 
     Same format as build_deck_from_markdown (references/markdown-format.md).
+
+    Example: deck_outline_from_markdown(markdown="## Sales grew 7%\\n- North up 12%")
 
     Args:
         markdown: The Markdown text.
@@ -1267,6 +1350,8 @@ def update_deck_prefs(feedback: str = "", changes: Optional[dict] = None) -> dic
 
     Call it when the user gives style feedback ("less text", "use our blue
     #1F4E79", "no speaker notes", "dark theme"). Then tell them what was saved.
+
+    Example: update_deck_prefs(feedback="dark theme, less text")
 
     Args:
         feedback: The user's words; clear requests are turned into preferences.
@@ -1294,10 +1379,12 @@ def update_deck_prefs(feedback: str = "", changes: Optional[dict] = None) -> dic
                 "error": "; ".join(problems),
                 "problems": problems,
             }
-        try:
-            _check_style_files(wanted, "preference")
-        except (OutlineError, SkillPermissionError) as exc:
-            return {"saved": False, **_error(exc)}
+        for key in _FILE_PREFS:
+            if wanted.get(key):
+                try:
+                    _readable(wanted[key], f"preference {key}")
+                except (OutlineError, SkillPermissionError) as exc:
+                    return {"saved": False, **_error(exc)}
         result = preferences().update(wanted)
         return {
             "saved": bool(result.saved),

@@ -129,10 +129,11 @@ def test_skill_md_stays_lean_and_every_reference_exists():
 
 
 def test_bad_csv_block_and_bad_json_block_say_how_to_fix():
-    with pytest.raises(OutlineError, match="no rows"):
-        outline_from_markdown("## A chart\n```chart\ny_title: x\n```\n")
-    with pytest.raises(OutlineError, match="CSV block is easier"):
-        outline_from_markdown("## A chart\n```slide\n{not json}\n```\n")
+    empty = outline_from_markdown("## A chart\n```chart\ny_title: x\n```\n")
+    assert empty["slides"][0]["title"] == "A chart"
+    assert "no rows" in empty["warnings"][0]
+    bad = outline_from_markdown("## A chart\n```slide\n{not json}\n```\n")
+    assert "CSV block is easier" in bad["warnings"][0]
 
 
 # ---------------------------------------------------------------- required items
@@ -247,41 +248,57 @@ def test_small_model_field_names_are_accepted():
     assert n["slides"][2]["paras"][0][0].startswith("A paragraph")
 
 
-def test_typo_fields_name_the_field_and_show_a_corrected_slide():
-    with pytest.raises(OutlineError) as e:
-        normalize_outline(
-            {
-                "slides": [
-                    {
-                        "type": "bullets",
-                        "title": "x",
-                        "bullett": ["lost point", "another"],
-                    }
-                ]
-            }
-        )
-    text = "\n".join(e.value.problems)
-    assert "unknown field 'bullett'" in text and "did you mean 'bullets'" in text
-    assert '"type": "bullets"' in text, "a corrected example is included"
+def test_a_misspelt_field_is_read_as_the_one_it_is_closest_to():
+    n = normalize_outline(
+        {
+            "slides": [
+                {
+                    "type": "bullets",
+                    "title": "x",
+                    "bullett": ["kept point", "another"],
+                }
+            ]
+        }
+    )
+    assert [p[0] for p in n["slides"][0]["paras"]] == ["kept point", "another"]
+    assert n["warnings"] == [
+        "slide 1 (bullets): unknown field 'bullett' was read as 'bullets'."
+    ]
 
 
-def test_chart_mistakes_get_a_chart_example():
-    with pytest.raises(OutlineError) as e:
-        normalize_outline(
-            {
-                "slides": [
-                    {
-                        "type": "chart",
-                        "title": "x",
-                        "categories": ["a", "b"],
-                        "serie": {"S": [1, 2]},
-                    }
-                ]
-            }
-        )
-    text = "\n".join(e.value.problems)
-    assert "did you mean 'series'" in text
-    assert '"chart_type": "column"' in text and '"series": {' in text
+def test_a_misspelt_chart_field_still_draws_the_chart():
+    n = normalize_outline(
+        {
+            "slides": [
+                {
+                    "type": "chart",
+                    "title": "x",
+                    "categories": ["a", "b"],
+                    "serie": {"S": [1, 2]},
+                }
+            ]
+        }
+    )
+    assert n["slides"][0]["type"] == "chart"
+    assert n["slides"][0]["chart"]["series"][0]["values"] == [1, 2]
+    assert "'serie' was read as 'series'" in n["warnings"][0]
+
+
+def test_a_field_no_slide_reads_is_named_with_the_fields_that_are():
+    n = normalize_outline(
+        {
+            "slides": [
+                {
+                    "type": "bullets",
+                    "title": "x",
+                    "bullets": ["a"],
+                    "zzqx": ["this content is not shown anywhere"],
+                }
+            ]
+        }
+    )
+    assert "unknown field 'zzqx' is not on the slide" in n["warnings"][0]
+    assert "A bullets slide reads:" in n["warnings"][0]
 
 
 def test_harmless_settings_are_ignored_not_errors():

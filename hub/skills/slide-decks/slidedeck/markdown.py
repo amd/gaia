@@ -31,10 +31,12 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from .outline import CHART_TYPES, OutlineError
+from .outline import CHART_TYPES, OutlineError, cover_left_out
 
 _BULLET = re.compile(r"^(\s*)(?:[-*+•]|\d+[.)])\s+(.*)$")
 _TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
+#: A "## Title" line, which starts a slide.
+_SLIDE_HEADING = re.compile(r"^##\s+\S")
 _REQUIRED = re.compile(
     r"^\s*(must[\s_-]*show|required(?:[\s_-]*items)?)\s*:\s*(.+)$", re.I
 )
@@ -196,7 +198,15 @@ def _box_as_takeaway(col: Dict[str, Any]) -> str:
     return f"{head}. {said}" if ":" in head else f"{head}: {said}"
 
 
-def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
+def _slide_from_block(
+    title: str, lines: List[str], warnings: List[str]
+) -> Dict[str, Any]:
+    if sum(1 for x in lines if x.strip().startswith("```")) % 2:
+        warnings.append(
+            f"slide {title!r}: a ``` block was never closed; it was read as "
+            "ending with the slide. End each block with a ``` line."
+        )
+        lines = [*lines, "```"]
     lines = _unfence_diagrams(lines)
     slide: Dict[str, Any] = {"title": title.strip()}
     bullets: List[Any] = []
@@ -246,18 +256,19 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
                     "kpis",
                     "metrics",
                 ) and not body.startswith("{"):
-                    extra.update(_csv_block(title, fence_lang, fence))
+                    try:
+                        extra.update(_csv_block(title, fence_lang, fence))
+                    except OutlineError as exc:
+                        warnings.append(f"{exc} The block was left off the slide.")
                 else:
                     try:
                         extra.update(json.loads(body or "{}"))
                     except json.JSONDecodeError as exc:
-                        raise OutlineError(
-                            [
-                                f"slide {title!r}: the ```{fence_lang or 'slide'} block is not valid JSON ({exc.msg}). "
-                                "For a chart, a CSV block is easier:\n```chart line\ny_title: Revenue ($M)\n"
-                                "Quarter,Revenue\nQ1,4.1\nQ2,4.6\n```"
-                            ]
-                        ) from exc
+                        warnings.append(
+                            f"slide {title!r}: the ```{fence_lang or 'slide'} block is not valid JSON ({exc.msg}), "
+                            "so it was left off the slide. For a chart, a CSV block is easier:\n```chart line\ny_title: Revenue ($M)\n"
+                            "Quarter,Revenue\nQ1,4.1\nQ2,4.6\n```"
+                        )
                 fence = None
             else:
                 fence.append(line)
@@ -350,13 +361,6 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
             # Several plain lines under a heading are its list, not one sentence.
             col["bullets"] = [{"text": x, "level": 0} for x in lines]
             col["text"] = ""
-    if fence is not None:
-        raise OutlineError(
-            [
-                f"slide {title!r}: the ```{fence_lang or 'slide'} block is never "
-                "closed, so nothing after it would show. End it with a ``` line."
-            ]
-        )
     shows_data = bool(extra or "columns_table" in slide or "image" in slide)
     if shows_data and len(columns) == 1 and not slide.get("takeaway"):
         # One box beside a chart or table is the slide's point: draw it as the takeaway.
@@ -378,12 +382,24 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
             else ("table" if "columns_table" in slide else "chart or KPI block")
         )
         names = ", ".join(c["heading"] for c in columns)
-        raise OutlineError(
-            [
-                f"slide {title!r}: a slide shows one {what} or '### ' boxes, not "
-                f"both, so the boxes ({names}) would not appear. Put them on their "
-                f"own '## ' slide, or drop the {what}."
-            ]
+        # Both cannot be drawn as written: the boxes become points beside it.
+        slide["bullets"] = [
+            *(slide.get("bullets") or []),
+            *[
+                {
+                    "text": c["heading"],
+                    "bold": True,
+                    "bullets": c["bullets"]
+                    or ([{"text": c["text"], "level": 0}] if c.get("text") else []),
+                }
+                for c in columns
+            ],
+        ]
+        columns = []
+        warnings.append(
+            f"slide {title!r}: a slide shows one {what} or '### ' boxes, not "
+            f"both, so the boxes ({names}) were written as points beside the "
+            f"{what}. To draw them as boxes, put them on their own '## ' slide."
         )
 
     if notes:
@@ -549,8 +565,10 @@ def outline_from_markdown(
 ) -> Dict[str, Any]:
     """Parse Markdown into ``{"slides": [...]}``. Raises OutlineError when empty.
 
-    With *expected_slides*, the ``#`` cover is left out when the ``##`` slides
-    alone make that count: "one slide" means the slide, not a cover plus it.
+    *expected_slides* counts every slide, the cover included: the ``#`` cover
+    is left out when the ``##`` slides alone make that count. That, and
+    anything else read differently from how it was written, is in the
+    result's ``warnings``.
     """
     if not md or not md.strip():
         raise OutlineError(["The Markdown is empty."])
@@ -562,6 +580,8 @@ def outline_from_markdown(
     for line in lines:
         if line.strip().startswith("```"):
             fenced = not fenced
+        elif fenced and _SLIDE_HEADING.match(line.strip()):
+            fenced = False
         m = None if fenced else _REQUIRED.match(line)
         if m:
             required += [x.strip() for x in re.split(r"[;|]", m.group(2)) if x.strip()]
@@ -580,11 +600,12 @@ def outline_from_markdown(
     cover_lines: List[str] = []
     in_fence = False
     stage = "start"
+    warnings: List[str] = []
 
     def close():
         nonlocal block, title
         if title is not None:
-            slides.append(_slide_from_block(title, block))
+            slides.append(_slide_from_block(title, block, warnings))
         elif stage == "cover" and deck_title is not None:
             pass
         title, block = None, []
@@ -593,6 +614,9 @@ def outline_from_markdown(
         s = line.strip()
         if s.startswith("```"):
             in_fence = not in_fence
+        elif in_fence and _SLIDE_HEADING.match(s):
+            # A block left open ends at the next slide, not at the end of the deck.
+            in_fence = False
         if (
             not in_fence
             and re.match(r"^#\s+\S", s)
@@ -634,15 +658,17 @@ def outline_from_markdown(
     if deck_title is not None and body:
         if not slides:
             # "# Title" over the content with no "## " slide is that slide, not a cover.
-            slides.append(_slide_from_block(deck_title, cover_lines))
+            slides.append(_slide_from_block(deck_title, cover_lines, warnings))
             deck_title, cover_lines = None, []
         else:
-            raise OutlineError(
-                [
-                    f"The '# {deck_title}' cover holds slide content ({body[0]!r}), "
-                    "which a cover does not show. Move it under a '## ' slide; the "
-                    "cover keeps only a subtitle and a date line."
-                ]
+            # A cover shows a subtitle and a date line only: its content is a slide.
+            slides.insert(0, _slide_from_block(deck_title, cover_lines, warnings))
+            cover_lines = []
+            warnings.append(
+                f"The '# {deck_title}' cover held slide content ({body[0]!r}), "
+                "which a cover does not show, so that content is a slide of its "
+                "own after the cover. To choose its title, put it under a '## ' "
+                "line."
             )
     out: List[Dict[str, Any]] = []
     if deck_title is not None:
@@ -673,7 +699,10 @@ def outline_from_markdown(
         and slides
     ):
         out = out[1:]
+        warnings.append(cover_left_out(expected_slides, deck_title))
     result: Dict[str, Any] = {"slides": out}
+    if warnings:
+        result["warnings"] = warnings
     if deck_title:
         result["title"] = deck_title
     if expected_slides:

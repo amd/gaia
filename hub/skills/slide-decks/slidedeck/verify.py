@@ -1048,9 +1048,12 @@ def verify_deck(
         issues.add(
             None,
             "slide_count",
-            "error",
-            f"the deck has {n} slides; {expected_slides} were asked for.",
-            "Add or remove slides (merge or split content) until the count is exact.",
+            "warning",
+            f"the deck has {n} slides; expected_slides was {expected_slides} "
+            "(every slide counts, the cover included).",
+            "If the user named a count, add or remove slides to match it: "
+            "add_slide adds one, and a rebuild with merged or split content "
+            "changes the rest. Otherwise tell the user the count.",
         )
 
     # Outline mapping: outline index -> built slide numbers.

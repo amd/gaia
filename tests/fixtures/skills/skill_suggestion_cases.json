@@ -43,7 +43,7 @@
     {"request": "From these three sets of meeting notes, list every to-do with its owner and due date", "expected": ["meeting-actions"], "acceptable": ["summarize", "transcribe-meeting"]},
     {"request": "What's still open from our last few project meetings? The minutes are attached", "expected": ["meeting-actions"], "acceptable": ["summarize", "transcribe-meeting"]},
     {"request": "Make a list of who promised what in this meeting transcript", "expected": ["meeting-actions"], "acceptable": ["summarize", "transcribe-meeting"]},
-    {"request": "Build a ten-slide quarterly business review deck with charts of these numbers", "expected": ["slide-decks"], "acceptable": ["office-docs", "report-from-sources", "data-explore"]},
+    {"request": "Build a ten-slide sales review deck with charts of these numbers", "expected": ["slide-decks"], "acceptable": ["office-docs", "report-from-sources", "data-explore"]},
     {"request": "Make a pitch deck for our startup using the company slide template", "expected": ["slide-decks"], "acceptable": ["office-docs"]},
     {"request": "Check my presentation for text spilling off the slides and hard-to-read colours", "expected": ["slide-decks"], "acceptable": ["office-docs"]},
     {"request": "List every recipe in this cooking class video with the time each one starts", "expected": ["analyze-recording"], "acceptable": ["guides"]},

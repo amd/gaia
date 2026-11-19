@@ -215,10 +215,12 @@ review, pitch, project status, training, research readout, decision, roadmap,
 one-slide framework) scale to the exact slide count asked for, and
 `verify_deck` checks the saved file for fit, overlaps, contrast, chart data,
 missing sources and style, rendering it with LibreOffice when installed.
-Every number on a slide must come from what you said or from a file, page or
-calculation the agent ran; a number it would have made up is refused and
-rebuilt without it, unless you asked for illustrative figures, which are then
-labelled as such on the slide.
+A build always saves the deck when the outline has a slide. Anything read or
+drawn differently from what was sent — a slide count that differs from the
+one asked for, a theme that does not exist, a number that is in nothing you
+said and no file, page or calculation the agent ran — comes back as a warning
+with the call that fixes it, not as a refusal. With no path given the deck is
+saved in the working folder.
 
 - **Demonstrates** — a tool-providing skill built on `gaia.skills.context`:
   scope-checked paths, a declared program (`program:run:soffice`), per-call

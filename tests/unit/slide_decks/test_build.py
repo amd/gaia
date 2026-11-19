@@ -247,17 +247,25 @@ def test_combo_with_secondary_axis_is_one_native_chart(out):
     assert sec.find(f"{{{plot_area.nsmap['c']}}}axPos").get("val") == "r"
 
 
-def test_secondary_axis_on_horizontal_bars_is_an_error(out):
-    spec = dict(
-        CHART,
-        chart_type="bar",
-        series=[
-            {"name": "A", "values": [1, 2, 3, 4, 5]},
-            {"name": "B", "values": [1, 2, 3, 4, 5], "axis": "secondary"},
-        ],
+def _chart(path):
+    return next(s for s in Presentation(path).slides[0].shapes if s.has_chart).chart
+
+
+def test_a_combo_that_cannot_be_drawn_is_a_plain_chart_with_a_warning(out):
+    both = [
+        {"name": "A", "values": [1, 2, 3, 4, 5]},
+        {"name": "B", "values": [1, 2, 3, 4, 5], "axis": "secondary"},
+    ]
+    bars = build_deck({"slides": [dict(CHART, chart_type="bar", series=both)]}, out())
+    assert any("horizontal bars" in w and "'column'" in w for w in bars["warnings"])
+    chart = _chart(bars["path"])
+    assert [s.name for s in chart.plots[0].series] == ["A", "B"]
+    moved = [dict(s, axis="secondary") for s in both]
+    all_off = build_deck(
+        {"slides": [dict(CHART, chart_type="column", series=moved)]}, out("m.pptx")
     )
-    with pytest.raises(OutlineError, match="horizontal bars"):
-        build_deck({"slides": [spec]}, out())
+    assert any("every series" in w for w in all_off["warnings"])
+    assert len(_chart(all_off["path"]).plots[0].series) == 2
 
 
 def test_highlight_puts_the_message_series_in_the_accent(out):

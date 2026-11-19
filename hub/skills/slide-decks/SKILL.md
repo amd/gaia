@@ -47,6 +47,10 @@ metadata:
           prefs:
             type: object
             required: false
+          expected_slides:
+            type: integer
+            required: false
+            default: 0
         returns:
           type: object
       - name: verify_deck
@@ -214,7 +218,7 @@ metadata:
 
 **Do not write python-pptx code. Build the deck with
 `slide-decks/build_deck_from_markdown` (or `slide-decks/build_deck` for a JSON
-outline), then check it with `slide-decks/verify_deck`.** Hand-written code gets chart pictures. Your job is the story and the numbers.
+outline).** One call makes the file. Hand-written code gets chart pictures. Your job is the story and the numbers.
 
 ````markdown
 # Northwind Q3 2026 review
@@ -236,67 +240,69 @@ Q3 25,4.1,3.9
 Q3 26,5.6,4.1
 ```
 
-## Support grows from one desk to a 24/7 team
-Each step adds channels and hours
+## Onboarding takes three steps
 Diagram: process
-### Help desk
-Answers within a day
-- Email tickets
-### Live chat
-- Chat, 8am-6pm
-### 24/7 team
-- Phone, chat and email
-Axis: More channels, staff and hours
+### Sign up
+- Two minutes online
+### Verify
+- ID check, same day
+### First order
+- Guided by a specialist
 ````
 
-`# ` is the cover, each `## ` line is one slide titled with its takeaway, `-`
-lines are bullets, `Takeaway:` the line to act on, `Must show:` what must be seen. Three or more
-`### ` headings on a slide are drawn as side-by-side boxes, each heading's
-bullets inside it. `Diagram: process` draws them as left-to-right stages
-(also `cycle`, `pyramid`, `stack`; dated plans: `timeline`, `### Feb 3 — Beta`). On a process,
-`Axis:` names what grows along them, never a separate table or slide.
-Use this for stages, steps, levels or options, never a chart of made-up
-scores or a wall of bullets. Values over stages or time: a chart.
-Keep the user's own names for each stage. Under each, a lead line, then 2-4
-bullets of 2-6 words, with no labels like `Focus:`. Use the user's terms; invent no abbreviations. Keep `Axis:` under 10 words.
+`# ` is an optional cover slide, each `## ` line is one slide titled with its
+takeaway, `-` lines are bullets, `Takeaway:` the line to act on, `Must show:`
+what must be seen. Three or more `### ` headings on a slide are drawn as
+side-by-side boxes; `Diagram: process` draws them as stages (also `cycle`,
+`pyramid`, `stack`, `timeline`). One slide is just one `## ` block:
+`build_deck_from_markdown(markdown="## Title\n- Point\n- Point")`.
 
-## Hard rules
+## What a build returns
 
-- **Exact slide count.** Build exactly the number the user named (a one-slide
-  request gets no cover), else the blueprint's default.
+- **Any outline with a slide is built.** `path` is the file. `status` is
+  `ok`, or `built_with_issues` when the check found errors in the saved deck.
+- **`warnings`** list what was read, drawn or left out differently from what
+  you sent, and what to check (slide count, numbers with no source, a theme
+  or field that does not exist). Each names the call that fixes it. Make that
+  call if the user would want it fixed; otherwise tell the user.
+- **`status: "error"`** means no file was made: no slides, a path outside the
+  folders this chat may use, or no folder to save in. The error names the
+  next call. Never switch to writing code.
+
+## Rules
+
+- **Slide count.** Pass the number the user named as `expected_slides`. It
+  counts every slide, the cover included: for one slide send one `## ` block
+  and no `# ` cover. A different count is built and reported in `warnings`.
 - **Every must-show item is visible on a slide.** List each number, name,
-  event, section and message the request asks for and pass them as
-  `required_items`: short facts and names, not the deck's overall message.
-  Never move requested content into the notes: cut other words or split. Notes hold extra detail and the spoken script.
+  event and message the request asks for and pass them as `required_items`.
+  Never move requested content into the notes: notes hold extra detail.
 - **Only numbers the user gave or a tool returned** (compute with
-  `run_python`); data slides name their source.
-- **On `status: "error"`**, fix every listed problem and call again. Never
-  switch to writing code.
+  `run_python`); data slides name their source. An estimate is labelled
+  `Illustrative` on its slide.
 
 ## Procedure
 
 1. **Brief.** Settle audience, purpose and slide count. Saved preferences
    apply; this request's `prefs`, `theme`, `template_path` win. Ask **one** short question **only** for a material
    ambiguity, through `request_user_input` with a default.
-   Never ask about anything a default covers. No numbers given is not a
-   reason to ask: show how it would work, claim no results, add an
-   `Evidence to add` box.
+   Never ask about anything a default covers.
 2. **Key facts.** From files: `list_files`, read each document in full with
    `read_file`, compute numbers from data with `run_python`. Keep a ledger
-   (fact, value, source) of headline numbers, changes, events and risks.
-   Every ledger row goes on a slide and into `required_items`. Several files
-   on one topic: use the newest for the requested period.
+   (fact, value, source); every ledger row goes on a slide and into
+   `required_items`.
 3. **Storyline.** One message per slide, answer first, end with next steps.
    For a standard deck call `list_blueprints`, then
    `outline_from_blueprint(name, slide_count=N)` and fill every TODO slot.
-4. **Build** with Markdown, or `build_deck` with JSON for flows,
-   2x2 matrices and combo charts. Leave `output_path` empty unless the user named where to save it.
-5. **Check.** The build result's `verify` is the check. Fix every error it
-   lists and rebuild (or `update_slide`) until its `status` is `pass`. Call
+4. **Build** with Markdown, or `build_deck` with JSON for flows, 2x2
+   matrices and combo charts. Leave `output_path` empty unless the user named
+   where to save it: the deck goes in the working folder and `path` says where.
+5. **Check.** The build result's `verify` is the check. Fix its errors with
+   `update_slide` or one rebuild. Call
    `verify_deck(path, expected_slides=N, required_items=[...])` only after
    `add_slide` or `update_slide`, or for a deck you did not build.
 6. **Report** the path, one line per slide from `slides_built`, the check
-   status and anything not done. On style feedback call
+   status and any warning left. On style feedback call
    `update_deck_prefs(feedback=...)` and say whether it was saved.
 
 ## References (paths relative to this skill's folder)
@@ -304,7 +310,7 @@ bullets of 2-6 words, with no labels like `Focus:`. Use the user's terms; invent
 - `references/markdown-format.md` - read when a slide needs a chart, table,
   KPI tiles, image, quote, two columns or speaker notes.
 - `references/outline-json.md` - read before calling `build_deck`,
-  `add_slide` or `update_slide` with JSON, or after an outline error.
+  `add_slide` or `update_slide` with JSON.
 - `references/storyline.md` - read when picking a blueprint, writing titles,
   or fixing density warnings.
 - `references/brief-and-sources.md` - read when unsure whether to ask the

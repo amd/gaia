@@ -98,7 +98,9 @@ def plan_slots(
     if len(candidates) < n:
         raise OutlineError(
             [
-                f"blueprint '{bp['name']}' reaches at most {len(candidates)} slides; {n} were asked for. Add slides yourself or pick a longer blueprint."
+                f"blueprint '{bp['name']}' reaches at most {len(candidates)} slides; {n} were asked for. "
+                f"Call outline_from_blueprint(name='{bp['name']}', slide_count={len(candidates)}) and add the other "
+                f"{n - len(candidates)} to its outline yourself."
             ]
         )
     chosen = candidates[:n]
@@ -167,7 +169,11 @@ def outline_from_blueprint(
     lo, hi = int(bp.get("min_slides", 1)), int(bp.get("max_slides", 40))
     if not lo <= n <= hi:
         raise OutlineError(
-            [f"blueprint '{bp['name']}' supports {lo}-{hi} slides; {n} were asked for."]
+            [
+                f"blueprint '{bp['name']}' supports {lo}-{hi} slides; {n} were asked for. "
+                f"Call outline_from_blueprint(name='{bp['name']}', slide_count={min(max(n, lo), hi)}) "
+                "and add or drop slides in its outline yourself."
+            ]
         )
     fills = dict(slots or {})
     known = {s["id"] for s in bp["slots"]}
