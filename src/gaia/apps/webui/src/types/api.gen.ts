@@ -956,6 +956,7 @@ export interface MessageResponse {
   agent_steps?: AgentStepResponse[] | null;
   content: string;
   created_at: string;
+  failed?: boolean;
   id: number;
   library_notices?: string[] | null;
   page_elements?: PageElement[] | null;

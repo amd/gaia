@@ -297,6 +297,7 @@ def message_to_response(msg: dict) -> MessageResponse:
         page_elements=page_elements,
         library_notices=msg.get("library_notices"),
         stopped=bool(msg.get("stopped")),
+        failed=bool(msg.get("failed")),
     )
 
 

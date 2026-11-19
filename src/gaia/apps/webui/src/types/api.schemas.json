@@ -3181,6 +3181,11 @@
         "title": "Created At",
         "type": "string"
       },
+      "failed": {
+        "default": false,
+        "title": "Failed",
+        "type": "boolean"
+      },
       "id": {
         "title": "Id",
         "type": "integer"
