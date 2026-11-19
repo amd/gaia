@@ -253,8 +253,8 @@ def test_a_redaction_answer_survives_loading_the_extraction_skill(agent, tmp_pat
         _call("write_file", file_path=log, content="document,location,type\n"),
         _call("read_file", file_path=log),
         {"answer": answer},
-        # Asked once to compare the copies with the agreements; nothing differs.
-        {"answer": answer},
+        # The turn's one self-check: nothing is missing.
+        {"answer": "RESULT: PASS"},
     )
     result = agent.process_query(REDACTION.format(root=tmp_path.as_posix()))
     assert result["result"].startswith(answer)

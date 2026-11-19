@@ -483,6 +483,20 @@ check goes by the argument's name, so a path in an argument named otherwise
 or `open_read` before using it. A tool that writes calls `check_write` or
 `open_write` itself.
 
+These calls are also how the turn's own checks learn what a skill tool did:
+
+- **A saved file counts as written by the turn** once it has really changed:
+  one written through `check_write` / `open_write`, or one whose absolute path
+  the result reports (`output_path`, `file_path`, `path`, `saved_to`) and that
+  was modified during the call. Without either, a turn that asked for
+  `deck.pptx` ends "incomplete" with the file on disk.
+- **A check tool that opens a file through `check_read` / `open_read` has read
+  it back.** The model is not asked to read the file again after it.
+- **A check that finds problems is a successful call.** Return a status of your
+  own (`"status": "errors_found"`, with `"ok": false` and the findings) and the
+  agent treats the findings as the result. `"status": "error"`, or an `error`
+  field, means the tool itself could not run.
+
 `gaia skill audit` matches these calls against the manifest. A declared
 `run_program("soffice")` passes. An undeclared one, or one naming a program the
 manifest doesn't list, is flagged. The file functions need no `filesystem`

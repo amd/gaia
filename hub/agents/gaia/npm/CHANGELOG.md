@@ -26,15 +26,30 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   successful write to `deck.pptx` is recorded for this turn", because the
   completion check only knew the built-in write tools. A write made through
   `gaia.skills.context` (`check_write`, `open_write`) is now on the same
-  record once the file has really changed.
-- **A file built from other files is compared with them before the answer.**
-  Models said "built and verified" without opening the output, so dropped
-  rows and totals that did not match the sources reached the user. A turn
-  that wrote a document or data file after reading other files is now asked
-  once to re-open what it wrote, reconcile counts and totals with its
-  inputs, and fix or report any mismatch. It costs one extra model step, is
-  never asked twice in a turn, and is not asked on a chat answer, a code
-  edit, or a file written from nothing.
+  record once the file has really changed, and so is a file whose path a
+  tool's result reports and that changed during the call.
+- **A built file gets one short self-check, not a second pass over the
+  work.** On long local-model tasks a requirement the request stated was
+  dropped (a tab, a chart, a length limit), an implausible result went out
+  unquestioned, or a duplicate input row reached a total. A turn that built a
+  document or data file is now asked once, in a few lines, to mark each
+  stated requirement met or not and to answer three plausibility questions;
+  figures are checked against sources only in prose that quotes them. With
+  nothing wrong it costs one short model step and the answer is unchanged.
+  Slide counts, named tabs, word limits, empty files and wrong extensions are
+  checked in code and raised only when wrong. The check shrinks or is skipped
+  when a time limit is nearly used up, never ends a finished turn
+  "incomplete", logs each firing (`[check:self]`), and is turned off with
+  `GAIA_AGENT_SELF_CHECK=0`.
+- **Finished work is no longer reported as unfinished or unsourced.** A turn
+  whose file exists ends `success`; a file not read back after its last
+  change is a "Not checked:" line in the answer, listed in
+  `completion_caveats`. A skill's check tool that opened the file has read it
+  back, and so has a full read followed only by in-place edits. A check tool
+  that returns findings (`"status": "errors_found"`, `"ok": false`) is a
+  successful call, not a tool error. Figures in a file a script or tool built
+  are no longer listed as "figures I found no source for" unless a call typed
+  them.
 - **A loaded skill's tools stay on the tool list, and `load_skill` says
   which ones.** A skill loaded by a skill set, or by any agent that picks
   its own tools each turn, could name tools the model was never sent. Every

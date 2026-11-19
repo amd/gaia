@@ -104,3 +104,40 @@ def test_the_ledger_counts_only_a_file_that_changed(tmp_path):
     # Nothing carries over to a later call that wrote nothing.
     evidence.record("read_file", {"file_path": "x"}, {"status": "success"}, True)
     assert len(evidence.written_files()) == 1
+
+
+_SAVES_TEXT = (
+    "with ctx.open_write(file_path, 'w') as fh:\n"
+    "    fh.write('notes')\n"
+    "return {'status': 'success'}\n"
+)
+_VERIFIES = (
+    "with ctx.open_read(file_path) as fh:\n"
+    "    fh.read()\n"
+    "return {'status': 'errors_found', 'ok': False, 'errors': ['no summary']}\n"
+)
+
+
+def test_a_skill_tools_check_of_the_file_reads_it_back(
+    agent, tmp_path, allowed, monkeypatch
+):
+    """The check found something; the call still worked and still read the file."""
+    monkeypatch.chdir(allowed)
+    monkeypatch.setenv("GAIA_AGENT_SELF_CHECK", "0")
+    _load(agent, tmp_path, "save-probe", [], _SAVES_TEXT)
+    _load(agent, tmp_path, "verify-probe", [], _VERIFIES)
+    notes = allowed / "notes.md"
+    answer = f"I saved the notes to `{notes}`. They have no summary yet."
+    left = _script(
+        agent,
+        {"tool": "save-probe/probe", "tool_args": {"file_path": str(notes)}},
+        {"tool": "verify-probe/probe", "tool_args": {"file_path": str(notes)}},
+        {"answer": answer},
+    )
+
+    result = agent.process_query(f"Write the notes and save them to `{notes}`")
+
+    assert not left
+    assert "read back" not in result["result"]
+    assert result["error_count"] == 0
+    assert result["status"] == "success", result["result"]

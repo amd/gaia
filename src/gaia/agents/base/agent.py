@@ -56,13 +56,12 @@ from gaia.agents.base.call_risk import (
 from gaia.agents.base.chunk_index import OUTPUT_TOOLS
 from gaia.agents.base.completion import (
     _BINARY_SUFFIXES,
-    RECONCILE_TAG,
     WRITE_TOOLS,
     CompletionEvidence,
+    blocking_gaps,
     caveated_answer,
     incomplete_answer,
     mentioned_paths,
-    reconcile_check,
     saved_before_error,
 )
 from gaia.agents.base.console import (
@@ -141,6 +140,16 @@ from gaia.agents.base.planted_instructions import (
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.python_human_only import python_human_only_refusal
 from gaia.agents.base.python_scope import python_scope_refusal
+from gaia.agents.base.self_check import (
+    BUILT_SUFFIXES,
+    PROSE_SUFFIXES,
+    SELF_CHECK_TAG,
+    mechanical_findings,
+    miss_note,
+    quotes_figures,
+    read_verdict,
+    self_check_prompt,
+)
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
 from gaia.agents.base.task_lessons import attach as attach_task_lessons
@@ -789,6 +798,27 @@ def verify_edits_enabled() -> bool:
         return False
     raise ValueError(
         f"GAIA_AGENT_VERIFY_EDITS must be a boolean (1/0, true/false, on/off), "
+        f"got {raw!r}. Unset it to keep the check on."
+    )
+
+
+def self_check_enabled() -> bool:
+    """Whether a turn that built a file gets one short self-check before it answers.
+
+    On by default. The check costs one model step, and more only when it
+    finds something to fix. ``GAIA_AGENT_SELF_CHECK=0`` turns it off. Read at
+    call time, like the other ``GAIA_AGENT_*`` knobs.
+    """
+    raw = os.environ.get("GAIA_AGENT_SELF_CHECK")
+    if raw is None or raw == "":
+        return True
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(
+        f"GAIA_AGENT_SELF_CHECK must be a boolean (1/0, true/false, on/off), "
         f"got {raw!r}. Unset it to keep the check on."
     )
 
@@ -2297,6 +2327,29 @@ def _with_replaced_answer(reply: str, replaced: str) -> Optional[str]:
     return f"{replaced}\n\n{reply}" if reply else replaced
 
 
+#: Time to the stop point, in typical steps, below which the self-check
+#: asks for the requirements line only.
+_SELF_CHECK_FULL_STEPS = 3
+
+
+def _answer_after_self_check(reply: str, earlier: str) -> Tuple[str, str]:
+    """``(answer, verdict)`` once the model has replied to the self-check.
+
+    A pass keeps *earlier* as it was. A miss the model could not fix is added
+    to it in one plain line. Anything else is a new answer, unless it is only
+    a short acknowledgement of the check.
+    """
+    verdict = read_verdict(reply)
+    if verdict.result == "pass":
+        return earlier, "pass"
+    if verdict.result == "miss":
+        return f"{earlier.rstrip()}\n\n{miss_note(verdict.miss)}", "miss"
+    rest = verdict.rest
+    if not rest or _with_replaced_answer(rest, earlier) is not None:
+        return earlier, "kept"
+    return rest, "new answer"
+
+
 #: Any one of these lets the agent look at a file the request names.
 _LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
 
@@ -3781,6 +3834,7 @@ Do NOT wrap conversational replies in JSON.
         # Whether each file parsed before this turn's first write to it.
         self._edit_parse_baseline: Dict[str, bool] = {}
         self._verify_edits_on = verify_edits_enabled()
+        self._self_check_on = self_check_enabled()
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -11880,19 +11934,24 @@ Do NOT wrap conversational replies in JSON.
             inputs=inputs,
             input_names=input_names,
             answer=answer,
+            # A file no editing tool typed: a script or a skill's tool built it.
+            built=[
+                path
+                for path in written
+                if not getattr(evidence.files.get(evidence.key(path)), "edited", False)
+            ],
         )
 
-    def _reconcile_reminder(self) -> Optional[str]:
-        """The compare-output-with-inputs reminder, for a turn that owes one.
+    def _self_check_plan(self) -> Optional[Dict[str, Any]]:
+        """What this turn's self-check would cover, or ``None`` when it owes none.
 
-        Only a turn that wrote a document or data file after reading other
-        files: a chat answer, a code edit, or a file written from nothing has
-        no inputs to reconcile.
+        A turn owes one when it wrote a document or data file and either read
+        other files to do it, built an office file (whose structure no one has
+        looked at), or left something code can already see is wrong. A chat
+        answer, a code edit, or a text file typed from nothing owes none.
         """
         evidence = getattr(self, "_completion_evidence", None)
-        if evidence is None or not any(
-            name in self._tools_registry for name in ("read_file", "run_python")
-        ):
+        if evidence is None:
             return None
         # An extraction's export is written and matched by the framework itself.
         if getattr(getattr(self, "_extraction_ledger", None), "enabled", False):
@@ -11917,10 +11976,114 @@ Do NOT wrap conversational replies in JSON.
                 if evidence.key(path) not in written_keys
             )
         )
-        if not inputs:
+        suffixes = {path: os.path.splitext(path)[1].lower() for path in written}
+        prose = {
+            path: blocks_text(self._deliverable_blocks(path))
+            for path in written
+            if suffixes[path] in PROSE_SUFFIXES
+        }
+        findings = mechanical_findings(
+            request,
+            written,
+            self._pending_deliverables(),
+            prose=next(iter(prose.values())) if len(prose) == 1 else "",
+        )
+        built = any(suffix in BUILT_SUFFIXES for suffix in suffixes.values())
+        if not (inputs or built or findings):
             return None
-        shown = [evidence.written_as.get(path, path) for path in written]
-        return reconcile_check(shown, inputs)
+        return {
+            "outputs": [evidence.written_as.get(path, path) for path in written],
+            "inputs": inputs,
+            "findings": findings,
+            "figure_files": [
+                evidence.written_as.get(path, path)
+                for path, text in prose.items()
+                if quotes_figures(text)
+            ],
+        }
+
+    def _self_check_mode(self, steps_taken: int, steps_limit: int) -> Tuple[str, str]:
+        """``(mode, why)``: ``"full"``, ``"short"`` or ``"skip"`` for this turn's budget.
+
+        The check is worth a step only while the turn can afford one: with a
+        time limit it is cut to the requirements line when few typical steps
+        are left before the stop point, and skipped when not even one is.
+        """
+        if not self._self_check_on:
+            return "skip", "GAIA_AGENT_SELF_CHECK is off"
+        if steps_taken >= steps_limit - 1:
+            return "skip", "no step left"
+        left = self._time_to_stop_s()
+        if left is None:
+            return "full", "no time limit"
+        typical = self._typical_step_s()
+        budget = f"{left:.0f}s to the stop point, typical step {typical:.0f}s"
+        if left <= typical or left <= 0:
+            return "skip", budget
+        if left < typical * _SELF_CHECK_FULL_STEPS:
+            return "short", budget
+        return "full", budget
+
+    def _self_check_message(self, steps_taken: int, steps_limit: int) -> Optional[str]:
+        """The self-check to send now, or ``None``; either way the log says why."""
+        plan = self._self_check_plan()
+        if plan is None:
+            return None
+        mode, why = self._self_check_mode(steps_taken, steps_limit)
+        logger.info(
+            "%s %s mode=%s outputs=%d inputs=%d code_findings=%d "
+            "figure_files=%d step=%d (%s)",
+            SELF_CHECK_TAG,
+            "skipped" if mode == "skip" else "fired",
+            mode,
+            len(plan["outputs"]),
+            len(plan["inputs"]),
+            len(plan["findings"]),
+            len(plan["figure_files"]),
+            steps_taken,
+            why,
+        )
+        if mode == "skip":
+            return None
+        return self_check_prompt(
+            plan["outputs"],
+            has_inputs=bool(plan["inputs"]),
+            findings=plan["findings"],
+            figure_files=plan["figure_files"],
+            short=mode == "short",
+        )
+
+    def _close_self_check(
+        self, opened: Dict[str, Any], reply: Optional[str], steps_taken: int
+    ) -> str:
+        """The answer to go on with once the self-check that *opened* is over.
+
+        *reply* is the model's reply to it, or ``None`` when the turn ran out
+        of steps or time first: the answer was finished before the check went
+        out, and stays. Whatever code still sees wrong is said in the answer,
+        whether or not the model agreed. Logs what the check cost.
+        """
+        if reply is None:
+            answer, verdict = opened["answer"], "unanswered"
+        else:
+            answer, verdict = _answer_after_self_check(reply, opened["answer"])
+        left = []
+        if verdict != "miss":
+            left = (self._self_check_plan() or {}).get("findings") or []
+        if left:
+            answer = f"{answer.rstrip()}\n\n" + "\n".join(miss_note(f) for f in left)
+        records = getattr(self, "_turn_tool_executions", None) or []
+        logger.info(
+            "%s done verdict=%s seconds=%.1f model_steps=%d tool_calls=%d "
+            "code_findings_left=%d",
+            SELF_CHECK_TAG,
+            verdict,
+            time.monotonic() - opened["at"],
+            steps_taken - opened["step"],
+            len(records) - opened["tools"],
+            len(left),
+        )
+        return answer
 
     def _deliverable_blocks(self, path: str) -> list:
         """``read_blocks``, cached per turn by the file's size and mtime."""
@@ -12232,7 +12395,9 @@ Do NOT wrap conversational replies in JSON.
         coverage = self._completion_evidence.read_coverage_gap(answer or "")
         if coverage and coverage not in gaps:
             gaps.append(coverage)
-        if gaps:
+        if gaps and answer and answer.strip() and not blocking_gaps(gaps):
+            answer = caveated_answer(answer, gaps)
+        elif gaps:
             report = incomplete_answer(gaps)
             # The turn ended early, so it is unfinished; whatever it said stays.
             keep = bool(answer and answer.strip())
@@ -13000,8 +13165,10 @@ Do NOT wrap conversational replies in JSON.
         cut_off_continuations = 0
         stream_cut_offs = 0
         completion_corrections = 0
-        # The output-against-inputs reminder goes out once a turn.
-        reconcile_prompted = False
+        # The self-check goes out once a turn. While it is open this holds
+        # the answer it was sent about, and when and where it went out.
+        self_check_sent = False
+        self_check_open: Optional[Dict[str, Any]] = None
         # The answer a completion correction asked to replace.
         answer_before_completion_check: Optional[str] = None
         completion_gaps = []
@@ -13071,6 +13238,7 @@ Do NOT wrap conversational replies in JSON.
         self._edit_verification_findings = []
         self._edit_parse_baseline = {}
         self._verify_edits_on = verify_edits_enabled()
+        self._self_check_on = self_check_enabled()
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
@@ -15103,6 +15271,15 @@ Do NOT wrap conversational replies in JSON.
                     )
                     continue
                 completion_gaps = []
+                if self_check_open is not None:
+                    # The reply is a verdict on the answer already given, so
+                    # every check below judges that answer, not the verdict.
+                    answer_candidate = self._close_self_check(
+                        self_check_open,
+                        _without_tool_markup(answer_candidate),
+                        steps_taken,
+                    )
+                    self_check_open = None
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after
                 # calling index_document but before issuing a query tool call.
@@ -15788,14 +15965,6 @@ Do NOT wrap conversational replies in JSON.
                                     "complete answer again."
                                 )
                         else:
-                            if artifact_gaps and not reconcile_prompted:
-                                # One prompt, not two, when both are due.
-                                also = self._reconcile_reminder()
-                                if also:
-                                    reconcile_prompted = True
-                                    correction += " Also: " + also.removeprefix(
-                                        RECONCILE_TAG + " "
-                                    )
                             self._turn_scope.widen(correction)
                             if artifact_gaps:
                                 # Writing and reading back the deliverable is the
@@ -15805,21 +15974,21 @@ Do NOT wrap conversational replies in JSON.
                         conversation.append({"role": "user", "content": correction})
                         continue
                     completion_gaps.extend(artifact_gaps)
-                elif (
-                    not reconcile_prompted
-                    and not completion_gaps
-                    and steps_taken < steps_limit - 1
-                    and not self._time_limit_passed()
-                ):
-                    reminder = self._reconcile_reminder()
-                    if reminder:
-                        reconcile_prompted = True
-                        answer_before_completion_check = unfinalized_answer
-                        reminder += " " + _GIVE_ANSWER_AGAIN
-                        self._turn_scope.widen(reminder)
+                elif not self_check_sent and not completion_gaps:
+                    self_check_sent = True
+                    check = self._self_check_message(steps_taken, steps_limit)
+                    if check:
+                        self_check_open = {
+                            "answer": unfinalized_answer,
+                            "at": time.monotonic(),
+                            "step": steps_taken,
+                            "tools": len(self._turn_tool_executions),
+                        }
+                        # A fix the check asks for is the request's own work.
+                        self._turn_scope.widen(check)
                         self._reopen_turn_scope(conversation)
-                        messages.append({"role": "user", "content": reminder})
-                        conversation.append({"role": "user", "content": reminder})
+                        messages.append({"role": "user", "content": check})
+                        conversation.append({"role": "user", "content": check})
                         continue
                 # Validate after subclass rewriting, before console/SSE emission.
                 final_test_claim = unsupported_test_claim(
@@ -15926,6 +16095,19 @@ Do NOT wrap conversational replies in JSON.
                 else:
                     # Silent mode - just stop
                     break
+
+        if (
+            final_answer is None
+            and self_check_open is not None
+            and not cancelled_by_console
+            and not user_stopped
+        ):
+            # The answer was finished before the check went out; running out
+            # of steps or time during the check does not unfinish it.
+            final_answer = self._close_self_check(self_check_open, None, steps_taken)
+            self_check_open = None
+            time_limit_reached = False
+            loop_break_answer_unprinted = True
 
         # Before any footer below sums the conversation.
         self._record_unrecorded_step(conversation)
@@ -16126,7 +16308,7 @@ Do NOT wrap conversational replies in JSON.
                 else (
                     "success"
                     if has_valid_answer
-                    and not completion_gaps
+                    and not blocking_gaps(completion_gaps)
                     and not max_steps_reached
                     and not time_limit_reached
                     else "incomplete"
@@ -16162,7 +16344,13 @@ Do NOT wrap conversational replies in JSON.
             "error_count": len(self._turn_errors()),
             "error_history": self._turn_errors(),  # this query's errors only
             "tool_schema": self._trace_tool_schema(),
-            "completion_gaps": completion_gaps,
+            "completion_gaps": blocking_gaps(completion_gaps),
+            # Stated in the answer, but the work itself is done.
+            "completion_caveats": [
+                gap
+                for gap in completion_gaps
+                if gap not in blocking_gaps(completion_gaps)
+            ],
             # Retries behind this turn's model calls, and whether the model
             # stayed unreachable (the run is then "failed", never "success").
             "model_retries": {
