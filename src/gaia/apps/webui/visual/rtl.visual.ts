@@ -635,6 +635,17 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the keyboard shortcuts sheet (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        await page.locator('textarea').first().focus();
+        await page.keyboard.press('Control+/');
+        await expect(page.locator('.shortcuts-dialog')).toBeVisible();
+        await shot(page, `shortcuts-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const LONG_TITLES = {
     latin: 'My own typed question Give me a banana bread recipe with walnuts and brown butter',
     arabic: 'سؤالي الذي كتبته بنفسي أعطني وصفة خبز الموز مع الجوز والزبدة البنية',
