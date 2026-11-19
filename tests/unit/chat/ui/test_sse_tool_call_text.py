@@ -492,11 +492,38 @@ class TestNativeEnvelopeNeverStreams:
         handler.print_final_answer(_native_envelope("Reconciling the two files now."))
         assert _answer(_drain(handler)) == "Reconciling the two files now."
 
+    def test_final_answer_drops_an_envelope_after_prose(self, handler):
+        # The streaming path already splits prose from the envelope; the
+        # final answer did not, so the raw JSON reached the transcript when
+        # prose came right before the call.
+        handler.print_final_answer("Sure. " + _native_envelope())
+        assert _answer(_drain(handler)) == "Sure."
+
+    def test_final_answer_keeps_prose_and_content_around_an_envelope(self, handler):
+        handler.print_final_answer(
+            "Sure. " + _native_envelope("Reconciling the two files now.")
+        )
+        assert _answer(_drain(handler)) == "Sure. Reconciling the two files now."
+
     def test_clean_reply_text_strips_a_native_envelope(self):
         assert clean_reply_text(_native_envelope()) == ""
         assert (
             clean_reply_text(_native_envelope("Reconciling the two files now."))
             == "Reconciling the two files now."
         )
-        quoted = '{"__tool_calls__": is the key the provider uses for native calls.}'
+                quoted = '{"__tool_calls__": is the key the provider uses for native calls.}'
         assert clean_reply_text(quoted) == quoted
+
+    def test_clean_reply_text_drops_an_envelope_after_prose(self):
+        assert clean_reply_text("Sure. " + _native_envelope()) == "Sure."
+        assert (
+            clean_reply_text(
+                "Sure. " + _native_envelope("Reconciling the two files now.")
+            )
+            == "Sure. Reconciling the two files now."
+        )
+        assert clean_reply_text(_native_envelope() + " Done.") == "Done."
+
+    def test_clean_reply_text_keeps_a_fenced_envelope_after_prose(self):
+        text = "Example:\n```json\n" + _native_envelope() + "\n```\nDone."
+        assert clean_reply_text(text) == text
