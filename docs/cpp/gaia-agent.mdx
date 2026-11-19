@@ -289,6 +289,7 @@ A control with a field of the wrong type is rejected with a line on stderr and c
 **Flags.** Besides the model and run options above, `--stdio` takes the flags the terminal UI passes: `-m/--model`, `--full-access`, `--accept-edits` and `--dev` (step-by-step `status` events, debug lines on stderr). `--accept-edits` and `--dev` are refused without `--stdio`. The endpoint comes from `LEMONADE_BASE_URL`, as in every other mode.
 
 - With `--stdio`, `--full-access` means approval prompts are off. The tools stay inside the working directory; add folders with `--allow-dir`.
+- The startup `status` event carries an empty `skills` list, so the terminal UI offers no skill under `/`: `gaiacpp` doesn't yet start a skill from a message that begins with `/<name>`. Skills still load when the model asks for one.
 - `--use-claude` and `--claude-model` stop the program with exit code 2, because `gaiacpp` has no Claude provider.
 - `GAIA_LEMONADE_EMBEDDED=1` is not acted on: `gaiacpp` keeps the `LEMONADE_BASE_URL` it started with, so if GAIA's own model server restarts on another port, turns end in `error` until the terminal UI restarts the agent.
 

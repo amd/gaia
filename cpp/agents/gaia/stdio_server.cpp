@@ -450,7 +450,10 @@ json StdioServer::statusEvent() {
                   {"lemonade_reachable", false},
                   {"lemonade_base_url", base},
                   {"agent_version", options_.agentVersion},
-                  {"gaia_version", options_.agentVersion}};
+                  {"gaia_version", options_.agentVersion},
+                  // What typing /<name> can run. Empty: gaiacpp doesn't start a skill that way yet, and a
+                  // listed name would promise it does.
+                  {"skills", json::array()}};
     // Its own short-lived client: a server that doesn't answer must not hold up the first line.
     try {
         HttpClientConfig hc;
