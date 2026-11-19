@@ -8505,6 +8505,8 @@ Do NOT wrap conversational replies in JSON.
         Two sources: a tool's own ``@tool(preflight=...)`` check, and — duck-typed
         like :meth:`_call_is_pre_authorized` — a host that implements
         ``policy_refusal_for_call``.
+
+        Full access skips the Python tools' checks: the code runs as written.
         """
         if self.internet_off:
             from gaia.agents.base.offline import offline_refusal
@@ -8514,7 +8516,7 @@ Do NOT wrap conversational replies in JSON.
             )
             if refusal is not None:
                 return refusal
-        if tool_name in PYTHON_TOOLS:
+        if tool_name in PYTHON_TOOLS and not Agent._full_access_on(self):
             folders = self._python_call_folders()
             refusal = (
                 python_human_only_refusal(tool_name, tool_args, folders)
@@ -8538,6 +8540,13 @@ Do NOT wrap conversational replies in JSON.
         if not callable(refuses):
             return None
         return refuses(tool_name, tool_args)  # pylint: disable=not-callable
+
+    def _full_access_on(self) -> bool:
+        """Whether a person turned full access on for this session.
+
+        Called unbound inside this class: test doubles borrow these methods.
+        """
+        return getattr(getattr(self, "console", None), "full_access", False) is True
 
     def _python_call_folders(self) -> List[str]:
         """Where a Python tool's relative paths may resolve, most likely first."""
@@ -8577,7 +8586,10 @@ Do NOT wrap conversational replies in JSON.
         shown this exact call and said yes, which already is their answer to
         it, so the confirmation prompt is not shown a second time.
         """
-        conflict = self._denied_effects.conflict(tool_name, tool_args)
+        # Only the user's own no outlasts turning full access on.
+        conflict = self._denied_effects.conflict(
+            tool_name, tool_args, by_user_only=Agent._full_access_on(self)
+        )
         if conflict is None:
             return None, False
         denial, effect = conflict
@@ -9256,6 +9268,7 @@ Do NOT wrap conversational replies in JSON.
             if (
                 ledger is not None
                 and not not_a_no
+                and not Agent._full_access_on(self)
                 and isinstance((tool_args or {}).get("command"), str)
             ):
                 ledger.record(
@@ -9358,8 +9371,9 @@ Do NOT wrap conversational replies in JSON.
             tool_name, tool_args
         ):
             # Handed-over text asks for no command or file change; a person
-            # asked to approve one would only be pressing Deny.
-            if hands_over_text_only(
+            # asked to approve one would only be pressing Deny. Under full
+            # access nobody is asked, so the call runs.
+            if not Agent._full_access_on(self) and hands_over_text_only(
                 str(
                     getattr(self, "_original_user_input", None)
                     or getattr(self, "_current_query", "")

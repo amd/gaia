@@ -147,7 +147,7 @@ echo "List the Python files here" | gaia -p --output-format json
 | `--time-limit <seconds>` | Wall-clock seconds the turn may take, at least 1. The agent is told the limit with the request, and to write a first version of any requested file early. At 25% and 50% it is told the time used. At 70% it is told to write what was asked for and not yet written, to leave a finished file alone, and to keep caveats in its answer rather than in the file; it is always told before it stops, even when one long step jumps past 70%. Near the limit it stops working, keeping back two of its typical steps (three while a requested file is missing, never less than 5% and never more than 25% of the limit): it writes any requested file still missing, may make one last tool call that runs (a final write, say), and answers. Each model call is capped to the output the time left allows at the model's measured speed; the reply that may carry the last tool call gets half of the time left, and the final answer is short (at most 2,048 tokens), a summary of where the work stands and the next steps that names files rather than repeating them. A shell or Python command, a wait or a sleep the agent starts gets a timeout no longer than the time left before that stop, and one with no time left is refused; the one last tool call may run for half of what is left of the limit. A turn still busy at the limit is stopped there: a running shell or Python command ends, a model call still running 5 seconds past the limit is abandoned, and the answer says the time limit stopped the turn, followed by the agent's latest findings. A turn the limit ended reports `status: incomplete` and exits 1, even when it wrote its file and answered. Counted from the start of the turn, after server start-up, so give a wrapper's own timeout some headroom above it. Can't be combined with `--attempts` yet (a usage error). Default: no limit |
 | `--attempts <n>` | Run `n` (up to 4) independent attempts, then one turn that checks and combines them ([below](#independent-attempts)). Default: 1 |
 | `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking. A request that only hands over quoted text to translate, reword or proofread still has them refused |
-| `--full-access` | Full access, as the TUI's `/full-access`: lifts the shell guardrails, so test runners, build tools and other commands outside the no-prompt list run, and grants paths outside the current folder without asking. Implies `--dangerously-skip-permissions` |
+| `--full-access` | Full access, as the TUI's `/full-access`: the shell runs any command and Python runs any code, with nothing asked and nothing refused, on any path. Implies `--dangerously-skip-permissions` |
 | `--base-url <url>` | Use a remote Lemonade server instead of the local one |
 | `--disallowed-tools <tools>` | Tools the agent may neither see nor call, comma- or space-separated, with `*` globs (`search_web,browser_*`). Repeatable. `search_tools` never finds a withheld tool, and a tool a skill adds mid-turn is withheld too when a pattern matches it. Each pattern must match a tool the agent has when the turn starts, or the run fails (exit 1) before it begins, so a typo can't leave a tool on |
 | `--no-web` | Withhold GAIA's tools that search, read, download or install from the internet: `search_web`, `fetch_page`, `fetch_webpage`, `download_file`, `open_url`, `browser_*`, `search_documentation`, `search_skill_hub`, `install_skill`, `install_cli` and `transcribe_media`. The shell and connector (MCP) tools stay available; withhold those with `--disallowed-tools`. The agent is also told not to search or fetch from the web through the shell or a script. That is an instruction, not a block: cut the network to enforce it |
@@ -352,7 +352,7 @@ $env:GAIA_ALLOWED_PATHS = "C:\evals\task-17"; gaia-cli
   nothing, and one outside it (another drive) is ignored with a warning — neither
   grants anything. If no entry overlaps, the agent can reach no files at all
   except its scratch folder. Out-of-scope paths are refused without an approval
-  prompt, and full access does not lift that.
+  prompt, and full access does not lift that for the file tools.
 - **One exception: an Agent UI chat with no attached documents.** Its default
   scope is GAIA's documents folder plus the folder the backend started in. When
   no entry overlaps that default, the folders this list names become the chat's
@@ -362,7 +362,8 @@ $env:GAIA_ALLOWED_PATHS = "C:\evals\task-17"; gaia-cli
   content searches (including the Documents/Downloads sweep and deep search),
   indexing a document, code search and its index, the project map, saving
   downloads, capturing a skill from a local folder, and the path checks on shell
-  commands. The agent's own scratch folder stays writable.
+  commands outside full access (under it the shell and Python tools run in any
+  folder). The agent's own scratch folder stays writable.
 - **It does not sandbox code.** A `run_python` script or a shell command the
   agent runs can open any file your OS account can read. This setting confines
   GAIA's tools, not arbitrary code — for real isolation, run the agent as a
@@ -2022,30 +2023,49 @@ GAIA versions released before this setting existed ignore the file.
 ### Full access
 
 By default the agent asks before it runs a shell command or writes a file.
-**Full access** stops the asking: every gated tool runs without a prompt, and
-the shell guardrails come off — output redirection works, and the read-only
-command list is replaced by a developer set (`python`, `pytest`, `node`, `npm`,
-`make`, `go`, `cargo`, `gh`, `git`, …) that can run arbitrary code. `git` is
-unrestricted, including push and history rewrites. It is the only mode in which
-commands GAIA otherwise refuses outright (a credential print such as
-`gh auth token`, an encoded PowerShell command) can run.
+**Full access** stops the asking, and the refusing: every gated tool runs
+without a prompt, and the shell and Python tools run what the agent gives them.
 
-Three things hold in every mode, full access included. A shell command or
-Python code that reads a file the file tools refuse (`.env`, a private key,
-`.npmrc`, `secrets.json`) is refused. Writing one, copying over one, or naming
-one as a search pattern still runs. Credential files never take part in a
-recursive search. A command that is just `grep -r`, `rg` or `git grep` runs with
-them left out, so `grep -rn TODO .` still searches everything else. Any other
-recursive search (piped or chained, inside a script, `findstr /s`,
-`Select-String` over `Get-ChildItem -Recurse`, `ag`, `find -exec`) is refused
-when the folder it searches holds one, and so is a `git grep` of a credential
-file's blob (`HEAD:.env`). On Windows, use `rg` or `git grep` for this: a
-recursive `grep` there is refused when the folder holds a credential file. Tokens
-in shell and Python output, such as the one in a `git remote -v` URL, are
-masked before the model reads it. And a cloud-metadata or link-local address
-(`169.254.169.254`, `fe80::/10`, `metadata.google.internal`) the web fetcher
-blocked stays blocked for the shell and Python for the rest of that turn.
-Private LAN addresses stay reachable from the shell.
+- **Any program.** There is no command list. `pip`, `where`, `gaia`, `rm`,
+  `rmdir`, `del`, a program given by its full path and one GAIA has never heard
+  of all run. `git` is unrestricted, including push and history rewrites.
+- **Any shell syntax.** The line goes to the shell (`sh`, or `cmd.exe` on
+  Windows), so redirection, `$(…)`, `&`, loops, conditions and commands of
+  several lines work. On Windows, separate lines run one after another, and
+  `python -c "…"` with code of several lines is started directly.
+- **Any path.** A working folder, a `cd` or an argument outside the allowed
+  folders runs. So does a command that reads a credential file (`.env`, a
+  private key), makes a link, reaches a system folder or a cloud-metadata
+  address, or installs packages outside a virtual environment.
+- **Any Python.** `run_python` and `execute_python_file` run the code as
+  written. Its paths, links and credential reads are not checked.
+- **No refusals carried over.** GAIA makes no refusals of its own under full
+  access, so none blocks a later call.
+
+What can still fail is what can't work: a program that isn't installed fails
+with the shell's own error, and a line with nothing on it is an error.
+
+Outside full access these rules hold. A shell command or Python code that reads
+a file the file tools refuse (`.env`, a private key, `.npmrc`, `secrets.json`)
+is refused. Writing one, copying over one, or naming one as a search pattern
+still runs. Credential files never take part in a recursive search. A command
+that is just `grep -r`, `rg` or `git grep` runs with them left out, so
+`grep -rn TODO .` still searches everything else. Any other recursive search
+(piped or chained, inside a script, `findstr /s`, `Select-String` over
+`Get-ChildItem -Recurse`, `ag`, `find -exec`) is refused when the folder it
+searches holds one, and so is a `git grep` of a credential file's blob
+(`HEAD:.env`). On Windows, use `rg` or `git grep` for this: a recursive `grep`
+there is refused when the folder holds a credential file. And a cloud-metadata
+or link-local address (`169.254.169.254`, `fe80::/10`,
+`metadata.google.internal`) the web fetcher blocked stays blocked for the shell
+and Python for the rest of that turn. Private LAN addresses stay reachable from
+the shell.
+
+Four things hold in every mode, full access included. Tokens in shell and
+Python output, such as the one in a `git remote -v` URL, are masked before the
+model reads it. A call you declined stays declined for the rest of that request.
+A calendar change and an outgoing email still wait for a person. And a folder
+you removed from a chat is not used as the shell's working folder.
 
 Full access is one of three permission modes. `Shift+Tab` in the TUI cycles
 them, and the status bar shows the one that is on:
@@ -4068,7 +4088,7 @@ Options accepted by every `gaia-cli` command:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--full-access` | off | Run every tool without asking, with the shell guardrails off — arbitrary code execution. Subprocess agents only (the flagship when the TUI launches it); refused over the background service. A banner stays on screen while it is on, and `/full-access off` ends it mid-session. See [Full access](#full-access). The retired `--bypass-permissions` fails naming this flag. |
+| `--full-access` | off | Run every tool without asking, with the shell running any command — arbitrary code execution. Subprocess agents only (the flagship when the TUI launches it); refused over the background service. A banner stays on screen while it is on, and `/full-access off` ends it mid-session. See [Full access](#full-access). The retired `--bypass-permissions` fails naming this flag. |
 | `--use-claude` | off | Answer with Anthropic's Claude API instead of local Lemonade. **Your conversation is sent to Anthropic.** Needs `ANTHROPIC_API_KEY`; the local server is not started and first-run setup is skipped, so RAG, memory and the code index (which embed through Lemonade) need `gaia init --skip-chat-model` later |
 | `--claude-model <id>` | `claude-sonnet-5` | The Claude model `--use-claude` runs on. Only valid with `--use-claude`; an id the agent does not offer is refused before the TUI opens. `""` lets the agent pick |
 | `--dev` | off | Developer mode: per-turn timings, steps, tool arguments and output on screen, connection diagnostics in `~/.gaia/logs/gaia-tui.log`, and DEBUG logging for agents the TUI launches. `--debug` is an alias |

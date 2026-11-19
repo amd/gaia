@@ -1696,7 +1696,7 @@ def _run_capturing_subprocess(host, command):
         )
         return _FakeProcess()
 
-    def fake_pipeline(segments, modes, envs, cwd, timeout, waiter=None):
+    def fake_pipeline(segments, modes, envs, cwd, timeout, waiter=None, marked=True):
         seen["pipeline"] = segments
         return subprocess_module.CompletedProcess(segments, 0, "", "")
 

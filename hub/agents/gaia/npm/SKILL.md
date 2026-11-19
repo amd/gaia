@@ -538,20 +538,18 @@ DELETE /v1/gaia/sessions/{session_id}   → { session_id, deleted: true }
 An unknown session is a **404**. One running a turn is a **409**: cancel the
 run, then delete again.
 
-**That bypass stops the prompts; it does not open the shell.** The stdio
-transport's `--full-access` does both — it runs gated tools unasked *and*
-lifts the shell tool's guardrails (redirection and the other shell-only
-operators, the read-only binary allowlist, the rate limit). That second half is
-arbitrary code execution, appropriate for one local parent on a private pipe and
-not for a bound socket, so it stays on stdio: HTTP sessions never lift the shell
-gates, and the request body rejects unknown fields so a client cannot ask. See
-SPEC §5.5.
+**That bypass is full access: it stops the prompts and opens the shell.** It
+is the same mode as the stdio transport's `--full-access`. Gated tools run
+unasked, `run_shell_command` runs any command (a delete, `git add`, a program
+by its full path, redirection, loops), and `run_python` runs its code
+unchecked. That is arbitrary code execution with the user's account, so turn it
+on only when the person asked for it. A sidecar started without a caller-auth
+token refuses to turn it on (**403**). The query body rejects unknown fields, so
+a client cannot ask for it there. See SPEC §5.5.
 
-So a shell command past those gates (a delete, `git add`) is never run unasked
-under bypass. On a run someone can answer (`can_answer_questions` not `false`,
-with a `session_id`) it emits `needs_confirmation` and waits for
-`/tool_decision`, exactly as with bypass off; commands that need no approval
-still run unasked. A run nobody can answer refuses it, as below.
+With bypass off, a shell command past the gates (a delete, `git add`) emits
+`needs_confirmation` on a run someone can answer (`can_answer_questions` not
+`false`, with a `session_id`) and waits for `/tool_decision`.
 
 **A run nobody can answer is still refused.** With `can_answer_questions: false`,
 or with no `session_id`, the server emits `needs_confirmation`, follows it

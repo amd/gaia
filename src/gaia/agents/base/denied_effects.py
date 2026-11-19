@@ -2355,13 +2355,21 @@ class DeniedEffects:
         return denial
 
     def conflict(
-        self, tool_name: str, tool_args: Optional[Dict[str, Any]]
+        self,
+        tool_name: str,
+        tool_args: Optional[Dict[str, Any]],
+        by_user_only: bool = False,
     ) -> Optional[Tuple[Denial, Effect]]:
-        """The earlier denial this call would route around, if any."""
+        """The earlier denial this call would route around, if any.
+
+        *by_user_only* looks only at what a person declined.
+        """
         if not self:
             return None
         wanted, operands, _ = _read_call(tool_name, tool_args, self.cwd)
         for denial in self.denials:
+            if by_user_only and not denial.by_user:
+                continue
             for denied in denial.effects:
                 for effect in wanted:
                     if not denied.overlaps(effect):
