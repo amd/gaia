@@ -67,6 +67,9 @@ on:
       - 'eval/ci_tiers.json'
       - 'eval/tasks/tasks.json'
       - 'eval/retrieval/**'
+      # test_eval_ci_guide_timeouts.py scales the guide's timeouts by these categories' scenario counts.
+      - 'eval/scenarios/rag_quality/**'
+      - 'eval/scenarios/context_retention/**'
       - 'data/pdf/**'
       - 'cpp/src/unicode_upper_ranges.inc'
       - 'website/src/scripts/download-target.ts'
@@ -141,6 +144,9 @@ on:
       - 'eval/ci_tiers.json'
       - 'eval/tasks/tasks.json'
       - 'eval/retrieval/**'
+      # test_eval_ci_guide_timeouts.py scales the guide's timeouts by these categories' scenario counts.
+      - 'eval/scenarios/rag_quality/**'
+      - 'eval/scenarios/context_retention/**'
       - 'data/pdf/**'
       - 'cpp/src/unicode_upper_ranges.inc'
       - 'website/src/scripts/download-target.ts'

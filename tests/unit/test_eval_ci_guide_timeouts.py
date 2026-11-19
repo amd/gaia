@@ -11,8 +11,10 @@ committed flagship baseline, scaled to the category's current scenario count
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,6 +24,7 @@ REPO = Path(__file__).resolve().parents[2]
 GUIDE = REPO / "docs" / "guides" / "eval-ci.mdx"
 BASELINE = REPO / "tests" / "fixtures" / "eval_baselines" / "gaia-flagship"
 SCENARIOS = REPO / "eval" / "scenarios"
+UNIT_WORKFLOW = REPO / ".github" / "workflows" / "test_unit.yml"
 
 
 def _example_workflows() -> dict[str, dict]:
@@ -70,3 +73,45 @@ def test_job_timeout_covers_its_categories(title, job_id, job, categories):
         f"{title}:{job_id} times out at {timeout} min but {categories} take "
         f"~{needed:.0f} min at the flagship baseline's per-scenario pace"
     )
+
+
+def _trigger_filters():
+    spec = importlib.util.spec_from_file_location(
+        "select_tests", REPO / "util" / "select_tests.py"
+    )
+    select_tests = importlib.util.module_from_spec(spec)
+    # Its dataclasses resolve their module through sys.modules.
+    sys.modules.setdefault(spec.name, select_tests)
+    spec.loader.exec_module(select_tests)
+    wf = yaml.safe_load(UNIT_WORKFLOW.read_text(encoding="utf-8"))
+    on = wf.get("on", wf.get(True))
+    return {
+        event: select_tests.path_filter(on[event]["paths"])
+        for event in ("push", "pull_request")
+    }
+
+
+def _guide_categories():
+    return sorted({c for *_, cats in _jobs_running_eval() for c in cats})
+
+
+def test_guide_runs_at_least_one_category():
+    assert _guide_categories(), "no example job in the guide names a --category"
+
+
+@pytest.mark.parametrize("category", _guide_categories())
+@pytest.mark.parametrize("event", ["push", "pull_request"])
+def test_adding_a_scenario_reruns_this_check(category, event):
+    # Adding a scenario raises the category's run time, so it must re-run this test.
+    new_scenario = f"eval/scenarios/{category}/new_scenario.yaml"
+    assert _trigger_filters()[event].match(new_scenario), (
+        f"{UNIT_WORKFLOW.name} on.{event}.paths does not match {new_scenario}, so "
+        f"adding a {category} scenario can push the guide's timeout below its run "
+        f"time without this test noticing; add 'eval/scenarios/{category}/**'"
+    )
+
+
+def test_an_unrelated_category_is_not_matched():
+    # The filter stays narrow: other categories' scenarios don't run the unit suite.
+    filters = _trigger_filters()
+    assert not filters["pull_request"].match("eval/scenarios/gaia_web/x.yaml")
