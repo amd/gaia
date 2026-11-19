@@ -40,6 +40,35 @@ FLM_CHAT_MODEL = "gemma4-it-e2b-FLM"  # NPU profile chat model (registry.py)
 # hardcoding it, so a mismatch here means the wrong model/vector space loaded.
 EXPECTED_DIM = 768
 
+# Repeat embeddings may drift in the last bits on the NPU; a different vector
+# (e.g. a swapped model or another input's row) lands far below this.
+DETERMINISM_MIN_COSINE = 0.999
+
+
+def cosine(a, b) -> float:
+    """Cosine similarity; fails loudly on mismatched or zero-norm vectors."""
+    if len(a) != len(b):
+        raise ValueError(f"vector lengths differ: {len(a)} vs {len(b)}")
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        raise ValueError("cosine is undefined for a zero-norm vector")
+    return sum(x * y for x, y in zip(a, b)) / (norm_a * norm_b)
+
+
+def _loaded_model_ids(client: LemonadeClient) -> list:
+    """Model ids resident on the server, from ``/health``."""
+    health = client._send_request("GET", f"{client.base_url}/health", timeout=15)
+    loaded = health.get("all_models_loaded") or []
+    return sorted(
+        str(
+            (m.get("id") or m.get("model_name") or m.get("model"))
+            if isinstance(m, dict)
+            else m
+        )
+        for m in loaded
+    )
+
 
 def _catalog_ids(client: LemonadeClient) -> set:
     """Model ids the live server advertises.
@@ -118,7 +147,7 @@ class TestFlmEmbedderOnNpu:
         assert dims == {EXPECTED_DIM}, f"inconsistent/unexpected dims: {dims}"
 
     def test_embedding_is_deterministic(self, client, npu_embedder):
-        """Same input -> identical vector (no sampling in embeddings)."""
+        """Same input -> the same vector, up to NPU precision drift."""
         text = "determinism check"
         a = client.embeddings([text], model=npu_embedder, timeout=120)["data"][0][
             "embedding"
@@ -126,7 +155,12 @@ class TestFlmEmbedderOnNpu:
         b = client.embeddings([text], model=npu_embedder, timeout=120)["data"][0][
             "embedding"
         ]
-        assert a == b
+        sim = cosine(a, b)
+        assert sim >= DETERMINISM_MIN_COSINE, (
+            f"repeat embedding of the same text diverged: cosine={sim:.4f} "
+            f"(need >= {DETERMINISM_MIN_COSINE}); "
+            f"loaded models={_loaded_model_ids(client)}"
+        )
 
     def test_distinct_texts_differ(self, client, npu_embedder):
         """Different inputs -> different vectors (model is actually encoding)."""
@@ -154,24 +188,15 @@ class TestFlmCoresidency:
         # this is exactly the call that evicted the FLM chat model.
         client.load_model(npu_embedder, auto_download=True, prompt=False)
 
-        health = client._send_request("GET", f"{client.base_url}/health", timeout=15)
-        loaded = health.get("all_models_loaded") or []
-        loaded_ids = {
-            (
-                (m.get("id") or m.get("model_name") or m.get("model"))
-                if isinstance(m, dict)
-                else m
-            )
-            for m in loaded
-        }
+        loaded_ids = _loaded_model_ids(client)
 
         assert FLM_EMBEDDER in loaded_ids, (
             f"{FLM_EMBEDDER} not resident after loading the chat model "
-            f"(loaded={sorted(str(i) for i in loaded_ids)}) -- NPU<->Vulkan eviction regressed"
+            f"(loaded={loaded_ids}) -- NPU<->Vulkan eviction regressed"
         )
         assert FLM_CHAT_MODEL in loaded_ids, (
             f"{FLM_CHAT_MODEL} was evicted when the embedder loaded "
-            f"(loaded={sorted(str(i) for i in loaded_ids)})"
+            f"(loaded={loaded_ids})"
         )
 
 
