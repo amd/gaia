@@ -16,12 +16,12 @@ from types import SimpleNamespace
 import pytest
 
 import gaia.ui._chat_helpers as chat_helpers_module
-import gaia.ui.email_sidecar.daemon_client as daemon_client_module
-import gaia.ui.email_sidecar.relay as relay_module
+import gaia.ui.sidecar.daemon_client as daemon_client_module
+import gaia.ui.sidecar.relay as relay_module
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
 from gaia.ui.models import ChatRequest
+from gaia.ui.sidecar.profiles import GAIA_PROFILE
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.utils import message_to_response
 
@@ -113,7 +113,7 @@ class _FakeProxy:
 
 
 class _FakeHandle:
-    api_version = "2.4"
+    api_version = "2.12"
 
     def proxy(self):
         return _FakeProxy()
@@ -136,16 +136,16 @@ def test_the_stopped_turn_is_saved_with_the_count_on_its_step(monkeypatch):
         handler._emit({"type": "status", "message": "Cancelled."})
 
     monkeypatch.setattr(
-        daemon_client_module, "acquire_handle", lambda agent_id="email": _FakeHandle()
+        daemon_client_module, "acquire_handle", lambda agent_id="gaia": _FakeHandle()
     )
     monkeypatch.setattr(relay_module, "relay_query", _fake_relay_query)
     monkeypatch.setattr(
         chat_helpers_module, "_maybe_update_session_title", _noop_retitle
     )
     db = ChatDatabase(":memory:")
-    session = db.create_session(agent_type="email")
+    session = db.create_session(agent_type="gaia")
     request = ChatRequest(
-        session_id=session["id"], message="hello", stream=True, agent_type="email"
+        session_id=session["id"], message="hello", stream=True, agent_type="gaia"
     )
     sent = []
 

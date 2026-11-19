@@ -104,9 +104,8 @@ class JudgeOutageError(RuntimeError):
     """The judge could not be reached — so nothing was scored.
 
     Subclasses ``RuntimeError``, never ``ValueError``, and that is load-bearing:
-    :func:`gaia.eval.draft_quality.judge_drafts` turns a ``ValueError`` into an
-    ``ERRORED`` scorecard row, which is right for an unparseable verdict and
-    exactly wrong for an outage. An outage has to abort the run instead of
+    a scorer that turns a ``ValueError`` into an ``ERRORED`` scorecard row is
+    right for an unparseable verdict and exactly wrong for an outage. An outage has to abort the run instead of
     quietly filling the scorecard with rows that read as failures.
     """
 

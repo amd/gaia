@@ -608,21 +608,21 @@ def test_run_setup_rejects_bad_concurrency(tmp_path):
 # fed a macOS executable into ``uv pip install``. These tests exercise the
 # fix: selecting the right per-platform entry from ``versions[v].artifacts[]``
 # via the new ``install(..., platform_key=...)`` DI seam. Manifest shapes
-# mirror the real ``hub.amd-gaia.ai/agents/email/manifest.json``.
+# mirror the real ``hub.amd-gaia.ai/agents/toy/manifest.json``.
 # ---------------------------------------------------------------------------
 
 _PLATFORM_FILENAMES = {
-    "win32-x64": "email-agent-win32-x64.exe",
-    "darwin-arm64": "email-agent-darwin-arm64",
-    "darwin-x64": "email-agent-darwin-x64",
-    "linux-x64": "email-agent-linux-x64",
+    "win32-x64": "toy-agent-win32-x64.exe",
+    "darwin-arm64": "toy-agent-darwin-arm64",
+    "darwin-x64": "toy-agent-darwin-x64",
+    "linux-x64": "toy-agent-linux-x64",
 }
 
 _FILENAME_BYTES = {
-    "email-agent-win32-x64.exe": b"win32-x64-binary-bytes",
-    "email-agent-darwin-arm64": b"darwin-arm64-binary-bytes",
-    "email-agent-darwin-x64": b"darwin-x64-binary-bytes",
-    "email-agent-linux-x64": b"linux-x64-binary-bytes",
+    "toy-agent-win32-x64.exe": b"win32-x64-binary-bytes",
+    "toy-agent-darwin-arm64": b"darwin-arm64-binary-bytes",
+    "toy-agent-darwin-x64": b"darwin-x64-binary-bytes",
+    "toy-agent-linux-x64": b"linux-x64-binary-bytes",
 }
 
 
@@ -637,7 +637,7 @@ def _artifact_entry(filename, data, path_prefix):
 
 
 def _binary_manifest(
-    agent_id="email",
+    agent_id="toy",
     version="0.1.0",
     platform_keys=("win32-x64", "darwin-arm64", "darwin-x64", "linux-x64"),
     filename_bytes=None,
@@ -678,9 +678,9 @@ def _binary_manifest(
 
 
 def _legacy_binary_manifest(
-    agent_id="email",
+    agent_id="toy",
     version="0.1.0",
-    filename="email-agent-darwin-arm64",
+    filename="toy-agent-darwin-arm64",
     data=b"legacy-binary-bytes",
 ):
     """Old manifest shape: a bare-executable singular ``artifact``, no
@@ -721,7 +721,7 @@ def _binary_fetcher(manifest, filename_bytes=None):
 
     def fetcher(url):
         if url.endswith("/gaia-agent.yaml"):
-            return b"id: email\nname: Email\n"
+            return b"id: toy\nname: Toy\n"
         for path, data in by_path.items():
             if url == f"{BASE}/{path}":
                 return data
@@ -747,7 +747,7 @@ def test_install_binary_selects_win32_and_skips_pip(tmp_path):
         return inner_fetcher(url)
 
     result = install(
-        "email",
+        "toy",
         manifest=manifest,
         base_url=BASE,
         fetcher=tracking_fetcher,
@@ -756,10 +756,10 @@ def test_install_binary_selects_win32_and_skips_pip(tmp_path):
         platform_key="win32-x64",
     )
 
-    assert any(u.endswith("email-agent-win32-x64.exe") for u in downloaded_urls)
-    exe_path = tmp_path / "email" / "email-agent.exe"
+    assert any(u.endswith("toy-agent-win32-x64.exe") for u in downloaded_urls)
+    exe_path = tmp_path / "toy" / "toy-agent.exe"
     assert exe_path.exists()
-    sentinel = read_sentinel("email", tmp_path)
+    sentinel = read_sentinel("toy", tmp_path)
     assert sentinel is not None
     assert sentinel.artifact_kind == "binary"
     assert result.hot_registered is False
@@ -771,9 +771,9 @@ def test_install_binary_selects_win32_and_skips_pip(tmp_path):
 @pytest.mark.parametrize(
     "platform_key,expected_filename,expected_generic",
     [
-        ("win32-x64", "email-agent-win32-x64.exe", "email-agent.exe"),
-        ("darwin-arm64", "email-agent-darwin-arm64", "email-agent"),
-        ("linux-x64", "email-agent-linux-x64", "email-agent"),
+        ("win32-x64", "toy-agent-win32-x64.exe", "toy-agent.exe"),
+        ("darwin-arm64", "toy-agent-darwin-arm64", "toy-agent"),
+        ("linux-x64", "toy-agent-linux-x64", "toy-agent"),
     ],
 )
 def test_install_binary_platform_selection(
@@ -788,7 +788,7 @@ def test_install_binary_platform_selection(
         return inner_fetcher(url)
 
     install(
-        "email",
+        "toy",
         manifest=manifest,
         base_url=BASE,
         fetcher=tracking_fetcher,
@@ -797,7 +797,7 @@ def test_install_binary_platform_selection(
         platform_key=platform_key,
     )
     assert any(u.endswith(expected_filename) for u in downloaded_urls)
-    installed_path = tmp_path / "email" / expected_generic
+    installed_path = tmp_path / "toy" / expected_generic
     assert installed_path.exists()
     if platform_key != "win32-x64" and os.name == "posix":
         mode = installed_path.stat().st_mode
@@ -811,7 +811,7 @@ def test_install_binary_prefers_binary_over_wheel_in_artifacts(tmp_path):
     manifest = _binary_manifest(extra_wheel=True)
     pip_calls = []
     install(
-        "email",
+        "toy",
         manifest=manifest,
         base_url=BASE,
         fetcher=_binary_fetcher(manifest),
@@ -820,7 +820,7 @@ def test_install_binary_prefers_binary_over_wheel_in_artifacts(tmp_path):
         platform_key="linux-x64",
     )
     assert pip_calls == []
-    assert (tmp_path / "email" / "email-agent").exists()
+    assert (tmp_path / "toy" / "toy-agent").exists()
 
 
 def test_install_binary_no_match_never_falls_back_to_wheel(tmp_path):
@@ -828,7 +828,7 @@ def test_install_binary_no_match_never_falls_back_to_wheel(tmp_path):
     pip_calls = []
     with pytest.raises(InstallError):
         install(
-            "email",
+            "toy",
             manifest=manifest,
             base_url=BASE,
             fetcher=_binary_fetcher(manifest),
@@ -1056,7 +1056,7 @@ def test_install_binary_missing_platform_raises_loud_error(tmp_path):
 
     with pytest.raises(InstallError) as excinfo:
         install(
-            "email",
+            "toy",
             manifest=manifest,
             base_url=BASE,
             fetcher=_binary_fetcher(manifest),
@@ -1065,12 +1065,12 @@ def test_install_binary_missing_platform_raises_loud_error(tmp_path):
             platform_key="darwin-x64",
         )
     message = str(excinfo.value)
-    assert "email" in message
+    assert "toy" in message
     assert "darwin-x64" in message
-    assert "email-agent-win32-x64.exe" in message
-    assert "email-agent-linux-x64" in message
-    assert installer.get_install_status("email")["status"] == "failed"
-    install_dir = tmp_path / "email"
+    assert "toy-agent-win32-x64.exe" in message
+    assert "toy-agent-linux-x64" in message
+    assert installer.get_install_status("toy")["status"] == "failed"
+    install_dir = tmp_path / "toy"
     assert not install_dir.exists() or list(install_dir.iterdir()) == []
 
 
@@ -1079,19 +1079,19 @@ def test_install_binary_missing_platform_raises_loud_error(tmp_path):
 
 def test_install_legacy_singular_binary_matches_platform(tmp_path):
     manifest = _legacy_binary_manifest(
-        filename="email-agent-darwin-arm64", data=b"legacy-bytes"
+        filename="toy-agent-darwin-arm64", data=b"legacy-bytes"
     )
 
     def fetcher(url):
         if url.endswith("/gaia-agent.yaml"):
-            return b"id: email\n"
-        if url.endswith("email-agent-darwin-arm64"):
+            return b"id: toy\n"
+        if url.endswith("toy-agent-darwin-arm64"):
             return b"legacy-bytes"
         raise AssertionError(url)
 
     pip_calls = []
     install(
-        "email",
+        "toy",
         manifest=manifest,
         base_url=BASE,
         fetcher=fetcher,
@@ -1100,27 +1100,27 @@ def test_install_legacy_singular_binary_matches_platform(tmp_path):
         platform_key="darwin-arm64",
     )
     assert pip_calls == []
-    assert (tmp_path / "email" / "email-agent").exists()
-    sentinel = read_sentinel("email", tmp_path)
+    assert (tmp_path / "toy" / "toy-agent").exists()
+    sentinel = read_sentinel("toy", tmp_path)
     assert sentinel.artifact_kind == "binary"
 
 
 def test_install_legacy_singular_binary_mismatch_raises(tmp_path):
     manifest = _legacy_binary_manifest(
-        filename="email-agent-darwin-arm64", data=b"legacy-bytes"
+        filename="toy-agent-darwin-arm64", data=b"legacy-bytes"
     )
 
     def fetcher(url):
         if url.endswith("/gaia-agent.yaml"):
-            return b"id: email\n"
-        if url.endswith("email-agent-darwin-arm64"):
+            return b"id: toy\n"
+        if url.endswith("toy-agent-darwin-arm64"):
             return b"legacy-bytes"
         raise AssertionError(url)
 
     pip_calls = []
     with pytest.raises(InstallError):
         install(
-            "email",
+            "toy",
             manifest=manifest,
             base_url=BASE,
             fetcher=fetcher,
@@ -1139,13 +1139,13 @@ def test_install_binary_checksum_mismatch(tmp_path):
     good_fetcher = _binary_fetcher(manifest)
 
     def tampered_fetcher(url):
-        if url.endswith("email-agent-linux-x64"):
+        if url.endswith("toy-agent-linux-x64"):
             return b"tampered-bytes"
         return good_fetcher(url)
 
     with pytest.raises(ChecksumError):
         install(
-            "email",
+            "toy",
             manifest=manifest,
             base_url=BASE,
             fetcher=tampered_fetcher,
@@ -1153,7 +1153,7 @@ def test_install_binary_checksum_mismatch(tmp_path):
             install_root=tmp_path,
             platform_key="linux-x64",
         )
-    assert read_sentinel("email", tmp_path) is None
+    assert read_sentinel("toy", tmp_path) is None
 
 
 # --- T8: update-in-place, locked-file errors, rollback/uninstall on binary --
@@ -1162,7 +1162,7 @@ def test_install_binary_checksum_mismatch(tmp_path):
 def test_install_binary_update_replaces_without_backup_dir(tmp_path):
     manifest_v1 = _binary_manifest(version="0.1.0")
     install(
-        "email",
+        "toy",
         manifest=manifest_v1,
         base_url=BASE,
         fetcher=_binary_fetcher(manifest_v1),
@@ -1173,7 +1173,7 @@ def test_install_binary_update_replaces_without_backup_dir(tmp_path):
     v2_bytes = {fn: data + b"-v2" for fn, data in _FILENAME_BYTES.items()}
     manifest_v2 = _binary_manifest(version="0.2.0", filename_bytes=v2_bytes)
     result = install(
-        "email",
+        "toy",
         manifest=manifest_v2,
         base_url=BASE,
         fetcher=_binary_fetcher(manifest_v2, filename_bytes=v2_bytes),
@@ -1182,8 +1182,8 @@ def test_install_binary_update_replaces_without_backup_dir(tmp_path):
         platform_key="linux-x64",
     )
     assert result.updated is True
-    assert not (tmp_path / installer.BACKUP_DIRNAME / "email").exists()
-    assert read_sentinel("email", tmp_path).version == "0.2.0"
+    assert not (tmp_path / installer.BACKUP_DIRNAME / "toy").exists()
+    assert read_sentinel("toy", tmp_path).version == "0.2.0"
 
 
 def test_install_binary_locked_file_raises_actionable_error(tmp_path, monkeypatch):
@@ -1195,7 +1195,7 @@ def test_install_binary_locked_file_raises_actionable_error(tmp_path, monkeypatc
     monkeypatch.setattr("os.replace", boom)
     with pytest.raises(InstallError) as excinfo:
         install(
-            "email",
+            "toy",
             manifest=manifest,
             base_url=BASE,
             fetcher=_binary_fetcher(manifest),
@@ -1280,7 +1280,7 @@ def test_a_failed_swap_puts_the_old_binary_back(tmp_path, monkeypatch):
 def test_rollback_binary_kind_raises_clean_error(tmp_path):
     manifest = _binary_manifest()
     install(
-        "email",
+        "toy",
         manifest=manifest,
         base_url=BASE,
         fetcher=_binary_fetcher(manifest),
@@ -1289,7 +1289,7 @@ def test_rollback_binary_kind_raises_clean_error(tmp_path):
         platform_key="linux-x64",
     )
     with pytest.raises(InstallError) as excinfo:
-        rollback("email", install_root=tmp_path)
+        rollback("toy", install_root=tmp_path)
     message = str(excinfo.value).lower()
     assert "rollback" in message or "backup" in message
 
@@ -1297,7 +1297,7 @@ def test_rollback_binary_kind_raises_clean_error(tmp_path):
 def test_uninstall_binary_locked_raises_actionable_error(tmp_path, monkeypatch):
     manifest = _binary_manifest()
     install(
-        "email",
+        "toy",
         manifest=manifest,
         base_url=BASE,
         fetcher=_binary_fetcher(manifest),
@@ -1311,7 +1311,7 @@ def test_uninstall_binary_locked_raises_actionable_error(tmp_path, monkeypatch):
 
     monkeypatch.setattr(installer.shutil, "rmtree", boom)
     with pytest.raises(InstallError):
-        uninstall("email", install_root=tmp_path)
+        uninstall("toy", install_root=tmp_path)
 
 
 # --- T9: sentinel back-compat + filename sanitization -----------------------
@@ -1337,7 +1337,7 @@ def test_read_sentinel_missing_artifact_kind_defaults_to_wheel(tmp_path):
 
 @pytest.mark.parametrize(
     "bad_filename",
-    ["../evil-binary", "sub/email-agent-win32-x64.exe", "sub\\evil.exe"],
+    ["../evil-binary", "sub/toy-agent-win32-x64.exe", "sub\\evil.exe"],
 )
 def test_install_rejects_path_traversal_filename_in_singular_artifact(
     tmp_path, bad_filename
@@ -1346,12 +1346,12 @@ def test_install_rejects_path_traversal_filename_in_singular_artifact(
 
     def fetcher(url):
         if url.endswith("/gaia-agent.yaml"):
-            return b"id: email\n"
+            return b"id: toy\n"
         return b"evil-bytes"
 
     with pytest.raises(InstallError):
         install(
-            "email",
+            "toy",
             manifest=manifest,
             base_url=BASE,
             fetcher=fetcher,
@@ -1359,12 +1359,12 @@ def test_install_rejects_path_traversal_filename_in_singular_artifact(
             install_root=tmp_path,
             platform_key="win32-x64",
         )
-    install_dir = tmp_path / "email"
+    install_dir = tmp_path / "toy"
     assert not install_dir.exists() or list(install_dir.iterdir()) == []
 
 
 @pytest.mark.parametrize(
-    "bad_filename", ["../evil-win32-x64.exe", "sub/email-agent-win32-x64.exe"]
+    "bad_filename", ["../evil-win32-x64.exe", "sub/toy-agent-win32-x64.exe"]
 )
 def test_install_rejects_path_traversal_filename_in_artifacts_array(
     tmp_path, bad_filename
@@ -1374,16 +1374,16 @@ def test_install_rejects_path_traversal_filename_in_artifacts_array(
     manifest["versions"][version]["artifacts"][0]["filename"] = bad_filename
     manifest["versions"][version]["artifacts"][0][
         "path"
-    ] = f"agents/email/{version}/{bad_filename}"
+    ] = f"agents/toy/{version}/{bad_filename}"
 
     def fetcher(url):
         if url.endswith("/gaia-agent.yaml"):
-            return b"id: email\n"
+            return b"id: toy\n"
         return b"evil-bytes"
 
     with pytest.raises(InstallError):
         install(
-            "email",
+            "toy",
             manifest=manifest,
             base_url=BASE,
             fetcher=fetcher,
@@ -1391,22 +1391,28 @@ def test_install_rejects_path_traversal_filename_in_artifacts_array(
             install_root=tmp_path,
             platform_key="win32-x64",
         )
-    install_dir = tmp_path / "email"
+    install_dir = tmp_path / "toy"
     assert not install_dir.exists() or list(install_dir.iterdir()) == []
 
 
 # --- T10: parity + drift guards ---------------------------------------------
 
 
-def test_generic_executable_names_match_binaries_lock(tmp_path):
+def test_generic_executable_names_match_binaries_lock(tmp_path, monkeypatch):
     from gaia.daemon.sidecars import platform as sidecar_platform
 
-    lock = sidecar_platform.load_lock()
+    # The flagship's published filenames, so the generic name is its own.
+    for key, name in list(_PLATFORM_FILENAMES.items()):
+        gaia_name = name.replace("toy-agent", "gaia-agent")
+        monkeypatch.setitem(_PLATFORM_FILENAMES, key, gaia_name)
+        monkeypatch.setitem(_FILENAME_BYTES, gaia_name, _FILENAME_BYTES[name])
+    lock = sidecar_platform.load_lock(agent_id="gaia")
     for platform_key in sidecar_platform.SUPPORTED_PLATFORMS:
         root = tmp_path / platform_key
-        manifest = _binary_manifest(singular_key=platform_key)
+        manifest = _binary_manifest(agent_id="gaia", singular_key=platform_key)
         install(
-            "email",
+            "gaia",
+            version="0.1.0",
             manifest=manifest,
             base_url=BASE,
             fetcher=_binary_fetcher(manifest),
@@ -1415,7 +1421,7 @@ def test_generic_executable_names_match_binaries_lock(tmp_path):
             platform_key=platform_key,
         )
         expected = lock.binaries[platform_key].executable
-        assert (root / "email" / expected).exists()
+        assert (root / "gaia" / expected).exists()
 
 
 @pytest.mark.parametrize(
@@ -1430,7 +1436,7 @@ def test_generic_executable_names_match_binaries_lock(tmp_path):
         ("freebsd", "riscv64"),
     ],
 )
-def test_current_platform_key_parity_with_email_sidecar(plat, arch):
+def test_current_platform_key_parity_with_the_sidecar(plat, arch):
     from gaia.daemon.sidecars import platform as sidecar_platform
     from gaia.hub import compatibility
 
@@ -1443,7 +1449,7 @@ def test_install_unsupported_platform_key_hits_loud_error_not_crash(tmp_path):
     manifest = _binary_manifest()
     with pytest.raises(InstallError):
         install(
-            "email",
+            "toy",
             manifest=manifest,
             base_url=BASE,
             fetcher=_binary_fetcher(manifest),
@@ -1490,7 +1496,7 @@ class TestAgentIdPathSafety:
             installer.agent_install_dir(bad_id, tmp_path)
 
     def test_valid_ids_accepted(self, tmp_path):
-        for good in ("email", "my-agent", "Agent_1.2", "a", "chat"):
+        for good in ("toy", "my-agent", "Agent_1.2", "a", "chat"):
             assert installer.agent_install_dir(good, tmp_path) == tmp_path / good
 
     def test_uninstall_rejects_traversal_id_without_touching_target(self, tmp_path):
@@ -1563,13 +1569,13 @@ class TestAgentIdPathSafety:
                     "language": "cpp",
                     "installed_at": "now",
                     "artifact_kind": "binary",
-                    "executable": "gaia-email-agent.exe",
+                    "executable": "gaia-toy-agent.exe",
                 }
             )
         )
         sentinel = read_sentinel("demo", tmp_path)
         assert sentinel is not None
-        assert sentinel.executable == "gaia-email-agent.exe"
+        assert sentinel.executable == "gaia-toy-agent.exe"
 
     def test_list_installed_skips_non_agent_directories(self, tmp_path):
         junk = tmp_path / "weird name!"
@@ -2190,7 +2196,7 @@ def test_a_leftover_that_cannot_be_deleted_does_not_stop_the_install(
 # ---------------------------------------------------------------------------
 
 
-def _serving_manifest(manifest, agent_id="email"):
+def _serving_manifest(manifest, agent_id="toy"):
     from gaia.hub import catalog
 
     url = catalog.manifest_url(agent_id, BASE)
@@ -2215,7 +2221,7 @@ def test_no_build_reason_agrees_with_install(tmp_path, platform_key):
     )
     fetcher, _ = _serving_manifest(manifest)
     reason = installer.no_build_reason(
-        "email",
+        "toy",
         base_url=BASE,
         fetcher=fetcher,
         platform_key=platform_key,
@@ -2224,7 +2230,7 @@ def test_no_build_reason_agrees_with_install(tmp_path, platform_key):
 
     try:
         install(
-            "email",
+            "toy",
             manifest=manifest,
             base_url=BASE,
             fetcher=_binary_fetcher(manifest),
@@ -2246,7 +2252,7 @@ def test_no_build_reason_downloads_only_the_manifest(tmp_path):
     fetcher, fetched = _serving_manifest(manifest)
 
     installer.no_build_reason(
-        "email",
+        "toy",
         base_url=BASE,
         fetcher=fetcher,
         platform_key="win32-x64",
@@ -2266,7 +2272,7 @@ def test_no_build_reason_honours_the_manifest_platform_gate(tmp_path, monkeypatc
     fetcher, _ = _serving_manifest(manifest)
 
     reason = installer.no_build_reason(
-        "email",
+        "toy",
         base_url=BASE,
         fetcher=fetcher,
         platform_key="win32-x64",
@@ -2287,7 +2293,7 @@ def test_a_full_disk_is_not_a_missing_build(tmp_path, monkeypatch):
 
     with pytest.raises(DiskSpaceError):
         installer.no_build_reason(
-            "email",
+            "toy",
             base_url=BASE,
             fetcher=fetcher,
             platform_key="win32-x64",
@@ -2303,7 +2309,7 @@ def test_an_unreachable_hub_is_not_a_missing_build(tmp_path):
 
     with pytest.raises(catalog.CatalogError):
         installer.no_build_reason(
-            "email", base_url=BASE, fetcher=offline, install_root=tmp_path
+            "toy", base_url=BASE, fetcher=offline, install_root=tmp_path
         )
 
 
@@ -2405,14 +2411,14 @@ def test_a_malformed_manifest_is_a_catalog_error_naming_the_url(tmp_path, how):
 
     with pytest.raises(catalog.CatalogError) as exc:
         installer.no_build_reason(
-            "email",
+            "toy",
             base_url=BASE,
             fetcher=fetcher,
             platform_key="win32-x64",
             install_root=tmp_path,
         )
 
-    assert catalog.manifest_url("email", BASE) in str(exc.value)
+    assert catalog.manifest_url("toy", BASE) in str(exc.value)
     assert "malformed" in str(exc.value)
 
 
@@ -2422,7 +2428,7 @@ def test_a_well_formed_manifest_still_installs(tmp_path):
 
     assert (
         installer.no_build_reason(
-            "email",
+            "toy",
             base_url=BASE,
             fetcher=fetcher,
             platform_key="win32-x64",

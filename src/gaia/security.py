@@ -307,6 +307,10 @@ def _is_gaia_user_content(norm_path: str, state_dir: str) -> bool:
     return first_segment in GAIA_STATE_USER_CONTENT_SUBDIRS
 
 
+#: The suffixes the image tool saves; nothing else in its folder is readable.
+GENERATED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
+
+
 def _get_blocked_directories() -> Set[str]:
     """Get platform-specific directories that should never be written to.
 
@@ -1307,7 +1311,48 @@ class PathValidator:
     def _in_read_only_scope(self, path: str) -> bool:
         """Whether *path*, symlinks and ``..`` resolved, is under a read-only grant."""
         real = Path(_real_path(path))
-        return any(_path_is_within(real, root) for root in self.read_only_paths)
+        if any(_path_is_within(real, root) for root in self.read_only_paths):
+            return True
+        return self.is_generated_image(path)
+
+    def is_generated_image(self, path: str) -> bool:
+        """Whether *path* is an image GAIA's image tool saved, so reads may reach it.
+
+        GAIA's state folder stays write-blocked; this opens reads of one kind
+        of file in one folder. *path* must resolve (``..``, links and 8.3
+        names followed) to a regular, singly linked file with an image suffix
+        directly inside :func:`gaia.config.generated_images_dir`, and that
+        folder must not itself be a link out of GAIA's state folder.
+
+        Args:
+            path: The path a tool was given.
+
+        Returns:
+            True only when every condition holds; False on any doubt.
+        """
+        import gaia.config as _config
+
+        try:
+            real = Path(_real_path(path))
+            if real.suffix.lower() not in GENERATED_IMAGE_SUFFIXES:
+                return False
+            base = Path(_real_path(_config.GAIA_CONFIG_DIR))
+            folder = base.joinpath(*_config.GENERATED_IMAGES_SUBDIR.parts)
+            # cache/sd/images re-pointed by a link is no longer GAIA's folder.
+            if os.path.normcase(_real_path(folder)) != os.path.normcase(str(folder)):
+                return False
+            if os.path.normcase(str(real.parent)) != os.path.normcase(str(folder)):
+                return False
+            info = os.lstat(real)
+            # A hard link could name a file that lives elsewhere.
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                return False
+        except (OSError, ValueError) as exc:
+            logger.debug("Not a generated image %s: %s", path, exc)
+            return False
+        if not self.in_env_scope(real) or self.withheld_root(str(real)) is not None:
+            return False
+        return not self.is_read_blocked(str(real))[0]
 
     def set_access_prompt(
         self,

@@ -15,8 +15,9 @@ Defines:
 
 from __future__ import annotations
 
+import zlib
 from dataclasses import dataclass, field
-from typing import Iterable, Protocol, Sequence, runtime_checkable
+from typing import Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -77,7 +78,19 @@ class OAuthProvider(Protocol):
         challenge: str,
         state: str,
         scopes: Iterable[str],
+        extra_params: Mapping[str, str] | None = None,
     ) -> str: ...
+
+    def account_prompt_params(
+        self,
+        *,
+        select_account: bool,
+        login_hint: str | None,
+        account_type: str | None,
+    ) -> dict:
+        """Authorization-URL params that pick the account: the provider's
+        account picker when adding one, or a hint when reconnecting one."""
+        ...
 
     def token_request_body(
         self, code: str, verifier: str, redirect_uri: str
@@ -86,3 +99,9 @@ class OAuthProvider(Protocol):
     def refresh_request_body(self, refresh_token: str) -> dict: ...
 
     def authorization_params(self) -> dict: ...
+
+
+def client_id_hash(client_id: str) -> str:
+    """CRC32 fingerprint of an OAuth client id, for the stored-connection
+    tripwire and log correlation only. Not a security measure."""
+    return format(zlib.crc32(client_id.encode()), "08x")

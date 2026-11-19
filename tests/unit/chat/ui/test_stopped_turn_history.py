@@ -118,7 +118,7 @@ def test_turn_that_ended_without_a_reply_reads_as_withdrawn(db):
 
 @pytest.mark.parametrize("partial", ["The sea was calm that morning.", ""])
 def test_turn_the_agent_crashed_on_reads_as_withdrawn(db, partial):
-    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
     crashed = (
         GAIA_PROFILE.stream_ended_message
