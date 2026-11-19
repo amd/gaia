@@ -1,6 +1,6 @@
 ---
 name: office-docs
-description: Create or edit Excel and Word files with Python and check them - .xlsx workbooks, invoices, trackers, budgets and pivot-style summaries with live formulas and native charts; .docx memos, letters, reports and filled-in templates with real headings and tables. Use when the user asks for a spreadsheet, workbook, Excel file, Word document, memo or .docx/.xlsx file. For presentations use slide-decks.
+description: Create or edit Excel and Word files with Python and check them - .xlsx workbooks, invoices, trackers, budgets and pivot-style summaries with live formulas and native charts; .docx memos, letters, reports and filled-in templates with real headings and tables. Use when the user asks for a spreadsheet, workbook, Excel file, Word document, memo or .docx/.xlsx file. For slides or a deck, use slide-decks when it is installed, otherwise this skill.
 license: MIT
 version: 1.0.0
 metadata:
