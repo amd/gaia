@@ -15104,11 +15104,19 @@ Do NOT wrap conversational replies in JSON.
                         )
                         # The next answer replaces this one wholesale, so it
                         # must carry the whole answer, not just the fixed claim.
+                        # With the time limit up no run can start: don't ask for one.
+                        remedy = (
+                            "The time limit is up and no tool can run, so drop "
+                            "the claim, or say when the check last ran and "
+                            "that it was not repeated. "
+                            if self.time_capped_run_seconds(1) == 0
+                            else "Either run the check now, or drop the claim. "
+                        )
                         correction = {
                             "role": "user",
                             "content": (
                                 f'Your answer says "{claim}", but {why}. '
-                                "Either run the check now, or drop the claim. "
+                                f"{remedy}"
                                 "Then give your complete answer again: it "
                                 "replaces the one above, which the user will "
                                 "not see."
