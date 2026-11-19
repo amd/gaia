@@ -547,6 +547,39 @@ def test_glob_filters_a_folder(tmp_path):
     assert [f.name for f in res.an.files] == ["a.log"]
 
 
+def _per_host_folders(root: Path, sub: str = "") -> None:
+    for n in (1, 2, 3):
+        folder = root / f"node{n}" / sub
+        folder.mkdir(parents=True)
+        _write(
+            folder / "app.log",
+            [f"{_iso(T0 + i * 60 + n)} INFO tick {i}" for i in range(30)],
+        )
+
+
+@pytest.mark.parametrize("sub", ["", "var/log"])
+def test_one_folder_per_host_with_the_same_file_name(tmp_path, sub):
+    _per_host_folders(tmp_path, sub)
+    below = f"{sub}/" if sub else ""
+    res = lt.triage([str(tmp_path)])
+    assert set(res.an.hosts) == {"node1", "node2", "node3"}
+    out = res.compact()
+    assert out["coverage"]["hosts"] == 3
+    assert [f["file"] for f in out["coverage"]["files"]] == [
+        f"node{n}/{below}app.log" for n in (1, 2, 3)
+    ]
+
+
+def test_rotated_files_in_one_folder_stay_one_host(tmp_path):
+    for name in ("app.log", "app.log.1"):
+        _write(
+            tmp_path / name, [f"{_iso(T0 + i * 60)} INFO tick {i}" for i in range(30)]
+        )
+    res = lt.triage([str(tmp_path)])
+    assert set(res.an.hosts) == {"app"}
+    assert [f.name for f in res.an.files] == ["app.log", "app.log.1"]
+
+
 # ---------------------------------------------------------------------------
 # Overrides
 # ---------------------------------------------------------------------------

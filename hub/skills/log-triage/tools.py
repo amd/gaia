@@ -1485,6 +1485,53 @@ def _sample_lines(path: Path) -> List[str]:
     return [ln.rstrip("\r\n") for ln in lines]
 
 
+def _below(folder: Path, root: str) -> str:
+    rel = os.path.relpath(folder, root).replace(os.sep, "/")
+    return "" if rel == "." else rel
+
+
+def file_labels(paths: Sequence[Path]) -> Tuple[List[str], List[str]]:
+    """The display name and the fallback host of every input file.
+
+    A file is shown by its name, and lines that name no host get one from the
+    file stem (``app.log`` and ``app.log.1`` are both ``app``). When several
+    folders hold the same file name, as in one folder per host, the name is
+    the path below their common folder and the host is the folder.
+    """
+    names = [p.name for p in paths]
+    hosts = [p.name.split(".")[0] or p.name for p in paths]
+    folders = [p.parent.resolve() for p in paths]
+
+    def groups(keys: Sequence[str]) -> List[List[int]]:
+        found: Dict[str, List[int]] = {}
+        for i, key in enumerate(keys):
+            found.setdefault(key, []).append(i)
+        return [g for g in found.values() if len({folders[i] for i in g}) > 1]
+
+    for group in groups(names):
+        try:
+            root = os.path.commonpath([str(folders[i]) for i in group])
+        except ValueError:  # different drives
+            for i in group:
+                names[i] = str(paths[i])
+            continue
+        for i in group:
+            rel = _below(folders[i], root)
+            names[i] = f"{rel}/{paths[i].name}" if rel else paths[i].name
+    for group in groups(hosts):
+        try:
+            root = os.path.commonpath([str(folders[i]) for i in group])
+        except ValueError:
+            continue
+        rels = {folders[i]: _below(folders[i], root) for i in group}
+        tops = {folder: rel.split("/")[0] for folder, rel in rels.items()}
+        # The first folder below the common one, unless two hosts share it.
+        labels = tops if len(set(tops.values())) == len(tops) else rels
+        for i in group:
+            hosts[i] = labels[folders[i]] or hosts[i]
+    return names, hosts
+
+
 def _mtime(path: Path) -> Optional[float]:
     try:
         return path.stat().st_mtime
@@ -1799,9 +1846,11 @@ class Analyzer:
         self.multi_file = len(paths) > 1
         lo: Optional[float] = None
         hi: Optional[float] = None
+        names, hosts = file_labels(paths)
         for idx, path in enumerate(paths):
             ctx = FileContext(idx, path, _year_hint(path))
-            report = FileReport(path=str(path), name=path.name)
+            ctx.stem = hosts[idx]
+            report = FileReport(path=str(path), name=names[idx])
             self.files.append(report)
             try:
                 sample = _sample_lines(path)
