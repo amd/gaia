@@ -39,6 +39,9 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
 - A reply that goes quiet partway through is requested again, up to twice,
   instead of ending the turn; the work done so far is kept either way.
+- In a `gaia -p` run the agent is told nobody can answer questions, so it
+  settles an open choice itself and says what it assumed instead of ending on
+  an offer to change it later.
 - `run_python` no longer drops long output without saying so. Output past
   8,000 characters used to be cut silently, so a scan's later hits never
   reached the agent. It now gets the start and end, is told how much was left
