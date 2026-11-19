@@ -811,6 +811,11 @@ export function MemoryDashboard() {
     const handleToggleSensitive = useCallback(async (entry: KnowledgeEntry) => {
         try {
             await memoryApi.editKnowledge(entry.id, { sensitive: !entry.sensitive });
+            // Marking an entry sensitive hides it, so close an editor holding its text.
+            if (!entry.sensitive && editingId === entry.id && !revealedIds.has(entry.id)) {
+                setEditingId(null);
+                setFormData(prev => ({ ...prev, content: '' }));
+            }
             loadKnowledge();
             log.ui.info(`Toggled sensitive for ${entry.id}: ${!entry.sensitive}`);
             showToast(t(entry.sensitive ? 'mem.toast.unmarkedSensitive' : 'mem.toast.markedSensitive'), 'info');
@@ -818,7 +823,7 @@ export function MemoryDashboard() {
             log.system.error('Failed to toggle sensitive', err);
             showToast(t('mem.toast.sensitiveFailed', { error: errorText(err) }), 'error');
         }
-    }, [loadKnowledge, showToast, t]);
+    }, [loadKnowledge, showToast, t, editingId, revealedIds]);
 
     const startEdit = useCallback((entry: KnowledgeEntry) => {
         if (entry.sensitive && !revealedIds.has(entry.id)) return;

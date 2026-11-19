@@ -138,6 +138,42 @@ describe('Advanced knowledge table — hidden sensitive entries', () => {
         expect(secretLeaks()).toBe(false);
     });
 
+    it('marking an entry sensitive while editing it closes the editor', async () => {
+        const user = userEvent.setup();
+        mockedApi.getKnowledge.mockResolvedValue({
+            items: [{ ...ENTRY, sensitive: false }], total: 1, offset: 0, limit: 25,
+        });
+        render(<MemoryDashboard />);
+        fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
+        const row = (await screen.findByText(SECRET)).closest('tr')!;
+
+        await user.click(within(row).getByTitle('Edit'));
+        expect(document.querySelector<HTMLTextAreaElement>('.mem-inline-form textarea')!.value).toBe(SECRET);
+
+        mockedApi.getKnowledge.mockResolvedValue({ items: [ENTRY], total: 1, offset: 0, limit: 25 });
+        await user.click(within(row).getByTitle('Mark sensitive'));
+
+        expect(mockedApi.editKnowledge).toHaveBeenCalledWith('k1', { sensitive: true });
+        await screen.findByRole('button', { name: /Sensitive — show/ });
+        expect(document.querySelector('.mem-inline-form')).toBeNull();
+        expect(secretLeaks()).toBe(false);
+    });
+
+    it('unmarking a revealed entry while editing keeps the editor open', async () => {
+        const user = userEvent.setup();
+        const row = await renderHiddenRow();
+
+        await user.click(within(row).getByRole('button', { name: /Sensitive — show/ }));
+        await user.click(editButton(row));
+        mockedApi.getKnowledge.mockResolvedValue({
+            items: [{ ...ENTRY, sensitive: false }], total: 1, offset: 0, limit: 25,
+        });
+        await user.click(within(row).getByTitle('Unmark sensitive'));
+
+        expect(mockedApi.editKnowledge).toHaveBeenCalledWith('k1', { sensitive: false });
+        expect(document.querySelector<HTMLTextAreaElement>('.mem-inline-form textarea')!.value).toBe(SECRET);
+    });
+
     it('leaves non-sensitive entries editable', async () => {
         const user = userEvent.setup();
         mockedApi.getKnowledge.mockResolvedValue({
