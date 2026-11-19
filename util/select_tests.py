@@ -4,11 +4,13 @@
 """Pick the unit-test files a change can affect, so a PR runs those and not all.
 
 **Narrowing is an allowlist.** A PR runs a subset only when every changed file
-is either a unit-test file or shipped ``.py`` code under a root the coverage map
+is a unit-test file, shipped ``.py`` code under a root the coverage map
 measures (``src/gaia``, and ``hub/agents`` when the map includes it) with an
-entry in the map. Everything else runs the whole suite: data files, ``util/``
-scripts, test helpers and fixtures, ``eval/``, configs, workflows, any
-``conftest.py``, a deleted or renamed file, a missing or stale map, this script
+entry in the map, or a file tests only ever read (``read_only_class``: docs
+pages, Agent UI sources, the Go TUI tree, hub data), which reaches just the
+tests that name it or scan its folder. Everything else runs the whole suite:
+other data files, pinned manifests and lockfiles, ``util/`` scripts, test
+helpers and fixtures, ``eval/``, configs, workflows, any ``conftest.py``, a deleted or renamed file, a missing or stale map, this script
 and the workflow that runs it. Tests load such files by path
 (``spec_from_file_location``, ``runpy``, ``open``), and neither imports nor
 coverage can follow what those scripts import or read. A selection over
@@ -49,6 +51,14 @@ files outside the filter (``docs/``, ``.claude/``, the root instruction files),
 so a code change shipped beside one of those runs everything, as on its PR.
 The root instruction files, ``.claude/`` and ``scripts/`` also force the full
 suite on their own, since the doc-path tests read them.
+
+On a pull request the macOS lane runs only when ``os_reason`` finds a changed
+file that touches the operating system. The ``ci:full`` label passes
+``--force-full`` and runs everything on every OS.
+
+``lane-scope`` makes the same kind of call for a whole workflow: build_tui.yml
+runs one core freeze, not its Go and installer matrix, when only the Agent UI
+changed.
 
 This is a speed-up for pull requests and the merge queue, not the coverage of
 record: test_unit.yml runs the full suite on Linux on every push to main, on
@@ -114,6 +124,19 @@ FULL_RUN_FILES = {
 }
 FULL_RUN_PREFIXES = (".claude/", "scripts/")
 FULL_RUN_BASENAMES = {"conftest.py"}
+# Pinned or generated files several lanes read; they keep forcing a full run
+# even inside a folder that otherwise narrows.
+PINNED_BASENAMES = {
+    "binaries.lock.json",
+    "package.json",
+    "package-lock.json",
+    "go.mod",
+    "go.sum",
+    "pyproject.toml",
+    "setup.cfg",
+}
+WEBUI_ROOT = "src/gaia/apps/webui/"
+
 # Filter syntax beyond `*` and `**`, refused rather than misread.
 _UNSUPPORTED_GLOB_RE = re.compile(r"[!?+\[\]]")
 
@@ -140,6 +163,41 @@ PLATFORM_MODULE_PREFIXES = (
     "gaia.agents.tools.file_io_tools",
     "gaia.electron",
     "gaia.audio",
+)
+# Changed code that touches the operating system, so the macOS lane runs on a
+# PR: processes, shells, paths, locks, ports, keyring and the installer. Push,
+# merge queue and nightly runs ignore this and still run macOS.
+OS_MODULE_PREFIXES = PLATFORM_MODULE_PREFIXES + (
+    "gaia.agents.tools.shell_session",
+    "gaia.agents.tools.shell_deletes",
+    "gaia.agents.tools.path_access",
+    "gaia.agents.tools.workspace_paths",
+    "gaia.agents.base.credential_reads",
+    "gaia.connectors",
+    "gaia.mcp.client.transports.stdio",
+    "gaia.mcp.ports",
+    "gaia.messaging.discord.credentials",
+    "gaia.messaging.slack.credentials",
+    "gaia.schedule.lock",
+    "gaia.skills.lock",
+    "gaia.skills.binaries",
+    "gaia.skills.binary_setup",
+    "gaia.utils.paths",
+    "gaia.utils.process_owner",
+    "gaia.utils.process_tree",
+    "gaia.ports",
+    "gaia.env",
+    "gaia.device",
+    "gaia.login_path",
+    "gaia.log_rotation",
+)
+OS_PATH_PREFIXES = ("installer/",)
+# A changed test that spawns processes, sends signals or reads the platform.
+OS_CALL_RE = re.compile(
+    r"\bsubprocess\b|\bPopen\b|create_subprocess|\bpsutil\b|\bmultiprocessing\b|"
+    r"\bos\.(?:kill|killpg|setsid|chmod|symlink|startfile|name)\b|\bsignal\.\w|"
+    r"\bfcntl\b|\bmsvcrt\b|\bctypes\b|\bwinreg\b|\bkeyring\b|\bsymlink_to\b|"
+    r"\bsys\.platform\b|\bplatform\.system\b"
 )
 
 
@@ -739,9 +797,9 @@ def full_run_reason(
 ) -> Optional[str]:
     """Why the whole suite must run, or None if the selection can narrow.
 
-    Narrowing is an allowlist: every changed file must be a unit-test file, or
-    shipped .py code the coverage map measures and has an entry for. Anything
-    else (data files, util/ scripts, test helpers and fixtures, eval/, configs,
+    Narrowing is an allowlist: every changed file must be a unit-test file,
+    shipped .py code the coverage map measures and has an entry for, or a
+    read-only file (``read_only_class``). Anything else (other data files, util/ scripts, test helpers and fixtures, eval/, configs,
     workflows) can be loaded by path or read by a script, which neither imports
     nor coverage can follow, so it runs everything.
     """
@@ -759,6 +817,10 @@ def full_run_reason(
             return f"{path} is not tracked by git, so its imports were not read"
         if is_test_file(path, test_root):
             continue
+        # Read by path, never imported: the tests that name the file or scan
+        # its folder are the ones it reaches (affected_files follows read_deps).
+        if read_only_class(path):
+            continue
         if not is_measured(path, coverage):
             return f"{path} is outside the code the coverage map measures"
         if path not in coverage:
@@ -772,6 +834,61 @@ def forces_full_run(path: str) -> bool:
         or path.startswith(FULL_RUN_PREFIXES)
         or PurePosixPath(path).name in FULL_RUN_BASENAMES
     )
+
+
+def read_only_class(path: str) -> Optional[str]:
+    """The kind of non-Python file that only reaches the tests reading it, or None.
+
+    Docs pages, Agent UI sources, the Go TUI tree and hub data are never
+    imported by a test; a test reads them by a path it spells out or by
+    scanning their folder, and the graph records both. Anything else that
+    isn't Python (fixtures, configs, eval data) still runs the full suite, and
+    so do skills and the data inside a hub agent's Python package: shipped
+    code loads those by scanning a folder, which the graph can't follow.
+    """
+    p = PurePosixPath(path)
+    if p.suffix == ".py" or p.name in PINNED_BASENAMES or forces_full_run(path):
+        return None
+    if path.startswith("tests/"):
+        return None
+    if path.startswith(WEBUI_ROOT):
+        return "webui"
+    if path.startswith("tui/"):
+        return "tui"
+    if path.startswith("hub/skills/") or re.match(r"hub/agents/[^/]+/python/", path):
+        return None
+    if path.startswith("hub/"):
+        return "hub data"
+    if p.suffix in {".md", ".mdx"} and not path.startswith("src/"):
+        return "docs"
+    return None
+
+
+def os_reason(changed: Iterable[str], graph: Graph) -> Optional[str]:
+    """Why a change needs the macOS lane on a pull request, or None.
+
+    It does for OS-touching code (OS_MODULE_PREFIXES, the installer tree), a
+    test that makes OS calls itself, a file that forces a full run, or Python
+    whose source can't be read. Anything else runs on Linux and Windows only;
+    a macOS-only break in it surfaces on the push to main instead.
+    """
+    for path in sorted(changed):
+        if forces_full_run(path):
+            return f"{path} changed"
+        module = _module_name(path, "src") or ""
+        if path.startswith(OS_PATH_PREFIXES) or any(
+            module == prefix or module.startswith(prefix + ".")
+            for prefix in OS_MODULE_PREFIXES
+        ):
+            return f"{path} is OS-touching code"
+        if not path.endswith(".py"):
+            continue
+        source = graph.sources.get(path)
+        if source is None:
+            return f"{path} was deleted or is untracked, so its OS calls can't be read"
+        if is_test_file(path) and OS_CALL_RE.search(source):
+            return f"{path} is a test that makes OS calls"
+    return None
 
 
 def workflow_trigger_paths(workflow: Path) -> List[str]:
@@ -842,9 +959,14 @@ def select(
     platform_only: bool = False,
     stale: bool = False,
     trigger_paths: Optional[List[str]] = None,
+    force_full: Optional[str] = None,
 ) -> Selection:
     changed = sorted(set(changed))
     all_tests = sorted(p for p in graph.files if is_test_file(p, test_root))
+    if force_full:
+        return Selection(
+            full=True, reason=force_full, tests=all_tests, total=len(all_tests)
+        )
     # The filter only gates whether anything runs: tests read files outside it.
     if trigger_paths is not None and not triggering_changes(changed, trigger_paths):
         return Selection(
@@ -915,14 +1037,18 @@ def _cmd_select(args: argparse.Namespace) -> int:
         args.platform_only,
         stale,
         trigger_paths,
+        args.force_full,
     )
     kind = "full suite" if sel.full else "selected"
     summary = f"{kind}: {len(sel.tests)} of {sel.total} test files ({sel.reason})"
-    print(f"select_tests: {summary}", file=sys.stderr)
-    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if step_summary:
-        with open(step_summary, "a", encoding="utf-8") as fh:
-            fh.write(f"**Test selection** — {summary}\n\n")
+    touches_os = args.force_full or os_reason(changed, graph)
+    if args.platform_only:
+        summary += (
+            f"; macOS on a PR: runs ({touches_os})"
+            if touches_os
+            else "; macOS on a PR: skipped (no OS-touching file changed)"
+        )
+    _report(summary, "Test selection")
     if args.explain:
         print("\n".join(sel.tests))
     if args.out:
@@ -932,6 +1058,55 @@ def _cmd_select(args: argparse.Namespace) -> int:
             fh.write(f"{args.github_output}_full={str(sel.full).lower()}\n")
             fh.write(f"{args.github_output}_count={len(sel.tests)}\n")
             fh.write(f"{args.github_output}_triggered={str(sel.triggered).lower()}\n")
+            fh.write(f"{args.github_output}_os={str(bool(touches_os)).lower()}\n")
+    return 0
+
+
+def _report(summary: str, title: str) -> None:
+    print(f"select_tests: {summary}", file=sys.stderr)
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step_summary:
+        with open(step_summary, "a", encoding="utf-8") as fh:
+            fh.write(f"**{title}** — {summary}\n\n")
+
+
+def lane_scope(
+    changed: Iterable[str],
+    patterns: Iterable[str],
+    narrow_prefixes: Iterable[str],
+    force_full: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """``(full, reason)``: whether a workflow needs its full job set.
+
+    Narrow only when every changed file the workflow's paths filter matches is
+    under one of ``narrow_prefixes``; files outside the filter never triggered
+    the workflow, so they don't decide its scope.
+    """
+    if force_full:
+        return True, force_full
+    rx = path_filter(patterns)
+    matched = sorted(p for p in changed if rx.match(p))
+    if not matched:
+        return True, "no changed file matches the paths filter, so nothing narrows"
+    prefixes = tuple(narrow_prefixes)
+    for path in matched:
+        if not path.startswith(prefixes):
+            return True, f"{path} needs the full job set"
+    return False, f"only {', '.join(prefixes)} changed ({len(matched)} file(s))"
+
+
+def _cmd_lane_scope(args: argparse.Namespace) -> int:
+    changed = changed_since(args.base) if args.base else args.changed
+    full, reason = lane_scope(
+        changed,
+        workflow_trigger_paths(Path(args.workflow)),
+        args.narrow_prefix,
+        args.force_full,
+    )
+    _report(f"{'full' if full else 'narrow'}: {reason}", "Job scope")
+    if args.github_output:
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+            fh.write(f"{args.github_output}_full={str(full).lower()}\n")
     return 0
 
 
@@ -974,11 +1149,38 @@ def main(argv: Optional[List[str]] = None) -> int:
     sel.add_argument("--out", help="write one test path per line here")
     sel.add_argument("--explain", action="store_true", help="print the selection")
     sel.add_argument(
+        "--force-full",
+        metavar="REASON",
+        help="run the whole suite for this logged reason (the ci:full label)",
+    )
+    sel.add_argument(
         "--github-output",
         metavar="PREFIX",
-        help="write PREFIX_full, PREFIX_count and PREFIX_triggered to $GITHUB_OUTPUT",
+        help="write PREFIX_full, PREFIX_count, PREFIX_triggered and PREFIX_os "
+        "to $GITHUB_OUTPUT",
     )
     sel.set_defaults(func=_cmd_select)
+
+    scope = sub.add_parser(
+        "lane-scope", help="decide whether a workflow needs its full job set"
+    )
+    scope_src = scope.add_mutually_exclusive_group(required=True)
+    scope_src.add_argument("--base", help="git ref to diff HEAD against")
+    scope_src.add_argument("--changed", nargs="+", help="changed paths, repo-relative")
+    scope.add_argument(
+        "--workflow", required=True, help="workflow whose pull_request paths to read"
+    )
+    scope.add_argument(
+        "--narrow-prefix",
+        action="append",
+        required=True,
+        help="a path prefix that alone needs only the narrow jobs (repeatable)",
+    )
+    scope.add_argument("--force-full", metavar="REASON")
+    scope.add_argument(
+        "--github-output", metavar="PREFIX", help="write PREFIX_full to $GITHUB_OUTPUT"
+    )
+    scope.set_defaults(func=_cmd_lane_scope)
 
     bm = sub.add_parser("build-map", help="turn a coverage file into a test map")
     bm.add_argument("--coverage", required=True, help="a .coverage data file")
