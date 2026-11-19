@@ -225,10 +225,10 @@ jobs:
           version: v2.12.2
           working-directory: tui
 
-      # Both linters only analyze the host GOOS, so internal/daemon/lock_windows.go
-      # and pid_windows.go are invisible to golangci-lint here. The Windows test
-      # leg compiles and vets them natively; this keeps them under the same
-      # linter pass as the rest. darwin needs no equivalent: the macos leg vets.
+      # Both linters only analyze the host GOOS, so internal/daemon/pid_windows.go
+      # is invisible to golangci-lint here. The Windows test leg compiles and
+      # vets it natively; this keeps it under the same linter pass as the rest.
+      # darwin needs no equivalent: the macos leg vets.
       - name: Vet Windows-only sources
         working-directory: tui
         env:
@@ -256,9 +256,8 @@ jobs:
 
       # Informational, NOT a gate. A threshold that blocks PRs needs buy-in that
       # a printed number does not, and the naive per-package figure is actively
-      # misleading here — internal/ui/root reads 0% because its tests live in
-      # the test/ package, so a naive gate would fail on one of the
-      # better-covered packages. `make cover` uses -coverpkg=./... to
+      # misleading here — code exercised by the test/ integration suite reads
+      # as uncovered in its own package. `make cover` uses -coverpkg=./... to
       # attribute coverage back to the package that owns the code.
       #
       # pipefail is set explicitly: a bare `make cover | tee` reports TEE's exit
