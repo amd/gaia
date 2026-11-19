@@ -579,6 +579,29 @@ def test_every_hub_skill_has_labelled_requests():
     assert sum(1 for case in cases if not case["expected"]) >= 5
 
 
+#: Questions *about* a skill's topic that scored 0.58-0.63 against that skill
+#: with embeddinggemma-300m, above the 0.55 auto-load floor.
+EXPLAIN_NEGATIVES = {
+    "What is RSS and how do RSS feeds work?": "rss-digest",
+    "How does image generation with diffusion models work, conceptually?": (
+        "image-gen"
+    ),
+    "What does a source watch mean in a newsroom?": "source-watch",
+    "Explain how GitHub issue triage works": "github-triage",
+}
+
+
+def test_questions_about_a_skills_topic_are_labelled_negatives():
+    """The auto-load calibration must count these as loads on a negative."""
+    present = set(_hub_skills())
+    by_request = {case["request"]: case for case in _present_cases(present)}
+    for request, near_miss in EXPLAIN_NEGATIVES.items():
+        assert near_miss in present, near_miss
+        case = by_request.get(request)
+        assert case is not None, f"{request!r} is missing from {CASES.name}"
+        assert case["expected"] == [] and case["acceptable"] == [], request
+
+
 def _measure(suggester, skills, cases):
     tp = fp = fn = negatives_hit = 0
     for case in cases:

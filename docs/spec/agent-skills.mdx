@@ -718,7 +718,9 @@ they are without it.
   them negatives, loaded 11 skills on 10 requests, none outside a request's
   labels and none on a negative (the highest scored 0.524), for recall 0.21.
   They have not been re-measured on the current labelled set, which is why
-  auto-load is opt-in. Run
+  auto-load is opt-in. Questions *about* a skill's topic score above the
+  floor: "What is RSS and how do RSS feeds work?" scored 0.589 against
+  `rss-digest`, and three like it are in the labelled set as negatives. Run
   `GAIA_SKILL_SUGGEST_CALIBRATE=1 pytest tests/unit/test_skill_suggester.py -k autoload_calibration -s`
   with `LEMONADE_BASE_URL` naming a running server. It prints precision,
   recall, wrong loads and loads on negatives for each floor from 0.40 to 0.60
