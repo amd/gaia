@@ -307,6 +307,10 @@ def _is_gaia_user_content(norm_path: str, state_dir: str) -> bool:
     return first_segment in GAIA_STATE_USER_CONTENT_SUBDIRS
 
 
+#: The suffixes the image tool saves; nothing else in its folder is readable.
+GENERATED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
+
+
 def _get_blocked_directories() -> Set[str]:
     """Get platform-specific directories that should never be written to.
 
@@ -399,6 +403,21 @@ _secret_links_lock = threading.Lock()
 _secret_links_cache: Dict[str, Any] = {"key": None, "at": 0.0, "ids": {}}
 
 
+def _walk_secret_files(linked_only: bool) -> Dict[Tuple[int, int], Tuple[str, int]]:
+    """``(device, inode)`` -> ``(folder, size)`` for the files in every credential folder."""
+    ids: Dict[Tuple[int, int], Tuple[str, int]] = {}
+    for folder in SECRET_DIRECTORIES:
+        for current, _dirs, files in os.walk(folder):
+            for name in files:
+                try:
+                    st = os.stat(os.path.join(current, name))
+                except OSError:
+                    continue  # removed or locked mid-walk; it can't be read either
+                if not linked_only or st.st_nlink >= 2:
+                    ids[(st.st_dev, st.st_ino)] = (folder, st.st_size)
+    return ids
+
+
 def _secret_links() -> Dict[Tuple[int, int], str]:
     """``(device, inode)`` -> folder, for every file in a credential folder."""
     key = frozenset(SECRET_DIRECTORIES)
@@ -406,17 +425,30 @@ def _secret_links() -> Dict[Tuple[int, int], str]:
         cache = _secret_links_cache
         if cache["key"] == key and time.monotonic() - cache["at"] < SECRET_LINKS_TTL_S:
             return cache["ids"]
-        ids: Dict[Tuple[int, int], str] = {}
-        for folder in SECRET_DIRECTORIES:
-            for current, _dirs, files in os.walk(folder):
-                for name in files:
-                    try:
-                        st = os.stat(os.path.join(current, name))
-                    except OSError:
-                        continue  # removed or locked mid-walk; it can't be read either
-                    ids[(st.st_dev, st.st_ino)] = folder
+        ids = {k: folder for k, (folder, _size) in _walk_secret_files(False).items()}
         cache.update(key=key, at=time.monotonic(), ids=ids)
         return ids
+
+
+def linked_secret_files() -> Dict[Tuple[int, int], Tuple[str, int]]:
+    """``(device, inode)`` -> ``(folder, size)``, for each credential file with a second name.
+
+    Listed fresh, not from the cache, so a link made a moment ago is in it.
+    A second name has the same size, so a folder-wide search looks up only
+    the files whose size matches one of these.
+    """
+    return _walk_secret_files(linked_only=True)
+
+
+def file_identity(path: Any) -> Optional[Tuple[int, int]]:
+    """``(device, inode)`` of the regular file *path* names when it has a second name."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink < 2:
+        return None
+    return (st.st_dev, st.st_ino)
 
 
 def secret_folder_sharing(path: Any) -> Optional[str]:
@@ -432,13 +464,8 @@ def secret_folder_sharing(path: Any) -> Optional[str]:
         The credential folder, or None when *path* is not a second name for
         one of its files.
     """
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-    if not stat.S_ISREG(st.st_mode) or st.st_nlink < 2:
-        return None
-    return _secret_links().get((st.st_dev, st.st_ino))
+    identity = file_identity(path)
+    return _secret_links().get(identity) if identity else None
 
 
 def _real_path(path: Any) -> str:
@@ -508,8 +535,9 @@ def credential_file_read(word: str, cwd: str) -> Optional[str]:
     """The credential file *word* reads from *cwd*, or None.
 
     By name for what the word says, and by the real file for what it is: a
-    ``notes.txt`` symlinked to ``.env`` reads ``.env``. A folder is not a file,
-    so a virtualenv called ``.env`` stays listable.
+    ``notes.txt`` symlinked to ``.env``, or hard-linked to a file in a
+    credential folder, reads that file. A folder is not a file, so a
+    virtualenv called ``.env`` stays listable.
     """
     if not word or "://" in word:
         return None
@@ -528,6 +556,8 @@ def credential_file_read(word: str, cwd: str) -> Optional[str]:
         if names_credential_file(spelling):
             return spelling
         if present and is_credential_file_name(os.path.basename(real)):
+            return real
+        if present and secret_folder_sharing(real):
             return real
     return None
 
@@ -1203,6 +1233,18 @@ class PathValidator:
         self.allowed_paths.add(Path(path).resolve())
         logger.debug(f"Added allowed path: {path}")
 
+    def remove_allowed_path(self, path: str) -> None:
+        """Withdraw a grant made by :meth:`add_allowed_path` for exactly *path*.
+
+        A wider folder that holds *path* stays granted; use
+        :meth:`withhold_path` to refuse *path* despite one.
+
+        Args:
+            path: The path that was granted.
+        """
+        self.allowed_paths.discard(Path(path).resolve())
+        logger.debug("Removed allowed path: %s", path)
+
     def add_read_only_path(self, path: str) -> None:
         """Let reads under *path* through without widening the write scope.
 
@@ -1269,7 +1311,48 @@ class PathValidator:
     def _in_read_only_scope(self, path: str) -> bool:
         """Whether *path*, symlinks and ``..`` resolved, is under a read-only grant."""
         real = Path(_real_path(path))
-        return any(_path_is_within(real, root) for root in self.read_only_paths)
+        if any(_path_is_within(real, root) for root in self.read_only_paths):
+            return True
+        return self.is_generated_image(path)
+
+    def is_generated_image(self, path: str) -> bool:
+        """Whether *path* is an image GAIA's image tool saved, so reads may reach it.
+
+        GAIA's state folder stays write-blocked; this opens reads of one kind
+        of file in one folder. *path* must resolve (``..``, links and 8.3
+        names followed) to a regular, singly linked file with an image suffix
+        directly inside :func:`gaia.config.generated_images_dir`, and that
+        folder must not itself be a link out of GAIA's state folder.
+
+        Args:
+            path: The path a tool was given.
+
+        Returns:
+            True only when every condition holds; False on any doubt.
+        """
+        import gaia.config as _config
+
+        try:
+            real = Path(_real_path(path))
+            if real.suffix.lower() not in GENERATED_IMAGE_SUFFIXES:
+                return False
+            base = Path(_real_path(_config.GAIA_CONFIG_DIR))
+            folder = base.joinpath(*_config.GENERATED_IMAGES_SUBDIR.parts)
+            # cache/sd/images re-pointed by a link is no longer GAIA's folder.
+            if os.path.normcase(_real_path(folder)) != os.path.normcase(str(folder)):
+                return False
+            if os.path.normcase(str(real.parent)) != os.path.normcase(str(folder)):
+                return False
+            info = os.lstat(real)
+            # A hard link could name a file that lives elsewhere.
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                return False
+        except (OSError, ValueError) as exc:
+            logger.debug("Not a generated image %s: %s", path, exc)
+            return False
+        if not self.in_env_scope(real) or self.withheld_root(str(real)) is not None:
+            return False
+        return not self.is_read_blocked(str(real))[0]
 
     def set_access_prompt(
         self,

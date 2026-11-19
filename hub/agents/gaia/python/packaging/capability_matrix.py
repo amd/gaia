@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: MIT
 """Code-derived capability matrix for the flagship GAIA agent.
 
-Mirrors ``hub/agents/email/python/packaging/capability_matrix.py`` (#2013):
-several surfaces exist (the registered agent-loop tool inventory, the REST
-sidecar API, and the eval suites) and nothing else guarantees they describe the
+Several surfaces exist (#2013) — the registered agent-loop tool inventory, the
+REST sidecar API, and the eval suites — and nothing else guarantees they describe the
 same agent. This module introspects each surface directly from source/config —
 never from memory, never re-typed by hand — and renders the result to a
 committed ``CAPABILITY_MATRIX.md`` that CI diffs against a fresh regeneration.
@@ -118,6 +117,7 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     "sessions/{session_id}/internet": _NO_EVAL_SENTINEL,
     "sessions/{session_id}/grants": _NO_EVAL_SENTINEL,
     "sessions/{session_id}/tools": _NO_EVAL_SENTINEL,
+    "sessions/{session_id}": _NO_EVAL_SENTINEL,
     "memory": _NO_EVAL_SENTINEL,
     "skills": _NO_EVAL_SENTINEL,
 }

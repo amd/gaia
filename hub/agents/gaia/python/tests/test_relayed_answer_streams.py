@@ -30,9 +30,9 @@ from gaia_agent import server as server_mod  # noqa: E402
 from gaia_agent import session_registry as sr  # noqa: E402
 
 from gaia.agents.base.agent import Agent  # noqa: E402
-from gaia.ui.email_sidecar.profiles import GAIA_PROFILE  # noqa: E402
-from gaia.ui.email_sidecar.proxy import SidecarProxy  # noqa: E402
-from gaia.ui.email_sidecar.relay import relay_query  # noqa: E402
+from gaia.ui.sidecar.profiles import GAIA_PROFILE  # noqa: E402
+from gaia.ui.sidecar.proxy import SidecarProxy  # noqa: E402
+from gaia.ui.sidecar.relay import relay_query  # noqa: E402
 from gaia.ui.sse_handler import SSEOutputHandler  # noqa: E402
 
 _HEAD = "Once upon a time, "

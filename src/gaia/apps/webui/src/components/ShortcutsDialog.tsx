@@ -8,21 +8,29 @@ import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import type { MessageKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
+import { browserPaneApi } from '../stores/browserPaneStore';
 import { formatShortcut } from '../utils/platform';
 import './ShortcutsDialog.css';
 
 /** Every shortcut the app answers; the one list the sheet and Settings both show. */
-export const SHORTCUTS: ReadonlyArray<{ label: MessageKey; keys: string }> = [
+export const SHORTCUTS: ReadonlyArray<{ label: MessageKey; keys: string; desktopOnly?: boolean }> = [
     { label: 'shortcuts.newChat', keys: 'Mod+Shift+O' },
     { label: 'shortcuts.search', keys: 'Mod+K' },
     { label: 'shortcuts.sidebar', keys: 'Mod+B' },
     { label: 'shortcuts.settings', keys: 'Mod+,' },
     { label: 'shortcuts.sheet', keys: 'Mod+/' },
+    { label: 'shortcuts.browserPane', keys: 'Mod+Shift+B', desktopOnly: true },
     { label: 'shortcuts.send', keys: 'Enter' },
     { label: 'shortcuts.newLine', keys: 'Shift+Enter' },
     { label: 'shortcuts.editLast', keys: '↑' },
     { label: 'shortcuts.stop', keys: 'Esc' },
 ];
+
+/** The shortcuts this window answers; the browser pane exists only in the desktop app. */
+export function visibleShortcuts() {
+    const desktop = !!browserPaneApi();
+    return SHORTCUTS.filter((s) => desktop || !s.desktopOnly);
+}
 
 /** The keyboard shortcuts sheet (Ctrl+/ or ⌘/). */
 export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
@@ -43,7 +51,7 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
                     </button>
                 </div>
                 <dl className="modal-body shortcuts-list">
-                    {SHORTCUTS.map(({ label, keys }) => (
+                    {visibleShortcuts().map(({ label, keys }) => (
                         <div key={label} className="shortcuts-row">
                             <dt>{t(label)}</dt>
                             <dd><kbd dir="ltr">{formatShortcut(keys)}</kbd></dd>

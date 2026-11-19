@@ -10,7 +10,7 @@ import { SettingsDisclosure } from './SettingsDisclosure';
 import { UpdatesSection } from './UpdatesSection';
 import { DEFAULT_CUSTOM, PALETTES, type CustomColors, type PaletteId } from '../../utils/palette';
 import { formatShortcut } from '../../utils/platform';
-import { SHORTCUTS } from '../ShortcutsDialog';
+import { visibleShortcuts } from '../ShortcutsDialog';
 import { LOCALES, localeOptionLabel, type MessageKey } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
 
@@ -150,7 +150,7 @@ export function GeneralSettings() {
             <UpdatesSection />
             <SettingsDisclosure title={t('settings.shortcuts')}>
                 <dl className="shortcut-list">
-                    {SHORTCUTS.map(({ label, keys }) => (
+                    {visibleShortcuts().map(({ label, keys }) => (
                         <div key={label} className="shortcut-row">
                             <dt><kbd>{formatShortcut(keys)}</kbd></dt>
                             <dd>{t(label)}</dd>

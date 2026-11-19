@@ -3,13 +3,13 @@
 
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { ShortcutsDialog, SHORTCUTS } from '../ShortcutsDialog';
+import { ShortcutsDialog, visibleShortcuts } from '../ShortcutsDialog';
 
 describe('ShortcutsDialog', () => {
     it('lists every shortcut with its keys', () => {
         render(<ShortcutsDialog onClose={vi.fn()} />);
         const dialog = screen.getByRole('dialog', { name: 'Keyboard shortcuts' });
-        expect(dialog.querySelectorAll('.shortcuts-row')).toHaveLength(SHORTCUTS.length);
+        expect(dialog.querySelectorAll('.shortcuts-row')).toHaveLength(visibleShortcuts().length);
         expect(dialog).toHaveTextContent('New chat');
         expect(dialog).toHaveTextContent('Search chats');
         expect(dialog).toHaveTextContent('Stop the answer');
