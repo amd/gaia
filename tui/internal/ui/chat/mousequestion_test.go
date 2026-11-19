@@ -80,8 +80,8 @@ func TestClickingTheSelectedQuestionOptionAnswersIt(t *testing.T) {
 	updated, _ := m.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	m = updated.(ChatModel) // select option 1
 
-	updated, cmd := m.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
-	m = updated.(ChatModel) // click again: now selected -> answers
+	// click again: now selected -> answers
+	_, cmd := m.Update(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 
 	if cmd == nil {
 		t.Fatal("clicking the selected option produced no command")

@@ -423,8 +423,9 @@ class FileSystemIndexService(DatabaseMixin):
         existing_paths: set = set()
         if incremental:
             rows = self.query(
-                "SELECT path FROM files WHERE path LIKE :prefix",
-                {"prefix": root_str + "%"},
+                "SELECT path FROM files "
+                "WHERE path = :root OR substr(path, 1, :prefix_len) = :prefix",
+                _under_root_params(root_str),
             )
             existing_paths = {r["path"] for r in rows}
 
@@ -669,8 +670,8 @@ class FileSystemIndexService(DatabaseMixin):
         """Compute and cache directory statistics for *root_path*."""
         rows = self.query(
             "SELECT size, extension, depth, is_directory FROM files "
-            "WHERE path LIKE :prefix",
-            {"prefix": root_path + "%"},
+            "WHERE path = :root OR substr(path, 1, :prefix_len) = :prefix",
+            _under_root_params(root_path),
         )
 
         total_size = 0
@@ -1042,6 +1043,16 @@ class FileSystemIndexService(DatabaseMixin):
 # ------------------------------------------------------------------
 # Module-level helpers
 # ------------------------------------------------------------------
+
+
+def _under_root_params(root: str) -> Dict[str, Any]:
+    """Bind values matching *root* and what is beneath it, never ``root2``.
+
+    Paired with a literal ``substr`` prefix compare, not ``LIKE``, where ``_``
+    and ``%`` in a folder name are wildcards.
+    """
+    prefix = os.path.join(root, "")
+    return {"root": root, "prefix": prefix, "prefix_len": len(prefix)}
 
 
 def _now_iso() -> str:

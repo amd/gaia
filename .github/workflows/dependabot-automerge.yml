@@ -9,6 +9,9 @@
 # the auto-merge action itself (`dependabot/fetch-metadata`) are left for human
 # review. CI gating is delegated to GitHub's native auto-merge queue — if the
 # required status checks fail, GitHub cancels the merge and the PR stays open.
+# Auto-merge waits only for REQUIRED checks, so the run refuses (and goes red)
+# when the base branch requires none: it would otherwise merge with nothing
+# gating it (#3260).
 #
 # Design notes (concurrency group, `>-` scalar, contains() for grouped PRs,
 # idempotent merge call, dual actor+author gate, diagnostic log step): see #1157.
@@ -79,11 +82,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          # Idempotent: skip if auto-merge is already enabled (synchronize re-trigger).
-          # Without this guard, the second call returns non-zero ("already enabled")
-          # and marks the workflow run failed for no reason.
-          if [ "$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest')" != "null" ]; then
+          set -euo pipefail
+
+          # Count required checks from branch protection AND rulesets; either can carry them.
+          classic=$(gh api "repos/$REPO/branches/$BASE_REF" --jq '
+            .protection.required_status_checks // {}
+            | if (.enforcement_level // "off") == "off" then 0
+              else (((.contexts // []) + ((.checks // []) | map(.context))) | unique | length)
+              end')
+          ruleset=$(gh api "repos/$REPO/rules/branches/$BASE_REF" --jq '
+            [.[] | select(.type == "required_status_checks")
+                 | .parameters.required_status_checks[]?] | length')
+          echo "required status checks on $BASE_REF: branch protection=$classic, rulesets=$ruleset"
+          if [ "$classic" -eq 0 ] && [ "$ruleset" -eq 0 ]; then
+            echo "::error title=No required checks on $BASE_REF::Refusing to enable auto-merge: $BASE_REF requires no status checks, so GitHub would merge this Dependabot PR before CI finishes. Add required status checks to $BASE_REF (Settings > Branches or Rules), then re-run this job. See issue #3260."
+            exit 1
+          fi
+
+          # Idempotent on re-trigger: a second `gh pr merge --auto` fails with "already enabled".
+          # `gh --jq` prints an empty line for a JSON null, never the word "null".
+          enabled=$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest // empty')
+          if [ -n "$enabled" ]; then
             echo "Auto-merge already enabled — no-op."
             exit 0
           fi

@@ -19,7 +19,7 @@ Anyone can build an agent harness with GAIA. The **GAIA agent** is the one we bu
 | **Use GAIA**: run the flagship agent in the desktop app or terminal | [Install GAIA](https://amd-gaia.ai/docs/guides/install), then the [GAIA agent guide](https://amd-gaia.ai/docs/guides/gaia) |
 | **Build with GAIA**: make an agent harness with skills, evals and the SDK | [Composing skills](https://amd-gaia.ai/docs/guides/composing-skills), [Agent evals](https://amd-gaia.ai/docs/guides/eval), [SDK reference](https://amd-gaia.ai/docs/sdk) |
 
-The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** chat through Lemonade. Use `/provider` to connect and choose a model; cloud chat sends conversation history to the selected provider. See [AI provider setup](docs/guides/ai-providers.mdx).
+The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** chat through Lemonade. Use `/provider` to connect and choose a model; cloud chat sends conversation history to the selected provider. See [AI provider setup](docs/guides/ai-providers.mdx). To make GAIA refuse every cloud AI model, run `gaia config set network_policy local_ai_only`.
 
 <p align="center">
   <a href="https://amd-gaia.ai/docs/quickstart"><strong>Get Started →</strong></a>
@@ -35,7 +35,7 @@ The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** 
 
 One download for users: on Windows, one installer offers the desktop app, the terminal, or both. See [Install GAIA](https://amd-gaia.ai/docs/guides/install) for every platform, and its [For developers](https://amd-gaia.ai/docs/guides/install#for-developers) section for script, `pip`/`uv` and source installs.
 
-> **Note (Email agent):** the Email agent installs with `gaia hub install email`, which fetches a binary sidecar into your GAIA agents directory — no PyPI wheel and no Node.js toolchain required. An npm client is also published for embedding the agent in a JS/TS app.
+> **Email:** the GAIA agent reads and searches your Gmail or Outlook inbox once you connect the Google or Microsoft connector — see [Email](https://amd-gaia.ai/docs/guides/email). There is no separate email agent to install.
 
 ---
 
@@ -88,7 +88,7 @@ print(result)
 - **Voice Integration** — Whisper ASR + Kokoro TTS for speech interaction (P0 enabling technology)
 - **Vision Models** — Extract text from images with Qwen3-VL-4B
 - **MCP Integration** — Connect to any MCP server for external tool access
-- **Skills** — Extend the GAIA agent with a `SKILL.md`, no code required ([guide](https://amd-gaia.ai/docs/guides/composing-skills))
+- **Skills** — Extend the GAIA agent with a `SKILL.md`, no code required ([guide](https://amd-gaia.ai/docs/guides/starter-skills))
 
 ---
 

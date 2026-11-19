@@ -26,6 +26,8 @@ import shutil
 import subprocess
 from typing import Optional
 
+from gaia.llm.local_only import assert_provider_permitted
+
 # Sonnet is enough for labelling and summarising tables, and keeps a
 # whole-corpus run cheap. Override per invocation with --model.
 DEFAULT_MODEL = "sonnet"
@@ -64,6 +66,7 @@ def run_claude(
     prompt, and a tool-enabled run could read files the caller never offered.
     """
 
+    assert_provider_permitted("the Claude Code CLI")
     exe = resolve_claude(binary)
     argv = [
         exe,

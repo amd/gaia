@@ -150,6 +150,7 @@ func TestTheLiveLineNamesTheModelsPhase(t *testing.T) {
 		{phase("reading", 0), "Reading your request"},
 		{phase("loading_model", 0), "Loading Qwen3.6 35B into memory"},
 		{phase("reading", 0), "Reading your request"},
+		{phase("loading_tools", 0), "Loading more tools"},
 		{phase("reasoning", 0), "Reasoning"},
 		// Reasoning text is narration: folded, and it must not end the phase.
 		{event.CanonicalStatusEvent{Type: "status", Message: "The user wants revenue by region."}, "Reasoning"},
@@ -565,7 +566,7 @@ func TestAnAnswerReflowsWhenTheWindowNarrows(t *testing.T) {
 	for _, w := range []int{100, 60, 160} {
 		m.width = w
 		m.resize()
-		content := m.renderMessage(&m.messages[len(m.messages)-1], nil)
+		content := m.renderMessage(&m.messages[len(m.messages)-1])
 		for i, row := range strings.Split(content, "\n") {
 			if got := ansi.StringWidth(row); got > m.viewport.Width {
 				t.Fatalf("at %d columns, row %d is %d wide — laid out for the old width: %q",
@@ -679,7 +680,7 @@ func TestAnExpectedExitStaysASuccess(t *testing.T) {
 func TestAWrappedQuestionHangsUnderItsText(t *testing.T) {
 	m := sizedChat(t, 60, 30)
 	msg := Message{Role: RoleUser, Content: strings.Repeat("parse_updated rejects a lowercase z ", 4) + "\nsecond line typed with Alt+Enter"}
-	rows := strings.Split(ansi.Strip(m.renderMessage(&msg, nil)), "\n")
+	rows := strings.Split(ansi.Strip(m.renderMessage(&msg)), "\n")
 	if len(rows) < 3 {
 		t.Fatalf("expected the question to wrap, got %q", rows)
 	}
@@ -700,7 +701,7 @@ func TestAnAnswerHasNoBlankRowsOfItsOwn(t *testing.T) {
 	m := feed(t, sizedChat(t, 100, 30), event.CanonicalFinalEvent{Type: "final", Answer: "Fixed — all 4 tests pass."})
 	msg := m.messages[len(m.messages)-1]
 	msg.Duration = 0 // just the answer, no footnote
-	rows := strings.Split(ansi.Strip(m.renderMessage(&msg, nil)), "\n")
+	rows := strings.Split(ansi.Strip(m.renderMessage(&msg)), "\n")
 	if first := strings.TrimSpace(rows[0]); first != "Fixed — all 4 tests pass." {
 		t.Errorf("the answer's first row is %q, not its text", first)
 	}

@@ -43,7 +43,7 @@ import os
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, ContextManager, Iterator, Optional, Tuple
 
@@ -760,15 +760,66 @@ def _acquire_with_reattach(
 @dataclass
 class _HeldLease:
     model: str
+    lease: Optional[dict] = None
+    heartbeat: Optional[object] = None
     live: bool = True
+    scope_exited: bool = False
+    deferred_releases: int = 0
+    released: bool = False
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
 # A context variable, not a thread-local, so a thread started with a copy of the
-# holder's context (the stream watchdog's reader) shares the lease. ``live`` is
-# shared by every copy, so ending the lease ends it in all of them at once.
+# holder's context (the stream watchdog's reader) shares the lease.  The worker
+# can defer its release while it drains an NPU response after the caller left.
 _held: contextvars.ContextVar[Optional[_HeldLease]] = contextvars.ContextVar(
     "gaia_model_slot_lease", default=None
 )
+
+
+def _release_held(hold: _HeldLease) -> None:
+    """Release *hold* once its scope and every deferred drain have ended."""
+    with hold.lock:
+        if hold.released or not hold.scope_exited or hold.deferred_releases:
+            return
+        hold.released = True
+        hold.live = False
+        heartbeat = hold.heartbeat
+        lease = hold.lease
+    if heartbeat is not None:
+        heartbeat.stop()
+    if lease is not None:
+        release_lease(lease["lease_id"])
+
+
+def defer_lease_release() -> Callable[[], None]:
+    """Keep this context's model lease until a detached stream drain finishes.
+
+    A returned callback is idempotent and must run when the drain reaches EOF
+    or its bounded cut-off.  It is a no-op for an unbrokered call or a worker
+    that did not inherit the holder's context.
+    """
+    hold = _current_hold()
+    if hold is None:
+        return lambda: None
+    with hold.lock:
+        if hold.released or hold.scope_exited:
+            return lambda: None
+        hold.deferred_releases += 1
+    ended = False
+    end_lock = threading.Lock()
+
+    def end() -> None:
+        nonlocal ended
+        with end_lock:
+            if ended:
+                return
+            ended = True
+        with hold.lock:
+            hold.deferred_releases -= 1
+        _release_held(hold)
+
+    return end
 
 
 def _current_hold() -> Optional[_HeldLease]:
@@ -825,7 +876,10 @@ def model_lease(
     hold = _current_hold()
     if hold is not None:
         held_model = hold.model
-        if held_model != model:
+        from gaia.llm.lemonade_client import _model_ids_match
+
+        # user.X and X are one model: Lemonade lists a registered user.X as X.
+        if not _model_ids_match(held_model, model):
             # The outer holder leased a DIFFERENT model. Folding silently would
             # let this load happen under a lease the broker booked against
             # another model, desyncing its slot bookkeeping — loud, because the
@@ -859,11 +913,10 @@ def model_lease(
     if lease is None:  # daemon has no broker — proceed unbrokered (warned above)
         yield None
         return
-    heartbeat = None
-    hold = _HeldLease(model)
+    hold = _HeldLease(model, lease=lease)
     _held.set(hold)
     try:
-        heartbeat = _Heartbeat(lease)
+        hold.heartbeat = _Heartbeat(lease)
         if lease.get("waited"):
             if not told["on_wait"] and on_wait is not None:
                 # A daemon from before queue streaming reports the wait only now.
@@ -882,11 +935,10 @@ def model_lease(
             )
         yield lease
     finally:
-        hold.live = False
         _held.set(None)
-        if heartbeat is not None:
-            heartbeat.stop()
-        release_lease(lease["lease_id"])
+        with hold.lock:
+            hold.scope_exited = True
+        _release_held(hold)
 
 
 def queue_status_event(event: dict) -> dict:

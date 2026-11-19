@@ -2,12 +2,26 @@
 /* SPDX-License-Identifier: MIT */
 /* Chat View - Refined conversation interface */
 
-.history-notice {
+.turn-announcer {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+
+.history-notice,
+.library-notices {
     margin: 8px auto;
     max-width: 640px;
     text-align: center;
     font-size: 12px;
     color: var(--text-secondary);
+}
+
+.library-notices {
+    color: var(--text-primary);
 }
 
 .task-view {
@@ -34,7 +48,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 8px 12px 8px 16px;
+    padding-block: 8px;
+    padding-inline: 16px 12px;
     min-height: 52px;
     flex-shrink: 0;
     background: var(--bg-primary);
@@ -48,6 +63,11 @@
     color: var(--accent-fill-text);
 }
 .task-header-right .task-header-private[data-private="true"]:hover { background: var(--accent-fill-hover); }
+.task-header-right .task-header-resources[aria-pressed="true"] {
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
+}
+.task-header-right .task-header-resources[aria-pressed="true"]:hover { background: var(--accent-fill-hover); }
 
 .task-title {
     display: inline-flex;
@@ -68,9 +88,17 @@
 .task-title span {
     overflow: hidden;
     white-space: nowrap;
-    padding-right: 24px;
+    padding-inline-end: 24px;
     -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
     mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+}
+.task-title span {
+    unicode-bidi: plaintext;
+}
+.task-title span:dir(rtl) {
+    text-align: right;
+    -webkit-mask-image: linear-gradient(to left, black calc(100% - 24px), transparent);
+    mask-image: linear-gradient(to left, black calc(100% - 24px), transparent);
 }
 
 .task-title-edit {
@@ -119,11 +147,26 @@
     background: var(--bg-secondary);
     transition: all var(--duration) var(--ease);
     flex-shrink: 0;
-    width: 100%;
-    text-align: left;
+    text-align: start;
 }
-.doc-context-expanded {
+.doc-context-expanded,
+.doc-context-bar:has(> .doc-context-past-cap) {
     flex-wrap: wrap;
+}
+.doc-context-past-cap {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    color: var(--text-primary);
+}
+.doc-context-icon-warn {
+    color: var(--danger);
+}
+.doc-context-past-cap-text {
+    min-width: 0;
+    white-space: normal;
 }
 .doc-context-icon {
     flex-shrink: 0;
@@ -154,7 +197,10 @@
 }
 .doc-context-pills-expanded {
     flex-wrap: wrap;
-    overflow: visible;
+    align-content: flex-start;
+    max-height: min(30vh, 160px);
+    overflow-x: hidden;
+    overflow-y: auto;
 }
 .doc-pill {
     display: inline-flex;
@@ -185,6 +231,13 @@
     flex-shrink: 0;
     color: var(--accent-green);
 }
+.doc-context-icon-failed,
+.doc-pill-failed .doc-pill-icon {
+    color: var(--danger);
+}
+.doc-pill-failed {
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
 /* Remove button - hidden by default, shown on pill hover */
 .doc-pill-remove {
     display: none;
@@ -194,7 +247,7 @@
     width: 14px;
     height: 14px;
     padding: 0;
-    margin-left: 1px;
+    margin-inline-start: 1px;
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
@@ -276,7 +329,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding-left: 32px;
+    padding-inline-start: 32px;
 }
 
 .skeleton-line {
@@ -331,13 +384,12 @@
 .streaming-bubble.stream-active {
     animation: streamBubbleIn var(--duration-slow) var(--ease);
 }
-.streaming-bubble.stream-ending {
-    pointer-events: none;
-}
 @keyframes streamBubbleIn {
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
 }
+/* A finished answer takes the live bubble's place as it stands: no second entrance. */
+.msg-settled > .msg { animation: none; }
 /* Message delete animation -- fade + shrink before removal */
 .msg-deleting {
     animation: msgDelete var(--duration) var(--ease) forwards;
@@ -363,23 +415,31 @@
 /* ── Input Area -- refined prompt input ──────────────────────────── */
 
 .input-area {
+    position: relative;
     padding: 0 0 16px;
     flex-shrink: 0;
     background: var(--bg-primary);
 }
 
 @media (max-width: 768px) {
-    .task-header { padding-left: var(--sidebar-toggle-clearance); }
+    .task-header { padding-inline-start: var(--sidebar-toggle-clearance); }
     .messages-column,
     .input-column { padding: 0 12px; }
 }
 
-/* Scroll to bottom FAB */
+/* Phone: the title takes its own row so five icons cannot squeeze it to a few letters. */
+@media (max-width: 480px) {
+    .task-header { flex-wrap: wrap; row-gap: 0; }
+    .task-header-left { flex: 1 1 100%; }
+    .task-header-right { margin-inline-start: auto; }
+}
+
+/* Scroll to bottom: 12px clear of the composer, at the column's end, where a line's
+   last word is least often. */
 .scroll-bottom-btn {
     position: absolute;
-    bottom: 100px;
-    left: 50%;
-    transform: translateX(-50%);
+    bottom: calc(100% + 12px);
+    inset-inline-end: max(12px, calc((100% - var(--content-w)) / 2 + 12px));
     width: 34px;
     height: 34px;
     border-radius: var(--radius-md);
@@ -398,15 +458,15 @@
 }
 
 @keyframes scrollBtnSlideIn {
-    from { opacity: 0; transform: translateX(-50%) translateY(12px); }
-    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 .scroll-bottom-btn:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
     border-color: var(--accent);
-    transform: translateX(-50%) translateY(-3px);
+    transform: translateY(-3px);
     box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
@@ -453,7 +513,51 @@
         padding: 12px 16px;
     }
     .skeleton-lines {
-        padding-left: 0;
+        padding-inline-start: 0;
     }
 
+}
+
+/* Under a turn the model server ended by taking no connection. */
+.server-down-notice {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    margin-block: 4px 12px;
+    padding: 12px;
+    max-width: 640px;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    background: var(--bg-card);
+    border: 1px solid var(--accent-yellow);
+    border-radius: var(--radius-md);
+}
+
+.server-down-notice p {
+    margin: 0;
+}
+
+.server-down-notice--ok {
+    border-color: var(--border-light);
+}
+
+.server-down-notice__title {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.server-down-notice__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.server-down-notice__raw {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    overflow-wrap: anywhere;
 }

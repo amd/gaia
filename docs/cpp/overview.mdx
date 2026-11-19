@@ -31,7 +31,7 @@ The GAIA C++17 framework is a native implementation of the core agent system. It
 - **Vision-language model (VLM) support** — `gaia::Image` + `processQuery(..., images)` overloads send images inline to OpenAI-compatible vision endpoints; see [API Reference](/cpp/api-reference#vision-language-models-vlm)
 
 <Info>
-The C++ framework focuses on the core agent loop and tool execution. Specialized agents (Code, Docker, Jira, Blender), the REST API server, RAG, and audio are available in the [Python SDK](/quickstart).
+The C++ framework focuses on the core agent loop and tool execution. The REST API server, RAG, and audio integrations are available in the [Python SDK](/quickstart); task-specific capabilities are provided through skills and connectors.
 </Info>
 
 ---
@@ -257,7 +257,7 @@ config.debug = true;
 | `debug` | `bool` | `false` | Enable verbose debug logging to stdout |
 | `showPrompts` | `bool` | `false` | Print full system prompts and LLM responses |
 | `silentMode` | `bool` | `false` | Suppress all console output (use `SilentConsole`) |
-| `streaming` | `bool` | `false` | Enable streaming responses from the LLM — implemented via `LemonadeClient::chatCompletionsStreaming()` + `SseParser` |
+| `streaming` | `bool` | `false` | Enable streaming responses from the LLM — implemented via `LemonadeClient::chatCompletionsStreaming()` + `SseParser`. A server error event or an unparseable stream event raises `std::runtime_error` with the server's message. An exception thrown by your token callback propagates to the caller |
 | `temperature` | `double` | `0.7` | LLM sampling temperature (`0.0` = deterministic, `1.0` = creative) |
 
 ---
@@ -322,7 +322,7 @@ cpp/
 | JSON parsing with fallbacks | Yes | Yes |
 | OpenAI-compatible LLM backend | Yes | Yes |
 | Multiple LLM providers (Claude, OpenAI) | Yes | Planned |
-| Specialized agents (Code, Docker, Jira) | Yes | — |
+| Task-specific capabilities via skills and connectors | Yes | — |
 | REST API server | Yes | — |
 | Audio / RAG / Stable Diffusion | Yes | — |
 

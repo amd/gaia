@@ -107,7 +107,7 @@ def _unreachable_until_moved(listed):
         listed.append(base_url)
         if base_url == OLD_URL:
             raise RuntimeError(f"Lemonade Server is not reachable at {base_url}.")
-        return [CLOUD_MODEL]
+        return {CLOUD_MODEL: {"id": CLOUD_MODEL}}
 
     return _models
 
@@ -171,7 +171,7 @@ class TestTheSwitchWaits:
             attempts.append(base_url)
             if len(attempts) == 1:
                 raise RuntimeError(f"Lemonade Server is not reachable at {base_url}.")
-            return [CLOUD_MODEL]
+            return {CLOUD_MODEL: {"id": CLOUD_MODEL}}
 
         monkeypatch.setattr(stdio, "_lemonade_models", _models)
         monkeypatch.setattr(stdio, "create_client", lambda **kw: object())

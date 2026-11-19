@@ -11,7 +11,6 @@ and was about to carry on. These tests stand in for such a PC: its
 not, and the code under test runs with its default clocks.
 """
 
-import importlib
 import threading
 import time
 
@@ -57,7 +56,7 @@ class SleepingPC:
 
 
 @pytest.fixture
-def pc():
+def pc(reload_module):
     """The PC's clocks, with the stream watchdog reloaded to read them.
 
     Reloaded so default clock arguments bind the stand-ins, whichever clock
@@ -70,12 +69,11 @@ def pc():
     machine = SleepingPC()
     real_monotonic, real_awake = time.monotonic, awake_clock.monotonic
     time.monotonic, awake_clock.monotonic = machine.monotonic, machine.awake
-    machine.watchdog = importlib.reload(watchdog)
+    machine.watchdog = reload_module(watchdog)
     try:
         yield machine
     finally:
         time.monotonic, awake_clock.monotonic = real_monotonic, real_awake
-        importlib.reload(watchdog)
 
 
 def _limits(watchdog, idle=IDLE):
@@ -189,6 +187,8 @@ def test_a_request_the_pc_slept_through_keeps_its_retry_budget(pc):
 
     client = LemonadeClient(base_url="http://127.0.0.1:1/api/v1")
     client._retry_sleep = lambda _s: None
+    # Up again after the wake; only the connection the sleep held was dropped.
+    client._server_accepts_connections = lambda: True
     attempts = []
 
     def call():

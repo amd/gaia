@@ -360,6 +360,7 @@ class _StubAgent:
     _pin_skill_body = Agent._pin_skill_body
     load_skill = Agent.load_skill
     unload_skill = Agent.unload_skill
+    _drop_skill_tools = Agent._drop_skill_tools
     select_skill_set = Agent.select_skill_set
     resolve_skill_set = Agent.resolve_skill_set
     load_skill_set = Agent.load_skill_set
@@ -774,7 +775,7 @@ def test_agent_init_loads_the_resolved_set(tmp_path, bundled):
         agent = _Harness()
         assert agent.active_skill_set == "personal"
         assert list(agent.loaded_skills) == ["newsletter-digest"]
-        assert "Body of newsletter-digest" in agent.system_prompt
+        assert "Body of newsletter-digest" in agent._prompt_text()
 
         override = _Harness(skill_set="work")
         assert override.active_skill_set == "work"

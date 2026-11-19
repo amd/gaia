@@ -20,10 +20,17 @@ The ref is stamped onto the element as ``data-gaia-ref`` so the follow-up
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
+
+from gaia.browser.untrusted import fence, site_words
 
 #: Attribute stamped on each snapshotted element; also the click selector.
 REF_ATTR = "data-gaia-ref"
+
+#: Attribute the browser pane's element picker stamps on what the user picked
+#: (``p1``, ``p2`` ...). A snapshot clears and restamps ``REF_ATTR``, so picks
+#: live in their own attribute and survive it.
+PICK_ATTR = "data-gaia-pick"
 
 #: Ceiling on elements returned in one snapshot. A page with more than this is
 #: almost always a list/feed where the first N carry the affordances; the
@@ -102,7 +109,8 @@ _SNAPSHOT_JS = """
     if (wrapping) { const t = clean(wrapping.innerText); if (t) return t; }
     const text = clean(el.innerText || el.textContent);
     if (text) return text;
-    for (const a of ['placeholder', 'title', 'alt', 'name', 'value']) {
+    // Not the name attribute: a form field name ("commit") is not what the control says.
+    for (const a of ['placeholder', 'title', 'alt', 'value']) {
       const v = clean(el.getAttribute(a));
       if (v) return v;
     }
@@ -163,6 +171,9 @@ _SNAPSHOT_JS = """
     const ref = 'g' + gen + 'e' + (++n);
     el.setAttribute(attr, ref);
     const rec = { ref, role: roleOf(el), name: nameOf(el) };
+    // What the control shows, when its accessible name says something else.
+    const shown = clean(el.innerText || el.textContent) || clean(el.getAttribute('value'));
+    if (shown && shown !== rec.name) rec.shown = shown;
     // Three buttons all labelled "Select" are indistinguishable to the model.
     // Carry the row's own text so it can tell which account it is choosing.
     const holder = el.closest('li,tr,[role=row],[role=listitem],div');
@@ -230,6 +241,72 @@ _SNAPSHOT_JS = """
 """
 
 
+# Finds text anywhere in the page and returns what surrounds each hit. Takes
+# ``[query, context]``. Shadow roots are included: a web component's content
+# is not part of body.innerText, so searching without it misses exactly the
+# text a snapshot could not show either.
+_FIND_JS = r"""([q, ctx]) => {
+    const shadow = (root) => {
+      let out = '';
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot) {
+          out += ' ' + (el.shadowRoot.textContent || '')
+               + shadow(el.shadowRoot);
+        }
+      }
+      return out;
+    };
+    const text = ((document.body && document.body.innerText) || '')
+               + shadow(document);
+    const hay = text.toLowerCase();
+    const needle = q.toLowerCase();
+    const hits = [];
+    let i = hay.indexOf(needle);
+    while (i !== -1 && hits.length < 10) {
+      hits.push(text.slice(Math.max(0, i - ctx), i + needle.length + ctx)
+                    .replace(/\s+/g, ' ').trim());
+      i = hay.indexOf(needle, i + needle.length);
+    }
+    return {matches: hits, total: hits.length,
+            page_chars: text.length};
+}"""
+
+
+def merge_frames(
+    main: Dict[str, Any],
+    subframes: List[Tuple[Any, Dict[str, Any]]],
+    gen: int,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Merge per-frame snapshots into one, and say which frame issued each ref.
+
+    Support portals, payment fields and embedded widgets live in iframes, and
+    a document-level query cannot see into one, so each frame is snapshotted
+    on its own. ``subframes`` is ``(frame_key, snap)`` in document order, for
+    the frames that could be read; ``frame_key`` is whatever the driver needs
+    to reach that frame again. A frame ref is rewritten ``g4e3`` -> ``g4f1e3``
+    so an action knows which frame to look in; the main frame keeps ``g4e3``.
+
+    Returns the merged snapshot (``main``, extended in place) and
+    ``{ref: frame_key}`` for the refs that came from a frame.
+    """
+    frames_by_ref: Dict[str, Any] = {}
+    main.setdefault("elements", [])
+    for index, (key, sub) in enumerate(subframes, 1):
+        for el in sub.get("elements") or []:
+            el["ref"] = el["ref"].replace(f"g{gen}e", f"g{gen}f{index}e", 1)
+            frames_by_ref[el["ref"]] = key
+            main["elements"].append(el)
+        if sub.get("text"):
+            main["text"] = (main.get("text") or "") + "\n" + sub["text"]
+        main.setdefault("tables", []).extend(sub.get("tables") or [])
+    return main, frames_by_ref
+
+
+def in_frame_ref(ref: str) -> str:
+    """``g4f2e7`` -> ``g4e7``: inside its frame an element carries the plain ref."""
+    return re.sub(r"^g(\d+)f\d+e(\d+)$", r"g\1e\2", ref)
+
+
 def snapshot_args(generation: int = 0) -> Dict[str, Any]:
     """Arguments passed into :data:`_SNAPSHOT_JS`."""
     return {
@@ -255,15 +332,25 @@ def snapshot_args(generation: int = 0) -> Dict[str, Any]:
 #: the page any more", which the model already knows how to recover from.
 _REF_RE = re.compile(r"^g\d+(?:f\d+)?e\d+$")
 
+#: An element the user picked in the browser pane: ``p1``, ``p2`` ...
+_PICK_REF_RE = re.compile(r"^p\d{1,6}$")
+
+
+def is_pick_ref(ref: str) -> bool:
+    """True for a ref the user's pick made (``p1``), not a snapshot."""
+    return bool(ref) and bool(_PICK_REF_RE.match(ref))
+
 
 def ref_selector(ref: str) -> str:
     """CSS selector addressing the element stamped with ``ref``."""
     # Whitelist, not escaping: this is interpolated into a CSS selector, so
     # model-supplied text must never reach it.
+    if is_pick_ref(ref):
+        return f'[{PICK_ATTR}="{ref}"]'
     if not ref or not _REF_RE.match(ref):
         raise ValueError(
             f"Invalid element ref {ref!r}. Refs look like 'g4e12' and come "
-            "from browser_snapshot()."
+            "from browser_snapshot(), or 'p1' for an element the user picked."
         )
     return f'[{REF_ATTR}="{ref}"]'
 
@@ -279,6 +366,15 @@ def render(snap: Dict[str, Any], include_text: bool = True) -> str:
         f"URL: {snap.get('url', '')}",
         "",
     ]
+
+    notes: List[str] = []
+    if snap.get("unread_frames"):
+        notes.append(
+            "Not read: frames from "
+            + ", ".join(site_words(str(o)) for o in snap["unread_frames"])
+            + ", because the user has not approved those sites. browser_snapshot "
+            "asks the user before reading them."
+        )
 
     if snap.get("dialog"):
         lines.insert(
@@ -323,4 +419,5 @@ def render(snap: Dict[str, Any], include_text: bool = True) -> str:
     if include_text and snap.get("text"):
         lines.extend(["", "Page text:", snap["text"]])
 
-    return "\n".join(lines)
+    page = fence("web page", "What the page showed.", "\n".join(lines))
+    return "\n".join([*notes, page])

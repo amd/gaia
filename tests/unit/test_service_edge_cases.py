@@ -652,29 +652,23 @@ class TestSharedDatabase:
             index_svc.close_db()
 
 
-class TestSanitizeNameAllSpecialChars:
-    """Edge case: _sanitize_name with all-special-character input."""
+class TestValidateNameAllSpecialChars:
+    """Edge case: _validate_name with all-special-character input."""
 
-    def test_all_special_chars_becomes_underscores(self, scratchpad):
-        """A name made entirely of special characters becomes all underscores.
+    def test_all_special_chars_rejected(self, scratchpad):
+        """A name made entirely of special characters is refused."""
+        with pytest.raises(ValueError, match="Invalid table name"):
+            scratchpad._validate_name("!@#$%^&*()")
 
-        re.sub(r"[^a-zA-Z0-9_]", "_", "!@#$%^&*()") produces "__________".
-        Since the first character is '_' (not a digit), no 't_' prefix is added.
-        """
-        result = scratchpad._sanitize_name("!@#$%^&*()")
-        expected = "_" * len("!@#$%^&*()")
-        assert result == expected
+    def test_injection_attempt_rejected(self, scratchpad):
+        """SQL in a table name is refused before it reaches any statement."""
+        with pytest.raises(ValueError, match="Invalid table name"):
+            scratchpad.create_table("x; DROP TABLE files", "a TEXT")
 
-    def test_single_special_char(self, scratchpad):
-        """Single special character becomes a single underscore."""
-        result = scratchpad._sanitize_name("!")
-        assert result == "_"
-
-    def test_mixed_special_and_digits(self, scratchpad):
-        """Special chars mixed with leading digit gets t_ prefix."""
-        result = scratchpad._sanitize_name("1-2-3")
-        # "1-2-3" -> "1_2_3" then starts with digit -> "t_1_2_3"
-        assert result == "t_1_2_3"
+    def test_non_string_rejected(self, scratchpad):
+        """A non-string name is refused with the same rule."""
+        with pytest.raises(ValueError, match="letters, digits and underscores"):
+            scratchpad._validate_name(123)
 
 
 class TestCreateTableUnusualColumns:

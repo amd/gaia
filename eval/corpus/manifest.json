@@ -1,7 +1,7 @@
 {
   "generated_at": "2026-03-20T02:10:00Z",
-  "total_documents": 11,
-  "total_facts": 33,
+  "total_documents": 12,
+  "total_facts": 37,
   "notes": "CSV redesigned 2026-03-22: replaced 11k-token transaction CSV with compact 25-row monthly summary. Q1 total updated to $340,000 (was $342,150), March Widget Pro X updated to 150 units/$30,000 (was 142 units/$28,400). Sarah Chen still top at $70,000. Handbook 2026-03-22: added 'Remote Work Allowance Summary: up to 3 days per week' header to Section 7 to improve RAG retrieval distinctiveness for remote work queries.",
   "documents": [
     {
@@ -124,6 +124,18 @@
       "domain": "safety",
       "facts": [
         {"id": "water_guidance", "question": "What does the document say about water?", "answer": "Ensure proper labeling of water containers; maintain sanitary conditions for potable water; isolate contaminated water and notify safety officer.", "difficulty": "medium"}
+      ]
+    },
+    {
+      "id": "clinic_guide_ar_en",
+      "filename": "clinic_guide_ar_en.pdf",
+      "format": "pdf",
+      "domain": "healthcare",
+      "facts": [
+        {"id": "consultation_fee", "question": "How much is a general consultation?", "answer": "150 dinars", "difficulty": "easy"},
+        {"id": "cancellation_notice", "question": "How much notice does cancelling an appointment need?", "answer": "At least 24 hours; later cancellations cost 40 dinars", "difficulty": "easy"},
+        {"id": "records_retention", "question": "How long does the clinic keep medical records?", "answer": "10 years after the patient's last visit", "difficulty": "medium"},
+        {"id": "video_visit_length", "question": "How long does a video visit last?", "answer": "Up to 20 minutes", "difficulty": "easy"}
       ]
     }
   ],

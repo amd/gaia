@@ -39,6 +39,7 @@ Design commitments
 from __future__ import annotations
 
 import re
+from pathlib import PureWindowsPath
 from typing import Any, Mapping, Optional
 
 #: ``channel`` value marking an event as harness bookkeeping rather than a
@@ -168,6 +169,7 @@ _SALIENT_ARG_KEYS = (
 #: Tools whose derived phrase reads badly or loses the point. Kept deliberately
 #: small — the generic deriver is the contract, this is the exception list.
 _NARRATION_OVERRIDES = {
+    "trust_project_folder": "Asking to trust this folder",
     "list_skills": "Checking your installed skills",
     "list_directory": "Listing folder contents",
     "browse_directory": "Listing folder",
@@ -176,12 +178,63 @@ _NARRATION_OVERRIDES = {
     "search_indexed_chunks": "Searching your documents",
     "web_search": "Searching the web",
     "get_file_preview": "Previewing file",
+    "transcribe_media": "Transcribing recording",
+    "refine_transcript": "Preparing transcript",
+    "analyze_transcript": "Analyzing transcript",
+    "export_transcript": "Exporting transcript",
+    # The flagship's tools whose names don't open with a verb.
+    "answer_question_about_image": "Looking at the image",
+    "analyze_image": "Looking at the image",
+    "request_user_input": "Asking you a question",
+    "run_python": "Running Python",
+    "execute_python_file": "Running a Python file",
+    "bookmark": "Bookmarking a folder",
+    "tree": "Listing folder tree",
+    "file_info": "Getting file info",
+    "browser_back": "Going back in the browser",
+    "browser_click": "Clicking in the browser",
+    "browser_find": "Finding on the page",
+    "browser_login": "Signing in on a website",
+    "browser_open": "Opening a page in the browser",
+    "browser_sessions": "Checking browser sign-ins",
+    "browser_snapshot": "Reading the page in the browser",
+    "browser_type": "Typing in the browser",
+    "capture_skill": "Saving a skill",
+    "drop_table": "Deleting a table",
+    "dump_document": "Extracting text",
+    "evaluate_retrieval": "Checking search results",
+    "forget": "Deleting from memory",
+    "forget_everything": "Erasing all memory",
+    "notify_desktop": "Showing a notification",
+    "rag_status": "Checking your documents",
+    "recall": "Recalling memory",
+    "remember": "Saving to memory",
+    "remember_skill_lesson": "Saving a lesson for a skill",
+    "reset_shell_session": "Resetting the terminal",
+    "get_shell_state": "Checking the terminal",
+    "sign_in_cli": "Signing in to a tool",
+    "skill_status": "Checking skills",
+    "sleep": "Waiting",
+    "take_screenshot": "Taking a screenshot",
+    "text_to_speech": "Reading aloud",
+    "unload_skill": "Putting away skill",
+    "wait_for_condition": "Waiting for a condition",
 }
 
 #: Substrings marking a tool that shells out. The narration for these MUST
 #: carry the actual command — "Running a shell command" tells a user nothing
 #: about whether the agent is about to ``ls`` or ``rm -rf``.
 _SHELL_TOOL_MARKERS = ("shell", "bash", "terminal", "subprocess", "run_command")
+
+#: Tools whose argument is a long path where only the file's name says anything.
+_FILE_NAME_TOOLS = frozenset(
+    {
+        "transcribe_media",
+        "refine_transcript",
+        "analyze_transcript",
+        "export_transcript",
+    }
+)
 
 _WHITESPACE_RUN = re.compile(r"\s+")
 
@@ -264,13 +317,16 @@ def derive_narration(tool: str, args: Optional[Mapping[str, Any]] = None) -> str
         args = {}
 
     detail = _salient_arg(args)
+    if detail and name in _FILE_NAME_TOOLS and "://" not in detail:
+        detail = PureWindowsPath(detail).name or detail
 
+    override = _NARRATION_OVERRIDES.get(name)
     # A shell tool without its command is worse than useless — it hides the one
     # thing the user needs to see. Say so rather than narrating a bare verb.
-    if _is_shell_tool(name):
+    if override is None and _is_shell_tool(name):
         return f"Running command: {detail}" if detail else "Running a shell command"
 
-    base = _NARRATION_OVERRIDES.get(name) or _humanize_tool(name)
+    base = override or _humanize_tool(name)
     return f"{base}: {detail}" if detail else base
 
 
@@ -338,7 +394,7 @@ def _format_bytes(size: int) -> str:
 
 
 def _error_text(payload: Mapping[str, Any]) -> str:
-    for key in ("error", "message", "detail", "display_message", "summary"):
+    for key in ("display_message", "error", "message", "detail", "summary"):
         value = payload.get(key)
         if _is_scalar(value) and _collapse(value):
             return _collapse(value)

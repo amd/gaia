@@ -10,28 +10,52 @@
  *   GET  /index.json                           lightweight catalog (all lanes)
  *   GET  /agents/<id>/manifest.json            per-agent aggregate manifest
  *   GET  /agents/<id>/<version>/<filename>     artifact / raw manifest download
+ *                                              (agents/tui/ and agents/terminal-hub/
+ *                                              resolve each other's objects)
  *   GET  /skills/<name>/manifest.json          per-skill aggregate manifest
  *   GET  /skills/<name>/<version>/<filename>   skill bundle / SKILL.md download
  *   POST /reindex                              rebuild index.json from R2 (auth)
  *   GET  /health                               liveness probe
  */
 
-import { rebuildIndex } from "./catalog";
+import { readResolvedAgentManifest, rebuildIndex } from "./catalog";
 import { errorResponse, HttpError, json } from "./http";
 import { handlePublish } from "./publish";
 import { handleSkillPublish } from "./skill-publish";
-import { AGENTS_PREFIX, INDEX_KEY, SKILLS_PREFIX } from "./storage";
+import { AGENTS_PREFIX, aliasOf, INDEX_KEY, SKILLS_PREFIX } from "./storage";
 import type { Env } from "./types";
 
-async function serveObject(bucket: R2Bucket, key: string): Promise<Response> {
-  const obj = await bucket.get(key);
+/** Serve the first of `keys` that exists; 404 names the first (the one requested). */
+async function serveObject(bucket: R2Bucket, ...keys: string[]): Promise<Response> {
+  let obj: R2ObjectBody | null = null;
+  for (const key of keys) {
+    obj = await bucket.get(key);
+    if (obj) break;
+  }
   if (!obj) {
-    throw new HttpError(404, "not_found", `Object not found: ${key}.`);
+    throw new HttpError(404, "not_found", `Object not found: ${keys[0]}.`);
   }
   const headers = new Headers();
   obj.writeHttpMetadata(headers);
   headers.set("etag", obj.httpEtag);
   return new Response(obj.body, { headers });
+}
+
+/**
+ * Serve `agents/<id>/...`. An id in an alias pair reads as one package: its
+ * manifest is the merged view, and any other object falls back to the alias.
+ */
+async function serveAgentObject(bucket: R2Bucket, key: string): Promise<Response> {
+  const [, id, ...rest] = key.split("/");
+  const alias = aliasOf(id);
+  if (!alias) return serveObject(bucket, key);
+  const tail = rest.join("/");
+  if (tail === "manifest.json") {
+    const manifest = await readResolvedAgentManifest(bucket, id);
+    if (!manifest) throw new HttpError(404, "not_found", `Object not found: ${key}.`);
+    return json(manifest);
+  }
+  return serveObject(bucket, key, `${AGENTS_PREFIX}${alias}/${tail}`);
 }
 
 async function route(request: Request, env: Env): Promise<Response> {
@@ -95,6 +119,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (!key.startsWith(prefix) || key.includes("..")) {
         throw new HttpError(400, "invalid_path", `Invalid object path: ${path}.`);
       }
+      if (prefix === AGENTS_PREFIX) return serveAgentObject(env.BUCKET, key);
       return serveObject(env.BUCKET, key);
     }
   }

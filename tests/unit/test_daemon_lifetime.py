@@ -121,6 +121,85 @@ def test_home_is_checked_before_the_tied_pid(daemon_home, dead_pid):
     assert str(daemon_home) in reason
 
 
+# -- GAIA_APP_PATH: the desktop app that started the daemon (#6682) -------------
+
+
+@pytest.fixture()
+def app_file(tmp_path):
+    app = tmp_path / "GAIA.AppImage"
+    app.write_text("app", encoding="utf-8")
+    return app
+
+
+@pytest.fixture()
+def app_bundle(tmp_path):
+    exe = tmp_path / "Applications" / "GAIA.app" / "Contents" / "MacOS" / "GAIA"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("app", encoding="utf-8")
+    return exe
+
+
+@pytest.mark.parametrize("raw", [None, "", "   "])
+def test_app_path_unset_means_no_tie(monkeypatch, raw):
+    if raw is None:
+        monkeypatch.delenv(lifetime.APP_PATH_ENV, raising=False)
+    else:
+        monkeypatch.setenv(lifetime.APP_PATH_ENV, raw)
+    assert lifetime.app_path_from_env() is None
+
+
+def test_app_path_reads_an_existing_app(monkeypatch, app_file):
+    monkeypatch.setenv(lifetime.APP_PATH_ENV, f" {app_file} ")
+    assert lifetime.app_path_from_env() == str(app_file)
+
+
+def test_a_relative_app_path_is_refused(monkeypatch, app_file):
+    monkeypatch.chdir(app_file.parent)
+    monkeypatch.setenv(lifetime.APP_PATH_ENV, app_file.name)
+    with pytest.raises(DaemonStartError, match=lifetime.APP_PATH_ENV):
+        lifetime.app_path_from_env()
+
+
+def test_an_app_already_removed_at_start_is_refused_loudly(monkeypatch, tmp_path):
+    missing = tmp_path / "Trash" / "GAIA.AppImage"
+    monkeypatch.setenv(lifetime.APP_PATH_ENV, str(missing))
+    with pytest.raises(DaemonStartError) as err:
+        lifetime.app_path_from_env()
+    assert str(missing) in str(err.value)
+    assert lifetime.APP_PATH_ENV in str(err.value)
+
+
+def test_no_reason_while_the_app_is_installed(registered, app_file):
+    assert lifetime.exit_reason(app_path=str(app_file)) is None
+
+
+def test_reason_when_the_appimage_is_deleted(registered, app_file):
+    app_file.unlink()
+    reason = lifetime.exit_reason(app_path=str(app_file))
+    assert reason is not None and str(app_file) in reason
+
+
+def test_reason_when_the_mac_app_is_moved_to_the_trash(registered, app_bundle):
+    bundle = app_bundle.parents[2]
+    trash = bundle.parent.parent / ".Trash"
+    trash.mkdir()
+    shutil.move(str(bundle), str(trash / bundle.name))
+    reason = lifetime.exit_reason(app_path=str(app_bundle))
+    assert reason is not None and str(app_bundle) in reason
+
+
+def test_a_replaced_app_at_the_same_path_keeps_the_daemon(registered, app_file):
+    # An in-place upgrade writes the new app where the old one was.
+    app_file.unlink()
+    app_file.write_text("new app", encoding="utf-8")
+    assert lifetime.exit_reason(app_path=str(app_file)) is None
+
+
+def test_home_is_checked_before_the_app(daemon_home, tmp_path):
+    reason = lifetime.exit_reason(app_path=str(tmp_path / "gone"))
+    assert str(daemon_home) in reason
+
+
 # -- LifetimeWatch ---------------------------------------------------------------
 
 
@@ -184,6 +263,26 @@ def test_watch_exits_when_the_tied_process_exits(registered):
         watch.stop()
         if proc.poll() is None:
             proc.kill()
+
+
+def test_watch_exits_when_the_app_is_removed(registered, app_file):
+    fired = threading.Event()
+    calls = []
+
+    def on_exit(reason):
+        calls.append(reason)
+        fired.set()
+
+    watch = _watch(on_exit, app_path=str(app_file))
+    watch.start()
+    try:
+        threading.Event().wait(0.1)
+        assert not fired.is_set()
+        app_file.unlink()
+        assert fired.wait(5), "the watch never noticed the app was removed"
+    finally:
+        watch.stop()
+    assert len(calls) == 1 and str(app_file) in calls[0]
 
 
 def test_watch_stop_is_safe_before_start_and_twice():

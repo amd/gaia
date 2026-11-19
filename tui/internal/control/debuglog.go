@@ -100,6 +100,12 @@ func logf(format string, args ...any) {
 		fmt.Sprintf(format, args...))
 }
 
+// DevLogf records one --dev diagnostic from the interactive TUI, which has the
+// same reason as this package to keep off stderr.
+func DevLogf(format string, args ...any) {
+	logf("[DEBUG] "+format, args...)
+}
+
 // CloseLog releases the session log. Optional — the OS closes it at exit — but
 // it lets a test reopen a fresh file under a new GAIA_TUI_HOME.
 func CloseLog() {

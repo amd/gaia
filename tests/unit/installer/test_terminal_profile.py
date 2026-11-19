@@ -62,7 +62,7 @@ def test_fragment_template_is_ascii():
 def test_rendered_fragment_is_valid_and_points_at_the_install(install_dir):
     fragment = _render(install_dir)
     (profile,) = fragment["profiles"]
-    assert profile["commandline"] == f'"{install_dir}\\gaia-tui.exe"'
+    assert profile["commandline"] == f'"{install_dir}\\gaia-cli.exe"'
     assert profile["icon"] == f"{install_dir}\\gaia.ico"
 
 

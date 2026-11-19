@@ -667,6 +667,23 @@ class TestReadingActivity:
         owner = EmbeddedLemonadeOwner(factory=lambda: embedded, owner_pid=1)
         assert owner.activity().busy is True
 
+    def test_a_stopped_server_is_not_busy(self, tmp_path, monkeypatch):
+        """Read as busy, it kept an outdated daemon from being replaced."""
+        import psutil
+
+        from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+        embedded = EmbeddedLemonade(home=tmp_path)
+        embedded._write_state({"pid": 1, "port": 4321, "api_key": "k"})
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda self, port, key: None)
+
+        def gone(pid):
+            raise psutil.NoSuchProcess(pid)
+
+        monkeypatch.setattr(psutil, "Process", gone)
+        owner = EmbeddedLemonadeOwner(factory=lambda: embedded, owner_pid=1)
+        assert owner.activity() is None
+
     def test_a_configured_server_is_never_read(self, monkeypatch):
         monkeypatch.setenv("LEMONADE_BASE_URL", "http://localhost:13305")
         factory = mock.Mock()

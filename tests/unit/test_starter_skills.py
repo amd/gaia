@@ -9,13 +9,13 @@ Phase 1 contract, declare only permissions this phase can honor, and name only
 tools that actually exist in the registry. A skill that parses but cannot run is
 worse than a missing one.
 
-Every test that can be parametrized iterates the hub's skills lane
-(``hub/skills/``) rather than a hardcoded list, so a newly added skill is covered
-automatically. The lane is currently the starter pack exactly, so these guards
-apply to all of it — including
-:func:`test_starter_skill_declares_starter_pack_provenance`. A skill added to the
-lane from some other source needs that assertion narrowed first; it will fail
-loudly rather than skip.
+Every generic guard iterates the hub's skills lane (``hub/skills/``) rather than
+a hardcoded list, so a newly added skill — AMD's or a contributor's — is covered
+automatically. Only the guards about AMD's own pack (starter-pack provenance and
+the MIT license) are scoped to :data:`STARTER_PACK`, an explicit list rather than
+"skills that declare provenance": a starter skill that lost its provenance block
+would otherwise drop out of the check instead of failing it, and an outside skill
+cannot claim the pack just by adding the block.
 
 All roots are ``tmp_path``-scoped and every CLI subprocess runs with ``HOME``
 and ``GAIA_CONFIG_DIR`` redirected, so nothing here reads or writes the
@@ -48,6 +48,39 @@ STARTER_ROOT = REPO_ROOT / "hub" / "skills"
 #: Marks every skill in the pack, so consumers can group them (issue #893).
 PROVENANCE_SOURCE = "starter-pack"
 
+#: AMD's starter pack. Adding a skill to the pack means adding it here.
+STARTER_PACK = frozenset(
+    {
+        "analyze-recording",
+        "automations",
+        "browser-pane",
+        "calculators",
+        "calendar",
+        "check-in",
+        "coding",
+        "daily-brief",
+        "data-explore",
+        "document-brief",
+        "file-ops",
+        "github-triage",
+        "guides",
+        "image-gen",
+        "inbox-triage",
+        "log-triage",
+        "meeting-actions",
+        "music-gen",
+        "price-watch",
+        "recommendations",
+        "report-from-sources",
+        "research-report",
+        "rss-digest",
+        "send-email",
+        "source-watch",
+        "summarize",
+        "transcribe-meeting",
+    }
+)
+
 
 def _starter_dirs() -> list[Path]:
     """Every skill directory in the pack, sorted."""
@@ -59,6 +92,7 @@ def _ids(paths: list[Path]) -> list[str]:
 
 
 STARTER_DIRS = _starter_dirs()
+PACK_DIRS = [d for d in STARTER_DIRS if d.name in STARTER_PACK]
 
 
 def test_the_starter_pack_is_not_empty():
@@ -87,23 +121,39 @@ def test_starter_skill_round_trips_byte_identical(skill_dir: Path):
     assert parse_skill(skill.to_markdown()) == skill
 
 
+def test_every_starter_pack_skill_is_in_the_lane():
+    """A pack name with no directory would leave its pack checks silently unrun."""
+    missing = sorted(STARTER_PACK - {d.name for d in STARTER_DIRS})
+    assert not missing, f"STARTER_PACK names skills not in {STARTER_ROOT}: {missing}"
+
+
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
-def test_starter_skill_declares_starter_pack_provenance(skill_dir: Path):
-    """Every skill is attributable to the pack (issue #893)."""
+def test_skill_provenance_matches_the_starter_pack_list(skill_dir: Path):
+    """Pack skills are attributable to it (issue #893); no other skill claims it."""
     skill = parse_skill_file(skill_dir)
-    provenance = skill.gaia.extra.get("provenance")
+    provenance = skill.gaia.extra.get("provenance") or {}
 
-    assert provenance is not None, f"{skill.name} is missing metadata.gaia.provenance"
-    assert provenance.get("source") == PROVENANCE_SOURCE
+    if skill_dir.name in STARTER_PACK:
+        assert provenance, f"{skill.name} is missing metadata.gaia.provenance"
+        assert provenance.get("source") == PROVENANCE_SOURCE
+    else:
+        assert provenance.get("source") != PROVENANCE_SOURCE, (
+            f"{skill.name} claims provenance.source {PROVENANCE_SOURCE!r} but is "
+            "not in STARTER_PACK; drop the claim (only AMD's pack carries it)"
+        )
 
 
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
-def test_starter_skill_is_publishable(skill_dir: Path):
-    """Versioned and MIT-licensed — the repo's publishing floor."""
+def test_skill_has_a_publishable_version(skill_dir: Path):
+    """Release publishing refuses a missing or ``0.0.0`` version."""
     skill = parse_skill_file(skill_dir)
 
     assert skill.version and skill.version != "0.0.0"
-    assert skill.license == "MIT"
+
+
+@pytest.mark.parametrize("skill_dir", PACK_DIRS, ids=_ids(PACK_DIRS))
+def test_starter_pack_skill_is_mit_licensed(skill_dir: Path):
+    assert parse_skill_file(skill_dir).license == "MIT"
 
 
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
@@ -151,6 +201,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
     """
     from gaia.agents.base.memory import MemoryMixin
     from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.agents.tools.audio_generation_tools import AudioGenerationToolsMixin
     from gaia.agents.tools.audio_tools import AudioToolsMixin
     from gaia.agents.tools.browser_tools import BrowserToolsMixin
     from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
@@ -205,6 +256,11 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
         SDToolsMixin.init_sd(
             _Stub(), output_dir=str(tmp_path_factory.mktemp("sd-images"))
         )
+        # Like SDToolsMixin, audio registers through an initializer. This only
+        # creates a temporary directory; no Lemonade request is issued.
+        AudioGenerationToolsMixin.init_audio_generation(
+            _Stub(), output_dir=str(tmp_path_factory.mktemp("audio-generations"))
+        )
         names = frozenset(_TOOL_REGISTRY)
     finally:
         _TOOL_REGISTRY.clear()
@@ -225,11 +281,11 @@ def _chat_agent_inline_tools() -> frozenset[str]:
     every non-``chat`` profile runs, so a skill that has to ask the user a
     question before acting can legitimately declare it.
     """
-    # Ships with the standalone gaia-agent-chat wheel, which the core-only test
+    # Ships with the flagship gaia-agent-gaia wheel, which the core-only test
     # job does not install; skip rather than judge the list against nothing.
-    gaia_agent_chat = pytest.importorskip("gaia_agent_chat")
+    gaia_agent = pytest.importorskip("gaia_agent")
 
-    source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
+    source = (Path(gaia_agent.__file__).parent / "chat_agent.py").read_text(
         encoding="utf-8"
     )
     inline = {"execute_python_file", "run_python", "list_files", "request_user_input"}
@@ -246,6 +302,9 @@ def test_registry_fixture_actually_registered_something(registry_tool_names):
         # SD registers via init_sd, not a register_* method — if that call
         # starts failing quietly, image-gen's honesty check goes vacuous.
         "generate_image",
+        "list_audio_generation_models",
+        "generate_music",
+        "generate_sound_effect",
     } <= registry_tool_names
 
 
@@ -266,6 +325,17 @@ def test_starter_skill_tools_required_are_real_tools(
         f"{skill.name} declares tools_required that no mixin registers: "
         f"{', '.join(unknown)}"
     )
+
+
+def test_no_two_starter_skills_claim_the_same_loads_with_tool():
+    """A tool that loads a skill must say which one; shared, it can't."""
+    claims: dict[str, list[str]] = {}
+    for skill_dir in STARTER_DIRS:
+        for tool in parse_skill_file(skill_dir).gaia.loads_with:
+            claims.setdefault(tool, []).append(skill_dir.name)
+
+    shared = {tool: names for tool, names in claims.items() if len(names) > 1}
+    assert not shared, f"loads_with tools claimed by more than one skill: {shared}"
 
 
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
@@ -330,6 +400,46 @@ def test_starter_skill_uses_only_real_memory_categories(skill_dir: Path):
     assert not unknown, (
         f"{skill.name} passes category={unknown} to a memory tool, but the "
         f"store only accepts {sorted(VALID_CATEGORIES)}"
+    )
+
+
+_START_LINE_ARG = re.compile(r"\bstart_line\s*=\s*([^,)]+)")
+_START_LINE_MINUS = re.compile(r"\w\s*-\s*\w")
+
+
+def _unclamped_start_lines(text: str) -> list:
+    """``start_line=`` values that subtract without a ``max(1, ...)`` floor."""
+    return [
+        arg.strip()
+        for arg in _START_LINE_ARG.findall(text)
+        if _START_LINE_MINUS.search(arg) and not arg.strip().startswith("max(1")
+    ]
+
+
+@pytest.mark.parametrize(
+    "text, flagged",
+    [
+        ("read_file(p, start_line=line - 30, end_line=line + 10)", ["line - 30"]),
+        ("read_file(p, start_line=n-5)", ["n-5"]),
+        ("read_file(p, start_line=max(1, line - 30), end_line=line)", []),
+        ("read_file(p, start_line=1, end_line=40)", []),
+        ("read_file(p, start_line=line, end_line=line + 10)", []),
+        ("start_line is 1-based", []),
+    ],
+)
+def test_unclamped_start_line_detector(text: str, flagged: list):
+    assert _unclamped_start_lines(text) == flagged
+
+
+@pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
+def test_starter_skill_read_window_never_starts_below_line_one(skill_dir: Path):
+    """``read_file`` rejects ``start_line`` below 1, so ``line - N`` needs a floor."""
+    skill = parse_skill_file(skill_dir)
+    bad = _unclamped_start_lines(skill.body)
+
+    assert not bad, (
+        f"{skill.name} computes start_line={bad} with no max(1, ...) floor; "
+        "near the top of a file that asks read_file for line 0 or lower"
     )
 
 
@@ -424,6 +534,7 @@ def test_starter_skill_loads_into_an_agent(pack_manager: SkillManager):
         _pin_skill_body = Agent._pin_skill_body
         load_skill = Agent.load_skill
         unload_skill = Agent.unload_skill
+        _drop_skill_tools = Agent._drop_skill_tools
         get_skills_system_prompt = Agent.get_skills_system_prompt
 
         def rebuild_system_prompt(self):
@@ -640,6 +751,207 @@ def test_fetch_rss_accepts_a_feed_whose_content_embeds_a_doctype(description: by
     assert result["count"] == 1
 
 
+# ----------------------------------------------------------------------
+# price-watch step order
+#
+# A pre-fetch save fired on plain re-checks and, once refused, displaced the
+# report; a fetch on "watch this at $X" overwrote the user's baseline.
+# ----------------------------------------------------------------------
+
+
+def _price_watch_paths() -> tuple[str, str]:
+    body = parse_skill_file(STARTER_ROOT / "price-watch").body
+    watch = re.search(r"^### Watch\b(.+?)(?=^### |^## )", body, re.M | re.S)
+    check = re.search(r"^### Check\b(.+?)(?=^### |^## )", body, re.M | re.S)
+    assert watch and check, "price-watch lost its Watch / Check sections"
+    return watch.group(1), check.group(1)
+
+
+def test_price_watch_watch_path_saves_the_stated_price_without_fetching():
+    watch, _ = _price_watch_paths()
+
+    assert "remember(" in watch
+    assert "stated by the user" in watch
+    assert "fetch_page(" not in watch, "a watch turn must not fetch the page"
+    assert re.search(r"Do \*\*not\*\* fetch", watch)
+    assert "Never save a price the user did not state" in watch
+
+
+def test_price_watch_check_path_fetches_then_reports_then_saves():
+    _, check = _price_watch_paths()
+    steps = re.findall(r"^(\d+)\. \*\*(.+?)\*\*", check, re.M)
+    titles = [title.lower() for _, title in steps]
+
+    assert [int(n) for n, _ in steps] == list(range(1, len(steps) + 1))
+    order = [
+        next(i for i, t in enumerate(titles) if key in t)
+        for key in ("recall", "fetch", "extract", "report", "update")
+    ]
+    assert order == sorted(order), f"check steps out of order: {titles}"
+
+    assert check.index("recall(") < check.index("fetch_page(")
+    assert check.index("fetch_page(") < check.index("remember(")
+    assert check.count("remember(") == 1, "the check path writes memory once"
+
+
+def test_price_watch_saves_on_a_check_only_for_a_new_low():
+    _, check = _price_watch_paths()
+    update = check[check.index("**Update the low") :]
+
+    assert "only if it is lower" in update
+    assert "Record every observation" not in check
+
+
+def test_price_watch_first_check_with_no_history_builds_a_baseline():
+    """A watch with no stated price must still record something to compare to."""
+    _, check = _price_watch_paths()
+    update = check[check.index("**Update the low") :]
+    title = update.splitlines()[0]
+
+    assert "or if no price is recorded yet" in title
+    assert "no history" in update and "baseline" in update
+
+    guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    section = guide[guide.index("### price-watch") :]
+    section = section[: section.index("\n### ")]
+    assert "no price is recorded yet" in " ".join(section.split())
+
+
+def test_price_watch_a_refused_save_never_replaces_the_report():
+    body = parse_skill_file(STARTER_ROOT / "price-watch").body
+
+    assert "never replaces the report" in body
+    assert "Give the report\nanyway" in body or "Give the report anyway" in body
+    assert "not saved" in body
+
+
+@pytest.mark.parametrize(
+    "stale_rule",
+    [
+        "before anything else",
+        "before** you fetch",
+        "before you fetch",
+        "even if they have not asked you to check",
+    ],
+)
+def test_price_watch_has_no_unconditional_pre_fetch_save(stale_rule: str):
+    body = parse_skill_file(STARTER_ROOT / "price-watch").body
+    assert stale_rule not in body
+
+
+# ----------------------------------------------------------------------
+# source-watch step order
+#
+# Its record step saved page text memory refuses unasked, so nothing was
+# recalled and an unchanged page was re-listed as news.
+# ----------------------------------------------------------------------
+
+
+def _source_watch_steps() -> tuple[str, list[str], dict[str, str]]:
+    body = parse_skill_file(STARTER_ROOT / "source-watch").body
+    procedure = re.search(r"^## Procedure\b(.+?)(?=^## )", body, re.M | re.S)
+    assert procedure, "source-watch lost its Procedure section"
+    text = procedure.group(1)
+    starts = list(re.finditer(r"^(\d+)\. \*\*(.+?)\*\*", text, re.M | re.S))
+    titles = [" ".join(m.group(2).split()).lower() for m in starts]
+    assert [int(m.group(1)) for m in starts] == list(range(1, len(starts) + 1))
+    steps = {}
+    for i, m in enumerate(starts):
+        end = starts[i + 1].start() if i + 1 < len(starts) else len(text)
+        steps[titles[i]] = " ".join(text[m.start() : end].split())
+    return text, titles, steps
+
+
+def _step(steps: dict[str, str], key: str) -> str:
+    return next(body for title, body in steps.items() if key in title)
+
+
+def test_source_watch_recalls_fetches_reports_then_saves():
+    text, titles, _ = _source_watch_steps()
+    order = [
+        next(i for i, t in enumerate(titles) if key in t)
+        for key in ("recall what", "fetch", "extract", "match", "report or", "record")
+    ]
+
+    assert order == sorted(order), f"steps out of order: {titles}"
+    assert text.index("recall(") < text.index("fetch_page(")
+    assert text.index("fetch_page(") < text.index("remember(")
+    assert text.count("remember(") == 1, "the procedure writes memory once"
+    assert "Report before any memory write" in " ".join(text.split())
+
+
+def test_source_watch_counts_this_conversations_reports_as_seen():
+    """Memory can hold nothing; a re-check in the same chat must still dedupe."""
+    _, _, steps = _source_watch_steps()
+    recall = _step(steps, "recall what")
+
+    assert "earlier in this conversation" in recall
+    assert "even when memory holds nothing" in recall
+    assert '"nothing new"' in _step(steps, "report or")
+
+
+def test_source_watch_saves_only_identifiers_and_only_when_asked():
+    _, _, steps = _source_watch_steps()
+    record = _step(steps, "record")
+    call = re.search(r"remember\(fact=\"([^\"]+)\"", record)
+
+    assert "only if the user asked you to remember or keep track" in record
+    assert '"watch" or "check" alone is not that ask' in record
+    assert call and call.group(1) == "<memory key>: <identifier>"
+    assert "summary" not in call.group(1)
+
+
+def test_source_watch_never_asks_for_the_memory_key_up_front():
+    """A plain check uses no key; asking for one stalls the first fetch."""
+    body = parse_skill_file(STARTER_ROOT / "source-watch").body
+    configure = body[body.index("## Configure") : body.index("## Procedure")]
+    key_row = next(line for line in configure.splitlines() if "Memory key" in line)
+
+    assert "ask for any that are missing" not in configure
+    assert "Never ask for the memory key" in configure
+    assert "Optional" in key_row and "keep track" in key_row
+
+    guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    section = guide[guide.index("### source-watch") :]
+    section = " ".join(section[: section.index("\n### ")].split())
+    assert "A memory key is optional" in section
+
+
+def test_source_watch_a_refused_save_never_replaces_the_report():
+    body = " ".join(parse_skill_file(STARTER_ROOT / "source-watch").body.split())
+
+    assert "never replaces the report" in body
+    assert "Give the report anyway" in body
+    assert "not saved" in body
+    assert "Do not retry the save or stop to ask about it" in body
+
+
+@pytest.mark.parametrize(
+    "stale_rule",
+    ["<one-line summary>", 'say "no new matches"', "Step 1 and step 6 need memory"],
+)
+def test_source_watch_drops_the_unconditional_summary_save(stale_rule: str):
+    body = parse_skill_file(STARTER_ROOT / "source-watch").body
+    assert stale_rule not in body
+
+
+def test_source_watch_guide_matches_the_skill():
+    guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    section = guide[guide.index("### source-watch") :]
+    section = " ".join(section[: section.index("\n### ")].split())
+
+    assert "same conversation count as seen" in section
+    assert "before any memory write" in section
+    assert "never replaces the report" in section
+    assert "suppress anything already reported via memory" not in section
+
+
 def test_the_guide_consumes_lists_match_the_manifests():
     """The guide names each skill's tools; drift makes it quietly wrong."""
     guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
@@ -671,13 +983,13 @@ def test_daily_brief_and_guide_do_not_underclaim_tts_or_scheduling():
     """#4252: daily-brief and the guide once said TTS doesn't exist — it does.
 
     ``text_to_speech`` is a real, always-registered ChatAgent tool
-    (``gaia_agent_chat/agent.py``), so a doc listing it as a missing capability
+    (``gaia_agent/chat_agent.py``), so a doc listing it as a missing capability
     tells the model to under-promise. Skill-aware scheduling genuinely is still
     missing (``gaia schedule add --skill`` is rejected, #1019), so that claim
     must stay.
     """
-    gaia_agent_chat = pytest.importorskip("gaia_agent_chat")
-    source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
+    gaia_agent = pytest.importorskip("gaia_agent")
+    source = (Path(gaia_agent.__file__).parent / "chat_agent.py").read_text(
         encoding="utf-8"
     )
     assert "def text_to_speech(" in source
@@ -714,7 +1026,7 @@ def test_the_guides_run_a_skill_snippet_still_type_checks():
     followed by ``process_query``. Renaming any of those would leave the guide
     quietly wrong, which is worse than no guide at all.
     """
-    chat_agent = pytest.importorskip("gaia_agent_chat.agent")
+    chat_agent = pytest.importorskip("gaia_agent.chat_agent")
 
     assert hasattr(chat_agent.ChatAgent, "load_skill")
     assert hasattr(chat_agent.ChatAgent, "unload_skill")
@@ -726,6 +1038,70 @@ def test_the_guides_run_a_skill_snippet_still_type_checks():
     # The guide claims the default profile is the one that registers the web,
     # RAG, scratchpad, and memory tools these skills consume.
     assert chat_agent.ChatAgentConfig().prompt_profile == "full"
+
+
+# ----------------------------------------------------------------------
+# An outside skill — the building-skills guide's example — clears the
+# generic guards, so the guide's "run this test" step is passable.
+# ----------------------------------------------------------------------
+
+_GUIDE_EXAMPLE = re.compile(
+    r"```yaml\n(---\nname: csv-quality-report\n.*?)```", re.DOTALL
+)
+
+
+@pytest.fixture
+def guide_example_skill(tmp_path: Path) -> Path:
+    guide = (REPO_ROOT / "docs" / "guides" / "building-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    match = _GUIDE_EXAMPLE.search(guide)
+    assert match, "building-skills.mdx no longer shows the csv-quality-report SKILL.md"
+    skill_dir = tmp_path / "csv-quality-report"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(match.group(1), encoding="utf-8")
+    return skill_dir
+
+
+def test_an_outside_skill_passes_the_generic_guards(guide_example_skill: Path):
+    assert guide_example_skill.name not in STARTER_PACK
+    for check in (
+        test_starter_skill_parses_and_validates,
+        test_starter_skill_round_trips_byte_identical,
+        test_skill_provenance_matches_the_starter_pack_list,
+        test_skill_has_a_publishable_version,
+        test_starter_skill_declares_no_refused_permission,
+        test_starter_skill_permissions_resolve_against_the_real_catalog,
+        test_starter_skill_with_a_shell_grant_declares_run_shell_command,
+        test_starter_skill_body_mentions_the_tools_it_declares,
+        test_starter_skill_uses_only_real_memory_categories,
+        test_starter_skill_scratchpad_sql_uses_the_table_prefix,
+    ):
+        check(guide_example_skill)
+
+
+def test_an_outside_skill_names_only_real_tools(
+    guide_example_skill: Path, registry_tool_names
+):
+    test_starter_skill_tools_required_are_real_tools(
+        guide_example_skill, registry_tool_names
+    )
+
+
+def test_an_outside_skill_cannot_claim_the_starter_pack(guide_example_skill: Path):
+    manifest = guide_example_skill / "SKILL.md"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            "  gaia:\n",
+            "  gaia:\n    provenance:\n      source: starter-pack\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    assert parse_skill_file(guide_example_skill).gaia.extra["provenance"]
+
+    with pytest.raises(AssertionError, match="not in STARTER_PACK"):
+        test_skill_provenance_matches_the_starter_pack_list(guide_example_skill)
 
 
 # ----------------------------------------------------------------------
@@ -782,8 +1158,7 @@ def test_a_fork_that_forgets_to_rename_is_rejected(tmp_path: Path):
 # ----------------------------------------------------------------------
 
 
-def _gaia(*args: str, home: Path) -> subprocess.CompletedProcess:
-    """Run ``gaia <args>`` with every skill root redirected into ``home``."""
+def _cli_env(home: Path) -> dict:
     env = {
         "HOME": str(home),
         "USERPROFILE": str(home),
@@ -797,16 +1172,72 @@ def _gaia(*args: str, home: Path) -> subprocess.CompletedProcess:
     for name in ("SystemRoot", "SystemDrive"):
         if name in os.environ:
             env[name] = os.environ[name]
+    return env
+
+
+def _gaia(*args: str, home: Path) -> subprocess.CompletedProcess:
+    """Run ``gaia <args>`` with every skill root redirected into ``home``."""
     return subprocess.run(
         [sys.executable, "-m", "gaia.cli", *args],
         capture_output=True,
         encoding="utf-8",
         errors="replace",
         cwd=home,
-        env=env,
+        env=_cli_env(home),
         timeout=180,
         check=False,
     )
+
+
+# Runs each argv through the real ``gaia.cli.main`` in one interpreter, so a
+# long command list pays the CLI's multi-second cold import once, not per call.
+_BATCH_DRIVER = """
+import contextlib, io, json, sys
+from gaia.cli import main
+
+commands_path, results_path = sys.argv[1:]
+with open(commands_path, encoding="utf-8") as f:
+    commands = json.load(f)
+results = []
+for argv in commands:
+    out, err = io.StringIO(), io.StringIO()
+    sys.argv = ["gaia", *argv]
+    code = 0
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            main()
+        except SystemExit as exc:
+            code = exc.code if isinstance(exc.code, int) else int(exc.code is not None)
+    results.append({"returncode": code, "stdout": out.getvalue(), "stderr": err.getvalue()})
+with open(results_path, "w", encoding="utf-8") as f:
+    json.dump(results, f)
+"""
+
+
+def _gaia_batch(
+    commands: list[list[str]], home: Path
+) -> list[subprocess.CompletedProcess]:
+    """Run several ``gaia`` commands in order, in one fresh interpreter."""
+    commands_path = home.parent / "batch-commands.json"
+    results_path = home.parent / "batch-results.json"
+    commands_path.write_text(json.dumps(commands), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-c", _BATCH_DRIVER, str(commands_path), str(results_path)],
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=home,
+        env=_cli_env(home),
+        timeout=180,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    results = json.loads(results_path.read_text(encoding="utf-8"))
+    assert len(results) == len(commands), proc.stderr
+    return [
+        subprocess.CompletedProcess(argv, r["returncode"], r["stdout"], r["stderr"])
+        for argv, r in zip(commands, results)
+    ]
 
 
 @pytest.fixture
@@ -865,6 +1296,23 @@ def _within_experimental_ceiling(skill_dir: Path) -> bool:
     return True
 
 
+def test_batched_cli_keeps_each_commands_own_exit_code_and_stderr(cli_home: Path):
+    """Batching must not let one command's failure pass, or leak into the next."""
+    missing = str(cli_home / "no-such-skill")
+    alone = _gaia("skill", "import", missing, home=cli_home)
+
+    failed, listed = _gaia_batch(
+        [["skill", "import", missing], ["skill", "list", "--json"]], home=cli_home
+    )
+
+    assert alone.returncode != 0
+    assert failed.returncode == alone.returncode
+    assert "no-such-skill" in failed.stderr
+    assert listed.returncode == 0, listed.stderr
+    assert "no-such-skill" not in listed.stderr
+    assert json.loads(listed.stdout)["skills"] == []
+
+
 def test_cli_imports_every_starter_skill(cli_home: Path):
     """Every pack skill imports, except those asking for more than 'experimental'.
 
@@ -874,10 +1322,11 @@ def test_cli_imports_every_starter_skill(cli_home: Path):
     importable = {d.name for d in STARTER_DIRS if _within_experimental_ceiling(d)}
     assert importable and importable != {d.name for d in STARTER_DIRS}
 
-    for skill_dir in STARTER_DIRS:
-        result = _gaia(
-            "skill", "import", str(skill_dir), "--allow-experimental", home=cli_home
-        )
+    results = _gaia_batch(
+        [["skill", "import", str(d), "--allow-experimental"] for d in STARTER_DIRS],
+        home=cli_home,
+    )
+    for skill_dir, result in zip(STARTER_DIRS, results):
         if skill_dir.name in importable:
             assert result.returncode == 0, f"{skill_dir.name}: {result.stderr}"
         else:

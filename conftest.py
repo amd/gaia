@@ -67,7 +67,7 @@ _SOURCE_ROOTS = _source_roots()
 #: Modules whose origin proves which checkout is under test. The hub agents are
 #: listed too: they are separately editable-installed, so ``gaia`` can resolve
 #: here while ``gaia_agent`` quietly comes from another worktree.
-_ANCHOR_MODULES = ("gaia", "gaia_agent", "gaia_agent_chat")
+_ANCHOR_MODULES = ("gaia", "gaia_agent")
 
 
 def _prepend_source_roots() -> None:
@@ -126,6 +126,8 @@ _STATE_ENV = {
     "GAIA_MEMORY_DB": ("memory", "memory.db"),
     # Cloud calls record model availability here.
     "GAIA_GATEWAY_FILE": ("gateway", "gateway.json"),
+    # The network policy: a developer's own "Local only" must not change results.
+    "GAIA_POLICY_FILE": ("policy", "policy.json"),
     # The stdio agent writes each session's chat history under it.
     "GAIA_TUI_HOME": ("tui",),
     # Opened when gaia is first imported, so it must be set before that.
@@ -187,6 +189,10 @@ _EXIT_WITH_PID_ENV = "GAIA_DAEMON_EXIT_WITH_PID"
 #: The developer's real GAIA home, read before any test patches ``Path.home``.
 _REAL_GAIA_HOME = Path.home() / ".gaia"
 
+#: Bound before any test patches ``os.path.realpath``: a test that breaks it
+#: must not break the guards, which coverage also reaches via sqlite3.connect.
+_REALPATH = os.path.realpath
+
 _REAL_HOME_MESSAGE = (
     "This test would {action} the GAIA in your real home, {home}: {harm} "
     "Point it at a tmp folder instead: set GAIA_HOME (a daemon also needs "
@@ -205,8 +211,8 @@ _DB_HINT = "A database a test opens itself belongs under tmp_path."
 
 
 def _is_real_gaia_home(path: Path) -> bool:
-    real = os.path.normcase(str(_REAL_GAIA_HOME.resolve()))
-    candidate = os.path.normcase(str(Path(path).resolve()))
+    real = os.path.normcase(_REALPATH(_REAL_GAIA_HOME))
+    candidate = os.path.normcase(_REALPATH(path))
     return candidate == real or candidate.startswith(real + os.sep)
 
 
@@ -265,6 +271,10 @@ def pytest_configure(config):  # noqa: D103 — pytest hook
         "embedded_start: let LemonadeManager.start_embedded_if_stopped run "
         "(its own dependencies must be mocked)",
     )
+    config.addinivalue_line(
+        "markers",
+        "npu_host_probe: let gaia.llm.npu_linux read this machine's NPU setup",
+    )
 
 
 _REAL_START_EMBEDDED = {}
@@ -305,6 +315,52 @@ def _allow_embedded_start(request, monkeypatch):
     )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_embedded_lemonade_paths():
+    """Keep ordinary tests off the caller's embedded Lemonade state.
+
+    The real SD integration lane opts in with ``GAIA_REQUIRE_SD=1`` after
+    ``gaia init --profile sd`` has started a server in the test process's
+    normal GAIA home. Its subprocess-created state must remain visible to the
+    client; all ordinary unit/integration runs still use the throwaway root.
+    """
+    if os.environ.get("GAIA_REQUIRE_SD") == "1":
+        yield
+        return
+
+    # The remaining body is the ordinary test isolation path. The import-time
+    # state path and the Path.home fallback both need the same sandbox.
+    from gaia.llm import lemonade_client, lemonade_embedded
+
+    original_gaia_home = lemonade_embedded.gaia_home
+    real_user_home = Path.home().resolve()
+    state_path = _STATE_ROOT / "lemonade" / "state.json"
+
+    def isolated_gaia_home() -> Path:
+        """Preserve explicit env and tests that temporarily fake Path.home."""
+        if os.environ.get("GAIA_HOME", "").strip():
+            return original_gaia_home()
+        if Path.home().resolve() != real_user_home:
+            return original_gaia_home()
+        return _STATE_ROOT
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(lemonade_client, "EMBEDDED_LEMONADE_STATE", state_path)
+        mp.setattr(lemonade_embedded, "gaia_home", isolated_gaia_home)
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_isolated_embedded_lemonade_state():
+    """Give tests without ``GAIA_HOME`` a fresh fallback state directory."""
+    real_rmtree = shutil.rmtree
+    if not os.environ.get("GAIA_HOME", "").strip():
+        real_rmtree(_STATE_ROOT / "lemonade", ignore_errors=True)
+    yield
+    if not os.environ.get("GAIA_HOME", "").strip():
+        real_rmtree(_STATE_ROOT / "lemonade", ignore_errors=True)
+
+
 #: EmbeddedLemonade methods that act on a server; none may reach the real home.
 _EMBEDDED_ACTIONS = (
     "install",
@@ -317,6 +373,68 @@ _EMBEDDED_ACTIONS = (
 )
 
 
+_REAL_WHICH = shutil.which
+
+
+@pytest.fixture(autouse=True)
+def _no_npu_host_probe(request, monkeypatch):
+    """Judge an NPU in a ``/system-info`` payload by the payload alone.
+
+    On a Linux runner the real checks would read that machine's sysfs, which
+    has no NPU, and turn every test NPU into one that isn't set up. Opt a test
+    in with @pytest.mark.npu_host_probe.
+    """
+    from gaia.llm import npu_linux
+
+    npu_linux.forget()
+    if request.node.get_closest_marker("npu_host_probe"):
+        return
+    monkeypatch.setattr(npu_linux, "problems", lambda: [])
+
+
+@pytest.fixture(autouse=True)
+def _no_real_claude_login(monkeypatch):
+    """Hide the developer's real ``claude`` CLI and login from credential choice.
+
+    CI has no ``claude``, so by default no test sees one and no login. A test
+    that stubs ``shutil.which`` sees its stub; one that needs a login uses the
+    ``claude_login`` fixture.
+    """
+    from gaia.eval import claude_credential
+
+    monkeypatch.setattr(
+        claude_credential,
+        "_claude_bin",
+        lambda: None if shutil.which is _REAL_WHICH else shutil.which("claude"),
+    )
+    monkeypatch.setattr(
+        claude_credential,
+        "_auth_status",
+        lambda _bin, _env: {"loggedIn": False, "authMethod": "none"},
+    )
+    monkeypatch.setattr(claude_credential, "_login_cache", {})
+    monkeypatch.setattr(claude_credential, "_announced", set())
+
+
+@pytest.fixture
+def claude_login(monkeypatch):
+    """A ``claude`` CLI on PATH, logged in to a subscription."""
+    from gaia.eval import claude_credential
+
+    def which(name, *args, **kwargs):
+        if name == "claude":
+            return "/usr/bin/claude"
+        return _REAL_WHICH(name, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "which", which)
+    monkeypatch.setattr(
+        claude_credential,
+        "_auth_status",
+        lambda _bin, _env: {"loggedIn": True, "authMethod": "claude.ai"},
+    )
+    return "/usr/bin/claude"
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _guard_real_gaia_home():
     """Fail a test that would act on the developer's real ``~/.gaia`` Lemonade.
@@ -325,7 +443,8 @@ def _guard_real_gaia_home():
     real home, and a daemon spawned without ``GAIA_HOME`` -- that daemon owns,
     and on shutdown stops, the real home's server.
     """
-    from gaia.daemon import client
+    from gaia.daemon import client, paths as daemon_paths
+    from gaia.llm import lemonade_service
     from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
     def _guard_method(name, real):
@@ -345,6 +464,39 @@ def _guard_real_gaia_home():
         return guarded
 
     real_spawn = client._spawn_and_wait
+    real_post_start = lemonade_service._post_start
+
+    def guarded_post_start(*args, **kwargs):
+        daemon_home = daemon_paths.host_dir()
+        if _is_real_gaia_home(daemon_home):
+            pytest.fail(
+                _REAL_HOME_MESSAGE.format(
+                    action="ask the daemon in",
+                    home=daemon_home,
+                    harm=_LEMONADE_HARM,
+                    hint=_LEMONADE_HINT,
+                ),
+                pytrace=False,
+            )
+        return real_post_start(*args, **kwargs)
+
+    from gaia.automations import files as automation_files
+
+    real_write_json = automation_files.write_json
+
+    def guarded_write_json(path, data):
+        # A daemon's clock runs the automations pass on every poll.
+        if _is_real_gaia_home(path):
+            pytest.fail(
+                _REAL_HOME_MESSAGE.format(
+                    action=f"write {Path(path).name} in",
+                    home=_REAL_GAIA_HOME,
+                    harm="it would take, queue or drop your own reminders.",
+                    hint="Set GAIA_CONFIG_DIR or GAIA_HOME to tmp_path.",
+                ),
+                pytrace=False,
+            )
+        return real_write_json(path, data)
 
     def guarded_spawn(*args, **kwargs):
         home = _child_gaia_home(os.environ)
@@ -368,9 +520,80 @@ def _guard_real_gaia_home():
                 _guard_method(name, getattr(EmbeddedLemonade, name)),
             )
         mp.setattr(client, "_spawn_and_wait", guarded_spawn)
+        mp.setattr(lemonade_service, "_post_start", guarded_post_start)
         # sqlite3.dbapi2 is the module SQLAlchemy and other drivers bind.
         for module in (sqlite3, sqlite3.dbapi2):
             mp.setattr(module, "connect", _guard_connect(module.connect))
+        mp.setattr(automation_files, "write_json", guarded_write_json)
+        yield
+
+
+_DEFAULT_LEMONADE_PORT = 13305
+_LOOPBACK_HOSTS = {"localhost", "::1", "0:0:0:0:0:0:0:1"}
+
+
+def _is_loopback(host) -> bool:
+    return isinstance(host, str) and (
+        host.lower() in _LOOPBACK_HOSTS or host.startswith("127.")
+    )
+
+
+def _redirected_lemonade_url() -> str | None:
+    """LEMONADE_BASE_URL when it points away from a local Lemonade on 13305."""
+    base_url = os.environ.get("LEMONADE_BASE_URL", "").strip()
+    if not base_url:
+        return None
+    parsed = urllib.parse.urlsplit(base_url)
+    if _is_loopback(parsed.hostname) and parsed.port == _DEFAULT_LEMONADE_PORT:
+        return None
+    return base_url
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _guard_default_lemonade_port():
+    """Fail a test that reaches local 13305 while LEMONADE_BASE_URL says otherwise.
+
+    Covers sockets opened in this process (requests, urllib, httpx sync); a
+    subprocess or a Windows proactor event loop is not seen.
+    """
+    redirected = _redirected_lemonade_url()
+    if redirected is None:
+        yield
+        return
+
+    import socket
+
+    def _check(address):
+        if (
+            isinstance(address, tuple)
+            and len(address) >= 2
+            and address[1] == _DEFAULT_LEMONADE_PORT
+            and _is_loopback(address[0])
+        ):
+            pytest.fail(
+                f"This test connected to {address[0]}:{_DEFAULT_LEMONADE_PORT}, "
+                f"but LEMONADE_BASE_URL={redirected} points tests elsewhere: it "
+                "would reach, and could load models on, the real Lemonade on "
+                "this machine. Resolve the address from LEMONADE_BASE_URL "
+                "(gaia.llm.lemonade_client._get_lemonade_config) instead of "
+                "hard-coding the default port.",
+                pytrace=False,
+            )
+
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+
+    def guarded_connect(self, address):
+        _check(address)
+        return real_connect(self, address)
+
+    def guarded_connect_ex(self, address):
+        _check(address)
+        return real_connect_ex(self, address)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(socket.socket, "connect", guarded_connect)
+        mp.setattr(socket.socket, "connect_ex", guarded_connect_ex)
         yield
 
 
@@ -422,13 +645,13 @@ def _off_real_home(path: Path) -> Path:
     """*path* moved from the real ``~/.gaia`` into ``_TEST_GAIA_HOME``."""
     if not _is_real_gaia_home(path):
         return path
-    relative = Path(path).resolve().relative_to(_REAL_GAIA_HOME.resolve())
+    relative = Path(_REALPATH(path)).relative_to(_REALPATH(_REAL_GAIA_HOME))
     return _TEST_GAIA_HOME / relative
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _redirect_default_databases():
-    """Open the file index, scratchpad and email stores under ``_TEST_GAIA_HOME``, not ``~/.gaia``.
+    """Open the file index and scratchpad stores under ``_TEST_GAIA_HOME``, not ``~/.gaia``.
 
     Both default to ``gaia_home()``, and GAIA_HOME stays unset (see
     _STATE_ENV). ``ChatAgentConfig`` passes that same default in explicitly, so
@@ -450,13 +673,6 @@ def _redirect_default_databases():
 
         return init
 
-    def redirect_path(real_resolve):
-        @functools.wraps(real_resolve)
-        def resolve(self):
-            return str(_off_real_home(Path(real_resolve(self)).expanduser()))
-
-        return resolve
-
     with pytest.MonkeyPatch.context() as mp:
         for module, cls in (
             (index, index.FileSystemIndexService),
@@ -464,15 +680,6 @@ def _redirect_default_databases():
         ):
             mp.setattr(module, "gaia_home", redirected_home)
             mp.setattr(cls, "__init__", redirect_init(cls.__init__))
-        # The email agent keeps state.db and memory.db under ~/.gaia/email; its
-        # package is absent from jobs that don't install it.
-        if importlib.util.find_spec("gaia_agent_email") is not None:
-            from gaia_agent_email.config import EmailAgentConfig
-
-            for name in ("resolved_db_path", "resolved_memory_db_path"):
-                mp.setattr(
-                    EmailAgentConfig, name, redirect_path(getattr(EmailAgentConfig, name))
-                )
         yield
 
 

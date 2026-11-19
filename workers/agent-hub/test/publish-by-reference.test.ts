@@ -146,6 +146,19 @@ describe("publish by reference", () => {
     expect((await again.json() as any).error.code).toBe("version_exists");
   });
 
+  it("refuses 'already published' when the stored object no longer matches the catalog", async () => {
+    // CI re-PUTs before it publishes, so a re-run of a racing loser re-stores its own bytes.
+    const env = makeEnv();
+    const { sha, bytes } = await stage(env);
+    expect((await publishRef(env, {}, sha, bytes.byteLength)).status).toBe(201);
+
+    const other = new TextEncoder().encode("a different build of the same installer");
+    const { sha: otherSha } = await stage(env, { bytes: other });
+    const res = await publishRef(env, {}, otherSha, other.byteLength);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as any).error.code).toBe("concurrent_publish_conflict");
+  });
+
   it("joins an existing version when the manifest matches, and refuses when it does not", async () => {
     // Release lanes mix inline binaries with by-reference installers under one
     // version; each post carries the same gaia-agent.yaml.

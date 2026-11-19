@@ -43,6 +43,15 @@ Apply these scoring overrides for `verbatim`-tagged turns:
 For non-verbatim turns (RAG, multi-turn, document Q&A), the existing
 rubric below applies in full.
 
+## CARDS ARE PART OF THE ANSWER
+
+Some tools show the user a card (a checklist, recipe, itinerary, calculator,
+table) instead of writing it out. In `get_messages()` such a tool step carries
+a `card` field with the card's full text. Treat it as part of the agent's
+answer: a packing list in a checklist card counts as the list, even when the
+reply text only adds a tip. Score its content against the ground truth the same
+way as prose.
+
 ## STEP 1 — PRE-CHECK (mandatory, apply before scoring)
 
 If ANY check fails: set correctness=0, completeness=0, tool_selection=0, failure_category as noted.

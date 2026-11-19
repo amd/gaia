@@ -403,11 +403,13 @@ def test_a_lease_from_a_client_that_does_not_renew_keeps_the_fixed_ttl():
 @pytest.mark.allow_network
 def test_model_lease_renews_while_held(daemon_factory):
     """A holder that runs past the heartbeat TTL keeps the slot end to end."""
-    daemon_factory(ModelSlotBroker(lease_ttl_s=1.0, heartbeat_ttl_s=1.0))
-    holder, released = _hold_in_thread("holder-model", 3.0, max_hold_s=30)
+    # A 1 s heartbeat left 0.75 s of slack, which a busy CI runner can use up.
+    daemon_factory(ModelSlotBroker(lease_ttl_s=1.0, heartbeat_ttl_s=4.0))
+    holder, released = _hold_in_thread("holder-model", 6.0, max_hold_s=30)
 
     lease = broker_client.acquire_lease("waiter-model")
 
+    assert "at" in released, "the lease was reclaimed mid-hold"
     assert time.monotonic() >= released["at"], "the lease was reclaimed mid-hold"
     broker_client.release_lease(lease["lease_id"])
     holder.join(10)
@@ -720,18 +722,21 @@ def test_a_lemonade_request_declares_its_own_call_budget(monkeypatch):
 
     monkeypatch.setattr(broker_client, "model_lease", _record)
     monkeypatch.setattr(lemonade_client, "request_budget_seconds", lambda: 2048)
+    # The lease budget must track the bounded drain, including test overrides.
+    monkeypatch.setattr(lemonade_client.stream_watchdog, "DRAIN_LIMIT_S", 17)
     deadline = lemonade_client.RetryPolicy.from_env().deadline
     margin = lemonade_client.LEASE_LOAD_MARGIN_S
+    drain = lemonade_client.stream_watchdog.DRAIN_LIMIT_S
     client = _local_client()
 
     with client._model_slot_lease("local-model"):
         pass
-    assert seen["max_hold_s"] == 2048 + deadline + margin
+    assert seen["max_hold_s"] == 2048 + deadline + margin + drain
 
     # An explicit per-call timeout is what bounds that call, not the default.
     with client._model_slot_lease("local-model", request_timeout=5000):
         pass
-    assert seen["max_hold_s"] == 5000 + deadline + margin
+    assert seen["max_hold_s"] == 5000 + deadline + margin + drain
 
 
 def test_background_work_is_not_starved_by_a_stream_of_turns():

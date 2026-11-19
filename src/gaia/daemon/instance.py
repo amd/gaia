@@ -112,11 +112,23 @@ def read_instance(path: Optional[Path] = None) -> Optional[DaemonInstance]:
             gaia_version=str(data.get("gaia_version", "")),
             version_file=str(data.get("version_file", "")),
         )
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, OverflowError) as e:
         logger.warning(
             "daemon: %s is present but malformed (%s); treating as stale", path, e
         )
         return None
+
+
+_RELEASE_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-?rc\.?(\d+))?$")
+
+
+def _release_key(text: str) -> Optional[Tuple[int, int, int, float]]:
+    """Order GAIA releases (0.25.4rc3 < 0.25.4); None for an unknown version."""
+    match = _RELEASE_RE.match((text or "").strip())
+    if not match:
+        return None
+    major, minor, patch, rc = match.groups()
+    return (int(major), int(minor), int(patch), float(rc) if rc else float("inf"))
 
 
 def runs_replaced_install(inst: DaemonInstance) -> Optional[str]:
@@ -125,7 +137,22 @@ def runs_replaced_install(inst: DaemonInstance) -> Optional[str]:
     Read from the daemon's own files, so every client, whichever Python it runs
     from, gets the same answer. A daemon that predates the record is judged
     only by a client from its own Python, against that install's files.
+
+    A frozen gaia replaces a daemon from an older release, or one that records
+    no version, and leaves a newer one alone, so two installs never take turns
+    restarting each other's daemon.
     """
+    if getattr(sys, "frozen", False):
+        from gaia import version
+
+        theirs = _release_key(inst.gaia_version)
+        ours = _release_key(version.__version__)
+        if theirs is None or (ours is not None and theirs < ours):
+            return (
+                f"it runs GAIA {inst.gaia_version or 'of an unknown version'}, "
+                f"and this app ships {version.__version__}"
+            )
+        return None
     if inst.version_file:
         try:
             text = Path(inst.version_file).read_text(encoding="utf-8")

@@ -1,0 +1,46 @@
+{
+  "kind": "turn",
+  "finding": "F10 (amd/gaia#7179)",
+  "why": "The check F10 misfired: a second file the answer says it saved, with no write behind it, still gets the note.",
+  "request": "In {ws}/todo.txt change milk to oat milk.",
+  "files": {
+    "todo.txt": "- milk\n"
+  },
+  "model": [
+    {
+      "tool": "edit_file",
+      "args": {
+        "file_path": "{ws}/todo.txt",
+        "old_content": "milk",
+        "new_content": "oat milk"
+      },
+      "creates": {
+        "{ws}/todo.txt": "- oat milk\n"
+      },
+      "result": {
+        "status": "success",
+        "file_path": "{ws}/todo.txt"
+      }
+    },
+    {
+      "tool": "read_file",
+      "args": {
+        "file_path": "{ws}/todo.txt"
+      },
+      "result": {
+        "status": "success",
+        "file_path": "{ws}/todo.txt",
+        "content": "- oat milk\n"
+      }
+    },
+    {
+      "answer": "Changed milk to oat milk in todo.txt. I saved the old list to `{ws}/todo_old.txt`."
+    }
+  ],
+  "expect": {
+    "answer_has": [
+      "I couldn't confirm all of this",
+      "todo_old.txt"
+    ]
+  }
+}

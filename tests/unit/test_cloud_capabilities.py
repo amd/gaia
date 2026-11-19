@@ -42,15 +42,17 @@ CLOUD = {
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
-    monkeypatch.setenv("GAIA_GATEWAY_FILE", str(tmp_path / "gateway.json"))
-    monkeypatch.setattr(
-        "gaia.llm.gateway.GATEWAY_STATE_FILE", tmp_path / "gateway.json"
-    )
+    # Its own folder: the unit conftest puts config.json, and its lock, in
+    # tmp_path, and several tests list everything beside gateway.json.
+    gateway_file = tmp_path / "gateway" / "gateway.json"
+    gateway_file.parent.mkdir()
+    monkeypatch.setenv("GAIA_GATEWAY_FILE", str(gateway_file))
+    monkeypatch.setattr("gaia.llm.gateway.GATEWAY_STATE_FILE", gateway_file)
     monkeypatch.setattr(lc, "_CLOUD_TOOL_CALLING", {})
     monkeypatch.setattr(lc, "_TOOL_CALLING_LOADED", False)
     previous = lc._CLOUD_MODELS
     lc.record_cloud_models(CLOUD)
-    yield tmp_path / "gateway.json"
+    yield gateway_file
     lc._CLOUD_MODELS = previous
 
 
@@ -576,3 +578,67 @@ def test_a_turns_own_stall_still_tells_the_user_to_resend(monkeypatch, caplog):
                 timeout=lc.PROBE_TIMEOUT_S,
             )
     assert any(r.levelname == "ERROR" for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "model_id, effort",
+    [
+        ("amd.Qwen3.8-Flash-Next", "low"),
+        ("amd.qwen3.8-flash-next-fp8", "low"),
+        ("amd.Claude-Opus-5.5", "none"),
+        ("amd.DeepSeek-V4.1-Flash", "none"),
+        # Rejects "none" and its accepted values are unrecorded.
+        ("amd.gpt-5.3-chat", None),
+        # Lookalikes of a mapped family must not inherit its effort.
+        ("amd.Qwen3.8-Flash", None),
+        ("amd.DeepSeek-V3.2", None),
+        ("amd.Claude-Sonnet-5", None),
+        ("amd.Claude-Opus-4.1", None),
+        ("fireworks.accounts/fireworks/models/deepseek-v4", None),
+        # Local ids, even ones naming a mapped family, are not cloud models.
+        ("user.Qwen3.8-Flash-Next-GGUF", None),
+        ("Qwen3.8-Flash-Next", None),
+        ("deepseek-v4.Q4_K_M", None),
+        ("amd.", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_cloud_lowest_reasoning_effort(model_id, effort):
+    assert lc.cloud_lowest_reasoning_effort(model_id) == effort
+
+
+def test_every_mapped_cloud_effort_is_a_real_effort_level():
+    for prefix, effort in lc._CLOUD_LOWEST_REASONING_EFFORT:
+        assert prefix == prefix.lower(), prefix
+        assert effort in {"none", "minimal", "low", "medium", "high", "xhigh"}
+
+
+@pytest.mark.parametrize("effort", ["low", "none"])
+def test_cloud_request_carries_the_callers_effort_unchanged(monkeypatch, effort):
+    sent = []
+
+    def post(*_args, **kwargs):
+        sent.append(kwargs.get("json") or {})
+        raise lc.requests.exceptions.ConnectionError("stop after capture")
+
+    client = lc.LemonadeClient(base_url="http://127.0.0.1:9/api/v1", verbose=False)
+    clock = _Clock()
+    client._retry_sleep = clock.advance
+    client._retry_clock = clock
+    client.cloud_model_provider = lambda model: "amd"
+    monkeypatch.setattr(lc.requests, "post", post)
+    monkeypatch.setattr(client, "_recover_stopped_gaia_lemonade", lambda *a, **k: False)
+    client._server_accepts_connections = lambda: False
+    with pytest.raises(lc.LemonadeServerDownError):
+        client.chat_completions(
+            model="amd.Qwen3.8-Flash-Next",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            auto_download=False,
+            reasoning_effort=effort,
+        )
+    assert sent
+    for payload in sent:
+        assert payload.get("reasoning_effort") == effort
+        assert "reasoning_effort" not in (payload.get("chat_template_kwargs") or {})

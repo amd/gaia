@@ -3,8 +3,7 @@
 """``AgentSidecarSpec`` — the data that parametrizes :class:`AgentSidecarManager`
 for one kind of sidecar agent (issue #2142).
 
-Email is the first registered agent; :func:`builtin_specs` is where new agents
-get added as this generalizes beyond email.
+:func:`builtin_specs` is where new agents get added.
 """
 
 from __future__ import annotations
@@ -24,17 +23,16 @@ from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
 class AgentSidecarSpec:
     """Immutable description of one sidecar agent kind.
 
-    ``token_env_var`` is a cross-repo literal contract: for the email spec it
-    MUST equal ``gaia_agent_email.caller_auth.TOKEN_ENV_VAR``. Kept as a plain
-    string (not imported from the hub wheel) so the daemon never depends on it.
+    ``token_env_var`` is a cross-package literal contract: it MUST equal the
+    name the agent package reads. Kept as a plain string (not imported from the
+    hub wheel) so the daemon never depends on it.
 
     ``token_file_env_var`` is the file-delivery leg of the same contract
     (#2149): the manager writes the launch secret to a 0600 file and hands the
     sidecar its PATH via this variable, so the secret itself never sits in the
     child's environment. ``secret_file_min_version`` is the first agent version
-    whose binary reads that file; older installed binaries keep the (deprecated,
-    loudly logged) bare-env leg. Both unset → the spec has no file contract and
-    delivery stays env-based.
+    whose binary reads that file; an older installed binary is refused at
+    spawn with a reinstall remedy. Both are required to spawn.
 
     ``mode_env_var`` names the env var a CALLER's own process reads to imply
     "user" vs "dev" mode when it does not pass an explicit override (issue
@@ -47,16 +45,16 @@ class AgentSidecarSpec:
     forwarded connectors is unaffected:
 
     - ``grant_agent_id`` — the namespaced agent id the connectors grant ledger
-      keys by (e.g. ``installed:email``). The daemon (custody home) resolves
+      keys by (e.g. ``installed:<id>``). The daemon (custody home) resolves
       grants and mints tokens under THIS id; it differs from the daemon's own
-      ``agent_id`` ("email"). A literal, not imported from the hub wheel.
+      ``agent_id``. A literal, not imported from the hub wheel.
     - ``forward_providers`` — the connector providers whose short-lived access
       tokens the daemon may forward OUT to this sidecar (granted ones only).
     - ``forwarded_mode_env_var`` — private env channel the manager sets to ``1``
       on spawn so the sidecar boots reading forwarded credentials instead of the
       machine keyring/grants store (the whole point of forward-out: the sidecar
-      never holds a long-lived refresh token). MUST equal the hub package's
-      ``gaia_agent_email.forwarded_credentials.FORWARDED_MODE_ENV_VAR``.
+      never holds a long-lived refresh token). MUST equal the name the hub
+      package reads.
 
     Connector-grant registration (#2408) — host/UI-facing only, never consulted
     by :class:`~gaia.daemon.sidecars.manager.AgentSidecarManager`:
@@ -66,9 +64,9 @@ class AgentSidecarSpec:
       ``gaia.hub.installer.register_installed_sidecars`` ->
       ``AgentRegistry.register_sidecar``) so the connectors grant flow and
       ``/api/agents`` can see them without an importable wheel. Transcribed as
-      literals from the hub package's own scope constants (core cannot import
-      the wheel at runtime, #2154) and guarded against drift by
-      ``tests/unit/connectors/test_email_scope_drift.py``.
+      literals (core cannot import the wheel at runtime, #2154); the flagship's
+      are guarded against drift by
+      ``tests/unit/connectors/test_mail_scope_drift.py``.
     """
 
     agent_id: str
@@ -90,6 +88,12 @@ class AgentSidecarSpec:
     health_timeout: float = 30.0
     grant_agent_id: Optional[str] = None
     forward_providers: Tuple[str, ...] = field(default_factory=tuple)
+    # macOS: read secrets through the daemon, for a frozen agent whose every
+    # update would otherwise re-prompt for each keychain item (#6481).
+    daemon_owns_keychain: bool = False
+    # First binary that deletes the keychain credential file. An older one would
+    # leave it readable, so it gets no file and reads the keychain itself.
+    keychain_file_min_version: Optional[str] = None
     forwarded_mode_env_var: Optional[str] = None
     required_connections: Tuple[ConnectorRequirement, ...] = field(
         default_factory=tuple
@@ -108,96 +112,53 @@ class AgentSidecarSpec:
     category: str = ""
     tags: Tuple[str, ...] = field(default_factory=tuple)
     icon: str = ""
+    #: The agent class's ``CONSUMES_MCP_SERVERS``. The UI offers a per-agent
+    #: switch on each MCP connector only for agents that set it.
+    consumes_mcp_servers: bool = False
 
 
-# The email agent's caller-auth token channel (#1706). MUST equal
-# gaia_agent_email.caller_auth.TOKEN_ENV_VAR — kept a literal so core never
-# imports the hub wheel.
-_EMAIL_TOKEN_ENV_VAR = "GAIA_EMAIL_SIDECAR_TOKEN"
-
-# File-delivery leg (#2149). MUST equal
-# gaia_agent_email.caller_auth.TOKEN_FILE_ENV_VAR — literal for the same reason.
-_EMAIL_TOKEN_FILE_ENV_VAR = "GAIA_EMAIL_SIDECAR_TOKEN_FILE"
-
-# First gaia-agent-email version whose binary reads the token file. Keep in
-# lock-step with the release cut that first ships caller_auth's file leg.
-_EMAIL_SECRET_FILE_MIN_VERSION = "0.6.0"
-
-# The flagship agent's caller-auth token channel. Same cross-repo literal
-# contract as email's above: these MUST equal the names the gaia-agent-gaia
-# sidecar reads, and are kept as literals so core never imports the hub wheel.
+# The flagship agent's caller-auth token channel, a cross-package literal
+# contract: these MUST equal the names the gaia-agent-gaia sidecar reads, and
+# are kept as literals so core never imports the hub wheel.
 _GAIA_TOKEN_ENV_VAR = "GAIA_GAIA_SIDECAR_TOKEN"
 _GAIA_TOKEN_FILE_ENV_VAR = "GAIA_GAIA_SIDECAR_TOKEN_FILE"
-
-# The email agent's grant-ledger identity (mirrors gaia-agent.yaml ``id: email``
-# → ``installed:email``, and ``connector_routes.EMAIL_AGENT_ID``). Kept a literal
-# so core never imports the hub wheel.
-_EMAIL_GRANT_AGENT_ID = "installed:email"
-
-# The email sidecar's forwarded-credentials mode switch (#2154). MUST equal
-# gaia_agent_email.forwarded_credentials.FORWARDED_MODE_ENV_VAR — a literal.
-_EMAIL_FORWARDED_MODE_ENV_VAR = "GAIA_EMAIL_FORWARDED_CREDENTIALS"
-
-# Connector scopes the email sidecar needs (#2408). Transcribed as literals —
-# not imported — so core never depends on the hub wheel (server.py:621-629).
-# MUST equal gaia_agent_email/scopes.py's ALL_SCOPES (GMAIL_SCOPES +
-# CALENDAR_SCOPES) / REQUIRED_SCOPES (GMAIL_SCOPES) and outlook_scopes.py's
-# OUTLOOK_ALL_SCOPES / OUTLOOK_REQUIRED_SCOPES. Guarded against drift by
-# tests/unit/connectors/test_email_scope_drift.py. ``scopes`` is what the
-# daemon REQUESTS at consent; ``required_scopes`` (#2730 D5) is the narrower
-# subset the forward-out mint ENFORCES — calendar is requested but optional.
-_EMAIL_REQUIRED_CONNECTIONS = (
-    ConnectorRequirement(
-        connector_id="google",
-        scopes=(
-            "https://www.googleapis.com/auth/gmail.modify",  # from gaia_agent_email/scopes.py
-            "https://www.googleapis.com/auth/gmail.send",  # from gaia_agent_email/scopes.py
-            "https://www.googleapis.com/auth/calendar.events",  # from gaia_agent_email/scopes.py
-            "https://www.googleapis.com/auth/calendar.readonly",  # from gaia_agent_email/scopes.py
-        ),
-        required_scopes=(
-            "https://www.googleapis.com/auth/gmail.modify",  # from gaia_agent_email/scopes.py
-            "https://www.googleapis.com/auth/gmail.send",  # from gaia_agent_email/scopes.py
-        ),
-    ),
-    ConnectorRequirement(
-        connector_id="microsoft",
-        scopes=(
-            "https://graph.microsoft.com/Mail.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
-            "https://graph.microsoft.com/Mail.Send",  # from gaia_agent_email/outlook_scopes.py
-            "https://graph.microsoft.com/Calendars.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
-        ),
-        required_scopes=(
-            "https://graph.microsoft.com/Mail.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
-            "https://graph.microsoft.com/Mail.Send",  # from gaia_agent_email/outlook_scopes.py
-        ),
-    ),
-    ConnectorRequirement(
-        connector_id="microsoft_work",
-        scopes=(
-            "https://graph.microsoft.com/Mail.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
-            "https://graph.microsoft.com/Mail.Send",  # from gaia_agent_email/outlook_scopes.py
-            "https://graph.microsoft.com/Calendars.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
-        ),
-        required_scopes=(
-            "https://graph.microsoft.com/Mail.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
-            "https://graph.microsoft.com/Mail.Send",  # from gaia_agent_email/outlook_scopes.py
-        ),
-    ),
-)
 
 # Mirrors gaia_agent.connectors.MAILBOX_REQUIREMENTS: the shipped flagship is a
 # frozen binary, so its own declaration cannot be imported to derive scopes.
 _GAIA_REQUIRED_CONNECTIONS = (
     ConnectorRequirement(
         connector_id="google",
-        scopes=("https://www.googleapis.com/auth/gmail.readonly",),
-        reason="Read and search your Gmail so the agent can triage your inbox.",
+        scopes=(
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.compose",
+            "https://www.googleapis.com/auth/calendar.events",
+        ),
+        required_scopes=(
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.compose",
+        ),
+        reason=(
+            "Read and search your Gmail, draft and send mail when you approve it, "
+            "and see and, with your approval, change your Google calendar."
+        ),
     ),
     ConnectorRequirement(
         connector_id="microsoft",
-        scopes=("https://graph.microsoft.com/Mail.ReadWrite",),
-        reason="Read and search your Outlook mail so the agent can triage your inbox.",
+        scopes=(
+            "https://graph.microsoft.com/Mail.Read",
+            "https://graph.microsoft.com/Mail.ReadWrite",
+            "https://graph.microsoft.com/Mail.Send",
+            "https://graph.microsoft.com/Calendars.ReadWrite",
+        ),
+        required_scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",
+            "https://graph.microsoft.com/Mail.Send",
+        ),
+        reason=(
+            "Read and search your Outlook mail, draft and send mail when you "
+            "approve it, and see and, with your approval, change your Outlook "
+            "calendar."
+        ),
     ),
 )
 
@@ -320,11 +281,34 @@ def repo_root_from_agent_dev_src_dir(dev_src_dir: Path, agent_id: str) -> Path:
     return Path(*dev_src_dir.parts[: -len(expected_tail)])
 
 
-def _default_email_src_dir() -> Path:
-    # src/gaia/daemon/sidecars/spec.py -> repo root is parents[4]. This
-    # follows the Python environment that launched the DAEMON, never a
-    # caller's — see resolve_caller_dev_src_dir for the caller-side mirror.
-    return agent_dev_src_dir(Path(__file__).resolve().parents[4], "email")
+def agent_binary_lock_path(repo_root: Path, agent_id: str) -> Path:
+    """The per-agent ``binaries.lock.json`` under a repo root.
+
+    Single owner of the ``hub/agents/<id>/npm`` lock layout, so the daemon's
+    own lock and a caller's (issue #2596) are always joined the same way.
+    """
+    return repo_root / "hub" / "agents" / agent_id / "npm" / "binaries.lock.json"
+
+
+def repo_root_from_agent_binary_lock_path(lock_path: Path, agent_id: str) -> Path:
+    """Invert :func:`agent_binary_lock_path`: the repo root a lock path was
+    joined from, named in a "restart the daemon" remedy.
+
+    Raises:
+        DevSrcDirResolutionError: *lock_path* does not end in
+            ``hub/agents/<agent_id>/npm/binaries.lock.json`` — no repo root is
+            guessed from an unexpected shape.
+    """
+    tail = ("hub", "agents", agent_id, "npm", "binaries.lock.json")
+    parts = lock_path.parts
+    if len(parts) <= len(tail) or tuple(p.lower() for p in parts[-len(tail) :]) != (
+        tuple(t.lower() for t in tail)
+    ):
+        raise DevSrcDirResolutionError(
+            f"'{lock_path}' does not end in the expected "
+            f"{'/'.join(tail)} layout, so no repo root can be derived from it."
+        )
+    return Path(*parts[: -len(tail)])
 
 
 def _default_gaia_src_dir() -> Path:
@@ -365,6 +349,55 @@ def _normalize_git_toplevel(raw: str) -> Path:
             drive, rest = match.groups()
             text = f"{drive}:/{rest}"
     return Path(text)
+
+
+def _caller_git_toplevel(cwd: Path) -> Path:
+    """``git rev-parse --show-toplevel`` for *cwd*, normalized for this OS.
+
+    Raises:
+        DevSrcDirResolutionError: *cwd* is not inside a git work tree, or
+            ``git`` is missing or fails.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+    ) as exc:
+        raise DevSrcDirResolutionError(
+            f"could not determine your checkout root from {cwd} "
+            f"({exc}). Run this command from inside a git work tree, or pass "
+            "--dev-src-dir <path> to name the source directory explicitly."
+        ) from exc
+    return _normalize_git_toplevel(result.stdout)
+
+
+def resolve_caller_binary_lock(
+    agent_id: str, *, cwd: Optional[Path] = None
+) -> Optional[Path]:
+    """The CALLER's own ``binaries.lock.json`` for a user-mode start (#2596).
+
+    The user-mode mirror of :func:`resolve_caller_dev_src_dir`: the caller's
+    checkout is its *cwd*'s git work tree, never ``__file__``. Returns
+    ``None`` when the caller is not in a checkout carrying a lock for
+    *agent_id* — an installed GAIA pins no binary, so there is nothing to
+    compare. The daemon only ever compares this file's digest against its own
+    lock; it never reads a caller-supplied path.
+    """
+    try:
+        repo_root = _caller_git_toplevel(cwd or Path.cwd())
+    except DevSrcDirResolutionError:
+        return None
+    lock = agent_binary_lock_path(repo_root, agent_id).expanduser().resolve()
+    return lock if lock.is_file() else None
 
 
 def resolve_caller_dev_src_dir(
@@ -414,67 +447,13 @@ def resolve_caller_dev_src_dir(
             raise DevSrcDirResolutionError(_dev_src_dir_shape_error(resolved, agent_id))
         return resolved
 
-    resolved_cwd = cwd or Path.cwd()
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(resolved_cwd),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-        raise DevSrcDirResolutionError(
-            f"could not determine your checkout root from {resolved_cwd} "
-            f"({exc}). Run this command from inside a git work tree, or pass "
-            "--dev-src-dir <path> to name the source directory explicitly."
-        ) from exc
-
-    repo_root = _normalize_git_toplevel(result.stdout)
+    repo_root = _caller_git_toplevel(cwd or Path.cwd())
     return agent_dev_src_dir(repo_root, agent_id).expanduser().resolve()
 
 
 def builtin_specs() -> "dict[str, AgentSidecarSpec]":
     """Return the specs for every agent the daemon knows how to supervise."""
     return {
-        "email": AgentSidecarSpec(
-            agent_id="email",
-            service_id="gaia-agent-email",
-            # "Email Triage" — matches gaia-agent.yaml's `name` and the
-            # package's own registration, so a binary and a wheel install
-            # label the same agent the same way.
-            display_name="Email Triage",
-            expected_api_major="2",
-            docs_url="https://amd-gaia.ai/docs/guides/email",
-            token_env_var=_EMAIL_TOKEN_ENV_VAR,
-            token_file_env_var=_EMAIL_TOKEN_FILE_ENV_VAR,
-            secret_file_min_version=_EMAIL_SECRET_FILE_MIN_VERSION,
-            mode_env_var="GAIA_EMAIL_AGENT_MODE",
-            cache_dir_name="email",
-            dev_src_dir=_default_email_src_dir(),
-            grant_agent_id=_EMAIL_GRANT_AGENT_ID,
-            forward_providers=("google", "microsoft", "microsoft_work"),
-            forwarded_mode_env_var=_EMAIL_FORWARDED_MODE_ENV_VAR,
-            required_connections=_EMAIL_REQUIRED_CONNECTIONS,
-            # Transcribed verbatim from gaia_agent_email.build_email_triage;
-            # drift-guarded by tests/unit/agents/test_sidecar_card_drift.py.
-            description=(
-                "Read, triage, organize, and reply to email through your "
-                "connected Google account. All email content is processed "
-                "locally on your machine."
-            ),
-            conversation_starters=(
-                "Run a pre-scan",
-                "Triage my inbox",
-                "Which of my sent emails are still waiting on a reply?",
-                "Summarize my unread emails",
-                "Draft a reply to my most recent message",
-                "Show me today's calendar",
-            ),
-            category="productivity",
-            tags=("email", "gmail", "calendar", "triage"),
-            icon="mail",
-        ),
         "gaia": AgentSidecarSpec(
             agent_id="gaia",
             service_id="gaia-agent-gaia",
@@ -483,17 +462,20 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             docs_url="https://amd-gaia.ai/docs/guides/gaia",
             token_env_var=_GAIA_TOKEN_ENV_VAR,
             token_file_env_var=_GAIA_TOKEN_FILE_ENV_VAR,
-            # First release already reads the token file, so there is no older
-            # installed binary needing the deprecated bare-env leg.
             secret_file_min_version="0.1.0",
             mode_env_var="GAIA_GAIA_AGENT_MODE",
             cache_dir_name="gaia",
             dev_src_dir=_default_gaia_src_dir(),
+            # A first start unpacks a ~170 MB binary while antivirus scans it;
+            # 30 s timed out on a cold Windows PC before it ever answered.
+            health_timeout=120.0,
             # No forward_providers: the flagship reaches external services through
             # MCP servers the user activates, not daemon-forwarded OAuth tokens.
             # Listing a provider here would hand it credentials it cannot use.
             # required_connections feeds grant scope derivation, not forwarding.
             required_connections=_GAIA_REQUIRED_CONNECTIONS,
+            daemon_owns_keychain=True,
+            keychain_file_min_version="0.3.4",
             description=(
                 "The flagship agent — conversation, document Q&A, data "
                 "analysis, and web research, with memory that persists and "
@@ -508,5 +490,6 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             category="general",
             tags=("general", "chat", "rag", "memory", "skills"),
             icon="sparkles",
+            consumes_mcp_servers=True,
         ),
     }

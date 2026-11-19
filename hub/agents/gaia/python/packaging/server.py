@@ -34,15 +34,20 @@ from __future__ import annotations
 import multiprocessing
 import sys
 
-from gaia_agent_chat.python_runner import dispatch as python_dispatch
+from gaia_agent.python_runner import dispatch as python_dispatch
 
 if __name__ == "__main__":
     # A script's multiprocessing workers re-launch this binary too.
     multiprocessing.freeze_support()
+    # os.environ keeps the bundle's library path: this one-file binary's own
+    # relaunches reuse its bundle through it. Other programs get child_env().
     _python_exit = python_dispatch(sys.argv[1:])
     if _python_exit is not None:
         sys.exit(_python_exit)
 
+from gaia.logger import configure  # noqa: E402
+
+configure()
 from gaia_agent.server import (  # noqa: E402,F401  (re-exported for the freeze/daemon)
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -51,5 +56,18 @@ from gaia_agent.server import (  # noqa: E402,F401  (re-exported for the freeze/
     main,
 )
 
+if __name__ != "__main__":
+    # The daemon's dev mode serves this module with `uvicorn server:app`,
+    # which never reaches main(), where the watch otherwise starts.
+    from gaia.sidecar import parent_watch
+
+    try:
+        parent_watch.start()
+    except ValueError as exc:  # one line, as main() prints it
+        raise SystemExit(f"gaia-agent: {exc}") from None
+
 if __name__ == "__main__":  # pragma: no cover
+    from gaia.sidecar.bundle_freshness import keep_unpacked_bundle_fresh
+
+    keep_unpacked_bundle_fresh()
     sys.exit(main())

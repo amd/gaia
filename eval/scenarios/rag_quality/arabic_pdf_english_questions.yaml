@@ -1,0 +1,38 @@
+id: arabic_pdf_english_questions
+name: "Arabic PDF, English questions"
+category: rag_quality
+severity: high
+description: |
+  Agent answers English questions from an Arabic PDF, which only works if it
+  searches in the document's language. One fact is written in Eastern Arabic digits.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - path: eval/corpus/documents/clinic_guide_ar_en.pdf
+
+turns:
+  - turn: 1
+    objective: "Ask 'How long does the clinic keep medical records?'"
+    ground_truth:
+      expected_phrases:
+        - "10"
+    success_criteria: "Agent answers in English that records are kept for 10 years after the patient's last visit, citing page 3"
+
+  - turn: 2
+    objective: "Ask 'Which children are exempt from the general consultation fee?'"
+    ground_truth:
+      expected_phrases:
+        - "6"
+    success_criteria: "Agent answers in English that children under 6 are exempt, citing page 2"
+
+  - turn: 3
+    objective: "Ask 'What is the nurse line extension?'"
+    ground_truth:
+      expected_phrases:
+        - "4417"
+    success_criteria: "Agent answers in English that the extension is 4417, citing page 1"
+
+expected_outcome: |
+  Every answer is in English, drawn from the Arabic text, with the right page.

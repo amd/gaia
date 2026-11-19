@@ -216,3 +216,32 @@ func mustKeyFor(t *testing.T, base string) string {
 	}
 	return key
 }
+
+// GAIA's own server, stopped: another Lemonade may hold the standard port, and
+// it is not the one this install was set up with.
+func TestStoppedOwnServerResolvesToItsLastPortNotTheStandardOne(t *testing.T) {
+	dir := isolatedConnection(t)
+	lemonadeDir := filepath.Join(dir, "lemonade")
+	if err := os.MkdirAll(filepath.Join(lemonadeDir, "dist", "v1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lemonadeDir, "last_port.json"), []byte(`{"port": 53237}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveBaseURL(""); got != DefaultBaseURL {
+		t.Fatalf("a PC without GAIA's own server resolved %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(lemonadeDir, "dist", "v1", "lemond.exe"), nil, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveBaseURL(""); got != "http://localhost:53237/api/v1" {
+		t.Fatalf("stopped own server resolved %q", got)
+	}
+	if key := mustKeyFor(t, ""); key != "" {
+		t.Fatalf("a key was sent to a stopped server's address: %q", key)
+	}
+	t.Setenv("LEMONADE_BASE_URL", "http://localhost:13305")
+	if got := ResolveBaseURL(""); got != DefaultBaseURL {
+		t.Fatalf("the user's own server was not used: %q", got)
+	}
+}

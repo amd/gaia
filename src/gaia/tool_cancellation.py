@@ -14,7 +14,7 @@ here that pulled in ``gaia.agents.*`` would make that a cycle.
 
 import logging
 import threading
-from typing import Optional
+from typing import Any, Callable, Optional
 
 
 class ToolCancelled(Exception):
@@ -59,6 +59,40 @@ def raise_if_cancelled() -> None:
     """Abort a tool body the agent has already given up on."""
     if tool_cancelled():
         raise ToolCancelled()
+
+
+def run_cancellable(work: Callable[[], Any], poll_seconds: float = 0.25) -> Any:
+    """Run a blocking call the tool can walk away from.
+
+    A network request or native library call cannot check for cancellation, so
+    Stop would otherwise wait minutes for it. The call runs on a daemon thread
+    and is abandoned on cancellation: nothing reads its result, and it ends when
+    the call does.
+
+    Raises:
+        ToolCancelled: The agent stopped waiting.
+    """
+    event = current_cancel_event()
+    if event is None:
+        return work()
+
+    outcome: dict = {}
+
+    def run() -> None:
+        try:
+            outcome["value"] = work()
+        except BaseException as e:  # pylint: disable=broad-except
+            outcome["error"] = e
+
+    worker = threading.Thread(target=run, name="cancellable-call", daemon=True)
+    worker.start()
+    while worker.is_alive():
+        worker.join(poll_seconds)
+        if worker.is_alive() and event.is_set():
+            raise ToolCancelled()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
 
 
 class AbandonedWorkerLogFilter(logging.Filter):

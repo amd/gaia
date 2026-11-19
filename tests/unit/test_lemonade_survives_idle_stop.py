@@ -214,7 +214,7 @@ class TestTheTurnSurvives:
         monkeypatch.setenv("LEMONADE_BASE_URL", f"http://localhost:{OLD_PORT}")
         client = _client()
         server.on_request = server.stop
-        with pytest.raises(requests.exceptions.ConnectionError):
+        with pytest.raises(lc.LemonadeServerDownError):
             _ask(client)
         assert server.daemon_calls == 0
 

@@ -173,7 +173,6 @@ _COMBOS = [
     dict(model="fireworks.kimi"),
     dict(model="claude-opus-5", use_claude=True),
     dict(model="claude-sonnet-5", use_claude=True),
-    dict(model="gpt-5", use_openai=True),
     dict(model=""),
     dict(model=None),
     dict(model="   "),

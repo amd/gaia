@@ -8,8 +8,9 @@ A Hub-installed flagship runs as a daemon sidecar. Its ``/query`` parks on a
 "Nothing was executed" card with no way to answer. These pin the path from
 the UI's own permission prompt to the sidecar's decision route, and that it
 stays fail-closed: the answer is bound to the prompt shown, a stale or
-duplicate answer is refused, "always" is not offered, and a sidecar-side
-timeout denies.
+duplicate answer is refused, "always" is not offered by a sidecar that can't
+list its grants (see test_relay_always_allow.py), and a sidecar-side timeout
+denies.
 """
 
 from __future__ import annotations
@@ -22,16 +23,16 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
-from gaia.ui.email_sidecar.profiles import (
-    EMAIL_PROFILE,
+from gaia.ui.routers.chat import router as chat_router
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import (
+    _NO_PROFILE,
     GAIA_PROFILE,
     confirmations_supported,
 )
-from gaia.ui.routers.chat import router as chat_router
 from gaia.ui.sse_handler import SSEOutputHandler
 
 pytestmark = pytest.mark.allow_network
@@ -87,9 +88,9 @@ def test_only_a_flagship_that_has_tool_decision_is_answerable(version, expected)
     assert confirmations_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_confirmations_stay_informational():
-    """Email's /query ends the run on a confirmation; there is nothing to answer."""
-    assert confirmations_supported(EMAIL_PROFILE, "2.99") is False
+def test_a_profile_without_the_floor_keeps_confirmations_informational():
+    """Without the floor a confirmation ends the run; there is nothing to answer."""
+    assert confirmations_supported(_NO_PROFILE, "2.99") is False
 
 
 # ── Relay event mapping ────────────────────────────────────────────────────
@@ -102,6 +103,8 @@ class TestRelayMapsAnswerableConfirmation:
 
         assert terminal is False, "the sidecar run is parked, not over"
         [event] = _drain(handler)
+        assert event.pop("timeout_seconds") == 600
+        assert event.pop("expires_at") > 0
         assert event == {
             "type": "permission_request",
             "tool": "write_file",
@@ -109,8 +112,8 @@ class TestRelayMapsAnswerableConfirmation:
             "summary": _CONFIRM["summary"],
             "risk": "write",
         }
-        # An "always" grant would live in the sidecar where this chat can't
-        # list or revoke it, so the choice is never offered.
+        # Below contract 2.19 the chat could neither list nor revoke an
+        # "always" grant the sidecar holds, so the choice is not offered.
         assert "always_scope" not in event
         assert handler.relay_confirmation_pending()
 
@@ -340,7 +343,7 @@ def live_gaia_sidecar(monkeypatch):
 
 
 def _relay_in_background(base_url):
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     handler = SSEOutputHandler()
     proxy = SidecarProxy(base_url, agent_id="gaia")
@@ -433,7 +436,7 @@ def test_full_access_relays_a_gated_shell_prompt_to_the_ui(
 ):
     """Full access pre-approves on the sidecar, yet a gated shell call reaches
     the Agent UI's prompt and runs only on its answer."""
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     base_url, agents = live_gaia_sidecar
     from gaia_agent import server as server_mod
@@ -482,7 +485,7 @@ def test_full_access_relays_a_gated_shell_prompt_to_the_ui(
 
 def test_a_decision_without_a_confirm_id_is_never_sent():
     """The sidecar would resolve whichever prompt is live; refuse instead."""
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     with pytest.raises(SidecarError, match="confirm_id"):
         SidecarProxy("http://127.0.0.1:9", agent_id="gaia").tool_decision(

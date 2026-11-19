@@ -463,3 +463,52 @@ class TestConnectedDevice:
         _activate_tunnel(app)
         client.get("/api/sessions", headers={"Authorization": "Bearer wrong"})
         assert app.state.tunnel.get_status()["device"] is None
+
+
+# ── Tests: installable-app files reach a phone without a cookie ─────────
+
+
+class TestPwaFilesOverTunnel:
+    """A phone fetches the manifest without credentials, and the service worker
+    script must arrive as JavaScript or the browser refuses to register it."""
+
+    @pytest.fixture
+    def app_with_pwa(self, tmp_path):
+        dist = tmp_path / "dist"
+        (dist / "icons").mkdir(parents=True)
+        (dist / "index.html").write_text("<html><body>gaia</body></html>")
+        (dist / "manifest.json").write_text('{"name": "GAIA"}')
+        (dist / "sw.js").write_text("self.addEventListener('fetch', () => {});")
+        (dist / "icons" / "icon-192.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        return create_app(db_path=":memory:", webui_dist=str(dist))
+
+    _REMOTE = {"x-forwarded-for": "203.0.113.7", "x-forwarded-proto": "https"}
+
+    @pytest.mark.parametrize(
+        "path, content_type",
+        [
+            ("/manifest.json", "application/json"),
+            ("/sw.js", "javascript"),
+            ("/icons/icon-192.png", "image/png"),
+        ],
+    )
+    def test_served_to_a_remote_client_with_no_cookie(
+        self, app_with_pwa, path, content_type
+    ):
+        _activate_tunnel(app_with_pwa)
+        resp = TestClient(app_with_pwa).get(path, headers=self._REMOTE)
+        assert resp.status_code == 200
+        assert content_type in resp.headers["content-type"]
+
+    def test_token_on_the_worker_script_does_not_set_cookie(self, app_with_pwa):
+        token = _activate_tunnel(app_with_pwa)
+        resp = TestClient(app_with_pwa).get(
+            f"/sw.js?token={token}", headers=self._REMOTE, follow_redirects=False
+        )
+        assert resp.status_code == 200
+        assert "gaia_tunnel_token" not in resp.headers.get("set-cookie", "")
+
+    def test_api_still_needs_the_token(self, app_with_pwa):
+        _activate_tunnel(app_with_pwa)
+        resp = TestClient(app_with_pwa).get("/api/sessions", headers=self._REMOTE)
+        assert resp.status_code == 401

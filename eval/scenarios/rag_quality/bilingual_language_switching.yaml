@@ -1,0 +1,37 @@
+id: bilingual_language_switching
+name: "Bilingual PDF, language switching mid-chat"
+category: rag_quality
+severity: high
+description: |
+  The user switches language every turn over a PDF with Arabic and English
+  sections. Each answer follows the language of the latest question, not the
+  language of the page or of the previous turn.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - path: eval/corpus/documents/clinic_guide_ar_en.pdf
+
+turns:
+  - turn: 1
+    objective: "Ask, in Arabic and word for word: 'كم تستغرق زيارة الفيديو؟'"
+    ground_truth:
+      expected_phrases:
+        - "20"
+    success_criteria: "Agent answers in Arabic, from the English section, that a video visit lasts up to 20 minutes, citing page 4"
+
+  - turn: 2
+    objective: "Ask 'And when is the second Hepatitis B dose given?'"
+    success_criteria: "Agent answers in English, from the Arabic section, that the second dose comes one month after the first, citing page 3"
+
+  - turn: 3
+    objective: "Ask, in Arabic and word for word: 'هل خدمة المترجم مجانية؟ ومتى يجب طلبها؟'"
+    ground_truth:
+      expected_phrases:
+        - "3"
+    success_criteria: "Agent answers in Arabic that an interpreter is free and must be requested at least 3 days before the visit, citing page 4"
+
+expected_outcome: |
+  Each answer is in the language of its own question and the facts come from the
+  right section whichever language that section is in.
