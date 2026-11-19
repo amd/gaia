@@ -54,6 +54,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+try:  # the regex parser moved in Python 3.11
+    from re import _parser as _regex_parser
+except ImportError:  # pragma: no cover - Python 3.10
+    import sre_parse as _regex_parser
+
 from gaia.agents.base.tools import tool
 from gaia.logger import get_logger
 from gaia.skills import context as skill_context
@@ -89,6 +94,9 @@ SAMPLE_TAIL_BYTES = 64 * 1024
 #: A line's own timestamp starts within this many characters.
 TS_SEARCH_CHARS = 60
 MERGE_MIN_VARIANTS = 8
+#: A caller's regex may take this long on one probe line, on this many lines.
+REGEX_PROBE_BUDGET_S = 0.25
+REGEX_PROBE_LINES = 20
 
 # Classification thresholds (percent of the analysed time range unless noted).
 BASELINE_MIN_SPAN_PCT = 60.0
@@ -1324,11 +1332,130 @@ PARSERS: Dict[str, Callable[[str, FileContext], Optional[Rec]]] = {
 }
 
 
+def _self_repeating(items: Sequence[Tuple[Any, Any]]) -> bool:
+    """True when a group's content can meet itself with nothing fixed between.
+
+    Every part is a variable repeat, and leaving out the optional ones puts
+    the same repeat next to itself: ``(\\w+\\s*)+``, ``(a+)*``, ``(\\d+,?)+``.
+    Repeating such a group lets the same text be split in a number of ways
+    that doubles with every character, and a line that does not match tries
+    them all. ``(\\s+\\S+)*`` is left to the timing probe: its two repeats
+    differ, so they may well not overlap.
+    """
+    if not items:
+        return False
+    needed: List[str] = []
+    for op, av in items:
+        name = str(op)
+        if name in ("MAX_REPEAT", "MIN_REPEAT"):
+            if av[0] == av[1]:
+                return False
+            if av[0] > 0:
+                needed.append(repr(av[2]))
+        elif name == "SUBPATTERN":
+            if not _self_repeating(av[3]):
+                return False
+            needed.append(repr(av[3]))
+        elif name == "BRANCH":
+            if not any(_self_repeating(alt) for alt in av[1]):
+                return False
+            needed.append(repr(av[1]))
+        else:
+            return False
+    if len(needed) <= 1:
+        return True
+    return any(a == b for a, b in zip(needed, needed[1:] + needed[:1]))
+
+
+def _has_nested_repeat(items: Sequence[Tuple[Any, Any]]) -> bool:
+    for op, av in items:
+        name = str(op)
+        if name in ("MAX_REPEAT", "MIN_REPEAT"):
+            body = av[2]
+            if av[1] > 1 and any(str(o) in ("SUBPATTERN", "BRANCH") for o, _ in body):
+                if _self_repeating(body):
+                    return True
+            if _has_nested_repeat(body):
+                return True
+        elif name in ("SUBPATTERN", "ATOMIC_GROUP"):
+            if _has_nested_repeat(av[3] if name == "SUBPATTERN" else av):
+                return True
+        elif name == "BRANCH":
+            if any(_has_nested_repeat(alt) for alt in av[1]):
+                return True
+        elif name in ("ASSERT", "ASSERT_NOT"):
+            if _has_nested_repeat(av[1]):
+                return True
+    return False
+
+
+def compile_regex(pattern: Optional[str], what: str) -> Optional["re.Pattern[str]"]:
+    """Compile a regex the caller supplied; None when it is empty.
+
+    Raises:
+        ValueError: naming the argument, when the pattern does not compile or
+            repeats a group whose content repeats on its own.
+    """
+    if not pattern:
+        return None
+    try:
+        compiled = re.compile(pattern)
+        nested = _has_nested_repeat(list(_regex_parser.parse(pattern)))
+    except (re.error, RecursionError, OverflowError) as exc:
+        raise ValueError(f"{what} is not a valid regular expression: {exc}") from exc
+    if nested:
+        raise ValueError(
+            f"{what} repeats a group whose content can repeat on its own, like "
+            "(\\w+\\s*)+ or (a+)*. One line that does not match can keep such a "
+            "pattern busy for hours. Rewrite it without a quantifier inside the "
+            "repeated group, for example [\\w\\s]+."
+        )
+    return compiled
+
+
+#: Runs of one kind of character: what runaway backtracking feeds on.
+_PROBE_RUNS = tuple(
+    unit * (48 // len(unit)) for unit in ("a", "1", " ", "a ", "a1", "a.")
+)
+
+
+def probe_regex(pattern: "re.Pattern[str]", what: str, lines: Sequence[str]) -> None:
+    """Time a caller's regex on sample lines before it meets the whole log.
+
+    A running ``re`` search cannot be stopped, so the pattern is tried on
+    prefixes that grow a little at a time, with and without a character that
+    makes an end anchor fail. Runaway backtracking then shows as a slow search
+    on a short prefix, long before a full line would hang the call.
+
+    Raises:
+        ValueError: naming the argument, when one search passes the budget.
+    """
+    chosen = list(lines[: REGEX_PROBE_LINES // 2])
+    chosen += sorted(lines, key=len, reverse=True)[: REGEX_PROBE_LINES // 2]
+    for line in list(_PROBE_RUNS) + chosen:
+        for tail in ("", "\x00"):
+            n = min(8, len(line))
+            while True:
+                text = line[:n] + tail
+                started = time.perf_counter()
+                pattern.search(text)
+                took = time.perf_counter() - started
+                if took > REGEX_PROBE_BUDGET_S:
+                    raise ValueError(
+                        f"{what} is too slow: {took:.2f} s on a line of {len(text)} "
+                        "characters, and it gets worse with length. Overlapping "
+                        "or nested quantifiers cause this; simplify the pattern."
+                    )
+                if n >= len(line):
+                    break
+                n = min(len(line), n + 2 if n < 48 else n * 2)
+
+
 class CustomParser:
     """Line parser built from the caller's ``timestamp_regex``."""
 
     def __init__(self, timestamp_regex: str) -> None:
-        self.pattern = re.compile(timestamp_regex)
+        self.pattern = compile_regex(timestamp_regex, "timestamp_regex")
         names = set(self.pattern.groupindex)
         if (
             "ts" not in names
@@ -1390,15 +1517,6 @@ class CustomParser:
                 break
         rec.msg = " ".join(t for i, t in enumerate(tokens) if i != drop)
         return rec
-
-
-def _compile_optional(pattern: Optional[str], what: str) -> Optional["re.Pattern[str]"]:
-    if not pattern:
-        return None
-    try:
-        return re.compile(pattern)
-    except re.error as exc:
-        raise ValueError(f"{what} is not a valid regular expression: {exc}") from exc
 
 
 def _group_value(m: "re.Match[str]", name: str) -> Optional[str]:
@@ -1826,13 +1944,14 @@ class Analyzer:
         self.custom = (
             CustomParser(options.timestamp_regex) if options.timestamp_regex else None
         )
-        self.level_re = _compile_optional(options.level_regex, "level_regex")
-        self.host_re = _compile_optional(options.host_regex, "host_regex")
-        entity_re = _compile_optional(options.entity_regex, "entity_regex")
+        self.level_re = compile_regex(options.level_regex, "level_regex")
+        self.host_re = compile_regex(options.host_regex, "host_regex")
+        entity_re = compile_regex(options.entity_regex, "entity_regex")
         self.entity_patterns: Tuple["re.Pattern[str]", ...] = (
             (entity_re,) if entity_re is not None else ()
         )
         self.custom_entities = entity_re is not None
+        self.probed = False
         self.bucket_s: float = parse_bucket(options.bucket) or 60.0
         self.bucket_fixed = options.bucket not in (None, "")
         self.bucket_asked = self.bucket_s
@@ -1892,6 +2011,8 @@ class Analyzer:
                 report.error = f"could not read: {exc}"
                 plans.append((path, ctx, {"format": "unreadable"}))
                 continue
+            if not self.probed and sample:
+                self._probe_patterns(sample)
             info = detect_format(sample, ctx, self.custom)
             report.format, report.match_rate = info["format"], info["match_rate"]
             report.secondary = info["secondary"]
@@ -1919,6 +2040,19 @@ class Analyzer:
         if lo is not None:
             self.origin = math.floor(lo / self.bucket_s) * self.bucket_s
         return plans
+
+    def _probe_patterns(self, sample: Sequence[str]) -> None:
+        """Time every regex the caller supplied, once, on the first sample."""
+        self.probed = True
+        named = (
+            ("timestamp_regex", self.custom.pattern if self.custom else None),
+            ("level_regex", self.level_re),
+            ("host_regex", self.host_re),
+            ("entity_regex", self.entity_patterns[0] if self.custom_entities else None),
+        )
+        for what, pattern in named:
+            if pattern is not None:
+                probe_regex(pattern, what, sample)
 
     def _parse_line(self, line: str, ctx: FileContext) -> Optional[Rec]:
         rec: Optional[Rec] = None
@@ -3044,7 +3178,8 @@ def triage(
     block): every file is opened through the skill context.
 
     Raises:
-        ValueError: an option (regex, bucket) is invalid.
+        ValueError: an option is invalid: a bucket that is no duration, or a
+            regex that does not compile or backtracks out of control.
     """
     options = options or TriageOptions()
     an = Analyzer(options)

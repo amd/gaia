@@ -616,6 +616,68 @@ def test_invalid_options_fail_loudly():
     )
 
 
+REGEX_ARGS = ["timestamp_regex", "level_regex", "host_regex", "entity_regex"]
+
+
+@pytest.mark.parametrize("arg", REGEX_ARGS)
+def test_a_regex_that_does_not_compile_is_a_tool_error_naming_it(tmp_path, arg):
+    path = _steady(tmp_path / "a.log", hours=1)
+    out = _call(paths=[str(path)], **{arg: "(?P<ts>[0-9"})
+    assert out["status"] == "error"
+    assert out["error"].startswith(f"{arg} is not a valid regular expression")
+    assert "coverage" not in out
+
+
+@pytest.mark.parametrize("arg", REGEX_ARGS)
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        r"(\w+\s*)+$",
+        r"(?P<ts>(\d+)*)x",
+        r"((a+)+)b",
+        r"(\d+,?)+!",
+        r"(\w+\w+)+!",
+    ],
+)
+def test_a_repeated_group_that_repeats_inside_is_refused(tmp_path, arg, pattern):
+    path = _steady(tmp_path / "a.log", hours=1)
+    out = _call(paths=[str(path)], **{arg: pattern})
+    assert out["status"] == "error"
+    assert out["error"].startswith(f"{arg} repeats a group")
+    assert "[\\w\\s]+" in out["error"]
+
+
+def test_a_slow_regex_is_stopped_by_the_probe_before_streaming(tmp_path, monkeypatch):
+    """Not nested, so only timing finds it: each 'a' can pair up or stand alone."""
+    monkeypatch.setattr(lt, "REGEX_PROBE_BUDGET_S", 0.05)
+    path = _steady(tmp_path / "a.log", hours=1)
+    streamed = []
+    monkeypatch.setattr(
+        lt.Analyzer, "run_file", lambda self, p, ctx: streamed.append(p)
+    )
+    out = _call(paths=[str(path)], entity_regex=r"(a|aa)+$")
+    assert out["status"] == "error"
+    assert out["error"].startswith("entity_regex is too slow")
+    assert streamed == [], "the log must not be streamed with that pattern"
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        r"(req-[0-9a-f]+)",
+        r"(?:\d+\.)+\d+",
+        r"(\d{1,3}\.){3}\d{1,3}",
+        r"(?P<entity>[A-Za-z]+-\d+)(?:\s|$)",
+        r"((?:\s+\S+)*)$",
+        r"((?:[0-9a-f]{2}:){5}[0-9a-f]{2})",
+    ],
+)
+def test_ordinary_regexes_are_accepted(tmp_path, pattern):
+    path = _steady(tmp_path / "a.log", hours=1)
+    out = _call(paths=[str(path)], entity_regex=pattern)
+    assert out["status"] == "success", out.get("error")
+
+
 def test_explicit_bucket_is_used(tmp_path):
     res = lt.triage(
         [str(_steady(tmp_path / "a.log", hours=2))], lt.TriageOptions(bucket="1min")
