@@ -203,8 +203,7 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
         "rg", "fd", "locate", "tree", "stat", "rsync", "zip", "7z", "dir", "type", "del", "Get-ChildItem"};
     // The program of the command segment a word at `at` belongs to.
     const auto programBefore = [&command](size_t at) {
-        const size_t segStart = command.find_last_of(";|&
-(", at);
+        const size_t segStart = command.find_last_of(";|&\n(", at);
         std::istringstream seg(command.substr(segStart == std::string::npos ? 0 : segStart + 1,
                                               at - (segStart == std::string::npos ? 0 : segStart + 1)));
         std::string w, program;
