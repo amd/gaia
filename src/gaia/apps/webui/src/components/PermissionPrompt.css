@@ -214,5 +214,5 @@
 
 /* The account an email goes out from: its own row, set apart from the recipients. */
 .perm-mail-header .perm-mail-from {
-    font-weight: 600;
+    font-weight: 500;
 }
