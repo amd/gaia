@@ -120,15 +120,12 @@ def triage_logs(
     """Find what went wrong in log files: call this first for any log question.
 
     Reads every file in full (read-only, any size) and separates steady
-    baseline templates from anomalies. Returns checks, coverage, anomalies,
-    bursts, baseline, entities and warnings; quote its numbers exactly.
+    baseline templates from anomalies; quote its numbers exactly.
 
-    Asked which ids, hosts, sessions, requests or jobs are anomalous? Pass
-    output_path: this tool writes that list, with the evidence for each id,
-    and returns its path, count and share of all entities. Deliver that file
-    or filter it; never rebuild the list with your own script. A list holding
-    more than a third of all entities is not an anomaly list: follow
-    entity_list_warning.
+    Asked which ids, hosts or jobs are anomalous? Pass output_path: this tool
+    writes that list with each id's evidence. Deliver or filter that file;
+    never rebuild the list with your own script. A list holding more than a
+    third of all entities is not an anomaly list: follow entity_list_warning.
 
     Args:
         paths: Log files and/or folders (folders are walked recursively).
@@ -142,10 +139,9 @@ def triage_logs(
         bucket: Optional time bucket such as "1min", "5min" or "1h"; chosen
             automatically from the range when empty.
         top_n: How many anomalies to return (1-50).
-        output_path: New file for the anomalous-entity list: .csv (one row
-            per id with its evidence) or .txt (one id per line); .json gets
-            the full detail, the list included. Pass it on the first call
-            when a list is asked for.
+        output_path: New file for the anomalous-entity list: .csv (id and
+            evidence per row), .txt (ids) or .json (full detail). Pass it on
+            the first call when a list is asked for.
         entity_min_level: Keep only ids named by anomaly templates at this
             level or above, e.g. "ERROR" for error-bearing templates only.
         entity_max_share: Leave out anomaly templates that touch more than
