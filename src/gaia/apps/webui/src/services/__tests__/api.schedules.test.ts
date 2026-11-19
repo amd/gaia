@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createSchedule, parseScheduleInput } from '../api';
+import { createSchedule, parseScheduleInput } from '../scheduleApi';
 import { formatNextRun } from '../../components/ScheduleManager';
 
 function bodyOf(call: unknown[]): Record<string, unknown> {

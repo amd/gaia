@@ -1236,6 +1236,78 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+async function withFormula(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'How much does a columnar scan save?', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: 'The scan amplification is\n\n$$R = \\frac{C_{\\text{row}}}{C_{\\text{col}}} \\approx \\frac{W}{w}$$\n\nWith 50 columns and 4 read, $R \\approx 12.5$, and the bill drops from $5 to $0.40.',
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a formula in an answer is drawn, left to right (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFormula);
+        const answer = page.locator('.msg-assistant').last();
+        await expect(answer.locator('.md-math math')).toHaveCount(2);
+        await expect(answer).toContainText('from $5 to $0.40');
+        await expect(answer.locator('.md-math').first()).toHaveAttribute('dir', 'ltr');
+        expect(await audit(page)).toEqual([]);
+        await answer.screenshot({ path: info.outputPath(`formula-${locale}.png`) });
+    });
+}
+
+const LONG_SUM = `$$${Array.from({ length: 30 }, (_, i) => `a_{${i + 1}}`).join(' + ')} = S$$`;
+const LONG_FORMULA_TEXT = `The quadratic formula is $$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$ inline, and a very long one ${LONG_SUM} in the same paragraph.\n\n$$A = P\\left(1 + \\frac{r}{n}\\right)^{nt}$$`;
+
+async function withLongFormula(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: LONG_FORMULA_TEXT, created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: LONG_FORMULA_TEXT, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const theme of ['light', 'dark'] as const) {
+    test(`a formula wider than its line scrolls in its own box, and one that fits has no scrollbar (${theme})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, 'en', withLongFormula, theme);
+        const list = page.locator('.messages-scroll');
+        await expect(page.locator('.md-math-wide')).toHaveCount(2);
+        expect(await list.evaluate((el) => el.scrollWidth - el.clientWidth), 'the chat scrolls sideways').toBeLessThanOrEqual(1);
+        for (const bubble of ['.msg-user', '.msg-assistant']) {
+            const spill = await page.locator(bubble).last().evaluate((el) => {
+                const edge = el.getBoundingClientRect().right;
+                const math = el.querySelector('.md-math-wide')!.getBoundingClientRect();
+                return math.right - edge;
+            });
+            expect(spill, `${bubble}: the formula's box runs past its message`).toBeLessThanOrEqual(1);
+        }
+        // The short formulas stay as they were: in the line, and with nothing to scroll.
+        const fits = await page.locator('.msg-assistant').last().evaluate((el) =>
+            [...el.querySelectorAll('.md-math:not(.md-math-wide)')].map((m) => ({
+                display: m.classList.contains('md-math-display'),
+                scrollsDown: m.scrollHeight > m.clientHeight && getComputedStyle(m).overflowY !== 'hidden',
+            })));
+        expect(fits).toEqual([{ display: false, scrollsDown: false }, { display: true, scrollsDown: false }]);
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.messages-column').screenshot({ path: info.outputPath(`formula-long-${theme}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
@@ -1631,6 +1703,27 @@ test('document being indexed', async ({ page }) => {
     await expect(page.locator('.btn-cancel')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+for (const locale of ['en', 'ar']) {
+    // A long library: one-line drop zone, a filter, and which chats each document is in.
+    test(`a long document library says where each document is used (${locale})`, async ({ page }) => {
+        const docs = ['q3-board.pdf', 'lease-agreement-final.pdf', 'garden-notes.txt', 'تقرير الميزانية.xlsx', 'meeting-notes.md', 'recipes.docx', 'taxes-2025.pdf']
+            .map((filename, i) => ({ id: `d${i}`, filename, filepath: `C:/docs/${filename}`, file_size: 4096 * (i + 1), chunk_count: i + 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: i % 3 }));
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => route.fulfill({ json: { documents: docs, total: docs.length, total_size_bytes: 1, total_chunks: 1 } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-usage')).toHaveCount(docs.length);
+        await expect(page.locator('.doc-filter-input')).toBeVisible();
+        await page.locator('.doc-row').nth(1).hover();
+        await shot(page, `documents-${locale}-long-library`);
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.doc-filter-input').fill('notes');
+        await expect(page.locator('.doc-row:visible')).toHaveCount(2);
+        await shot(page, `documents-${locale}-filtered`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 for (const locale of ['en', 'ar']) {
     // The dialog was centred on its content, so its title and path box jumped as rows came and went.
@@ -3471,6 +3564,15 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.schedule-nl-input').fill('every 2m');
             await expect(page.locator('.schedule-parsed-preview.valid')).toBeVisible();
             await check(page, 'form-valid');
+        });
+
+        // A schedule couldn't be changed: you deleted it and typed it in again.
+        test('editing a schedule', async ({ page }) => {
+            await openSchedules(page);
+            await page.locator('.schedule-card').first().getByRole('button', { name: locale === 'ar' ? /تعديل/ : /^Edit$/ }).click();
+            await expect(page.locator('.schedule-form-title')).toBeVisible();
+            await expect(page.locator('.schedule-nl-input')).toHaveValue('Weekdays at 8:00 AM');
+            await check(page, 'form-edit');
         });
 
         test('new schedule with a "when" GAIA cannot read', async ({ page }) => {
