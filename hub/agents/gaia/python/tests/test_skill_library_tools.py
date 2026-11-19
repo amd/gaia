@@ -46,6 +46,10 @@ pytest.importorskip("gaia_agent")
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
 from gaia_agent.skill_tools import SKILL_LIBRARY_TOOL_NAMES  # noqa: E402
 
+from gaia.agents.base.history import (  # noqa: E402
+    MEMORY_CONTEXT_FOOTER,
+    MEMORY_CONTEXT_HEADER,
+)
 from gaia.skills.capture import (  # noqa: E402
     published_skill_names as _REAL_PUBLISHED_SKILL_NAMES,
 )
@@ -1515,3 +1519,75 @@ class TestCaptureSkillTool:
         result = call(session, "capture_skill", source="whatever", name="../evil")
         assert result["status"] == "error"
         assert "not a skill name" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# /<skill-name> typed by the user
+# ---------------------------------------------------------------------------
+
+
+def test_a_typed_skill_command_loads_the_skill_and_frames_the_request(session):
+    agent = session.agent
+    sent = agent._expand_skill_command("/note-taker summarize this chat")
+
+    assert "note-taker" in agent.loaded_skills
+    assert NOTE_TAKER_MARKER in agent._prompt_text()
+    assert sent.startswith("[GAIA: the user typed /note-taker")
+    assert sent.endswith("\n\nsummarize this chat")
+    assert agent.describe_skills()[-1] == {"name": "note-taker", "how": "user"}
+
+
+def test_the_skill_body_survives_the_turns_skill_selection(session):
+    """The per-turn selector must not hide the body the user just asked for."""
+    agent = session.agent
+    sent = agent._expand_skill_command("/note-taker")
+
+    agent._refresh_active_skill_filter(sent)
+
+    assert NOTE_TAKER_MARKER in agent._prompt_text()
+    assert "No request was typed after the command" in sent
+
+
+def test_process_query_sends_the_framed_request(session, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        session.agent,
+        "_process_query_impl",
+        lambda user_input, *a, **k: seen.append(user_input) or {"result": ""},
+    )
+    monkeypatch.setattr(
+        session.agent, "get_memory_dynamic_context", lambda: "Current time: noon"
+    )
+    session.agent.process_query("/note-taker take notes")
+
+    memory, _, sent = seen[0].partition(MEMORY_CONTEXT_FOOTER + "\n\n")
+    assert memory.startswith(MEMORY_CONTEXT_HEADER)
+    assert sent.startswith("[GAIA: the user typed /note-taker")
+    assert sent.endswith("take notes")
+    assert "note-taker" in session.agent.loaded_skills
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["/tmp/report.txt summarize it", "/not-installed hi", "/etc", "hi /note-taker"],
+)
+def test_text_that_names_no_installed_skill_passes_through(session, text):
+    assert session.agent._expand_skill_command(text) == text
+    assert "note-taker" not in session.agent.loaded_skills
+
+
+def test_a_refused_skill_is_reported_not_run(session):
+    sent = session.agent._expand_skill_command("/imported-code do the thing")
+
+    assert "imported-code" not in session.agent.loaded_skills
+    assert "could not be turned on" in sent
+    assert "Do not attempt their request without the skill" in sent
+    assert "gaia skill import" in sent
+
+
+def test_a_folder_note_in_front_of_the_command_is_kept(session):
+    note = "[This chat is working in the folder C:\\work. When the user says it.]"
+    sent = session.agent._expand_skill_command(f"{note}\n\n/note-taker go")
+
+    assert sent.startswith(note + "\n\n[GAIA: the user typed /note-taker")
+    assert "note-taker" in session.agent.loaded_skills

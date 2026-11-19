@@ -392,6 +392,32 @@ def test_the_model_is_told_the_limit_with_its_request(agent, clock):
     assert [m["role"] for m in chat.sent[0]].count("user") == 1
 
 
+_NO_ONE = "Nobody can answer questions during this run."
+
+
+def test_a_run_nobody_watches_says_so_with_the_request(agent, clock):
+    """Expecting a reply, the model ended on an offer instead of deciding."""
+    agent.no_one_to_ask = True
+    chat = _stub_chat(agent, clock, [_answer("Fine.")], 10)
+
+    result = agent.process_query(_REQUEST)
+
+    first = chat.sent[0][-1]
+    assert first["content"].startswith(_REQUEST)
+    assert _NO_ONE in first["content"]
+    assert [m["role"] for m in chat.sent[0]].count("user") == 1
+    asked = [m for m in result["conversation"] if m.get("role") == "user"]
+    assert asked[0]["content"] == _REQUEST, "the saved history keeps the user's words"
+
+
+def test_a_chat_someone_is_in_gets_no_such_note(agent, clock):
+    chat = _stub_chat(agent, clock, [_answer("Fine.")], 10)
+
+    agent.process_query(_REQUEST)
+
+    assert chat.sent[0][-1]["content"] == _REQUEST
+
+
 def test_the_saved_history_keeps_the_users_own_words(agent, clock):
     agent.time_limit_s = 100
     _stub_chat(agent, clock, [_answer("Fine.")], 10)

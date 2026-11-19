@@ -61,7 +61,7 @@ export interface AgentTool {
 }
 
 /** How a skill came to be loaded in a chat. */
-export type SkillOrigin = 'model' | 'auto' | 'always';
+export type SkillOrigin = 'model' | 'user' | 'auto' | 'always';
 
 export interface ActiveSkill {
     name: string;

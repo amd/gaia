@@ -574,11 +574,31 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
         # The header shows these, not an install record that may name another build.
         "agent_version": agent_version,
         "gaia_version": gaia_version,
+        "skills": _skill_commands(agent),
     }
     # Reported even on the Claude path: embeddings (RAG, memory) still run on
     # Lemonade, so "chat is remote" does not mean Lemonade being down is fine.
     event.update(_lemonade_health(_status_lemonade_url(agent)))
     return event
+
+
+def _skill_commands(agent: Any) -> List[Dict[str, str]]:
+    """Installed skills, for the TUI's ``/`` list: typing ``/<name>`` runs one.
+
+    Empty for an agent without the skill library: it cannot run them.
+    """
+    if not callable(getattr(agent, "activate_skill", None)):
+        return []
+    skills = agent.skill_manager.discover()
+    return [
+        {"name": name, "description": skills[name].description or ""}
+        for name in sorted(skills)
+    ]
+
+
+def _skills_event(agent: Any) -> Dict[str, Any]:
+    """A status line carrying only the skill list, after it may have changed."""
+    return {"type": "status", "message": "", "skills": _skill_commands(agent)}
 
 
 def _status_lemonade_url(agent: Any) -> Optional[str]:
@@ -1219,6 +1239,7 @@ def run_skills_command(agent: Any, query: str, out) -> None:
     args = query.strip()[len(SKILLS_COMMAND_PREFIX) :].split()
     if not args:
         skills = sorted(agent.skill_manager.reload())
+        _write(_skills_event(agent), out)
         listing = ", ".join(f"`{n}`" for n in skills) or "none"
         _write(
             {
@@ -1291,6 +1312,7 @@ def run_skills_command(agent: Any, query: str, out) -> None:
     # The skill catalog sits in the cached prompt head; recompose so this
     # session can see what was just added.
     agent.rebuild_system_prompt()
+    _write(_skills_event(agent), out)
     lines = [f"Added {len(result.added)} skill(s) from {link}."]
     if result.added:
         lines.append(", ".join(f"`{a['name']}`" for a in result.added))
