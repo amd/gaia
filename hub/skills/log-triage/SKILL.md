@@ -72,7 +72,7 @@ incident.
   `parsed_share_ok` is false, call again with `timestamp_regex` (and
   `level_regex` / `host_regex`) fitted to the file's `unparsed_samples`.
 - **Deliver lists from `triage_logs` output; do not rebuild them by hand.**
-  A list of bad blocks, requests, sessions or jobs is `entities.list`. For
+  A list of failed requests, sessions or jobs is `entities.list`. For
   more than 150 ids call again with
   `output_path="<folder>/anomalous_entities.csv"` and give the user that file.
   Say how many were flagged out of `total`.
@@ -80,9 +80,8 @@ incident.
   ERROR or FATAL. Report them once as background, never in an anomaly total.
 - **Quote, do not round.** Copy every timestamp, count and host number
   exactly as the result prints it.
-- **Use only the logs you were given**: not a public dataset you recognise,
-  not memory, not a labels or expected-results file beside the logs (mention
-  such a file and leave it unused).
+- **Base every finding on lines in the logs you were given**; do not fill
+  gaps from memory.
 
 ## Procedure
 
@@ -101,9 +100,9 @@ incident.
    context, else "owner: to assign"), Confidence. Close with Baseline and
    Limits, and repeat every warning that limits the answer.
 
-Example (invented): *"Summary: disk controller faults on 31 of 40 nodes,
-2024-03-06 13:13:00 to 13:16:58 UTC, 120 FATAL lines from a template seen
-nowhere else in the 3.5-day log. Impact: 31 jobs aborted. The 3,002 request
+Example (invented): *"Summary: storage controller resets on 17 of 24 hosts,
+2025-03-05 07:18:51 to 07:21:49 UTC, 90 FATAL lines from a template seen
+nowhere else in the 2-day log. Impact: 17 jobs aborted. The 1,440 request
 timeouts are baseline: steady across the whole range."*
 
 ## References (paths relative to this skill's folder)

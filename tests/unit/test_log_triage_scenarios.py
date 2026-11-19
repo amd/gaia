@@ -3,7 +3,7 @@
 """End-to-end scoring of ``triage_logs`` on generated logs with planted incidents.
 
 Eight invented scenarios (see ``log_triage_scenarios``): a fault burst amid a
-heavy FATAL baseline, a slow memory leak, one failing host against a
+routine CRITICAL baseline, a slow memory leak, one failing host against a
 cluster-wide outage, an access-log 5xx spike from one upstream, a new
 exception after a deploy in JSON lines, three files with different clock
 conventions, and two negatives where nothing should be flagged. Each run is
@@ -62,7 +62,7 @@ def test_single_host_and_cluster_wide_failures_report_their_blast_radius(tmp_pat
 def test_the_compact_result_fits_a_small_context(tmp_path):
     import json
 
-    for name in ("hardware_fault_burst", "access_5xx_spike", "multi_file_timezones"):
+    for name in ("fleet_fault_burst", "access_5xx_spike", "multi_file_timezones"):
         sub = tmp_path / name
         sub.mkdir()
         result = run(SCENARIOS[name](sub))

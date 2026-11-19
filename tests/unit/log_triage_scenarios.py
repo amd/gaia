@@ -4,8 +4,8 @@
 
 Every scenario is generated from a seed: steady background traffic (some of
 it ERROR and FATAL on purpose) plus planted incidents whose lines, burst
-windows and entity ids are recorded as they are written. Nothing here comes
-from a real system or a public dataset.
+windows and entity ids are recorded as they are written. Every message, host
+name and id is made up for these tests.
 
 The scorer compares what ``triage_logs`` reports with what was planted:
 
@@ -152,19 +152,19 @@ def _year_start() -> float:
 # ---------------------------------------------------------------------------
 
 
-def hardware_fault_burst(tmp: Path, seed: int = 1) -> Scenario:
-    """Rare fault on most nodes for 4 minutes amid a heavy FATAL/ERROR baseline."""
+def fleet_fault_burst(tmp: Path, seed: int = 1) -> Scenario:
+    """Rare fault on most hosts for 3 minutes amid a routine CRITICAL/ERROR baseline."""
     rng = random.Random(seed)
     t0 = _year_start()
-    t1 = t0 + 3.5 * 86400
-    nodes = [f"node-{i:02d}" for i in range(1, 41)]
+    t1 = t0 + 2 * 86400
+    nodes = [f"edge-{i:02d}" for i in range(1, 25)]
     events: List[Event] = []
     jobs = iter(range(10000, 99999))
 
     def line(ts, node, level, msg):
         return f"{_iso_ms(ts)} {node} {level} {msg}"
 
-    for ts in _poisson_times(rng, t0, t1, 400):  # routine FATAL, ~10/5min
+    for ts in _poisson_times(rng, t0, t1, 400):  # routine CRITICAL, ~10/5min
         node = rng.choice(nodes)
         events.append(
             Event(
@@ -173,8 +173,8 @@ def hardware_fault_burst(tmp: Path, seed: int = 1) -> Scenario:
                 line(
                     ts,
                     node,
-                    "FATAL",
-                    f"rts: kernel terminated for reason {rng.randint(1000, 1100)}",
+                    "CRITICAL",
+                    f"replica sync lagging {rng.randint(40, 900)} s",
                 ),
             )
         )
@@ -198,7 +198,7 @@ def hardware_fault_burst(tmp: Path, seed: int = 1) -> Scenario:
             Event(
                 ts,
                 "cluster.log",
-                line(ts, node, "WARN", f"cache miss for key 0x{_hex(rng)}"),
+                line(ts, node, "WARN", f"config cache miss for key 0x{_hex(rng)}"),
             )
         )
     for ts in _poisson_times(rng, t0, t1, 200):
@@ -211,7 +211,7 @@ def hardware_fault_burst(tmp: Path, seed: int = 1) -> Scenario:
                     ts,
                     node,
                     "INFO",
-                    f"job job-{next(jobs)} started on {node} partition {rng.randint(0, 7)}",
+                    f"job job-{next(jobs)} started on {node} queue {rng.randint(0, 7)}",
                 ),
             )
         )
@@ -235,26 +235,26 @@ def hardware_fault_burst(tmp: Path, seed: int = 1) -> Scenario:
                     ts,
                     node,
                     "ERROR",
-                    f"ciod: failed to read message prefix on control stream {rng.randint(1, 99)}",
+                    f"fan tray {rng.randint(1, 6)} speed below threshold",
                 ),
             )
         )
 
-    fault_start = t0 + 2.4 * 86400 + 777.123
-    hit = rng.sample(nodes, 31)
+    fault_start = t0 + 1.3 * 86400 + 411.507
+    hit = rng.sample(nodes, 17)
     first = last = None
     entities: Set[str] = set()
-    for k in range(120):
-        ts = fault_start + rng.uniform(0, 238)
+    for k in range(90):
+        ts = fault_start + rng.uniform(0, 176)
         node = hit[k % len(hit)]
-        msg = f"machine check interrupt: uncorrectable ECC error on DIMM {rng.randint(0, 15)} bank {rng.randint(0, 7)}"
+        msg = f"storage controller reset on slot {rng.randint(0, 11)}"
         events.append(
-            Event(ts, "cluster.log", line(ts, node, "FATAL", msg), kind="ecc_fault")
+            Event(ts, "cluster.log", line(ts, node, "FATAL", msg), kind="controller_reset")
         )
         first = ts if first is None else min(first, ts)
         last = ts if last is None else max(last, ts)
     for node in hit:
-        ts = fault_start + rng.uniform(5, 240)
+        ts = fault_start + rng.uniform(5, 178)
         job = f"job-{next(jobs)}"
         events.append(
             Event(
@@ -267,7 +267,7 @@ def hardware_fault_burst(tmp: Path, seed: int = 1) -> Scenario:
         entities.add(job)  # nodes show up as hosts
         last = max(last, ts)
     paths, planted = _write(tmp, events)
-    return Scenario("hardware_fault_burst", paths, planted, [(first, last)], entities)
+    return Scenario("fleet_fault_burst", paths, planted, [(first, last)], entities)
 
 
 def memory_leak(tmp: Path, seed: int = 2) -> Scenario:
@@ -935,7 +935,7 @@ def diurnal_negative(tmp: Path, seed: int = 8) -> Scenario:
 
 SCENARIOS: Dict[str, Callable[[Path], Scenario]] = {
     "diurnal_negative": diurnal_negative,
-    "hardware_fault_burst": hardware_fault_burst,
+    "fleet_fault_burst": fleet_fault_burst,
     "memory_leak": memory_leak,
     "single_vs_cluster": single_vs_cluster,
     "access_5xx_spike": access_5xx_spike,

@@ -139,9 +139,39 @@ def test_levels_and_keyword_fallback():
     assert lt.level_severity(40) == 3  # numeric levels follow Python logging: 40 ERROR
     assert lt.level_severity(60) == 4
     assert lt.level_severity("banana") is None
-    assert lt.keyword_severity("kernel panic - not syncing") == 4
-    assert lt.keyword_severity("connection refused") == 3
     assert lt.keyword_severity("all good") == 1
+
+
+@pytest.mark.parametrize(
+    "message,severity",
+    [
+        ("fatal: could not bind port 8080", 4),
+        ("worker panicked while draining the queue", 4),
+        ("index file corrupted, rebuilding", 4),
+        ("renderer crashed with exit code 3", 4),
+        ("import aborted after 3 attempts", 4),
+        ("segfault in image filter", 4),
+        ("out of memory while sorting", 4),
+        ("OutOfMemoryError in batch job", 4),
+        ("oom killer stopped the cache", 4),
+        ("2 errors while saving", 3),
+        ("payment failed for order 7", 3),
+        ("unhandled exception in handler", 3),
+        ("upstream timed out", 3),
+        ("read timeout after 30 s", 3),
+        ("connection refused", 3),
+        ("permission denied for /srv/data", 3),
+        ("host unreachable", 3),
+        ("Traceback (most recent call last):", 3),
+        ("warning: disk at 91%", 2),
+        ("retrying in 5 s", 2),
+        ("slow response from search", 2),
+        ("running in degraded mode", 2),
+        ("option --fast is deprecated", 2),
+    ],
+)
+def test_keyword_severity_for_lines_without_a_level(message, severity):
+    assert lt.keyword_severity(message) == severity
 
 
 def test_masking_keeps_structure_and_hides_values():
@@ -405,21 +435,21 @@ def test_glob_filters_a_folder(tmp_path):
 
 def test_timestamp_regex_with_components_and_level_host_overrides(tmp_path):
     lines = [
-        f"250304 1000{i:02d} 77 host=n{i % 3} sev:E block blk_{1000 + i} lost"
+        f"D04.03.25 T10h00m{i:02d}s host=n{i % 3} sev:E parcel order-{1000 + i} lost"
         for i in range(20)
     ]
     opts = dict(
-        timestamp_regex=r"^(?P<year>\d{2})(?P<month>\d{2})(?P<day>\d{2}) (?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})",
+        timestamp_regex=r"^D(?P<day>\d{2})\.(?P<month>\d{2})\.(?P<year>\d{2}) T(?P<hour>\d{2})h(?P<minute>\d{2})m(?P<second>\d{2})s",
         level_regex=r"sev:(?P<level>\w+)",
         host_regex=r"host=(\w+)",
-        entity_regex=r"(blk_\d+)",
+        entity_regex=r"(order-\d+)",
     )
     res, f = _formats(tmp_path, "a.log", lines, **opts)
     assert f.format == "custom" and f.entries == 20 and f.unparsed == 0
     assert lt.format_ts(f.first) == "2025-03-04 10:00:00"
     tpl = next(iter(res.an.tpls.values()))
     assert set(tpl.hosts) == {"n0", "n1", "n2"}
-    assert len(tpl.ents) == 20 and "blk_1000" in tpl.ents
+    assert len(tpl.ents) == 20 and "order-1000" in tpl.ents
 
 
 def test_invalid_options_fail_loudly():

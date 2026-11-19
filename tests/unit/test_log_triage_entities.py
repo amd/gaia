@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """The anomalous-entity list is learned from the data, not from a fixed regex.
 
-Each test generates a log whose ids follow one style (word_-digits, UUIDs,
+Each test generates a log whose ids follow one style (word-hex, UUIDs,
 hex trace ids in JSON fields, key=value tokens, ip:port backends), next to
 other id-shaped tokens that every routine line carries (peers, users, client
 addresses). Without ``entity_regex`` the tool must pick the id kind that
@@ -60,25 +60,24 @@ def _window(rng: random.Random, n: int) -> List[float]:
     return sorted(start + rng.uniform(0, 300) for _ in range(n))
 
 
-def chunk_ids(tmp_path: Path, rng: random.Random) -> Tuple[Path, Set[str]]:
-    """``blk_-?\\d+`` chunk ids; every line also names a peer ``ip:port``."""
+def volume_ids(tmp_path: Path, rng: random.Random) -> Tuple[Path, Set[str]]:
+    """``vol-<hex>`` volume ids; every line also names a peer ``ip:port``."""
     peers = [f"10.4.0.{i}:7001" for i in range(1, 21)]
-    chunks = [
-        f"blk_{rng.choice(['', '-'])}{rng.randint(10**9, 10**12)}" for _ in range(3000)
-    ]
+    chunks = sorted({f"vol-{rng.getrandbits(40):010x}" for _ in range(3000)})
+    rng.shuffle(chunks)
     rows = []
     for ts, c in zip(_times(rng, 3000), chunks):
         rows.append(
             (
                 ts,
-                f"{_iso(ts)} store INFO stored chunk {c} from peer {rng.choice(peers)}",
+                f"{_iso(ts)} store INFO snapshot of {c} stored on peer {rng.choice(peers)}",
             )
         )
         ts2 = ts + rng.uniform(1, 30)
         rows.append(
             (
                 ts2,
-                f"{_iso(ts2)} store INFO replicated chunk {c} to peer {rng.choice(peers)}",
+                f"{_iso(ts2)} store INFO snapshot of {c} copied to peer {rng.choice(peers)}",
             )
         )
     bad = set(rng.sample(chunks, 40))
@@ -86,7 +85,7 @@ def chunk_ids(tmp_path: Path, rng: random.Random) -> Tuple[Path, Set[str]]:
         rows.append(
             (
                 ts,
-                f"{_iso(ts)} store ERROR checksum mismatch on chunk {c} from peer {rng.choice(peers)}",
+                f"{_iso(ts)} store ERROR checksum mismatch on {c} from peer {rng.choice(peers)}",
             )
         )
     return _write(tmp_path, rows), bad
@@ -187,7 +186,7 @@ def backend_ip_port(tmp_path: Path, rng: random.Random) -> Tuple[Path, Set[str]]
 
 
 STYLES = {
-    "chunk_ids": (chunk_ids, "blk_N"),
+    "volume_ids": (volume_ids, "vol-H"),
     "request_uuids": (request_uuids, "uuid"),
     "json_trace_ids": (json_trace_ids, "trace_id="),
     "session_tokens": (session_tokens, "session="),
@@ -212,17 +211,17 @@ def test_the_id_kind_is_learned_and_the_list_is_precise(style, tmp_path):
 
 
 def test_shared_tokens_are_skipped_with_a_reason(tmp_path):
-    path, _ = chunk_ids(tmp_path, random.Random(1))
+    path, _ = volume_ids(tmp_path, random.Random(1))
     ent = lt.triage([str(path)]).compact()["entities"]
     skipped = {k["kind"]: k["why"] for k in ent["kinds_skipped"]}
     assert "ip:port" in skipped and "routine templates" in skipped["ip:port"]
 
 
 def test_the_reported_regex_reproduces_the_list(tmp_path):
-    path, _ = chunk_ids(tmp_path, random.Random(2))
+    path, _ = volume_ids(tmp_path, random.Random(2))
     auto = lt.triage([str(path)])
     regex = auto.compact()["entities"]["kinds_used"][0]["regex"]
-    assert regex == r"(blk_-?\d+)"
+    assert regex == r"(vol-[0-9a-fA-F]+)"
     pinned = lt.triage([str(path)], lt.TriageOptions(entity_regex=regex))
     assert set(pinned.entities["flagged"]) == set(auto.entities["flagged"])
     assert pinned.compact()["entities"]["mode"] == "entity_regex"
@@ -242,7 +241,7 @@ def test_the_list_is_written_when_output_path_is_given(tmp_path):
 
 def test_a_long_list_points_at_output_path(tmp_path, monkeypatch):
     monkeypatch.setattr(lt, "OUT_ENTITY_LIST", 10)
-    path, _ = chunk_ids(tmp_path, random.Random(4))
+    path, _ = volume_ids(tmp_path, random.Random(4))
     ent = lt.triage([str(path)]).compact()["entities"]
     assert "list" not in ent and "output_path" in ent["full_list"]
     assert len(ent["sample"]) == lt.OUT_ENTITIES

@@ -24,7 +24,7 @@ Describe systems and events, not people. In this order:
 Close with **Baseline** (the top routine templates and why they are routine)
 and **Limits** (unparsed lines, gaps, warnings).
 
-Example (invented): *"Summary: disk controller faults on 31 of 40 nodes,
-2024-03-06 13:13:00 to 13:16:58 UTC, 120 FATAL lines from a template seen
-nowhere else in the 3.5-day log. Impact: 31 jobs aborted. The 3,002 request
-timeouts are baseline: steady across the whole range, about 9 per 15 minutes."*
+Example (invented): *"Summary: storage controller resets on 17 of 24 hosts,
+2025-03-05 07:18:51 to 07:21:49 UTC, 90 FATAL lines from a template seen
+nowhere else in the 2-day log. Impact: 17 jobs aborted. The 1,440 request
+timeouts are baseline: steady across the whole range, about 7 per 15 minutes."*

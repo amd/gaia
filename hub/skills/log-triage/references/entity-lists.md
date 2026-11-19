@@ -1,7 +1,7 @@
 # Lists of anomalous entities
 
-When the user asks for a list of bad items (blocks, requests, sessions, jobs,
-backends), **deliver the list from `triage_logs` output; do not rebuild it by
+When the user asks for a list of failed items (requests, sessions, jobs,
+orders, backends), **deliver the list from `triage_logs` output; do not rebuild it by
 hand.** `entities` is built only from anomaly templates, inside each anomaly's
 own window, never from baseline errors.
 
@@ -10,7 +10,7 @@ own window, never from baseline errors.
   id per line) and give the user that file. Say how many were flagged out of
   `total` (`share`) and which template put each group there (`by_template`).
 - `kinds_used` says which id pattern the tool learned from the data (for
-  example `blk_N` with `regex` `(blk_-?\d+)`), and `kinds_skipped` why other
+  example `req-H` with `regex` `(req-[0-9a-fA-F]+)`), and `kinds_skipped` why other
   id-shaped tokens (peers, users, client addresses) were left out. If the user
   means a different id, call again with `entity_regex` set to that kind's
   `regex`.

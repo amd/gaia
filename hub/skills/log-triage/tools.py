@@ -24,7 +24,7 @@ counting deterministically, in one streaming pass per file:
 4. **Bursts.** Buckets where errors and anomaly lines rise far above their
    median, merged into windows with exact first and last timestamps and the
    templates that occur only there.
-5. **Entities.** Ids (request, session, block, job, host ...) taken only from
+5. **Entities.** Ids (request, session, order, job, host ...) taken only from
    anomaly templates, inside the anomaly's own window, with a check that
    warns when the flagged share looks like the baseline.
 
@@ -149,7 +149,7 @@ SEVERITY_NAMES = ("DEBUG", "INFO", "WARN", "ERROR", "FATAL")
 
 _KEYWORD_SEV = (
     (4, re.compile(r"\b(?:fatal|panic\w*|corrupt\w*|crash\w*|abort\w*|segfault|"
-                   r"out of memory|outofmemory\w*|oom|kernel bug|machine check)\b", re.I)),
+                   r"out of memory|outofmemory\w*|oom)\b", re.I)),
     (3, re.compile(r"\b(?:errors?|err|fail\w*|exception|timed? ?out|timeout|refused|"
                    r"denied|unreachable|traceback)\b", re.I)),
     (2, re.compile(r"\b(?:warn\w*|retry\w*|retrying|slow|degraded|deprecated)\b", re.I)),
@@ -538,10 +538,10 @@ def exception_class(text: str) -> Optional[str]:
 _ENTITY_KEYS = (
     "request_id|req_id|requestid|trace_id|traceid|span_id|session_id|sessionid|"
     "user_id|userid|user|username|job_id|jobid|task_id|taskid|order_id|block_id|"
-    "blk_id|container_id|pod|upstream|upstream_addr|client_id|account_id|tenant|"
+    "container_id|pod|upstream|upstream_addr|client_id|account_id|tenant|"
     "tenant_id|device_id|txn_id|transaction_id|correlation_id|correlationid|node_id|"
     "instance_id|host_id|shard|partition|session|sess|token|trace|request|req|txn|"
-    "transaction|job|task|order|block|blk|container|device|account|correlation"
+    "transaction|job|task|order|block|container|device|account|correlation"
 )
 _KEY_SET = frozenset(_ENTITY_KEYS.split("|"))
 _KV_CANDIDATE = re.compile(
@@ -552,9 +552,9 @@ _UUID_RE = re.compile(
 )
 _IP_PORT_RE = re.compile(r"(?<![\w.:])(\d{1,3}(?:\.\d{1,3}){3}:\d{1,5})(?![\w.:])")
 _IP_RE = re.compile(r"(?<![\w.:])(\d{1,3}(?:\.\d{1,3}){3})(?![\w.:])")
-#: word + separator + id with a digit: blk_-1234, job-17, req-a3f9c2d1, sess:x9k2.
+#: word + separator + id with a digit: job-17, vol_0042, req-a3f9c2d1, sess:x9k2.
 _PREFIXED_ID_RE = re.compile(
-    r"(?<![\w.-])([A-Za-z]{1,16})([-_:#])(-?)([A-Za-z0-9]*\d[A-Za-z0-9]*)(?![\w-])"
+    r"(?<![\w.-])([A-Za-z]{1,16})([-_:#])([A-Za-z0-9]*\d[A-Za-z0-9]*)(?![\w-])"
 )
 _HEX_ID_RE = re.compile(
     r"(?<![\w.:-])(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)([0-9a-f]{8,})(?![\w.:-])"
@@ -582,7 +582,7 @@ def auto_entities(text: str, *, kv_only: bool = False) -> List[Tuple[str, str]]:
     """Every id-shaped token in ``text`` with the kind of id it is.
 
     Kinds are learned from the token's shape, not a fixed vocabulary:
-    ``blk_N`` / ``req-H`` / ``sess:A`` (a word, a separator and an id with a
+    ``job-N`` / ``req-H`` / ``sess:A`` (a word, a separator and an id with a
     digit, keyed by the word), ``request_id=`` (an id-named field), ``uuid``,
     ``hex``, ``ip:port`` and ``ip``. Which kinds name the anomalous entities
     is decided after the whole log is read (:func:`build_entities`).
@@ -619,7 +619,7 @@ def auto_entities(text: str, *, kv_only: bool = False) -> List[Tuple[str, str]]:
             add(m.group(1), "ip")
     if "-" in text or "_" in text or ":" in text or "#" in text:
         for m in _PREFIXED_ID_RE.finditer(text):
-            prefix, sep, neg, ident = m.groups()
+            prefix, sep, ident = m.groups()
             add(m.group(0), f"{prefix.lower()}{sep}{_id_shape(ident)}")
     for m in _HEX_ID_RE.finditer(text):
         add(m.group(1), "hex")
@@ -637,8 +637,7 @@ def kind_regex(kind: str, examples: Sequence[str] = ()) -> str:
     prefix, sep, shape = kind[:-2], kind[-2], kind[-1]
     sample = next((e for e in examples if e.lower().startswith(prefix)), "")
     word = sample[: len(prefix)] if sample else prefix
-    negative = any(e[len(prefix) + 1 : len(prefix) + 2] == "-" for e in examples)
-    return f"({re.escape(word)}{sep}{'-?' if negative else ''}{_SHAPE_RE[shape]})"
+    return f"({re.escape(word)}{sep}{_SHAPE_RE[shape]})"
 
 
 _ID_KEY_RE = re.compile(r"^(?:" + _ENTITY_KEYS + r")$|(?:_id|Id|ID)$", re.I)
@@ -1900,6 +1899,7 @@ class Analyzer:
 
     def finalize(self) -> None:
         """Rebucket if the sample misjudged the range, then merge templates."""
+        self._unify_id_shapes()
         if self.gmin is None or self.gmax is None:
             return
         lo = self._bucket(self.gmin)
@@ -1916,6 +1916,29 @@ class Analyzer:
             )
         self._rebase(lo, factor)
         self._merge_templates()
+
+    def _unify_id_shapes(self) -> None:
+        """One kind per id prefix: a ``vol-`` id made only of digits is still
+        a ``vol-H`` id when the others are hex."""
+        widest: Dict[str, str] = {}
+        for kind in self.kinds:
+            stem, shape = kind[:-1], kind[-1]
+            if kind not in FIXED_KIND_REGEX and shape in _SHAPE_RE:
+                widest[stem] = max(widest.get(stem, "N"), shape, key="NHA".index)
+        rename = {
+            stem + shape: stem + widest[stem]
+            for stem in widest
+            for shape in _SHAPE_RE
+            if shape != widest[stem] and stem + shape in self.kinds
+        }
+        if not rename:
+            return
+        for e, kind in self.ent_kind.items():
+            if kind in rename:
+                self.ent_kind[e] = rename[kind]
+        for old, new in rename.items():
+            merged = self.kinds[new] + self.kinds.pop(old)
+            self.kinds[new] = merged[:5]
 
     def _rebase(self, lo: int, factor: int) -> None:
         """Renumber buckets from 0 at the earliest line, coarsening by ``factor``."""
@@ -3371,7 +3394,7 @@ def triage_logs(
             (?P<ts>...) or year/month/day/hour/minute[/second] groups.
         level_regex: Optional regex whose (?P<level>...) or first group is the level.
         host_regex: Optional regex whose (?P<host>...) or first group is the host.
-        entity_regex: Optional regex for the ids to list, e.g. "(blk_-?[0-9]+)";
+        entity_regex: Optional regex for the ids to list, e.g. "(order-[0-9]+)";
             by default the id kind is learned from the data.
         bucket: Optional time bucket such as "1min", "5min" or "1h"; chosen
             automatically from the range when empty.
