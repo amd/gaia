@@ -6025,8 +6025,9 @@ Do NOT wrap conversational replies in JSON.
                 n for n in self._active_skill_filter if n != name
             ]
         # A later load reports who asked then, not who asked the first time.
-        if self._skill_origins:
-            self._skill_origins.pop(name, None)
+        origins = getattr(self, "_skill_origins", None)
+        if origins:
+            origins.pop(name, None)
         self.rebuild_system_prompt()
         logger.info(
             "Unloaded skill '%s'%s",

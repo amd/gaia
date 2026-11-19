@@ -76,3 +76,26 @@ def test_failure_relays_the_reason_and_forbids_the_task():
     assert "needs a larger model." in message
     assert "Do not attempt their request without the skill." in message
     assert message.endswith("Their request was: make a report")
+
+
+def test_an_arabic_request_is_kept_whole():
+    command = parse_skill_command("/pdf لخّص هذا الملف في صفحة واحدة")
+    assert command == SkillCommand(name="pdf", request="لخّص هذا الملف في صفحة واحدة")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A pasted document or quoted reply that mentions a command later on.
+        "Here is the doc:\n\n/pdf make a report",
+        "> /pdf make a report",
+        "```\n/pdf make a report\n```",
+        # A host note must be followed by a blank line, not just a newline.
+        "[note]\n/pdf go",
+        # Right-to-left marks or other characters before the slash.
+        "‏/pdf go",
+        "/pdf/../../etc go",
+    ],
+)
+def test_a_command_anywhere_but_the_start_does_not_run(text):
+    assert parse_skill_command(text) is None

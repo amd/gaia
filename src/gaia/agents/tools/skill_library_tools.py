@@ -345,7 +345,7 @@ class SkillLibraryToolsMixin:
             payload["unmet_tools_required"] = unmet
             unmet_warning = (
                 f"Skill '{skill.name}' expects tool(s) {', '.join(unmet)}, which "
-                "this self does not have registered. The parts of its "
+                "this agent does not have registered. The parts of its "
                 "instructions that use them cannot run — say so instead of "
                 "improvising a substitute."
             )
