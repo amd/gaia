@@ -1535,6 +1535,10 @@ def test_the_same_program_on_something_else_is_another_action(
         ("gh issue close 3", 'bash -c "gh issue close 3"'),
         ("git add a.txt", "git add ."),
         ("git add src", "git add src/app.py"),
+        ('git commit -m "fix bug"', 'git commit -m "Fix the bug"'),
+        ('gh pr create --title "Fix" --body "one"', 'gh pr create -t "A fix" -b "two"'),
+        ("pip install pandas", "pip install pandas==2.2"),
+        ("pip install pandas>=2", "pip install 'pandas[excel]<3'"),
     ],
 )
 def test_a_reworded_command_is_the_same_action(declined, later, tmp_path):

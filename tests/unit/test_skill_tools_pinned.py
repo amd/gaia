@@ -1,5 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+# flake8: noqa: F811
+# (pytest fixtures imported from a sibling test module are named again as arguments)
 """A loaded skill's tools are on the list the model is sent, and stay there.
 
 A skill's instructions name tools. However the skill came to be loaded, each

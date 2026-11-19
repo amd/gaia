@@ -1,5 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+# flake8: noqa: F811
+# (pytest fixtures imported from a sibling test module are named again as arguments)
 """A file a skill's own tool saves counts as saved by the turn.
 
 The completion check knew the built-in write tools by name. A skill tool that
