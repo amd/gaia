@@ -11977,6 +11977,22 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _self_check_plan(self) -> Optional[Dict[str, Any]]:
+        """:meth:`_build_self_check_plan`, which can never end the turn.
+
+        The check reads files the model just wrote, with parsers that raise
+        their own error classes on a malformed one. It is advisory: a check
+        that cannot run is logged with its traceback and the answer goes out
+        without it.
+        """
+        try:
+            return self._build_self_check_plan()
+        except Exception:  # advisory: see the docstring
+            logger.exception(
+                "%s could not run; the turn goes on without it", SELF_CHECK_TAG
+            )
+            return None
+
+    def _build_self_check_plan(self) -> Optional[Dict[str, Any]]:
         """What this turn's self-check would cover, or ``None`` when it owes none.
 
         A turn owes one when it wrote a document or data file and either read
@@ -12021,6 +12037,7 @@ Do NOT wrap conversational replies in JSON.
             written,
             self._pending_deliverables(),
             prose=next(iter(prose.values())) if len(prose) == 1 else "",
+            folder=os.getcwd(),
         )
         built = any(suffix in BUILT_SUFFIXES for suffix in suffixes.values())
         if not (inputs or built or findings):
