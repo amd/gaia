@@ -313,6 +313,92 @@ def test_a_reply_that_was_all_thinking_is_told_to_act_not_to_continue(
     assert "make one tool call now" in nudge
 
 
+def _stub_effort_chat(agent, *replies):
+    """Like ``_stub_thinking_chat``, recording each call's ``reasoning_effort``."""
+    replies = list(replies)
+    efforts = []
+
+    def _send(messages, *_, **kwargs):
+        efforts.append(kwargs.get("reasoning_effort", "unset"))
+        text, finish_reason, reasoning, stats = replies.pop(0)
+        resp = MagicMock()
+        resp.text = text
+        resp.stats = stats
+        resp.reasoning = reasoning
+        resp.finish_reason = finish_reason
+        return resp
+
+    agent.chat = MagicMock()
+    agent.chat.send_messages = MagicMock(side_effect=_send)
+    return efforts
+
+
+_ALL_THINKING = ("", "length", None, {"reasoning_tokens": 32768})
+
+
+def _register_lookup(agent):
+    agent._instance_tools = {
+        "lookup": {
+            "name": "lookup",
+            "description": "stub",
+            "parameters": {"key": {"type": "string", "required": True}},
+            "function": lambda key: {"status": "success", "value": key.upper()},
+            "atomic": True,
+        }
+    }
+
+
+def _lookup(key):
+    call = {"thought": "look", "tool": "lookup", "tool_args": {"key": key}}
+    return (json.dumps(call), "stop", None, {})
+
+
+def test_the_request_after_an_all_thinking_cut_off_asks_for_the_least_thinking(
+    agent,
+):
+    """The nudge alone lost 17 turns: the model thought the limit away again."""
+    agent.model_id = "fireworks.deepseek-v4p1-flash"
+    _register_lookup(agent)
+    efforts = _stub_effort_chat(agent, _ALL_THINKING, _lookup("gfx90a"), _DONE)
+
+    agent.process_query("What about gfx90a?", max_steps=10)
+
+    # Only the request right after the cut-off; the next one thinks as usual.
+    assert efforts == ["unset", "none", "unset"]
+
+
+def test_a_model_with_no_known_lowest_effort_is_sent_no_effort(agent):
+    agent.model_id = "fireworks.some-other-model"
+    efforts = _stub_effort_chat(agent, _ALL_THINKING, _DONE)
+
+    agent.process_query("What about gfx90a?", max_steps=10)
+
+    assert efforts == ["unset", "unset"]
+
+
+def test_a_reply_cut_off_mid_text_does_not_lower_the_effort(agent):
+    agent.model_id = "fireworks.deepseek-v4p1-flash"
+    efforts = _stub_effort_chat(agent, (TR8319_CB_REPLY, "length", None, {}), _DONE)
+
+    agent.process_query("Fix gfx90a PR testing", max_steps=20)
+
+    assert efforts == ["unset", "unset"]
+
+
+def test_the_cut_off_budget_counts_cut_offs_in_a_row(agent):
+    """A turn that recovered twice used to end at its third cut-off anyway."""
+    agent.model_id = "fireworks.deepseek-v4p1-flash"
+    _register_lookup(agent)
+    replies = []
+    for n in range(_MAX_CUT_OFF_CONTINUATIONS + 2):
+        replies += [_ALL_THINKING, _lookup(f"gfx{n}")]
+    _stub_effort_chat(agent, *replies, _DONE)
+
+    result = agent.process_query("What about gfx90a?", max_steps=30)
+
+    assert _final(result) == "gfx90a is the MI200 series."
+
+
 def test_an_empty_cut_off_with_no_thinking_is_not_blamed_on_thinking(agent):
     """A full context window also ends a reply empty at finish_reason=length."""
     sent = _stub_thinking_chat(
