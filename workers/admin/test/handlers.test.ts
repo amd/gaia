@@ -82,6 +82,22 @@ describe("/api/downloads", () => {
     expect(d.latestDaily).toEqual({ tag: "v1.1.0", daily: [{ day: day(2), install: 40 }, { day: day(1), install: 30 }] });
   });
 
+  it("treats a day the release is missing from as a gap, not as zero downloads", async () => {
+    const db = memoryD1();
+    await put(db, "releases", ["tag", "published_at", "prerelease", "html_url"], [
+      ["v1.0.0", iso(30), 0, "u"],
+      ["v1.1.0", iso(5), 0, "u"],
+    ]);
+    await put(db, "asset_snapshots", ["day", "tag", "asset", "downloads"], [
+      [day(4), "v1.1.0", "gaia-windows-setup.exe", 100],
+      [day(3), "v1.1.0", "gaia-windows-setup.exe", 150],
+      [day(2), "v1.0.0", "gaia-windows-setup.exe", 500],
+      [day(1), "v1.1.0", "gaia-windows-setup.exe", 170],
+    ]);
+    const d = await get(db, "/api/downloads", "range=30");
+    expect(d.latestDaily.daily).toEqual([{ day: day(3), install: 50 }]);
+  });
+
   it("has no per-day figures before any final release", async () => {
     const db = memoryD1();
     await put(db, "releases", ["tag", "published_at", "prerelease", "html_url"], [["v1.0.0-rc1", iso(2), 1, "u"]]);

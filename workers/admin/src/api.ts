@@ -108,7 +108,10 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
         last.tag,
         from,
       );
-      const snapDays = (await all<{ day: string }>("SELECT DISTINCT day FROM asset_snapshots WHERE day >= ?", from)).map((r) => r.day);
+      // Only days before the release's first snapshot count from zero. A later day that lacks it is a gap:
+      // counting it as zero would turn the next day into its whole total.
+      const firstSeen = rows.reduce((m, r) => (r.day < m ? r.day : m), "9999-12-31");
+      const snapDays = (await all<{ day: string }>("SELECT DISTINCT day FROM asset_snapshots WHERE day >= ? AND day < ?", from, firstSeen)).map((r) => r.day);
       const rel = dailyDeltas(rows, snapDays);
       latestDaily = {
         tag: last.tag,

@@ -50,9 +50,9 @@ export interface ReleaseStats {
   // `releases`/`totalReleaseCount` (main tags only): don't "fix" it into
   // false consistency.
   totalDownloadCount: number;
-  // The newest stable release and its downloads so far, counting only files a
-  // person downloads to install (see sumInstallDownloads). Null before the first.
-  latestRelease: { tag: string; publishedAt: string; installDownloads: number } | null;
+  // The newest stable release and its downloads so far, leaving out update
+  // feeds, checksums and signatures (see sumInstallDownloads). Null before the first.
+  latestRelease: { tag: string; installDownloads: number } | null;
 }
 
 export interface NpmDownloadStats {
@@ -337,8 +337,9 @@ export function sumAssetDownloads(assets: { download_count: number }[]): number 
   return assets.reduce((sum, a) => sum + a.download_count, 0);
 }
 
-// Files nobody downloads to install GAIA: the desktop app's update feeds (fetched
-// on every start), differential-update data, checksums and signatures. Kept in
+// Files that are not GAIA itself: the desktop app's update feeds (fetched on
+// every start), differential-update data, checksums and signatures. Installer
+// files an app downloads to update itself (the macOS .zip) still count. Kept in
 // step with META_PATTERNS in workers/admin/src/classify.ts.
 const NOT_INSTALL_FILES: RegExp[] = [
   /^latest(-[a-z]+)?\.yml$/i,
@@ -629,7 +630,7 @@ export async function getReleaseStats(): Promise<ReleaseStats> {
       totalReleaseCount: nonDraft.filter((r) => isMainReleaseTag(r.tag_name)).length,
       totalDownloadCount: sumAssetDownloads(nonDraft.flatMap((r) => r.assets)),
       latestRelease: latest
-        ? { tag: latest.tag_name, publishedAt: latest.published_at ?? '', installDownloads: sumInstallDownloads(latest.assets) }
+        ? { tag: latest.tag_name, installDownloads: sumInstallDownloads(latest.assets) }
         : null,
     };
   })();

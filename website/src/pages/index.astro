@@ -38,8 +38,8 @@ const npmStats = await getNpmDownloadStats();
 // install` fetch agents from hub.amd-gaia.ai (R2), and pip and npm have their
 // own registries — so it is labelled as release downloads, not installs. See
 // docs/plans/website-admin-dashboard.md for the all-source count.
-// The latest release's figure counts only installer downloads, not the update
-// feeds the desktop app fetches on every start. The site rebuilds daily
+// The latest release's figure leaves out the update feeds the desktop app
+// fetches on every start, and checksums. The site rebuilds daily
 // (deploy_website.yml) so it keeps up after a release. Its date is in the
 // release stream beside it.
 const latest = releaseStats.latestRelease;
