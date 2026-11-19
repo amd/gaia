@@ -67,13 +67,18 @@ from gaia.agents.base.skill_loader import (
     dynamic_skills_env_override,
 )
 from gaia.agents.base.skill_suggester import (
+    DEFAULT_AUTOLOAD_THRESHOLD,
     DEFAULT_SUGGEST_THRESHOLD,
+    SkillMatches,
     SkillSuggester,
+    autoload_env_override,
+    render_autoloaded,
     render_suggestion,
     suggest_env_override,
 )
 from gaia.agents.base.text_task import instruction_part
 from gaia.agents.base.tool_grants import BROWSER_PANE_SKILL
+from gaia.agents.registry import DEFAULT_EMBEDDING_MODEL
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
@@ -294,6 +299,14 @@ class GaiaAgentConfig(ChatAgentConfig):
     skill_suggestions: bool = True
     skill_suggestion_threshold: float = DEFAULT_SUGGEST_THRESHOLD
 
+    # Load a suggested skill before the turn when it scores far above the
+    # suggestion floor and clearly ahead of every other skill: local models
+    # often ignore a correct suggestion. Opt-in until the threshold is measured
+    # on the current labelled requests. Needs suggestions on. Overridable via
+    # GAIA_SKILL_AUTOLOAD.
+    skill_autoload: bool = False
+    skill_autoload_threshold: float = DEFAULT_AUTOLOAD_THRESHOLD
+
     # On for the flagship only. It does pull a second resident model and evict
     # the chat model — a cost a document agent should not pay silently, so
     # ChatAgent keeps it off — but this is the general-purpose surface, and off
@@ -395,6 +408,7 @@ def _apply_fast_mode(config: GaiaAgentConfig) -> None:
     config.dynamic_skills = False
     config.skill_discovery = False
     config.skill_suggestions = False
+    config.skill_autoload = False
     config.auto_index = False
 
 
@@ -702,7 +716,50 @@ class GaiaAgent(
                     DEFAULT_SUGGEST_THRESHOLD,
                 )
             ),
+            autoload_threshold=self._resolve_skill_autoload_threshold(),
         )
+
+    def _resolve_skill_autoload_threshold(self) -> Optional[float]:
+        """The auto-load floor, or ``None`` when auto-load is off.
+
+        ``GAIA_SKILL_AUTOLOAD`` wins over the config field. Off on any embedder
+        but the one the floor was measured with, whatever the setting says.
+        """
+        enabled = autoload_env_override()
+        if enabled is None:
+            enabled = bool(getattr(self.config, "skill_autoload", False))
+        if not enabled:
+            return None
+        embedder = self._active_embedding_model()
+        if embedder != DEFAULT_EMBEDDING_MODEL:
+            logger.warning(
+                "[skills] auto-load is off: its threshold is calibrated for %s, "
+                "not the active embedder %s. Matching skills are still suggested.",
+                DEFAULT_EMBEDDING_MODEL,
+                embedder,
+            )
+            return None
+        return float(
+            getattr(self.config, "skill_autoload_threshold", DEFAULT_AUTOLOAD_THRESHOLD)
+        )
+
+    #: Most tokens the bodies of all loaded skills may add up to for an
+    #: auto-load to go ahead. Counts every loaded body, not only this turn's
+    #: active ones: with the embedder down, all of them render.
+    SKILL_AUTOLOAD_BODY_TOKENS: ClassVar[int] = 6000
+
+    def _skill_suggester_for_turn(self, user_input: str) -> Optional[SkillSuggester]:
+        """The suggester, or ``None`` when *user_input* gets no skill matching."""
+        suggester = getattr(self, "skill_suggester", None)
+        if suggester is None:
+            return None
+        if getattr(self, "_memory_store", None) is None:
+            logger.debug("[skills] no suggestions: memory store (embedder) is off")
+            return None
+        # Text handed over to translate or reword needs no skill, whatever it says.
+        if instruction_part(user_input) != (user_input or ""):
+            return None
+        return suggester
 
     def _select_skill_suggestions_for_turn(self, user_input: str) -> List[str]:
         """Unloaded catalogue skills that clearly match *user_input*.
@@ -712,14 +769,8 @@ class GaiaAgent(
         already loaded or were already declined. Empty when the suggester is
         off, or memory is off (the same embedder backs both).
         """
-        suggester = getattr(self, "skill_suggester", None)
+        suggester = self._skill_suggester_for_turn(user_input)
         if suggester is None:
-            return []
-        if getattr(self, "_memory_store", None) is None:
-            logger.debug("[skills] no suggestions: memory store (embedder) is off")
-            return []
-        # Text handed over to translate or reword needs no skill, whatever it says.
-        if instruction_part(user_input) != (user_input or ""):
             return []
         return suggester.suggest(
             user_input,
@@ -728,16 +779,131 @@ class GaiaAgent(
             list_project=self._lists_project_skills(),
         )
 
+    def _select_skill_matches_for_turn(self, user_input: str) -> SkillMatches:
+        """This turn's matches, split into auto-loads and suggestions.
+
+        With auto-load off this is :meth:`_select_skill_suggestions_for_turn`
+        and nothing to load.
+        """
+        suggester = self._skill_suggester_for_turn(user_input)
+        if suggester is None:
+            return SkillMatches()
+        if getattr(suggester, "autoload_threshold", None) is None:
+            return SkillMatches(
+                suggest=self._select_skill_suggestions_for_turn(user_input)
+            )
+        return suggester.select(
+            user_input,
+            self._catalog_skills(),
+            loaded=frozenset(self.loaded_skills),
+            list_project=self._lists_project_skills(),
+        )
+
+    def _autoload_skills(self, names: List[str]) -> Tuple[List[str], List[str]]:
+        """Load *names* before the turn; return ``(loaded, left to suggest)``.
+
+        Loads as the ``load_skill`` tool would, and pins each body so this
+        turn's selection cannot hide it. A skill is left as a suggestion, never
+        loaded, when it was auto-loaded earlier this session and has since been
+        unloaded, when it would grant a command-line program (the shell then
+        runs it without a prompt, so the model has to ask for it), when it is
+        a ``.claude`` skill shipping tools (``load_skill`` refuses those), when
+        its body would push the loaded bodies past
+        :attr:`SKILL_AUTOLOAD_BODY_TOKENS`, or when loading it fails — logged
+        as a warning, and the model's own ``load_skill`` call then reports why.
+        """
+        if not names:
+            return [], []
+        from gaia.agents.tools.skill_library_tools import estimate_prompt_tokens
+        from gaia.skills.binaries import binary_permissions
+        from gaia.skills.errors import SkillError
+        from gaia.skills.manager import CLAUDE_ROOTS
+
+        used = sum(
+            estimate_prompt_tokens(skill.body or "")
+            for skill in self.loaded_skills.values()
+        )
+        done = getattr(self, "_autoloaded_skills", None)
+        if done is None:
+            done = self._autoloaded_skills = set()
+        loaded: List[str] = []
+        left: List[str] = []
+        for name in names:
+            if name in self.loaded_skills:
+                continue
+            if name in done:
+                # The model or user dropped it; bringing it back is their call.
+                left.append(name)
+                continue
+            try:
+                # Discovery reads frontmatter only; the body sets the cost.
+                skill = self.skill_manager.load(name)
+                grants = binary_permissions(skill.parsed_permissions())
+            except SkillError as exc:
+                logger.warning("[skills] not auto-loading '%s': %s", name, exc)
+                left.append(name)
+                continue
+            if skill.gaia.tools and skill.root in CLAUDE_ROOTS:
+                left.append(name)
+                continue
+            if grants:
+                logger.info(
+                    "[skills] suggesting '%s' instead of auto-loading it: it "
+                    "would grant %s",
+                    name,
+                    ", ".join(str(p) for p in grants),
+                )
+                left.append(name)
+                continue
+            cost = estimate_prompt_tokens(skill.body or "")
+            if used + cost > self.SKILL_AUTOLOAD_BODY_TOKENS:
+                logger.info(
+                    "[skills] suggesting '%s' instead of auto-loading it: its "
+                    "~%d-token body would bring loaded skills to ~%d of %d tokens",
+                    name,
+                    cost,
+                    used + cost,
+                    self.SKILL_AUTOLOAD_BODY_TOKENS,
+                )
+                left.append(name)
+                continue
+            try:
+                self.load_skill(name)
+            except (SkillError, PermissionError) as exc:
+                logger.warning("[skills] could not auto-load '%s': %s", name, exc)
+                left.append(name)
+                continue
+            # Tools the framework supplies for a skill, as load_skill registers them.
+            activate = getattr(self, "_activate_extraction_skills", None)
+            if callable(activate):
+                activate(name)
+            self._announce_skill(name, "auto")
+            self._pin_skill_body(name)
+            done.add(name)
+            used += cost
+            loaded.append(name)
+        if loaded:
+            logger.info("[skills] auto-loaded for this request: %s", ", ".join(loaded))
+        return loaded, left
+
     def get_memory_dynamic_context(self) -> str:
-        """Per-turn context, plus the skills that may fit this request.
+        """Per-turn context, plus the skills loaded for or fitting this request.
+
+        Loads this turn's auto-load matches first (see :meth:`_autoload_skills`),
+        so the lines name what is loaded and what is only suggested.
 
         In the user message, not the system prompt: a line that changes from
         turn to turn anywhere in the system prompt makes the server re-read the
         whole conversation (see ``test_prompt_prefix_stability.py``).
         """
         query = getattr(self, "_memory_turn_query", None) or ""
-        line = render_suggestion(self._select_skill_suggestions_for_turn(query))
-        parts = (super().get_memory_dynamic_context(), line)
+        matches = self._select_skill_matches_for_turn(query)
+        auto, refused = self._autoload_skills(matches.auto_load)
+        parts = (
+            super().get_memory_dynamic_context(),
+            render_autoloaded(auto),
+            render_suggestion(refused + matches.suggest),
+        )
         return "\n".join(part for part in parts if part)
 
     def _maybe_build_skill_loader(self) -> Optional[SkillLoader]:

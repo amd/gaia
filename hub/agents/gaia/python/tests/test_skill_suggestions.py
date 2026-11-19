@@ -18,9 +18,17 @@ from gaia_agent.agent import GaiaAgent, GaiaAgentConfig, _apply_fast_mode
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.model_features import COMPACT
 from gaia.agents.base.skill_suggester import (
+    DEFAULT_AUTOLOAD_THRESHOLD,
     DEFAULT_SUGGEST_THRESHOLD,
+    SkillMatches,
     SkillSuggester,
 )
+from gaia.agents.registry import DEFAULT_EMBEDDING_MODEL, get_embedding_model_for_device
+
+
+@pytest.fixture(autouse=True)
+def _no_autoload_env(monkeypatch):
+    monkeypatch.delenv("GAIA_SKILL_AUTOLOAD", raising=False)
 
 
 def _never(_text):
@@ -225,3 +233,293 @@ def test_a_real_suggester_reaches_the_turn_context(monkeypatch):
     agent._skill_manager = SimpleNamespace(discover=lambda: skills)
     context = _with_turn_context(monkeypatch, agent, "draw a lighthouse")
     assert "not loaded yet: image-gen —" in context
+
+
+# ── auto-load ───────────────────────────────────────────────────────────────
+
+
+def test_autoload_is_opt_in_with_the_calibrated_threshold(monkeypatch):
+    config = GaiaAgentConfig()
+    assert config.skill_autoload is False
+    assert config.skill_autoload_threshold == DEFAULT_AUTOLOAD_THRESHOLD
+    suggester = _agent(monkeypatch)._maybe_build_skill_suggester()
+    assert suggester is not None
+    assert suggester.autoload_threshold is None
+
+
+def test_config_turns_autoload_on_and_carries_its_threshold(monkeypatch):
+    agent = _agent(monkeypatch, skill_autoload=True)
+    suggester = agent._maybe_build_skill_suggester()
+    assert suggester.autoload_threshold == pytest.approx(DEFAULT_AUTOLOAD_THRESHOLD)
+    assert suggester.threshold == pytest.approx(DEFAULT_SUGGEST_THRESHOLD)
+    agent = _agent(monkeypatch, skill_autoload=True, skill_autoload_threshold=0.6)
+    assert agent._maybe_build_skill_suggester().autoload_threshold == pytest.approx(0.6)
+
+
+@pytest.mark.parametrize("raw,on", [("0", False), ("1", True)])
+def test_autoload_env_wins_over_config(monkeypatch, raw, on):
+    agent = _agent(monkeypatch, skill_autoload=not on)
+    monkeypatch.setenv("GAIA_SKILL_AUTOLOAD", raw)
+    suggester = agent._maybe_build_skill_suggester()
+    assert (suggester.autoload_threshold is not None) is on
+
+
+@pytest.mark.parametrize(
+    "embedder",
+    [
+        get_embedding_model_for_device("npu"),
+        "nomic-embed-text-v2-moe-GGUF",
+        DEFAULT_EMBEDDING_MODEL.removeprefix("user."),
+        DEFAULT_EMBEDDING_MODEL.upper(),
+    ],
+)
+@pytest.mark.parametrize("env", [None, "1"])
+def test_autoload_off_for_an_uncalibrated_embedder(monkeypatch, caplog, embedder, env):
+    """The threshold is embedder-specific, so even an explicit opt-in cannot
+    auto-load on scores it was never measured against; suggestions stay."""
+    import logging
+
+    agent = _agent(monkeypatch, skill_autoload=True)
+    if env is not None:
+        monkeypatch.setenv("GAIA_SKILL_AUTOLOAD", env)
+    agent._embedding_model = embedder
+    with caplog.at_level(logging.WARNING):
+        suggester = agent._maybe_build_skill_suggester()
+    assert suggester is not None
+    assert suggester.autoload_threshold is None
+    assert "auto-load is off" in caplog.text
+
+
+def test_no_autoload_without_suggestions(monkeypatch):
+    agent = _agent(monkeypatch, skill_suggestions=False, skill_autoload=True)
+    monkeypatch.setenv("GAIA_SKILL_AUTOLOAD", "1")
+    assert agent._maybe_build_skill_suggester() is None
+
+
+def test_fast_mode_turns_autoload_off():
+    config = GaiaAgentConfig(skill_autoload=True)
+    _apply_fast_mode(config)
+    assert config.skill_autoload is False
+
+
+class _AutoSuggester:
+    """A suggester with auto-load on: *auto* to load, *names* to suggest."""
+
+    autoload_threshold = DEFAULT_AUTOLOAD_THRESHOLD
+
+    def __init__(self, names, auto):
+        self.names = list(names)
+        self.auto = list(auto)
+        self.calls = []
+
+    def select(self, query, skills, loaded=frozenset(), list_project=False):
+        self.calls.append((query, set(skills), set(loaded), list_project))
+        return SkillMatches(
+            auto_load=[n for n in self.auto if n not in loaded],
+            suggest=[n for n in self.names if n not in loaded],
+        )
+
+
+def _full_skill(name, body="x" * 400, permissions=(), tools=(), root="agent"):
+    from gaia.skills.permissions import parse_permissions
+
+    return SimpleNamespace(
+        name=name,
+        body=body,
+        root=root,
+        tool_names=[],
+        gaia=SimpleNamespace(tools=list(tools), tools_required=[]),
+        parsed_permissions=lambda: parse_permissions(
+            list(permissions), skill_name=name
+        ),
+    )
+
+
+def _loading(monkeypatch, auto, *, names=(), library=None, fail=None):
+    """An agent whose suggester auto-loads *auto* and whose load_skill works."""
+    agent = _agent(monkeypatch, skill_autoload=True)
+    agent.skill_suggester = _AutoSuggester(names, auto)
+    agent._memory_store = object()
+    agent._loaded_skills = {}
+    library = library or {}
+    for name in [*auto, *names]:
+        library.setdefault(name, _full_skill(name))
+    agent._skill_manager = SimpleNamespace(
+        discover=lambda: dict(library), load=lambda name: library[name]
+    )
+    agent.loads = []
+    agent.announced = []
+
+    def load_skill(name):
+        if fail is not None and name == fail:
+            from gaia.skills.errors import SkillPermissionError
+
+            raise SkillPermissionError(f"{name} needs a connector")
+        agent.loads.append(name)
+        agent._loaded_skills[name] = library[name]
+        return library[name]
+
+    agent.load_skill = load_skill
+    agent._announce_skill = lambda name, how: agent.announced.append((name, how))
+    return agent
+
+
+def test_a_high_confidence_match_is_loaded_and_announced(monkeypatch):
+    agent = _loading(monkeypatch, ["report-from-sources"], names=["office-docs"])
+    context = _with_turn_context(monkeypatch, agent, "build a deck from my docs")
+    assert agent.loads == ["report-from-sources"]
+    assert agent.announced == [("report-from-sources", "auto")]
+    assert context.splitlines() == [
+        "Current time: now",
+        "Loaded report-from-sources because it matches this request — its "
+        "instructions are in the system prompt.",
+        "Skills that may fit this request and are not loaded yet: office-docs — "
+        "use load_skill for the ones that cover what was asked and ignore the "
+        "rest.",
+    ]
+    # Pinned, so this turn's body selection cannot hide what it was loaded for.
+    assert "report-from-sources" in agent._sticky_skill_turns
+    query, installed, loaded, list_project = agent.skill_suggester.calls[0]
+    assert query == "build a deck from my docs"
+    assert installed == {"report-from-sources", "office-docs"}
+    assert loaded == set()
+    assert list_project is False
+
+
+def test_with_autoload_off_a_strong_match_is_only_suggested(monkeypatch):
+    agent = _wired(monkeypatch, ["summarize"])
+    agent.load_skill = lambda name: pytest.fail("nothing may load")
+    context = _with_turn_context(monkeypatch, agent, "sum this up")
+    assert "not loaded yet: summarize —" in context
+    assert "Loaded" not in context
+
+
+def test_a_loaded_skill_is_not_reloaded_or_re_suggested(monkeypatch):
+    agent = _loading(monkeypatch, ["report-from-sources"])
+    _with_turn_context(monkeypatch, agent, "build a deck from my docs")
+    context = _with_turn_context(monkeypatch, agent, "now a second deck")
+    assert agent.loads == ["report-from-sources"]
+    assert context == "Current time: now"
+    assert agent.skill_suggester.calls[1][2] == {"report-from-sources"}
+
+
+def test_an_unloaded_auto_load_is_only_suggested_after(monkeypatch):
+    agent = _loading(monkeypatch, ["summarize"])
+    _with_turn_context(monkeypatch, agent, "sum this up")
+    del agent._loaded_skills["summarize"]  # the model unloaded it
+    context = _with_turn_context(monkeypatch, agent, "sum this up too")
+    assert agent.loads == ["summarize"]
+    assert "not loaded yet: summarize —" in context
+    assert "Loaded summarize" not in context
+
+
+def test_a_skill_that_grants_a_cli_is_suggested_not_loaded(monkeypatch):
+    library = {
+        "github-triage": _full_skill("github-triage", permissions=["shell:execute:gh"])
+    }
+    agent = _loading(monkeypatch, ["github-triage"], library=library)
+    context = _with_turn_context(monkeypatch, agent, "triage my issues")
+    assert agent.loads == []
+    assert "not loaded yet: github-triage —" in context
+
+
+def test_a_claude_skill_shipping_tools_is_suggested_not_loaded(monkeypatch):
+    from gaia.skills.manager import ROOT_CLAUDE_PROJECT
+
+    library = {
+        "release": _full_skill("release", tools=["cut"], root=ROOT_CLAUDE_PROJECT)
+    }
+    agent = _loading(monkeypatch, ["release"], library=library)
+    context = _with_turn_context(monkeypatch, agent, "run the release checklist")
+    assert agent.loads == []
+    assert "not loaded yet: release —" in context
+
+
+def test_the_body_budget_stops_an_auto_load(monkeypatch):
+    budget = GaiaAgent.SKILL_AUTOLOAD_BODY_TOKENS
+    library = {
+        "big": _full_skill("big", body="x" * (budget * 4 - 400)),
+        "small": _full_skill("small", body="x" * 800),
+    }
+    agent = _loading(monkeypatch, ["big", "small"], library=library)
+    context = _with_turn_context(monkeypatch, agent, "do both")
+    assert agent.loads == ["big"]
+    assert "Loaded big because it matches" in context
+    assert "not loaded yet: small —" in context
+
+
+def test_bodies_already_loaded_count_against_the_budget(monkeypatch):
+    budget = GaiaAgent.SKILL_AUTOLOAD_BODY_TOKENS
+    agent = _loading(monkeypatch, ["summarize"])
+    agent._loaded_skills["coding"] = _full_skill("coding", body="x" * budget * 4)
+    _with_turn_context(monkeypatch, agent, "sum this up")
+    assert agent.loads == []
+
+
+def test_a_failed_auto_load_falls_back_to_the_suggestion(monkeypatch, caplog):
+    import logging
+
+    agent = _loading(monkeypatch, ["inbox-triage"], fail="inbox-triage")
+    with caplog.at_level(logging.WARNING):
+        context = _with_turn_context(monkeypatch, agent, "check my mail")
+    assert "not loaded yet: inbox-triage —" in context
+    assert "could not auto-load 'inbox-triage'" in caplog.text
+
+
+def test_no_embedder_means_no_auto_load(monkeypatch):
+    agent = _loading(monkeypatch, ["summarize"])
+    agent._memory_store = None
+    assert _with_turn_context(monkeypatch, agent, "sum this up") == (
+        "Current time: now"
+    )
+    assert agent.loads == []
+    assert agent.skill_suggester.calls == []
+
+
+def test_text_handed_over_to_translate_auto_loads_no_skill(monkeypatch):
+    agent = _loading(monkeypatch, ["file-ops"])
+    context = _with_turn_context(
+        monkeypatch,
+        agent,
+        'Translate this sentence to French, do nothing else: "The file '
+        'C:\\Users\\maria\\budget.xlsx is missing, please check the shared folder".',
+    )
+    assert context == "Current time: now"
+    assert agent.loads == []
+    assert agent.skill_suggester.calls == []
+
+
+def test_a_real_suggester_auto_loads_at_most_two(monkeypatch):
+    names = ("alpha", "beta", "gamma")
+    skills = {
+        name: SimpleNamespace(
+            name=name,
+            description=f"does {name}",
+            root="agent",
+            tool_names=[],
+            gaia=SimpleNamespace(pairs_with=[], tools_required=[]),
+        )
+        for name in names
+    }
+    axis = {f"{name}: does {name}": i for i, name in enumerate(names)}
+
+    def embed(text):
+        v = np.zeros(4, dtype=np.float32)
+        if text in axis:
+            v[axis[text]] = 1.0
+        else:
+            v[:3] = 0.57  # the request: every skill well above the threshold
+        return v
+
+    agent = _loading(monkeypatch, [], names=names)
+    agent.skill_suggester = SkillSuggester(
+        embed, autoload_threshold=0.55, autoload_margin=0.0
+    )
+    agent._skill_manager = SimpleNamespace(
+        discover=lambda: skills,
+        load=lambda name: _full_skill(name),
+    )
+    context = _with_turn_context(monkeypatch, agent, "do it all")
+    assert agent.loads == ["alpha", "beta"]
+    assert "Loaded alpha and beta because they match" in context
+    assert "not loaded yet: gamma —" in context

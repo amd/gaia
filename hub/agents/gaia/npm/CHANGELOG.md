@@ -10,6 +10,16 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
 ### Changed
 
+- **A skill that clearly fits the request can load before the turn (opt-in).**
+  Local models often ignore the "skills that may fit this request" line: over
+  56 tasks one called `load_skill` on 3. With `GAIA_SKILL_AUTOLOAD=1` or
+  `skill_autoload=True`, a match scoring at least 0.55 and 0.03 ahead of every
+  other skill loads first (two per turn at most), and the request opens with
+  "Loaded report-from-sources because it matches this request". Weaker matches
+  are suggested as before. A skill that would grant a command-line program, or
+  push loaded skill bodies past ~6,000 tokens, is only suggested. It runs only
+  on the `embeddinggemma-300m` embedder it was measured with. Off by default:
+  the 0.55 floor has not been re-measured on the current labelled requests.
 - **Start a message with `/` and a skill's name to run that skill**, as in
   Claude Code: `/pdf turn notes.md into a report`. The agent loads the skill
   with the same checks as `load_skill` and follows it for the rest of the line.

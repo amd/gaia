@@ -10,10 +10,15 @@ it scores the user's request against every installed skill that is not loaded
 and, when one or more clearly fit, the user's message gains one line naming
 them.
 
-It suggests and never loads. The lexical auto-loader the catalogue replaced
-loaded the right skill on 0 of 24 tasks (#3764); a wrong suggestion costs one
-line the model may ignore, a wrong load costs a skill body and possibly a CLI
-grant. The model still decides.
+By default it suggests and never loads. The lexical auto-loader the catalogue
+replaced loaded the right skill on 0 of 24 tasks (#3764); a wrong suggestion
+costs one line the model may ignore, a wrong load costs a skill body and
+possibly a CLI grant. The model still decides.
+
+Auto-load is the opt-in exception (:meth:`SkillSuggester.select`): local models
+often ignore even a correct suggestion, so a host may ask for the matches far
+above the suggestion floor, and clearly ahead of every other skill, to load
+before the turn. Everything below that bar is suggested exactly as before.
 
 Cheap by construction: each skill's ``"name: first line of description"`` is
 embedded once and cached by content, and a turn costs one query embedding. When
@@ -34,12 +39,19 @@ Companions from ``pairs_with`` are added only when they score
 mutual, so a hub skill like ``office-docs`` pairs with five others; added
 unconditionally, companions dropped precision to 0.52. Scores are
 embedder-specific: another embedding model needs its own calibration.
+
+Auto-load was measured on an earlier 71-request set (26 negatives) with the
+same embedder: at :data:`DEFAULT_AUTOLOAD_THRESHOLD` and
+:data:`DEFAULT_AUTOLOAD_MARGIN` it picked 11 skills on 10 requests, none
+outside a request's labels and none on a negative, for recall 0.21. It has not
+been re-measured on the current set, which is why it is off by default.
 """
 
 from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     AbstractSet,
@@ -48,6 +60,7 @@ from typing import (
     List,
     Optional,
     Sequence,
+    Tuple,
 )
 
 import numpy as np
@@ -64,6 +77,9 @@ log = get_logger(__name__)
 #: Env override for the feature. Unset = the agent's config decides.
 SUGGEST_ENV = "GAIA_SKILL_SUGGEST"
 
+#: Env override for auto-loading. Unset = the agent's config decides.
+AUTOLOAD_ENV = "GAIA_SKILL_AUTOLOAD"
+
 #: Inclusive cosine floor a skill must reach to be suggested: the lowest best
 #: match on a positive request in the calibration set.
 DEFAULT_SUGGEST_THRESHOLD = 0.30
@@ -79,17 +95,46 @@ DEFAULT_COMPANION_THRESHOLD = 0.40
 #: Most skills suggested from scoring alone, before ``pairs_with`` companions.
 DEFAULT_SUGGEST_TOP_K = 3
 
+#: Inclusive cosine floor for loading a skill before the turn, when a host
+#: opts in. The highest negative measured scored 0.524.
+DEFAULT_AUTOLOAD_THRESHOLD = 0.55
+
+#: The best auto-load must lead every skill that is not auto-loaded, loaded or
+#: not, by this much: two skills scoring alike means the request is ambiguous,
+#: so the model picks.
+DEFAULT_AUTOLOAD_MARGIN = 0.03
+
+#: Most skills auto-loaded on one turn.
+MAX_AUTOLOADS_PER_TURN = 2
+
 #: The request is cut to this many characters before embedding. A pasted
 #: document should not blow the embedder's context; the ask usually leads.
 QUERY_CHARS = 4000
 
 
-def suggest_env_override() -> Optional[bool]:
-    """Parse :data:`SUGGEST_ENV`, or ``None`` when it is unset."""
-    raw = os.getenv(SUGGEST_ENV)
+def _env_flag(name: str) -> Optional[bool]:
+    raw = os.getenv(name)
     if raw is None:
         return None
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def suggest_env_override() -> Optional[bool]:
+    """Parse :data:`SUGGEST_ENV`, or ``None`` when it is unset."""
+    return _env_flag(SUGGEST_ENV)
+
+
+def autoload_env_override() -> Optional[bool]:
+    """Parse :data:`AUTOLOAD_ENV`, or ``None`` when it is unset."""
+    return _env_flag(AUTOLOAD_ENV)
+
+
+@dataclass
+class SkillMatches:
+    """One turn's matches: skills to load before the turn, and to suggest."""
+
+    auto_load: List[str] = field(default_factory=list)
+    suggest: List[str] = field(default_factory=list)
 
 
 def render_suggestion(names: Sequence[str]) -> str:
@@ -110,11 +155,30 @@ def render_suggestion(names: Sequence[str]) -> str:
     )
 
 
+def render_autoloaded(names: Sequence[str]) -> str:
+    """The turn-context line naming skills loaded for this request, or ``""``.
+
+    It goes into the user's message, like :func:`render_suggestion`.
+    """
+    if not names:
+        return ""
+    if len(names) == 1:
+        return (
+            f"Loaded {names[0]} because it matches this request — its "
+            "instructions are in the system prompt."
+        )
+    return (
+        f"Loaded {', '.join(names[:-1])} and {names[-1]} because they match "
+        "this request — their instructions are in the system prompt."
+    )
+
+
 class SkillSuggester:
     """Scores a request against installed skills and names the clear matches.
 
     Holds no agent state: :meth:`suggest` is handed the installed skills and the
-    loaded names each turn, and returns names. The host renders them.
+    loaded names each turn, and returns names. The host renders them, and
+    loads the ones :meth:`select` marks for auto-load.
     """
 
     #: Seconds without suggestions after an embedder failure, so a down
@@ -130,6 +194,9 @@ class SkillSuggester:
         margin: float = DEFAULT_SUGGEST_MARGIN,
         top_k: int = DEFAULT_SUGGEST_TOP_K,
         companion_threshold: float = DEFAULT_COMPANION_THRESHOLD,
+        autoload_threshold: Optional[float] = None,
+        autoload_margin: float = DEFAULT_AUTOLOAD_MARGIN,
+        max_autoloads: int = MAX_AUTOLOADS_PER_TURN,
     ) -> None:
         """Build a suggester.
 
@@ -141,15 +208,27 @@ class SkillSuggester:
             margin: How far below the best score a suggestion may sit.
             top_k: Most skills suggested by score (companions come on top).
             companion_threshold: Inclusive cosine floor for a companion.
+            autoload_threshold: Inclusive cosine floor for an auto-load, or
+                ``None`` (the default) to never auto-load.
+            autoload_margin: How far the best auto-load must lead every skill
+                that is not auto-loaded.
+            max_autoloads: Most skills auto-loaded per turn.
         """
         if top_k < 1:
             raise ValueError(f"top_k must be at least 1, got {top_k}")
+        if max_autoloads < 0:
+            raise ValueError(f"max_autoloads must not be negative, got {max_autoloads}")
         self._embed_fn = embed_fn
         self._embed_batch_fn = embed_batch_fn
         self.threshold = float(threshold)
         self.margin = float(margin)
         self.top_k = int(top_k)
         self.companion_threshold = float(companion_threshold)
+        self.autoload_threshold = (
+            None if autoload_threshold is None else float(autoload_threshold)
+        )
+        self.autoload_margin = float(autoload_margin)
+        self.max_autoloads = int(max_autoloads)
         # (name, doc text) -> vector. Docs only change when a skill is edited.
         self._cache: Dict[tuple, "np.ndarray"] = {}
         self._disabled_until = 0.0
@@ -197,8 +276,67 @@ class SkillSuggester:
         failed — the catalogue still lists every skill, so a missing
         suggestion degrades to the behaviour without this feature.
         """
-        if not query.strip() or self.cooling_down:
+        result, _ = self._match(query, skills, loaded, list_project)
+        if result:
+            log.info("Suggesting skills for this request: %s", ", ".join(result))
+        return result
+
+    def select(
+        self,
+        query: str,
+        skills: Dict[str, "Skill"],
+        loaded: AbstractSet[str] = frozenset(),
+        list_project: bool = False,
+    ) -> SkillMatches:
+        """What :meth:`suggest` returns, split into auto-loads and suggestions.
+
+        Up to :attr:`max_autoloads` of the matches scoring at least
+        :attr:`autoload_threshold` become auto-loads, provided the best of them
+        leads every other skill, loaded or not, by :attr:`autoload_margin`. The
+        rest stay suggestions, in the same order. With no
+        :attr:`autoload_threshold` nothing is ever an auto-load.
+        """
+        matched, scored = self._match(query, skills, loaded, list_project)
+        auto = self._auto_loads(matched, scored)
+        result = SkillMatches(
+            auto_load=auto, suggest=[name for name in matched if name not in auto]
+        )
+        if auto:
+            log.info("Skills clearing the auto-load bar: %s", ", ".join(auto))
+        if result.suggest:
+            log.info(
+                "Suggesting skills for this request: %s", ", ".join(result.suggest)
+            )
+        return result
+
+    def _auto_loads(self, matched: List[str], scored: Dict[str, float]) -> List[str]:
+        """The *matched* names to load before the turn, best first."""
+        if self.autoload_threshold is None or self.max_autoloads == 0:
             return []
+        auto = sorted(
+            (name for name in matched if scored[name] >= self.autoload_threshold),
+            key=lambda name: (-scored[name], name),
+        )[: self.max_autoloads]
+        if not auto:
+            return []
+        runner_up = max(
+            (score for name, score in scored.items() if name not in auto),
+            default=float("-inf"),
+        )
+        if scored[auto[0]] - runner_up < self.autoload_margin:
+            return []
+        return auto
+
+    def _match(
+        self,
+        query: str,
+        skills: Dict[str, "Skill"],
+        loaded: AbstractSet[str],
+        list_project: bool,
+    ) -> Tuple[List[str], Dict[str, float]]:
+        """The names :meth:`suggest` returns, and every listed skill's score."""
+        if not query.strip() or self.cooling_down:
+            return [], {}
         try:
             scored = self.scores(query, skills, list_project)
         except Exception as exc:  # noqa: BLE001 — a suggestion is optional
@@ -209,9 +347,9 @@ class SkillSuggester:
                 self.RETRY_COOLDOWN_SECONDS,
                 exc,
             )
-            return []
+            return [], {}
         if not scored:
-            return []
+            return [], {}
 
         best = max(scored.values())
         floor = max(self.threshold, best - self.margin)
@@ -236,9 +374,7 @@ class SkillSuggester:
             result,
             [(name, round(score, 3)) for name, score in ranked[:5]],
         )
-        if result:
-            log.info("Suggesting skills for this request: %s", ", ".join(result))
-        return result
+        return result, scored
 
     def _skill_vectors(self, skills: Dict[str, "Skill"]) -> Dict[str, "np.ndarray"]:
         docs = {name: skill_doc_text(skill) for name, skill in skills.items()}
@@ -260,12 +396,19 @@ class SkillSuggester:
 
 
 __all__ = [
+    "AUTOLOAD_ENV",
+    "DEFAULT_AUTOLOAD_MARGIN",
+    "DEFAULT_AUTOLOAD_THRESHOLD",
     "DEFAULT_COMPANION_THRESHOLD",
     "DEFAULT_SUGGEST_MARGIN",
     "DEFAULT_SUGGEST_THRESHOLD",
     "DEFAULT_SUGGEST_TOP_K",
+    "MAX_AUTOLOADS_PER_TURN",
     "SUGGEST_ENV",
+    "SkillMatches",
     "SkillSuggester",
+    "autoload_env_override",
+    "render_autoloaded",
     "render_suggestion",
     "suggest_env_override",
 ]
