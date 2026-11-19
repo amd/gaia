@@ -70,32 +70,37 @@ def _bare_agent(**attrs) -> ChatAgent:
 
 
 @pytest.mark.parametrize(
-    ("profile", "dynamic", "expect_loader"),
+    ("profile", "dynamic", "expect"),
     [
-        ("doc", True, True),
-        ("doc", False, False),
+        ("doc", True, "profile"),
+        ("doc", False, None),
         # "full" gained a loader once FULL_CORE_TOOLS/FULL_BUNDLES covered its
         # whole registry; without that coverage its unbundled tools would have
         # become permanently invisible, which is why it was excluded before.
-        ("full", True, True),
-        ("full", False, False),
-        # Everything else has no PROFILE_TOOL_CONFIGS entry and stays on the
-        # full-registry legacy path even with the toggle on.
-        ("chat", True, False),
-        ("file", True, False),
-        ("data", True, False),
-        ("web", True, False),
+        ("full", True, "profile"),
+        ("full", False, None),
+        # Everything else has no PROFILE_TOOL_CONFIGS entry: its loader gates
+        # MCP tools only, and every other tool is core (#1972).
+        # "chat" registers no MCP tools, so there is nothing to gate.
+        ("chat", True, None),
+        ("file", True, "mcp_only"),
+        ("data", True, "mcp_only"),
+        ("web", True, "mcp_only"),
+        ("web", False, None),
     ],
 )
-def test_loader_built_only_for_configured_profiles_with_toggle_on(
-    monkeypatch, profile, dynamic, expect_loader
+def test_the_toggle_builds_a_loader_and_the_profile_picks_its_kind(
+    monkeypatch, profile, dynamic, expect
 ):
     monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
     a = _bare_agent(
         config=ChatAgentConfig(prompt_profile=profile, dynamic_tools=dynamic)
     )
     loader = a._maybe_build_tool_loader()
-    assert (loader is not None) == expect_loader
+    if expect is None:
+        assert loader is None
+    else:
+        assert loader.mcp_only is (expect == "mcp_only")
 
 
 def test_env_toggle_overrides_config(monkeypatch):
@@ -358,7 +363,7 @@ class TestSelectToolsForTurn:
 
     def test_the_query_is_the_current_message_alone(self):
         a = _selecting_agent(self.NAMES)
-        a.tool_loader = MagicMock(session_disabled=False, turns=1)
+        a.tool_loader = MagicMock(session_disabled=False, turns=1, mcp_only=False)
         a._select_tools_for_turn("summarize it")
         assert a.tool_loader.select.call_args.args[0] == "summarize it"
 

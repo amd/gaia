@@ -3,8 +3,9 @@
 """Mixin for adding MCP client support to agents."""
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from gaia.agents.base.tool_loader import is_mcp_tool
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.logger import get_logger
 from gaia.mcp.client.config import MCPConfig
@@ -29,6 +30,85 @@ def _summary_error(error: str) -> str:
     if len(first) > _SUMMARY_ERROR_CHARS:
         return first[: _SUMMARY_ERROR_CHARS - 1] + "…"
     return first
+
+
+#: Most MCP tool names the menu shows; past that a server shows as a count.
+MCP_MENU_MAX_TOOLS = 40
+#: A longer tool name is counted, not shown (``search_tools`` still finds it); a
+#: longer server name is cut.
+MCP_MENU_NAME_CHARS = 80
+MCP_MENU_HEADER = "==== MORE CONNECTOR TOOLS ===="
+
+
+def _menu_entry(name: str, entry: Mapping) -> Tuple[str, str]:
+    """``(server, tool)`` as the registry name spells them: ``mcp_<server>_<tool>``."""
+    tool = str(entry.get("_mcp_tool") or "")
+    if tool and name.startswith("mcp_") and name.endswith(f"_{tool}"):
+        return name[len("mcp_") : -len(tool) - 1], tool
+    return str(entry["_mcp_server"]), name
+
+
+def format_unlisted_mcp_tools(
+    registry: Mapping[str, Mapping],
+    listed: Sequence[str],
+    *,
+    permitted: Callable[[str], bool] = lambda _name: True,
+    limit: int = MCP_MENU_MAX_TOOLS,
+) -> str:
+    """Name the MCP tools left off a filtered tool list, or ``""`` when none are.
+
+    A native tool-calling model cannot call a tool missing from ``tools=``, so
+    this menu is how it learns a connector tool exists: it points the model at
+    ``search_tools``, which puts the tool on the list and returns its docs. One
+    line per server with bare tool names keeps it a few tokens per tool. It
+    changes only when the list does, so the agent renders it at the end of the
+    system prompt.
+
+    Args:
+        registry: The agent's tool registry, in registry order.
+        listed: The tool names on this turn's list.
+        permitted: Whether the agent may offer a tool; a withheld one is left out.
+        limit: Most tool names shown. Past it, a server's other tools are
+            counted on its line, and the cut is logged.
+    """
+    on_list = set(listed)
+    servers: Dict[str, List[str]] = {}
+    for name, entry in registry.items():
+        if is_mcp_tool(entry) and name not in on_list and permitted(name):
+            server, tool = _menu_entry(name, entry)
+            servers.setdefault(server, []).append(tool)
+    if not servers:
+        return ""
+    lines = [
+        MCP_MENU_HEADER,
+        "Connected MCP servers have these tools too, not yet in your list. If "
+        "one fits, call search_tools with what you want to do before you answer "
+        "without a tool.",
+    ]
+    budget, total, hidden = limit, 0, 0
+    for server, tools in servers.items():
+        total += len(tools)
+        label = server[:MCP_MENU_NAME_CHARS]
+        shown = [t for t in tools if len(t) <= MCP_MENU_NAME_CHARS][: max(budget, 0)]
+        budget -= len(shown)
+        rest = len(tools) - len(shown)
+        hidden += rest
+        if not shown:
+            lines.append(f"- {label}: {len(tools)} tools")
+        elif rest:
+            lines.append(f"- {label}: {', '.join(shown)}, and {rest} more")
+        else:
+            lines.append(f"- {label}: {', '.join(shown)}")
+    if hidden:
+        logger.info(
+            "MCP tool menu names %d of %d unlisted MCP tools (cap %d, names over "
+            "%d chars counted)",
+            total - hidden,
+            total,
+            limit,
+            MCP_MENU_NAME_CHARS,
+        )
+    return "\n".join(lines)
 
 
 class MCPClientMixin:

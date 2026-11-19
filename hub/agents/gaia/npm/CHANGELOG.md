@@ -21,6 +21,17 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   or put caveats inside one.
 ### Changed
 
+- **MCP tools wait for a turn that needs them, and a menu names them.** With
+  memory off, or on the `file`, `data` and `web` profiles with dynamic tools
+  on, the agent sent every connected MCP server's tools on every turn; now they join the list like any
+  other tool outside it, and the agent's own tools are never held back or
+  changed. While MCP tools are off the list, the prompt ends with one line per
+  server naming them and telling the model to call `search_tools`, so a model
+  that only sees declared tools can still find one. On 3 servers of 5 tools
+  each, with memory off, a local model's first turn spends 99 tokens on MCP
+  tools instead of 1,304 (`python -m gaia.eval.tool_cost --mcp`, proxy
+  tokenizer). With memory on, MCP tools were already off the first turn, so the
+  menu adds 61 to 137 tokens for 1 to 5 servers.
 - **Office files are checked before they are handed over.** The bundled
   `office-docs` skill ships two tools that never write the file.
   `verify_workbook` recalculates a copy of an .xlsx (with LibreOffice when

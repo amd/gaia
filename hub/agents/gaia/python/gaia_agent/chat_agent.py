@@ -87,7 +87,12 @@ from gaia.agents.base.file_snapshots import (
     watch_script_folders,
 )
 from gaia.agents.base.goal_store import GOAL_OUTCOMES
-from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.memory import (
+    MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED,
+    MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
+    MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
+    MemoryMixin,
+)
 from gaia.agents.base.model_features import (
     FEATURE_TOOLS,
     features_for_model,
@@ -102,6 +107,7 @@ from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F40
 from gaia.agents.base.tool_loader import (
     ToolLoader,
     format_tool_docs,
+    is_mcp_tool,
     thin_tool_schema,
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -154,7 +160,7 @@ from gaia.llm.lemonade_client import (
     resolve_default_vision_model,
     resolve_lemonade_base_url,
 )
-from gaia.mcp.mixin import MCPClientMixin
+from gaia.mcp.mixin import MCPClientMixin, format_unlisted_mcp_tools
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
 from gaia.security import (
@@ -211,6 +217,15 @@ def _no_answer_result(timeout_seconds: int, default: Optional[str]) -> str:
 MAX_TOOL_SEARCHES = 3
 MAX_TOOL_SEARCH_CHARS = 500
 TOOL_SEARCH_HITS = 5
+
+#: Why memory can be off with no embedder to select tools with.
+_EMBEDDER_DOWN = frozenset(
+    {
+        MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
+        MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED,
+        MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
+    }
+)
 SKILL_SEARCH_HITS = 3
 EXTRACTION_TOOLS = ("extract_document_items", "save_extracted_items")
 TOOL_SEARCH_DOCS = 2
@@ -868,6 +883,10 @@ class ChatAgent(
     _mcp_unavailable_error: Optional[str] = None
     _mcp_dropped_notice: Optional[str] = None
     _mcp_dropped_notice_shown: Optional[str] = None
+    # Set once the agent has warned that search_tools is withheld.
+    _search_withheld_warned: bool = False
+    # Set when this agent registers search_tools; another agent's is dropped.
+    _search_tools_registered: bool = False
 
     # This turn's last request_user_input question, while it went unanswered.
     _unanswered_question: Optional[str] = None
@@ -1477,20 +1496,30 @@ class ChatAgent(
     # ── dynamic tool loader (#1449) ───────────────────────────────────────
 
     def _maybe_build_tool_loader(self) -> Optional[ToolLoader]:
-        """Construct the tool loader, or ``None`` when inactive.
+        """Construct the tool loader, or ``None`` when the toggle is off.
 
-        Active for a profile with a :data:`PROFILE_TOOL_CONFIGS` entry (``doc``,
-        ``full``) and the toggle resolved on (config field, overridable by
-        ``GAIA_DYNAMIC_TOOLS``). Any other profile returns ``None``, leaving the
-        agent on the full-registry / byte-identical legacy path.
+        The toggle is the config field, overridable by ``GAIA_DYNAMIC_TOOLS``.
+        A profile with a :data:`PROFILE_TOOL_CONFIGS` entry (``doc``, ``full``)
+        gets its CORE and bundles. ``file``, ``data`` and ``web`` get an
+        MCP-only loader, which acts only once the agent has MCP tools; until
+        then the agent stays on the full-registry, byte-identical legacy path.
+        ``chat`` registers no MCP tools and gets none.
         """
         if not self._resolve_dynamic_tools_enabled():
             return None
-        profile_config = PROFILE_TOOL_CONFIGS.get(
-            getattr(self.config, "prompt_profile", "full")
-        )
-        if profile_config is None:
+        profile = getattr(self.config, "prompt_profile", "full")
+        # "chat" registers no MCP tools, so a loader would have nothing to gate.
+        if get_profile_spec(profile).early_return:
             return None
+        profile_config = PROFILE_TOOL_CONFIGS.get(profile)
+        if profile_config is None:
+            return ToolLoader(
+                core_tools=(),
+                bundles=(),
+                mcp_only=True,
+                embed_fn=self._embed_text,
+                embed_batch_fn=self._embed_texts_batch,
+            )
         return ToolLoader(
             core_tools=profile_config.core | self._workspace_core_tools(),
             bundles=profile_config.bundles,
@@ -1528,10 +1557,66 @@ class ChatAgent(
         norms[norms == 0] = 1.0
         return vecs / norms
 
+    def _local_loader(self) -> bool:
+        """True when a loader picks the list for a local model on this agent."""
+        loader = getattr(self, "tool_loader", None)
+        if loader is None or self._hosted_model():
+            return False
+        return not loader.mcp_only or self._mcp_tools_present()
+
     def _thin_tool_schemas(self) -> bool:
-        """Thin ``tools=`` on local models, where the prompt is read token by token."""
-        return (
-            getattr(self, "tool_loader", None) is not None and not self._hosted_model()
+        """Thin ``tools=`` on local models, where the prompt is read token by token.
+
+        Only on a profile with its own CORE: elsewhere the loader holds back MCP
+        tools alone, and the agent's own tools go out exactly as without it.
+        """
+        profile = getattr(getattr(self, "config", None), "prompt_profile", "full")
+        return self._local_loader() and profile in PROFILE_TOOL_CONFIGS
+
+    def _mcp_tools_present(self) -> bool:
+        """True when this agent's own tool snapshot holds an MCP tool.
+
+        ``False`` before the snapshot: the process-wide registry may hold
+        another agent's MCP tools until then.
+        """
+        tools = self._instance_tools
+        return tools is not None and any(
+            isinstance(entry, dict) and is_mcp_tool(entry) for entry in tools.values()
+        )
+
+    def _loader_in_play(self) -> bool:
+        """True when this session's list is the loader's to gate.
+
+        Memory feeds only the skill signal, so MCP tools are gated without it,
+        as long as the embedder works: memory off because it is down leaves
+        nothing to select with, so every tool goes out.
+        """
+        mcp = self._mcp_tools_present() and not self._embedder_down()
+        if self.tool_loader.mcp_only:
+            return mcp
+        return getattr(self, "_memory_store", None) is not None or mcp
+
+    def _embedder_down(self) -> bool:
+        """True when memory found the embedder missing or unreachable."""
+        return getattr(self, "_memory_unavailable_reason", None) in _EMBEDDER_DOWN
+
+    def _gate_only_mcp_without_memory(self) -> None:
+        """With memory off, hold back MCP tools only: the agent's own stay listed.
+
+        The profile CORE assumes memory's skill signal; without it, turning
+        memory off must never cost the agent one of its own tools.
+        """
+        loader = self.tool_loader
+        if (
+            loader.mcp_only
+            or getattr(self, "_memory_store", None) is not None
+            or not self._mcp_tools_present()
+        ):
+            return
+        self.tool_loader = loader.as_mcp_only()
+        logger.info(
+            "Memory is off: the tool loader holds back MCP tools only, and "
+            "lists every other tool."
         )
 
     def _tool_docs(self, names: List[str]) -> str:
@@ -1543,14 +1628,15 @@ class ChatAgent(
     def _dynamic_tools_active(self) -> bool:
         """True when the tool list is the loader's to decide this turn.
 
-        Off-states (any → every tool): loader not built (toggle off / wrong
-        profile), a hosted model, embedder session-disabled, or memory disabled
-        (``GAIA_MEMORY_DISABLED`` tears down ``_memory_store``).
+        Off-states (any → every tool): loader not built (toggle off), a hosted
+        model, embedder session-disabled, an MCP-only loader with no MCP tools,
+        or memory disabled (``GAIA_MEMORY_DISABLED`` tears down
+        ``_memory_store``) on an agent with no MCP tools.
         """
         return (
-            self._thin_tool_schemas()
+            self._local_loader()
             and not self.tool_loader.session_disabled
-            and getattr(self, "_memory_store", None) is not None
+            and self._loader_in_play()
         )
 
     def _validate_tool_config(self) -> None:
@@ -1584,6 +1670,7 @@ class ChatAgent(
         """
         if not self._dynamic_tools_active():
             return None
+        self._gate_only_mcp_without_memory()
         self._validate_tool_config()
         # A rebuilt agent can't know what this chat's list was, and its slot is
         # most likely gone: one re-read now beats a second one at the next tool.
@@ -1628,7 +1715,7 @@ class ChatAgent(
     def _before_model_call(self, messages: List[Dict[str, Any]]) -> None:
         """Free the idle prefix before a long conversation can lose its own."""
         self._model_called = True
-        if not self._thin_tool_schemas():
+        if not self._local_loader():
             return
         idle = CONVERSATION_SLOT if self.tool_loader.jumped else FULL_TOOLS_SLOT
         if idle in self._released_slots:
@@ -1647,10 +1734,7 @@ class ChatAgent(
 
     def _conversation_request_kwargs(self) -> Dict[str, Any]:
         """Continue on the primed slot once the session is on the full list."""
-        if (
-            not self._thin_tool_schemas()
-            or getattr(self, "_memory_store", None) is None
-        ):
+        if not self._local_loader() or not self._loader_in_play():
             return {}
         # A dead embedder also means the full list, the one that slot holds.
         if not (self.tool_loader.jumped or self.tool_loader.session_disabled):
@@ -1669,9 +1753,10 @@ class ChatAgent(
             or not self._uses_native_tool_calls()
         ):
             return super()._history_tool_schemas()
-        return [
-            thin_tool_schema(schema) for schema in self._build_openai_tool_schemas()
-        ]
+        schemas = self._build_openai_tool_schemas()
+        if not self._thin_tool_schemas():
+            return schemas
+        return [thin_tool_schema(schema) for schema in schemas]
 
     def _admit_skill_tools(self, names: List[str]) -> bool:
         """Put a just-loaded skill's tools on the list."""
@@ -1695,6 +1780,7 @@ class ChatAgent(
         """The core list, with the tool embeddings built for the first turn."""
         if not self._dynamic_tools_active():
             return super()._warm_tool_filter()
+        self._gate_only_mcp_without_memory()
         self._validate_tool_config()
         self.tool_loader.admit_tools(self._standing_skill_tools(), self._tools_registry)
         return self.tool_loader.warm(self._tools_registry)
@@ -1728,6 +1814,66 @@ class ChatAgent(
         finally:
             self._apply_tool_filter(core)
             self._tool_notice_due = notice_due
+
+    def _register_search_tools(self) -> None:
+        """Register ``search_tools``, the loader's way to reach an unlisted tool."""
+        from gaia.agents.base.tools import tool
+
+        self._search_tools_registered = True
+
+        @tool
+        def search_tools(query: str) -> dict:
+            """Call before saying you can't do something: finds any tool or skill.
+
+            Tools it finds can be called on your next step. A skill it finds
+            needs load_skill first.
+
+            Args:
+                query: What you want to do, in plain words.
+
+            Returns:
+                Matching tools with their docs, and matching installed skills.
+            """
+            return self._search_tools(query)
+
+    def _unlisted_tools_menu(self) -> str:
+        """Name the MCP tools this turn's list leaves out, pointing at ``search_tools``.
+
+        Empty on the full list, so the prompt primed for the jump is the one
+        the jump sends.
+        """
+        current = self._active_tool_filter
+        if current is None or not self._dynamic_tools_active():
+            return ""
+        # Withheld by the user (--disallowed-tools): nothing for the menu to point at.
+        if not self._tool_permitted("search_tools"):
+            if not self._search_withheld_warned and self._has_unlisted_mcp(current):
+                self._search_withheld_warned = True
+                logger.warning(
+                    "search_tools is withheld, so MCP tools off the tool list are "
+                    "reached only when a request clearly needs one. Allow "
+                    "search_tools, or set GAIA_DYNAMIC_TOOLS=0 to list every tool."
+                )
+            return ""
+        menu = format_unlisted_mcp_tools(
+            self._tools_registry, current, permitted=self._tool_permitted
+        )
+        if menu and "search_tools" not in current:
+            raise RuntimeError(
+                "The tool list leaves out MCP tools but not search_tools, so the "
+                "model has no way to reach them. Keep search_tools in the "
+                "profile's CORE (gaia_agent/tool_bundles.py), or turn dynamic "
+                "tools off with GAIA_DYNAMIC_TOOLS=0."
+            )
+        return menu
+
+    def _has_unlisted_mcp(self, listed: List[str]) -> bool:
+        """True when an MCP tool in the registry is not on *listed*."""
+        on_list = set(listed)
+        return any(
+            isinstance(entry, dict) and is_mcp_tool(entry) and name not in on_list
+            for name, entry in self._tools_registry.items()
+        )
 
     def _search_tools(self, query: str) -> Dict[str, Any]:
         """Find tools and installed skills for *query*; ``search_tools``'s body."""
@@ -2778,23 +2924,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         self.register_reasoning_effort_tools()  # only for models that grade reasoning
 
         # search_tools — registered ONLY when the loader exists, so the loader-off
-        # path stays byte-identical.
-        if self.tool_loader is not None:
-
-            @tool
-            def search_tools(query: str) -> dict:
-                """Call before saying you can't do something: finds any tool or skill.
-
-                Tools it finds can be called on your next step. A skill it finds
-                needs load_skill first.
-
-                Args:
-                    query: What you want to do, in plain words.
-
-                Returns:
-                    Matching tools with their docs, and matching installed skills.
-                """
-                return self._search_tools(query)
+        # path stays byte-identical. An MCP-only loader registers it once its
+        # MCP tools have loaded, below.
+        if self.tool_loader is not None and not self.tool_loader.mcp_only:
+            self._register_search_tools()
 
         # Inline list_files — only for profiles that need file operations
         if spec.generic_file_ops:
@@ -3882,12 +4015,19 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
         # Must run last so MCP tools don't bloat context before we know the base count.
         self._load_mcp_tools()
+        # Without MCP tools an MCP-only loader stays off, and the tools stay as they were.
+        loader = self.tool_loader
+        if loader is not None and loader.mcp_only and self._own_mcp_tools:
+            self._register_search_tools()
 
         # Snapshot: freeze this agent's tool set so mutations by other agents
         # in the same process do not leak in.  Exclusion replaces the old
         # _TOOL_REGISTRY.pop() pattern that corrupted the global dict.
         self._register_output_reader()
         self._snapshot_tools()
+        # Another agent's search_tools would search that agent's tools.
+        if not self._search_tools_registered:
+            self._instance_tools.pop("search_tools", None)
         # The registry is process-wide: drop MCP tools other agents registered,
         # from servers that may be off or not active for this agent.
         own_mcp = getattr(self, "_own_mcp_tools", set())

@@ -136,6 +136,10 @@ registered tool is exposed, exactly as before this feature existed.** No semanti
 selection, no filtering. This is a *documented off-state*, not a degradation — the
 user chose it, and the agent must behave identically to a build without the tool
 loader.
+
+**One exception (#1972):** with MCP tools connected and a working embedder,
+memory off holds back only the MCP tools, behind a menu that names them and
+`search_tools` to reach them. Every other tool is still listed.
 </Warning>
 
 This collapses three distinct conditions onto the **same** safe behavior — load
@@ -269,6 +273,8 @@ and sets the concrete TTFT target — before more is built.
   measurably shrink, not just one.
 - **All three off-states revert to all tools** — memory disabled, loader toggle
   off, and embedder unavailable each expose the full registry (the last logs).
+  Since #1972, memory disabled with MCP tools connected holds back only the MCP
+  tools.
 
 #### How Part 1 shipped (implementation reference)
 

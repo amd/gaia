@@ -36,6 +36,19 @@ from gaia.eval.tool_recall import (  # noqa: E402
 MCP_RECALL_FLOOR = 18 / 25
 MCP_JUMP_RATE_CEILING = 18 / 25
 
+# The same measurement on the two paths #1972 started gating: the `web` profile
+# with its MCP-only loader, and the flagship with memory off. Same caveats and
+# same way to re-pin. Each one sent every MCP tool before, so 100% then.
+MCP_ONLY_RECALL = 19 / 25
+MEMORY_OFF_RECALL = 18 / 25
+
+# The issue's bar: on 3+ servers the loader-on first turn, menu included, costs
+# at most 40% of what eager registration sent on the native path.
+MIN_NATIVE_CUT = 0.60
+
+# What joins the menu to the rest of the system prompt; it counts as menu cost.
+MENU_SEPARATOR = "\n\n"
+
 
 @pytest.fixture(scope="module")
 def agents():
@@ -104,10 +117,14 @@ def test_mcp_cost_grows_per_server_and_native_costs_more(agents):
     for row in rows:
         assert row["off"]["native_chars"] > row["off"]["text_chars"] > 0
         assert row["mcp_tools"] == row["servers"] * 5
-        # The loader opens a session on its core list; MCP tools are not on it.
+        # The loader opens a session on its core list; MCP tools are not on it,
+        # so their whole first-turn cost is the menu that names them.
         assert row["mcp_offered"] == 0
-        assert row["on"]["native_chars"] == 0
-        assert tool_cost.mcp_reduction(row, "native_chars") == 1.0
+        assert row["on"]["native_chars"] == row["menu"]["chars"] + len(MENU_SEPARATOR)
+        if row["servers"] >= 3:
+            assert tool_cost.mcp_reduction(row, "native_chars") >= MIN_NATIVE_CUT
+    menus = [r["menu"]["chars"] for r in rows]
+    assert menus == sorted(menus)
 
 
 def test_measuring_leaves_the_agents_tools_untouched(agents, largest):
@@ -149,7 +166,9 @@ def test_a_loader_that_cannot_embed_fails_loudly(largest):
 
 def test_a_loader_outside_dynamic_tools_mode_fails_loudly(agents, largest, monkeypatch):
     off, on = agents
-    monkeypatch.setattr(on, "_memory_store", None)
+    # Memory off no longer idles the loader once MCP tools are present (#1972);
+    # a hosted model still does.
+    monkeypatch.setattr(on, "_hosted_model", lambda: True)
     entries = convert_mock_servers(off, largest[0])
     with pytest.raises(RuntimeError, match="did not select"):
         measure_mcp_recall(on, entries, largest[1])
@@ -178,7 +197,8 @@ def test_recall_check_names_each_failure():
 def test_cli_prints_the_report_and_passes(capsys):
     assert tool_cost.main(["--mcp", "--servers", "1", "--min-mcp-recall", "0"]) == 0
     out = capsys.readouterr().out
-    assert "First-turn tool-block tokens the MCP tools add" in out
+    assert "First-turn tokens the MCP tools add" in out
+    assert "Paths that sent every MCP tool before #1972" in out
     assert "| 1 x 5 | 5 |" in out
     assert "the loader still thins native schemas" in out
     assert "**FAIL:**" not in out
@@ -208,3 +228,62 @@ def test_cli_exits_1_when_the_guard_fails(capsys, monkeypatch):
 def test_cli_rejects_bad_mcp_flags(argv):
     with pytest.raises(SystemExit):
         tool_cost.main(argv)
+
+
+@pytest.fixture(scope="module")
+def gating_paths():
+    return tool_cost.measure_gating_paths((1, 3, 5), (5,))
+
+
+def test_newly_gated_paths_cut_the_first_turn_on_three_or_more_servers(gating_paths):
+    rows = gating_paths["rows"]
+    assert {r["path"] for r in rows} == {"mcp_only", "memory_off"}
+    for row in rows:
+        menu = row["menu"]["chars"] + len(MENU_SEPARATOR)
+        if row["path"] == "memory_off":
+            assert row["on"]["native_chars"] == menu
+        else:
+            # search_tools registers only once MCP tools arrive, so it is MCP cost.
+            assert row["on"]["native_chars"] > menu
+        if row["servers"] >= 3:
+            assert tool_cost.mcp_reduction(row, "native_chars") >= MIN_NATIVE_CUT
+
+
+def test_newly_gated_paths_hold_their_recall_and_keep_every_own_tool(gating_paths):
+    recall = gating_paths["recall"]
+    assert recall["mcp_only"].recall >= MCP_ONLY_RECALL, recall["mcp_only"].misses
+    assert recall["memory_off"].recall >= MEMORY_OFF_RECALL, recall["memory_off"].misses
+    assert gating_paths["own_tools_kept"] == {"mcp_only": True, "memory_off": True}
+
+
+def test_search_tools_reaches_every_tool_the_first_turn_missed(agents, largest):
+    from gaia_agent.chat_agent import TOOL_SEARCH_HITS
+
+    off, on = agents
+    servers, probes = largest
+    entries = convert_mock_servers(off, servers)
+    misses = measure_mcp_recall(on, entries, probes).misses
+    assert misses
+    # Exact with the stand-in embedder; re-run the harness and re-pin if a core
+    # tool's description edit moves it.
+    assert tool_recall.search_reach(on, entries, misses, TOOL_SEARCH_HITS) == len(
+        misses
+    )
+
+
+def test_search_reach_needs_a_loader(agents):
+    off, _ = agents
+    with pytest.raises(ValueError, match="tool loader"):
+        tool_recall.search_reach(off, {}, [], 5)
+
+
+def test_an_mcp_only_agent_lists_every_own_tool_for_each_probe(largest):
+    off, on = tool_cost.build_mcp_only_agents()
+    servers, probes = largest
+    entries = convert_mock_servers(off, servers)
+    with tool_cost.with_mcp_tools(on, entries):
+        own = [n for n in on._tools_registry if n not in entries]
+        for request, _tool in probes:
+            names = tool_cost.first_turn_tools(on, request)
+            assert names is not None
+            assert names[: len(own)] == own

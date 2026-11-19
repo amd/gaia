@@ -20,6 +20,10 @@ own, and moves to that list at most once:
 Nothing is evicted. :func:`thin_tool_schema` keeps each entry short, and
 :func:`format_tool_docs` hands out what it leaves out, on request.
 
+A profile with no CORE or bundles of its own can still gate MCP tools: in
+**MCP-only** mode every tool that is not from an MCP server is core, so the
+agent's own tools are never held back and only connector tools wait for a jump.
+
 The registry stays the source of truth for all registered tools and for
 execution; the loader only picks what the prompt renderers surface. It never
 imports ``MemoryMixin``: the embedding function(s) are injected by the host
@@ -52,6 +56,11 @@ JUMP_MARGIN = 0.03
 # ``search_tools`` returns nothing below this: an answer of "no match" must stay
 # possible, or the model keeps calling whatever came back first.
 SEARCH_FLOOR = 0.20
+
+
+def is_mcp_tool(entry: dict) -> bool:
+    """True for a registry entry an MCP server provides."""
+    return entry.get("_mcp_server") is not None
 
 
 def dynamic_tools_env_override() -> Optional[bool]:
@@ -173,6 +182,7 @@ class ToolLoader:
         embed_batch_fn: Optional[Callable[[Sequence[str]], "np.ndarray"]] = None,
         threshold: float = DEFAULT_THRESHOLD,
         optional_tools: Sequence[str] = (),
+        mcp_only: bool = False,
     ) -> None:
         """Build a tool loader.
 
@@ -190,7 +200,20 @@ class ToolLoader:
                 subclass contributes that the base profile does not. Exempt from
                 :meth:`validate_registry` only; every other name there still
                 fails loudly, and the list simply omits an absent tool.
+            mcp_only: Treat every registry tool that is not from an MCP server
+                as core, read from the live registry on each call, so only MCP
+                tools wait for a jump. For profiles with no CORE or bundles;
+                *core_tools* and *bundles* must then be empty.
+
+        Raises:
+            ValueError: *mcp_only* with *core_tools* or *bundles* given.
         """
+        if mcp_only and (core_tools or bundles):
+            raise ValueError(
+                "An MCP-only ToolLoader takes its core from the registry; pass no "
+                "core_tools or bundles, or build a profile loader instead."
+            )
+        self._mcp_only = mcp_only
         self._core: FrozenSet[str] = frozenset(core_tools)
         self._bundles: List[ToolBundle] = list(bundles)
         self._optional: FrozenSet[str] = frozenset(optional_tools)
@@ -224,6 +247,28 @@ class ToolLoader:
     def jumped(self) -> bool:
         """True once this session has moved to the full list."""
         return self._jump_reason is not None
+
+    @property
+    def mcp_only(self) -> bool:
+        """True when only MCP tools are gated and every other tool is core."""
+        return self._mcp_only
+
+    def as_mcp_only(self) -> "ToolLoader":
+        """An MCP-only loader with this one's embedders, threshold and embed cache.
+
+        For an agent that loses what its profile CORE relies on (memory) but
+        still has MCP tools to gate. Per-session state starts fresh.
+        """
+        twin = ToolLoader(
+            (),
+            (),
+            self._embed_fn,
+            embed_batch_fn=self._embed_batch_fn,
+            threshold=self._threshold,
+            mcp_only=True,
+        )
+        twin._embed_cache = self._embed_cache
+        return twin
 
     def validate_registry(
         self, registry: Dict[str, dict], withheld: Iterable[str] = ()
@@ -273,9 +318,11 @@ class ToolLoader:
         """
         if self.jumped:
             return list(registry)
-        listed = [name for name in registry if name in self._core]
+        listed = [name for name in registry if self._is_core(name, registry)]
         return listed + [
-            name for name in self._added if name in registry and name not in self._core
+            name
+            for name in self._added
+            if name in registry and not self._is_core(name, registry)
         ]
 
     def select(
@@ -410,6 +457,11 @@ class ToolLoader:
         self._session_disabled = False
 
     # ── internals ────────────────────────────────────────────────────────
+
+    def _is_core(self, name: str, registry: Dict[str, dict]) -> bool:
+        if self._mcp_only:
+            return not is_mcp_tool(registry[name])
+        return name in self._core
 
     def _ensure_tool_embeddings(
         self, registry: Dict[str, dict]
