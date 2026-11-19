@@ -415,7 +415,7 @@ jobs:
               }
 
               # -j 1: run tests sequentially so they don't compete for the single LLM server
-              ctest --test-dir cpp/build-integration -C Release --output-on-failure -j 1 @excludeArg
+              ctest --test-dir cpp/build-integration -C Release --output-on-failure --no-tests=error -j 1 @excludeArg
               if ($LASTEXITCODE -ne 0) { throw "C++ integration tests failed" }
               Write-Host "[SUCCESS] All C++ integration tests passed!"
 
