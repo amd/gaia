@@ -83,7 +83,8 @@ const DOUBT = F(R(4, 2, 0, 1), R(3, 6, 0, -1));
 const tears = (dy, ys, xs = [3]) => ys.map((y) => P('sad', 0, dy, xs.flatMap((x) => [[x, y], [x, y + 1]])));
 const BLUSH = [[2, 13], [4, 13], [6, 13], [9, 13], [11, 13], [13, 13]];
 const shy = (dx, dy) => F(R(3, 3, dx, dy), undefined, BLUSH);
-const zed = (x, y) => [[x, y], [x + 1, y], [x + 2, y], [x + 3, y], [x + 2, y + 1], [x + 1, y + 2], [x, y + 3], [x + 1, y + 3], [x + 2, y + 3], [x + 3, y + 3]];
+/** A sleep bubble. Not a "z": the sheet is mirrored in right-to-left layouts, so nothing on it may be a letter. */
+const bubble = (x, y) => [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]];
 const ASLEEP = R(5, 1, 0, 3);
 const drop = (y) => [[15, y], [15, y + 1]];
 
@@ -92,6 +93,11 @@ const drop = (y) => [[15, y], [15, y + 1]];
  * state; the component picks among them at random so a state rarely repeats
  * itself. `pose` is the frame of the first variant shown under reduced motion.
  * Working states loop while GAIA works; `wait` and the moods play once.
+ *
+ * Frames are drawn for left-to-right reading. In a right-to-left layout the
+ * whole sheet is mirrored, so the eyes read, glance and write the other way and
+ * the question mark turns into the Arabic one. Draw only shapes that survive
+ * that flip: no letters, digits or one-directional symbols.
  */
 export const STATES = {
     think: {
@@ -340,8 +346,8 @@ export const STATES = {
         variants: [[
             REST, F(R(3, 4, 0, 1)), F(R(3, 3, 0, 1)), ...hold(F(R(4, 2, 0, 2)), 3), F(ASLEEP), ...hold(F(R(5, 1, 0, 4)), 2),
             F(R(4, 6, 0, -2)), REST, F(R(3, 4, 0, 1)), F(R(3, 3, 0, 1)), F(R(4, 2, 0, 2)),
-            ...hold(F(ASLEEP, undefined, zed(11, 5)), 3), ...hold(F(ASLEEP, undefined, [...zed(11, 2), ...zed(6, 6)]), 3),
-            ...hold(F(ASLEEP, undefined, [...zed(11, 0), ...zed(6, 4)]), 3),
+            ...hold(F(ASLEEP, undefined, [[11, 7]]), 3), ...hold(F(ASLEEP, undefined, [...bubble(12, 4), [10, 7]]), 3),
+            ...hold(F(ASLEEP, undefined, [...bubble(13, 1), ...bubble(11, 4), [9, 7]]), 3),
         ]],
     },
 };
