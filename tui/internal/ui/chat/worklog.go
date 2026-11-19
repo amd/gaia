@@ -25,15 +25,6 @@ import (
 // approvalWaiting marks a step parked on the confirmation modal.
 const approvalWaiting = "waiting for you"
 
-// isNarration reports whether an item is the agent talking rather than acting.
-func isNarration(item ActivityItem) bool {
-	switch item.Kind {
-	case "status", "thinking", "note":
-		return true
-	}
-	return false
-}
-
 // isStep reports whether an item is work the user would want a record of.
 func isStep(item ActivityItem) bool {
 	return item.Kind == "tool" || item.Kind == "confirm"

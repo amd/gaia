@@ -113,10 +113,6 @@ var (
 	failStyle = lipgloss.NewStyle().
 			Foreground(theme.Danger)
 
-	// A step error the agent is retrying past: worth seeing, not an alarm.
-	retryStyle = lipgloss.NewStyle().
-			Foreground(theme.Warning)
-
 	dividerStyle = lipgloss.NewStyle().
 			Foreground(theme.Divider)
 
@@ -2944,11 +2940,6 @@ func trimBlankLines(s string) string {
 	}
 	return strings.Join(lines, "\n")
 }
-
-// workLogLines caps how many ACTIONS the live work log keeps. Bounded so a long
-// turn cannot push the transcript off screen, deep enough that repeated tool
-// calls read as progress.
-const workLogLines = 6
 
 // workLogMaxRows caps the log's rendered HEIGHT. An action can occupy two rows
 // once its outcome lands, so the action cap alone would let the region grow to
