@@ -1581,8 +1581,10 @@ class LemonadeProvider(LLMClient):
                 ):
                     self._last_ttft_seconds = time.perf_counter() - request_started
                 _accumulate_tool_calls(tool_calls, delta.get("tool_calls"))
+                # tool_calls stays empty when a frame holds only non-dict fragments.
                 if (
                     delta.get("tool_calls")
+                    and tool_calls
                     and self.tool_call_draft is not None
                     and time.perf_counter() >= next_draft
                 ):

@@ -584,10 +584,26 @@ def partial_json_string(arguments: str, key: str) -> Optional[str]:
             if len(code) < 4:
                 break
             try:
-                out.append(chr(int(code, 16)))
+                unit = int(code, 16)
             except ValueError:
                 break
             i += 6
+            if 0xD800 <= unit <= 0xDBFF:
+                # Half of a pair: alone it cannot be encoded as UTF-8.
+                low = arguments[i + 2 : i + 6]
+                if arguments[i : i + 2] != "\\u" or len(low) < 4:
+                    break
+                try:
+                    low_unit = int(low, 16)
+                except ValueError:
+                    break
+                if not 0xDC00 <= low_unit <= 0xDFFF:
+                    break
+                unit = 0x10000 + ((unit - 0xD800) << 10) + (low_unit - 0xDC00)
+                i += 6
+            elif 0xDC00 <= unit <= 0xDFFF:
+                break
+            out.append(chr(unit))
             continue
         out.append(_JSON_ESCAPES.get(esc, esc))
         i += 2

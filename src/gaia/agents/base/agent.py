@@ -885,6 +885,8 @@ COMPUTATION_FAILED = (
 
 #: How many user messages and tool results an agent keeps for fact checks.
 SEEN_SOURCES_MAX = 200
+#: Longest text kept for one of them, in characters.
+SEEN_SOURCE_MAX_CHARS = 20_000
 
 # Tools whose result is nothing but a receipt for what the agent itself just
 # did. EVERY other tool is treated as bringing in content the user did not type
@@ -8853,13 +8855,26 @@ Do NOT wrap conversational replies in JSON.
         """Record a user message or tool result, so tools can check facts against it."""
         # A test agent built via __new__ has no list yet.
         seen = self.__dict__.setdefault("_seen_sources", [])
-        text = (
-            content
-            if isinstance(content, str)
-            else json.dumps(content, default=str, ensure_ascii=False)
-        )
-        seen.append((source, dict(args or {}), text))
+        if isinstance(content, str):
+            text = content
+        else:
+            try:
+                text = json.dumps(content, default=str, ensure_ascii=False)
+            except (TypeError, ValueError, RecursionError) as exc:
+                # Tuple keys or a cycle: the result is still a good tool result.
+                logger.warning(
+                    "Could not serialise the %s result for fact checks (%s); "
+                    "keeping its str() form.",
+                    source,
+                    exc,
+                )
+                text = str(content)
+        seen.append((source, dict(args or {}), text[:SEEN_SOURCE_MAX_CHARS]))
         del seen[:-SEEN_SOURCES_MAX]
+
+    def clear_seen_sources(self) -> None:
+        """Forget them, when the conversation is cleared."""
+        self.__dict__["_seen_sources"] = []
 
     def seen_sources(self) -> List[Tuple[str, Dict[str, Any], str]]:
         """``(source, args, text)`` for each user message and tool result this conversation.
@@ -9358,11 +9373,9 @@ Do NOT wrap conversational replies in JSON.
             elif tool_name in FILE_CONTENT_TOOLS:
                 # Masks only what the model sees; edits refuse to write the marker back.
                 result = redact_file_content(result)
-            Agent.note_seen(self, tool_name, tool_args, result)
             logger.debug(f"Tool execution result: {result}")
             _record_refused_write(self, tool_name, tool_args, result)
             self._fold_tool_usage(tool_name, result)
-            return result
         except ToolExecutionTimeout as e:
             # Bounded-execution guard fired: the tool body blocked past its
             # limit. Fail loud with an actionable message — name the tool, the
@@ -9432,6 +9445,9 @@ Do NOT wrap conversational replies in JSON.
                 "tool_args": tool_args,
                 "plan_step": self.current_step + 1 if self.current_plan else None,
             }
+        # Outside the try: a bookkeeping failure must not fail a tool that ran.
+        Agent.note_seen(self, tool_name, tool_args, result)
+        return result
 
     def _generate_max_steps_message(
         self,

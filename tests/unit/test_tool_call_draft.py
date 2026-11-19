@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """A tool call being written reaches the Agent UI as a live draft."""
 
+import json
+
 import pytest
 
 from gaia.agents.base.tools import partial_json_string, tool
@@ -20,10 +22,41 @@ from gaia.ui.sse_translation import CanonicalTranslator
         ('{"markdown":"a\\u2192b\\', "a→b"),
         ('{"markdown":"a\\u21', "a"),
         ('{"markdown":"done", "theme": "x"}', "done"),
+        ('{"markdown":"ok \\ud83d\\ude00!', "ok \U0001f600!"),
+        ('{"markdown":"ok \\ud83d', "ok "),
+        ('{"markdown":"ok \\ud83d\\ude', "ok "),
+        ('{"markdown":"ok \\ud83d and', "ok "),
+        ('{"markdown":"ok \\ude00 and', "ok "),
     ],
 )
 def test_the_text_written_so_far_is_read_from_partial_json(arguments, expected):
-    assert partial_json_string(arguments, "markdown") == expected
+    text = partial_json_string(arguments, "markdown")
+    assert text == expected
+    if text is not None:
+        # The stdio transport encodes every draft; a lone surrogate would raise.
+        json.dumps({"text": text}, ensure_ascii=False).encode("utf-8")
+
+
+def test_a_frame_of_only_malformed_tool_call_fragments_sends_no_draft(monkeypatch):
+    from unittest.mock import patch
+
+    from gaia.llm.providers import lemonade as lemonade_provider
+    from gaia.llm.providers.lemonade import LemonadeProvider
+
+    monkeypatch.setattr(lemonade_provider, "TOOL_CALL_DRAFT_INTERVAL_S", 0.0)
+    frames = [
+        {"choices": [{"delta": {"tool_calls": ["not-a-fragment"]}}]},
+        {"choices": [{"delta": {"content": "hello"}, "finish_reason": "stop"}]},
+    ]
+    with patch("gaia.llm.providers.lemonade.LemonadeClient") as backend:
+        backend.return_value.chat_completions.return_value = iter(frames)
+        provider = LemonadeProvider(model="Gemma-4-E4B-it-GGUF")
+    drafts = []
+    provider.tool_call_draft = lambda tool, arguments: drafts.append(tool)
+
+    out = "".join(provider.chat([{"role": "user", "content": "q"}], stream=True))
+
+    assert drafts == [] and "hello" in out
 
 
 def test_a_draft_argument_must_name_a_parameter():
