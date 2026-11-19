@@ -570,3 +570,164 @@ def test_consolidation_keeps_the_users_facts_not_the_documents(store):
         )
     ]
     assert facts == ["User is the finance lead"]
+
+
+DOC_CHUNKS = {
+    "status": "success",
+    "chunks": [
+        "Q3 regional sales: APAC 8,610 units, EMEA 7,200 units.",
+        "Facilities: spare keys are kept at Desk 17C on the second floor.",
+        "The Orion team mascot is Zephyr-Quill, a teal heron.",
+    ],
+}
+
+
+class TestDocumentAnswersAreNotAboutTheUser:
+    """Questions answered from indexed documents stored the answers as facts
+    "about you", replayed in every later chat."""
+
+    @pytest.mark.parametrize(
+        "question, answer, memory",
+        [
+            (
+                "How many units did APAC sell in Q3?",
+                "APAC sold 8,610 units in Q3.",
+                "APAC sold 8,610 units in Q3.",
+            ),
+            (
+                "Where are the spare keys kept?",
+                "The spare keys are kept at Desk 17C.",
+                "Spare keys are kept at Desk 17C.",
+            ),
+            (
+                "What is the Orion team mascot called?",
+                "The Orion team mascot is Zephyr-Quill, a teal heron.",
+                "The Orion team mascot is named Zephyr-Quill (a teal heron).",
+            ),
+            # Not a question, and it names the subject: the tool check catches it.
+            (
+                "Tell me about the Orion team mascot from my docs",
+                "Their mascot is a heron.",
+                "The Orion team mascot is named Zephyr-Quill (a teal heron).",
+            ),
+        ],
+    )
+    def test_a_document_answer_is_not_stored(self, store, question, answer, memory):
+        host = _Host(store, [_user_op(memory)])
+        host.queued_calls = [("query_documents", {"query": question}, DOC_CHUNKS)]
+        host.answer = answer
+
+        host.process_query(question)
+
+        assert _extracted(store) == []
+
+    def test_a_fact_the_user_states_beside_a_document_question_is_kept(self, store):
+        host = _Host(
+            store,
+            [
+                _user_op("User manages the APAC sales region"),
+                _user_op("APAC sold 8,610 units in Q3"),
+            ],
+        )
+        host.queued_calls = [("query_documents", {"query": "APAC Q3"}, DOC_CHUNKS)]
+        host.answer = "APAC sold 8,610 units in Q3."
+
+        host.process_query(
+            "I manage the APAC sales region. How many units did we sell?"
+        )
+
+        assert _extracted(store) == ["User manages the APAC sales region"]
+
+
+class TestUserStatements:
+    @pytest.mark.parametrize(
+        "text, kept",
+        [
+            ("Where are the spare keys kept?", ""),
+            ("What’s the Orion mascot?", ""),
+            ("What should I cook tonight?", "What should I cook tonight?"),
+            ("How about Friday instead?", "How about Friday instead?"),
+            ("can you make it Friday?", "can you make it Friday?"),
+            ("I moved to Berlin. What's the weather there?", "I moved to Berlin."),
+        ],
+    )
+    def test_information_questions_are_left_out(self, text, kept):
+        from gaia.agents.base.memory import _user_statements
+
+        assert _user_statements(text) == kept
+
+    def test_a_question_does_not_vouch_for_its_answer(self):
+        assert _copied_from_material(
+            "Spare keys are kept at Desk 17C",
+            "Where are the spare keys kept?",
+            "The spare keys are kept at Desk 17C.",
+        )
+
+
+class TestLiftedFromTools:
+    @pytest.mark.parametrize(
+        "content, user, tool_text, lifted",
+        [
+            ("APAC sold 8610 units", "APAC sales?", "APAC: 8610 units", True),
+            ("Keys are at Desk 17C", "keys?", "keys at Desk 17C", True),
+            ("User lives in Berlin", "I live in Berlin", "Berlin: 12C, rain", False),
+            ("User prefers teal", "I like teal", "", False),
+        ],
+    )
+    def test_cases(self, content, user, tool_text, lifted):
+        from gaia.agents.base.memory import _lifted_from_tools
+
+        assert _lifted_from_tools(content, user, tool_text) is lifted
+
+    def test_a_personal_detail_only_a_tool_supplied_is_dropped(self):
+        """Intended: memory holds what the user said, even about themselves.
+
+        The time came from their calendar, not their words, so it is not
+        remembered; the calendar stays the source of truth for it.
+        """
+        from gaia.agents.base.memory import _lifted_from_tools
+
+        assert _lifted_from_tools(
+            "User has a dentist appointment Friday 3pm",
+            "check my calendar for the dentist",
+            "Dentist Fri 3pm",
+        )
+
+
+def test_consolidation_drops_answers_to_document_questions(store):
+    """A chat distilled weeks later must not turn its answers into facts."""
+    from datetime import datetime, timedelta
+
+    turns = [
+        ("user", "Where are the spare keys kept?"),
+        ("assistant", "The spare keys are kept at Desk 17C on the second floor."),
+        ("user", "I'm the office manager on the second floor."),
+        ("assistant", "Got it."),
+    ] * 2
+    for role, text in turns:
+        store.store_turn("s-docs", role, text)
+    old = (datetime.now().astimezone() - timedelta(days=30)).isoformat()
+    with store._lock:
+        store._conn.execute("UPDATE conversations SET timestamp = ?", (old,))
+        store._conn.commit()
+    host = _Host(
+        store,
+        {
+            "summary": "",
+            "knowledge": [
+                {"category": "fact", "content": "Spare keys are kept at Desk 17C"},
+                {"category": "fact", "content": "User is the office manager"},
+            ],
+        },
+    )
+
+    host.consolidate_old_sessions()
+
+    facts = [
+        r[0]
+        for r in store._conn.execute(
+            "SELECT content FROM knowledge WHERE source = 'consolidation' "
+            "AND category = 'fact'"
+        )
+    ]
+    assert facts == ["User is the office manager"]

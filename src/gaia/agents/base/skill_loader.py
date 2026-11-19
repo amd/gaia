@@ -23,7 +23,7 @@ is deliberately **not** the same selection model:
 Capability is never fully gated on the semantic match: :meth:`Agent.load_skill`
 is itself the explicit escape hatch — calling it again on an already-loaded
 skill always re-activates that skill's body for the rest of the turn, whether
-or not the query matched it (mirrors ToolLoader's ``load_tools`` escape hatch).
+or not the query matched it (mirrors ``search_tools``).
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 #: Inclusive cosine threshold. Same calibration basis as ToolLoader's
-#: DEFAULT_THRESHOLD (#1449) — a query is only weakly similar to a short
+#: DEFAULT_THRESHOLD — a query is only weakly similar to a short
 #: trigger description, so real scores sit well below a naive 0.5+ guess.
 DEFAULT_SKILL_THRESHOLD = 0.20
 

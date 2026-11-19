@@ -6,9 +6,10 @@
 # a broken page (type error, failed Astro build) reached main and only failed at
 # deploy time. This runs on every PR that touches website/.
 #
-# The download links are built from what the download server published (no
-# bundled fixture fallback — see website/src/data/catalog.ts), so
-# HUB_CATALOG_URL points at it, exactly like the Railway production build.
+# PR builds read tests/fixtures/github/releases.json instead of the live
+# releases API, so a shared hourly GitHub API quota cannot fail validation.
+# Main builds leave the fixture unset and fetch live, exactly like the Railway
+# production build. See website/src/data/github.ts.
 
 name: Website CI
 
@@ -17,6 +18,9 @@ name: Website CI
 # (cross-surface.test.ts reads both to assert the shared hues match — retuning
 # one surface alone is exactly how the two ambers drifted apart), and the design
 # language spec (tokens.contrast.test.ts recomputes the ratios it quotes).
+# The installer table and the two release workflows are read by
+# release-assets.test.ts: the download buttons look for the asset names they
+# produce, and a rename there would silently drop a button.
 #
 # Both lists are asserted by cross-surface.test.ts, which scans the suite for
 # reads that leave website/ — so a new one fails here rather than going unrun.
@@ -27,7 +31,11 @@ on:
       - 'src/gaia/apps/webui/src/styles/index.css'
       - 'tui/internal/ui/theme/theme.go'
       - 'docs/spec/gaia-design-language.mdx'
+      - 'installer/tui/artifacts.py'
+      - '.github/workflows/build_tui.yml'
+      - '.github/workflows/publish.yml'
       - '.github/workflows/website-ci.yml'
+      - 'tests/fixtures/github/releases.json'
   push:
     branches: [main]
     paths:
@@ -35,7 +43,11 @@ on:
       - 'src/gaia/apps/webui/src/styles/index.css'
       - 'tui/internal/ui/theme/theme.go'
       - 'docs/spec/gaia-design-language.mdx'
+      - 'installer/tui/artifacts.py'
+      - '.github/workflows/build_tui.yml'
+      - '.github/workflows/publish.yml'
       - '.github/workflows/website-ci.yml'
+      - 'tests/fixtures/github/releases.json'
 
 permissions:
   contents: read
@@ -52,13 +64,10 @@ jobs:
       run:
         working-directory: website
     env:
-      # Same source the Railway production build uses for the download links
-      # (no fixture fallback). A download-server outage fails the build loudly.
-      HUB_CATALOG_URL: https://hub.amd-gaia.ai
-      # Optional — the homepage stats row (website/src/data/github.ts) fetches
-      # public GitHub data at build time. Unauthenticated works fine (60
-      # req/hr); this just raises it to 5,000/hr. Actions provides it for
-      # free, so there's no reason to omit it even though it isn't required.
+      # Optional — the download links and stats row (website/src/data/github.ts)
+      # fetch public GitHub data at build time. Unauthenticated works (60
+      # req/hr); this raises it to 5,000/hr. Actions provides it for free, so
+      # there's no reason to omit it even though it isn't required.
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
@@ -80,7 +89,16 @@ jobs:
       - name: Unit tests (vitest)
         run: npm test
 
+      # PR builds use the checked-in fixture, so they do not touch the live
+      # releases API or spend the workflow token's hourly quota. Main builds
+      # leave GAIA_GITHUB_FIXTURE empty and fetch live. Retries stay opt-in for
+      # live API reads and cannot refill a shared hourly quota; they only ride
+      # out a transient 403. Both are step-level so `npm test` keeps the default
+      # of no retries.
       - name: Build (astro build)
+        env:
+          GITHUB_FETCH_RETRIES: ${{ github.event_name != 'pull_request' && '3' || '' }}
+          GAIA_GITHUB_FIXTURE: ${{ github.event_name == 'pull_request' && format('{0}/tests/fixtures/github/releases.json', github.workspace) || '' }}
         run: npx astro build
 
       # Production's start command was previously never exercised by CI, so a
@@ -101,9 +119,13 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${PORT}/")
           echo "/ -> ${code}"
           [ "${code}" = 200 ] || { echo "::error::/ returned ${code} from the production start command"; exit 1; }
-          # The retired /hub pages redirect home (public/serve.json) so old links don't 404.
-          for route in /hub /hub/email; do
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${PORT}/hub")
+          echo "/hub -> ${code}"
+          [ "${code}" = 200 ] || { echo "::error::/hub returned ${code} from the production start command"; exit 1; }
+          # Redirects in public/serve.json: retired /hub/<agent> pages and /roadmap.
+          for pair in "/hub/email /hub" "/roadmap /docs/roadmap"; do
+            route="${pair% *}"; target="${pair#* }"
             out=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://localhost:${PORT}${route}")
             echo "${route} -> ${out}"
-            [ "${out%% *}" = 301 ] && [[ "${out#* }" == */#install ]] || { echo "::error::${route} did not redirect to /#install (${out})"; exit 1; }
+            [ "${out%% *}" = 301 ] && [[ "${out#* }" == *"${target}" ]] || { echo "::error::${route} did not redirect to ${target} (${out})"; exit 1; }
           done

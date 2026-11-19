@@ -402,7 +402,7 @@ class TestFullStorageAndRetrieval:
         assert item_after["use_count"] == initial_use_count + 2
 
     def test_dedup_with_embeddings(self, memory_store, fake_embedder):
-        """Store similar content (>80% overlap), verify dedup and embedding update."""
+        """Store a refinement of a fact, verify dedup and embedding update."""
         # Store initial item with embedding
         id1 = memory_store.store(
             category="fact",
@@ -414,10 +414,10 @@ class TestFullStorageAndRetrieval:
         )
         memory_store.store_embedding(id1, _embedding_to_blob(vec1))
 
-        # Store very similar content — should dedup (>80% overlap)
+        # A refinement of the same fact — should dedup
         id2 = memory_store.store(
             category="fact",
-            content="GAIA supports local LLM inference on AMD Ryzen AI processors",
+            content="GAIA supports local LLM inference on AMD Ryzen AI hardware and processors",
             context="work",
         )
 
@@ -426,7 +426,7 @@ class TestFullStorageAndRetrieval:
 
         # Store new embedding for the updated content
         vec2 = fake_embedder(
-            "GAIA supports local LLM inference on AMD Ryzen AI processors"
+            "GAIA supports local LLM inference on AMD Ryzen AI hardware and processors"
         )
         memory_store.store_embedding(id2, _embedding_to_blob(vec2))
 
@@ -657,7 +657,7 @@ class TestDeduplicationPipeline:
         assert id2 != id1
 
     def test_dedup_updates_content_to_newer(self, memory_store):
-        """Dedup replaces content with the newer version."""
+        """Dedup replaces content with the newer, fuller version."""
         id1 = memory_store.store(
             category="fact",
             content="The team uses React 18 for frontend development",
@@ -665,7 +665,7 @@ class TestDeduplicationPipeline:
         )
         id2 = memory_store.store(
             category="fact",
-            content="The team uses React 19 for frontend development",
+            content="The team uses React 18 for frontend development and testing",
             context="work",
         )
         assert id2 == id1
@@ -673,7 +673,7 @@ class TestDeduplicationPipeline:
         # Verify content was updated to newer version
         results = memory_store.search("React frontend development")
         match = next(r for r in results if r["id"] == id1)
-        assert "React 19" in match["content"]
+        assert match["content"].endswith("and testing")
 
     def test_dedup_takes_max_confidence(self, memory_store):
         """Dedup takes the max confidence between old and new."""
@@ -1372,13 +1372,13 @@ class TestSchemaMigration:
     """Test that the current schema features work on fresh databases."""
 
     def test_fresh_install_gets_current_schema(self, memory_store):
-        """Fresh install creates schema version 6 (forgotten memories, #4730)."""
+        """Fresh install creates the current schema version."""
         with memory_store._lock:
             cursor = memory_store._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             )
             version = cursor.fetchone()[0]
-        assert version == 7
+        assert version == 8
 
     def test_embedding_column_exists(self, memory_store):
         """The embedding BLOB column exists in the knowledge table."""

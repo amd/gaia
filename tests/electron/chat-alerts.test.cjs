@@ -85,6 +85,8 @@ describe("chat banners", () => {
     expect(shown).toBe(true);
     const banner = MockNotification.instances[0];
     expect(banner.opts).toMatchObject({ title: "GAIA needs your approval", body: "Fix the build", silent: true });
+    // A full-size icon crashed the KDE Plasma panel (#5888).
+    expect(banner.opts.icon).toBe(require("../../src/gaia/apps/webui/services/app-icon.cjs").notificationIconPath());
 
     banner.emit("click");
     expect(win.focus).toHaveBeenCalled();

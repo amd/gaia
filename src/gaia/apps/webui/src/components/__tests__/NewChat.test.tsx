@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
+import { useBrowserPaneStore } from '../../stores/browserPaneStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
-import type { StartScreen, SystemStatus } from '../../types';
+import { FlagshipMissing } from '../../utils/newTask';
+import newChatCss from '../NewChat.css?raw';
+import type { ActiveModel, Document, StartScreen, SystemStatus } from '../../types';
 
 vi.mock('../../services/api');
 
@@ -16,7 +19,7 @@ const START: StartScreen = {
         { skill: 'document-brief', title: 'Ask about your documents', note: '2 indexed documents', prompt: 'Using my indexed documents, give me the key points.', needs_input: false },
         { skill: 'research-report', title: 'Research a topic', note: 'A cited report from the web', prompt: 'Research and write a short cited report on: ', needs_input: true },
     ],
-    working_folder: { path: '/home/u/my-project', name: 'my-project', gaia_folder: false },
+    working_folder: { path: '/home/u/my-project', name: 'my-project', gaia_folder: false, choosable: true },
 };
 
 beforeEach(() => {
@@ -24,6 +27,96 @@ beforeEach(() => {
     useChatStore.setState({ systemStatus: null });
     vi.mocked(api.requestWarmUp).mockResolvedValue({ state: 'ready' });
     vi.mocked(api.getStartScreen).mockResolvedValue(START);
+    vi.mocked(api.listDocuments).mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+    useChatStore.setState({ documents: [], draftDocumentIds: [], showDocLibrary: false });
+});
+
+const libraryDoc = (id: string, filename: string): Document => ({
+    id, filename, filepath: `/home/u/${filename}`, file_size: 100, chunk_count: 2,
+    indexed_at: '', last_accessed_at: null, sessions_using: 0, indexing_status: 'complete',
+});
+
+describe('NewChat and the document library', () => {
+    const docs = [libraryDoc('d1', 'report.pdf'), libraryDoc('d2', 'notes.md')];
+
+    beforeEach(() => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        vi.mocked(api.listDocuments).mockResolvedValue({ documents: docs, total: 2, total_size_bytes: 200, total_chunks: 4 });
+    });
+
+    it('says a new chat cannot search the library until documents are attached', async () => {
+        render(<NewChat onSend={vi.fn()} />);
+
+        expect(await screen.findByText(/2 documents in your library. Attach the ones you want to search here./)).toBeInTheDocument();
+    });
+
+    it('attaches the whole library to the chat it creates', async () => {
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Attach all 2' }));
+
+        expect(useChatStore.getState().draftDocumentIds).toEqual(['d1', 'd2']);
+        const attached = screen.getByRole('list', { name: 'Documents for this chat' });
+        expect(attached).toHaveTextContent('report.pdf');
+        expect(attached).toHaveTextContent('notes.md');
+    });
+
+    it('lets one attached document be dropped again', async () => {
+        useChatStore.setState({ draftDocumentIds: ['d1', 'd2'] });
+        render(<NewChat onSend={vi.fn()} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: "Don't attach notes.md" }));
+
+        expect(useChatStore.getState().draftDocumentIds).toEqual(['d1']);
+        expect(screen.getByText(/1 more document in your library/)).toBeInTheDocument();
+    });
+
+    it('shows a few attached documents and folds the rest behind "+N more" (#7733)', async () => {
+        const many = Array.from({ length: 600 }, (_, i) => libraryDoc(`m${i}`, `file-${i}.txt`));
+        vi.mocked(api.listDocuments).mockResolvedValue({ documents: many, total: 600, total_size_bytes: 0, total_chunks: 0 });
+        useChatStore.setState({ draftDocumentIds: many.map((d) => d.id) });
+        render(<NewChat onSend={vi.fn()} />);
+
+        const more = await screen.findByRole('button', { name: '+595 more' });
+        const list = screen.getByRole('list', { name: 'Documents for this chat' });
+        expect(list.querySelectorAll('li')).toHaveLength(5);
+        expect(list).not.toHaveClass('is-expanded');
+
+        fireEvent.click(more);
+        expect(list.querySelectorAll('li')).toHaveLength(600);
+        // Expanded, the list scrolls inside its own box so the composer stays put.
+        expect(list).toHaveClass('is-expanded');
+        expect(more).toHaveAttribute('aria-expanded', 'true');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Show fewer' }));
+        expect(list.querySelectorAll('li')).toHaveLength(5);
+    });
+
+    it('lists every attached document when there are only a few', async () => {
+        useChatStore.setState({ draftDocumentIds: ['d1', 'd2'] });
+        render(<NewChat onSend={vi.fn()} />);
+
+        const list = await screen.findByRole('list', { name: 'Documents for this chat' });
+        expect(list.querySelectorAll('li')).toHaveLength(2);
+        expect(screen.queryByRole('button', { name: /more$/ })).toBeNull();
+    });
+
+    it('opens the library to choose documents', async () => {
+        render(<NewChat onSend={vi.fn()} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Choose' }));
+
+        expect(useChatStore.getState().showDocLibrary).toBe(true);
+    });
+
+    it('offers nothing when the library is empty', async () => {
+        vi.mocked(api.listDocuments).mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+        render(<NewChat onSend={vi.fn()} />);
+
+        await waitFor(() => expect(api.listDocuments).toHaveBeenCalled());
+        expect(screen.queryByText(/Your library has/)).toBeNull();
+    });
 });
 
 describe('NewChat while GAIA is starting', () => {
@@ -39,6 +132,15 @@ describe('NewChat while GAIA is starting', () => {
         expect(onSend).not.toHaveBeenCalled();
     });
 
+    it('keeps the message box open once every boot task has finished', () => {
+        useChatStore.setState({ systemStatus: {
+            init_state: 'initializing',
+            init_tasks: [{ name: 'Loading AI model', status: 'done' }],
+        } as SystemStatus });
+        render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
+        expect(screen.getByLabelText('Message')).not.toBeDisabled();
+    });
+
     it('sends once GAIA is ready', () => {
         useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
         const onSend = vi.fn().mockResolvedValue(undefined);
@@ -48,6 +150,122 @@ describe('NewChat while GAIA is starting', () => {
         fireEvent.change(box, { target: { value: 'hello' } });
         fireEvent.keyDown(box, { key: 'Enter' });
         expect(onSend).toHaveBeenCalledWith('hello');
+    });
+});
+
+describe('NewChat without the GAIA agent', () => {
+    it('points a refused send at the install notice only while that notice shows', async () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        const onSend = vi.fn().mockRejectedValue(new FlagshipMissing());
+        const { rerender } = render(<NewChat onSend={onSend} agentMissing />);
+
+        const box = screen.getByLabelText('Message');
+        fireEvent.change(box, { target: { value: 'hello' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        expect(await screen.findByRole('alert')).toHaveTextContent('Install it from the notice above');
+        expect(box).toHaveValue('hello');
+
+        rerender(<NewChat onSend={onSend} agentMissing={false} />);
+        expect(screen.queryByText(/notice above/)).not.toBeInTheDocument();
+    });
+});
+
+describe('NewChat try chips', () => {
+    it('fills the box with an example that ends in a card, without sending it', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+
+        expect(screen.getByLabelText('Message')).toHaveValue('Give me a banana bread recipe');
+        expect(screen.getByLabelText('Message')).toHaveFocus();
+        expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it('keeps a question already typed and adds the example after it (#7594)', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
+
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'What should I cook this week?' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+
+        expect(screen.getByLabelText('Message')).toHaveValue('What should I cook this week?\n\nGive me a banana bread recipe');
+    });
+
+    it('swaps the earlier chip example for the next one, with and without a typed question', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
+        const box = screen.getByLabelText('Message');
+
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
+        expect(box).toHaveValue('A 15-minute workout I can do at home');
+        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
+        expect(box).toHaveValue('A 15-minute workout I can do at home');
+
+        fireEvent.change(box, { target: { value: 'What should I do today?' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
+        expect(box).toHaveValue('What should I do today?\n\nA 15-minute workout I can do at home');
+    });
+});
+
+describe('NewChat while the chat is being created (#5712)', () => {
+    beforeEach(() => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus, messageQueues: {}, currentSessionId: null });
+    });
+
+    function sendTwo(onSend: (text: string) => Promise<boolean | void>) {
+        render(<NewChat onSend={onSend} />);
+        const box = screen.getByLabelText('Message');
+        fireEvent.change(box, { target: { value: 'first' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        // Cleared at once, so what is typed next is its own message.
+        expect(box).toHaveValue('');
+        expect(box).toBeEnabled();
+        fireEvent.change(box, { target: { value: 'second' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        return box;
+    }
+
+    it('queues a message sent before the chat exists instead of dropping it', async () => {
+        let created!: () => void;
+        const onSend = vi.fn(() => new Promise<void>((resolve) => { created = () => {
+            useChatStore.setState({ currentSessionId: 'chat-1' });
+            resolve();
+        }; }));
+        sendTwo(onSend);
+
+        expect(onSend).toHaveBeenCalledTimes(1);
+        await act(async () => created());
+
+        expect(useChatStore.getState().messageQueues['chat-1']?.map((m) => [m.text, m.state])).toEqual([['second', 'queued']]);
+    });
+
+    it('never sends held messages on their own when the first one was not sent', async () => {
+        let created!: () => void;
+        const onSend = vi.fn(() => new Promise<boolean>((resolve) => { created = () => {
+            useChatStore.setState({ currentSessionId: 'chat-1' });
+            resolve(false);
+        }; }));
+        sendTwo(onSend);
+
+        await act(async () => created());
+
+        expect(useChatStore.getState().messageQueues['chat-1']?.map((m) => [m.text, m.state, m.error]))
+            .toEqual([['second', 'failed', 'The first message was not sent.']]);
+    });
+
+    it('puts every message back in the box when the chat could not be created', async () => {
+        let fail!: () => void;
+        const onSend = vi.fn(() => new Promise<void>((_, reject) => { fail = () => reject(new Error('no backend')); }));
+        const box = sendTwo(onSend);
+
+        await act(async () => fail());
+
+        expect(box).toHaveValue('first\n\nsecond');
+        expect(screen.getByText('no backend')).toBeInTheDocument();
     });
 });
 
@@ -110,44 +328,161 @@ describe('NewChat empty state', () => {
         other.remove();
     });
 
-    it('offers the task cards the backend picked', async () => {
+    it('stays clean: no task cards, only the greeting and the composer', async () => {
         render(<NewChat onSend={vi.fn()} />);
-        const list = await screen.findByRole('list', { name: 'Things to try' });
-        expect(list.querySelectorAll('li')).toHaveLength(2);
-        expect(screen.getByText('2 indexed documents')).toBeInTheDocument();
+        await screen.findByText('my-project');
+        expect(screen.queryByRole('list', { name: 'Things to try' })).not.toBeInTheDocument();
+        expect(screen.queryByText('Ask about your documents')).not.toBeInTheDocument();
     });
 
-    it('a complete task card starts the chat with its prompt', async () => {
-        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
-        const onSend = vi.fn().mockResolvedValue(undefined);
-        render(<NewChat onSend={onSend} />);
-        fireEvent.click(await screen.findByRole('button', { name: /Ask about your documents/ }));
-        expect(onSend).toHaveBeenCalledWith(START.cards[0].prompt);
+    it('draws the NPU backdrop behind the content', () => {
+        const { container } = render(<NewChat onSend={vi.fn()} />);
+        expect(container.querySelector('main.new-chat > canvas.npu-backdrop')).toHaveAttribute('aria-hidden', 'true');
     });
 
-    it('a card that needs a subject fills the box and waits for it', async () => {
-        const onSend = vi.fn().mockResolvedValue(undefined);
-        render(<NewChat onSend={onSend} />);
-        fireEvent.click(await screen.findByRole('button', { name: /Research a topic/ }));
-        const box = screen.getByLabelText('Message');
-        expect(box).toHaveValue(START.cards[1].prompt);
-        expect(box).toHaveFocus();
-        expect(onSend).not.toHaveBeenCalled();
+    it('keeps the composer and greeting in place while typing', () => {
+        const { container } = render(<NewChat onSend={vi.fn()} />);
+        const main = container.querySelector('main.new-chat')!;
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'h' } });
+        expect(main).not.toHaveClass('is-docked');
+        expect(container.querySelector('.new-chat-greeting')).not.toHaveAttribute('aria-hidden', 'true');
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: '' } });
+        expect(main).not.toHaveClass('is-docked');
     });
 
-    it('shows the working folder', async () => {
-        render(<NewChat onSend={vi.fn()} />);
+    it('drops the composer to the bottom when the message is sent', async () => {
+        let finish: (v: boolean) => void = () => {};
+        const onSend = vi.fn(() => new Promise<boolean>((r) => { finish = r; }));
+        const { container } = render(<NewChat onSend={onSend} />);
+        const main = container.querySelector('main.new-chat')!;
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'hello' } });
+        fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+        await waitFor(() => expect(main).toHaveClass('is-docked'));
+        await act(async () => { finish(true); });
+    });
+
+    it('shows the working folder under the message box, where its picker opens', async () => {
+        const { container } = render(<NewChat onSend={vi.fn()} />);
         const chip = (await screen.findByText('my-project')).parentElement!;
         expect(chip).toHaveAttribute('title', expect.stringContaining('/home/u/my-project'));
+        expect(container.querySelector('.new-chat-meta')).toContainElement(chip);
+        expect(container.querySelector('.composer')).not.toContainElement(chip);
     });
 
-    it("says when GAIA works in its own folder", async () => {
+    it("names no folder when GAIA works in its own, and says what Add a folder does", async () => {
         vi.mocked(api.getStartScreen).mockResolvedValue({
-            ...START, working_folder: { path: '/home/u/.gaia/documents', name: 'documents', gaia_folder: true },
+            ...START, working_folder: { path: '/home/u/.gaia/documents', name: 'documents', gaia_folder: true, choosable: true },
         });
         render(<NewChat onSend={vi.fn()} />);
-        const chip = (await screen.findByText('documents')).parentElement!;
-        expect(chip.getAttribute('title')).toMatch(/its own folder/);
+        const add = await screen.findByRole('button', { name: 'Add a folder' });
+        expect(add.getAttribute('title')).toMatch(/its own folder, \/home\/u\/\.gaia\/documents\. Add a folder this chat can read and write\./);
+        expect(screen.queryByText('documents')).not.toBeInTheDocument();
+    });
+
+    it('picks a folder for the chat from the folder chip, and drops it again', async () => {
+        useChatStore.setState({ draftFolder: null });
+        vi.mocked(api.browseFiles).mockResolvedValueOnce({
+            current_path: '/home/u',
+            parent_path: null,
+            entries: [{ name: 'site', path: '/home/u/site', type: 'folder', size: 0, extension: null, modified: null }],
+            quick_links: [],
+        }).mockResolvedValueOnce({ current_path: '/home/u/site', parent_path: '/home/u', entries: [], quick_links: [] });
+        render(<NewChat onSend={vi.fn()} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'site' }));
+        await screen.findByText('No folders inside.');
+        fireEvent.click(screen.getByRole('button', { name: 'Use this folder' }));
+
+        expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        // Picking adds a folder as its own chip; the working folder stays beside it.
+        expect(screen.getByText('site').parentElement).toHaveAttribute('title', 'This chat can read and write /home/u/site.');
+        expect(screen.getByText('my-project')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Add a folder' })).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: "Don't give this chat site" }));
+        expect(useChatStore.getState().draftFolder).toBeNull();
+        expect(screen.getByRole('button', { name: 'Add a folder' })).toBeInTheDocument();
+    });
+
+    describe('in the desktop app', () => {
+        const pickFolder = vi.fn<(defaultPath?: string) => Promise<string | null>>();
+        beforeEach(() => {
+            useChatStore.setState({ draftFolder: null });
+            window.gaiaAPI = { dialog: { pickFolder } } as unknown as NonNullable<typeof window.gaiaAPI>;
+            vi.mocked(api.checkEnvironmentFolder).mockResolvedValue({ refusal: null });
+        });
+        afterEach(() => {
+            delete window.gaiaAPI;
+        });
+
+        it('picks the folder in the OS picker, starting from the working folder', async () => {
+            pickFolder.mockResolvedValue('/home/u/site');
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
+
+            expect(await screen.findByRole('button', { name: "Don't give this chat site" })).toBeInTheDocument();
+            expect(pickFolder).toHaveBeenCalledWith('/home/u/my-project');
+            expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+            expect(api.browseFiles).not.toHaveBeenCalled();
+            expect(api.checkEnvironmentFolder).toHaveBeenCalledWith('/home/u/site');
+        });
+
+        it('refuses the home folder as soon as it is picked, and says why (#7996)', async () => {
+            const why = "GAIA can't be given /home/u: it is your home directory. Pick a narrower folder.";
+            pickFolder.mockResolvedValue('/home/u');
+            vi.mocked(api.checkEnvironmentFolder).mockResolvedValue({ refusal: why });
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
+
+            expect(await screen.findByText(why)).toBeInTheDocument();
+            expect(useChatStore.getState().draftFolder).toBeNull();
+            expect(screen.getByRole('button', { name: 'Add a folder' })).toBeInTheDocument();
+        });
+
+        it('takes a folder outside the home folder, as adding it does', async () => {
+            pickFolder.mockResolvedValue('D:\\Projects\\site');
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
+
+            await waitFor(() => expect(useChatStore.getState().draftFolder).toBe('D:\\Projects\\site'));
+            expect(api.browseFiles).not.toHaveBeenCalled();
+        });
+
+        it("adds nothing and says so when the folder couldn't be checked", async () => {
+            pickFolder.mockResolvedValue('/home/u/site');
+            vi.mocked(api.checkEnvironmentFolder).mockRejectedValue(new Error('Failed to fetch'));
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
+
+            expect(await screen.findByText("Couldn't check that folder, so it wasn't added: Failed to fetch")).toBeInTheDocument();
+            expect(useChatStore.getState().draftFolder).toBeNull();
+        });
+
+        it('keeps the folder as it was when the OS picker is cancelled', async () => {
+            pickFolder.mockResolvedValue(null);
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
+
+            await waitFor(() => expect(pickFolder).toHaveBeenCalledTimes(1));
+            expect(useChatStore.getState().draftFolder).toBeNull();
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        });
+    });
+
+    it("shows the folder as plain text when this chat's agent can't be given another", async () => {
+        vi.mocked(api.getStartScreen).mockResolvedValue({ ...START, working_folder: { ...START.working_folder, choosable: false } });
+        render(<NewChat onSend={vi.fn()} />);
+
+        expect(await screen.findByText('my-project')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Add a folder' })).not.toBeInTheDocument();
     });
 
     it('starts with text handed over from setup', () => {
@@ -155,30 +490,38 @@ describe('NewChat empty state', () => {
         expect(screen.getByLabelText('Message')).toHaveValue('Summarize this: ');
     });
 
-    it('says in one plain sentence why there are no suggestions, with the detail behind Details', async () => {
+    it('puts the caret after text handed over, so typing adds to it', () => {
+        render(<NewChat onSend={vi.fn()} initialText="Use the summarize skill: " />);
+        const box = screen.getByLabelText('Message') as HTMLTextAreaElement;
+        expect(document.activeElement).toBe(box);
+        expect(box.selectionStart).toBe(box.value.length);
+        expect(box.selectionEnd).toBe(box.value.length);
+    });
+
+    it('says in one plain sentence that the assistant did not start, with the detail behind Details', async () => {
         const detail = `The GAIA agent could not be started: sidecar binary lock ${'PENDING-sha256 '.repeat(60).trim()}`;
         vi.mocked(api.getStartScreen).mockResolvedValue({ ...START, cards: [], skills_error: detail });
         render(<NewChat onSend={vi.fn()} />);
-        expect(await screen.findByText(/assistant didn.t start, so it can.t suggest tasks yet/)).toBeInTheDocument();
+        expect(await screen.findByText(/assistant didn.t start yet/)).toBeInTheDocument();
         expect(screen.queryByText(detail)).not.toBeInTheDocument();
-        // The folder still shows: only the cards depend on the agent.
+        // The folder still shows: it does not depend on the agent.
         expect(screen.getByText('my-project')).toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('button', { name: /Details/ }));
         expect(screen.getByText(detail)).toBeInTheDocument();
     });
 
-    it('tries the suggestions again', async () => {
+    it('tries the start screen again', async () => {
         vi.mocked(api.getStartScreen)
             .mockRejectedValueOnce(new Error('backend restarting'))
             .mockResolvedValue(START);
         render(<NewChat onSend={vi.fn()} />);
         fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
-        expect(await screen.findByRole('list', { name: 'Things to try' })).toBeInTheDocument();
+        expect(await screen.findByText('my-project')).toBeInTheDocument();
         expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument();
     });
 
-    it('fetches the suggestions again on its own once the assistant has started', async () => {
+    it('fetches the start screen again on its own once the assistant has started', async () => {
         vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
         try {
             vi.mocked(api.getStartScreen)
@@ -196,8 +539,7 @@ describe('NewChat empty state', () => {
             expect(screen.getByText(/didn.t start/)).toBeInTheDocument();
 
             await act(async () => { vi.advanceTimersByTime(START_RETRY_MS); });
-            expect(await screen.findByRole('list', { name: 'Things to try' })).toBeInTheDocument();
-            expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument();
+            await waitFor(() => expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument());
         } finally {
             vi.useRealTimers();
         }
@@ -205,7 +547,7 @@ describe('NewChat empty state', () => {
 
     it('makes no model call of its own', async () => {
         render(<NewChat onSend={vi.fn()} />);
-        await screen.findByRole('list', { name: 'Things to try' });
+        await screen.findByText('my-project');
         expect(api.sendMessageStream).not.toHaveBeenCalled();
         expect(api.loadModel).not.toHaveBeenCalled();
     });
@@ -233,5 +575,76 @@ describe('NewChat warm-up line', () => {
         useModelStore.setState({ names: { 'Gemma-4-E4B-it-GGUF': 'Gemma 4 E4B' } });
         expect(warmUpLine({ seconds: 3, model: 'Gemma-4-E4B-it-GGUF', device: 'gpu' })).toBe('Loading Gemma 4 E4B on your GPU… 3s');
         useModelStore.setState({ names: {} });
+    });
+});
+
+describe('NewChat after first-run setup failed', () => {
+    const error = 'Gemma-4-E4B-it-GGUF - Not enough free memory to load Gemma-4-E4B-it-GGUF with a 32,768-token window: '
+        + 'needs about 7.8 GB and only 6.0 GB is free. See https://amd-gaia.ai/docs/reference/troubleshooting';
+    const failed = { init_state: 'ready', setup_error: error, model_loaded: null } as SystemStatus;
+    const local: ActiveModel = { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma', remote: false, is_default: true };
+
+    beforeEach(() => {
+        useModelStore.setState({ active: local });
+        useChatStore.setState({ settingsSection: null });
+    });
+
+    it('says so with the error before the first message, and opens the model picker', () => {
+        useChatStore.setState({ systemStatus: failed });
+        render(<NewChat onSend={vi.fn()} />);
+
+        const notice = screen.getByRole('alert');
+        expect(notice).toHaveTextContent('GAIA’s first-run setup didn’t finish');
+        expect(notice).toHaveTextContent(error);
+        fireEvent.click(screen.getByRole('button', { name: 'Choose a model' }));
+        expect(useChatStore.getState().settingsSection).toBe('model');
+    });
+
+    it('stays quiet once chats run in the cloud or a model has loaded', () => {
+        useChatStore.setState({ systemStatus: failed });
+        useModelStore.setState({ active: { ...local, provider: 'fireworks', remote: true } });
+        const { unmount } = render(<NewChat onSend={vi.fn()} />);
+        expect(screen.queryByRole('alert')).toBeNull();
+        unmount();
+
+        useModelStore.setState({ active: local });
+        useChatStore.setState({ systemStatus: { ...failed, model_loaded: 'Qwen3-4B-GGUF' } });
+        render(<NewChat onSend={vi.fn()} />);
+        expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('is not shown when setup finished', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready', setup_error: null } as SystemStatus });
+        render(<NewChat onSend={vi.fn()} />);
+        expect(screen.queryByRole('alert')).toBeNull();
+    });
+});
+
+describe('NewChat and the browser pane', () => {
+    afterEach(() => {
+        delete window.gaiaBrowserPane;
+        useBrowserPaneStore.setState({ draftOpen: false });
+    });
+
+    it('offers the browser pane button in the desktop app', () => {
+        window.gaiaBrowserPane = {} as NonNullable<typeof window.gaiaBrowserPane>;
+        useBrowserPaneStore.setState({ draftOpen: false });
+        render(<NewChat onSend={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Show browser pane' }));
+        expect(useBrowserPaneStore.getState().draftOpen).toBe(true);
+        expect(screen.getByRole('button', { name: 'Hide browser pane' })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('has no browser pane button in a plain browser', () => {
+        render(<NewChat onSend={vi.fn()} />);
+        expect(screen.queryByRole('button', { name: /browser pane/ })).toBeNull();
+    });
+});
+
+describe('the greeting gloss', () => {
+    it('is set smaller than the greeting, so the English never out-sizes the Arabic', () => {
+        const rule = newChatCss.match(/\.new-chat-greeting \.i18n-gloss\.i18n-gloss \{([^}]*)\}/);
+        expect(rule?.[1]).toMatch(/font-size:\s*0\.55em/);
+        expect(rule?.[1]).toMatch(/display:\s*block/);
     });
 });

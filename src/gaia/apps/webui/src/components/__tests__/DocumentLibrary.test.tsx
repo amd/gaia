@@ -1,12 +1,14 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DocumentLibrary } from '../DocumentLibrary';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DocumentLibrary, REMOVE_UNDO_MS } from '../DocumentLibrary';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { Document } from '../../types';
+import { stripIsolates } from '../../i18n/registry';
+import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../test/dates';
 
 vi.mock('../../services/api');
 
@@ -65,27 +67,78 @@ it('closes on Escape', async () => {
     expect(useChatStore.getState().showDocLibrary).toBe(false);
 });
 
+/** A focused button outside the dialog, standing in for the control that opened it. */
+function focusTrigger(): HTMLButtonElement {
+    const trigger = document.createElement('button');
+    trigger.textContent = 'Open';
+    document.body.appendChild(trigger);
+    trigger.focus();
+    return trigger;
+}
+
+it('takes focus when it opens and gives it back when it closes', async () => {
+    const trigger = focusTrigger();
+    const { unmount } = render(<DocumentLibrary />);
+    await screen.findByText('broken.pdf');
+
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+    unmount();
+    expect(trigger).toHaveFocus();
+    trigger.remove();
+});
+
 describe('DocumentLibrary with no chat open', () => {
     it('holds a newly indexed document for the next chat instead of dropping it', async () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
         mockedApi.uploadDocumentByPath.mockResolvedValue(COMPLETE_DOC);
         render(<DocumentLibrary />);
 
-        fireEvent.change(screen.getByLabelText('File path to index'), { target: { value: '/tmp/good.pdf' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Index' }));
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: '/tmp/good.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
         await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1']));
         expect(mockedApi.attachDocument).not.toHaveBeenCalled();
+    });
+
+    it('keeps a typed path in the box when adding it fails, and clears it on success', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+        mockedApi.uploadDocumentByPath.mockRejectedValueOnce(new Error('File not found'));
+        mockedApi.uploadDocumentByPath.mockResolvedValueOnce(COMPLETE_DOC);
+        render(<DocumentLibrary />);
+        const box = screen.getByLabelText('File path to add') as HTMLInputElement;
+
+        fireEvent.change(box, { target: { value: '/tmp/q3/reprot.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+        await waitFor(() => expect(screen.getByText(/File not found/)).toBeInTheDocument());
+        expect(box.value).toBe('/tmp/q3/reprot.pdf');
+
+        fireEvent.change(box, { target: { value: '/tmp/q3/report.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+        await waitFor(() => expect(box.value).toBe(''));
+    });
+
+    it.each([
+        ['"C:\\Reports\\q3.pdf"', 'C:\\Reports\\q3.pdf'],
+        ['file:///Users/sam/My%20Docs/q3.pdf', '/Users/sam/My Docs/q3.pdf'],
+    ])('adds a pasted path written as %s', async (pasted, expected) => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+        mockedApi.uploadDocumentByPath.mockResolvedValue(COMPLETE_DOC);
+        render(<DocumentLibrary />);
+
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: pasted } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+        await waitFor(() => expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith(expected));
     });
 
     it('offers an existing document for the next chat, once', async () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
         render(<DocumentLibrary />);
 
-        fireEvent.click(await screen.findByRole('button', { name: 'Attach good.pdf to your next chat' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Add good.pdf to your next chat' }));
 
         expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1']);
-        expect(screen.queryByRole('button', { name: 'Attach good.pdf to your next chat' })).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Add good.pdf to your next chat' })).toBeNull();
         expect(mockedApi.attachDocument).not.toHaveBeenCalled();
     });
 
@@ -95,7 +148,11 @@ describe('DocumentLibrary with no chat open', () => {
         useChatStore.setState({ draftDocumentIds: ['doc-ok-1'] });
         render(<DocumentLibrary />);
 
-        fireEvent.click(await screen.findByRole('button', { name: 'Remove good.pdf' }));
+        const remove = await screen.findByRole('button', { name: 'Remove good.pdf' });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        fireEvent.click(remove);
+        act(() => { vi.advanceTimersByTime(REMOVE_UNDO_MS); });
+        vi.useRealTimers();
 
         await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual([]));
     });
@@ -111,11 +168,106 @@ describe('DocumentLibrary with no chat open', () => {
         mockedApi.attachDocument.mockResolvedValue(undefined);
         render(<DocumentLibrary />);
 
-        fireEvent.change(screen.getByLabelText('File path to index'), { target: { value: '/tmp/good.pdf' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Index' }));
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: '/tmp/good.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
         await waitFor(() => expect(mockedApi.attachDocument).toHaveBeenCalledWith('sess-1', 'doc-ok-1'));
         expect(useChatStore.getState().draftDocumentIds).toEqual([]);
+    });
+});
+
+describe('DocumentLibrary says where documents go', () => {
+    const chat = {
+        id: 'sess-1', title: 'Budget review', created_at: '', updated_at: '', model: '',
+        system_prompt: null, message_count: 1, document_ids: [],
+    };
+
+    beforeEach(() => {
+        useChatStore.setState({ currentSessionId: 'sess-1', sessions: [chat] });
+        mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+        mockedApi.uploadDocumentByPath.mockResolvedValue(COMPLETE_DOC);
+        mockedApi.attachDocument.mockResolvedValue(undefined);
+    });
+
+    const indexPath = () => {
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: '/tmp/good.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    };
+
+    it('names the open chat in the attach button label, for screen readers too', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
+        render(<DocumentLibrary />);
+
+        const button = await screen.findByRole('button', { name: 'Add good.pdf to “Budget review”' });
+        expect(button.getAttribute('title')).toBe('Use in “Budget review”');
+    });
+
+    it('names the open chat as the destination and confirms the attach', async () => {
+        render(<DocumentLibrary />);
+
+        const choice = screen.getByRole('combobox', { name: 'Add documents to' });
+        expect(choice).toHaveValue('chat');
+        expect(screen.getByRole('option', { name: 'This chat: “Budget review”' })).toBeInTheDocument();
+        indexPath();
+
+        expect(await screen.findByRole('status')).toHaveTextContent('Added good.pdf to “Budget review”.');
+    });
+
+    it('holds documents for the next new chat when chosen, leaving the open chat alone', async () => {
+        render(<DocumentLibrary />);
+
+        fireEvent.change(screen.getByRole('combobox', { name: 'Add documents to' }), { target: { value: 'next' } });
+        indexPath();
+
+        await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1']));
+        expect(mockedApi.attachDocument).not.toHaveBeenCalled();
+        expect(screen.getByRole('status')).toHaveTextContent('good.pdf will be added to your next new chat.');
+    });
+
+    it('drops the "will be attached" line when that document is removed', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
+        mockedApi.deleteDocument.mockResolvedValue(undefined as never);
+        render(<DocumentLibrary />);
+        fireEvent.change(screen.getByRole('combobox', { name: 'Add documents to' }), { target: { value: 'next' } });
+        indexPath();
+        expect(await screen.findByRole('status')).toHaveTextContent('good.pdf will be added to your next new chat.');
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Remove good.pdf' }));
+
+        expect(screen.queryByText(/will be added to your next new chat/)).toBeNull();
+        await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual([]), { timeout: 10_000 });
+    });
+
+    it('says so when indexing worked but attaching did not', async () => {
+        mockedApi.attachDocument.mockRejectedValue(new Error('Session not found'));
+        render(<DocumentLibrary />);
+
+        indexPath();
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Indexed, but not attached to “Budget review”: Session not found');
+    });
+
+    it('with no chat open, says documents go to the next new chat', () => {
+        useChatStore.setState({ currentSessionId: null });
+        render(<DocumentLibrary />);
+
+        expect(screen.getByText('Documents you add here go to your next new chat.')).toBeInTheDocument();
+        expect(screen.queryByRole('combobox', { name: 'Add documents to' })).toBeNull();
+    });
+
+    it('explains a file outside the readable folders without asking for a bug report', async () => {
+        mockedApi.uploadDocumentByPath.mockRejectedValue(Object.assign(
+            new Error('GAIA can only read documents under C:\\Users\\u. Move or copy the file there.'),
+            { httpStatus: 403 },
+        ));
+        render(<DocumentLibrary />);
+
+        indexPath();
+
+        const toast = await screen.findByRole('alert');
+        expect(toast).toHaveTextContent('Move or copy the file there');
+        expect(toast).toHaveTextContent('Or drop the file here instead');
+        expect(screen.queryByRole('link', { name: /report this issue/i })).toBeNull();
     });
 });
 
@@ -170,24 +322,195 @@ describe('DocumentLibrary failed doc', () => {
     });
 });
 
-describe('DocumentLibrary chunk counts', () => {
-    it('says "1 chunk", not "1 chunks"', async () => {
-        mockedApi.listDocuments.mockResolvedValue({
-            documents: [{ ...COMPLETE_DOC, chunk_count: 1 }],
-            total: 1,
-            total_size_bytes: 2048,
-            total_chunks: 1,
+describe('DocumentLibrary failure reasons', () => {
+    it('shows why a document failed as visible text, not only a tooltip', async () => {
+        render(<DocumentLibrary />);
+
+        await screen.findByText('broken.pdf');
+
+        expect(screen.getByText('RAG pipeline timed out', { selector: 'p' })).toBeTruthy();
+        expect(screen.getByText('Failed')).toBeTruthy();
+    });
+
+    it('says a corrupt file needs re-exporting and keeps the full reason expandable', async () => {
+        const corrupt: Document = {
+            ...FAILED_DOC,
+            error_kind: 'corrupted',
+            last_error: 'RAG indexing failed for broken.pdf: Could not read PDF: broken.pdf\n'
+                + 'Reason: Stream has ended unexpectedly\n'
+                + 'The file appears to be corrupted, truncated, or not a valid PDF.',
+        };
+        mockedApi.listDocuments.mockResolvedValue({ documents: [corrupt], total: 1, total_size_bytes: 1024, total_chunks: 0 });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('broken.pdf');
+
+        expect(screen.getByText("Can't be read")).toBeTruthy();
+        expect(screen.getByText(/looks damaged\. Re-download or re-export it/)).toBeTruthy();
+        // The hint says it plainly; the raw reason waits behind "Technical details".
+        expect(screen.getByText('Technical details', { selector: 'summary' })).toBeTruthy();
+        expect(screen.getByText(/Could not read PDF: broken\.pdf\s+Reason: Stream has ended unexpectedly/)).toBeTruthy();
+        const retry = screen.getByRole('button', { name: /Retry indexing broken\.pdf/i });
+        expect(retry.className).toContain('btn-retry-quiet');
+    });
+
+    it('says an empty file needs content instead of offering a plain Retry', async () => {
+        const empty: Document = {
+            ...FAILED_DOC,
+            filename: 'empty.txt',
+            file_size: 0,
+            error_kind: 'empty_file',
+            last_error: 'RAG indexing failed for empty.txt: File is empty',
+        };
+        mockedApi.listDocuments.mockResolvedValue({ documents: [empty], total: 1, total_size_bytes: 0, total_chunks: 0 });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('empty.txt');
+
+        expect(screen.getByText("Can't be read")).toBeTruthy();
+        expect(screen.getByText('This file is empty. Add content to it, then add it again.')).toBeTruthy();
+        // "File is empty" under it said the same thing again.
+        expect(screen.getByText('File is empty').closest('details')).not.toHaveAttribute('open');
+        const retry = screen.getByRole('button', { name: /Retry indexing empty\.txt/i });
+        expect(retry.className).toContain('btn-retry-quiet');
+    });
+
+    it('says a dropped damaged PDF can\'t be read, with no bug-report link', async () => {
+        mockedApi.uploadDocumentBlob.mockRejectedValue(Object.assign(
+            new Error('RAG indexing failed for 1a2b_broken.pdf: Could not read PDF'),
+            { httpStatus: 422, reason: 'corrupted' },
+        ));
+        const { container } = render(<DocumentLibrary />);
+        await screen.findByText('broken.pdf');
+
+        const dropped = new File(['%PDF-1.4 truncated'], 'report.pdf', { type: 'application/pdf' });
+        fireEvent.drop(container.querySelector('.drop-zone')!, { dataTransfer: { files: [dropped] } });
+
+        expect(await screen.findByText('"report.pdf" can\'t be read')).toBeTruthy();
+        expect(screen.getByRole('alert').textContent).toContain('looks damaged. Re-download or re-export it');
+        expect(screen.queryByText(/Report this issue/)).toBeNull();
+    });
+});
+
+describe('DocumentLibrary path box', () => {
+    const emptyList = { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 };
+
+    function submitPath(path: string) {
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: path } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    }
+
+    it('indexes a folder path and says how many files it added and skipped', async () => {
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('C:\\Users\\me\\.gaia\\documents is a folder, not a file.'), {
+                httpStatus: 400, reason: 'is_folder',
+            }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 2, failed: 0, skipped: 1, errors: [],
+            documents: [COMPLETE_DOC, { ...COMPLETE_DOC, id: 'doc-ok-2', filename: 'b.md' }],
         });
         render(<DocumentLibrary />);
 
-        await screen.findByText('good.pdf');
+        submitPath('C:\\Users\\me\\.gaia\\documents');
 
-        expect(screen.getByText('1 chunk')).toBeTruthy();
-        expect(screen.getByText(/· 1 chunk$/)).toBeTruthy();
-        expect(screen.queryByText(/1 chunks/)).toBeNull();
+        const notice = await screen.findByRole('status');
+        expect(notice.textContent).toContain('Added 2 files from "documents".');
+        expect(notice.textContent).toContain("Skipped 1 file of a type GAIA can't add.");
+        expect(mockedApi.indexFolder).toHaveBeenCalledWith('C:\\Users\\me\\.gaia\\documents', false);
+        expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1', 'doc-ok-2']);
+        expect(screen.queryByRole('alert')).toBeNull();
     });
 
-    it('keeps the plural for other counts', async () => {
+    it('says how many images a folder left out and how to add them', async () => {
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 0, skipped_images: 2, errors: [], documents: [COMPLETE_DOC],
+        });
+        render(<DocumentLibrary />);
+
+        submitPath('/home/me/scan');
+
+        const notice = await screen.findByRole('status');
+        expect(notice.textContent).toContain('Left out 2 images: add them one at a time and GAIA will read them.');
+        expect(notice.textContent).not.toContain('Skipped');
+    });
+
+    it('reports a folder with nothing indexable plainly', async () => {
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({ indexed: 0, failed: 0, skipped: 3, errors: [], documents: [] });
+        render(<DocumentLibrary />);
+
+        submitPath('/home/me/pictures');
+
+        const notice = await screen.findByRole('status');
+        expect(notice.textContent).toContain('"pictures" has no documents GAIA can index.');
+        expect(notice.textContent).toContain('Skipped 3 files');
+    });
+
+    it('says a missing file does not exist instead of offering a bug report', async () => {
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('File not found: there is no file at C:\\Users\\me\\missing.pdf. Check the path for typos.'), {
+                httpStatus: 404, reason: null,
+            }),
+        );
+        render(<DocumentLibrary />);
+
+        submitPath('C:\\Users\\me\\missing.pdf');
+
+        const toast = await screen.findByRole('alert');
+        expect(toast.textContent).toContain(`"missing.pdf" doesn't exist`);
+        expect(toast.textContent).toContain('Check the path');
+        expect(toast.textContent).not.toContain('Report this issue');
+        expect(mockedApi.indexFolder).not.toHaveBeenCalled();
+    });
+
+    it('indexes a dotted folder name typed with a trailing separator', async () => {
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 0, errors: [], documents: [COMPLETE_DOC],
+        });
+        render(<DocumentLibrary />);
+
+        submitPath('C:\\Users\\me\\notes.v2\\');
+
+        const notice = await screen.findByRole('status');
+        expect(notice.textContent).toContain('Added 1 file from "notes.v2".');
+        expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith('C:\\Users\\me\\notes.v2\\');
+        expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('asks the server about an unsupported typed path, then names the file type', async () => {
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error("File type not allowed: GAIA can't index .heic files."), {
+                httpStatus: 400, reason: null,
+            }),
+        );
+        render(<DocumentLibrary />);
+
+        submitPath('C:\\Users\\me\\photo.heic');
+
+        const toast = await screen.findByRole('alert');
+        expect(toast.textContent).toContain('This image format cannot be indexed.');
+        expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith('C:\\Users\\me\\photo.heic');
+        expect(mockedApi.indexFolder).not.toHaveBeenCalled();
+    });
+});
+
+describe('DocumentLibrary words', () => {
+    it('shows sizes, not internal chunk counts', async () => {
         mockedApi.listDocuments.mockResolvedValue({
             documents: [COMPLETE_DOC],
             total: 1,
@@ -198,7 +521,95 @@ describe('DocumentLibrary chunk counts', () => {
 
         await screen.findByText('good.pdf');
 
-        expect(screen.getByText('5 chunks')).toBeTruthy();
-        expect(screen.getByText(/· 5 chunks$/)).toBeTruthy();
+        expect(screen.queryByText(/chunk/)).toBeNull();
+        expect(screen.getByText('Drop files here to add them')).toBeTruthy();
+    });
+});
+
+describe('DocumentLibrary dates follow the interface language', () => {
+    afterEach(resetUiLocale);
+
+    it('shows when an older document was indexed in Arabic, inline and in the tooltip', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue({
+            documents: [{ ...COMPLETE_DOC, indexed_at: '2025-03-14T10:00:00Z' }],
+            total: 1,
+            total_size_bytes: 2048,
+            total_chunks: 5,
+        });
+        const { container } = render(<DocumentLibrary />);
+        await screen.findByText('good.pdf');
+        const stamp = container.querySelector('.doc-timestamp')!;
+        for (const text of [stamp.textContent ?? '', stamp.getAttribute('title') ?? '']) {
+            expect(stripIsolates(text)).toMatch(ARABIC_MONTH);
+            expect(stripIsolates(text)).not.toMatch(ENGLISH_MONTH);
+        }
+    });
+});
+
+describe('DocumentLibrary notices follow the interface language', () => {
+    afterEach(resetUiLocale);
+    const emptyList = { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 };
+
+    function submitPath(container: HTMLElement, path: string) {
+        const input = container.querySelector('.path-input') as HTMLInputElement;
+        fireEvent.change(input, { target: { value: path } });
+        fireEvent.submit(input.form!);
+    }
+
+    it('says in Arabic what a folder added and skipped', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 2, failed: 0, skipped: 1, errors: [],
+            documents: [COMPLETE_DOC, { ...COMPLETE_DOC, id: 'doc-ok-2', filename: 'b.md' }],
+        });
+        const { container } = render(<DocumentLibrary />);
+
+        submitPath(container, '/home/me/trip');
+
+        const text = stripIsolates((await screen.findByRole('status')).textContent ?? '');
+        expect(text).toContain('الملفات المضافة من «trip»: 2.');
+        expect(text).toContain('الملفات المتخطّاة لأن GAIA لا يستطيع إضافة نوعها: 1.');
+        expect(text).toContain('لا تُضمَّن المجلدات الفرعية.');
+        expect(text.indexOf('الملفات المضافة')).toBe(0);
+    });
+
+    it('says in Arabic how many images a folder left out', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 0, skipped_images: 2, errors: [], documents: [COMPLETE_DOC],
+        });
+        const { container } = render(<DocumentLibrary />);
+
+        submitPath(container, '/home/me/scan');
+
+        const text = stripIsolates((await screen.findByRole('status')).textContent ?? '');
+        expect(text).toContain('الصور المستبعدة: 2. أضِف كل صورة وحدها ليقرأها GAIA.');
+    });
+
+    it('says in Arabic that a mistyped path does not exist', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('File not found: there is no file at /home/me/tirp.pdf. Check the path for typos.'), {
+                httpStatus: 404, reason: null,
+            }),
+        );
+        const { container } = render(<DocumentLibrary />);
+
+        submitPath(container, '/home/me/tirp.pdf');
+
+        const text = stripIsolates((await screen.findByRole('alert')).textContent ?? '');
+        expect(text).toContain('«tirp.pdf» غير موجود');
+        expect(text).toContain('تحقّق من المسار');
+        expect(text).not.toContain('there is no file');
     });
 });

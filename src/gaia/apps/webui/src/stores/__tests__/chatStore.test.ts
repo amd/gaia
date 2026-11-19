@@ -53,9 +53,28 @@ describe('chatStore streaming state', () => {
     });
 });
 
-describe('chatStore full-page views', () => {
+describe('chatStore sidebar destinations', () => {
     beforeEach(() => {
-        useChatStore.setState({ showMemoryDashboard: false, showSchedules: false, currentSessionId: null });
+        useChatStore.setState({ showMemoryDashboard: false, showSchedules: false, showDocLibrary: false, currentSessionId: null });
+    });
+
+    const open = {
+        memory: () => useChatStore.getState().setShowMemoryDashboard(true),
+        schedules: () => useChatStore.getState().setShowSchedules(true),
+        documents: () => useChatStore.getState().setShowDocLibrary(true),
+    };
+    const shown = () => {
+        const s = useChatStore.getState();
+        return { memory: s.showMemoryDashboard, schedules: s.showSchedules, documents: s.showDocLibrary };
+    };
+
+    it.each([
+        ['memory', 'documents'], ['schedules', 'documents'],
+        ['documents', 'memory'], ['documents', 'schedules'],
+    ] as const)('opening %s closes %s', (next, previous) => {
+        open[previous]();
+        open[next]();
+        expect(shown()).toEqual({ memory: false, schedules: false, documents: false, [next]: true });
     });
 
     it.each([
@@ -87,12 +106,28 @@ describe('chatStore full-page views', () => {
 
 describe('chatStore settings dialog', () => {
     it('opens on General by default, on a named section, and closes', () => {
+        useChatStore.setState({ lastSettingsSection: 'general' });
         useChatStore.getState().openSettings();
         expect(useChatStore.getState().settingsSection).toBe('general');
         useChatStore.getState().openSettings('permissions');
         expect(useChatStore.getState().settingsSection).toBe('permissions');
         useChatStore.getState().closeSettings();
         expect(useChatStore.getState().settingsSection).toBeNull();
+    });
+
+    it('reopens on the section it was closed on', () => {
+        useChatStore.getState().openSettings('privacy');
+        useChatStore.getState().closeSettings();
+        useChatStore.getState().openSettings();
+        expect(useChatStore.getState().settingsSection).toBe('privacy');
+    });
+
+    it('a jump names its target and where it came from; picking a section clears it', () => {
+        useChatStore.getState().jumpToSetting({ section: 'model', target: '#ctx-size', from: 'setup' });
+        expect(useChatStore.getState().settingsSection).toBe('model');
+        expect(useChatStore.getState().settingsJump).toEqual({ section: 'model', target: '#ctx-size', from: 'setup' });
+        useChatStore.getState().openSettings('general');
+        expect(useChatStore.getState().settingsJump).toBeNull();
     });
 });
 

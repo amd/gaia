@@ -1,0 +1,48 @@
+{
+  "run_id": "eval-20261030-022627",
+  "config": {
+    "model": "claude-sonnet-4-6",
+    "agent_type": "gaia",
+    "agent_model": "Gemma-4-E4B-it-GGUF"
+  },
+  "summary": {
+    "total_scenarios": 3,
+    "passed": 1,
+    "failed": 1,
+    "blocked": 0,
+    "pass_rate": 0.3333,
+    "judged_pass_rate": 0.5,
+    "avg_score": 9.54
+  },
+  "scenarios": [
+    {
+      "scenario_id": "core_arithmetic_direct",
+      "status": "INFRA_ERROR",
+      "overall_score": null,
+      "category": "gaia_core",
+      "elapsed_s": 245.97050380706787
+    },
+    {
+      "scenario_id": "core_bare_number_followup",
+      "status": "PASS",
+      "overall_score": 9.97,
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "category": "gaia_core",
+      "elapsed_s": 301.0068018436432
+    },
+    {
+      "scenario_id": "core_contradiction_injection",
+      "status": "FAIL",
+      "overall_score": 9.1,
+      "root_cause": "In turn 4, when the user gave an ambiguous 'whatever works' after the contradiction was surfaced, the agent interpreted this as tacit approval for the original vegetarian constraint rather than recognizing the contradiction remained unresolved. The agent silently committed to vegetarian without asking which was correct or presenting a dual-option menu — the exact failure mode named in the success criteria. This is a prompt-level gap: the agent's reasoning did not enforce that an explicit contradiction requires an explicit resolution before committing to one side.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Add a contradiction-handling rule to the system prompt: when two conflicting facts are in session history and the user gives an ambiguous response (e.g., 'whatever works', 'either is fine', 'I don't mind') that does not explicitly resolve the conflict, the agent must either (a) ask directly which fact is current, or (b) present options labelled for each possibility while naming the unresolved question. The agent must never silently pick a side when a contradiction was raised in the same session and the user has not explicitly resolved it."
+      },
+      "category": "gaia_core",
+      "elapsed_s": 274.36434173583984
+    }
+  ]
+}

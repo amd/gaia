@@ -19,8 +19,8 @@ the same source, use the **`gaia-executive-presentation`** skill.
 - **Input:** a path to a repo file (`.md`, `.mdx`, `.json`, `.html`, `.txt`) — the primary
   form. Pasted text is accepted as a fallback when no file exists.
 - **Output:** `presentations/<source-path-slug>.technical.html` at the **repo root**, where
-  the slug is the source path with `/` replaced by `-` (so `hub/agents/chat/python/README.md`
-  → `presentations/hub-agents-chat-python-README.technical.html`). Deterministic; re-runs
+  the slug is the source path with `/` replaced by `-` (so `hub/agents/gaia/npm/README.md`
+  → `presentations/hub-agents-gaia-npm-README.technical.html`). Deterministic; re-runs
   overwrite in place — never hand-edit the output.
 - **Never write next to the source.** Decks are local scratch, and many sources live in
   directories that ship (`hub/agents/*/python/`, `src/`). The root `presentations/` dir is
@@ -86,11 +86,11 @@ prose.
 
 ## Worked example
 
-`reference/example-technical.html` — generated from the GAIA email agent hub package
-(`hub/agents/email/python/`): 12 slides covering architecture, the request/response contract,
-the packaging table, the token-usage schema, and code blocks. Its benchmark slide
-intentionally shows labeled `⚠ PLACEHOLDER` values because no eval results existed in the
-source at generation time — a demonstration of the credibility contract.
+`reference/example-technical.html` — generated from the flagship GAIA agent package
+(`hub/agents/gaia/python/` + `hub/agents/gaia/npm/`): 12 slides covering architecture, the
+`/v1/gaia/query` request/response contract and SSE events, the packaging table, and code
+blocks. Its scorecard slide labels the committed card as a harness-validation run and shows
+the product baseline as a labeled `⚠ PLACEHOLDER` — a demonstration of the credibility contract.
 
 ## Checklist before reporting done
 

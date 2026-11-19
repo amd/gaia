@@ -221,6 +221,7 @@ def test_a_quoted_value_keeps_its_spaces():
         "NODE_OPTIONS",
         "PYTEST_ADDOPTS",
         "LESSOPEN",
+        "MORE",
         "GIT_CONFIG_COUNT",
         "GH_PAGER",
         "PYTHONSTARTUP",

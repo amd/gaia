@@ -177,7 +177,7 @@ def test_map_names_absent_commands_so_the_agent_does_not_try_them(repo, monkeypa
     assert pm.tools_present == []
     assert pm.shell_commands == []
     assert set(pm.tools_absent) == set(DEV_TOOL_PROBES)
-    assert "NOT installed" in render_project_map(pm)
+    assert "Not on the agent's PATH" in render_project_map(pm)
 
 
 def test_shell_allowlist_is_not_conflated_with_what_is_installed(repo):
@@ -317,6 +317,57 @@ def test_no_root_outside_a_repository(tmp_path, monkeypatch):
     plain.mkdir(parents=True)
     monkeypatch.chdir(plain)
     assert resolve_project_root() is None
+
+
+# ── the session's working directory (#3591) ───────────────────────────────
+# A daemon-spawned sidecar's cwd is the daemon's folder; the client's start
+# folder arrives as the session's working_directory and must pick the project.
+
+
+def test_the_start_folder_resolves_its_repository_not_the_cwd(
+    repo, tmp_path_factory, monkeypatch
+):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(tmp_path_factory.mktemp("daemon-folder"))
+    assert resolve_project_root(start=str(repo / "src" / "demo")) == str(repo.resolve())
+
+
+def test_a_start_folder_outside_any_repository_has_no_root(
+    repo, tmp_path_factory, monkeypatch
+):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    # The process cwd is a repository; the start folder must still win.
+    monkeypatch.chdir(repo)
+    plain = tmp_path_factory.mktemp("plain")
+    assert resolve_project_root(start=str(plain)) is None
+
+
+def test_explicit_and_env_roots_still_win_over_the_start_folder(
+    repo, tmp_path_factory, monkeypatch
+):
+    other = tmp_path_factory.mktemp("other")
+    (other / ".git").mkdir()
+    assert resolve_project_root(str(repo), start=str(other)) == str(repo.resolve())
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(repo))
+    assert resolve_project_root(start=str(other)) == str(repo.resolve())
+
+
+def test_a_start_folder_of_home_maps_nothing(monkeypatch, tmp_path):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: tmp_path))
+    assert resolve_project_root(start=str(tmp_path)) is None
+
+
+def test_a_vanished_start_folder_resolves_to_no_root(tmp_path, monkeypatch):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    assert resolve_project_root(start=str(tmp_path / "gone" / "away")) is None
+
+
+def test_a_start_folder_inside_gaias_own_source_maps_nothing(monkeypatch, repo):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.setattr(project_map, "is_agent_own_source", lambda _: True)
+    assert resolve_project_root(start=str(repo)) is None
 
 
 def _install_gaia_at(monkeypatch, package: pathlib.Path) -> None:
@@ -465,6 +516,32 @@ def test_outside_a_project_the_fragment_is_only_the_working_directory(
     assert "PROJECT MAP" not in text and len(text.splitlines()) == 1
 
 
+def test_the_map_follows_the_sessions_working_directory(
+    repo, tmp_path_factory, monkeypatch
+):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(tmp_path_factory.mktemp("daemon-folder"))
+    agent = _FakeAgent(repo)
+    agent.config.project_root = None
+    agent.config.working_directory = str(repo / "src")
+    assert agent._project_map_root() == str(repo.resolve())
+    text = agent.get_project_map_system_prompt()
+    assert text.startswith("==== PROJECT MAP ====") and str(repo.resolve()) in text
+
+
+def test_a_working_directory_outside_the_env_scope_is_not_mapped(
+    repo, tmp_path_factory, monkeypatch
+):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    agent = _FakeAgent(repo)
+    agent.config.project_root = None
+    agent.config.working_directory = str(repo)
+    agent.path_validator = type(
+        "V", (), {"in_env_scope": staticmethod(lambda _p: False)}
+    )()
+    assert agent._project_map_root() is None
+
+
 def test_gaia_own_source_is_not_named_as_the_working_directory(monkeypatch):
     monkeypatch.setattr(project_map, "is_agent_own_source", lambda _: True)
     assert project_map.working_directory_line() == ""
@@ -511,6 +588,59 @@ def test_prompt_says_building_while_the_index_is_running(repo):
         gate.set()
         _join(agent)
     assert "building now in the background" in text
+
+
+def test_prompt_says_building_while_a_search_started_build_runs(repo):
+    """A first search's background build must not read as "not built"."""
+    agent = _FakeAgent(repo, indexed=False, auto_index=False)
+    agent._code_index_build_running = lambda sdk: '{"index_building": true}'
+    text = agent.get_project_map_system_prompt()
+    assert "building now in the background" in text
+    assert "not built" not in text
+
+
+def test_every_session_on_one_index_says_building_while_one_builds(
+    repo, tmp_path, monkeypatch
+):
+    """Two chats on one repo: the one that did not start the build must not
+    read "not built" and be told to start another."""
+    from gaia.agents.tools import code_index_tools
+    from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+
+    class _Agent(_FakeAgent, CodeIndexToolsMixin):
+        pass
+
+    class _SlowIndex(_FakeSDK):
+        def __init__(self):
+            super().__init__(indexed=False)
+            self._cache_dir = str(tmp_path / "shared-cache")
+            self.release = threading.Event()
+            self.progress = {"embedded": 0, "to_embed": 0}
+
+        def index_repository(self):
+            self.release.wait(5)
+
+    monkeypatch.setattr(code_index_tools, "_FIRST_BUILD_WAIT_SECONDS", 0.01)
+    agents = [_Agent(repo, indexed=False, auto_index=False) for _ in range(2)]
+    for agent in agents:
+        agent.sdk = _SlowIndex()
+        agent._repo_path = str(repo)
+    try:
+        agents[0]._code_index_build(agents[0].sdk)
+        for agent in agents:
+            text = agent.get_project_map_system_prompt()
+            assert "building now in the background" in text
+            assert "not built" not in text
+    finally:
+        for agent in agents:
+            agent.sdk.release.set()
+        code_index_tools._BUILDS.clear()
+
+
+def test_prompt_says_not_built_when_no_build_runs(repo):
+    agent = _FakeAgent(repo, indexed=False, auto_index=False)
+    agent._code_index_build_running = lambda sdk: None
+    assert "not built" in agent.get_project_map_system_prompt()
 
 
 def test_prompt_reports_a_failed_index_instead_of_waiting_forever(repo):
@@ -671,7 +801,7 @@ def test_an_explicit_root_may_point_at_gaia_itself(monkeypatch):
 def test_shell_commands_are_omitted_for_an_agent_without_the_shell_tool(repo):
     text = render_project_map(build_project_map(repo), has_shell_tool=False)
     assert "run_shell_command" not in text
-    assert "NOT installed" in text
+    assert "Not on the agent's PATH" in text
 
 
 def test_a_turn_that_does_not_offer_the_shell_omits_its_commands(repo):

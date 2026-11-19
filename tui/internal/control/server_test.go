@@ -43,7 +43,7 @@ func (m testModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		lines = append(lines, "key:"+msg.String())
 		switch msg.String() {
 		case "enter":
-			m.snap = Snapshot{View: "chat", Agent: "email"}
+			m.snap = Snapshot{View: "chat", Agent: "notes"}
 		case "esc":
 			m.snap = newTestModel().snap
 		case "tab":
@@ -511,7 +511,7 @@ func TestWaitResolvesOnLaterChange(t *testing.T) {
 
 	start := time.Now()
 	status, body := request(t, srv, http.MethodPost, "/wait",
-		map[string]any{"state": map[string]any{"view": "chat", "agent": "email"}, "timeout_ms": 5000}, srv.Token())
+		map[string]any{"state": map[string]any{"view": "chat", "agent": "notes"}, "timeout_ms": 5000}, srv.Token())
 	elapsed := time.Since(start)
 
 	if status != http.StatusOK {
@@ -690,6 +690,11 @@ func TestStopGivesUpOnAStuckRequestAtItsBudget(t *testing.T) {
 	defer conn.Close()
 	if _, err := conn.Write([]byte("GET " + APIPrefix + "/status HTTP/1.1\r\nHost: x\r\n")); err != nil {
 		t.Fatalf("write: %v", err)
+	}
+	// The listener accepts in order, so once a later request is answered the
+	// half request is tracked; without this Stop can race the accept and pass.
+	if status, _ := request(t, srv, http.MethodGet, "/status", nil, srv.Token()); status != http.StatusOK {
+		t.Fatalf("warm-up /status = %d, want 200", status)
 	}
 
 	start := time.Now()

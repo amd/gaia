@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { resolveUrlNavTarget } from '../utils/sessionNav';
+import { lastSessionTarget, rememberLastSession, resolveUrlNavTarget } from '../utils/sessionNav';
 import { getSessionHash } from '../utils/format';
 
 const A = '550e8400-e29b-41d4-a716-446655440000';
@@ -48,5 +48,21 @@ describe('resolveUrlNavTarget (URL session navigation guard)', () => {
 
     it('navigates when no session is currently active', () => {
         expect(resolveUrlNavTarget(getSessionHash(B), null, sessions)).toBe(B);
+    });
+});
+
+describe('last open chat (reopened after an update restart)', () => {
+    it('remembers the open chat and forgets it for a new chat', () => {
+        rememberLastSession('abc-123');
+        expect(lastSessionTarget()).toBe('abc-123');
+        rememberLastSession(null);
+        expect(lastSessionTarget()).toBeNull();
+    });
+
+    it('resolves to the chat only while it still exists', () => {
+        rememberLastSession('abc-123');
+        expect(resolveUrlNavTarget(lastSessionTarget(), null, [{ id: 'abc-123' }])).toBe('abc-123');
+        expect(resolveUrlNavTarget(lastSessionTarget(), null, [{ id: 'other' }])).toBeNull();
+        rememberLastSession(null);
     });
 });

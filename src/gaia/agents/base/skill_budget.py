@@ -135,9 +135,14 @@ def window_budget(agent: Any) -> Tuple[Optional[int], str, int]:
 
     Cached because the window it resolves to must not drift from turn to turn
     with free memory: a budget that moved would re-render the skills section,
-    and with it the whole prompt, for no change the user made.
+    and with it the whole prompt, for no change the user made. A switch of the
+    model actually sent (``chat.effective_model``) resolves it again.
     """
-    key = (getattr(agent, "model_id", None), bool(getattr(agent, "_use_claude", 0)))
+    key = (
+        getattr(agent, "model_id", None),
+        getattr(getattr(agent, "chat", None), "effective_model", None),
+        bool(getattr(agent, "_use_claude", 0)),
+    )
     cached = getattr(agent, "_skill_window_cache", None)
     if cached is not None and cached[0] == key:
         return cached[1]

@@ -478,3 +478,56 @@ def test_a_url_attached_to_a_short_flag_is_not_read_as_a_path(layout):
     )
 
     assert refusal is None, refusal
+
+
+# A lone '/' is a switch on Windows, so the root this host reads is os.sep.
+_ROOT_SEPARATORS = ["\\"] if sys.platform == "win32" else ["/"]
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        # The long-horizon run's command, in shape.
+        "Get-ChildItem -Recurse -File | ForEach-Object "
+        "{ $_.FullName.Substring($root.Length).Replace('\\','/') }",
+        "Get-ChildItem -File | ForEach-Object { $_.Name.Replace( '/', '\\\\' ) }",
+        "(Get-Location).Path.TrimEnd('\\').Split('/')",
+        "Get-ChildItem -File | ForEach-Object { $_.FullName -replace '\\\\', '/' }",
+        "'a,b' -split '/'",
+    ],
+)
+def test_a_separator_given_to_a_string_method_is_not_a_path(script, layout):
+    refusal, validator = _check(
+        f'powershell -NoProfile -Command "{script}"', layout["work"], layout["home"]
+    )
+
+    assert refusal is None, refusal
+    anchor = Path(layout["work"]).resolve().anchor
+    assert anchor not in validator.asked and "/" not in validator.asked
+
+
+@pytest.mark.parametrize("sep", _ROOT_SEPARATORS)
+@pytest.mark.parametrize(
+    "template",
+    [
+        "Get-ChildItem '{sep}'",
+        "Get-ChildItem -Path '{sep}' -Recurse",
+        "[IO.Directory]::GetFiles('{sep}')",
+        "Get-ChildItem ([IO.Path]::Join('{sep}', 'x'))",
+        "Get-Content ('{sep}')",
+        "Get-ChildItem '{sep}' | ForEach-Object {{ $_.Name.Replace('a','b') }}",
+        # A separator a string method returns is still a path.
+        "Get-ChildItem ('x'.Replace('x','{sep}'))",
+        "Get-ChildItem ('x' -replace 'x','{sep}')",
+        "Get-ChildItem (@('','') -join '{sep}')",
+        "Get-ChildItem ([string]::Join('{sep}', @('','')))",
+    ],
+)
+def test_a_root_path_is_still_refused_beside_string_methods(template, sep, layout):
+    refusal, _ = _check(
+        f'powershell -NoProfile -Command "{template.format(sep=sep)}"',
+        layout["work"],
+        layout["home"],
+    )
+
+    assert refusal is not None, template

@@ -23,10 +23,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
-from gaia.agents.base.call_risk import call_risk
+from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
-from gaia.agents.base.tool_grants import grant_scope
-from gaia.agents.base.tool_outcome import FAILED_STATUSES
+from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, grant_scope
+from gaia.agents.base.tool_outcome import FAILED_STATUSES, tool_result_dict
 from gaia.agents.base.tool_outcome import tool_result_failed as _tool_result_failed
 from gaia.agents.base.tools import (
     get_tool_display_label,
@@ -34,11 +34,17 @@ from gaia.agents.base.tools import (
     tool_call_progress_message,
 )
 from gaia.agents.base.turn_metrics import turn_log_path
-from gaia.agents.base.verification import split_verification_scope
+from gaia.agents.base.verification import EXECUTED_KEY, split_verification_scope
+from gaia.agents.tools.connect_card import (
+    CONNECT_CARD_KIND,
+    CONNECT_CARD_SUMMARY,
+    connect_card_in,
+)
 from gaia.llm.providers.lemonade import (
     TOOL_CALL_PROGRESS_INTERVAL_S,
     TOOL_CALL_PROGRESS_MIN_CHARS,
 )
+from gaia.llm.reasoning import THINK_CLOSE, THINK_OPEN, has_lone_close
 from gaia.ui import scripted_user
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
@@ -47,7 +53,9 @@ from gaia.ui.event_narration import (
     grant_phrase,
     tool_phrase,
 )
-from gaia.ui.turn_summary import TurnLedger
+from gaia.ui.generated_media import is_remote_or_device_path
+from gaia.ui.turn_summary import TurnLedger, search_hits
+from gaia.upload_names import display_file_name, upload_original_name
 from gaia.utils.json_string import (
     JsonStringStreamDecoder,
     extract_json_string_field,
@@ -57,6 +65,23 @@ from gaia.utils.json_string import (
 logger = logging.getLogger(__name__)
 
 _SUMMARY_CHAR_CAP = 300
+#: How much of an MCP tool's text output a tool row carries.
+_MCP_OUTPUT_CHAR_CAP = 16_000
+#: Most diff lines an edit's ``diff`` card carries; the rest is counted, not sent.
+_DIFF_CARD_MAX_LINES = 400
+#: Most characters it carries, so one huge line (a minified file) stays bounded.
+_DIFF_CARD_MAX_CHARS = 64_000
+
+#: Result keys naming a file the tool wrote; kept on the summary view a
+#: relayed result is reduced to.
+RESULT_PATH_KEYS = ("file_path", "image_path", "audio_path")
+
+#: Generated media file types that a client may later open through an explicit
+#: card action.  Keep this intentionally narrow: a successful tool result is
+#: not enough to turn an arbitrary local file into a launchable UI payload.
+MEDIA_OUTPUT_EXTENSIONS = frozenset(
+    {".png", ".jpg", ".jpeg", ".webp", ".wav", ".mp3", ".ogg", ".flac"}
+)
 
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = FAILED_STATUSES
@@ -71,6 +96,15 @@ def tool_result_failed(data: Any) -> bool:
 #: Matches the TUI's ``DeliverableConfirmationTimeout`` so a prompt waits as
 #: long on every surface.
 TOOL_CONFIRM_TIMEOUT_SECONDS = 10 * 60
+
+#: Terminal text for the rare race where a relayed approval is answered but
+#: the chat cannot retake the model before the sidecar sends its next event.
+#: Keep this named so the relay can distinguish it from an ordinary Stop and
+#: avoid replacing the terminal error with a misleading "Cancelled" status.
+MODEL_RETAKE_FAILED_MESSAGE = (
+    "This chat ended while your approved step was waiting for the model, "
+    "so it didn't run. Send your message again to retry."
+)
 
 #: Sentinel for "the caller did not pass a timeout". Distinct from ``None``,
 #: which is a caller explicitly asking to wait for the human indefinitely.
@@ -486,6 +520,7 @@ class SSEOutputHandler(OutputHandler):
     """
 
     blocking_confirmation = True
+    asks_past_preapproval = True
 
     #: How long to wait for a decision. A host that can actually deliver one
     #: raises this — a person reading a prompt routinely takes longer than a
@@ -510,8 +545,24 @@ class SSEOutputHandler(OutputHandler):
     #: Set when the client denied the live prompt because nobody answered.
     _confirm_timed_out: bool = False
 
+    #: The arguments the model sent for the call about to be confirmed, when
+    #: the prompt shows more than that (see :meth:`note_call_args`).
+    _noted_call: Optional["tuple[str, Dict[str, Any]]"] = None
+
     #: The sidecar prompt a relayed run is parked on (see __init__).
     _relay_confirm_id: Optional[str] = None
+
+    #: What "always" would grant on that prompt; ``None`` when not offered.
+    _relay_always_scope: Optional[str] = None
+
+    #: The path that prompt asks to open, when it is a path-access prompt.
+    _relay_path_access: Optional[str] = None
+
+    #: Answers that prompt "timeout" when the confirm window runs out.
+    _relay_confirm_timer: Optional[threading.Timer] = None
+
+    #: The sidecar question a relayed run is parked on, until it is answered.
+    _relay_question_id: Optional[str] = None
 
     #: Outcome of the last ``tool_result``, echoed by the ``tool_end`` after it.
     _last_tool_success: bool = True
@@ -520,6 +571,18 @@ class SSEOutputHandler(OutputHandler):
     #: permission mode; ``None`` when no relayed run is doing so.
     active_relay_mode_session: Optional[str] = None
 
+    #: Set by a transport that knows no person can answer a confirmation on
+    #: this run (an unattended sidecar query), so nothing offers to ask one.
+    nobody_answers: bool = False
+
+    #: The sidecar session a relayed run keeps in step with the chat's Internet
+    #: switch; ``None`` when no relayed run is doing so.
+    active_relay_internet_session: Optional[str] = None
+
+    #: A relayed run is going whose agent is too old to be told the Internet
+    #: switch, so turning it off has to end the run instead.
+    relay_ignores_internet: bool = False
+
     def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()
@@ -527,8 +590,13 @@ class SSEOutputHandler(OutputHandler):
         self._step_count = 0
         self._tool_count = 0
         self._last_tool_name: Optional[str] = None
+        self._last_tool_label = ""
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
         self._in_thinking = False  # True while inside a <think>...</think> block
+        # Part of the open <think> block already went out.
+        self._thinking_streamed = False
+        # This reply has shown a think tag, so a later </think> is not lone.
+        self._reply_saw_think = False
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
         # Where the brace scan of a still-open envelope stopped, and the head of
         # the buffer it scanned: a long tool call is scanned once, not per token.
@@ -548,6 +616,8 @@ class SSEOutputHandler(OutputHandler):
         self._shown_line_start = True
         # Line-start state of the raw stream, thinking included.
         self._raw_line_start = True
+        # Text streamed since the last tool call; becomes commentary if a call follows.
+        self._text_since_tool = ""
         # Set while streaming the value of a {"answer": "..."} reply.
         self._answer_stream: Optional[JsonStringStreamDecoder] = None
         # Tool confirmation state (blocking until frontend responds)
@@ -566,7 +636,8 @@ class SSEOutputHandler(OutputHandler):
         # may have unloaded or reloaded it meanwhile. Raises when it can't.
         self.on_model_regained = None
         # Autonomous loop support
-        # background_mode=True: skip blocking user confirmation; immediately deny.
+        # background_mode=True: nobody can confirm. In process a gated tool is
+        # denied; on the sidecar relay the run ends at that step.
         self.background_mode: bool = background_mode
         # False on a transport with no route back for an answer (the stdio
         # agent): a question there would hang the turn, so none is asked.
@@ -592,23 +663,63 @@ class SSEOutputHandler(OutputHandler):
         # email-relay turn, in lockstep with active_relay_response.
         self.active_relay_proxy: Optional[Any] = None
         self.active_relay_run_id: Optional[str] = None
+        # True only while an in-process agent is executing its query. A handler
+        # is registered before it contacts the daemon, so counting every
+        # handler would make the request that asks for a restart block itself.
+        self.in_process_turn_active = False
         # Only this id may be answered, so a late click cannot approve a newer one.
         self._relay_confirm_id = None
+        self._relay_always_scope = None
+        self._relay_path_access = None
+        # A relayed needs_input question the sidecar run is parked on.
+        self._relay_question_id: Optional[str] = None
+        # What the sidecar measured fills its context, from its ``final`` event.
+        self.relay_context: Optional[Dict[str, Any]] = None
+        # Turns this relay left out to fit; the sidecar never sees them.
+        self.relay_hidden_turns = 0
+        self.relay_context_error: Optional[str] = None
+        self.relay_performance: Optional[Dict[str, Any]] = None
+        # The route a relayed hybrid turn took, from the sidecar's ``final``.
+        self.relayed_route: Optional[Dict[str, Any]] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
+        # The turn's answer and record for later turns, sealed when the answer
+        # prints so a daemon's final event need not wait on the run thread's tail.
+        self.staged_answer: Optional[str] = None
+        self.staged_model_messages: Optional[List[Dict[str, Any]]] = None
+        # Set by mark_turn_failed; the next answer event carries ``failed``.
+        self._turn_failed = False
+        self._turn_failure: Optional[str] = None
         # The answer this turn already put on the wire. A transport that ends
         # the turn on it cancels the run, so the run reads it back from here.
         self.delivered_answer: str = ""
         # What this turn's tools used, wrote and contacted, for the side rail.
         self.turn_ledger = TurnLedger()
+        # The diff print_diff drew for the call in flight; its result carries it.
+        self._pending_diff_card: Optional[Dict[str, Any]] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
-        if event and event.get("type") == "chunk":
+        etype = event.get("type") if event else None
+        if etype == "chunk":
             self._shown_fence, self._shown_line_start = _fence_after(
                 event.get("content") or "", self._shown_fence, self._shown_line_start
             )
+            self._text_since_tool += event.get("content") or ""
+        elif etype == "tool_start":
+            # Text written just before a call narrates the work; it is not the answer.
+            note = self._text_since_tool.strip()
+            if note:
+                self.event_queue.put({"type": "commentary", "content": note})
+            self._text_since_tool = ""
+        elif etype == "answer":
+            self._text_since_tool = ""
+        elif etype in ("thinking", "status") and event.get("retracts_answer"):
+            # The text shown since the last tool was reasoning, or a reply that
+            # was cut off; either way it is not commentary.
+            self._text_since_tool = ""
+            self._shown_fence, self._shown_line_start = None, True
         self.event_queue.put(event)
 
     def _fence_at(self, unshown: str) -> "tuple[Optional[str], bool]":
@@ -621,6 +732,7 @@ class SSEOutputHandler(OutputHandler):
         self._shown_line_start = True
         self._raw_line_start = True
         self._call_progress_next = 0.0
+        self._reply_saw_think = False
 
     def _elapsed(self) -> float:
         if self._start_time is None:
@@ -662,6 +774,9 @@ class SSEOutputHandler(OutputHandler):
         pass
 
     def print_thought(self, thought: str):
+        # Live thinking pieces are joined with no separator; end a whole thought on a newline.
+        if thought and not thought.endswith("\n"):
+            thought += "\n"
         self._emit(
             {
                 "type": "thinking",
@@ -718,29 +833,49 @@ class SSEOutputHandler(OutputHandler):
 
     # === Tool Execution Methods ===
 
-    def print_tool_usage(self, tool_name: str):
+    def record_tool_started(self, tool_name: str) -> None:
+        """Note a tool starting in the turn's ledger and start its timer."""
         self._tool_count += 1
         self._last_tool_name = tool_name
         self._tool_start_time = time.monotonic()
         self.turn_ledger.tool_started(tool_name)
+
+    def record_tool_args(self, args: Dict[str, Any]) -> None:
+        """Note the running tool's arguments in the turn's ledger."""
+        self.turn_ledger.tool_args(args)
+
+    def record_tool_result(self, data: Any, success: bool) -> Optional[float]:
+        """Note the running tool's result and stop its timer.
+
+        Returns the tool's latency in milliseconds, or None when no start was
+        recorded.
+        """
+        self._last_tool_success = success
+        self.turn_ledger.tool_result(data, success)
+        if self._tool_start_time is None:
+            return None
+        latency_ms = round((time.monotonic() - self._tool_start_time) * 1000, 1)
+        self._tool_start_time = None
+        return latency_ms
+
+    def print_tool_usage(self, tool_name: str):
+        self.record_tool_started(tool_name)
+        self._pending_diff_card = None
         # Prefer an explicit display label from the tool registry; fall back
         # to the legacy description map in this module when none is provided.
         detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
+        self._last_tool_label = detail_label
         event = {
             "type": "tool_start",
             "tool": tool_name,
             "detail": detail_label,
             "narration": derive_narration(tool_name),
         }
-        # Attach MCP server name if this is an MCP tool.
-        # _mcp_server is set by MCPTool.to_gaia_format() during registration
-        # in MCPClientMixin._register_mcp_tools() (see mcp/client/mcp_client.py).
-        meta = get_tool_metadata(tool_name)
-        if meta:
-            mcp_server = meta.get("_mcp_server")
-            if mcp_server:
-                event["mcp_server"] = mcp_server
+        event.update(_mcp_identity(tool_name))
         self._emit(event)
+
+    def print_skill_use(self, name: str, loaded: List[str], how: str):
+        self._emit({"type": "skill_use", "skill": name, "how": how, "loaded": loaded})
 
     def print_tool_complete(self):
         self._tool_start_time = None  # Reset in case tool_result was skipped
@@ -754,10 +889,25 @@ class SSEOutputHandler(OutputHandler):
 
     def pretty_print_json(self, data: Dict[str, Any], title: str = None):
         # When title is "Arguments", emit tool args as a detail update
-        # so the frontend can show what the tool was called with.
-        if title == "Arguments" and isinstance(data, dict):
-            detail = _format_tool_args(self._last_tool_name, data)
-            self.turn_ledger.tool_args(data)
+        # so the frontend can show what the tool was called with. Sent for an
+        # empty call too: the translator holds tool_start until this arrives.
+        if title == "Arguments":
+            if not isinstance(data, dict):
+                # The wire carries an object; log what the model really sent.
+                logger.warning(
+                    "Tool %s was called with %s arguments, not an object: %.200r",
+                    self._last_tool_name,
+                    type(data).__name__,
+                    data,
+                )
+                data = {}
+            # A call with no arguments keeps the tool_start label, not a blank.
+            detail = (
+                _format_tool_args(self._last_tool_name, data)
+                if data
+                else self._last_tool_label
+            )
+            self.record_tool_args(data)
             self._emit(
                 {
                     "type": "tool_args",
@@ -780,25 +930,61 @@ class SSEOutputHandler(OutputHandler):
         # For tool results, provide a detailed summary
         summary = _summarize_tool_result(data)
         success = not tool_result_failed(data)
-        self._last_tool_success = success
-        self.turn_ledger.tool_result(data, success)
+        latency_ms = self.record_tool_result(data, success)
         event = {
             "type": "tool_result",
             "title": title,
             "summary": summary,
             "success": success,
         }
+        # A relayed result is reduced to this event, and a "skipped" save
+        # must not reach the chat's Outputs as made.
+        if isinstance(data, dict) and isinstance(data.get("status"), str):
+            event["status"] = data["status"]
+        # A model the call needed and didn't find, so the UI can offer it.
+        if isinstance(data, dict) and isinstance(data.get("needs_model"), str):
+            event["needs_model"] = data["needs_model"]
+        # A "denied" call nobody answered is not one the user declined.
+        if isinstance(data, dict) and data.get("timed_out") is True:
+            event["timed_out"] = True
+        # Nor is one GAIA's own rule stopped.
+        if isinstance(data, dict) and data.get("denied_by") == "policy":
+            event["denied_by"] = "policy"
+        # Nor is one GAIA turned down itself without showing a prompt.
+        if isinstance(data, dict) and data.get("declined_by") == "agent":
+            event["declined_by"] = "agent"
+        # A refusal must not read as a site contacted, relayed or not.
+        if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
+            event[EXECUTED_KEY] = False
         # String-returning tools (notably email envelopes) are summarized by a
         # hard character cap. Tell downstream classifiers that an unparsable
         # summary may be incomplete instead of making them infer truncation.
         if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
             event["summary_truncated"] = True
+        # Where the tool wrote, resolved: a relayed turn's Outputs need it.
+        if isinstance(data, dict):
+            for key in RESULT_PATH_KEYS:
+                if isinstance(data.get(key), str):
+                    event[key] = data[key]
+            if isinstance(data.get("num_chunks"), int):
+                event["num_chunks"] = data["num_chunks"]
+        # The summary drops the hits a relayed turn's sources are made of.
+        if self._last_tool_name == "search_web" and isinstance(data, str):
+            event["sources"] = search_hits(data)
 
-        # Attach latency for tool calls (measured from print_tool_usage)
-        if self._tool_start_time is not None:
-            latency_ms = round((time.monotonic() - self._tool_start_time) * 1000, 1)
+        if success and (get_tool_metadata(self._last_tool_name) or {}).get(
+            "_mcp_server"
+        ):
+            output = _mcp_output_text(data)
+            if output:
+                event["summary"] = _first_line_summary(output)
+                event["mcp_output"] = {
+                    "text": output[:_MCP_OUTPUT_CHAR_CAP],
+                    "truncated": len(output) > _MCP_OUTPUT_CHAR_CAP,
+                }
+
+        if latency_ms is not None:
             event["latency_ms"] = latency_ms
-            self._tool_start_time = None
 
         # For command execution results, include structured output data
         # so the frontend can render a proper terminal view
@@ -821,13 +1007,16 @@ class SSEOutputHandler(OutputHandler):
         # For file search results, include structured file list
         if isinstance(data, dict) and ("files" in data or "file_list" in data):
             files = data.get("file_list", data.get("files", []))
+            folders = data.get("directories")
             if isinstance(files, list):
                 # Keep the UI contract honest: "total" should never claim more accessible
                 # files than we actually include in the event payload.
                 # list_files reports bare names; the UI renders entries.
-                limited_files = [
-                    {"name": f} if isinstance(f, str) else f for f in files[:20]
-                ]
+                entries = [
+                    {"name": _entry_name(d), "kind": "folder"}
+                    for d in (folders if isinstance(folders, list) else [])
+                ] + [{"name": f} if isinstance(f, str) else f for f in files]
+                limited_files = entries[:20]
                 event["result_data"] = {
                     "type": "file_list",
                     "files": limited_files,  # Limit to 20 files
@@ -846,7 +1035,7 @@ class SSEOutputHandler(OutputHandler):
                             {
                                 "id": c.get("chunk_id", 0),
                                 "source": (
-                                    Path(c["source_file"]).name
+                                    display_file_name(c["source_file"])
                                     if c.get("source_file")
                                     else None
                                 ),
@@ -876,12 +1065,55 @@ class SSEOutputHandler(OutputHandler):
                     "chunks": structured_chunks,
                 }
 
+        connect = connect_card_in(data)
+        if connect is not None:
+            fault = str((tool_result_dict(data) or {}).get("error") or "")
+            said = fault.splitlines()[0][:200] if fault else CONNECT_CARD_SUMMARY
+            event["summary"] = said
+            # A relaying host reads the outcome and the summary off this payload.
+            connect = {
+                **connect,
+                "success": success,
+                "status": "ok" if success else "error",
+                "display_message": said,
+            }
+            event["result_data"] = connect
+            event["render"] = CONNECT_CARD_KIND
+            event["data"] = connect
         # The render-map card (if any) is authoritative for a registered tool —
         # set last so it always wins over the generic result_data shapes above.
-        if render_card is not None:
+        elif render_card is not None:
             event["result_data"] = render_card
+            event["render"] = self._RENDER_TOOL_TO_LANG[self._last_tool_name]
+            event["data"] = render_card
+        elif self._pending_diff_card is not None:
+            # ChatView and step persistence read a card from ``data``.
+            event["result_data"] = self._pending_diff_card
+            event["data"] = self._pending_diff_card
+            event["render"] = "diff"
+        self._pending_diff_card = None
 
         self._emit(event)
+
+    def print_diff(self, diff: str, filename: str) -> None:
+        """Attach a ``diff`` card to the result of the call that made the change.
+
+        Called by the write tools after the bytes are on disk; the card rides
+        the call's own ``tool_result`` so it lands under that tool row.
+        """
+        lines = diff.splitlines()
+        card: Dict[str, Any] = {"title": filename, "unified": diff}
+        if len(lines) > _DIFF_CARD_MAX_LINES:
+            card["unified"] = "\n".join(lines[:_DIFF_CARD_MAX_LINES])
+            card["note"] = (
+                f"Showing the first {_DIFF_CARD_MAX_LINES} of {len(lines)} diff lines."
+            )
+        if len(card["unified"]) > _DIFF_CARD_MAX_CHARS:
+            card["unified"] = card["unified"][:_DIFF_CARD_MAX_CHARS]
+            card["note"] = (
+                f"Showing the first {_DIFF_CARD_MAX_CHARS:,} characters of the diff."
+            )
+        self._pending_diff_card = card
 
     # === Status Messages ===
 
@@ -939,6 +1171,18 @@ class SSEOutputHandler(OutputHandler):
     def report_progress(self, message: str):
         self._emit({"type": "status", "status": "working", "message": message})
 
+    def restart_answer(self, message: str) -> None:
+        self.delivered_answer = ""
+        self._emit(
+            {
+                "type": "status",
+                "status": "warning",
+                "phase": "answer_restart",
+                "message": message,
+                "retracts_answer": True,
+            }
+        )
+
     def report_phase(self, phase: str, message: str, **counts: int):
         self._emit(
             {
@@ -953,16 +1197,26 @@ class SSEOutputHandler(OutputHandler):
     # === Structured-render map (#2109) ===
 
     # Mapping from tool name to the card "kind" the frontend's render-card
-    # registry draws (spec §4.2). Shared with the sidecar's own canonical
-    # translator (``gaia_agent_email/sse_translation.py`` duplicates this map
-    # to stay dependency-light) — a test in that package
-    # (``test_render_tool_to_lang_maps_stay_in_sync``) pins the two dicts
-    # equal so the duplication can't silently drift.
+    # registry draws (spec §4.2).
     _RENDER_TOOL_TO_LANG: ClassVar[Dict[str, str]] = {
-        "pre_scan_inbox": "email_pre_scan",
         # #2765: a generic ``table`` card (no new client code) so the thread
         # view renders straight from tool data instead of model prose.
         "get_thread": "table",
+        # Bundled skills: hub/skills/guides and hub/skills/calculators.
+        "guides/show_recipe": "guide",
+        "guides/show_workout": "guide",
+        "guides/show_how_to": "guide",
+        "guides/show_checklist": "guide",
+        "guides/show_itinerary": "guide",
+        "calculators/show_tip_calculator": "calculator",
+        "calculators/show_loan_calculator": "calculator",
+        # Media-producing tools return a verified local path.  The client gets
+        # it through a typed card rather than scraping a model-written path out
+        # of prose, so opening it cannot become an agent-output execution sink.
+        "generate_image": "media",
+        "generate_music": "media",
+        "generate_sound_effect": "media",
+        "text_to_speech": "media",
     }
 
     def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:
@@ -992,6 +1246,8 @@ class SSEOutputHandler(OutputHandler):
             envelope = parsed
         else:
             return None
+        if lang == "media":
+            return self._media_card_payload(envelope)
         if not envelope.get("ok"):
             return None
         inner = envelope.get("data")
@@ -999,11 +1255,89 @@ class SSEOutputHandler(OutputHandler):
             return None
         return inner
 
+    @staticmethod
+    def _media_card_payload(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Return a typed card only for a verified media file this tool wrote.
+
+        The terminal must never open a path copied from model prose or from an
+        unrelated tool's payload.  The render map admits only media producers;
+        this second check requires their successful, absolute, regular-file
+        output before the path crosses the wire as an actionable card.
+        """
+        if envelope.get("status") != "success":
+            return None
+        path_key = next(
+            (
+                key
+                for key in ("image_path", "audio_path", "file_path")
+                if isinstance(envelope.get(key), str) and envelope[key].strip()
+            ),
+            None,
+        )
+        if path_key is None:
+            return None
+        # Judged on the string first: stat-ing a UNC path reaches out to the share.
+        if is_remote_or_device_path(envelope[path_key]):
+            return None
+        path = Path(envelope[path_key]).expanduser()
+        if not path.is_absolute() or path.suffix.lower() not in MEDIA_OUTPUT_EXTENSIONS:
+            return None
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        if not path.is_file():
+            return None
+        image = path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+        media_type = "image" if image else "audio"
+        payload: Dict[str, Any] = {
+            "kind": "media",
+            "path": str(path),
+            "media_type": media_type,
+            "size_bytes": stat.st_size,
+            # A relayed turn reaches the Agent UI as this payload alone; its
+            # inline image/audio card and Outputs read the tool's own keys.
+            "status": "success",
+            path_key: str(path),
+        }
+        for key in (
+            "model",
+            "size",
+            "steps",
+            "voice",
+            "format",
+            "duration_seconds",
+            "duration_requested",
+            "generation_time_s",
+        ):
+            if envelope.get(key) is not None:
+                payload[key] = envelope[key]
+        return payload
+
     # === Completion Methods ===
 
     def print_turn_metrics(self, record: Dict[str, Any]):
         """Stash the sealed turn record for the answer event that follows."""
         self._turn_metrics = record
+
+    def stage_final_model_messages(
+        self, answer: str, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Keep the turn's answer and record sealed at the answer for ``final``.
+
+        The agent seals them before ``print_final_answer``; the daemon reads them
+        from here so ``final`` carries the measurement and what later turns
+        replay without waiting on the run thread (which may still be storing
+        memory or writing a trace).
+        """
+        self.staged_answer = answer
+        self.staged_model_messages = messages
+        return messages
+
+    def mark_turn_failed(self, failure: Optional[str] = None) -> None:
+        """The answer that follows ends a turn a model failure cut short."""
+        self._turn_failed = True
+        self._turn_failure = failure
 
     def print_final_answer(
         self,
@@ -1075,6 +1409,12 @@ class SSEOutputHandler(OutputHandler):
         record, self._turn_metrics = self._turn_metrics, None
         if record is not None and turn_log_path() is not None:
             event["metrics"] = record
+        if self._turn_failed:
+            self._turn_failed = False
+            event["failed"] = True
+            if self._turn_failure:
+                event["failure"] = self._turn_failure
+            self._turn_failure = None
         self.delivered_answer = event["content"] or ""
         self._emit(event)
 
@@ -1437,13 +1777,26 @@ class SSEOutputHandler(OutputHandler):
             ):
                 self._envelope_scan = None  # a cancelled stream left it behind
             while self._in_thinking or (
-                self._envelope_scan is None and "<think>" in self._stream_buffer
+                self._envelope_scan is None
+                and (
+                    THINK_OPEN in self._stream_buffer
+                    or (
+                        not self._reply_saw_think and THINK_CLOSE in self._stream_buffer
+                    )
+                )
             ):
                 if self._in_thinking:
                     # We're inside a thinking block — look for closing tag
                     close_idx = self._stream_buffer.find("</think>")
                     if close_idx >= 0:
-                        thinking_text = self._stream_buffer[:close_idx].strip()
+                        thinking_text = self._stream_buffer[:close_idx]
+                        # A closing piece continues the streamed words; keep its leading space.
+                        thinking_text = (
+                            thinking_text.rstrip()
+                            if self._thinking_streamed
+                            else thinking_text.strip()
+                        )
+                        self._thinking_streamed = False
                         if thinking_text:
                             self._emit({"type": "thinking", "content": thinking_text})
                         self._stream_buffer = self._stream_buffer[
@@ -1453,16 +1806,25 @@ class SSEOutputHandler(OutputHandler):
                         continue  # Check for more <think> blocks
                     else:
                         # Still inside thinking — emit partial and wait
-                        if self._stream_buffer.strip():
-                            self._emit(
-                                {"type": "thinking", "content": self._stream_buffer}
-                            )
+                        piece = self._stream_buffer
+                        if not self._thinking_streamed:
+                            piece = piece.lstrip()
+                        if piece:
+                            self._emit({"type": "thinking", "content": piece})
+                            self._thinking_streamed = True
                         self._stream_buffer = ""
                         return
+                elif not self._reply_saw_think and has_lone_close(self._stream_buffer):
+                    head, _, self._stream_buffer = self._stream_buffer.partition(
+                        THINK_CLOSE
+                    )
+                    self._retract_as_reasoning(head)
+                    continue
                 else:
                     # Not in thinking — look for opening tag
                     open_idx = self._stream_buffer.find("<think>")
                     if open_idx >= 0:
+                        self._reply_saw_think = True
                         # Emit any text before <think> as regular content,
                         # stripping thought/tool-call JSON artifacts that the
                         # model sometimes outputs before its think block.
@@ -1654,6 +2016,23 @@ class SSEOutputHandler(OutputHandler):
         if end_of_stream:
             self._answer_stream = None
 
+    def _retract_as_reasoning(self, head: str) -> None:
+        """A lone ``</think>`` ended reasoning that streamed as answer text.
+
+        Everything shown since the last tool call, plus *head*, goes to the
+        thinking step; ``retracts_answer`` tells the consumer to drop it from
+        the answer it has drawn so far.
+        """
+        self._reply_saw_think = True
+        shown = self._text_since_tool
+        reasoning = (shown + head).strip()
+        if not reasoning:
+            return
+        event: Dict[str, Any] = {"type": "thinking", "content": reasoning}
+        if shown:
+            event["retracts_answer"] = True
+        self._emit(event)
+
     def _emit_answer_text(self, text: str) -> None:
         if text:
             self.delivered_answer = (self.delivered_answer or "") + text
@@ -1668,6 +2047,18 @@ class SSEOutputHandler(OutputHandler):
         it, and a skill grant would otherwise run ``pytest`` with nobody asked.
         """
         return scripted_user.declines(tool_name, tool_args)
+
+    def note_call_args(self, tool_name: str, call_args: Dict[str, Any]) -> None:
+        """Record what the model sent for the call the next prompt asks about.
+
+        The prompt's arguments can carry what GAIA adds for display (the folder
+        a shell call runs in, a risk note), so when they differ the
+        ``permission_request`` also carries these as ``call_args``. Its only
+        reader is ``CanonicalTranslator`` (the ``/query`` wire's ``args``); the
+        Agent UI ignores it. Consumed by the next :meth:`confirm_tool_execution`,
+        and only for the same tool.
+        """
+        self._noted_call = (tool_name, dict(call_args))
 
     def confirm_tool_execution(
         self,
@@ -1693,6 +2084,24 @@ class SSEOutputHandler(OutputHandler):
         """
         if timeout is _USE_HANDLER_TIMEOUT:
             timeout = self.confirm_timeout_seconds
+        self._answered_prompt = None
+        noted, self._noted_call = self._noted_call, None
+        call_args = noted[1] if noted is not None and noted[0] == tool_name else None
+
+        # A call only a person may approve: pre-approval never answers it.
+        needs_person = (
+            isinstance(tool_args, dict) and tool_args.get(NEEDS_PERSON_ARG) is True
+        )
+        if needs_person:
+            tool_args = {k: v for k, v in tool_args.items() if k != NEEDS_PERSON_ARG}
+            if not self.answers_confirmations:
+                return self.deny_tool_execution(
+                    tool_name,
+                    f"'{tool_name}' needs your approval and nobody can answer on "
+                    "this run. Start the request from the GAIA terminal UI or "
+                    "Agent UI to approve it there.",
+                    unattended=True,
+                )
 
         # Before auto-approve: the eval runs with it on, and this is its only no.
         if scripted_user.declines(tool_name, tool_args):
@@ -1713,7 +2122,13 @@ class SSEOutputHandler(OutputHandler):
         # emitted: neither has a question to ask, so putting a modal up would be
         # theatre. Checked per call, so toggling full access mid-run takes effect on
         # the very next gated tool.
-        if self.auto_approve_confirmations_enabled():
+        # Pre-approval answers tool prompts; only full access widens the file scope.
+        widens_scope = tool_name == PATH_ACCESS_PROMPT_TOOL and not self.full_access
+        if (
+            self.auto_approve_confirmations_enabled()
+            and not widens_scope
+            and not needs_person
+        ):
             self.log_auto_approval(tool_name)
             self._emit(
                 {
@@ -1769,7 +2184,7 @@ class SSEOutputHandler(OutputHandler):
             logger.info(
                 "Background mode: immediately denied confirmation for '%s'", tool_name
             )
-            self._last_denial = Denial(tool_name, unattended_message)
+            self._last_denial = Denial(tool_name, unattended_message, unattended=True)
             return False
 
         confirm_id = str(uuid.uuid4())
@@ -1790,6 +2205,8 @@ class SSEOutputHandler(OutputHandler):
             "args": tool_args,
             "confirm_id": confirm_id,
         }
+        if call_args is not None and call_args != tool_args:
+            request["call_args"] = call_args
         # Present only when an "always" answer would create a grant, and it
         # names exactly what that grant covers. A front-end must not offer the
         # choice without it: an unqualified "always" is read as far broader
@@ -1798,7 +2215,7 @@ class SSEOutputHandler(OutputHandler):
         if scope is not None:
             request["always_scope"] = scope.label
             # ``always_scope`` is matched as-is by the MCP control; this is its wording.
-            always_label = grant_phrase(tool_name, scope.subject)
+            always_label = scope.phrase or grant_phrase(tool_name, scope.subject)
             if always_label:
                 request["always_label"] = always_label
         # What this call does — `pytest` is not `rm -rf` — so the prompt's label
@@ -1811,6 +2228,7 @@ class SSEOutputHandler(OutputHandler):
         # renders a prompt that waits.
         if timeout is not None:
             request["timeout_seconds"] = timeout
+            request["expires_at"] = time.time() + timeout
         self._emit(request)
 
         # Poll in short intervals so cancellation is detected promptly.
@@ -1829,6 +2247,7 @@ class SSEOutputHandler(OutputHandler):
                 tool_name,
                 f"Confirmation for '{tool_name}' was abandoned: the run was "
                 "cancelled before the user answered.",
+                unattended=True,
             )
             return False
 
@@ -1852,6 +2271,8 @@ class SSEOutputHandler(OutputHandler):
         result = self._confirm_result
         timed_out = self._confirm_timed_out
         self._clear_pending_confirmation()
+        if not timed_out:
+            self.note_prompt_answered(tool_name)
         if timed_out:
             # The client's own clock ran out and it said so: a timeout, never
             # "the user denied it".
@@ -1880,7 +2301,9 @@ class SSEOutputHandler(OutputHandler):
             ) or self._relay_confirm_id is not None:
                 return "permission"
         with self._user_input_lock:
-            if any(not evt.is_set() for evt in self._user_input_events.values()):
+            if self._relay_question_id is not None or any(
+                not evt.is_set() for evt in self._user_input_events.values()
+            ):
                 return "question"
         return None
 
@@ -1891,32 +2314,67 @@ class SSEOutputHandler(OutputHandler):
         On the way back the turn retakes the model at the front of the line,
         and a Stop while it waits there ends the turn.
         """
-        slot = self.turn_slot
-        try:
-            stepped_away = slot is not None and slot.step_away()
-        except TimeoutError:
-            # The hand-back may still run later; never use the model unheld.
-            logger.error("Could not give the model up while waiting; stopping the turn")
-            self.cancelled.set()
-            stepped_away = False
-        if not stepped_away:
+        if not self.step_away_from_model():
             yield
             return
         try:
             yield
         finally:
-            if not self.cancelled.is_set() and not slot.come_back(self.cancelled):
-                # Withdrawn from the line: the turn must not use the model.
+            self.come_back_to_model()
+
+    def step_away_from_model(self) -> bool:
+        """Give the model to other chats while the turn waits on the user.
+
+        Returns whether it was given up, i.e. whether
+        :meth:`come_back_to_model` must follow once the wait ends.
+        """
+        slot = self.turn_slot
+        try:
+            return slot is not None and slot.step_away()
+        except TimeoutError:
+            # The hand-back may still run later; never use the model unheld.
+            logger.error("Could not give the model up while waiting; stopping the turn")
+            self.cancelled.set()
+            return False
+
+    def come_back_to_model(self) -> Optional[bool]:
+        """Retake the model at the front of the line after a wait on the user.
+
+        Returns ``True`` when the turn may continue, ``None`` for an ordinary
+        user Stop, and ``False`` after it emitted a named terminal retake error.
+        This lets a relayed sidecar preserve that error instead of overwriting
+        it with ``Cancelled.``.
+        """
+        if self.cancelled.is_set():
+            return None
+        if not self.turn_slot.come_back(self.cancelled):
+            if self.cancelled.is_set():
+                return None
+            # Not a Stop: the turn ended (cleanup or shutdown) while it waited in line.
+            logger.warning(
+                "Turn ended while waiting to retake the model after the user "
+                "answered; the approved step did not run"
+            )
+            self._emit(
+                {
+                    "type": "agent_error",
+                    "content": (MODEL_RETAKE_FAILED_MESSAGE),
+                    "fatal": True,
+                }
+            )
+            self.cancelled.set()
+            return False
+        elif not self.cancelled.is_set() and self.on_model_regained is not None:
+            try:
+                self.on_model_regained()
+            except Exception as exc:  # pylint: disable=broad-except
+                # The model the turn needs is gone and can't be loaded:
+                # end the turn before the approved tool runs, and say why.
+                logger.error("Model check after the user answered failed: %s", exc)
+                self._emit({"type": "agent_error", "content": str(exc), "fatal": True})
                 self.cancelled.set()
-            elif not self.cancelled.is_set() and self.on_model_regained is not None:
-                try:
-                    self.on_model_regained()
-                except Exception as exc:  # pylint: disable=broad-except
-                    # The model the turn needs is gone and can't be loaded:
-                    # end the turn before the approved tool runs, and say why.
-                    logger.error("Model check after the user answered failed: %s", exc)
-                    self._emit({"type": "agent_error", "content": str(exc)})
-                    self.cancelled.set()
+                return False
+        return None if self.cancelled.is_set() else True
 
     def _clear_pending_confirmation(self) -> None:
         """Drop the live prompt's slot so a later answer cannot resolve it."""
@@ -2011,7 +2469,7 @@ class SSEOutputHandler(OutputHandler):
         for the whole blocking ``read()``, and ``close()`` waits on that same
         lock — so a cross-thread ``close()`` blocks until the read returns on
         its own (proven by the real-socket test in
-        ``tests/unit/test_email_sidecar_proxy.py``). ``shutdown()`` bypasses
+        ``tests/unit/test_sidecar_proxy.py``). ``shutdown()`` bypasses
         the file-object layer entirely and wakes the parked ``recv``
         immediately; the relay's stream generator then closes the response
         itself on the way out. ``resp.close()`` remains only as the fallback
@@ -2048,7 +2506,7 @@ class SSEOutputHandler(OutputHandler):
         if self._confirm_id is not None or self._relay_confirm_id is not None:
             return True
         with self._user_input_lock:
-            return bool(self._user_input_queue)
+            return bool(self._user_input_queue) or self._relay_question_id is not None
 
     def request_user_input_blocking(
         self,
@@ -2170,8 +2628,8 @@ class SSEOutputHandler(OutputHandler):
     def resolve_user_input(self, request_id: str, response: str) -> bool:
         """Unblock a pending ``request_user_input_blocking()`` call.
 
-        Called by ``POST /api/chat/user-input`` and by the email sidecar's
-        ``POST /v1/email/query/{run_id}/respond``.  Returns ``False`` if no
+        Called by ``POST /api/chat/user-input`` and by a sidecar's
+        ``POST /v1/<agent>/query/{run_id}/respond``.  Returns ``False`` if no
         request with that ID is pending, so the caller can answer 409 rather
         than report an accepted answer nothing will read.
         """
@@ -2189,7 +2647,7 @@ class SSEOutputHandler(OutputHandler):
         active relay run to answer (already finished, or never one) so the
         caller can 404 rather than report an accepted answer nothing reads.
         Any sidecar rejection (e.g. the question is no longer pending)
-        propagates as :class:`~gaia.ui.email_sidecar.errors.SidecarError` —
+        propagates as :class:`~gaia.daemon.sidecars.errors.SidecarError` —
         never swallowed.
         """
         proxy = self.active_relay_proxy
@@ -2197,23 +2655,93 @@ class SSEOutputHandler(OutputHandler):
         if proxy is None or run_id is None:
             return False
         proxy.respond_query(run_id, request_id, value)
+        with self._user_input_lock:
+            # A newer question may already be pending; only this one is answered.
+            if self._relay_question_id == request_id:
+                self._relay_question_id = None
         return True
 
-    def set_relay_confirmation(self, confirm_id: Optional[str]) -> None:
-        """Record (or clear, with ``None``) the sidecar prompt now pending."""
+    def set_relay_question(self, request_id: Optional[str]) -> None:
+        """Record (or clear, with ``None``) the relayed question now pending."""
+        with self._user_input_lock:
+            self._relay_question_id = request_id
+
+    def set_relay_confirmation(
+        self,
+        confirm_id: Optional[str],
+        always_scope: Optional[str] = None,
+        path_access: Optional[str] = None,
+    ) -> None:
+        """Record (or clear, with ``None``) the sidecar prompt now pending.
+
+        *always_scope* is what an "always" answer grants, when one is offered.
+        *path_access* is the path a path-access prompt asks to open.
+        """
         with self._confirm_lock:
             self._relay_confirm_id = confirm_id
+            self._relay_always_scope = always_scope if confirm_id else None
+            self._relay_path_access = path_access if confirm_id else None
+            if self._relay_confirm_timer is not None:
+                self._relay_confirm_timer.cancel()
+                self._relay_confirm_timer = None
+            # The sidecar's own bound is only a backstop; this is the one the card shows.
+            timeout = self.confirm_timeout_seconds
+            if confirm_id and timeout is not None:
+                timer = threading.Timer(
+                    timeout, self._expire_relay_confirmation, args=(confirm_id,)
+                )
+                timer.daemon = True
+                timer.start()
+                self._relay_confirm_timer = timer
 
-    def relay_confirmation_pending(self) -> bool:
+    def _expire_relay_confirmation(self, confirm_id: str) -> None:
+        """Tell the sidecar nobody answered *confirm_id* in time."""
+        from gaia.daemon.sidecars.errors import SidecarError
+
+        try:
+            self.resolve_relay_confirmation(False, confirm_id, timed_out=True)
+        except SidecarError as exc:
+            logger.warning(
+                "Could not tell the sidecar that prompt %s timed out: %s",
+                confirm_id,
+                exc,
+            )
+
+    def relay_confirmation_pending(self, confirm_id: Optional[str] = None) -> bool:
+        """Whether a sidecar prompt is pending; *confirm_id* must be that one."""
         with self._confirm_lock:
+            if confirm_id is not None:
+                return confirm_id == self._relay_confirm_id
             return self._relay_confirm_id is not None
 
-    def resolve_relay_confirmation(self, approved: bool, confirm_id: str) -> bool:
-        """Hand the user's allow-once/deny to the sidecar run parked on it.
+    def relay_always_scope(self, confirm_id: Optional[str]) -> Optional[str]:
+        """What "always" grants on the pending prompt *confirm_id*, or None."""
+        with self._confirm_lock:
+            if not confirm_id or confirm_id != self._relay_confirm_id:
+                return None
+            return self._relay_always_scope
+
+    def relay_path_access(self, confirm_id: Optional[str]) -> Optional[str]:
+        """The path the pending prompt *confirm_id* asks to open, or None."""
+        with self._confirm_lock:
+            if not confirm_id or confirm_id != self._relay_confirm_id:
+                return None
+            return self._relay_path_access
+
+    def resolve_relay_confirmation(
+        self,
+        approved: bool,
+        confirm_id: str,
+        always: bool = False,
+        timed_out: bool = False,
+    ) -> bool:
+        """Hand the user's answer to the sidecar run parked on it.
 
         Returns ``False`` when *confirm_id* is not the prompt pending on a live
-        relayed run. Claimed under the lock before the POST, so a double click
-        cannot send two answers; a sidecar rejection raises ``SidecarError``.
+        relayed run, or when *always* was not offered on it. *timed_out* says
+        nobody answered in time. Claimed under the lock before the POST, so a
+        double click cannot send two answers; a sidecar rejection raises
+        ``SidecarError``.
         """
         with self._confirm_lock:
             proxy = self.active_relay_proxy
@@ -2223,10 +2751,19 @@ class SSEOutputHandler(OutputHandler):
                 or confirm_id != self._relay_confirm_id
                 or proxy is None
                 or run_id is None
+                or (always and self._relay_always_scope is None)
             ):
                 return False
             self._relay_confirm_id = None
-        proxy.tool_decision(run_id, "allow" if approved else "deny", confirm_id)
+            self._relay_always_scope = None
+            self._relay_path_access = None
+        if timed_out:
+            decision = "timeout"
+        elif always:
+            decision = "always"
+        else:
+            decision = "allow" if approved else "deny"
+        proxy.tool_decision(run_id, decision, confirm_id)
         return True
 
     def signal_done(self):
@@ -2236,6 +2773,7 @@ class SSEOutputHandler(OutputHandler):
             self._emit({"type": "thinking", "content": self._stream_buffer})
             self._stream_buffer = ""
             self._in_thinking = False
+        self._thinking_streamed = False
 
         # A stopped stream can leave a call open or a tag tail held back.
         if self._markup_close is not None or self._markup_pending:
@@ -2294,6 +2832,109 @@ def _count_summary(data: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _mcp_identity(tool_name: Optional[str]) -> Dict[str, str]:
+    """The connector an MCP tool belongs to, as tool-row fields; {} for other tools."""
+    meta = get_tool_metadata(tool_name) if tool_name else None
+    server = (meta or {}).get("_mcp_server")
+    if not server:
+        return {}
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    # A server added by hand to mcp_servers.json has no catalog entry; its
+    # config name is the only name it has.
+    label = REGISTRY.get(server).display_name if server in REGISTRY else server
+    identity = {"mcp_server": server, "mcp_server_label": label}
+    if meta.get("_mcp_tool"):
+        identity["mcp_tool"] = meta["_mcp_tool"]
+    return identity
+
+
+def _mcp_output_text(data: Any) -> Optional[str]:
+    """The text an MCP tool returned, from its wrapped ``tools/call`` result."""
+    result = data.get("data") if isinstance(data, dict) else data
+    if isinstance(result, dict) and isinstance(result.get("content"), list):
+        result = "\n".join(
+            item["text"]
+            for item in result["content"]
+            if isinstance(item, dict)
+            and item.get("type", "text") == "text"
+            and isinstance(item.get("text"), str)
+        )
+    if not isinstance(result, str) or not result.strip():
+        return None
+    return result.strip("\n")
+
+
+def _first_line_summary(text: str) -> str:
+    """``"a\\nb\\nc"`` -> ``"a (+2 more lines)"``."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    first = lines[0][:_SUMMARY_CHAR_CAP] if lines else ""
+    return f"{first} (+{len(lines) - 1} more lines)" if len(lines) > 1 else first
+
+
+def _entry_name(entry: Any) -> str:
+    """A listed file's display name: ``{"name": "a.py", "directory": "/src"}`` -> ``"a.py (/src)"``."""
+    if not isinstance(entry, dict):
+        return str(entry)
+    name = entry.get("name", entry.get("filename", entry.get("file_name", "")))
+    if not name and entry.get("file_path"):
+        name = str(entry["file_path"]).replace("\\", "/").rsplit("/", 1)[-1]
+    directory = entry.get("directory", "")
+    if directory and name:
+        return f"{name} ({directory})"
+    return str(name or directory)
+
+
+def _listing_summary(data: Dict[str, Any]) -> str:
+    """``{"files": [...], "directories": [...]}`` -> ``"Found 3 files and 2 folders: ..."``."""
+    files = data.get("file_list", data.get("files"))
+    files = files if isinstance(files, list) else []
+    folders = data.get("directories")
+    folders = folders if isinstance(folders, list) else []
+    count = data.get("count")
+    # "count" is the files a search matched, which may exceed the names it returned.
+    file_count = (
+        max(count, len(files))
+        if isinstance(count, int) and not isinstance(count, bool)
+        else len(files)
+    )
+    folder_count = len(folders)
+    total = data.get("total")
+    other = (
+        total - file_count - folder_count
+        if isinstance(total, int) and not isinstance(total, bool)
+        else 0
+    )
+    parts = [
+        format_count(n, noun)
+        for n, noun in (
+            (file_count, "files"),
+            (folder_count, "folders"),
+            (other, "other entries"),
+        )
+        if n > 0
+    ]
+    if not parts:
+        found = "no files or folders" if "directories" in data else "no files"
+    elif len(parts) == 1:
+        found = parts[0]
+    else:
+        found = ", ".join(parts[:-1]) + f" and {parts[-1]}"
+
+    names = [f"{_entry_name(d)}/" for d in folders[:5]]
+    names += [_entry_name(f) for f in files[: 5 - len(names)]]
+    names = [n for n in names if n and n != "/"]
+    display_msg = data.get("display_message", "")
+    if not names:
+        return display_msg or f"Found {found}"
+    listed = "\n".join(f"  {name}" for name in names)
+    hidden = file_count + folder_count - len(names)
+    if hidden > 0:
+        listed += f"\n  ... +{hidden} more"
+    return f"{display_msg}\n{listed}" if display_msg else f"Found {found}:\n{listed}"
+
+
 def _summarize_tool_result(data: Dict[str, Any]) -> str:
     """Create a detailed human-readable summary of a tool result."""
     if not isinstance(data, dict):
@@ -2306,6 +2947,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         lines = stdout.strip().split("\n") if stdout.strip() else []
         if rc != 0 and data.get("expected_exit"):
             return f"{data['expected_exit']} (exit {rc})"
+        if rc != 0 and isinstance(data.get("exit_code_meaning"), str):
+            # winget reports failure as a bare number and prints to stdout.
+            return f"{data['exit_code_meaning']} (exit {rc})"
         if rc != 0:
             stderr = data.get("stderr", "")
             return f"Command failed (exit {rc})" + (
@@ -2319,39 +2963,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
             return preview
         return "Command completed (no output)"
 
-    # File search results
+    # File search and folder listing results
     if "files" in data or "file_list" in data:
-        files = data.get("file_list", data.get("files", []))
-        count = data.get("count", len(files) if isinstance(files, list) else 0)
-        display_msg = data.get("display_message", "")
-        if isinstance(files, list) and files:
-            file_names = []
-            for f in files[:5]:
-                if isinstance(f, dict):
-                    name = f.get("name", f.get("filename", f.get("file_name", "")))
-                    # Fallback: extract filename from file_path if name keys are missing
-                    if not name and f.get("file_path"):
-                        name = f["file_path"].replace("\\", "/").rsplit("/", 1)[-1]
-                    directory = f.get("directory", "")
-                    if directory and name:
-                        file_names.append(f"{name} ({directory})")
-                    elif name:
-                        file_names.append(name)
-                    elif directory:
-                        file_names.append(directory)
-                else:
-                    file_names.append(str(f))
-            result = "\n".join(f"  {name}" for name in file_names)
-            if count > 5:
-                result += f"\n  ... +{count - 5} more"
-            return (
-                (display_msg + "\n" + result)
-                if display_msg
-                else f"Found {count} file(s):\n{result}"
-            )
-        if display_msg:
-            return display_msg
-        return f"Found {count} file(s)"
+        return _listing_summary(data)
 
     # Search/query results with chunks
     if "chunks" in data:
@@ -2381,7 +2995,8 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         if data.get("already_indexed"):
             return f"Already indexed ({chunks} chunks)"
         if filename:
-            return f"Indexed {filename} ({chunks} chunks)"
+            shown = upload_original_name(filename) or filename
+            return f"Indexed {shown} ({chunks} chunks)"
         return f"Indexed document ({chunks} chunks)"
 
     # File read results
@@ -2421,7 +3036,10 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
     # Status-based results
     if "status" in data:
         status = data["status"]
-        msg = data.get("message", data.get("error", data.get("display_message", "")))
+        # Written for the user; message may be written for the model.
+        if data.get("display_message"):
+            return str(data["display_message"])[:200]
+        msg = data.get("message", data.get("error", ""))
         if msg:
             return f"{status}: {str(msg)[:200]}"
         # A bare "success" tells the user nothing. Report what came back
@@ -2498,4 +3116,24 @@ def _fix_double_escaped(text: str) -> str:
         text = text.replace("\\n", "\n")
         text = text.replace("\\t", "\t")
         text = text.replace('\\"', '"')
+    return text
+
+
+def clean_reply_text(text: str) -> str:
+    """Strip the LLM output artifacts a reply must not be stored with."""
+    if not text:
+        return text
+    text = _TOOL_CALL_JSON_SUB_RE.sub("", text)
+    # _clean_answer_json MUST run before _THOUGHT_JSON_SUB_RE, or a leaked
+    # {"thought":..., "answer":...} blob is stripped whole, answer included.
+    text = _clean_answer_json(text)
+    text = _THOUGHT_JSON_SUB_RE.sub("", text)
+    text = _RAG_RESULT_JSON_SUB_RE.sub("", text)
+    # Mixed content: plain text followed by a duplicate {"answer": "..."} wrapper.
+    text = _ANSWER_JSON_SUB_RE.sub("", text)
+    text = _fix_double_escaped(text)
+    # 3+ closing braces at the end are a leaked nested tool result.
+    text = re.sub(r"\}{3,}\s*$", "", text).strip()
+    # A code fence left after JSON extraction, e.g. "}\n```".
+    text = re.sub(r"[\n\s]*`{3,}\s*$", "", text).strip()
     return text

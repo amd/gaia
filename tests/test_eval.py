@@ -200,20 +200,21 @@ class TestAgentEvalAudit:
         assert audit_tool_results_in_history(f2) is False
 
     def test_audit_reads_real_chat_helpers_values(self):
-        """Integration canary: audit must read the real constants from _chat_helpers.py.
+        """Integration canary: the relay keeps no fixed history caps.
 
-        This test breaks intentionally if someone renames or changes _RELAY_CONTEXT_PAIRS
-        or _MAX_CHARS, alerting that eval recommendations need updating.
+        Relayed history is sized to the model's context window, like the
+        in-process path, so the audit finds no pair or per-message cap. This
+        breaks if one comes back, so the eval recommendations get revisited.
         """
         from gaia.eval.audit import audit_chat_helpers
 
         constants = audit_chat_helpers()
         assert (
-            constants.get("_RELAY_CONTEXT_PAIRS") == 5
-        ), "_RELAY_CONTEXT_PAIRS changed in _chat_helpers.py — update eval recommendations"
+            "_RELAY_CONTEXT_PAIRS" not in constants
+        ), "_chat_helpers.py caps relayed history again — update eval recommendations"
         assert (
-            constants.get("_MAX_CHARS") == 2000
-        ), "_MAX_CHARS changed in _chat_helpers.py — update eval recommendations"
+            "_MAX_CHARS" not in constants
+        ), "_chat_helpers.py cuts messages again — update eval recommendations"
 
 
 class TestAgentEvalRunner:
@@ -1144,6 +1145,10 @@ class TestBuildScenarioPrompt:
 
 class TestRunScenarioSubprocess:
     """Tests for run_scenario_subprocess JSON parsing via mocked subprocess."""
+
+    @pytest.fixture(autouse=True)
+    def _signed_in(self, claude_login):
+        """The driver needs a Claude credential; give it a CLI login."""
 
     def _minimal_scenario(self):
         return {
@@ -2808,6 +2813,10 @@ class TestScenarioLoading:
 class TestRunner:
     """Tests for runner execution behavior (mocked subprocess)."""
 
+    @pytest.fixture(autouse=True)
+    def _signed_in(self, claude_login):
+        """The driver needs a Claude credential; give it a CLI login."""
+
     def test_timeout_handling(self, mocker):
         """Scenario that exceeds timeout gets TIMEOUT status."""
         import tempfile
@@ -2896,10 +2905,12 @@ class TestRunner:
         # 1M input = $3.00, 0.5M output = $7.50, total = $10.50
         assert expected_total == pytest.approx(10.50, abs=0.01)
 
-        # Test default fallback for unknown models
-        fallback = MODEL_PRICING["default"]
-        assert fallback["input_per_mtok"] == 3.00
-        assert fallback["output_per_mtok"] == 15.00
+        # An unpriced Claude model is an error, not a guessed price
+        from gaia.eval.config import claude_pricing
+
+        assert "default" not in MODEL_PRICING
+        with pytest.raises(ValueError, match="MODEL_PRICING"):
+            claude_pricing("claude-future-9000")
 
         # Test opus pricing is higher than sonnet
         opus_pricing = MODEL_PRICING["claude-opus-4"]
@@ -2958,6 +2969,10 @@ class TestRunner:
 
 class TestScorecardPublicAPI:
     """Tests for the scorecard public API including score calculation and comparison."""
+
+    @pytest.fixture(autouse=True)
+    def _signed_in(self, claude_login):
+        """The driver needs a Claude credential; give it a CLI login."""
 
     def _make_result(self, scenario_id, status, score, category="rag_quality"):
         return {

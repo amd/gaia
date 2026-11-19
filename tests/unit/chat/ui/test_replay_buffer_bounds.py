@@ -169,3 +169,21 @@ async def test_thinking_tokens_merge_and_stay_apart_from_the_answer():
     assert events[0]["content"] == "".join(f"t{i} " for i in range(5000))
     assert events[2]["content"] == "u0 u1 u2 "
     assert _answer(events) == "".join(f"w{i} " for i in range(500))
+
+
+async def test_a_turn_that_cannot_take_followups_still_says_so_after_a_trim(
+    monkeypatch,
+):
+    """A re-attaching chat must not offer "Add to this reply" to a turn that refused it."""
+    monkeypatch.setattr(rm, "MAX_REPLAY_BYTES", 5_000)
+    run = Run("s8")
+    run.emit(_frame({"type": "status", "status": "info", "message": "start"}))
+    run.emit(_frame({"type": "followup_unavailable"}))
+    for i in range(50):
+        run.emit(_frame({"type": "tool_result", "summary": f"r{i}", "data": "x" * 400}))
+
+    events = _events(await _replay(run))
+
+    assert run._trimmed
+    assert {"type": "followup_unavailable"} in events
+    assert events[-1]["summary"] == "r49"

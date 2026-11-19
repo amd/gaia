@@ -13,7 +13,6 @@
     "testEnvironment": "node",
     "coverageDirectory": "coverage",
     "collectCoverageFrom": [
-      "../../src/gaia/electron/**/*.js",
       "../../src/gaia/apps/webui/*.cjs",
       "../../src/gaia/apps/webui/services/*.cjs",
       "../../src/gaia/apps/**/webui/src/**/*.js",

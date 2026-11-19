@@ -41,7 +41,7 @@ From `src/gaia/llm/lemonade_client.py`:
 | Use | Model | Size |
 |-----|-------|------|
 | General/default (`DEFAULT_MODEL_NAME`) | `Gemma-4-E4B-it-GGUF` | ~3 GB |
-| Every `AGENT_PROFILES` entry (chat, code, jira, blender, docker, talk, rag, vlm, …) | `gemma-4-e4b` | ~3 GB |
+| Every `AGENT_PROFILES` entry (chat, bash, talk, rag, vlm, minimal, mcp, sd) | `gemma-4-e4b` | ~3 GB |
 | Vision / VLM | `Gemma-4-E4B-it-GGUF` (default; `Qwen3-VL-4B-Instruct-GGUF` also supported) | ~3 GB |
 | Prompt enhancement | `Qwen3-8B-GGUF` | ~5 GB |
 | Legacy pinned sessions only | `Qwen3.5-35B-A3B-GGUF` — still a selectable model, no longer any profile's default | ~17 GB Q4_K_M |
@@ -56,9 +56,9 @@ Context window is pinned per device profile, not per agent: `GPU_CTX_SIZE` (6553
 |--------|---------|------------|
 | OGA | ONNX GenAI | Ryzen AI 300-series NPU |
 | llamacpp | llama.cpp | Vulkan / ROCm / Metal / CPU |
-| FLM (FastFlowLM) | NPU-native LLM + embedder runtime | Ryzen AI NPU (`gemma4-it-e2b-FLM` chat, `embed-gemma-300m-FLM` embedder) |
+| FLM (FastFlowLM) | NPU-native LLM runtime | Ryzen AI NPU (`gemma4-it-e2b-FLM` chat; its `embed-gemma-300m-FLM` embedder isn't used: its search ranked at chance on FLM 1.0.7) |
 
-Hybrid mode (NPU + iGPU) is the sweet spot on Ryzen AI 300 series. FLM caps context at `NPU_CTX_SIZE` (32768) — hand it the GPU window and it fails to load. Keeping the embedder on FLM too lets chat model and embedder stay co-resident instead of evicting each other.
+Hybrid mode (NPU + iGPU) is the sweet spot on Ryzen AI 300 series. FLM caps context at `NPU_CTX_SIZE` (32768) — hand it the GPU window and it fails to load. Documents and memory embed on the GPU even then: FLM's embedder ranked text at chance on FLM 1.0.7, and Lemonade keeps one model per type, so the GGUF embedder loads beside the FLM chat model.
 
 ## Python integration via GAIA
 
@@ -99,11 +99,12 @@ gaia llm "query" --base-url http://remote:13305/api/v1
 Lemonade Server ships a browser GUI at `http://localhost:13305` for interactive model management.
 
 There is no cross-platform "serve" command, so never hard-code one. Lemonade removed the
-`lemonade-server` CLI in 10.7; GAIA pins 2026.40.0, where Windows runs `LemonadeServer.exe
+`lemonade-server` CLI in 10.7; GAIA pins 2026.44.1, where Windows runs `LemonadeServer.exe
 --silent`, Linux runs the `lemond` systemd unit, and macOS runs `lemond` directly. Resolve
 it through `gaia.llm.lemonade_launcher` — `resolve_lemonade()` / `build_start_command()` to
-launch, `describe_start_hint()` for anything shown to a user. Context size is the
-`LEMONADE_CTX_SIZE` env var, not a flag, and GAIA pins it per device profile.
+launch, `describe_start_hint()` for anything shown to a user. Modern Lemonade takes no
+context size at launch (no flag, no env var); GAIA sends its per-profile window with every
+`/load`.
 
 ## Troubleshooting matrix
 

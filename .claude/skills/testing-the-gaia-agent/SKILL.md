@@ -120,7 +120,7 @@ agent — a parallel task, a second harness — the file interleaves, and **a ne
 tool timeout reads as your session's failure**. Set `GAIA_AGENT_LOG` in the launcher:
 
 ```powershell
-$env:GAIA_AGENT_LOG = 'C:\...\gaia-tui-test\logs\agent-session.log'
+$env:GAIA_AGENT_LOG = 'C:\...\gaia-cli-test\logs\agent-session.log'
 ```
 
 Lines also carry `pid:NNNN`, so the shared default is still attributable when you forget.
@@ -135,7 +135,7 @@ user's real `~/.gaia/memory.db`, and everything you plant during a test drive be
 permanent fact about the user:
 
 ```powershell
-$env:GAIA_MEMORY_DB = 'C:\...\gaia-tui-test\memory\test-memory.db'
+$env:GAIA_MEMORY_DB = 'C:\...\gaia-cli-test\memory\test-memory.db'
 ```
 
 This is the eval-runner rule applied to interactive sessions. `gaia eval agent` already
@@ -172,6 +172,13 @@ One binary, two surfaces — always state which:
 Launching bare and typing lands your text in the Hub's filter box, not a chat
 composer. That produced a fake bug report once.
 
+For a single-turn check that needs no TUI — one tool path, one model —
+`gaia -p "<prompt>" --model <id> --output-format json` runs the flagship once,
+headless, and reports steps and tool calls. It has no conversation history and
+denies gated tools unless `--dangerously-skip-permissions`, so it replaces neither
+the follow-up canary nor the permission-gate checks. Set `GAIA_MEMORY_DB` for it
+too: it writes to the memory store like any other turn.
+
 ## Setup
 
 ### 1. Build
@@ -195,7 +202,7 @@ installed:
 
 ```bash
 uv pip install --python <venv>/Scripts/python.exe \
-  -e hub/agents/gaia/python -e hub/agents/chat/python --no-deps
+  -e hub/agents/gaia/python --no-deps
 ```
 
 `--no-deps` is mandatory: without it pip pulls `amd-gaia` from PyPI and the agent
@@ -228,7 +235,7 @@ Create `launch-tui.ps1`. Every line matters:
 
 ```powershell
 $root = '<ABSOLUTE PATH TO YOUR WORKTREE>'
-$env:PYTHONPATH = "$root\src;$root\hub\agents\chat\python;$root\hub\agents\gaia\python"
+$env:PYTHONPATH = "$root\src;$root\hub\agents\gaia\python"
 $env:GAIA_TUI_HOME = '<A PRIVATE TEMP DIR — NOT ~/.gaia/tui>'
 $env:GAIA_MEMORY_DB = '<A PRIVATE TEMP FILE — NOT ~/.gaia/memory.db>'
 $env:GAIA_AGENT_LOG = '<A PRIVATE TEMP FILE — NOT ~/.gaia/logs/gaia-agent.log>'

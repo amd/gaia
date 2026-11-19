@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+import requests
 
 from gaia.config import GaiaConfig
 from gaia.llm import lemonade_choice as choice
@@ -154,7 +155,7 @@ class TestAgentUiRouter:
     def test_target_offers_a_switch_until_someone_chooses(self, client):
         body = client.get("/api/lemonade/target", headers=self.H).json()
         assert body["mode"] == "gaia" and body["offer"] is True
-        assert "embedding model" in body["what_gaia_does"]
+        assert "leaves your server's settings" in body["what_gaia_does"]
         _save(lemonade_mode="gaia")
         assert (
             client.get("/api/lemonade/target", headers=self.H).json()["offer"] is False
@@ -211,6 +212,30 @@ class TestAgentUiRouter:
         assert GaiaConfig.load().lemonade_mode is None
         self.applied.assert_not_called()
 
+    def test_a_dead_address_is_refused_in_plain_words(self, client, monkeypatch):
+        import urllib3
+
+        conn = urllib3.exceptions.NewConnectionError(None, "Failed to establish")
+        conn.__cause__ = ConnectionRefusedError(10061, "actively refused")
+        refused = requests.exceptions.ConnectionError(
+            urllib3.exceptions.MaxRetryError(None, "/api/v1/health", conn)
+        )
+        monkeypatch.setattr(requests, "get", mock.Mock(side_effect=refused))
+        r = client.post(
+            "/api/lemonade/target",
+            json={"mode": "external", "base_url": "http://127.0.0.1:9"},
+            headers=self.H,
+        )
+        assert r.status_code == 422
+        message = r.json()["detail"]["message"]
+        assert message == (
+            "No Lemonade Server is answering at http://127.0.0.1:9/api/v1: "
+            "nothing is listening on that port. Start it, or check the address "
+            "and port."
+        )
+        assert "gaia config set" not in message
+        self.applied.assert_not_called()
+
     def test_malformed_url_is_rejected(self, client):
         r = client.post(
             "/api/lemonade/target",
@@ -248,6 +273,60 @@ class TestAgentUiRouter:
         assert r.status_code == 502
         assert "could not switch" in r.json()["detail"]
         assert GaiaConfig.load().lemonade_mode is None
+
+    ENV_URL = "http://127.0.0.1:59999/api/v1"
+
+    def _installed(self, monkeypatch, installed):
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_embedded.EmbeddedLemonade.is_installed",
+            lambda self: installed,
+        )
+
+    def test_gaias_own_over_lemonade_base_url_from_settings(self, client, monkeypatch):
+        ensured = mock.Mock(return_value={"running": True})
+        monkeypatch.setattr("gaia.daemon.client.ensure_lemonade", ensured)
+        self._installed(monkeypatch, True)
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.ENV_URL)
+        assert client.get("/api/lemonade/target", headers=self.H).json()["source"] == (
+            "env"
+        )
+        r = client.post("/api/lemonade/target", json={"mode": "gaia"}, headers=self.H)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["source"] == "gaia" and body["env_url_ignored"] == self.ENV_URL
+        assert body["env_override"] is None
+        saved = GaiaConfig.load()
+        assert saved.lemonade_mode == "gaia"
+        assert saved.lemonade_env_url_ignored == self.ENV_URL
+        # Leaving a server that wasn't GAIA's is checked end to end.
+        ensured.assert_called_once()
+
+    def test_gaias_own_over_lemonade_base_url_before_it_is_installed(
+        self, client, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "gaia.daemon.client.ensure_lemonade",
+            lambda: pytest.fail("nothing to start yet; setup installs it"),
+        )
+        self._installed(monkeypatch, False)
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.ENV_URL)
+        r = client.post("/api/lemonade/target", json={"mode": "gaia"}, headers=self.H)
+        assert r.status_code == 200, r.text
+        assert r.json()["source"] == "gaia" and r.json()["gaia_installed"] is False
+
+    def test_a_failed_switch_over_lemonade_base_url_changes_nothing(
+        self, client, monkeypatch
+    ):
+        from gaia.daemon.errors import DaemonError
+
+        self._installed(monkeypatch, True)
+        self.applied.side_effect = DaemonError("boom")
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.ENV_URL)
+        r = client.post("/api/lemonade/target", json={"mode": "gaia"}, headers=self.H)
+        assert r.status_code == 502
+        saved = GaiaConfig.load()
+        assert saved.lemonade_mode is None and saved.lemonade_env_url_ignored is None
+        assert choice.configured_source() == "env"
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +539,35 @@ class TestInitReviewRegressions:
         monkeypatch.setattr(cmd, "_hand_server_to_daemon", lambda: None)
         assert cmd._start_embedded_server() is starts
         assert GaiaConfig.load().lemonade_mode == ("gaia" if starts else "external")
+
+    @pytest.mark.parametrize("download_works", [True, False])
+    def test_a_new_version_is_downloaded_before_the_old_server_stops(
+        self, monkeypatch, download_works
+    ):
+        from gaia.llm import lemonade_embedded as emb
+
+        _save(lemonade_mode="external", lemonade_base_url=USER_URL)
+        cmd = self._cmd(yes=True, gaia_lemonade=True)
+        assert cmd._choose_lemonade() is True
+        embedded = mock.Mock()
+        embedded.status.return_value = mock.Mock(
+            unresponsive_pid=None, running=True, version="old"
+        )
+        embedded.version = "new"
+        embedded.is_installed.return_value = False
+        embedded.start.return_value = mock.Mock(version="new", port=1)
+        if not download_works:
+            embedded.install.side_effect = emb.EmbeddedLemonadeError("offline")
+        monkeypatch.setattr(emb, "EmbeddedLemonade", lambda **k: embedded)
+        monkeypatch.setattr(cmd, "_hand_server_to_daemon", lambda: None)
+
+        assert cmd._start_embedded_server() is download_works
+
+        calls = [c[0] for c in embedded.method_calls]
+        if download_works:
+            assert calls.index("install") < calls.index("stop")
+        else:
+            assert "stop" not in calls
 
     def test_force_models_never_deletes_from_the_users_server(self, monkeypatch):
         _save(lemonade_mode="external", lemonade_base_url=USER_URL)

@@ -11,6 +11,8 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
+    "jsxImportSource": "@gaia/jsx",
+    "paths": { "@gaia/jsx/*": ["./src/i18n/jsx/*"] },
     "strict": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,

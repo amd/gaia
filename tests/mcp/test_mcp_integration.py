@@ -10,11 +10,11 @@ import sys
 import urllib.error
 import urllib.request
 
-# Set UTF-8 encoding for Windows
-if sys.platform == "win32":
-    import io
 
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+def _configure_windows_stdout():
+    """Configure UTF-8 output for direct script execution without replacing stdout."""
+    if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
 
 
 def test_mcp_bridge():
@@ -105,5 +105,6 @@ def main():
 
 
 if __name__ == "__main__":
+    _configure_windows_stdout()
     success = main()
     sys.exit(0 if success else 1)

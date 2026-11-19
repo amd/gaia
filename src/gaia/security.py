@@ -6,6 +6,7 @@ Handles path validation, user prompting, persistent allow-lists,
 blocked path enforcement, write guardrails, and audit logging.
 """
 
+import atexit
 import contextlib
 import datetime
 import hashlib
@@ -17,9 +18,11 @@ import re
 import shutil
 import stat
 import tempfile
+import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from gaia.utils.terminal import stdin_is_interactive
 
@@ -80,6 +83,9 @@ def audit_shell_command(
         json.dumps(segments),
     )
 
+
+# Opens the refusal for an out-of-scope path that turned out not to exist.
+MISSING_REFUSAL_PREFIX = "Not found: "
 
 # Maximum file size the agent is allowed to write (10 MB)
 MAX_WRITE_SIZE_BYTES = 10 * 1024 * 1024
@@ -301,6 +307,10 @@ def _is_gaia_user_content(norm_path: str, state_dir: str) -> bool:
     return first_segment in GAIA_STATE_USER_CONTENT_SUBDIRS
 
 
+#: The suffixes the image tool saves; nothing else in its folder is readable.
+GENERATED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
+
+
 def _get_blocked_directories() -> Set[str]:
     """Get platform-specific directories that should never be written to.
 
@@ -385,6 +395,78 @@ BLOCKED_DIRECTORIES: Set[str] = _get_blocked_directories()
 GAIA_STATE_DIRECTORIES: Set[str] = _gaia_state_dirs()
 SECRET_DIRECTORIES: Set[str] = _secret_directories()
 
+#: How long the list of credential files is reused. A link made later still
+#: names a file already listed; only a file added to the folder waits for this.
+SECRET_LINKS_TTL_S = 10.0
+
+_secret_links_lock = threading.Lock()
+_secret_links_cache: Dict[str, Any] = {"key": None, "at": 0.0, "ids": {}}
+
+
+def _walk_secret_files(linked_only: bool) -> Dict[Tuple[int, int], Tuple[str, int]]:
+    """``(device, inode)`` -> ``(folder, size)`` for the files in every credential folder."""
+    ids: Dict[Tuple[int, int], Tuple[str, int]] = {}
+    for folder in SECRET_DIRECTORIES:
+        for current, _dirs, files in os.walk(folder):
+            for name in files:
+                try:
+                    st = os.stat(os.path.join(current, name))
+                except OSError:
+                    continue  # removed or locked mid-walk; it can't be read either
+                if not linked_only or st.st_nlink >= 2:
+                    ids[(st.st_dev, st.st_ino)] = (folder, st.st_size)
+    return ids
+
+
+def _secret_links() -> Dict[Tuple[int, int], str]:
+    """``(device, inode)`` -> folder, for every file in a credential folder."""
+    key = frozenset(SECRET_DIRECTORIES)
+    with _secret_links_lock:
+        cache = _secret_links_cache
+        if cache["key"] == key and time.monotonic() - cache["at"] < SECRET_LINKS_TTL_S:
+            return cache["ids"]
+        ids = {k: folder for k, (folder, _size) in _walk_secret_files(False).items()}
+        cache.update(key=key, at=time.monotonic(), ids=ids)
+        return ids
+
+
+def linked_secret_files() -> Dict[Tuple[int, int], Tuple[str, int]]:
+    """``(device, inode)`` -> ``(folder, size)``, for each credential file with a second name.
+
+    Listed fresh, not from the cache, so a link made a moment ago is in it.
+    A second name has the same size, so a folder-wide search looks up only
+    the files whose size matches one of these.
+    """
+    return _walk_secret_files(linked_only=True)
+
+
+def file_identity(path: Any) -> Optional[Tuple[int, int]]:
+    """``(device, inode)`` of the regular file *path* names when it has a second name."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink < 2:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def secret_folder_sharing(path: Any) -> Optional[str]:
+    """The credential folder holding the same file as *path* under another name.
+
+    A hard link is a second name for one file, so the folder check on the path
+    alone misses it. Only files with more than one name are looked up.
+
+    Args:
+        path: Path of the file about to be read or written.
+
+    Returns:
+        The credential folder, or None when *path* is not a second name for
+        one of its files.
+    """
+    identity = file_identity(path)
+    return _secret_links().get(identity) if identity else None
+
 
 def _real_path(path: Any) -> str:
     """*path* with ``~`` expanded and every symlink and ``..`` resolved.
@@ -393,6 +475,91 @@ def _real_path(path: Any) -> str:
     same path — not a literal ``<cwd>/~`` that happens to sit inside the CWD.
     """
     return os.path.realpath(os.path.expanduser(os.fspath(path)))
+
+
+def protected_directory_of(path: Any) -> Optional[str]:
+    """The system, credential or GAIA-state folder *path* resolves into, or None.
+
+    No approval or full access opens these folders to the agent.
+    """
+    real = os.path.normpath(_normalize_macos_symlinks(_real_path(path)))
+    for blocked_dir in sorted(BLOCKED_DIRECTORIES):
+        normalized = os.path.normpath(_normalize_macos_symlinks(blocked_dir))
+        if not _path_is_within(Path(real), Path(normalized)):
+            continue
+        if normalized in GAIA_STATE_DIRECTORIES and _is_gaia_user_content(
+            real, normalized
+        ):
+            continue
+        return blocked_dir
+    for secret_dir in sorted(SECRET_DIRECTORIES):
+        if _path_is_within(Path(real), Path(secret_dir)):
+            return secret_dir
+    return None
+
+
+def is_credential_file_name(name: str) -> bool:
+    """Whether a file called *name* is one the read tools refuse by name.
+
+    The same names and extensions as :meth:`PathValidator.is_read_blocked`.
+    """
+    lowered = name.lower()
+    return (
+        lowered in {n.lower() for n in SENSITIVE_FILE_NAMES}
+        or os.path.splitext(lowered)[1] in SENSITIVE_EXTENSIONS
+    )
+
+
+def names_credential_file(word: str) -> bool:
+    """Whether *word*, read as a path, names a credential file.
+
+    A word with a folder in it is judged by its last part. A bare word must
+    look like a file name: ``passwd`` is also a getent database and ``.a.key``
+    a JSON field, so those count only when such a file is really there.
+    """
+    # '\' separates folders on Windows only; elsewhere '\.env' is a regex.
+    separators = "/\\" if os.name == "nt" else "/"
+    stripped = word.rstrip(separators)
+    name = re.split(f"[{re.escape(separators)}]", stripped)[-1].lower()
+    if not name:
+        return False
+    if name != stripped.lower():
+        return is_credential_file_name(name)
+    if name in {n.lower() for n in SENSITIVE_FILE_NAMES}:
+        return "." in name
+    ext = os.path.splitext(name)[1]
+    return ext in SENSITIVE_EXTENSIONS and not name.startswith(".")
+
+
+def credential_file_read(word: str, cwd: str) -> Optional[str]:
+    """The credential file *word* reads from *cwd*, or None.
+
+    By name for what the word says, and by the real file for what it is: a
+    ``notes.txt`` symlinked to ``.env``, or hard-linked to a file in a
+    credential folder, reads that file. A folder is not a file, so a
+    virtualenv called ``.env`` stays listable.
+    """
+    if not word or "://" in word:
+        return None
+    expanded = os.path.expandvars(os.path.expanduser(word))
+    for spelling in dict.fromkeys((word, expanded)):
+        try:
+            target = Path(cwd).joinpath(spelling)
+            present = os.path.lexists(target)
+            is_dir = present and os.path.isdir(target)
+            real = os.path.realpath(target) if present else ""
+        except (OSError, ValueError) as exc:
+            logger.debug("Not a file on disk (%s)", type(exc).__name__)
+            present, is_dir, real = False, False, ""
+        if is_dir:
+            continue
+        if names_credential_file(spelling):
+            return spelling
+        if present and is_credential_file_name(os.path.basename(real)):
+            return real
+        if present and secret_folder_sharing(real):
+            return real
+    return None
 
 
 def _normalize_macos_symlinks(path_str: str) -> str:
@@ -420,10 +587,52 @@ _NO_WORKAROUND = (
     " Do not copy, move or convert it to another location to get around this."
 )
 
+# Folders a denial of the whole home folder offers instead, when they exist.
+_USER_FOLDER_NAMES = (
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Movies",
+    "Music",
+    "Pictures",
+    "Videos",
+)
+
 
 def _system_temp_roots() -> Set[str]:
     """Shared temp directories, which stay out of every agent's scope."""
     return {tempfile.gettempdir(), "/tmp", "/var/tmp"}
+
+
+def _make_private_dir(path: Path) -> None:
+    """Create *path* private, or confirm the existing one is ours to use.
+
+    Raises:
+        OSError: If *path* exists but is a link, not a directory, or (POSIX)
+            owned by another user, or cannot be created.
+    """
+    path.mkdir(mode=0o700, exist_ok=True)
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise OSError(f"{path} is not a directory")
+    # getuid is POSIX-only; the hasattr guard keeps Windows off this path.
+    if (
+        hasattr(os, "getuid")
+        and info.st_uid != os.getuid()  # pylint: disable=no-member
+    ):
+        raise OSError(f"{path} is owned by another user")
+
+
+SCRATCH_PREFIX = "gaia-scratch-"
+
+
+def is_scratch_path(path: Path) -> bool:
+    """True when *path* lies in an agent scratch directory under the temp dir."""
+    temp = Path(tempfile.gettempdir()).resolve()
+    return any(
+        parent.parent == temp and parent.name.startswith(SCRATCH_PREFIX)
+        for parent in Path(path).resolve().parents
+    )
 
 
 def stable_scratch_dir(anchor: str) -> Path:
@@ -435,6 +644,11 @@ def stable_scratch_dir(anchor: str) -> Path:
     under a shared temp dir must not be an invitation: the directory is created
     private, and one that already exists but is not a directory this user owns is
     refused, loudly, in favour of a fresh private one.
+
+    The same path is handed to every agent on *anchor*, so several chats in one
+    long-lived process share it: take it with :func:`acquire_scratch_dir` and
+    give it back with :func:`release_scratch_dir`, which says when it is safe to
+    delete.
     """
     owner = (
         str(os.getuid()) if hasattr(os, "getuid") else os.environ.get("USERNAME", "")
@@ -442,20 +656,11 @@ def stable_scratch_dir(anchor: str) -> Path:
     digest = hashlib.sha1(
         f"{owner}:{Path(anchor).resolve()}".encode("utf-8"), usedforsecurity=False
     ).hexdigest()[:12]
-    path = Path(tempfile.gettempdir()) / f"gaia-scratch-{digest}"
+    path = Path(tempfile.gettempdir()) / f"{SCRATCH_PREFIX}{digest}"
     try:
-        path.mkdir(mode=0o700, exist_ok=True)
-        info = path.lstat()
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            raise OSError("not a directory")
-        # getuid is POSIX-only; the hasattr guard keeps Windows off this path.
-        if (
-            hasattr(os, "getuid")
-            and info.st_uid != os.getuid()  # pylint: disable=no-member
-        ):
-            raise OSError("owned by another user")
+        _make_private_dir(path)
     except OSError as exc:
-        fallback = Path(tempfile.mkdtemp(prefix="gaia-scratch-"))
+        fallback = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX))
         logger.warning(
             "Scratch directory %s is unusable (%s); using %s for this session",
             path,
@@ -464,6 +669,162 @@ def stable_scratch_dir(anchor: str) -> Path:
         )
         return fallback
     return path
+
+
+_scratch_holders: Dict[str, int] = {}
+_scratch_lock = threading.Lock()
+_scratch_swept = False
+_scratch_sweeper: Optional[threading.Thread] = None
+
+#: A scratch folder no run has written to for this long belongs to no live run.
+SCRATCH_STALE_SECONDS = 24 * 3600
+
+
+def _scratch_key(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _last_activity(path: str) -> float:
+    """The newest mtime of *path* and the entries directly in it."""
+    newest = os.lstat(path).st_mtime
+    with os.scandir(path) as entries:
+        for entry in entries:
+            newest = max(newest, entry.stat(follow_symlinks=False).st_mtime)
+    return newest
+
+
+def sweep_stale_scratch_dirs() -> int:
+    """Remove this user's scratch folders untouched for a day; how many went.
+
+    A run that ended without ``cleanup()`` (the app was closed, the process was
+    killed) left its folder behind. One this process holds is kept whatever its
+    age, and one another live process still uses is re-created on its next run
+    (:func:`ensure_scratch_dir`).
+    """
+    temp = tempfile.gettempdir()
+    cutoff = datetime.datetime.now().timestamp() - SCRATCH_STALE_SECONDS
+    removed, failures = 0, []
+    with os.scandir(temp) as entries:
+        candidates = [
+            entry.path
+            for entry in entries
+            if entry.name.startswith(SCRATCH_PREFIX)
+            and entry.is_dir(follow_symlinks=False)
+        ]
+    for path in candidates:
+        with _scratch_lock:
+            if _scratch_key(Path(path)) in _scratch_holders:
+                continue
+        try:
+            info = os.lstat(path)
+            if hasattr(os, "getuid") and info.st_uid != os.getuid():
+                continue
+            if _last_activity(path) > cutoff:
+                continue
+            shutil.rmtree(path)
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            failures.append(f"{path}: {exc}")
+    if removed:
+        logger.info("Removed %d stale scratch folder(s) from %s", removed, temp)
+    if failures:
+        logger.warning(
+            "Could not remove %d stale scratch folder(s), first: %s",
+            len(failures),
+            failures[0],
+        )
+    return removed
+
+
+def _sweep_in_background() -> None:
+    try:
+        sweep_stale_scratch_dirs()
+    except OSError as exc:
+        logger.warning("Stale scratch folder sweep failed: %s", exc)
+
+
+def _remove_held_scratch_dirs() -> None:
+    """At exit: remove every scratch folder this process still holds."""
+    with _scratch_lock:
+        held = list(_scratch_holders)
+        _scratch_holders.clear()
+    for path in held:
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning("Could not remove scratch folder %s at exit: %s", path, exc)
+
+
+atexit.register(_remove_held_scratch_dirs)
+
+
+def acquire_scratch_dir(anchor: str) -> Path:
+    """:func:`stable_scratch_dir` for *anchor*, counted as held by one more agent.
+
+    Every chat in a long-lived sidecar that shares a project shares this path,
+    so one chat's cleanup must not delete it while another is still using it.
+    The first call in a process also clears stale folders, off the caller's
+    thread.
+    """
+    global _scratch_swept, _scratch_sweeper
+    path = stable_scratch_dir(anchor)
+    # A folder in use must not look stale to another process's sweep.
+    os.utime(path)
+    with _scratch_lock:
+        key = _scratch_key(path)
+        _scratch_holders[key] = _scratch_holders.get(key, 0) + 1
+        start_sweep = not _scratch_swept
+        _scratch_swept = True
+    if start_sweep:
+        _scratch_sweeper = threading.Thread(
+            target=_sweep_in_background, name="gaia-scratch-sweep", daemon=True
+        )
+        _scratch_sweeper.start()
+    return path
+
+
+def release_scratch_dir(path: Path) -> bool:
+    """Give back one hold on *path*; True when no agent in this process holds it.
+
+    A path never acquired (or already fully released) answers True, so a
+    caller that set the directory up by hand still cleans it up.
+    """
+    with _scratch_lock:
+        key = _scratch_key(path)
+        held = _scratch_holders.get(key, 0)
+        if held <= 1:
+            _scratch_holders.pop(key, None)
+            return True
+        _scratch_holders[key] = held - 1
+        return False
+
+
+def ensure_scratch_dir(path: Path) -> bool:
+    """Make sure *path* exists before anything runs in it.
+
+    The directory lives in the shared temp folder, so it can vanish under a
+    live agent: another GAIA process on the same project cleaned it up, or a
+    temp cleaner (Storage Sense, ``systemd-tmpfiles``) swept it. Re-creating it
+    is safe — it holds only throwaway files — and keeps the path the system
+    prompt already names.
+
+    Returns:
+        True if it had to be re-created, False if it was already there.
+
+    Raises:
+        OSError: If it cannot be re-created as a private directory this user
+            owns.
+    """
+    path = Path(path)
+    if path.is_dir() and not path.is_symlink():
+        return False
+    _make_private_dir(path)
+    logger.warning("Scratch directory %s had been deleted; re-created it", path)
+    return True
 
 
 #: Narrows every agent's file scope for one run; see :func:`env_allowed_paths`.
@@ -567,7 +928,9 @@ def _intersect_scopes(
     return _dedupe_paths(kept)
 
 
-def narrow_allowed_paths(paths: Optional[List[Any]]) -> Optional[List[str]]:
+def narrow_allowed_paths(
+    paths: Optional[List[Any]], *, warn: bool = True
+) -> Optional[List[str]]:
     """*paths* narrowed by ``GAIA_ALLOWED_PATHS``, or unchanged when it is unset.
 
     ``None`` stands for the validator default, the working directory; once
@@ -576,6 +939,7 @@ def narrow_allowed_paths(paths: Optional[List[Any]]) -> Optional[List[str]]:
 
     Args:
         paths: An agent's configured ``allowed_paths``.
+        warn: Log the setting's entries that fall outside *paths*.
 
     Returns:
         The narrowed list, or *paths* itself when the variable is unset.
@@ -587,7 +951,7 @@ def narrow_allowed_paths(paths: Optional[List[Any]]) -> Optional[List[str]]:
     if ceiling is None:
         return paths
     base = [Path.cwd()] if paths is None else paths
-    return [str(p) for p in _intersect_scopes(base, ceiling)]
+    return [str(p) for p in _intersect_scopes(base, ceiling, warn=warn)]
 
 
 class PathValidator:
@@ -643,10 +1007,15 @@ class PathValidator:
                 it and every later grant is held to it (see
                 :func:`env_allowed_paths`).
         """
+        from gaia.config import gaia_home
+
         self._env_scope: Optional[List[Path]] = env_allowed_paths()
         self.allowed_paths: Set[Path] = set()
-        # Readable but never writable, e.g. a loaded skill's own folder.
+        # Readable but never writable, e.g. a loaded skill's own folder. GAIA's
+        # transcripts are here unless the environment confines this session.
         self.read_only_paths: Set[Path] = set()
+        if self._env_scope is None:
+            self.read_only_paths.add(Path(_real_path(gaia_home() / "transcripts")))
         # Folders the user took away from this chat: refused, never prompted for.
         self.withheld_paths: Set[Path] = set()
         self.scratch_dir: Optional[Path] = None
@@ -663,8 +1032,6 @@ class PathValidator:
                 self.allowed_paths.add(Path(p).resolve())
 
         # Setup cache directory
-        from gaia.config import gaia_home
-
         self.cache_dir = gaia_home() / "cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.config_file = self.cache_dir / "allowed_paths.json"
@@ -678,6 +1045,9 @@ class PathValidator:
         self._on_prompt_end = on_prompt_end
         self._interactive_check = interactive_check
         self._access_prompt: Optional[Callable[[Path], bool]] = None
+        self._access_declines: Optional[Callable[[Path], bool]] = None
+        # Paths whose access prompt the user answered "no" to.
+        self._declined_paths: Set[Path] = set()
 
         # Load persisted paths
         self._load_persisted_paths()
@@ -746,9 +1116,15 @@ class PathValidator:
                 self.config_file,
             )
             return
+        from gaia.utils.file_lock import file_lock
+
         if self.config_file.exists():
             try:
-                with open(self.config_file, "r", encoding="utf-8") as f:
+                # Windows refuses an open while another process swaps the file in.
+                with (
+                    file_lock(self.config_file),
+                    open(self.config_file, "r", encoding="utf-8") as f,
+                ):
                     data = json.load(f)
                     for p in data.get("paths", []):
                         try:
@@ -787,30 +1163,31 @@ class PathValidator:
                 self.config_file,
             )
             return
+        from gaia.utils.file_lock import file_lock, write_text_atomic
+
         try:
-            data = {"paths": []}
-            if self.config_file.exists():
-                try:
-                    with open(self.config_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                except (OSError, json.JSONDecodeError) as load_err:
-                    # Corrupt or unreadable cache file — start fresh and log
-                    # so the situation is visible in debug output (CLAUDE.md
-                    # prohibits bare except/pass).
-                    logger.warning(
-                        "Allowed-paths cache %s unreadable (%s); rebuilding.",
-                        self.config_file,
-                        load_err,
-                    )
+            # Every GAIA process under this home shares the file.
+            with file_lock(self.config_file):
+                data = {"paths": []}
+                if self.config_file.exists():
+                    try:
+                        with open(self.config_file, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    except (OSError, json.JSONDecodeError) as load_err:
+                        # Corrupt or unreadable cache file — start fresh and log
+                        # so the situation is visible in debug output (CLAUDE.md
+                        # prohibits bare except/pass).
+                        logger.warning(
+                            "Allowed-paths cache %s unreadable (%s); rebuilding.",
+                            self.config_file,
+                            load_err,
+                        )
 
-            str_path = str(path)
-            if str_path not in data["paths"]:
-                data["paths"].append(str_path)
-
-                with open(self.config_file, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-
-                logger.info(f"Persisted new allowed path: {path}")
+                str_path = str(path)
+                if str_path not in data["paths"]:
+                    data["paths"].append(str_path)
+                    write_text_atomic(self.config_file, json.dumps(data, indent=2))
+                    logger.info(f"Persisted new allowed path: {path}")
         except Exception as e:
             logger.error(f"Failed to save allowed path to {self.config_file}: {e}")
 
@@ -855,6 +1232,18 @@ class PathValidator:
             return
         self.allowed_paths.add(Path(path).resolve())
         logger.debug(f"Added allowed path: {path}")
+
+    def remove_allowed_path(self, path: str) -> None:
+        """Withdraw a grant made by :meth:`add_allowed_path` for exactly *path*.
+
+        A wider folder that holds *path* stays granted; use
+        :meth:`withhold_path` to refuse *path* despite one.
+
+        Args:
+            path: The path that was granted.
+        """
+        self.allowed_paths.discard(Path(path).resolve())
+        logger.debug("Removed allowed path: %s", path)
 
     def add_read_only_path(self, path: str) -> None:
         """Let reads under *path* through without widening the write scope.
@@ -922,9 +1311,54 @@ class PathValidator:
     def _in_read_only_scope(self, path: str) -> bool:
         """Whether *path*, symlinks and ``..`` resolved, is under a read-only grant."""
         real = Path(_real_path(path))
-        return any(_path_is_within(real, root) for root in self.read_only_paths)
+        if any(_path_is_within(real, root) for root in self.read_only_paths):
+            return True
+        return self.is_generated_image(path)
 
-    def set_access_prompt(self, prompt: Optional[Callable[[Path], bool]]) -> None:
+    def is_generated_image(self, path: str) -> bool:
+        """Whether *path* is an image GAIA's image tool saved, so reads may reach it.
+
+        GAIA's state folder stays write-blocked; this opens reads of one kind
+        of file in one folder. *path* must resolve (``..``, links and 8.3
+        names followed) to a regular, singly linked file with an image suffix
+        directly inside :func:`gaia.config.generated_images_dir`, and that
+        folder must not itself be a link out of GAIA's state folder.
+
+        Args:
+            path: The path a tool was given.
+
+        Returns:
+            True only when every condition holds; False on any doubt.
+        """
+        import gaia.config as _config
+
+        try:
+            real = Path(_real_path(path))
+            if real.suffix.lower() not in GENERATED_IMAGE_SUFFIXES:
+                return False
+            base = Path(_real_path(_config.GAIA_CONFIG_DIR))
+            folder = base.joinpath(*_config.GENERATED_IMAGES_SUBDIR.parts)
+            # cache/sd/images re-pointed by a link is no longer GAIA's folder.
+            if os.path.normcase(_real_path(folder)) != os.path.normcase(str(folder)):
+                return False
+            if os.path.normcase(str(real.parent)) != os.path.normcase(str(folder)):
+                return False
+            info = os.lstat(real)
+            # A hard link could name a file that lives elsewhere.
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                return False
+        except (OSError, ValueError) as exc:
+            logger.debug("Not a generated image %s: %s", path, exc)
+            return False
+        if not self.in_env_scope(real) or self.withheld_root(str(real)) is not None:
+            return False
+        return not self.is_read_blocked(str(real))[0]
+
+    def set_access_prompt(
+        self,
+        prompt: Optional[Callable[[Path], bool]],
+        declines: Optional[Callable[[Path], bool]] = None,
+    ) -> None:
         """Ask through *prompt* instead of stdin when a path is out of scope.
 
         Hosts whose user is not on this process's stdin (Agent UI, TUI) pass a
@@ -936,8 +1370,29 @@ class PathValidator:
 
         Args:
             prompt: The callable, or None to restore the stdin prompt.
+            declines: Optional check, without asking anyone, that *prompt*
+                would refuse a path; refusal messages never suggest such a path.
         """
         self._access_prompt = prompt
+        self._access_declines = declines if prompt is not None else None
+
+    def note_access_answer(self, path: Path, declined: bool) -> None:
+        """Record whether the user said no to *path*'s access prompt.
+
+        A timed-out prompt is not a no, so it clears an earlier one too.
+        """
+        resolved = Path(_real_path(str(path))).resolve()
+        if declined:
+            self._declined_paths.add(resolved)
+        else:
+            self._declined_paths.discard(resolved)
+
+    def _declined_by_user(self, path: str) -> bool:
+        target = Path(_real_path(path)).resolve()
+        return any(
+            target == declined or declined in target.parents
+            for declined in self._declined_paths
+        )
 
     def _unaskable_reason(self, path: Path) -> str:
         """Why *path* stays refused whatever the user answers, or "".
@@ -1041,6 +1496,39 @@ class PathValidator:
                 )
         return ""
 
+    def _folders_inside_home_hint(self, path: Path) -> str:
+        """Folders to ask for instead when *path* holds the whole home folder.
+
+        Args:
+            path: A symlink-resolved path refused as too broad.
+
+        Returns:
+            A sentence naming the user folders an approval could grant, or ""
+            when *path* does not hold the home folder or nobody can approve.
+            A folder the host would refuse without asking is never named.
+        """
+        home = Path.home().resolve()
+        if not _path_is_within(home, path):
+            return ""
+        if self._access_prompt is None and not self._can_prompt():
+            return ""
+        declines = self._access_declines
+        askable = []
+        for name in _USER_FOLDER_NAMES:
+            folder = home / name
+            if not folder.is_dir():
+                continue
+            real = Path(_real_path(folder))
+            if self._unaskable_reason(real) or (declines and declines(real)):
+                continue
+            askable.append(f"'{folder}'")
+        if not askable:
+            return ""
+        return (
+            " A folder inside the home folder can still be approved: use the "
+            f"specific folder you need instead, such as {', '.join(askable)}."
+        )
+
     def access_denied_message(self, path: str) -> str:
         """The error for an out-of-scope *path*, with a remedy this host offers.
 
@@ -1059,11 +1547,21 @@ class PathValidator:
                 "the user it can be added back under Environment in the session "
                 "panel."
             )
+        if self._declined_by_user(path):
+            return (
+                f"Access denied: the user declined access to '{path}' when asked. "
+                "The file is fine; GAIA may not read it. Don't reach it, or what "
+                "it holds, another way. Tell the user, and offer to read it if "
+                "they attach it to this chat or allow it when asked again."
+            )
         message = f"Access denied: '{path}' is not in allowed paths."
         real_path = Path(_real_path(path))
         unaskable = self._unaskable_reason(real_path)
         if unaskable:
-            remedy = f" No approval can grant it: {unaskable.rstrip('.')}."
+            remedy = (
+                f" No approval can grant it: {unaskable.rstrip('.')}."
+                f"{self._folders_inside_home_hint(real_path)}"
+            )
         elif self._access_prompt is not None or self._can_prompt():
             remedy = (
                 " To use it, ask again and approve access when prompted, or "
@@ -1265,6 +1763,15 @@ class PathValidator:
                         f"read from it.",
                     )
 
+            shared = secret_folder_sharing(real_path)
+            if shared:
+                return (
+                    True,
+                    f"Read blocked: '{real_path}' is the same file as one inside "
+                    f"'{shared}', which holds credentials. The agent is not "
+                    f"allowed to read it.",
+                )
+
             return (False, "")
 
         except Exception as e:
@@ -1302,7 +1809,8 @@ class PathValidator:
             # Unreadable is not missing; let the user decide as before.
             return ""
         message = (
-            f"Not found: '{path}' does not exist, so access was not requested. "
+            f"{MISSING_REFUSAL_PREFIX}'{path}' does not exist, so access was not "
+            "requested. "
             "Check the name and folder, or ask the user where the file is."
         )
         candidates = self._in_scope_files_named(real_path.name)
@@ -1425,6 +1933,14 @@ class PathValidator:
                         f"directory '{secret_dir}', which holds credentials and "
                         f"tool configuration. Edit it yourself if you need to.",
                     )
+            shared = secret_folder_sharing(real_path)
+            if shared:
+                return (
+                    True,
+                    f"Write blocked: '{real_path}' is the same file as one inside "
+                    f"'{shared}', which holds credentials and tool configuration. "
+                    f"Edit it yourself if you need to.",
+                )
 
             # Check sensitive file names
             if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
@@ -1633,7 +2149,7 @@ def backup_file(path: str, cache_dir: Optional[Path] = None) -> Optional[str]:
     # ".bak" goes LAST. Keeping the original extension made a backup of
     # tests/test_x.py land as test_x.<stamp>.bak.py, which pytest
     # collects and cannot import, so editing a test file broke the whole
-    # suite (#3747). Nothing globs *.bak.
+    # suite. Nothing globs *.bak.
     def _backup_at(moment: datetime.datetime) -> Path:
         return mirror / f"{real_path.name}.{moment:%Y%m%d_%H%M%S_%f}.bak"
 

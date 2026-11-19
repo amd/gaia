@@ -4,13 +4,6 @@ description: "Voice interaction with ASR, TTS, and voice chat orchestration"
 icon: "headphones"
 ---
 
-<Warning>
-The direct OpenAI and LiteLLM provider adapters have been removed. Any
-`use_chatgpt` field shown below is a migration-error shim: setting it to `True`
-raises before inference. Use the [Lemonade gateway path](/sdk/sdks/llm#gateway-migration).
-</Warning>
-
-
 <Info>
   **Source Code:** [`src/gaia/audio/`](https://github.com/amd/gaia/blob/main/src/gaia/audio/)
 </Info>
@@ -87,7 +80,6 @@ class AudioClient:
         enable_tts=True,
         logging_level="INFO",
         use_claude=False,
-        use_chatgpt=False,
         system_prompt=None,
         model=None,
         claude_model="claude-sonnet-5",
@@ -105,7 +97,6 @@ class AudioClient:
             enable_tts: Enable text-to-speech output
             logging_level: Logging level (DEBUG, INFO, WARNING, ERROR)
             use_claude: Use Claude API for LLM
-            use_chatgpt: Removed; True raises migration guidance
             system_prompt: Default system prompt for LLM
             model: Model ID for the local/OpenAI provider (None = provider default)
             claude_model: Claude model ID, used when use_claude=True
@@ -122,21 +113,10 @@ class AudioClient:
 
         Example:
             >>> async def process_message(text: str):
-            ...     await audio.process_voice_input(text)
+            ...     reply = audio.llm_client.generate(text)
+            ...     print(reply)
+            ...     await audio.speak_text(reply)
             >>> await audio.start_voice_chat(process_message)
-        """
-        pass
-
-    async def process_voice_input(self, text: str, get_stats_callback=None):
-        """
-        Process transcribed voice input and get AI response.
-
-        Capture stays paused until streamed playback has fully finished;
-        transcriptions queued meanwhile are discarded before capture resumes.
-
-        Args:
-            text: Transcribed text to process
-            get_stats_callback: Optional callback for performance stats
         """
         pass
 
@@ -321,7 +301,9 @@ async def main():
     )
 
     async def process_message(text):
-        await audio.process_voice_input(text)
+        reply = audio.llm_client.generate(text)
+        print(reply)
+        await audio.speak_text(reply)
 
     await audio.start_voice_chat(process_message)
 

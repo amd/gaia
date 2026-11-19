@@ -66,8 +66,8 @@ To list available input devices, use `WhisperAsr.list_audio_devices()` directly 
 <Note>
 `WhisperAsr` is the **live microphone** path only — it has no file-transcription
 method. To transcribe a recording you already have, use the agent's
-`transcribe_media` tool ([Transcription & Meeting Notes](/guides/transcription)),
-which runs on Lemonade and writes a plain-text transcript to disk. It returns
+`transcribe_media` tool ([Transcription & Recording Analysis](/guides/transcription)),
+which also takes a video link, runs on Lemonade and writes a plain-text transcript to disk. It returns
 the transcript's path, duration, language, and the words Whisper itself was
 least confident about — not timestamps or speaker labels in the result itself.
 `transcribe_media` also runs acoustic speaker diarization on the same audio
@@ -126,7 +126,7 @@ if asr.asr_error:
 
 ## Speaker Diarization (Who Spoke When)
 
-**Import:** `from gaia.audio.diarize import diarize, is_available, ensure_ready`
+**Import:** `from gaia.audio.diarize import diarize, diarize_in_child, is_available, ensure_ready`
 
 <Note>
 `diarize()` runs pyannote's segmentation network and a WeSpeaker embedding
@@ -159,6 +159,12 @@ threshold (`cluster_threshold`, default `0.65`) that is sensitive to tune —
 `0.50` over-split the same recording into 10 clusters, `0.75` collapsed it to
 2. Very short clips can miss a voice entirely: a 90-second clip where a
 second speaker only interjected a few words came back as one speaker.
+
+`sherpa-onnx` holds Python's GIL for the whole run, so `diarize()` blocks every
+other thread in the process: about 5 minutes for an 84-minute recording. In a
+server or UI process, call `diarize_in_child()` instead. It takes the same
+arguments except `progress`, returns the same spans, runs in a child process, and kills that
+process when the tool is stopped.
 
 `diarize()` returns acoustic labels only — `Speaker 1`, `Speaker 2`, and so
 on. Turning those into real names is a separate, text-based inference step

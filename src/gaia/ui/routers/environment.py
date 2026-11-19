@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""The session panel's Environment (#5276) and Outputs (#5277) endpoints."""
+"""The session panel's Environment (#5276), Outputs (#5277) and Agent info (#440)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,9 @@ from pydantic import BaseModel, Field
 
 from gaia.agents.base import file_snapshots
 from gaia.logger import get_logger
+from gaia.security import AllowedPathsEnvError
 
+from .. import session_capabilities
 from .. import session_environment as env
 from .. import session_outputs
 from ..database import ChatDatabase
@@ -30,6 +32,17 @@ class InternetRequest(BaseModel):
     on: bool
 
 
+async def _describe(db: ChatDatabase, session: dict) -> dict:
+    """The panel's view of *session*; a bad ``GAIA_ALLOWED_PATHS`` is a 500 naming it.
+
+    An empty list would read as "this chat can open nothing" with no reason.
+    """
+    try:
+        return await asyncio.to_thread(env.describe, db, session)
+    except AllowedPathsEnvError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 def _session(db: ChatDatabase, session_id: str) -> dict:
     session = db.get_session(session_id)
     if session is None:
@@ -41,7 +54,7 @@ def _session(db: ChatDatabase, session_id: str) -> dict:
 async def get_environment(session_id: str, db: ChatDatabase = Depends(get_db)):
     """The folders this chat may touch and whether it may use the internet."""
     session = _session(db, session_id)
-    return await asyncio.to_thread(env.describe, db, session)
+    return await _describe(db, session)
 
 
 @router.post("/api/sessions/{session_id}/environment/folders")
@@ -54,7 +67,17 @@ async def add_folder(
         await asyncio.to_thread(env.add_folder, db, session_id, body.path)
     except env.EnvironmentChangeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    return await asyncio.to_thread(env.describe, db, session)
+    return await _describe(db, session)
+
+
+@router.post("/api/environment/folders/check")
+async def check_folder(body: FolderRequest) -> dict:
+    """Why a chat can't be given a folder, or None: the add step's own rule."""
+    try:
+        await asyncio.to_thread(env.check_folder, body.path)
+    except env.EnvironmentChangeError as e:
+        return {"refusal": str(e)}
+    return {"refusal": None}
 
 
 @router.post("/api/sessions/{session_id}/environment/folders/remove")
@@ -67,7 +90,7 @@ async def remove_folder(
         await asyncio.to_thread(env.remove_folder, db, session_id, body.path)
     except env.EnvironmentChangeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    return await asyncio.to_thread(env.describe, db, session)
+    return await _describe(db, session)
 
 
 @router.put("/api/sessions/{session_id}/environment/internet")
@@ -80,7 +103,9 @@ async def set_internet(
         await asyncio.to_thread(env.set_internet, db, session_id, body.on)
     except env.EnvironmentChangeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    return await asyncio.to_thread(env.describe, db, session)
+    except env.RelayedSwitchError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return await _describe(db, session)
 
 
 @router.get("/api/sessions/{session_id}/outputs")
@@ -91,3 +116,16 @@ async def get_outputs(session_id: str, db: ChatDatabase = Depends(get_db)):
         return await asyncio.to_thread(session_outputs.list_outputs, db, session_id)
     except file_snapshots.SnapshotError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/api/sessions/{session_id}/capabilities")
+async def get_capabilities(session_id: str, db: ChatDatabase = Depends(get_db)):
+    """The tools this chat's agent has: name, description and category each.
+
+    409 when the agent isn't running yet; never an empty list in its place.
+    """
+    session = _session(db, session_id)
+    try:
+        return await asyncio.to_thread(session_capabilities.describe, session)
+    except session_capabilities.CapabilitiesError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e

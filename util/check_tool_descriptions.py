@@ -5,7 +5,9 @@
 
 A tool's docstring is its schema, and the whole schema set is re-sent on every
 model call — so an over-long docstring is paid for on every step of every turn,
-for the life of the session. The budgets live in
+for the life of the session. "Every tool" includes the ones a bundled skill
+registers from its ``tools.py`` when loaded: they are offered the same way, so
+they are held to the same budget. The budgets live in
 ``gaia.agents.base.tools`` (``MAX_TOOL_DESCRIPTION_CHARS``,
 ``MAX_TOOL_PARAM_DESCRIPTION_CHARS``); this check fails when a tool exceeds one,
 naming the tool, its length, and the budget.
@@ -18,7 +20,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 
 def find_violations(
@@ -55,6 +57,42 @@ def find_violations(
     return violations
 
 
+def bundled_skill_tool_schemas(agent: Any) -> List[dict]:
+    """Schemas of every tool the flagship's bundled skills provide.
+
+    Registers each tool-providing skill on *agent* just long enough to render
+    its schemas, then removes it again, leaving the agent as it was.
+    """
+    from gaia_agent.agent import _bundled_skill_roots
+
+    from gaia.skills.format import SKILL_FILENAME, parse_skill_file
+    from gaia.skills.loader import register_skill_tools, unregister_skill_tools
+    from gaia.skills.manager import ROOT_AGENT_BUNDLED
+
+    schemas: List[dict] = []
+    seen: set[str] = set()
+    for root in _bundled_skill_roots():
+        for skill_dir in sorted(Path(root).iterdir()):
+            skill_file = skill_dir / SKILL_FILENAME
+            if not skill_file.is_file() or skill_dir.name in seen:
+                continue
+            seen.add(skill_dir.name)
+            skill = parse_skill_file(
+                skill_file, root=ROOT_AGENT_BUNDLED, read_only=True
+            )
+            if not skill.gaia.tools:
+                continue
+            entries = register_skill_tools(skill)
+            try:
+                agent._instance_tools.update(entries)
+                schemas += agent._build_openai_tool_schemas(filter_to=list(entries))
+            finally:
+                for name in entries:
+                    agent._instance_tools.pop(name, None)
+                unregister_skill_tools(skill.name)
+    return schemas
+
+
 def run_check() -> int:
     """Check the flagship's tool schemas. Returns 0 when all are in budget."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -67,7 +105,10 @@ def run_check() -> int:
         TOOL_DESCRIPTION_ALLOWANCES,
     )
 
+    from gaia.eval.tool_cost import build_full_agent_skeleton
+
     schemas = flagship_tool_schemas()
+    schemas += bundled_skill_tool_schemas(build_full_agent_skeleton())
     violations = find_violations(
         schemas,
         MAX_TOOL_DESCRIPTION_CHARS,
@@ -87,7 +128,7 @@ def run_check() -> int:
         return 1
 
     print(
-        f"[OK] All {len(schemas)} flagship tool schemas within "
+        f"[OK] All {len(schemas)} flagship and bundled-skill tool schemas within "
         f"{MAX_TOOL_DESCRIPTION_CHARS}/{MAX_TOOL_PARAM_DESCRIPTION_CHARS} chars."
     )
     return 0

@@ -7,6 +7,7 @@ in tests/unit/rag/test_retrieval_bench_harness.py.
 """
 
 import hashlib
+import io
 import json
 import re
 
@@ -168,6 +169,30 @@ def test_a_chunk_may_start_before_the_previous_one_only_if_it_runs_through_it():
     assert unlocated == [2]
 
 
+def test_an_overlap_through_a_split_tail_beats_a_later_repeat_of_its_text():
+    # Filings repeat whole passages; the in-order copy far ahead is the wrong one.
+    text = (
+        "alpha beta gamma delta epsilon zeta eta theta. "
+        "Appendix. gamma delta epsilon zeta again later."
+    )
+    doc = DocText.from_full_text("d.pdf", text)
+    paths, docs = {"d.pdf": [0, 1, 2, 3]}, {"d.pdf": doc}
+    chunks = ["alpha beta gamma", "delta", "gamma delta epsilon zeta", "eta theta."]
+    spans, unlocated = locate_chunks(chunks, paths, docs)
+    assert unlocated == []
+    assert spans[2].start == text.index("gamma")
+    # Without the near copy, the following chunks would all be unlocated.
+    assert spans[3].start == text.index("eta theta.")
+    # A chunk only the later repeat can explain is still placed there.
+    chunks[2] = "gamma delta epsilon zeta again"
+    spans, unlocated = locate_chunks(chunks[:3], {"d.pdf": [0, 1, 2]}, docs)
+    assert unlocated == [] and spans[2].start == text.rindex("gamma")
+    # And text that is nowhere in the document stays unlocated.
+    chunks[2] = "gamma delta omega"
+    _, unlocated = locate_chunks(chunks, paths, docs)
+    assert 2 in unlocated
+
+
 def test_a_quote_resolves_only_on_its_labelled_page():
     doc = DocText.from_full_text("d.pdf", PAGED)
     ev = resolve_evidence(Evidence("d.pdf", 2, "pump rate is 42"), doc)
@@ -193,7 +218,7 @@ def test_a_chunk_hits_when_it_covers_half_the_quote_or_the_labelled_page():
 
 def test_every_manifest_file_is_pinned_and_checksummed():
     manifest = sources.load_manifest()
-    assert set(manifest) == {"financebench", "amd", "arxiv", "xquad", "wikipedia"}
+    assert set(manifest) == {"amd", "arxiv", "xquad", "wikipedia"}
     for name, spec in manifest.items():
         assert spec["license"], name
         for rel, entry in spec["files"].items():
@@ -226,6 +251,81 @@ def test_fetch_refuses_a_file_whose_checksum_does_not_match(tmp_path, monkeypatc
     (tmp_path / "demo" / "a.txt").write_bytes(b"edited bytes")
     with pytest.raises(sources.SourceError, match="Checksum mismatch"):
         sources.fetch("demo", "a.txt", manifest)
+
+
+def test_drop_stale_removes_only_files_the_manifest_no_longer_pins(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(sources.CACHE_ENV, str(tmp_path))
+    current, old = b"current bytes", b"previous upstream revision"
+
+    def pin(data):
+        return {
+            "url": "https://example.invalid/x",
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+
+    manifest = {
+        "demo": {
+            "files": {
+                "kept.pdf": pin(current),
+                "repinned.pdf": pin(current),
+                "absent.pdf": pin(current),
+            }
+        }
+    }
+    (tmp_path / "demo").mkdir()
+    (tmp_path / "demo" / "kept.pdf").write_bytes(current)
+    (tmp_path / "demo" / "repinned.pdf").write_bytes(old)
+    (tmp_path / "demo" / "unlisted.pdf").write_bytes(old)
+
+    assert sources.drop_stale(manifest) == [tmp_path / "demo" / "repinned.pdf"]
+    assert (tmp_path / "demo" / "kept.pdf").read_bytes() == current
+    assert (tmp_path / "demo" / "unlisted.pdf").exists()
+    assert sources.drop_stale(manifest) == []
+
+
+@pytest.mark.parametrize(
+    "url, browser",
+    [
+        ("https://www.amd.com/content/dam/amd/en/x.pdf", True),
+        ("https://arxiv.org/pdf/1706.03762v7", False),
+        ("https://huggingface.co/datasets/x/resolve/abc/y.parquet", False),
+        ("https://raw.githubusercontent.com/x/y/z.json", False),
+    ],
+)
+def test_each_host_gets_the_user_agent_it_serves(url, browser):
+    agent = sources.user_agent_for(url)
+    assert ("Chrome/" in agent) is browser
+    assert ("gaia-eval-retrieval" in agent) is not browser
+
+
+def test_fetch_sends_the_host_specific_user_agent(tmp_path, monkeypatch):
+    monkeypatch.setenv(sources.CACHE_ENV, str(tmp_path))
+    data = b"pdf bytes"
+    url = "https://www.amd.com/content/dam/amd/en/x.pdf"
+    manifest = {
+        "amd": {
+            "files": {"x.pdf": {"url": url, "sha256": hashlib.sha256(data).hexdigest()}}
+        }
+    }
+    sent = []
+
+    class _Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def _urlopen(request, timeout):
+        sent.append((request.full_url, request.get_header("User-agent")))
+        return _Response(data)
+
+    monkeypatch.setattr(sources.urllib.request, "urlopen", _urlopen)
+    assert sources.fetch("amd", "x.pdf", manifest).read_bytes() == data
+    assert sent == [(url, sources.user_agent_for(url))]
+    assert "Chrome/" in sent[0][1]
 
 
 def test_offline_fetch_of_a_missing_file_names_how_to_download_it(
@@ -417,6 +517,49 @@ def test_cli_rejects_a_suite_or_flag_of_the_other_component(argv, message):
     with pytest.raises(SystemExit) as exc:
         cli._check_retrieval_args(args)  # pylint: disable=protected-access
     assert message in str(exc.value)
+
+
+def test_financebench_is_gone_from_the_suite_and_the_cli():
+    assert "financebench" not in runner.SUITES["full"].datasets
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["eval", "retrieval", "--financebench-docs", "3"])
+
+
+def test_an_unknown_dataset_is_refused_before_anything_runs(tmp_path):
+    with pytest.raises(ValueError) as exc:
+        runner.check_datasets(["repo_docs", "financebench"])
+    message = str(exc.value)
+    assert "financebench" in message and "repo_docs, technical_docs, xquad" in message
+    out = tmp_path / "out"
+    opts = runner.RunOptions(
+        suite=runner.SUITES["pr"], out_dir=out, datasets=["financebench"]
+    )
+    with pytest.raises(ValueError, match="Unknown retrieval dataset"):
+        runner.run(opts)
+    assert not out.exists()
+
+
+def test_cli_names_the_valid_datasets_for_an_unknown_one(monkeypatch):
+    root = sources.repo_root()
+    monkeypatch.setattr(sources, "_repo_root", None)
+    monkeypatch.setattr(runner, "run", lambda opts: pytest.fail("the run started"))
+    args = cli.build_parser().parse_args(
+        [
+            "eval",
+            "retrieval",
+            "--suite",
+            "full",
+            "--datasets",
+            "financebench,xquad",
+            "--repo-root",
+            str(root),
+        ]
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli._handle_eval_retrieval(args)  # pylint: disable=protected-access
+    message = str(exc.value)
+    assert message.startswith("gaia eval retrieval: Unknown retrieval dataset(s): ")
+    assert "financebench" in message and "repo_docs, technical_docs, xquad" in message
 
 
 def test_cli_code_component_keeps_its_own_tolerance():

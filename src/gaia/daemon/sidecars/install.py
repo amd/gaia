@@ -35,6 +35,7 @@ a remedy.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -53,13 +54,12 @@ from gaia.daemon.sidecars.errors import (
     UnknownAgentError,
 )
 from gaia.logger import get_logger
+from gaia.retired_agents import RETIRED_AGENT_IDS
 
 logger = get_logger(__name__)
 
-# Ids queued for install but whose worker has not yet entered
-# ``installer.install`` (and therefore not yet claimed ``_install_slot``).
-# Closes the window where two POSTs both pass the busy check and the second
-# worker's InstallInProgressError would clobber the first one's progress.
+# Ids with an install or uninstall in flight on this daemon, from the request
+# until its worker finishes. A second POST for one of them is refused at once.
 _QUEUE_LOCK = threading.Lock()
 _QUEUED: set = set()
 
@@ -368,6 +368,43 @@ def _release_slot(agent_id: str) -> None:
         _QUEUED.discard(agent_id)
 
 
+def _claim_cross_process_slot(agent_id: str, install_root: Optional[Path], action: str):
+    """The installer's slot for *agent_id*, held across every GAIA process.
+
+    Raises:
+        InstallBusyError: another process (the Agent UI, ``gaia hub``) holds it.
+        InstallFailedError: its lock file could not be created.
+    """
+    from gaia.utils.file_lock import FileLockError
+
+    installer_mod = _installer()
+    try:
+        return installer_mod.claim_install_slot(agent_id, install_root)
+    except installer_mod.InstallInProgressError as exc:
+        raise InstallBusyError(f"cannot {action} '{agent_id}': {exc}") from exc
+    except FileLockError as exc:
+        raise InstallFailedError(f"cannot {action} '{agent_id}': {exc}") from exc
+
+
+def _read_process(proc, what: str, read):
+    """*read()* for one process, or None when this user cannot see it."""
+    import psutil
+
+    try:
+        return read()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return None
+    except SystemError as e:
+        # psutil's macOS cmdline read can raise this for a live process.
+        logger.warning(
+            "install: could not read the %s of pid %s (%s); judging it by the rest",
+            what,
+            proc.pid,
+            e,
+        )
+        return None
+
+
 def assert_no_live_process_in(install_dir: Path, agent_id: str) -> None:
     """Refuse to mutate *install_dir* while any live process runs from it.
 
@@ -383,26 +420,26 @@ def assert_no_live_process_in(install_dir: Path, agent_id: str) -> None:
 
     target = install_dir.resolve()
     survivors = []
-    for proc in psutil.process_iter(["pid", "exe", "cmdline"]):
-        try:
-            info = proc.info
-            # exe + argv[0] catch a frozen sidecar (the daemon always spawns it
-            # by absolute path); argv[1] catches an interpreter running a script
-            # from the dir. Later argv entries are deliberately NOT scanned — a
-            # log path passed to `tail` must not block an install. Relative argv
-            # would need the process's cwd and is not what the daemon produces.
-            candidates = [info.get("exe") or ""] + list(info.get("cmdline") or [])[:2]
-            for candidate in candidates:
-                if not candidate:
-                    continue
-                try:
-                    Path(candidate).resolve().relative_to(target)
-                except (ValueError, OSError):
-                    continue
-                survivors.append(info.get("pid"))
-                break
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            continue
+    # Attributes are read one at a time: inside process_iter, a read error
+    # ends the whole scan.
+    for proc in psutil.process_iter():
+        # exe + argv[0] catch a frozen sidecar (the daemon always spawns it
+        # by absolute path); argv[1] catches an interpreter running a script
+        # from the dir. Later argv entries are deliberately NOT scanned — a
+        # log path passed to `tail` must not block an install. Relative argv
+        # would need the process's cwd and is not what the daemon produces.
+        exe = _read_process(proc, "executable", proc.exe)
+        argv = _read_process(proc, "command line", proc.cmdline)
+        candidates = [exe or ""] + list(argv or [])[:2]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                Path(candidate).resolve().relative_to(target)
+            except (ValueError, OSError):
+                continue
+            survivors.append(proc.pid)
+            break
     if survivors:
         unique = sorted(set(survivors))
         raise StopFailedError(
@@ -502,7 +539,9 @@ def start_install(
     Raises:
         UnknownAgentError: no sidecar spec — the daemon could not run it.
         AgentTrustRequiredError: non-verified agent without ``trusted=True``.
-        InstallBusyError: an install for this id is already running.
+        InstallBusyError: an install for this id is already running, here or
+            in another GAIA process.
+        InstallFailedError: the install slot's lock file could not be created.
         HubUnavailableError: the hub manifest could not be fetched.
         StopFailedError: a running sidecar survived the pre-install stop.
     """
@@ -546,7 +585,11 @@ def start_install(
         raise HubUnavailableError(str(exc)) from exc
 
     _claim_slot(agent_id)
+    slot = None
     try:
+        # Before the sidecar stops: another GAIA process installing this id
+        # must refuse this request, not have the agent stopped under it.
+        slot = _claim_cross_process_slot(agent_id, install_root, "install")
         # Stop the sidecar up front so a survivor is a SYNCHRONOUS error the
         # caller sees on this request; the worker re-takes the hold for the
         # duration of the actual mutation.
@@ -566,12 +609,15 @@ def start_install(
                 base_url=base_url,
                 fetcher=fetcher,
                 install_root=install_root,
+                slot=slot,
             )
         )
     except BaseException:
         # Anything that stops the worker from ever running (including a failure
         # to spawn the thread) must release the slot, or install/uninstall of
         # this id would be wedged for the life of the daemon.
+        if slot is not None:
+            slot.release()
         _release_slot(agent_id)
         raise
     return {"agent_id": agent_id, "status": "queued", "version": version}
@@ -587,8 +633,12 @@ def _run_install(
     base_url: Optional[str],
     fetcher,
     install_root: Optional[Path],
+    slot,
 ) -> None:
-    """Install worker. The failure is recorded in progress AND logged loudly."""
+    """Install worker; owns *slot* and releases it however it ends.
+
+    The failure is recorded in progress AND logged loudly.
+    """
     installer_mod = _installer()
     try:
         # The hold spans the whole download+replace so no ensure can respawn
@@ -602,15 +652,15 @@ def _run_install(
                 base_url=base_url,
                 fetcher=fetcher,
                 install_root=install_root,
+                slot=slot,
             )
         logger.info(
             "install: %s %s installed at %s", agent_id, result.version, result.path
         )
     except Exception as exc:  # noqa: BLE001 - terminal state is the return channel
-        # installer.install() records status="failed" for its own errors, but
-        # not for InstallInProgressError (another process holds the slot).
-        # Force a terminal state either way so a poller can never hang on
-        # "queued" forever.
+        # installer.install() records status="failed" for its own errors; an
+        # error raised outside it (the sidecar hold) records nothing. Force a
+        # terminal state either way so a poller can never hang on "queued".
         state = installer_mod.get_install_status(agent_id)
         if state is None or state.get("status") not in ("failed", "completed"):
             installer_mod._set_progress(  # noqa: SLF001 - terminal state for the poller
@@ -623,7 +673,10 @@ def _run_install(
             )
         logger.error("install: %s failed: %s", agent_id, exc)
     finally:
-        _release_slot(agent_id)
+        try:
+            slot.release()
+        finally:
+            _release_slot(agent_id)
 
 
 def install_status(agent_id: str) -> Optional[Dict[str, Any]]:
@@ -667,20 +720,135 @@ def uninstall(
     # stops this removal from deleting a just-completed install).
     _claim_slot(agent_id, action="uninstall")
     try:
-        with sidecar_stopped(registry, agent_id, install_root):
-            installer_mod.uninstall(agent_id, install_root=install_root)
+        # Before the sidecar stops, so an install in another process refuses
+        # this request instead of having the agent stopped under it.
+        with _claim_cross_process_slot(agent_id, install_root, "uninstall") as slot:
+            with sidecar_stopped(registry, agent_id, install_root):
+                installer_mod.uninstall(agent_id, install_root=install_root, slot=slot)
     except installer_mod.NotInstalledError as exc:
         # The installer names what failed and where to look; the third part of
         # the fail-loudly contract — what to DO next — is added here.
         raise AgentNotInstalledError(
             f"{exc} See what is installed with `gaia hub list --installed`."
         ) from exc
-    except installer_mod.InstallInProgressError as exc:
-        # Another process (the Agent UI, `gaia hub`) is installing it.
-        raise InstallBusyError(f"cannot uninstall '{agent_id}': {exc}") from exc
     except installer_mod.InstallError as exc:
         raise InstallFailedError(str(exc)) from exc
     finally:
         _release_slot(agent_id)
     installer_mod.clear_progress(agent_id)
     return {"agent_id": agent_id, "status": "uninstalled"}
+
+
+# ---------------------------------------------------------------------------
+# Retired agents
+# ---------------------------------------------------------------------------
+
+# The daemon has no spec for a retired agent, so an install left over from an
+# older GAIA could never start or be updated again.
+
+# What a Hub install or a fetched binary leaves in its folder, besides the binary.
+_RETIRED_INSTALL_NAMES = frozenset(
+    {
+        ".installed",
+        "gaia-agent.yaml",
+        "binaries.lock.json",
+        "site-packages",
+        "logs",
+        "_internal",
+    }
+)
+_RETIRED_INSTALL_SUFFIXES = (".lock", ".log", ".part", ".tmp")
+
+
+def _is_retired_binary(name: str, agent_id: str) -> bool:
+    stem = name[:-4] if name.lower().endswith(".exe") else name
+    return (
+        stem == f"{agent_id}-agent"
+        or stem.startswith(f"{agent_id}-agent-")
+        or stem.startswith(f"gaia-agent-{agent_id}")
+    )
+
+
+def _sentinel_names(agent_dir: Path, agent_id: str) -> bool:
+    try:
+        recorded = json.loads((agent_dir / ".installed").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(recorded, dict) and recorded.get("id") == agent_id
+
+
+def retired_install_verdict(agent_dir: Path, agent_id: str) -> Optional[str]:
+    """Why *agent_dir* is NOT the retired agent's own install, or ``None`` if it is.
+
+    ``~/.gaia/agents/<id>/`` is also where a person's own agent lives, so the
+    folder is deleted only when everything in it is something GAIA put there.
+    """
+    names = sorted(entry.name for entry in agent_dir.iterdir())
+    if "agent.py" in names:
+        return "it holds an agent.py, so it is someone's own agent"
+    proof = (
+        _sentinel_names(agent_dir, agent_id)
+        or "binaries.lock.json" in names
+        or any(_is_retired_binary(name, agent_id) for name in names)
+    )
+    if not proof:
+        return "nothing in it marks it as the agent GAIA installed"
+    foreign = [
+        name
+        for name in names
+        if name not in _RETIRED_INSTALL_NAMES
+        and not _is_retired_binary(name, agent_id)
+        and not name.endswith(_RETIRED_INSTALL_SUFFIXES)
+        and not name.startswith(".gaia-hub-tmp-")
+    ]
+    if foreign:
+        return f"it also holds files GAIA did not put there ({', '.join(foreign)})"
+    return None
+
+
+def remove_retired_agents(install_root: Optional[Path] = None) -> List[str]:
+    """Delete leftover installs of retired agents; return the ids removed.
+
+    Covers a Hub install and a lazily fetched binary alike — both live in
+    ``~/.gaia/agents/<id>/``. A folder that is not provably that install is
+    left alone and logged. So is one a live process still runs from, and the
+    next daemon start tries again.
+    """
+    import shutil
+
+    root = install_root or _installer().default_install_root()
+    removed: List[str] = []
+    for agent_id in RETIRED_AGENT_IDS:
+        agent_dir = root / agent_id
+        if not agent_dir.is_dir():
+            continue
+        try:
+            kept_because = retired_install_verdict(agent_dir, agent_id)
+        except OSError as exc:
+            kept_because = f"it could not be read ({exc})"
+        if kept_because:
+            logger.warning(
+                "daemon: left %s alone: GAIA no longer ships an '%s' agent, but "
+                "%s. Delete the folder yourself if you no longer need it.",
+                agent_dir,
+                agent_id,
+                kept_because,
+            )
+            continue
+        try:
+            assert_no_live_process_in(agent_dir, agent_id)
+            shutil.rmtree(agent_dir)
+        except (StopFailedError, OSError) as exc:
+            logger.error(
+                "daemon: could not remove the retired '%s' agent at %s: %s. "
+                "GAIA will try again at its next start.",
+                agent_id,
+                agent_dir,
+                exc,
+            )
+            continue
+        logger.info(
+            "daemon: removed the retired '%s' agent from %s", agent_id, agent_dir
+        )
+        removed.append(agent_id)
+    return removed

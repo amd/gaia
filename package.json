@@ -1,30 +1,8 @@
 {
   "name": "gaia-apps",
   "version": "1.0.0",
-  "description": "GAIA Electron Applications",
+  "description": "GAIA repo-level npm tooling",
   "private": true,
-  "scripts": {
-    "app:jira:run:dev": "node src/gaia/apps/_shared/dev-server.js jira",
-    "app:jira:run:electron": "cross-env GAIA_APP_NAME=jira electron src/gaia/electron/src/main.js",
-    "app:jira:build": "cd src/gaia/apps/jira/webui && npm run build:electron",
-    "app:example:run:dev": "node src/gaia/apps/_shared/dev-server.js example",
-    "install:framework": "cd src/gaia/electron && npm install",
-    "install:apps": "npm run install:framework && npm run install:jira",
-    "install:jira": "cd src/gaia/apps/jira/webui && npm install"
-  },
-  "workspaces": [
-    "src/gaia/electron",
-    "src/gaia/apps/*/webui"
-  ],
-  "devDependencies": {
-    "cross-env": "^10.1.0",
-    "electron": "^44.7.2"
-  },
-  "dependencies": {
-    "@prisma/client": "^7.10.1",
-    "prisma": "^7.10.1",
-    "zod": "^4.6.7"
-  },
   "overrides": {
     "tar": ">=7.5.8",
     "find-my-way": ">=9.7.0",

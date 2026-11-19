@@ -27,7 +27,7 @@ import os as _os
 
 CJ = _os.environ.get(
     "GAIA_TUI_CONTROL_JSON",
-    r"C:/Users/kovtchar/AppData/Local/Temp/gaia-tui-solo/control.json",
+    r"C:/Users/kovtchar/AppData/Local/Temp/gaia-cli-solo/control.json",
 )
 
 _conn = None

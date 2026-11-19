@@ -17,7 +17,6 @@ import os
 import subprocess
 import sys
 import threading
-import time
 import urllib.parse
 from pathlib import Path
 
@@ -79,13 +78,13 @@ def _sent_refresh_token(request) -> str:
 
 
 def _lock_path() -> Path:
-    # Path.home() is a per-test tmp dir (tests/unit/connectors/conftest.py).
-    return Path.home() / ".gaia" / "connectors" / "google.refresh.lock"
+    # The refresh of the one stored account waits on that account's lock.
+    return _refresh_lock.account_lock_path("google", "default")
 
 
 @pytest.fixture
 def other_process():
-    """A separate OS process holding the google refresh lock."""
+    """A separate OS process holding the google account's refresh lock."""
     src = Path(tokens.__file__).resolve().parents[2]
     holder = subprocess.Popen(
         [sys.executable, "-c", _HOLDER, str(_lock_path())],
@@ -198,7 +197,7 @@ async def test_keyring_calls_run_off_the_event_loop(monkeypatch, google):
         return wrapper
 
     monkeypatch.setattr(
-        tokens, "load_connection", record("load", tokens.load_connection)
+        tokens, "peek_connection", record("load", tokens.peek_connection)
     )
     monkeypatch.setattr(
         tokens, "save_connection", record("save", tokens.save_connection)
@@ -355,6 +354,9 @@ async def test_a_forward_while_waiting_does_not_clear_the_new_connection(
 
     # The forward itself, as if it ran just before the other process let go.
     monkeypatch.setattr(api_mod, "held_sync", lambda _provider: nullcontext())
+    monkeypatch.setattr(
+        api_mod, "held_account_sync", lambda _provider, _slot: nullcontext()
+    )
     api_mod.import_forwarded_connection(
         provider="google",
         client_id="forwarded.apps.googleusercontent.com",
@@ -389,11 +391,23 @@ async def test_the_slot_and_file_lock_waits_share_one_budget(
         await asyncio.sleep(seconds)
         entry.lock.release()
 
+    # Assert the file-lock wait's budget, not wall time: a loaded runner
+    # stretches elapsed time past any ceiling that separates the two.
+    real_held = _refresh_lock.held_account
+    granted = []
+
+    def spy_held(provider_id, slot, timeout=None):
+        granted.append(timeout)
+        return real_held(provider_id, slot, timeout=timeout)
+
+    monkeypatch.setattr(_refresh_lock, "held_account", spy_held)
+
     peer = asyncio.create_task(peer_finishes_after(0.6))
-    started = time.monotonic()
     with pytest.raises(ConnectorsError, match="has been busy"):
         await asyncio.wait_for(get_or_refresh("google"), 10)
-    elapsed = time.monotonic() - started
     await peer
 
-    assert elapsed < 1.4, f"waited {elapsed:.2f}s on a 1.0 s budget"
+    assert len(granted) == 1
+    assert (
+        granted[0] is not None and granted[0] <= 0.45
+    ), f"file-lock wait got {granted[0]}s after a 0.6 s slot wait on a 1.0 s budget"

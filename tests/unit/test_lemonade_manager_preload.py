@@ -20,6 +20,7 @@ import pytest
 
 from gaia.llm.lemonade_client import LemonadeClientError, LemonadeStatus
 from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
+from gaia.version import LEMONADE_VERSION
 
 # A co-loaded non-LLM model. Its tiny ctx_size must never be mistaken for the
 # server's, and its presence must never be mistaken for "a chat model is up".
@@ -47,6 +48,7 @@ def _reset_manager():
 
 def _status(running=True, context_size=0, loaded_models=None):
     return LemonadeStatus(
+        version=LEMONADE_VERSION,
         running=running,
         context_size=context_size,
         loaded_models=[] if loaded_models is None else loaded_models,
@@ -63,6 +65,59 @@ def _make_client_mock(status):
     # int/None comparisons in `resolve_effective_ctx_size`.
     client.get_model_max_context_window.return_value = None
     return client
+
+
+@pytest.mark.parametrize("cloud_marker", [{"recipe": "cloud"}, {"labels": ["cloud"]}])
+def test_context_ceiling_selection_ignores_cloud_model(cloud_marker):
+    status = _status(
+        loaded_models=[
+            {"id": "cloud-model", "type": "llm", **cloud_marker},
+            {"id": "local-gguf", "type": "llm"},
+        ]
+    )
+    client = _make_client_mock(status)
+    client.get_model_max_context_window.return_value = 32768
+
+    assert LemonadeManager._find_loaded_llm_id(status) == "local-gguf"
+    assert LemonadeManager._honest_context_size(client, status, 65536) == 32768
+    client.get_model_max_context_window.assert_called_once_with(
+        "local-gguf", status=status
+    )
+    assert LemonadeManager._context_ceiling_model == "local-gguf"
+
+
+@pytest.mark.parametrize("cloud_marker", [{"recipe": "cloud"}, {"labels": ["cloud"]}])
+def test_context_ceiling_selection_with_only_cloud_models(cloud_marker):
+    status = _status(
+        loaded_models=[{"id": "cloud-model", "type": "llm", **cloud_marker}]
+    )
+    client = _make_client_mock(status)
+
+    assert LemonadeManager._find_loaded_llm_id(status) is None
+    assert LemonadeManager._honest_context_size(client, status, 65536) == 65536
+    client.get_model_max_context_window.assert_not_called()
+
+
+def test_context_ceiling_selection_accepts_null_labels():
+    status = _status(loaded_models=[{"id": "legacy-local", "labels": None}])
+
+    assert LemonadeManager._find_loaded_llm_id(status) == "legacy-local"
+
+
+@pytest.mark.parametrize("model_type", ["embedding", "image", "transcription"])
+def test_context_ceiling_selection_excludes_non_llm_models(model_type):
+    status = _status(
+        loaded_models=[
+            {"id": "non-llm", "type": model_type},
+            {"model_name": "local-gguf", "type": "llm"},
+        ]
+    )
+
+    assert LemonadeManager._find_loaded_llm_id(status) == "local-gguf"
+
+
+def test_context_ceiling_selection_with_no_loaded_models():
+    assert LemonadeManager._find_loaded_llm_id(_status()) is None
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +266,7 @@ def test_preload_failure_raises_actionable_and_does_not_poison_singleton(mock_cl
     msg = str(exc_info.value)
     assert "Lemonade" in msg
     assert "ctx_size=32768" in msg or "32768" in msg
+    assert "server returned 500" in msg, "the load's own error must reach the CLI"
     assert "systemctl --user start lemond" in msg
     assert "lemonade-server" not in msg
 
@@ -492,19 +548,22 @@ def test_reload_clamps_to_known_ceiling_and_reports_honestly(mock_cls):
 def test_known_ceiling_stops_repeat_reload_attempts(mock_cls):
     client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
     client.get_model_max_context_window.return_value = 40960
+    loaded = _status(
+        running=True,
+        context_size=65536,
+        loaded_models=[
+            {
+                "id": "Gemma-4-E4B-it-GGUF",
+                "model_name": "Gemma-4-E4B-it-GGUF",
+                "max_context_window": 40960,
+            }
+        ],
+    )
+    # The third status answers the second call's re-check.
     client.get_status.side_effect = [
         _status(running=True, context_size=0, loaded_models=[]),
-        _status(
-            running=True,
-            context_size=65536,
-            loaded_models=[
-                {
-                    "id": "Gemma-4-E4B-it-GGUF",
-                    "model_name": "Gemma-4-E4B-it-GGUF",
-                    "max_context_window": 40960,
-                }
-            ],
-        ),
+        loaded,
+        loaded,
     ]
     mock_cls.return_value = client
 
@@ -955,7 +1014,7 @@ def test_recheck_with_only_non_llm_model_warns_loudly(mock_cls, caplog, capsys):
         assert "no LLM loaded" in surface
         assert "Whisper-Large-v3-Turbo" in surface
         assert "gaia init" in surface
-        assert "server.log" in surface
+        assert "log has the full error" in surface
 
     # The silent part that must NOT happen: caching min_context_size as if a
     # chat model were up.
@@ -1063,6 +1122,104 @@ def test_cloud_caller_repeat_calls_skip_status_and_warnings(mock_cls, caplog):
     assert client.get_status.call_count == probes
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
     client.load_model.assert_not_called()
+
+
+# Lemonade keeps cloud keys in memory only, so a server this process just
+# reached may have none: without a replay every gateway model 404s.
+GATEWAY_MODEL = "amd.DeepSeek-V4.1-Flash"
+
+
+@pytest.mark.parametrize("model", [CLOUD_MODEL, GATEWAY_MODEL])
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_cloud_caller_replays_the_kept_key(mock_cls, model):
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    mock_cls.return_value = client
+
+    assert LemonadeManager.ensure_ready(quiet=True, model=model) is True
+
+    client._replay_cloud_key.assert_called_once_with(model)
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_cloud_key_is_replayed_after_an_autostart(mock_cls):
+    client = _make_client_mock(_status(running=False))
+    client.get_status.side_effect = [
+        _status(running=False),
+        _status(running=True, context_size=0, loaded_models=[]),
+    ]
+    mock_cls.return_value = client
+
+    with patch.object(LemonadeManager, "_autostart", return_value=True) as start:
+        assert LemonadeManager.ensure_ready(quiet=True, model=GATEWAY_MODEL) is True
+
+    start.assert_called_once()
+    client._replay_cloud_key.assert_called_once_with(GATEWAY_MODEL)
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_cloud_key_is_not_replayed_when_the_autostart_fails(mock_cls):
+    client = _make_client_mock(_status(running=False))
+    mock_cls.return_value = client
+
+    with patch.object(LemonadeManager, "_autostart", return_value=False):
+        assert LemonadeManager.ensure_ready(quiet=True, model=GATEWAY_MODEL) is False
+
+    client._replay_cloud_key.assert_not_called()
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_cloud_key_replay_runs_once_per_ready_server(mock_cls):
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    mock_cls.return_value = client
+
+    LemonadeManager.ensure_ready(quiet=True, model=GATEWAY_MODEL)
+    LemonadeManager.ensure_ready(quiet=True, model=GATEWAY_MODEL)
+
+    client._replay_cloud_key.assert_called_once()
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_local_caller_never_replays_a_cloud_key(mock_cls):
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    client.get_status.side_effect = [
+        _status(running=True, context_size=0, loaded_models=[]),
+        _status(
+            running=True,
+            context_size=65536,
+            loaded_models=[{"id": "Gemma-4-E4B-it-GGUF"}],
+        ),
+    ]
+    mock_cls.return_value = client
+
+    LemonadeManager.ensure_ready(
+        min_context_size=65536, quiet=True, model="Gemma-4-E4B-it-GGUF"
+    )
+
+    client._replay_cloud_key.assert_not_called()
+
+
+@patch("gaia.llm.cloud_keys.ensure_authenticated")
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_failed_key_replay_still_leaves_the_server_ready(mock_cls, ensure_auth, caplog):
+    """The replay is best-effort: the turn's own 404 then names the model."""
+    import types as _types
+
+    from gaia.llm.cloud_keys import CloudKeyError
+    from gaia.llm.lemonade_client import LemonadeClient as RealClient
+
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    client.model = None
+    client.log = logging.getLogger("gaia.llm.lemonade_client")
+    client.cloud_model_provider.return_value = "amd"
+    client._replay_cloud_key = _types.MethodType(RealClient._replay_cloud_key, client)
+    ensure_auth.side_effect = CloudKeyError("no kept key")
+    mock_cls.return_value = client
+
+    with caplog.at_level(logging.WARNING, logger="gaia.llm.lemonade_client"):
+        assert LemonadeManager.ensure_ready(quiet=True, model=GATEWAY_MODEL) is True
+
+    ensure_auth.assert_called_once_with("amd", client=client)
+    assert any("no kept key" in r.getMessage() for r in caplog.records)
 
 
 @patch("gaia.llm.lemonade_manager.LemonadeClient")

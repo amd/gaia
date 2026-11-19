@@ -14,9 +14,9 @@
 > **Tracks:** [#2015](https://github.com/amd/gaia/issues/2015) (this spec),
 > epic [#2014](https://github.com/amd/gaia/issues/2014) (Agent UI v2, Phase 0).
 > **Design source:** the Agent UI v2 design (removed from the tree; this document is now the source of truth).
-> **First consumer:** [#2016](https://github.com/amd/gaia/issues/2016) implements
-> this contract as `POST /v1/email/query` on the email sidecar (contract bump
-> 2.3 → 2.4).
+> **Consumer:** the flagship `gaia` sidecar serves this contract as
+> `POST /v1/gaia/query`. The standalone email agent that first implemented it
+> ([#2016](https://github.com/amd/gaia/issues/2016)) has been removed.
 
 ---
 
@@ -33,10 +33,10 @@ which is **not** the v2 contract below.
 
 This document defines two things and freezes the boundary between them:
 
-1. **The target wire contract** (§3–§5) — the seven canonical event types plus
-   the `/query` request body. Integrators depend on this and nothing else.
+1. **The target wire contract** (sections 3 to 5): the ten canonical event types
+   plus the `/query` request body. Integrators depend on this and nothing else.
 2. **The translation map** (§6) — a total, source-exhaustive mapping from the
-   in-process handler's vocabulary onto the seven canonical types, so the v2
+   in-process handler's vocabulary onto the ten canonical types, so the v2
    translation layer (built in #2016) can be implemented with **no source event
    left unmapped**.
 
@@ -76,12 +76,20 @@ net-new agent instrumentation.
 | `query` | string | **yes** | The natural-language request driving the agent loop. Non-empty. |
 | `run_id` | string (UUIDv4) | **yes** | **Host-minted** streaming-run handle. See §2.3. |
 | `context` | array of `{role, content}` objects | **yes** | The relevant transcript slice, **pushed in the body**. May be an empty array `[]` for a fresh conversation, but the field must be present. See §2.4. |
-| `model` | string | no | Model id override. Omitted ⇒ the sidecar's default (e.g. `Gemma-4-E4B-it-GGUF` for the email agent). |
-| `provider` | string | no | LLM provider override. The flagship (`gaia`) accepts `lemonade` / `claude`; the email agent is local-only and accepts only `lemonade`. Omitted ⇒ sidecar default. `openai` is rejected by both — #3899 retired the generic `openai`/`litellm` backends repo-wide. |
+| `model` | string | no | Model id override. Omitted ⇒ the sidecar's default model. |
+| `provider` | string | no | LLM provider override. The flagship (`gaia`) accepts `lemonade` / `claude`. Omitted ⇒ sidecar default. `openai` is rejected — #3899 retired the generic `openai`/`litellm` backends repo-wide. |
 | `max_steps` | integer ≥ 1 | no | Agent-loop step ceiling. Omitted ⇒ the sidecar's configured default. |
-| `can_answer_questions` | boolean | no | Whether **this caller** can render a `needs_input` event and POST the answer (§5.1). **Send only to a peer at contract ≥ 2.6** — an older sidecar 422s the unknown field (see §7). **The two shipped sidecars default this differently when it's omitted.** The email agent's field is a plain `bool` defaulting to `False` — the safe answer, since a caller that cannot answer would otherwise park the run until the question times out, which is indistinguishable from a hang. The flagship (`gaia`) agent's field is `Optional[bool]` defaulting to `None`, and only an *explicit* `false` turns answering off — an omitted field behaves as answerable. A client driving both sidecars with the same "omit when unsure" logic gets opposite behavior; send the field explicitly rather than relying on either default. |
+| `can_answer_questions` | boolean | no | Whether **this caller** can render a `needs_input` event and POST the answer (§5.1). **Send only to a peer at contract ≥ 2.6** — an older sidecar 422s the unknown field (see §7). *The flagship (`gaia`) agent's field is `Optional[bool]` defaulting to `None`, and only an *explicit* `false` turns answering off — an omitted field behaves as answerable. A caller that cannot answer must send `false`, or the run parks until the question times out, which is indistinguishable from a hang. |
 | `session_id` | string, `^[A-Za-z0-9_-]{1,128}$` | no | Opaque conversation id, host-minted once per conversation and reused across turns (#2829). **Send only to a peer at contract ≥ 2.12** — an older sidecar 422s the unknown field (see §7). Omitted ⇒ today's stateless behaviour: a throwaway agent per call. Present ⇒ the run resolves the SAME agent every other turn on this id used, so a reference to something an earlier turn surfaced (e.g. "reply to number 1") can resolve. See §2.4. |
-| `documents` | array of strings (absolute file paths) | no | **Flagship (`gaia`) only, contract ≥ 2.16** (#4166) — the email agent and an older flagship 422 the unknown field (see §7). The files the user attached to this conversation. Send the whole set on every turn; the agent indexes the ones it has not indexed yet before the turn runs, so a file attached mid-conversation is read on the next turn. Each path is granted as that exact file — never its folder — and a relative path is a 422. A file that is missing, a folder, or a secret the path policy refuses is named as not indexed in the turn's `index_documents` step, and the turn still runs. See §2.5. |
+| `reasoning` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.22** — an older sidecar 422s the unknown field (see §7). `true` streams the model's reasoning as `reasoning` events (§4) instead of folding it into `status` lines, for a client that shows reasoning on its own. Omitted ⇒ `false`, today's behaviour. |
+| `documents` | array of strings (absolute file paths) | no | **Flagship (`gaia`) only, contract ≥ 2.16** (#4166) — an older flagship 422s the unknown field (see §7). The files the user attached to this conversation. Send the whole set on every turn; the agent indexes the ones it has not indexed yet before the turn runs, so a file attached mid-conversation is read on the next turn, and drops any file an earlier turn sent that this one leaves out (an empty list drops them all). Each path is granted as that exact file — never its folder — and a relative path is a 422. A file that is missing, a folder, or a secret the path policy refuses is named as not indexed in the turn's `index_documents` step, and the turn still runs. See §2.5. |
+| `allowed_paths` | array of absolute path strings | no | **Flagship (`gaia`) only, contract ≥ 2.18** — an older flagship 422s the unknown field (see §7). Caller-computed conversation scope. A new session gets exactly this scope; a retained session gains newly supplied entries and keeps what the user granted; `GAIA_ALLOWED_PATHS` can only narrow it. A relative path is a 422. This is an access allowlist, not the chat working directory. Omitted ⇒ the agent's default scope. |
+| `memory` | `"on"` \| `"private"` \| `"off"` | no | **Flagship (`gaia`), contract ≥ 2.18** — an older peer 422s the unknown field (see §7). Controls whether this turn may read or write memory. `private` and `off` suppress all reads and writes, including errors and lessons. Send it every turn when the caller owns the setting; omit it to retain the agent's current mode. |
+| `changes_turn_id` | string matching `^\d{14}-[0-9a-f]{8}$` | no | **Flagship (`gaia`) only, contract ≥ 2.19** — an older flagship 422s the unknown field (see §7). Records file changes for this turn's Undo history. Requires `session_id`; omit it to record no changes. |
+| `surface` | `"agent_ui"` \| `"tui"` \| `"cli"` | no | **Flagship (`gaia`) only, contract ≥ 2.20** — identifies the front-end so provider errors and feature wording fit the caller. Omit for headless callers. |
+| `internet_off` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.23** — when true, blocks tools and commands that contact another host for this retained session. Send it every turn when the caller owns the setting; omit it to retain the current mode. |
+| `working_directory` | string (absolute path) | no | **Flagship (`gaia`) only, contract ≥ 2.24** — chat workspace for resolving relative file paths. It is separate from `allowed_paths`, which controls access. Relative paths are rejected with 422. |
+| `turns` | array of arrays of objects | no | **Flagship (`gaia`) only, contract ≥ 2.25**: earlier turns as the model saw them, including tool calls and results. Send `turns` instead of `context`; `context` must then be `[]`. `turns: []` clears retained history and enables `final.model_messages` and the pre-answer `context_usage` event (contract ≥ 2.28). |
 
 ```jsonc
 // JSON Schema (draft 2020-12) — request body
@@ -110,8 +118,36 @@ net-new agent instrumentation.
     "max_steps": { "type": "integer", "minimum": 1 },
     "can_answer_questions": { "type": "boolean", "default": false },
     "session_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$" },
-    "documents": { "type": "array", "items": { "type": "string" } }
-  }
+    "documents": { "type": "array", "items": { "type": "string" } },
+    "allowed_paths": { "type": "array", "items": { "type": "string" } },
+    "memory": { "enum": ["on", "private", "off"] },
+    "changes_turn_id": { "type": "string", "pattern": "^\\d{14}-[0-9a-f]{8}$" },
+    "surface": { "enum": ["agent_ui", "tui", "cli"] },
+    "internet_off": { "type": "boolean" },
+    "working_directory": { "type": "string" },
+    "turns": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "role": { "enum": ["user", "assistant", "system", "tool"] }
+          }
+        }
+      }
+    },
+    "reasoning": { "type": "boolean", "default": false }
+  },
+  "dependentRequired": {
+    "changes_turn_id": ["session_id"]
+  },
+  "allOf": [
+    {
+      "if": { "required": ["turns"] },
+      "then": { "properties": { "context": { "maxItems": 0 } } }
+    }
+  ]
 }
 ```
 
@@ -147,7 +183,9 @@ event, never a silent cold start.
 
 A relayed agent cannot see the host's session table, so the files a user
 attached to a chat travel in `documents` (#4166). The Agent UI sends them only
-to a flagship at contract ≥ 2.16. Against an older flagship, a chat with
+to a flagship at contract ≥ 2.16, every turn, an empty list when none are
+attached, so a document the user detached or deleted from the library leaves
+the agent's index. Against an older flagship, a chat with
 attached documents stops before the turn with an `agent_error` that says to
 update the agent or remove the documents. Answering without them would read
 as "no documents are indexed" about a file the user can see attached.
@@ -164,24 +202,33 @@ as "no documents are indexed" about a file the user can see attached.
 - **Ordering:** `status`/`token`/`tool_call`/`tool_result` may interleave freely
   during a run. `needs_confirmation` pauses the logical run pending the §0.4
   handoff. A terminal `final`/`error` is always last.
+- **Undo finalization:** recording finishes before the terminal event. If saving
+  undo history also fails after a failed turn, a `status` warning reports the undo
+  failure and the terminal `error` preserves the original turn error. A successful
+  answer is likewise preserved when only undo saving fails. Both failures remain
+  available in the server log.
 
 ---
 
-## 4. The seven canonical event types
+## 4. The ten canonical event types
 
 The contract is exactly these `type` values (design §0.2 — the original seven,
-plus `needs_input` added as an additive MINOR by #2469). No others are valid on
+plus `needs_input` added as an additive MINOR by #2469, `reasoning`, sent
+only on request, by contract 2.22, and `context_usage`, streamed before the
+answer by contract 2.28). No others are valid on
 the wire; a receiver applies the §7 unknown-type rule to anything else.
 
 | `type` | Payload | UI effect |
 |---|---|---|
-| `status` | `{message, phase?, words?, chars?, queue?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label |
+| `status` | `{message, level?, phase?, words?, chars?, queue?, retracts_answer?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label. `level: "warning"` means the agent is warning the user (for example, configured MCP servers were dropped): show it as a warning, not only as the live line. `retracts_answer: true` (phase `answer_restart`) means the reply was cut off and the step starts over: drop the `token` text since the last `tool_call` and show `message` in its place |
 | `token` | `{delta}` | stream assistant text |
+| `reasoning` | `{delta, retracts_answer?}` | stream the model's reasoning, apart from the answer. Sent only when the request asked for it (`reasoning: true`, contract ≥ 2.22); pieces keep their own spacing, so a client joins them as they come. `retracts_answer: true` means the `token` text since the last `tool_call` was this reasoning (a model whose template opened the block sends only `</think>`): drop it from the answer shown so far |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
-| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, risk?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool |
+| `context_usage` | `{window, used, turns_in_view, turns_hidden, ...}` | update the composer's context meter; **not terminal**. The sidecar streams it before the answer for a caller that sent `turns` (contract ≥ 2.28), in the same shape an in-process turn streams at turn start, so the meter fills during a long turn instead of waiting for `final` |
+| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
-| `final` | `{answer, usage?}` | finalize the message; terminal |
+| `final` | `{answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?, route?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `failure: "model_server_down"` means the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25), and `route` is a `hybrid` session's routing decision, whose `model` is the concrete model the turn ran on: bill and label the turn by it (contract >= 2.29) |
 | `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
 
 A `:`-prefixed SSE comment may appear at any point as a heartbeat. It carries no
@@ -198,10 +245,12 @@ indistinguishable from a dead one.
   "properties": {
     "type":    { "const": "status" },
     "message": { "type": "string" },
+    "level":   { "const": "warning" }, // optional; absent for progress lines
     "phase":   { "type": "string" },   // optional, §4.4
     "words":   { "type": "integer" },  // with phase "reasoning"
     "chars":   { "type": "integer" },  // with phase "tool_call"
-    "queue":   { "type": "object" }    // with phase "model_queue", §4.4
+    "queue":   { "type": "object" },   // with phase "model_queue", §4.4
+    "retracts_answer": { "type": "boolean" }  // with phase "answer_restart", §4.4
   } }
 
 // token
@@ -218,7 +267,10 @@ indistinguishable from a dead one.
   "properties": {
     "type": { "const": "tool_call" },
     "tool": { "type": "string" },
-    "args": { "type": "object" }     // {} when the tool takes no arguments
+    "args": { "type": "object" },    // {} when the tool takes no arguments
+    "mcp_server":       { "type": "string" },  // optional, MCP tools only: mcp_servers.json key
+    "mcp_server_label": { "type": "string" },  // optional: the connector's name, e.g. "Git"
+    "mcp_tool":         { "type": "string" }   // optional: the server's own tool name
   } }
 
 // tool_result
@@ -239,6 +291,19 @@ indistinguishable from a dead one.
     "run_id":      { "type": "string", "format": "uuid" },
     "action":      { "type": "string" },   // e.g. "send", "archive", "input"
     "summary":     { "type": "string" },   // the literal text the user approves
+    "confirm_id":  { "type": "string" },   // echoed back by a live decision channel
+    "always_scope": { "type": "string" },  // what an "always" answer grants; absent = don't offer it
+    "risk":        { "enum": ["read", "write", "execute", "destructive"] },
+    "tool_label":  { "type": "string" },   // the tool in plain words
+    "args":        { "type": "object" },   // exactly the model's arguments, values capped
+    "args_truncated": { "const": true },   // a value in args was cut
+    "prompt_context": {                    // what the agent adds; never part of the call
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "working_directory": { "type": "string" },
+        "risk_note":         { "type": "string" },
+        "file_path":         { "type": "string" }   // where a relative write lands
+      } },
     "confirm_url": { "type": "string" }    // resume-model only (§0.4); omitted under stateless
   } }
 
@@ -268,13 +333,42 @@ indistinguishable from a dead one.
     "timeout_seconds": { "type": "integer" }   // after this the run fails loudly
   } }
 
+// reasoning (contract >= 2.22; emitted only when requested)
+{ "type": "object", "additionalProperties": false,
+  "required": ["type", "delta"],
+  "properties": {
+    "type":  { "const": "reasoning" },
+    "delta": { "type": "string" },
+    "retracts_answer": { "type": "boolean" }  // the tokens since the last tool_call were this reasoning
+  } }
+
+// context_usage (contract >= 2.28; not terminal)
+{ "type": "object",
+  "required": ["type", "window", "used"],
+  "properties": {
+    "type":          { "const": "context_usage" },
+    "window":        { "type": "integer" },  // the model's admitted context, in tokens
+    "used":          { "type": "integer" },  // what the next call holds, by kind
+    "turns_in_view": { "type": "integer" },  // earlier turns the model still sees
+    "turns_hidden":  { "type": "integer" },  // earlier turns it no longer sees
+    "model":         { "type": "string" }    // present on the `final.context` copy
+  } }  // carries the whole breakdown; a meter reads these keys and ignores the rest
+
 // final
 { "type": "object", "additionalProperties": false,
   "required": ["type", "answer"],
   "properties": {
-    "type":   { "const": "final" },
-    "answer": { "type": "string" },
-    "usage":  { "type": "object" }   // optional {steps?, tools_used?, elapsed?, tokens?, ttft?, tok_per_s?}
+    "type":           { "const": "final" },
+    "answer":         { "type": "string" },
+    "usage":          { "type": "object" },
+    "failed":         { "const": true },
+    "performance":    { "type": "object" },
+    "context":        { "type": "object" },
+    "context_error":  { "type": "string" },
+    "model_messages": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
   } }
 
 // error
@@ -301,7 +395,7 @@ unknown `render` degrades to the generic result card (see §7).
 
 ### 4.3 Generic render primitives (#2108)
 
-Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers five
+Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers eight
 **generic primitives** any agent can emit on `tool_result.render` without
 shipping its own frontend component. `data` must match the schema for the key:
 
@@ -310,8 +404,17 @@ shipping its own frontend component. `data` must match the schema for the key:
 | `table` | `{ title?: string, columns: string[], rows: Array<Array<string\|number\|boolean\|null>> }` |
 | `key_value` | `{ title?: string, items: Array<{key: string, value: string\|number\|boolean\|null}> }` |
 | `list` | `{ title?: string, ordered?: boolean, items: Array<string\|number> }` |
-| `image` | `{ src: string, alt?: string, caption?: string }` |
+| `image` | `{ src: string, alt?: string, caption?: string, path?: string }` |
+| `audio` | `{ src: string, caption?: string, path?: string, duration_seconds?: number }` — added (additive, MINOR) for generated music and sound effects (#540) |
 | `diff` | `{ title?: string, unified: string }` — a unified-diff text; lines are styled by their `+` / `-` / `@@` prefix |
+| `guide` | `{ kind: "guide", guideType: "recipe"\|"workout"\|"howto"\|"checklist"\|"itinerary", title: string, description: string, notes: string, servings: integer\|null, items: string[], steps: string[] }` — `items` are the ingredients, equipment, materials, checklist entries or packing list; `steps` are the recipe steps, exercises, how-to steps or one line per day ("Day 1 - Lisbon: …"), and `[]` for a checklist; `servings` is set only for a recipe. The bundled `guides` skill's `guides/show_recipe`, `guides/show_workout`, `guides/show_how_to`, `guides/show_checklist` and `guides/show_itinerary` emit it |
+| `calculator` | `{ kind: "calculator", calculator: "tip", title: string, currency: string, inputs: { bill: number, tipPercent: number, people: integer } }` or `{ kind: "calculator", calculator: "loan", title: string, currency: string, inputs: { amount: number, annualRatePercent: number, years: number, downPayment: number } }` — starting numbers only; the card computes the tip, total and per-person share, or the monthly payment, total paid and interest, and recomputes as the person edits them. `title` may be `""`; `currency` is an ISO 4217 code such as `"EUR"`. The bundled `calculators` skill's `calculators/show_tip_calculator` and `calculators/show_loan_calculator` emit it |
+
+One more key is not a primitive an agent picks, but the host's own:
+
+| `render` | `data` schema |
+|---|---|
+| `connect_account` | `{ kind: "connect_account", providers: string[], agent_id?: string, reconnect?: string[], scopes?: Record<string, string[]>, account?: Record<string, string>, success: boolean, status: "ok"\|"error", display_message: string }` — a tool found no usable account. `providers` are connector ids to offer a Connect button for, and only `google`, `microsoft` and `microsoft_work` are allowed: a card naming any other connector is dropped, not drawn; `agent_id` is the namespaced agent that gets access when sign-in completes; a host starts sign-in with no scopes and that agent in `grant_agents`, so consent covers only what the agent declares, and sends the user to Settings › Connectors when the agent does not declare the connector. `reconnect` lists the providers that were connected already (an expired or under-scoped connection), so a host does not read their being connected as the fix. `scopes` maps a provider to the access the failed call needs. `account` maps a provider to the account the failed call used, by its stable id or its address, so a host offers that account to sign in to again instead of guessing among several; a card that leaves it out gets a plain Connect button, or a Reconnect for the only account when that one needs signing in. Any tool whose result carries a `connect_card` object gets it (the mail and calendar tools add one when the caller's `surface` is `agent_ui`), so the button never depends on what the model writes. `success`, `status` and `display_message` repeat the tool's outcome for a host that derives the tool row from `data` |
 
 Rules every receiver implements and every producer can rely on:
 
@@ -321,9 +424,22 @@ Rules every receiver implements and every producer can rely on:
   raw `data` so the turn stays debuggable. A card is never silently dropped
   and a bad card never blanks the message.
 - **`image.src` accepts only inline base64 raster data** matching
-  `^data:image/(png|jpe?g|gif|webp);base64,` — SVG is deliberately excluded
-  (it can carry script), and remote URLs (`http(s)://`) are rejected. Anything
-  else is an invalid payload.
+  `^data:image/(png|jpe?g|gif|webp);base64,`, **or a generated-media
+  reference** `/api/media/image/<name>` — SVG is deliberately excluded (it can
+  carry script), and remote URLs (`http(s)://`) are rejected. Anything else is
+  an invalid payload.
+- **`audio.src` accepts only a generated-media reference**
+  `/api/media/audio/<name>`. A generated-media reference names one
+  URL-encoded file name (no separators, no `..`) that the Agent UI backend
+  serves from GAIA's own generation folder (`GET /api/media/{kind}/{name}`);
+  `path` is that file on disk. A terminal can show neither, so the TUI draws
+  the caption, `path` and (for audio) the length instead.
+- **No sidecar emits `image`-by-reference or `audio` today.** The Agent UI
+  host builds them from a successful `generate_image` / `generate_music` /
+  `generate_sound_effect` result's `image_path` / `audio_path` (carried in
+  `tool_result.data`), whether the agent ran in-process or behind `/query`,
+  so no sidecar `apiVersion` changes. An older sidecar that omits
+  `audio_path` simply gets no audio card.
 - **500-item render cap.** `table` rows, `list` items, and `key_value` items
   render at most 500 entries; the card shows a visible `+N more (truncated)`
   row when capped. Producers should pre-trim to what the user actually needs.
@@ -343,10 +459,14 @@ is on the wire. It is sent when the phase actually starts, never on a timer, and
 
 | `phase` | Sent when | Count |
 |---|---|---|
-| `reading` | a model call is sent (again after a load finishes) | — |
+| `reading` | a model call is sent (again after a load finishes); while `extract_document_items` runs, before each page's call ("Reading page 4 of 12…") | — |
 | `loading_model` / `downloading_model` | the agent starts loading (or first downloading) the model | — |
 | `reasoning` | the model's first reasoning output, then about once a second | `words` reasoned so far |
 | `tool_call` | a long tool call's arguments are still streaming | `chars` so far |
+| `reconnecting` | GAIA's own Lemonade Server stopped mid-request or during a `/model` switch: sent once while the agent waits for the daemon to bring it back, then it retries. A server the user runs, or a remote `LEMONADE_BASE_URL`, is never waited on | — |
+| `model_restart` | GAIA's own Lemonade Server stopped under a model call, the answer's or one a tool makes itself: sent while the step waits to retry and again while the daemon starts it (`message` "The model server stopped. GAIA is restarting it…"), or before the daemon starts a server that was never running ("Starting the model server…") | — |
+| `model_retry` | a model call failed for another reason (the model service was busy, timed out, stopped sending, or the connection dropped) and is retried: once per retry, `message` naming the trouble, the wait and the attempt ("The model service is busy — retrying in 8s (2/4)") | — |
+| `answer_restart` | a reply was cut off part-way (the model server stopped or the connection dropped) and the step starts over; carries `retracts_answer: true` | — |
 | `model_queue` | the turn is queued for the model behind another request, then every ~2 s while it waits, then once when it gets the model | `queue` (below) |
 
 `model_queue` is the one phase sent on a timer: the steady updates are what let a
@@ -373,7 +493,7 @@ either:
 
 - **Stateless stop-and-hand-off (recommended v1):** the event *ends the stream*;
   `confirm_url` is **omitted**. The host performs the deterministic call itself
-  (e.g. `POST /v1/email/send` with the single-use token) and issues a fresh
+  (e.g. the agent's own write route with the single-use token) and issues a fresh
   `/query` carrying the approved-step state to continue.
 - **Resume model:** the event includes `confirm_url =
   /v1/<agent>/query/{run_id}/confirm`; the run stays paused server-side and
@@ -476,6 +596,45 @@ moment the next turn starts.
 **Send only to a peer at contract ≥ 2.15**; an older sidecar 404s the path
 itself, which a client must not misread as "the run ended" (see §7).
 
+### 5.3 Listing and revoking "always" answers (schema 2.26, flagship)
+
+**`GET /v1/gaia/sessions/{session_id}/grants`** →
+`{session_id, grants: [{key, label}]}` and
+**`DELETE /v1/gaia/sessions/{session_id}/grants[?key=<key>]`** → the same shape
+after revoking one grant, or all without `key`.
+
+An `always` answer to `needs_confirmation` is held by the session, so a host
+that offers it must be able to show the user what it granted and take it back.
+`label` is the prompt's `always_scope`; `key` is the handle to revoke it by.
+The list includes answers given in a turn still running, and a revoke applies
+from the very next gated call, including one in that turn. An unknown session,
+or a `key` the session does not hold, is a `404`. **Offer `always` only to a
+peer at contract ≥ 2.26**: an older one grants it with no way to list or revoke
+it.
+
+### 5.4 Listing a session's tools (schema 2.27, flagship)
+
+**`GET /v1/gaia/sessions/{session_id}/tools`** →
+`{session_id, tools: [{name, description, category}]}`.
+
+The tools the session's own agent can call now, in registry order, skills
+loaded in earlier turns included. `description` is the text the model is
+given. `category` is a `KNOWN_TOOLS` mixin name (`rag`, `file_io`, `shell`,
+...), `mcp`, `skill`, or `agent` for a tool the agent class defines itself. An
+unknown session is a `404`: the route never builds an agent just to answer,
+since that agent would not be the one the session talks to. **Ask only a peer
+at contract ≥ 2.27**; an older one 404s the path itself.
+
+### 5.5 Ending a session (schema 2.30, flagship)
+
+**`DELETE /v1/gaia/sessions/{session_id}`** → `{session_id, deleted: true}`.
+
+Ends the session and closes its agent, which stops the MCP servers it started.
+A host calls it when the user deletes the conversation; otherwise the session
+and its servers live until it idles out. An unknown session is a `404`; one
+running a turn is a `409` (cancel the run, then delete again). **Call it only on
+a peer at contract ≥ 2.30**; an older one has no such route.
+
 ---
 
 ## 6. Translation map — in-process handler → canonical contract
@@ -489,25 +648,26 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 > `grep '"type":"..."'` over `sse_handler.py` returns 18 strings, but two of
 > them — `file_list` and `search_results` — are **nested** `result_data.type`
 > values *inside* a `tool_result` event, not top-level event types. The handler
-> emits **16 distinct top-level event types** (listed below), plus the `None`
+> emits **17 distinct top-level event types** (listed below), plus the `None`
 > queue sentinel (stream close, not a wire event).
 
 ### 6.1 The four clean maps (named in the issue)
 
 | Source event | → Canonical | Transform |
 |---|---|---|
-| `tool_start` | `tool_call` | Rename; carry `tool`. `args` filled from the paired `tool_args` (§6.3). `detail`/`mcp_server` dropped (host derives its own label). |
+| `tool_start` | `tool_call` | Rename; carry `tool`. `args` filled from the paired `tool_args` (§6.3). `detail` dropped (host derives its own label). An MCP tool's `mcp_server`, `mcp_server_label` and `mcp_tool` ride along (additive): only the agent knows which connector a prefixed tool name belongs to. |
 | `chunk` | `token` | `content` → `delta`. |
 | `answer` | `final` | `content` → `answer`; `elapsed`/`steps`/`tools_used`/`tokens`/`ttft`/`tok_per_s`/`input_tokens`/`cached_tokens` → `usage`. An `answer` marked `streamed` (text pulled out of a streaming JSON reply, mid-turn) maps to a `token` instead: the agent's printed answer is the one `final`. |
-| `permission_request` | `needs_confirmation` | `tool` → `action`; render `args` as `summary` (for a shell command whose `risk` is `write` or `execute`, plus one plain line on what it can do; for a call GAIA's checks don't cover — `args._risk_note` set — the exact command unshortened, `in <folder>`, then that note, and no `always_scope`); carry `run_id`; `confirm_url` per §5. |
+| `permission_request` | `needs_confirmation` | `tool` → `action`; render `args` as `summary` (for a shell command whose `risk` is `write` or `execute`, plus one plain line on what it can do; for a call GAIA's checks don't cover — `args._risk_note` set — the exact command unshortened, `in <folder>`, then that note, and no `always_scope`); the wire `args` are the source's `call_args` (what the model sent) when present, else its `args` without the prompt-only `_risk_note` / `_scratch_dir`; a folder or note the agent added goes to `prompt_context`; carry `run_id`; `confirm_url` per §5. |
 
 ### 6.2 Every remaining top-level source event
 
 | Source event | Emitters (`sse_handler.py`) | Decision | → Canonical | Rationale |
 |---|---|---|---|---|
-| `status` | `print_processing_start`, `print_goal`, `print_warning`, `print_info`, `start_progress`, `print_repeated_tool_warning`, `print_completion`, confirm-timeout | **map** | `status` | Already the canonical shape; keep `message`, drop the `status`/`steps`/`elapsed` sub-fields (progress-only). |
+| `status` | `print_processing_start`, `print_goal`, `print_warning`, `print_info`, `start_progress`, `print_repeated_tool_warning`, `print_completion`, confirm-timeout | **map** | `status` | Already the canonical shape; keep `message`, carry `status: "warning"` as `level: "warning"`, drop the other `status` values and the `steps`/`elapsed` sub-fields (progress-only). |
 | `step` | `print_step_header` | **fold** | `status` | Step counter is progress narration; render as a `status` line (e.g. `"Step 3/20"`). No dedicated canonical type. |
-| `thinking` | `print_thought`, `print_streaming_text` (`<think>…</think>`) | **fold** | `status` | Reasoning narration, not final assistant text — folds to `status`, **not** `token` (which is answer text the UI commits to the message). See open question Q1. |
+| `thinking` | `print_thought`, `print_streaming_text` (`<think>…</think>`) | **fold** / **map** | `status`, or `reasoning` | Reasoning narration, not final assistant text — never `token` (which is answer text the UI commits to the message). Folds to `status` unless the request set `reasoning: true` (contract ≥ 2.22), which maps it to `reasoning` unchanged, `retracts_answer` included. See §9 Q1, now resolved. |
+| `commentary` | `_emit` (before a `tool_start`) | **drop** | — | Re-derived from the `token` text by the receiving host's own handler, so the sidecar's copy would double it. |
 | `plan` | `print_plan` | **fold** | `status` | Plan preview is progress narration; join `steps` into one `status` message. |
 | `tool_args` | `pretty_print_json` (`title == "Arguments"`) | **fold** | `tool_call` | Merged into the preceding `tool_call` as `args` (§6.3), not a standalone event. |
 | `tool_result` | `pretty_print_json` (result branch) | **map** | `tool_result` | Direct. `result_data` (incl. nested `file_list` / `search_results`) → canonical `data`; `render` set from the sidecar's declared card type (replaces the #1000 fence hack). |
@@ -516,6 +676,8 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 | `policy_alert` | `print_policy_alert` | **map** | `error` | A governance **block** is an actionable, must-surface refusal. `reason` → `detail`; `decision`/`rule_ids`/`policy_version`/`receipt_id` → a structured tail on `detail` or dropped. See open question Q2 (per-tool vs terminal). |
 | `user_input_request` | `request_user_input_blocking` | **map** | `needs_input` | `request_id`/`message`/`options`/`choices`/`allow_free_text`/`sensitive`/`timeout_seconds` map straight across; `choices` strings become `{value, label}` options so a bare choice list is still pickable. `respond_url` is derived from `run_id`. (Was folded into `needs_confirmation` before #2469 — see §9 Q3, now resolved.) |
 | `tool_confirm_denied` | `confirm_tool_execution` (background mode) | **fold** | `status` | Unattended auto-deny is informational — the run continues and the agent retries. Surface the actionable `message` as a `status` line, not an `error` (the run did not fail). |
+| `skill_use` | `print_skill_use` | **fold** | `status` | "Using skill: _name_" when GAIA loaded the skill for one of its `loads_with` tools, or it was already loaded. Dropped when the model called `load_skill` itself, which already went out as a `tool_call`. |
+| `context_usage` | `_restore_model_history` (`_chat_helpers.py`) | **map** | `context_usage` | Already the canonical shape, streamed at turn start; passed through unchanged. A caller that sends `turns` gets the same event from the sidecar before its answer (contract ≥ 2.28). |
 | `agent_created` | `print_agent_created` | **drop** | — | Registry-refresh signal with no chat-stream meaning. Must move to a **host control channel**, not the `/query` event stream. Dropping it here is a contract decision, not a silent loss — call it out in #2016. |
 | `None` (queue sentinel) | `signal_done` | **n/a** | *stream close* | Not a wire event. The canonical stream ends after the terminal `final`/`error`; the sentinel maps to closing the `text/event-stream` response. |
 
@@ -525,8 +687,12 @@ The in-process handler emits `tool_start` (name only) and then, separately,
 `tool_args` (arguments) once they're known. The canonical `tool_call` carries
 `{tool, args}` **together**. The translation layer buffers the `tool_start`,
 attaches `args` from the following `tool_args`, and emits a single `tool_call`.
-If no `tool_args` arrives (argument-less tool), it emits `tool_call{tool,
-args:{}}`.
+Every call the agent loop makes sends `tool_args` before the tool runs, with
+`args: {}` for a tool that takes no arguments, so the `tool_call` is on the
+wire while the tool is still running. A host must treat that `tool_call` as a
+running tool: the messaging bridge stops counting idle time from it until the
+`tool_result`. If a producer sends `tool_start` with no `tool_args` at all,
+the next event (or stream close) flushes it as `tool_call{tool, args:{}}`.
 
 ---
 
@@ -572,40 +738,29 @@ The seven types are the frozen v1 vocabulary. Evolution rules:
 
 ---
 
-## 8. Email agent regeneration plan (implemented by #2016)
+## 8. Docs that move with a contract change
 
-Freezing this contract is the dependency for [#2016](https://github.com/amd/gaia/issues/2016),
-which adds `POST /v1/email/query` (the SSE agent loop) to the email sidecar and
-bumps the contract **2.3 → 2.4** (additive MINOR — 2.2 was consumed by
-attachments #1542, 2.3 by the triage scaffold #1984). Per the #1841 "update every
-doc that describes it" rule, #2016 must regenerate/update **together**:
+The first implementation of this contract was the standalone email agent's
+`/query` route ([#2016](https://github.com/amd/gaia/issues/2016)); that agent
+has since been removed, and the flagship `gaia` sidecar is the one that serves
+it. Per the #1841 "update every doc that describes it" rule, a contract MINOR
+moves these **together**: this spec, the flagship's OpenAPI document
+(`hub/agents/gaia/python/openapi.gaia.json`, regenerated by
+`gaia_agent/export_openapi.py`), its contract version, and the npm
+`SPEC.md` / `README.md` / `SKILL.md` / `CHANGELOG.md` under
+`hub/agents/gaia/npm/`.
 
-| Surface | File | Change |
-|---|---|---|
-| OpenAPI | [`hub/agents/email/python/openapi.email.json`](../../hub/agents/email/python/openapi.email.json) | Regenerate via `export_openapi.py` with the new `/query` route + this SSE contract referenced as the streaming response. |
-| OpenAPI generator | `hub/agents/email/python/gaia_agent_email/export_openapi.py` | Emit the `/query` path + `/query/{run_id}/cancel`. |
-| Human spec (HTML) | [`hub/agents/email/python/specification.html`](../../hub/agents/email/python/specification.html) via `gaia_agent_email/spec_html.py` | Document `/query`, the seven event types, and the request body. |
-| Contract version | `gaia_agent_email/contract.py` (`SCHEMA_VERSION`) + `gaia_agent_email/version.py` (`API_VERSION`) | `2.3` → `2.4`. |
-| Route | `gaia_agent_email/api_routes.py` | New `/query` route wiring the agent loop through the translation layer (§6). |
-| Integrator docs | `hub/agents/email/npm/{SPEC.md, SKILL.md, README.md, CHANGELOG.md}` | Describe `/query`, the event vocabulary, and the 2.4 CHANGELOG entry. |
-
-The same rule applied again for the #2469 `needs_input` MINOR (contract 2.5 →
-2.6): this spec, `openapi.email.json`, `specification.html` / `spec_html.py`,
-`contract.py`, `CONTRACT.md`, `CAPABILITY_MATRIX.md`, and the npm
-`SPEC.md` / `README.md` / `SKILL.md` / `CHANGELOG.md` all moved together.
-
-The translation layer (§6) is the reusable piece: #2016 builds it once against
-this contract; later surfaces (#2014 relay, CLI, `gaia api`) consume the same
-canonical stream and never re-derive the mapping.
+The translation layer (§6) is the reusable piece: it is built once against
+this contract, and every surface (#2014 relay, CLI, `gaia api`) consumes the
+same canonical stream and never re-derives the mapping.
 
 ---
 
 ## 9. Open questions
 
-- **Q1 — dedicated reasoning stream?** `thinking` currently folds into `status`.
-  If the v2 UI wants a distinct "reasoning" affordance separate from progress
-  narration and from committed answer text, that is an **additive MINOR** (a new
-  event type or a `status` subtype) — not a change to the frozen seven.
+- **Q1 — dedicated reasoning stream? RESOLVED (contract 2.22).** A client that
+  sends `reasoning: true` gets the model's reasoning as `reasoning` events, an
+  additive MINOR. Without the field, `thinking` still folds into `status`.
 - **Q2 — `policy_alert` terminal vs per-tool.** Mapped to `error`, but a
   governance block is per-*tool* (the run may continue), whereas the canonical
   `error` is documented as terminal. Either the translation layer distinguishes
@@ -694,8 +849,34 @@ turns (and their estimated tokens) no longer replayed to the model, and
 `message` is the line the TUI keeps in the transcript. It is sent only when more
 turns are hidden than in the last reported view (the newest turn moved the cut,
 or a smaller model or longer prompt shrank the budget), so a stable cut is
-reported once.
+reported once. The model is told on every such turn, not once: the oldest user
+message it is sent opens with a one-sentence note that earlier turns exist and
+are no longer shown.
 
-Over stdio the agent never sends `tool_result.render`,
-`needs_confirmation.confirm_url` or `error.source`. The TUI decodes them for
-other transports, and it sets `source` itself on an error it synthesizes.
+### 10.4 Session listing
+
+Launched with `--history-file <dir>/<id>.sqlite3 --session-kind <kind>`, the
+agent keeps a listing beside the transcript so a host can show and reopen the
+session without reading SQLite. `<id>.json` holds `version`, `id`, `title` (the
+first line of the first question), `kind`, `status`, `created_at`, `updated_at`,
+`pid` and `turns`, and is replaced atomically on every change. `status` is
+`running` while a turn runs, `waiting` while it is parked on a
+`needs_confirmation`, then `done` or `failed` by the turn's terminal event; `pid`
+is cleared to 0 on a clean exit. `<id>.jsonl` gains one line per finished turn:
+`{"user", "answer"}` or `{"user", "error"}`. `clear_conversation` empties it.
+The agent holds an exclusive lock on the first byte of `<id>.lock` for its whole
+life; that lock, not `pid`, is how a host tells an open session from a closed
+one, since it dies with the process and a reused pid cannot fake it. Reopening
+a session takes the lock and rewrites `<id>.json` at once (a status left at
+`running` or `waiting` becomes `failed`); if another process still holds the
+lock after a short wait (a host's probe takes and drops it), the agent refuses
+to start. `<id>` must be hex, as the TUI mints it.
+Only real turns move the listing — sentinels and `/model` do not. Without
+`--session-kind` nothing is written. The TUI passes `chat`; other launchers name
+their own kind (`eval`, `scheduled`), which the TUI hides by default.
+
+Over stdio the agent never sends `needs_confirmation.confirm_url` or
+`error.source`. The TUI decodes them for other transports, and it sets `source`
+itself on an error it synthesizes. It does send `tool_result.render` for the
+card tools (`guide`, `calculator`), and the TUI draws both: every line of a
+guide, and a calculator's results computed from its starting numbers.

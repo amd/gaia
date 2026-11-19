@@ -48,8 +48,8 @@ def build_fixture_wheel_bytes(
 
     ``extra_modules`` maps extra relative-path -> source for additional files
     inside ``module_name`` (e.g. ``{"app.py": "..."}``), for fixtures that
-    need more than one module (e.g. mimicking ``gaia_agent_chat.agent`` +
-    ``gaia_agent_chat.app`` for a hardcoded-import call site).
+    need more than one module (e.g. mimicking ``gaia_agent.agent`` +
+    ``gaia_agent.interactive`` for a hardcoded-import call site).
     """
     dist_info = f"{_normalize_dist_name(dist_name)}-{version}.dist-info"
     files: Dict[str, str] = {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,8 +21,10 @@ type Capacity struct {
 	MemorySource string
 	// DiskFreeGB is negative when Lemonade did not report its model store.
 	DiskFreeGB float64
-	// ServerVersion is Lemonade's own version, "" when it did not say.
-	ServerVersion string
+	// NPUMemoryGB is the system RAM an FLM model loads into: the RAM the OS
+	// sees, so installed RAM less an APU's GPU carve-out. 0 when Lemonade
+	// reports no available NPU.
+	NPUMemoryGB float64
 }
 
 type gpuInfo struct {
@@ -54,6 +57,7 @@ func (g *gpuList) UnmarshalJSON(b []byte) error {
 }
 
 type systemInfo struct {
+	OSVersion      string `json:"OS Version"`
 	PhysicalMemory string `json:"Physical Memory"`
 	Devices        struct {
 		AMD     gpuList `json:"amd_gpu"`
@@ -61,6 +65,9 @@ type systemInfo struct {
 		AMDDGPU gpuList `json:"amd_dgpu"`
 		NVIDIA  gpuList `json:"nvidia_gpu"`
 		Metal   gpuList `json:"metal"`
+		NPU     *struct {
+			Available bool `json:"available"`
+		} `json:"amd_npu"`
 	} `json:"devices"`
 	Storage *struct {
 		FreeBytes *float64 `json:"free_bytes"`
@@ -68,6 +75,34 @@ type systemInfo struct {
 }
 
 var physicalGB = regexp.MustCompile(`([\d.]+)\s*GB`)
+
+// physicalMemoryGB is Lemonade's "Physical Memory" in GB, or 0 when absent.
+func physicalMemoryGB(raw string) float64 {
+	if m := physicalGB.FindStringSubmatch(raw); m != nil {
+		if gb, err := strconv.ParseFloat(m[1], 64); err == nil && gb > 0 {
+			return gb
+		}
+	}
+	return 0
+}
+
+// windowsSharedGB is the system RAM Windows lets an integrated GPU use beyond
+// its carve-out: half of the RAM Windows sees. Lemonade's "Physical Memory" is
+// installed RAM, which still counts the carve-out. Mirrors
+// gaia.llm.model_fit._windows_shared_gb.
+func windowsSharedGB(physicalGB, carveOutGB float64) float64 {
+	return math.Max(0, physicalGB-carveOutGB) * fitRule.WindowsIGPUSharedRAMFraction
+}
+
+// formatGB mirrors gaia.llm.model_fit.format_gb: under 1 GB keeps a decimal so
+// 0.5 never reads as 0. Keep it apart from textutil.FormatGB, or the TUI and
+// Python print different "will not fit" text.
+func formatGB(gb float64) string {
+	if gb > 0 && gb < 1 {
+		return strconv.FormatFloat(gb, 'f', 1, 64)
+	}
+	return strconv.FormatFloat(gb, 'f', 0, 64)
+}
 
 type gpuEntry struct {
 	vendor     string
@@ -78,11 +113,56 @@ type gpuEntry struct {
 // capacityFrom mirrors gaia.llm.model_fit.capacity_from_system_info, including
 // its refusal to judge a PC whose GPU is reported without its memory.
 func capacityFrom(info systemInfo) (Capacity, error) {
+	c, err := gpuCapacityFrom(info)
+	c.NPUMemoryGB = npuMemoryGB(info)
+	return c, err
+}
+
+// npuMemoryGB mirrors gaia.llm.model_fit._npu_memory_gb.
+func npuMemoryGB(info systemInfo) float64 {
+	physical := physicalMemoryGB(info.PhysicalMemory)
+	if info.Devices.NPU == nil || !info.Devices.NPU.Available || physical <= 0 {
+		return 0
+	}
+	// Only a Windows Lemonade reports installed RAM; Linux's MemTotal is
+	// already without the carve-out.
+	if !strings.HasPrefix(strings.ToLower(info.OSVersion), "windows") {
+		return physical
+	}
+	carveOut := 0.0
+	for _, src := range []struct {
+		integrated bool
+		list       gpuList
+	}{{false, info.Devices.AMD}, {true, info.Devices.AMDIGPU}, {false, info.Devices.AMDDGPU}} {
+		for _, g := range src.list {
+			if g.available() && (src.integrated || g.Integrated) {
+				if carveOut = g.VRAMGB; carveOut <= 0 {
+					carveOut = adapterMemoryGB(g.Name)
+				}
+				return math.Max(0, physical-carveOut)
+			}
+		}
+	}
+	return physical
+}
+
+// NPU is c as an FLM model sees it: the NPU's system RAM as the memory pool.
+// ok is false on a PC with no NPU. Mirrors gaia.llm.model_fit.npu_capacity.
+func (c Capacity) NPU() (npu Capacity, ok bool) {
+	if c.NPUMemoryGB <= 0 {
+		return c, false
+	}
+	c.MemoryGB, c.MemorySource = c.NPUMemoryGB, "NPU, system RAM"
+	return c, true
+}
+
+func gpuCapacityFrom(info systemInfo) (Capacity, error) {
 	c := Capacity{DiskFreeGB: -1}
 	if info.Storage != nil && info.Storage.FreeBytes != nil {
 		c.DiskFreeGB = *info.Storage.FreeBytes / 1e9
 	}
 	d := info.Devices
+	physical := physicalMemoryGB(info.PhysicalMemory)
 	var gpus []gpuEntry
 	for _, src := range []struct {
 		vendor     string
@@ -103,8 +183,11 @@ func capacityFrom(info systemInfo) (Capacity, error) {
 			c.MemoryGB, c.MemorySource = g.VRAMGB+g.VirtualGB, "AMD iGPU"
 			return c, nil
 		}
-		if dedicated := adapterMemoryGB(g.Name); dedicated > 0 {
-			c.MemoryGB, c.MemorySource = dedicated, "AMD iGPU"
+		if carveOut := adapterMemoryGB(g.Name); carveOut > 0 {
+			if physical <= 0 {
+				return c, fmt.Errorf("Lemonade reports an AMD integrated GPU (%s) but not this PC's 'Physical Memory', and the GPU's BIOS carve-out alone is not the memory it loads into, so GAIA cannot tell which models fit. Update Lemonade and retry, or choose the model yourself with `gaia config set default_model <model>`", g.Name)
+			}
+			c.MemoryGB, c.MemorySource = carveOut+windowsSharedGB(physical, carveOut), "AMD iGPU"
 			return c, nil
 		}
 	}
@@ -125,33 +208,20 @@ func capacityFrom(info systemInfo) (Capacity, error) {
 		}
 		return c, fmt.Errorf("Lemonade reports a GPU (%s) but not its memory, so GAIA cannot tell which models fit. Update Lemonade and retry", strings.Join(names, ", "))
 	}
-	if m := physicalGB.FindStringSubmatch(info.PhysicalMemory); m != nil {
-		if gb, err := strconv.ParseFloat(m[1], 64); err == nil && gb > 0 {
-			c.MemoryGB, c.MemorySource = gb, "System RAM"
-			return c, nil
-		}
+	if physical > 0 {
+		c.MemoryGB, c.MemorySource = physical, "System RAM"
+		return c, nil
 	}
 	return c, fmt.Errorf("Lemonade reported neither GPU memory nor system memory, so GAIA cannot tell which models fit this PC. Update Lemonade and retry")
 }
 
-// Capacity asks Lemonade what this machine can hold, and which Lemonade it is.
+// Capacity asks Lemonade what this machine can hold.
 func (c *Client) Capacity(ctx context.Context) (Capacity, error) {
 	var info systemInfo
 	if err := c.request(ctx, "GET", "/system-info", nil, &info); err != nil {
 		return Capacity{}, err
 	}
-	capacity, err := capacityFrom(info)
-	if err != nil {
-		return capacity, err
-	}
-	var health struct {
-		Version string `json:"version"`
-	}
-	if err := c.request(ctx, "GET", "/health", nil, &health); err != nil {
-		return capacity, err
-	}
-	capacity.ServerVersion = health.Version
-	return capacity, nil
+	return capacityFrom(info)
 }
 
 // versionAtLeast compares Lemonade versions by the leading digits of each part,
@@ -190,19 +260,6 @@ func versionAtLeast(have, want string) bool {
 	return true
 }
 
-// SupportsModel mirrors gaia.llm.model_fit.check_server_supports: an unknown
-// server version cannot show support.
-func (c Capacity) SupportsModel(minVersion string) (bool, string) {
-	if minVersion == "" || versionAtLeast(c.ServerVersion, minVersion) {
-		return true, ""
-	}
-	running := "this server's version is unknown"
-	if c.ServerVersion != "" {
-		running = "this server is v" + c.ServerVersion
-	}
-	return false, fmt.Sprintf("needs Lemonade v%s or newer (%s); upgrade it with `gaia init --force-reinstall`", minVersion, running)
-}
-
 // RequiredMemoryGB is the memory a model of sizeGB weights needs to run.
 // kvCacheGB is its KV cache at its floor window when larger than the shared
 // margin allows for (0 otherwise).
@@ -214,7 +271,7 @@ func RequiredMemoryGB(sizeGB, kvCacheGB float64) float64 {
 // same words as gaia.llm.model_fit.check_fit.
 func (c Capacity) Fit(sizeGB, kvCacheGB float64) (bool, string) {
 	if need := RequiredMemoryGB(sizeGB, kvCacheGB); need > c.MemoryGB {
-		return false, fmt.Sprintf("needs ~%.0f GB of memory; this PC has %.0f GB (%s)", need, c.MemoryGB, c.MemorySource)
+		return false, fmt.Sprintf("needs ~%.0f GB of memory; this PC has %s GB (%s)", need, formatGB(c.MemoryGB), c.MemorySource)
 	}
 	if c.DiskFreeGB >= 0 && sizeGB > c.DiskFreeGB {
 		return false, fmt.Sprintf("needs %.0f GB of disk; %.0f GB free", sizeGB, c.DiskFreeGB)

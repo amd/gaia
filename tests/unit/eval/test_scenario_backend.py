@@ -18,7 +18,7 @@ from pathlib import Path
 import psutil
 import pytest
 
-from gaia.eval import runner
+from gaia.eval import claude_credential, runner
 
 from ._fake_agent_ui import FakeAgentUI
 
@@ -55,6 +55,10 @@ def claude_shim(tmp_path, monkeypatch):
         lambda name, *a, **kw: str(shim) if name == "claude" else real_which(name),
     )
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # The stand-in CLI is logged in.
+    monkeypatch.setattr(
+        claude_credential, "_auth_status", lambda _b, _e: {"loggedIn": True}
+    )
     return shim
 
 

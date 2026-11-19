@@ -11,6 +11,12 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../services/api');
+// Only rendered when setup is needed; stands in for the real screen's "Start chatting".
+vi.mock('../components/SetupScreen', () => ({
+    SetupScreen: ({ onReady }: { onReady: () => void }) => (
+        <button type="button" onClick={() => onReady()}>Start chatting</button>
+    ),
+}));
 
 import App from '../App';
 import * as api from '../services/api';
@@ -54,9 +60,9 @@ beforeEach(() => {
     mocked.listProviderModels.mockResolvedValue({ models: [] } as never);
     mocked.checkSetup.mockResolvedValue(READY);
     mocked.requestWarmUp.mockResolvedValue({ state: 'ready' });
-    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
     mocked.getSystemStatus.mockResolvedValue({ lemonade_running: true, model_loaded: 'x', initialized: true } as never);
-    mocked.listAgents.mockResolvedValue({ agents: [GAIA_AGENT], total: 1 });
+    mocked.listAgents.mockReset().mockResolvedValue({ agents: [GAIA_AGENT], total: 1 });
     mocked.listSessions.mockResolvedValue({ sessions: [], total: 0 });
     mocked.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
     mocked.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
@@ -201,6 +207,71 @@ describe('the GAIA agent is not installed', () => {
         expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
     });
 
+    it('is not claimed right after setup installed the agent', async () => {
+        mocked.checkSetup.mockResolvedValue({ ready: false, steps: [] });
+        // Read at startup, before setup installs the agent.
+        mocked.listAgents.mockResolvedValueOnce({ agents: [], total: 0 });
+        let answer!: (v: { agents: AgentInfo[]; total: number }) => void;
+        mocked.listAgents.mockReturnValueOnce(new Promise((r) => { answer = r; }));
+        render(<App />);
+        await advance(0);
+
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start chatting' })); });
+        await advance(0);
+        expect(mocked.listAgents).toHaveBeenCalledTimes(2);
+        // Still re-reading: say nothing rather than the stale verdict.
+        expect(screen.queryByText(/GAIA agent isn't installed/)).not.toBeInTheDocument();
+
+        await act(async () => { answer({ agents: [GAIA_AGENT], total: 1 }); });
+        await advance(0);
+        expect(screen.getByLabelText('Message')).toBeInTheDocument();
+        expect(screen.queryByText(/GAIA agent isn't installed/)).not.toBeInTheDocument();
+    });
+
+    it('ignores a startup read that answers after the post-setup one', async () => {
+        mocked.checkSetup.mockResolvedValue({ ready: false, steps: [] });
+        let answerStartup!: (v: { agents: AgentInfo[]; total: number }) => void;
+        mocked.listAgents
+            .mockReturnValueOnce(new Promise((r) => { answerStartup = r; }))
+            .mockResolvedValueOnce({ agents: [GAIA_AGENT], total: 1 });
+        render(<App />);
+        await advance(0);
+
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start chatting' })); });
+        await advance(0);
+        expect(mocked.listAgents).toHaveBeenCalledTimes(2);
+
+        // The startup read was sent before setup installed the agent.
+        await act(async () => { answerStartup({ agents: [], total: 0 }); });
+        await advance(0);
+        expect(screen.getByLabelText('Message')).toBeInTheDocument();
+        expect(screen.queryByText(/GAIA agent isn't installed/)).not.toBeInTheDocument();
+    });
+
+    it('still says so after setup when the re-read fails', async () => {
+        mocked.checkSetup.mockResolvedValue({ ready: false, steps: [] });
+        mocked.listAgents
+            .mockResolvedValueOnce({ agents: [], total: 0 })
+            .mockRejectedValueOnce(NOT_LISTENING());
+        render(<App />);
+        await advance(0);
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start chatting' })); });
+        await advance(0);
+        expect(screen.getByText(/GAIA agent isn't installed/)).toBeInTheDocument();
+    });
+
+    it('re-checks on window focus, so an install from the CLI clears the notice', async () => {
+        mocked.listAgents.mockResolvedValueOnce({ agents: [], total: 0 });
+        render(<App />);
+        await advance(0);
+        expect(screen.getByText(/GAIA agent isn't installed/)).toBeInTheDocument();
+
+        await act(async () => { window.dispatchEvent(new Event('focus')); });
+        await advance(0);
+        expect(mocked.listAgents).toHaveBeenCalledTimes(2);
+        expect(screen.queryByText(/GAIA agent isn't installed/)).not.toBeInTheDocument();
+    });
+
     it('a chat refused for the missing agent says why instead of the raw 422', async () => {
         // The agent list never loaded, so only the refusal can tell.
         mocked.listAgents.mockRejectedValue(NOT_LISTENING());
@@ -214,5 +285,67 @@ describe('the GAIA agent is not installed', () => {
         expect(screen.getByRole('alert')).toHaveTextContent(/GAIA agent isn't installed/);
         expect(screen.getByRole('button', { name: 'Install GAIA agent' })).toBeInTheDocument();
         expect(mocked.sendMessageStream).not.toHaveBeenCalled();
+    });
+});
+
+describe('the version setup works on', () => {
+    function stubUpdater() {
+        const bridge = {
+            getStatus: vi.fn(async () => ({ status: 'idle' })),
+            onStatusChange: vi.fn(() => () => {}),
+            markSetupWorked: vi.fn(async () => ({ status: 'idle' })),
+        };
+        vi.stubGlobal('gaiaUpdater', bridge);
+        return bridge;
+    }
+
+    it('is recorded when the launch check finds setup ready', async () => {
+        const bridge = stubUpdater();
+        render(<App />);
+        await advance(0);
+        expect(bridge.markSetupWorked).toHaveBeenCalledTimes(1);
+    });
+
+    it('is recorded when first-run setup finishes, not before', async () => {
+        const bridge = stubUpdater();
+        mocked.checkSetup.mockResolvedValue({ ready: false, steps: [] });
+        render(<App />);
+        await advance(0);
+        expect(bridge.markSetupWorked).not.toHaveBeenCalled();
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start chatting' })); });
+        await advance(0);
+        expect(bridge.markSetupWorked).toHaveBeenCalledTimes(1);
+    });
+
+    it('is not recorded on a cloud model, which never ran local setup', async () => {
+        const bridge = stubUpdater();
+        mocked.getActiveModel.mockResolvedValue({
+            provider: 'fireworks', model: 'qwen', label: 'Qwen', display_name: 'Qwen', remote: true, is_default: false,
+        } as never);
+        render(<App />);
+        await advance(0);
+        expect(mocked.checkSetup).toHaveBeenCalled();
+        expect(bridge.markSetupWorked).not.toHaveBeenCalled();
+    });
+
+    it('is not recorded when updating the model server failed, and the way back is offered', async () => {
+        const bridge = stubUpdater();
+        bridge.getStatus.mockResolvedValue({
+            status: 'idle', currentVersion: '0.26.0', lastWorking: { version: '0.25.0', at: '2026-11-02T09:30:00.000Z' },
+        } as never);
+        mocked.checkSetup.mockResolvedValue({ ready: false, stage: 'upgrade', steps: [] } as never);
+        mocked.getSetupStatus.mockResolvedValue({ state: 'failed', upgrade_embedded: true, error: 'exit code 127', steps: [] } as never);
+        render(<App />);
+        await advance(0);
+        expect(screen.getByRole('button', { name: 'Go back to GAIA 0.25.0' })).toBeInTheDocument();
+        expect(bridge.markSetupWorked).not.toHaveBeenCalled();
+    });
+
+    it('is not recorded when setup could not be checked', async () => {
+        const bridge = stubUpdater();
+        mocked.checkSetup.mockRejectedValue(new Error('HTTP 500'));
+        render(<App />);
+        await advance(0);
+        expect(bridge.markSetupWorked).not.toHaveBeenCalled();
     });
 });

@@ -5,8 +5,8 @@
 .notification-center {
   display: flex;
   flex-direction: column;
-  width: 400px;
-  max-height: 600px;
+  width: min(400px, calc(100vw - 24px));
+  max-height: min(600px, calc(100dvh - 72px));
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -15,16 +15,10 @@
   animation: notifSlideIn var(--duration) var(--ease);
 }
 
-[data-theme="dark"] .notification-center {
-  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
-  backdrop-filter: blur(20px) saturate(1.2);
-  -webkit-backdrop-filter: blur(20px) saturate(1.2);
-}
-
 @keyframes notifSlideIn {
   from {
     opacity: 0;
-    transform: translateY(-8px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -49,7 +43,7 @@
 
 .notification-center-title {
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-primary);
   margin: 0;
 }
@@ -65,7 +59,7 @@
   background: var(--text-primary);
   color: var(--bg-primary);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .notification-center-close {
@@ -77,16 +71,13 @@
 }
 
 /* ── Filter Bar ──────────────────────────────────────────────────────── */
+/* Tabs wrap to a second line rather than run off the panel's edge. */
 .notification-filter-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-light);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.notification-filter-bar::-webkit-scrollbar {
-  display: none;
 }
 
 .notification-filter-tab {
@@ -105,7 +96,7 @@
 .notification-filter-tab.active {
   background: var(--bg-active);
   color: var(--text-primary);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 /* ── Notification List ───────────────────────────────────────────────── */
@@ -140,7 +131,7 @@
   gap: 10px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border-light);
-  border-left: 3px solid transparent;
+  border-inline-start: 3px solid transparent;
   cursor: pointer;
   position: relative;
   transition: background var(--duration-fast) var(--ease);
@@ -176,31 +167,31 @@
 .notification-unread-dot {
   position: absolute;
   top: 16px;
-  left: 6px;
+  inset-inline-start: 6px;
   width: 6px;
   height: 6px;
   border-radius: var(--radius-full);
   background: var(--accent);
 }
 
-/* ── Type-based left border colors ───────────────────────────────────── */
+/* ── Type-based start border colors ───────────────────────────────────── */
 .notification-item.notif-type-permission {
-  border-left-color: var(--accent);
+  border-inline-start-color: var(--accent);
 }
 .notification-item.notif-type-security {
-  border-left-color: var(--accent-yellow);
+  border-inline-start-color: var(--accent-yellow);
 }
 .notification-item.notif-type-policy {
-  border-left-color: var(--accent-yellow);
+  border-inline-start-color: var(--accent-yellow);
 }
 .notification-item.notif-type-status {
-  border-left-color: var(--accent-green);
+  border-inline-start-color: var(--accent-green);
 }
 .notification-item.notif-type-info {
-  border-left-color: var(--accent-blue);
+  border-inline-start-color: var(--accent-blue);
 }
 .notification-item.notif-type-error {
-  border-left-color: var(--danger);
+  border-inline-start-color: var(--danger);
 }
 
 /* ── Type-based icon colors ──────────────────────────────────────────── */
@@ -247,11 +238,13 @@
 
 .notification-agent {
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
+  animation: fade-cut-inline both;
+  animation-timeline: scroll(self inline);
 }
 
 .notification-time {
@@ -263,7 +256,7 @@
 
 .notification-title {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-primary);
   line-height: 1.3;
 }
@@ -274,6 +267,8 @@
   line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 3;
+  animation: fade-cut-block both;
+  animation-timeline: scroll(self block);
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -298,8 +293,8 @@
 
 .notification-policy-reason {
   display: block;
-  padding-left: 8px;
-  border-left: 2px solid color-mix(in srgb, var(--accent-yellow) 45%, transparent);
+  padding-inline-start: 8px;
+  border-inline-start: 2px solid color-mix(in srgb, var(--accent-yellow) 45%, transparent);
   color: var(--text-secondary);
   line-height: 1.45;
 }
@@ -325,7 +320,7 @@
   padding: 4px 12px;
   border-radius: var(--radius-sm);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   transition: all var(--duration-fast) var(--ease);
 }
 
@@ -354,7 +349,7 @@
   padding: 2px 8px;
   border-radius: var(--radius-full);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
   margin-top: 4px;
   width: fit-content;
 }

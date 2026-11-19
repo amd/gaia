@@ -137,3 +137,15 @@ def test_a_finished_answer_is_never_told_to_write_its_source(tmp_path):
     gaps = ledger.gaps("Saved the action items to actions.md.", _claims_file_write)
     assert gaps == []
     assert "minutes.txt" not in " ".join(gaps)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Saved a backup in **C:/t/todo.txt.bak.**",
+        "Saved a backup in *C:/t/todo.txt.bak*.",
+    ],
+)
+def test_markdown_emphasis_is_not_part_of_a_path(text):
+    """A bold path kept its asterisks in the footer (#7439)."""
+    assert destination_paths(text) == ["C:/t/todo.txt.bak"]

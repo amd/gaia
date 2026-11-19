@@ -1,10 +1,10 @@
 ---
 title: "Terminal UI"
-description: "gaia-tui boots straight into the flagship GAIA agent's chat — a splash, a readiness gate that fixes what it can, then the conversation. No terminal required to leave."
+description: "gaia-cli boots straight into the flagship GAIA agent's chat — a splash, a readiness gate that fixes what it can, then the conversation. No terminal required to leave."
 icon: "terminal"
 ---
 
-`gaia-tui` is GAIA's terminal-native front door. It opens directly on the flagship
+`gaia-cli` is GAIA's terminal-native front door. It opens directly on the flagship
 `gaia` agent — conversation, documents, data, web research, memory, skills — behind a
 readiness gate that runs on every launch and checks the few things that would
 otherwise make the agent fail. Where it can fix a problem itself, one key does it.
@@ -14,7 +14,7 @@ Download the installer for your platform from **[amd-gaia.ai](https://amd-gaia.a
 run it, then open a new terminal:
 
 ```bash
-gaia-tui
+gaia-cli
 ```
 
 <Info>
@@ -25,16 +25,26 @@ gaia-tui
 </Info>
 
 <Note>
-  `gaia-tui` is the Go terminal binary — never `gaia`, which is the Python CLI's
+  `gaia-cli` is the Go terminal binary — never `gaia`, which is the Python CLI's
   name and has entirely different subcommands. It accepts a leading `tui` word and
-  drops it, so `gaia-tui` and `gaia-tui tui` open the same session. See the
-  [CLI reference](/reference/cli#terminal-ui-gaia-tui) for its non-interactive
+  drops it, so `gaia-cli` and `gaia-cli tui` open the same session. See the
+  [CLI reference](/reference/cli#terminal-ui-gaia-cli) for its non-interactive
   subcommands.
+</Note>
+
+<Note>
+  **It used to be `gaia-tui`.** Updating installs `gaia-cli` and removes the old
+  binary. An install made with the one-line installer keeps `gaia-tui` as a link
+  to `gaia-cli` (a copy on Windows), so shortcuts and scripts that use the old name still work. With
+  the Windows setup and the macOS and Linux packages, type `gaia-cli`. Until this
+  release `gaia-cli` was a second name for the Python `gaia` command; use `gaia`
+  for that. `/update` can't take a Windows setup or macOS package install back to
+  a release from before the rename: uninstall GAIA, then install that release.
 </Note>
 
 <Warning>
   This binary boots straight into the flagship, and it does not install, uninstall,
-  search, or vote on agents — that stays the Python CLI's job (`gaia hub install email --trust` for the email agent).
+  search, or vote on agents — that stays the Python CLI's job (`gaia init` installs the flagship).
   An earlier version of the TUI opened on an agent browser that did all of that,
   with the flagship listed as "Coming Soon." That screen, and the `list` / `install` /
   `uninstall` / `hub` subcommands that drove it, are gone for good.
@@ -48,24 +58,29 @@ gaia-tui
 
 Every release publishes a native installer per platform at
 [amd-gaia.ai](https://amd-gaia.ai/#install) (the page picks your platform). Each puts
-two binaries on disk and on your PATH — `gaia-tui` (this app) and `gaia-agent` (the flagship agent
+two binaries on disk and on your PATH — `gaia-cli` (this app) and `gaia-agent` (the flagship agent
 it runs) — so there is nothing to unzip and nothing to `chmod`.
 
 | Platform | File | How to install | Installs to |
 | --- | --- | --- | --- |
-| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click, tick **GAIA Terminal UI** | `%LOCALAPPDATA%\Programs\GAIA Terminal Hub` |
+| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click, tick **GAIA Terminal UI** | `%LOCALAPPDATA%\Programs\gaia-tui` |
 | macOS Apple silicon | `gaia-<version>-darwin-arm64.pkg` | double-click | `/usr/local/bin` |
 | macOS Intel | `gaia-<version>-darwin-x64.pkg` | double-click | `/usr/local/bin` |
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
-| Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo rpm -i gaia-<version>.x86_64.rpm` | `/usr/bin` |
+| Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo dnf install ./gaia-<version>.x86_64.rpm` | `/usr/bin` |
+
+On macOS and Linux the package carries only those two binaries. The first time you
+open GAIA, setup installs the rest of GAIA (its Python part, the `gaia` command) into
+`~/.gaia`. That takes about two minutes and needs internet. The one-line installer
+(`curl -fsSL https://amd-gaia.ai/install.sh | sh`) installs it up front instead.
 
 On Windows this is the one GAIA installer: on **Choose Components**, tick
 **Terminal** — and the desktop app too, if you want both. [Install GAIA](/guides/install)
 covers the choice and silent installs (`/S /COMPONENTS=tui`).
 
 The Windows setup is per-user: it needs no administrator rights and shows no UAC
-prompt. It also bundles Lemonade Server, so the install itself needs no network
-(Lemonade downloads its own runtime the first time you run a model). Start Menu
+prompt. The install itself needs no network; GAIA sets up its own Lemonade Server
+and models the first time you open it. Start Menu
 and desktop shortcuts are created; open a **new** terminal afterwards, because an
 already-open one keeps the PATH it started with. Quit GAIA before upgrading —
 Windows cannot replace a running program, and the setup will tell you so rather
@@ -74,7 +89,7 @@ than install over it half-way.
 The Windows setup also gives GAIA its own look in Windows Terminal. It adds a
 **GAIA** profile (IBM Plex Mono, roomy spacing, a dark GAIA colour scheme) and installs
 IBM Plex Mono for your account only. When Windows Terminal is installed, the shortcuts
-open that profile. Without it, they run `gaia-tui` in the default console, and the
+open that profile. Without it, they run `gaia-cli` in the default console, and the
 install log says so. Specifically, the setup writes:
 
 | What | Where |
@@ -94,22 +109,23 @@ To remove it, close Windows Terminal, then go to **Settings → Personalization 
 <Note>
   There is no installer for Windows on Arm or Linux on Arm. The flagship agent
   publishes no build for either, so an installer there would set up the terminal app
-  with no agent behind it. The raw `gaia-tui` binary is still published for all six targets
+  with no agent behind it. The raw `gaia-cli` binary is still published for all six targets
   if you want to run it against an agent you build yourself.
 </Note>
 
 Uninstalling leaves `~/.gaia` — your chats, documents and memory — in place unless
 you say otherwise. On Windows, the terminal is its own **GAIA Terminal UI** entry
 in Installed apps, separate from the desktop app's, and its uninstaller offers to delete it; on Linux,
-`apt remove` and `rpm -e` keep it. Lemonade Server is never removed with GAIA,
-because other things may be using it — see `gaia uninstall --purge-lemonade`.
+`apt remove` and `rpm -e` keep it. GAIA's own Lemonade Server lives in `~/.gaia`,
+so it stays or goes with that folder. A system-wide Lemonade is never removed with
+GAIA, because other things may be using it — see `gaia uninstall --purge-lemonade`.
 
 A macOS `.pkg` ships no uninstaller — that is the platform convention, not an
 omission — so remove the files and then forget the receipt:
 
 ```bash
-sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
-sudo rm -rf /usr/local/share/doc/gaia-tui
+sudo rm -f /usr/local/bin/gaia-cli /usr/local/bin/gaia-agent
+sudo rm -rf /usr/local/share/doc/gaia-cli
 sudo pkgutil --forget ai.amd.gaia.terminal-hub
 sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
 ```
@@ -129,23 +145,23 @@ dismiss the warning, then go to **System Settings → Privacy & Security** and c
 Contributors who want the binary from a checkout, rather than the installer:
 
 ```bash
-cd tui && make build     # -> tui/bin/gaia-tui
+cd tui && make build     # -> tui/bin/gaia-cli (.exe on Windows)
 ```
 
-This builds `gaia-tui` only. `gaia-agent` still has to come from an installer or a
+This builds `gaia-cli` only. `gaia-agent` still has to come from an installer or a
 hub download — the readiness gate below says so on the first screen if it is
 missing.
 
 ## The boot sequence
 
-Every launch — `gaia-tui` with no arguments, or `gaia-tui run email` — goes
+Every launch — `gaia-cli` with no arguments, or `gaia-cli run email` — goes
 through the same screens: a splash, a readiness gate, then chat. The flagship
 agent adds a short "Getting GAIA ready" stage before chat opens — see
 [Getting ready](#getting-ready).
 
 ```bash
-gaia-tui                 # the flagship agent
-gaia-tui run email       # any other agent, by id
+gaia-cli                 # the flagship agent
+gaia-cli run email       # any other agent, by id
 ```
 
 ### 1. Splash
@@ -219,10 +235,14 @@ Every choice still installs Lemonade next: it runs local models, and for a cloud
 provider it routes the requests and computes the embeddings that document
 search and memory use.
 
-- **Local** — step 2 installs Lemonade, step 3 downloads the models.
+- **Local** — step 2 installs Lemonade, step 3 opens **Choose your models**,
+  and nothing downloads until you press `Enter` there.
 - **Fireworks AI** or **AMD LLM Gateway** — step 2 installs Lemonade. Step 3
   opens that provider's key form; paste the key, pick a model, and setup
   downloads only the embedding model. No local chat model is downloaded.
+
+When the AMD gateway can't be reached (no AMD network or VPN), its option is
+greyed out and says "No network available". Connect, then press **r**.
 
 ```
   Setting up GAIA                                                    step 2 of 3
@@ -242,27 +262,168 @@ Press `Enter` and the step runs right there. The row it is working on shows it,
 and the line underneath says what is happening in words — never a log line.
 The Lemonade step installs Lemonade and stops, downloading nothing — and so does
 every retry of it, and the key on a Lemonade row that is installed but not
-running. `p` still opens the full provider panel at any point, to pick a
-specific model rather than the default. Press `Enter` again to start the last
-step:
+running. `p` still opens the full provider panel at any point on the flagship agent, to pick a
+specific model rather than the default.
+
+#### Choose your models
+
+`Enter` on the last step opens the plan before anything downloads. The models,
+the GPU memory, the download and the test are parts of that one step, so the
+header keeps the checklist's count. Models are grouped by the job they do, and
+each row says its size still to download, whether GAIA verified it, whether it
+fits this PC's memory, and which one is recommended. The free space on the drive
+Lemonade stores models on is underneath.
 
 ```
-  Setting up GAIA                                                    step 3 of 3
-  ──────────────────────────────────────────────────────────────────────────────
-    [ok]  GAIA agent          C:\Users\you\.gaia\bin\gaia-agent.exe
-    [ok]  Lemonade            running at http://localhost:13305/api/v1
-    [..]  Language model      ⣟  downloading Gemma-4-E4B-it-GGUF…
+  Choose your models                                 step 3 of 3 · part 1 of 3
+  ────────────────────────────────────────────────────────────────────────────
+  Chat
+  > (•) Qwen3.6 35B A3B        Verified 23.3 GB   * recommended
+        Answers your chats and reads images. Needs about 27.1 GB of memory;
+        this PC has 32.0 GB for models.
+    ( ) Gemma 4 E4B            Verified 6.0 GB
+    ( ) gpt-oss 20B            Untested 12.1 GB
+    ( ) gpt-oss 120B           Untested 63.4 GB   [!] won't fit
+  Reading images
+  Handled by Qwen3.6 35B A3B · Nothing more to download
+    Choose a different vision model
+  Documents and memory
+    [x] EmbeddingGemma 300M    Verified 330 MB    * recommended
+  Optional extras (off by default)
+    [ ] Speech to text                  1.6 GB
+    [ ] Text to speech                  330 MB
+    [ ] Creating images                 6.5 GB
 
-  ⣟  Step 3 of 3 — downloading Gemma-4-E4B-it-GGUF · 0:05
-  Leaving this screen stops setup.
-  ──────────────────────────────────────────────────────────────────────────────
-  r re-check · d details · esc back
+  Default chat: Qwen3.6 35B A3B
+  [ ] Keep trying if the connection drops (up to 2 minutes)  t
+  Download 23.6 GB · free on C: 200.0 GB · after 176.4 GB
+  Also downloads Model runtime, Python packages. Press v to see everything.
+  ────────────────────────────────────────────────────────────────────────────
+  a recommended · v everything · space choose · enter continue · esc back
 ```
 
-`esc` cancels it. If setup stops, the screen says why and `d` shows its full
-output; `gaia init` does the same work from a terminal.
+**Verified** models passed GAIA's evaluations. **Untested** ones are used at your
+own risk: they may run, but tools, documents or images might not work well.
 
-If this PC already runs a Lemonade Server (v10.9.0 or newer) on its default
+Picking a chat model updates the rest:
+
+- The model it replaces stops downloading, unless it is already on this PC.
+- A chat model that reads images needs no separate vision model. With any other
+  chat model, Gemma is picked for that job. **Choose a different vision model**
+  opens the others, and **Skip for now** leaves it off until you need it.
+- Gemma can't take image creation, so **Creating images** is unticked and stays
+  off with the reason on screen. Choose a larger chat model to use it.
+
+Optional extras are off by default. Tick one and setup downloads and tests it
+with the rest.
+
+| Key | What it does |
+|---|---|
+| `space` | Choose the model under the cursor for its job, or tick a box. On a model already in Lemonade, make it the chat model |
+| `v` | List everything coming to this PC, with its size and where it comes from, before anything starts |
+| `c` | Choose the chat model from a list of the ones picked and the ones already in Lemonade (FLM/NPU models included) |
+| `l` | Show or hide the models already in Lemonade |
+| `a` | Back to the recommended set |
+| `t` | Keep trying for up to 2 minutes when the connection drops, instead of failing straight away (off until you turn it on) |
+| `d` | The raw facts behind the screen: memory, model drive, fit reasons |
+| `Enter` | Continue |
+| `Esc` | Back to the steps. Coming back finds the ticks and the chat model as you left them |
+
+Unticking never deletes a model. Every warning is a caveat with numbers, not a
+block:
+
+- **Won't fit:** `[!] Needs about 27.1 GB; this PC has 16.0 GB`. `Enter` asks
+  `Needs about 27.1 GB; this PC has 16.0 GB. y download anyway · n pick another`.
+- **Disk:** when the selection needs more than is free, the line says how much to
+  free and the one model to untick that would make it fit, and `Enter` becomes
+  `continue anyway`.
+- **Vision:** with a chat model that can't read images and no vision model, GAIA
+  can't read images or screenshots. It asks before downloading one.
+- **Fit unknown:** `[?] fit unknown` when GAIA couldn't read this PC's memory. It
+  never shows a guessed number.
+
+The one thing that stops `Enter` is no chat model at all with chat on this PC:
+the screen says "Pick at least one chat model, or choose a cloud provider in
+step 1." A cloud provider downloads only the embedding model.
+
+On a PC with an integrated GPU (Strix Halo class), where a bigger GPU share would
+let a model you ticked fit, or GAIA's default chat model for the PC (unticked
+at first because it doesn't fit yet), the next part is **Give the GPU more memory**: the split
+now, a target in GB of GPU memory (`←`/`→`), and what it unlocks. It needs administrator rights and
+a restart, and asks first (`n` is the default). Where GAIA can't change the
+setting itself (Windows), `Enter` shows the exact steps in AMD Software and
+the one value to enter there, as AMD Software shows it (`c` copies it), and
+"I've done this" re-reads the split instead of trusting it. `s` skips it.
+
+Then the download: one row per model, then everything else setup fetches, each
+with its size and where it comes from. Models show real progress. The other
+pieces report only their state, so they read Waiting, In progress, Ready, Failed
+or Already here.
+
+```
+  Downloading models                                 step 3 of 3 · part 2 of 3
+  ────────────────────────────────────────────────────────────────────────────
+  > [..] ⣟ Qwen3.6 35B A3B      ██████▎░░░░░░░░░░░  2.1/23.3 GB  149 MB/s  3 min
+    [ ]    EmbeddingGemma 300M  queued · 330 MB · From huggingface.co/google/…
+  Overall ██▏░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 7% · 2.1/23.6 GB · about 3 min left
+  [ok] GAIA's model server  Ready · 7 MB · From github.com/lemonade-sdk/lemon…
+  [..] Model runtime        In progress · 141 MB · From github.com/ggml-org/l…
+  [ ]  Python packages      Waiting · Size shown when it starts · From pypi.o…
+  [ok] GAIA agent           Already here · Size shown when it starts · From h…
+  [x] Keep trying if the connection drops (up to 2 minutes)  t
+  Leaving this screen cancels the download. Finished models stay.
+  ────────────────────────────────────────────────────────────────────────────
+  t keep trying · d details · c cancel · esc back
+```
+
+Each row names its state in words — queued, downloading, checking that it
+loads, ready, failed, cancelled, or downloaded but not checked yet (setup
+stopped before its load check; the model is kept, and `R` checks it). Speed and time left appear after 10 seconds of data
+("Estimating…" before), and a download with no data for 15 seconds says so. `c`
+stops it (asking first once over 1 GB is in); finished models and partial files
+stay, and `r` on a stopped row (or `R` for all of them) resumes from where it
+stopped. A failed row says why — the
+connection dropped, the disk filled up (with how much to free), or the model
+downloaded but didn't load — and `r` retries it. A model that didn't load is
+deleted and downloaded again only after you confirm. Model names, sizes and
+these sentences read the same as in the Agent UI. `Esc` leaves, which cancels the download.
+
+#### Testing everything
+
+A download isn't proof it works, so the last part runs each job for real: the
+model server answers, the chat model loads and answers, the vision model names a
+test image's colour, the embedder makes an embedding, each extra you ticked does
+its job, and GAIA answers one real chat on the model your chat will open on. Each
+test shows as a row, and setup is ready only when the ones it needs have passed.
+
+```
+  Testing everything                                 step 3 of 3 · part 3 of 3
+  ────────────────────────────────────────────────────────────────────────────
+  Tests done: 2 of 2 ██████████████████████████████ 100%
+  [ok] Model server answers                                   Passed, 3 s
+  [!]  Chat: loads and answers · Qwen3.6 35B A3B              Failed
+        Lemonade answered 500: llama-server exited while loading the model.
+
+  Something didn't work, so GAIA isn't ready yet. Your downloads are safe.
+  Press x to download Qwen3.6 35B A3B again.
+  ────────────────────────────────────────────────────────────────────────────
+  m choose another model · x download again · r test again · esc back
+```
+
+A failed test shows its real error and holds the step: `r` tests again, `m` goes
+back to choose another model, and `x` replaces a broken model after you confirm,
+then tests it. When the PC is short of free memory, the screen says so and offers
+no new copy, because one wouldn't help. An optional extra that fails doesn't hold
+setup; the summary says which one and why.
+
+Once the tests pass, a summary names the chat, vision and documents models and
+anything left out; `Enter` starts GAIA.
+
+When every model is already on the PC, `Enter` reads **test and start**: nothing
+downloads, and the tests still run before the summary ("Everything is already on
+this PC."). `m` on the summary reopens the choice.
+
+If this PC already runs a Lemonade Server (v2026.44.1 or newer) on its default
 port, the Lemonade row offers it instead of step 1: press `f` to use it, or `g`
 to install GAIA's own (saved once GAIA's server is installed and running). Using yours keeps one server and one copy of each model
 on the PC. A server that needs an API key shows the `gaia lemonade connect`
@@ -310,7 +471,7 @@ to the installer — there is no in-TUI download for the agent binary:
   ──────────────────────────────────────────────────────────────────────────────
   > [!]   GAIA agent          not on this machine
           gaia-agent is the program that does the thinking. Nothing runs without it.
-          Re-run the GAIA installer — it ships gaia-agent alongside gaia-tui.
+          Re-run the GAIA installer — it ships gaia-agent alongside gaia-cli.
           run:   https://amd-gaia.ai/#install
           look:  https://amd-gaia.ai/docs/guides/gaia
     [ ]   Lemonade            —  checked once "GAIA agent" is fixed
@@ -421,8 +582,9 @@ chip next to it.
 
 The model chip names the chat model from the moment the chat opens, local
 included: the one the startup check loaded, until the agent reports the model it
-actually runs. The model you last picked is restored on the next launch; if it
-can't be, the chat says so in one line and opens the provider picker. See
+actually runs. The model you last picked is restored on the next launch, and the
+status bar says `restoring <model>…` until it is; if it can't be, the chat says
+so in one line and opens the provider picker. See
 [Your model is remembered](/guides/ai-providers#your-model-is-remembered).
 
 Once setup has installed the flagship as a hub package, the TUI reaches it through
@@ -448,6 +610,8 @@ names the update command.
 | `Ctrl+V` | Paste — text, or a clipboard **image** (a screenshot), which is saved to a temp file and its path inserted |
 | `Ctrl+Y` | Copy the whole answer |
 | `Ctrl+B` | Copy the last code block in the answer |
+| `Ctrl+F` | Open the newest generated image or audio file. Available only for the verified image/audio cards shown by the TUI |
+| `Ctrl+G` | Reveal the newest generated image or audio file in its folder. Like `Ctrl+F`, this is unavailable over SSH; use the displayed path on the remote machine instead |
 | `Ctrl+O` | Show every step in full — the agent's narration, wrapped commands, timings — or fold it back to one row per step |
 
 ### Reading a turn
@@ -466,9 +630,26 @@ the answer set apart below:
 ```
 
 - **Paths** are shown relative to the folder you started GAIA in, or under `~`;
-  a path that is still long keeps its end.
+  a path that is still long keeps its end. The agent works in that folder too:
+  a file you name without a full path, such as `note.txt` or `src/app.py`, is
+  read from and saved to that folder, and the
+  [project map](/guides/project-map) is of the project that folder is in.
+- **The folder you started GAIA in is the chat's folder**, the same as
+  `gaia -p`: GAIA looks there first and reads files in it, and in the folders
+  under it, without asking. A file anywhere else asks first, and saying yes
+  lets GAIA use that file for the rest of the chat. Started from your home
+  folder or a drive root, that is everything under it, so start GAIA in the
+  folder you are working in.
 - **A failed step** keeps its reason under it, remedy included — that row is
-  where a failure lives, so a retried call is one red row, not a separate error.
+  where a failure lives, not a separate error. While the turn is still running
+  it reads `error` in amber, since the agent may fix it and try again. Once a
+  later run of the same file or the same command succeeds, it reads
+  `error, retried` and keeps its one-line error. The same command means every
+  command in a `&&`, `||` or `;` chain, in the same folder, with the same
+  arguments; added switches like `--user` and the right side of a pipe don't
+  count. A step with no file or command
+  to match, such as a web fetch or a query, is never marked retried. A failure
+  nothing recovered turns red and reads `failed` when the turn ends.
 - **A confirmation** asks once, in the prompt pinned above the composer. The step
   it gated then records your answer in a word: `approved`, `denied`, or `always
   allowed '<scope>'`.
@@ -525,24 +706,41 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 |---|---|
 | `/help` | Show the shortcut overlay (scrolls with `↑`/`↓`/`PgUp`/`PgDn` if it doesn't fit) |
 | `/clear` | Clear the conversation |
-| `/setup` | Re-run first-time setup (`gaia init`) for the flagship agent |
+| `/setup` | Re-run first-time setup for the flagship agent: choose the models, download them, then test them |
+| `/models` | The models on this PC: tick one to download it, untick to stop using it, `x` removes one (it asks first), `c` picks the chat model, `a` applies. Downloads keep going when you close it, and the status line shows `downloading 38%` |
+| `/gpu` | Give the GPU more memory so bigger models fit. Offered only on a PC with an integrated GPU |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
 | `/model` | Switch the flagship agent's live model. Bare `/model` lists what you can switch to |
-| `/provider` | Choose where chat runs — Local, Fireworks AI, or the AMD LLM Gateway — and set its key. See [AI providers](/guides/ai-providers) |
+| `/skills` | List installed skills. `/skills add <link>` shows what a GitHub repo, skills.sh page or `.zip` holds and what each skill may do, with a security warning; `/skills add <link> confirm` adds that version (a `confirm` with no preview previews first) (`--allow-code` to include skills that ship scripts) |
+| `/provider` | Choose where chat runs — Local, Fireworks AI, or the AMD LLM Gateway — and set its key. Under Local, **Ctrl+A** adds a model from a Hugging Face link. With [Local only](/reference/cli#local-only) on, connecting a cloud provider is refused. See [AI providers](/guides/ai-providers) |
 | `/gateway` | Connect the AMD LLM Gateway and pick which of its models GAIA uses. See [LLM gateway](/guides/llm-gateway) |
 | `/slack` | Connect this agent to Slack, or show the connection's status. See [Slack](/guides/slack) |
+| `/automations` | List the reminders, summaries, alerts and triggers GAIA runs on its own, numbered. `/automations pause 2`, `resume 2` or `remove 2` changes one; a name works too. See [Automations](/guides/automations) |
+| `/connectors` | List your connected apps (Gmail, Slack, GitHub…). A connector with several accounts lists each one, marking the default and any whose sign-in expired. Also a clickable entry in the status bar. See [Connectors](/connectors) |
+| `/connectors personalize <id>` | Optional: let GAIA read a connected app's recent activity, save what it learns to memory, and suggest automations. Told only to read; creates no schedules. GAIA keeps access to the app afterwards |
+| `/connectors revoke <id>` | Turn off GAIA's access to a tool-server connector (Slack, Notion…), such as the access Personalize leaves on. Google and Microsoft access comes with signing in, so use `/connectors remove` for those |
+| `/connectors remove <id> [address]` | Sign a Google or Microsoft account out of GAIA. With several accounts connected, name the one to remove, or GAIA lists them |
+| `/connectors add <id>` | Sign another Google or Microsoft account in beside the ones already connected. Your browser opens the provider's account picker; GAIA waits up to 15 minutes |
+| `/connectors reconnect <id> <address>` | Sign an account in again after its sign-in expired. `/connectors` marks expired accounts |
+| `/connectors default <id> <address>` | Choose the account GAIA uses when you don't name one |
 | `/full-access` | Explain full access; `/full-access confirm` then turns it on for this session (off by default) |
 | `/full-access off` | Turn full access off for this session |
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
 | `/full-access never` | Stop it coming back on future launches |
+| `/read-aloud` | Read the last reply aloud through Lemonade's voice model, played by the PC's own player. Run it again, or `/read-aloud stop`, to stop. Works while the agent is still answering |
+| `/voice` | Show the read-aloud voice, speed and auto-read, and list the voices (American or British English, female or male). `/voice bm_george` picks one, `/voice speed 125` sets the speed in percent (50–200), `/voice auto on` reads each finished reply. Saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui/chat#read-aloud) |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
 | `/cost help` | Where the rates come from, and how to set your own |
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
 | `/copy all` | Copy the whole conversation as markdown |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
+| `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update back` returns to the version before the last update, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
+| `/sessions` | Reopen a past session — see [Reopening a session](#reopening-a-session) |
+| `/sessions all` | The same list with eval and scheduled runs included |
+| `/<skill-name>` | Run an installed skill on the rest of the line, as in Claude Code: `/pdf turn notes.md into a report`. The palette lists your skills after the commands above. See [Skills](/guides/gaia#skills) |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
-their own — `/model`, `/setup`, and `/provider` are flagship-only, and `/memory`
+their own — `/model`, `/skills`, `/setup`, `/models`, `/gpu` and `/provider` are flagship-only (`/gpu` only on an integrated-GPU PC), and `/memory`
 needs a peer new enough to serve it (see the [memory guide](/guides/memory#terminal-ui-memory)).
 `/agents` is always available.
 
@@ -565,6 +763,11 @@ open `/help` first:
          │  ▸ /model   Switch the model this session runs on (gaia …  │
          ╰────────────────────────────────────────────────────────────╯
 ```
+
+Installed skills follow the commands, one `/<skill-name>` row each; when the list is
+taller than the window it scrolls to keep the selection in view. Picking a skill row
+runs it with no request, and the agent asks what it needs; to give the request up
+front, type the name, a space, then the request.
 
 Keep typing to narrow the list (`/mo` above narrows to `/model`), `↑`/`↓` to move the
 selection, `Enter` to run it, `Esc` to close the palette without touching the composer
@@ -634,12 +837,15 @@ approving runs that exact line once, and the next one asks again.
 ```
 
 A few stay refused with no prompt: a PowerShell `-EncodedCommand` or a line
-with invisible or line-break characters (the prompt couldn't show what runs), a
+with invisible characters or a carriage return (the prompt couldn't show what runs),
+a command of several lines on Windows (the command prompt runs only the first), a
 line whose quoting GAIA can't split the way the shell would, a line its checks
 don't cover that also deletes or discards work (`git push --force`, `git reset
---hard`, `git clean`, `rm` outside the project), and folders no approval can
-open (credential folders, the system temp folder, a whole drive or your home
-folder). The agent
+--hard`, `git clean`, `rm` outside the project), a granted CLI's actions that
+end someone else's work (`gh issue close`, `gh pr merge`), and folders no
+approval can open (credential folders, the system temp folder, a whole drive or
+your home folder), and reading credential files (`.env`, private keys, `.npmrc`) even
+under full access. The agent
 says what it would have run, so you can run it yourself.
 
 | Key | What it does |
@@ -647,6 +853,10 @@ says what it would have run, so you can run it yourself.
 | `y` | Run it this once |
 | `a` | Run it, and stop asking about that kind of command for the rest of the session. The prompt names exactly what `a` covers: `pytest (runs the test code it finds)` covers every spelling of a test run (`python -m pytest`, `cd proj && pytest 2>&1 \| tail`), never a different program. A command that runs code it does not show says so — `make (runs the Makefile's commands)`, `pip install (runs the package's setup code)`, `python -m explore (runs that Python module)` — and `python (any script)` and `Python snippets (run_python)` cover any Python code. Anything that runs code from the agent's own scratch folder never offers `a`: a script there, a shell command run there or naming a path there, or a script handed one. Writing there never asks, so each run is answered on its own. Deletes never offer `a` |
 | `n` / `Esc` | Don't run it. The agent is told you said no |
+
+An email prompt too long for the screen scrolls with `↑`/`↓`/`PgUp`/`PgDn`, and
+`y` only works once its last line has been on screen, because you are approving
+exactly what goes out. `n` and `Esc` work throughout.
 
 A prompt nobody answers expires after 10 minutes. The agent is told it **timed
 out**, not that you refused, so it asks whether you still want it rather than
@@ -658,7 +868,7 @@ giving up on something you never saw.
 
 | Mode | What asks first |
 |---|---|
-| `ask` (default) | Every shell command, Python run and file write |
+| `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
 | `accept edits` | Shell commands and Python still ask. File edits inside the folder you started GAIA in run without asking. Hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on your `PATH`, and a file that would stand in for a real program on Windows (`git.bat`) still ask. Started from your home folder or a drive root, nothing is auto-accepted |
 | `full access` | Nothing — see below |
 
@@ -750,7 +960,7 @@ being ignored.
 
 To run a turn somewhere other than this machine — Fireworks AI or your
 organisation's AMD LLM Gateway — choose it at the first-run question, press **p**
-at the readiness gate, or type `/provider`. See [AI providers](/guides/ai-providers).
+at the readiness gate (flagship agent only), or type `/provider`. See [AI providers](/guides/ai-providers).
 
 ## When GAIA asks permission
 
@@ -767,7 +977,8 @@ RUNS CODE  Run this command?
 ```
 
 The first line is a risk badge — `READ`, `WRITE`, `RUNS CODE` or
-`DESTRUCTIVE` — and the question. Tools GAIA knows get a plain question (`Run
+`DESTRUCTIVE` — and the question. A prompt to let GAIA into a file or folder
+outside the chat's folders is headed `ACCESS`. Tools GAIA knows get a plain question (`Run
 this command?`, `Write this file?`, `Install this skill?`); any other tool reads
 `Allow <tool>?`. A `DESTRUCTIVE` prompt adds a warning line under the call.
 
@@ -784,28 +995,54 @@ the part that matters. An "always allow" answer, where offered, is scoped to
 that specific call — approving `gh issue list` once does not hand over your
 shell for the session.
 
-`--bypass-permissions` runs every tool without asking, and the TUI shows a
-persistent warning the whole time it is on. `/bypass off` turns it off
+`--full-access` runs every tool without asking, and the TUI shows a
+persistent warning the whole time it is on. `/full-access off` turns it off
 mid-session.
 
-## Running another agent
+## Reopening a session
 
-The flagship is the default, but `gaia-tui` can also drive `email` by id — it keeps
-its own five-row readiness gate:
+Quitting doesn't lose a conversation. `/sessions`, or launching with
+`gaia-cli --resume`, lists your recent sessions with their title, how long ago
+they were active, and where they stand:
+
+| Status | Means |
+|---|---|
+| `waiting on you` | Paused on a permission prompt in another window. Listed first |
+| `running` | A turn is in progress in another window |
+| `done` | The last turn finished |
+| `failed` | The last turn ended in an error |
+| `stopped mid-turn` | GAIA closed before the last turn finished |
+
+Pick one with `Enter` and its conversation is redrawn, the agent restarts on
+that session, and you carry on where you left off — the model remembers what
+was said, not just the screen. `gaia-cli --resume=<id>` reopens one directly; a
+unique prefix of the id is enough. A session that is still open in another
+window can't be reopened until you close it there. If a turn is still running
+when you pick a session, GAIA asks first: `s` stops the turn and switches (the
+new chat says which turn it stopped), `k` or `Esc` keeps it running. A session
+you only just left in this window may take a few seconds to finish saving; GAIA
+says it is still closing and reopens it as soon as it can. If `GAIA_HISTORY_FILE` pins
+GAIA to one transcript, every launch keeps using that file and `--resume`
+refuses to run until you unset it.
+
+The list shows chats only; `a` in the list (or `/sessions all`) adds eval and
+scheduled runs. Sessions are kept by the GAIA agent the TUI starts itself,
+under `~/.gaia/tui/history/`. When the agent is an installed binary that runs
+through the background service instead, it doesn't keep them yet: `/sessions`
+and `--resume` say so rather than showing an empty list.
+
+## Running an agent by id
+
+The flagship is the default, and `gaia-cli` can also drive an agent by its id:
 
 ```bash
-gaia-tui run email
-gaia-tui run email --query "triage my inbox"   # one-shot: answer on stdout
-gaia-tui chat --agent email                    # same thing, via `chat`
+gaia-cli run gaia
+gaia-cli run gaia --query "summarize my inbox"  # one-shot: answer on stdout
+gaia-cli chat --agent gaia                     # same thing, via `chat`
 ```
 
-Installing or removing it is the Python CLI's job:
-
-```bash
-gaia hub list
-gaia hub install email --trust
-gaia hub uninstall email
-```
+Installing or removing an agent is the Python CLI's job (`gaia init` for the
+flagship, `gaia hub` for scripted installs).
 
 ## Colours (light vs dark terminals)
 
@@ -813,7 +1050,7 @@ Colours adapt to your terminal automatically. Some terminals never answer that
 query (SSH, tmux, a CI log) — if the screen comes out hard to read, force a mode:
 
 ```bash
-GAIA_TUI_THEME=light gaia-tui    # or dark; unset or "auto" = detect
+GAIA_TUI_THEME=light gaia-cli    # or dark; unset or "auto" = detect
 ```
 
 ## Troubleshooting
@@ -833,10 +1070,10 @@ server answers; it does not load a model. Check the server's own log —
 processing rather than generation — the status line's `ttft` is the honest
 number. A cloud provider trades that for network latency and privacy.
 
-**It quit with no message.** `gaia-tui status` shows the background service and
+**It quit with no message.** `gaia-cli status` shows the background service and
 what is installed.
 
-**Is it running on Vulkan, ROCm or the CPU?** `gaia-tui status` prints a
+**Is it running on Vulkan, ROCm or the CPU?** `gaia-cli status` prints a
 **Model server** line, and `/provider` shows the same under **Local**:
 
 ```text
@@ -844,14 +1081,15 @@ Model server:        Lemonade 2026.41.1 (GAIA's own) at localhost:51234 · Qwen3
 ```
 
 `(default)` means Lemonade picked the backend; `unknown` means this Lemonade
-does not report it. To choose one, run `gaia config set llamacpp_backend rocm`
-(or `vulkan`, `cpu`, `auto`), or use Settings → Advanced → Model server in the
-Agent UI, which lists only the backends this PC can run. It applies the next
-time the chat model loads.
+does not report it. GAIA offers only the backends it has tested: Vulkan for
+the GPU (`gaia config set llamacpp_backend vulkan`, or Settings → Advanced →
+Model server in the Agent UI), and FastFlowLM for a chat model on a Ryzen AI
+NPU, chosen by picking that model. It applies the next time the chat model
+loads.
 
 ## Next steps
 
-- [CLI reference](/reference/cli#terminal-ui-gaia-tui) — the non-interactive
+- [CLI reference](/reference/cli#terminal-ui-gaia-cli) — the non-interactive
   subcommands (`run`, `chat`, `status`) and their exit codes.
 - [Driving the TUI programmatically](/guides/mcp/tui) — the control API, for tests
   and assistants. Not needed for normal use.

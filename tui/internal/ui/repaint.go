@@ -22,6 +22,9 @@ type repaintOnResize struct {
 	width, height int
 }
 
+// Unwrap returns the wrapped model.
+func (r repaintOnResize) Unwrap() tea.Model { return r.inner }
+
 func (r repaintOnResize) Init() tea.Cmd { return r.inner.Init() }
 
 func (r repaintOnResize) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

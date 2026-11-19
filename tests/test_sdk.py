@@ -493,7 +493,6 @@ class TestAudioClient:
         assert hasattr(AudioClient, "start_voice_chat")
         assert hasattr(AudioClient, "initialize_tts")
         assert hasattr(AudioClient, "speak_text")
-        assert hasattr(AudioClient, "process_voice_input")
         assert hasattr(AudioClient, "halt_generation")
 
 
@@ -771,7 +770,6 @@ class TestBackwardCompatibility:
         # Test common parameters are accepted
         agent = TestAgent(
             use_claude=False,
-            use_chatgpt=False,
             model_id="test-model",
             max_steps=10,
             debug_prompts=False,
@@ -1188,8 +1186,8 @@ class TestSpecializedAgents:
 
     def test_chat_agent_exists(self):
         """Verify ChatAgent can be imported."""
-        pytest.importorskip("gaia_agent_chat")
-        from gaia_agent_chat.agent import ChatAgent
+        pytest.importorskip("gaia_agent")
+        from gaia_agent.chat_agent import ChatAgent
 
         assert ChatAgent is not None
 

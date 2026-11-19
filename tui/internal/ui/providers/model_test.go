@@ -76,7 +76,7 @@ func fireworks(ids ...string) modelsMsg {
 	for _, id := range ids {
 		models = append(models, lemonade.Model{ID: id, Recipe: "cloud"})
 	}
-	return modelsMsg{entries: lemonade.BuildEntries("fireworks", models, lemonade.Capacity{}, nil)}
+	return modelsMsg{entries: lemonade.BuildEntries("fireworks", models, lemonade.Capacity{}, nil, lemonade.NPUVerdict{})}
 }
 
 // rankedLabel is the picker label of a ranked recommendation.
@@ -256,7 +256,7 @@ func TestRefreshFailureOrEmptyCatalogCannotCrashSelection(t *testing.T) {
 func TestModelSearchAndMetadata(t *testing.T) {
 	m := New("", 80, 24)
 	m.selected = 1
-	next, _ := m.Update(modelsMsg{entries: plain(lemonade.Model{ID: "fireworks.gemma", ContextLength: 262144, Labels: []string{"tool-calling", "vision"}}, lemonade.Model{ID: "fireworks.qwen"})})
+	next, _ := m.Update(modelsMsg{entries: plain(lemonade.Model{ID: "fireworks.gemma", MaxContextWindow: 262144, Labels: []string{"tool-calling", "vision"}}, lemonade.Model{ID: "fireworks.qwen"})})
 	m = next.(Model)
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("gemma")})
 	m = next.(Model)
@@ -417,11 +417,11 @@ func TestCompactGatewayKeepsProviderAndFieldsVisible(t *testing.T) {
 // localPicker opens the local model list against a stub Lemonade at url.
 func localPicker(url string, capacity lemonade.Capacity, models ...lemonade.Model) Model {
 	m := New(url, 100, 40)
-	next, _ := m.Update(modelsMsg{source: m.client, entries: lemonade.BuildEntries("local", models, capacity, nil), capacity: "This PC: 12 GB for models (Apple GPU)"})
+	next, _ := m.Update(modelsMsg{source: m.client, entries: lemonade.BuildEntries("local", models, capacity, nil, lemonade.NPUVerdict{}), capacity: "This PC: 12 GB for models (Apple GPU)"})
 	return next.(Model)
 }
 
-var smallMac = lemonade.Capacity{MemoryGB: 12, MemorySource: "Apple GPU", DiskFreeGB: 20, ServerVersion: "2026.39.1"}
+var smallMac = lemonade.Capacity{MemoryGB: 12, MemorySource: "Apple GPU", DiskFreeGB: 20}
 
 func TestTooBigModelIsShownButCannotBeDownloaded(t *testing.T) {
 	m := localPicker("", smallMac, lemonade.Model{ID: "Gemma-4-E4B-it-GGUF", Downloaded: true, Size: 5.97, Labels: []string{"chat"}})

@@ -33,6 +33,20 @@ log = get_logger(__name__)
 
 DOCS_URL = "https://amd-gaia.ai/docs/reference/troubleshooting"
 
+#: Containers GAIA offers to transcribe. ffmpeg decodes more than these; this is
+#: what the Agent UI accepts as a recording. ``.ts`` is left out because it is
+#: far more often TypeScript. The UI keeps a copy in
+#: ``apps/webui/src/utils/mediaFiles.ts``, pinned by a test.
+VIDEO_EXTENSIONS = frozenset(
+    ".3g2 .3gp .asf .avi .divx .f4v .flv .m2ts .m2v .m4v .mkv .mov .mp4 .mpeg "
+    ".mpg .mts .mxf .ogv .rm .rmvb .vob .webm .wmv".split()
+)
+AUDIO_EXTENSIONS = frozenset(
+    ".aac .ac3 .aif .aiff .amr .ape .au .caf .dts .eac3 .flac .m4a .m4b .mka "
+    ".mp2 .mp3 .oga .ogg .opus .spx .wav .wma .wv".split()
+)
+MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+
 TARGET_SAMPLE_RATE = 16000
 TARGET_CHANNELS = 1
 TARGET_CODEC = "pcm_s16le"
@@ -90,6 +104,33 @@ _OUT_TIME_RE = re.compile(r"^out_time=(\d+):(\d{2}):(\d{2}(?:\.\d+)?)$")
 
 class MediaError(RuntimeError):
     """Raised when media decoding or the ffmpeg bootstrap cannot complete."""
+
+
+def prune_older_than(
+    folder: Path, days: float, only: Optional[frozenset] = None
+) -> None:
+    """Remove what has sat in a media cache for *days*, so it cannot fill the disk.
+
+    Args:
+        folder: The cache. A missing one is left alone.
+        days: Age past which an entry goes, by last change.
+        only: Limit removal to files with these suffixes.
+    """
+    if not folder.is_dir():
+        return
+    cutoff = time.time() - days * 86400
+    for entry in folder.iterdir():
+        if only is not None and entry.suffix.lower() not in only:
+            continue
+        try:
+            if entry.stat().st_mtime >= cutoff:
+                continue
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+        except OSError as e:
+            log.warning("Could not remove old media %s: %s", entry, e)
 
 
 def _extra_search_dirs() -> List[str]:
@@ -352,6 +393,12 @@ def to_wav16k_mono(
 
 
 def _decode_failure(src: Path, returncode: int, stderr: str) -> MediaError:
+    if "does not contain any stream" in stderr or "matches no streams" in stderr:
+        return MediaError(
+            f"{src.name} has no audio track, so there is nothing to transcribe. "
+            "Check that this is the recording you meant, or export it again "
+            f"with its sound. See {DOCS_URL}"
+        )
     return MediaError(
         f"ffmpeg failed to decode {src} (exit {returncode}): "
         f"{stderr.strip()[:500]}\n"

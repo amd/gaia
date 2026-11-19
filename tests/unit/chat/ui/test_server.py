@@ -11,19 +11,17 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from gaia.ui.server import (
-    _compute_file_hash,
-    _sanitize_document_path,
-    _sanitize_static_path,
-    _validate_file_path,
-    create_app,
-)
+from gaia.ui.server import _sanitize_static_path, create_app
+from gaia.ui.utils import compute_file_hash as _compute_file_hash
+from gaia.ui.utils import sanitize_document_path as _sanitize_document_path
+from gaia.ui.utils import validate_file_path as _validate_file_path
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +42,15 @@ def client(app):
 def db(app):
     """Access the database from app state."""
     return app.state.db
+
+
+def _seed_cloud_catalog(monkeypatch, model_id):
+    """Register *model_id* as cloud the way ``/models`` reports it; undone after."""
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(lc, "_CLOUD_MODELS", lc._CLOUD_MODELS)
+    monkeypatch.setattr(lc, "_CLOUD_PROVIDERS", lc._CLOUD_PROVIDERS)
+    lc.record_cloud_models({"data": [{"id": model_id, "recipe": "cloud"}]})
 
 
 class TestHealthEndpoint:
@@ -105,6 +112,21 @@ class TestSystemStatus:
         assert data["default_model_name"] == "amd.DeepSeek-V4.1-Flash"
         assert data["default_model_is_cloud"] is True
 
+    @patch("httpx.AsyncClient")
+    def test_system_status_flags_a_discovered_cloud_model(
+        self, mock_httpx_cls, client, db, monkeypatch
+    ):
+        """A cloud provider known only from the catalog is still cloud."""
+        import httpx
+
+        _seed_cloud_catalog(monkeypatch, "opencode.big-model")
+        db.set_setting("custom_model", "opencode.big-model")
+        mock_httpx_cls.side_effect = httpx.ConnectError("down")
+
+        data = client.get("/api/system/status").json()
+
+        assert data["default_model_is_cloud"] is True
+
     def test_system_status_returns_200(self, client):
         resp = client.get("/api/system/status")
         assert resp.status_code == 200
@@ -141,7 +163,7 @@ class TestSystemStatus:
         assert data["version"] == __version__
 
     def test_unreadable_config_is_reported_not_hidden(
-        self, client, tmp_path, monkeypatch
+        self, client, tmp_path, monkeypatch, gaia_owned_lemonade
     ):
         bad = tmp_path / "config.json"
         bad.write_text("{not json", encoding="utf-8")
@@ -183,6 +205,19 @@ class TestSystemStatus:
         ]
         for field in expected_fields:
             assert field in data, f"Missing field: {field}"
+
+    def test_system_status_reports_a_failed_desktop_setup(
+        self, client, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        assert client.get("/api/system/status").json()["setup_error"] is None
+
+        reason = "Gemma-4-E4B-it-GGUF - Not enough free memory to load it."
+        (tmp_path / "electron-install-state.json").write_text(
+            f'{{"state": "ready", "init": "failed", "initError": "{reason}"}}',
+            encoding="utf-8",
+        )
+        assert client.get("/api/system/status").json()["setup_error"] == reason
 
     def test_system_status_disk_space_non_negative(self, client):
         resp = client.get("/api/system/status")
@@ -257,18 +292,18 @@ class TestSystemStatus:
 
         health_data = {
             "status": "ok",
-            "model_loaded": "Qwen3.5-35B-A3B-GGUF",
+            "model_loaded": "Gemma-4-E4B-it-GGUF",
             "version": "9.2.0",
             "all_models_loaded": [
                 {
-                    "model_name": "Qwen3.5-35B-A3B-GGUF",
+                    "model_name": "Gemma-4-E4B-it-GGUF",
                     "type": "llm",
                     "device": "amd_npu",
                     "recipe_options": {"ctx_size": 4096},  # Way too small
                 }
             ],
         }
-        models_data = {"data": [{"id": "Qwen3.5-35B-A3B-GGUF", "downloaded": True}]}
+        models_data = {"data": [{"id": "Gemma-4-E4B-it-GGUF", "downloaded": True}]}
 
         # Map URL suffix → response
         async def mock_get(url, **kwargs):
@@ -288,7 +323,7 @@ class TestSystemStatus:
         resp = client.get("/api/system/status")
         data = resp.json()
         assert data["lemonade_running"] is True
-        assert data["model_loaded"] == "Qwen3.5-35B-A3B-GGUF"
+        assert data["model_loaded"] == "Gemma-4-E4B-it-GGUF"
         assert data["model_context_size"] == 4096
         assert data["context_size_sufficient"] is False
 
@@ -807,9 +842,11 @@ class TestSystemStatus:
         assert data["expected_model_loaded"] is True
 
     @patch("httpx.AsyncClient")
-    def test_system_status_wrong_model_and_small_context(self, mock_httpx_cls, client):
-        """Both expected_model_loaded=False and context_size_sufficient=False when
-        the wrong model is loaded with an insufficient context window."""
+    def test_system_status_other_model_window_is_not_judged(
+        self, mock_httpx_cls, client
+    ):
+        """Indexing's small vision model is not chat's model, so its window can't
+        make chat's window "too small"; chat reloads its own model at full size."""
         mock_client = AsyncMock()
 
         def make_response(status_code, json_data):
@@ -846,8 +883,125 @@ class TestSystemStatus:
         data = resp.json()
         assert data["model_loaded"] == "TinyModel-0.5B-GGUF"
         assert data["expected_model_loaded"] is False
-        assert data["context_size_sufficient"] is False
+        assert data["context_size_sufficient"] is True
         assert data["model_context_size"] == 4096
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_picked_model_not_loaded_yet(self, mock_httpx_cls, client):
+        """A picked model that another model still holds the slot for is named
+        as downloaded, so the UI can load it rather than wait on a send."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "gemma4-it-e4b-FLM",
+            "all_models_loaded": [
+                {
+                    "model_name": "gemma4-it-e4b-FLM",
+                    "type": "llm",
+                    "device": "npu",
+                    "recipe_options": {"ctx_size": 65536},
+                }
+            ],
+        }
+        catalog = {
+            "data": [
+                {"id": "gemma4-it-e4b-FLM", "downloaded": True, "size": 9.1},
+                {"id": "Qwen3.6-35B-A3B-GGUF", "downloaded": True, "size": 23.3},
+            ]
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/models" in url:
+                return make_response(200, catalog)
+            return make_response(200, {})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        client.put("/api/settings", json={"custom_model": "Qwen3.6-35B-A3B-GGUF"})
+        data = client.get("/api/system/status").json()
+        assert data["model_loaded"] == "gemma4-it-e4b-FLM"
+        assert data["default_model_name"] == "Qwen3.6-35B-A3B-GGUF"
+        assert data["expected_model_loaded"] is False
+        assert data["model_downloaded"] is True
+        assert data["default_model_size_gb"] == 23.3
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_sizes_match_setup(self, mock_httpx_cls, client):
+        """Lemonade's 21.7 (GiB) for Qwen3.6 reads as GAIA's 23.3 GB; a model
+        GAIA has no figure for keeps Lemonade's."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "TinyModel-0.5B-GGUF",
+            "all_models_loaded": [
+                {
+                    "model_name": "TinyModel-0.5B-GGUF",
+                    "type": "llm",
+                    "recipe_options": {"ctx_size": 4096},
+                }
+            ],
+        }
+        catalog = {
+            "data": [
+                {"id": "TinyModel-0.5B-GGUF", "downloaded": True, "size": 0.4},
+                {"id": "Qwen3.6-35B-A3B-GGUF", "downloaded": True, "size": 21.7},
+            ]
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/models" in url:
+                return make_response(200, catalog)
+            return make_response(200, {})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        client.put("/api/settings", json={"custom_model": "Qwen3.6-35B-A3B-GGUF"})
+        data = client.get("/api/system/status").json()
+        assert data["model_size_gb"] == 0.4
+        assert data["default_model_size_gb"] == 23.3
+
+    @pytest.mark.parametrize(
+        "query, expected",
+        [("", ("new chat", False)), ("?fresh=true", ("model pick retry", True))],
+    )
+    def test_warm_up_retry_of_a_pick_is_fresh(
+        self, client, monkeypatch, query, expected
+    ):
+        """Try again on a failed pick queues behind a running warm-up."""
+        from gaia.ui import warmup
+
+        asked = []
+        monkeypatch.setattr(
+            warmup,
+            "request_warm_up",
+            lambda reason, fresh=False: asked.append((reason, fresh)),
+        )
+        assert client.post(f"/api/system/warm-up{query}").status_code == 200
+        assert asked == [expected]
 
     @patch("httpx.AsyncClient")
     def test_system_status_custom_model_respected(self, mock_httpx_cls, client):
@@ -918,6 +1072,44 @@ class TestSystemStatus:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_httpx_cls.return_value = mock_client
 
+    @pytest.mark.parametrize("data", ["x", ["x"], {"id": "a"}])
+    @patch("httpx.AsyncClient")
+    def test_a_malformed_model_list_is_named_not_reported_as_down(
+        self, mock_httpx_cls, client, data
+    ):
+        """#7219: /health answers and chats work; only /models is malformed."""
+        mock_client = AsyncMock()
+
+        async def mock_get(url, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/health" in url:
+                resp.json.return_value = {"status": "ok", "all_models_loaded": []}
+            elif "/models" in url:
+                resp.json.return_value = {"object": "list", "data": data}
+            else:
+                resp.json.return_value = {}
+            return resp
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        status = client.get("/api/system/status").json()
+
+        assert status["lemonade_running"] is True
+        assert status["lemonade_probe"] == "ok"
+        assert status["lemonade_error"] is None
+        shape_warnings = [
+            w
+            for w in status["probe_warnings"]
+            if "model list came back in an unexpected shape" in w
+        ]
+        # One fault, one warning: the download check reads the same list.
+        assert len(shape_warnings) == 1, status["probe_warnings"]
+        assert not any("gaia init" in w for w in status["probe_warnings"])
+
     _EMBEDDER = {
         "model_name": "nomic-embed-text-v2-moe-GGUF",
         "type": "embedding",
@@ -981,15 +1173,193 @@ class TestSystemStatus:
         assert data["embedding_model_loaded"] is True
 
 
-class TestDynamicToolsSetting:
-    """/api/settings round-trip + env lock for the Beta dynamic tool loader (#1798)."""
+class TestCustomModelIsTheChosenModel:
+    """Settings > Advanced's custom model is the model the sidecar warms (#7217)."""
 
-    def test_cold_state_defaults_to_off(self, client, monkeypatch):
-        """Fresh DB (no dynamic_tools key) + no env var ⇒ off, unlocked —
-        byte-identical to the pre-#1798 default-off path."""
+    @pytest.fixture(autouse=True)
+    def _private_config(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", tmp_path / "config.json")
+
+    def test_saving_a_custom_model_records_it_as_the_last_model(self, client):
+        from gaia.config import GaiaConfig
+        from gaia.llm.lemonade_client import resolve_chat_model
+
+        GaiaConfig.save_keys(
+            {
+                "last_model": "fireworks.deepseek-v4p1-flash",
+                "last_provider": "fireworks",
+            }
+        )
+        resp = client.put(
+            "/api/settings", json={"custom_model": " opencode.big-model "}
+        )
+
+        assert resp.status_code == 200
+        assert GaiaConfig.load().last_model == "opencode.big-model"
+        # The flagship sidecar's start-up warm-up loads resolve_chat_model().
+        assert resolve_chat_model() == "opencode.big-model"
+
+    def test_clearing_the_custom_model_clears_the_last_model(self, client):
+        from gaia.config import GaiaConfig
+
+        client.put("/api/settings", json={"custom_model": "opencode.big-model"})
+        client.put("/api/settings", json={"custom_model": ""})
+
+        cfg = GaiaConfig.load()
+        assert cfg.last_model is None
+        assert cfg.last_provider is None
+
+    def test_omitting_the_custom_model_leaves_the_last_model(self, client):
+        from gaia.config import GaiaConfig
+
+        GaiaConfig.save_keys({"last_model": "Qwen3.6-35B-A3B-GGUF"})
+        client.put("/api/settings", json={"agent_mode": "manual"})
+
+        assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
+
+    def test_an_unwritable_config_fails_the_save_and_keeps_the_old_model(
+        self, client, db
+    ):
+        from gaia.config import GaiaConfigError
+
+        db.set_setting("custom_model", "Qwen3.6-35B-A3B-GGUF")
+        with patch(
+            "gaia.config.GaiaConfig.save_keys",
+            side_effect=GaiaConfigError("config.json is read-only."),
+        ):
+            resp = client.put(
+                "/api/settings", json={"custom_model": "opencode.big-model"}
+            )
+
+        assert resp.status_code == 500
+        assert "read-only" in resp.json()["detail"]
+        assert db.get_setting("custom_model") == "Qwen3.6-35B-A3B-GGUF"
+
+    def test_a_cloud_model_is_refused_while_local_only_is_on(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        from gaia.config import GaiaConfig
+        from gaia.llm import local_only
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        local_only.set_policy("local_ai_only")
+        GaiaConfig.save_keys({"last_model": "Qwen3.6-35B-A3B-GGUF"})
+
+        resp = client.put(
+            "/api/settings", json={"custom_model": "fireworks.glm-5p3-flash"}
+        )
+
+        assert resp.status_code == 409
+        assert "Local only is on" in resp.json()["detail"]
+        assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
+        assert db.get_setting("custom_model") is None
+
+    def test_a_cloud_model_only_the_server_lists_is_refused_under_local_only(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        from gaia.config import GaiaConfig
+        from gaia.llm import lemonade_client, local_only
+        from gaia.ui.routers import providers
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        local_only.set_policy("local_ai_only")
+        GaiaConfig.save_keys({"last_model": "Qwen3.6-35B-A3B-GGUF"})
+        asked = []
+
+        def model_list(method, path, payload=None):
+            asked.append((method, path))
+            listed = {"id": "othercloud.big-model", "recipe": "cloud"}
+            return 200, {"data": [listed]}
+
+        monkeypatch.setattr(providers, "_lemonade", model_list)
+        try:
+            resp = client.put(
+                "/api/settings", json={"custom_model": "othercloud.big-model"}
+            )
+        finally:
+            lemonade_client.record_cloud_models({"data": []})
+
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert (
+            "Can't switch to big-model · othercloud: Local only is on, so it was blocked: it is a cloud model."
+            in detail
+        )
+        assert "Settings > Privacy" in detail and "gaia config" not in detail
+        assert asked == [("GET", "models?show_all=true")]
+        assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
+        assert db.get_setting("custom_model") is None
+
+    def test_a_listed_cloud_model_retyped_in_another_case_is_refused_under_local_only(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        from gaia.llm import lemonade_client, local_only
+        from gaia.ui.routers import providers
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        local_only.set_policy("local_ai_only")
+        listed = {"id": "othercloud.big-model", "recipe": "cloud"}
+        monkeypatch.setattr(
+            providers, "_lemonade", lambda *a, **k: (200, {"data": [listed]})
+        )
+        try:
+            resp = client.put(
+                "/api/settings", json={"custom_model": "user.OtherCloud.Big-Model"}
+            )
+        finally:
+            lemonade_client.record_cloud_models({"data": []})
+
+        assert resp.status_code == 409
+        assert "Local only is on" in resp.json()["detail"]
+        assert db.get_setting("custom_model") is None
+
+    def test_a_local_model_is_saved_under_local_only_without_asking_the_server(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        from gaia.llm import local_only
+        from gaia.ui.routers import providers
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        local_only.set_policy("local_ai_only")
+        monkeypatch.setattr(
+            providers, "_lemonade", lambda *a, **k: pytest.fail("asked the server")
+        )
+
+        resp = client.put("/api/settings", json={"custom_model": "Qwen3-4B-GGUF"})
+
+        assert resp.status_code == 200
+        assert db.get_setting("custom_model") == "Qwen3-4B-GGUF"
+
+    def test_saving_a_custom_model_clears_a_failed_restore_notice(
+        self, client, monkeypatch
+    ):
+        from gaia.ui.routers import providers
+
+        monkeypatch.setattr(
+            providers,
+            "_restore_result",
+            {"status": "failed", "message": "Couldn't restore your last model."},
+        )
+
+        resp = client.put("/api/settings", json={"custom_model": "opencode.big-model"})
+
+        assert resp.status_code == 200
+        assert providers._restore_result == {"status": "none", "message": None}
+
+
+class TestDynamicToolsSetting:
+    """/api/settings round-trip + env lock for dynamic tool loading."""
+
+    @pytest.fixture(autouse=True)
+    def _private_config(self, monkeypatch, tmp_path):
+        """The setting lives in config.json; one test's PUT must not reach the next."""
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", tmp_path / "config.json")
+
+    def test_cold_state_defaults_to_on(self, client, monkeypatch):
+        """No config file + no env var ⇒ on, unlocked."""
         monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
         data = client.get("/api/settings").json()
-        assert data["dynamic_tools"] is False
+        assert data["dynamic_tools"] is True
         assert data["dynamic_tools_locked"] is False
 
     def test_put_true_round_trips(self, client, monkeypatch):
@@ -1039,6 +1409,129 @@ class TestDynamicToolsSetting:
         assert unlocked["dynamic_tools_locked"] is False
 
 
+class TestNetworkPolicySetting:
+    """The Agent UI writes the same Local only policy and cleanup as the CLI."""
+
+    def test_get_reports_the_default_policy(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        assert client.get("/api/settings").json()["network_policy"] == "cloud_allowed"
+
+    def test_unrecognized_stricter_policy_is_reported_as_local_only(
+        self, client, monkeypatch, tmp_path
+    ):
+        policy = tmp_path / "policy.json"
+        policy.write_text('{"network_policy":"offline"}', encoding="utf-8")
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(policy))
+        response = client.get("/api/settings")
+        assert response.status_code == 200
+        assert response.json()["network_policy"] == "local_ai_only"
+
+    def test_local_only_clears_a_cloud_ui_choice_but_keeps_a_local_one(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: None)
+        monkeypatch.setattr("gaia.llm.cloud_keys.drop_runtime_keys", lambda: [])
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
+        db.set_setting("custom_model", "fireworks.glm-5p3-flash")
+
+        turned_on = client.put(
+            "/api/settings", json={"network_policy": "local_ai_only"}
+        )
+
+        assert turned_on.status_code == 200
+        assert turned_on.json()["network_policy"] == "local_ai_only"
+        assert turned_on.json()["policy_notices"] == []
+        assert db.get_setting("custom_model") is None
+        db.set_setting("custom_model", "Qwen3.6-35B-A3B-GGUF")
+        assert (
+            client.put(
+                "/api/settings", json={"network_policy": "local_ai_only"}
+            ).status_code
+            == 200
+        )
+        assert db.get_setting("custom_model") == "Qwen3.6-35B-A3B-GGUF"
+
+    def test_local_only_clears_a_discovered_cloud_custom_model(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        """A cloud model known only from the catalog is cleared like any other."""
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: None)
+        monkeypatch.setattr("gaia.llm.cloud_keys.drop_runtime_keys", lambda: [])
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
+        _seed_cloud_catalog(monkeypatch, "opencode.big-model")
+        db.set_setting("custom_model", "opencode.big-model")
+
+        response = client.put("/api/settings", json={"network_policy": "local_ai_only"})
+
+        assert response.status_code == 200
+        assert db.get_setting("custom_model") is None
+
+    def test_policy_cleanup_warnings_are_returned(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        from gaia.llm.cloud_keys import CloudKeyError
+
+        monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: None)
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
+        monkeypatch.setattr(
+            "gaia.llm.cloud_keys.drop_runtime_keys",
+            lambda: (_ for _ in ()).throw(CloudKeyError("server refused")),
+        )
+        response = client.put("/api/settings", json={"network_policy": "local_ai_only"})
+        assert response.status_code == 200
+        assert "server refused" in response.json()["policy_warnings"][0]
+        assert response.json()["policy_notices"] == [
+            {
+                "code": "runtime_keys_not_dropped",
+                "severity": "warning",
+                "url": None,
+                "reason": "server refused",
+                "cause": None,
+                "models": None,
+            }
+        ]
+
+    def test_user_server_notice_is_structured_for_translation(
+        self, client, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        monkeypatch.setattr(
+            "gaia.llm.cloud_keys.users_lemonade_url", lambda: "http://127.0.0.1:1234"
+        )
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
+        response = client.put("/api/settings", json={"network_policy": "local_ai_only"})
+        assert response.status_code == 200
+        assert response.json()["policy_warnings"] == []
+        assert response.json()["policy_notices"] == [
+            {
+                "code": "users_server_keeps_keys",
+                "severity": "info",
+                "url": "http://127.0.0.1:1234",
+                "reason": None,
+                "cause": None,
+                "models": None,
+            }
+        ]
+
+    def test_policy_changes_are_local_pc_only(self, client):
+        response = client.put(
+            "/api/settings",
+            json={"network_policy": "cloud_allowed"},
+            headers={"X-Forwarded-For": "203.0.113.7"},
+        )
+        assert response.status_code == 403
+        assert "PC running GAIA" in response.json()["detail"]
+
+
 class TestAgentModeSetting:
     """/api/settings agent_mode honesty (#2005): 'autonomous' is unshipped —
     reject it on write, default to 'goal_driven', normalize legacy values."""
@@ -1067,12 +1560,6 @@ class TestAgentModeSetting:
         resp = client.put("/api/settings", json={"agent_mode": "bogus"})
         assert resp.status_code == 400
         assert "goal_driven" in resp.json()["detail"]
-
-    def test_legacy_stored_autonomous_reported_as_goal_driven(self, client, db):
-        """A DB written before #2005 may hold 'autonomous'; GET must report the
-        effective mode, not the no-op label."""
-        db.set_setting("agent_mode", "autonomous")
-        assert client.get("/api/settings").json()["agent_mode"] == "goal_driven"
 
 
 class TestSessionEndpoints:
@@ -1201,7 +1688,7 @@ class TestSessionEndpoints:
     def test_create_session_microsoft_mail_provider(self, client):
         resp = client.post(
             "/api/sessions",
-            json={"agent_type": "email", "mail_provider": "microsoft"},
+            json={"mail_provider": "microsoft"},
         )
         assert resp.status_code == 200
         sid = resp.json()["id"]
@@ -1243,8 +1730,21 @@ class TestSessionEndpoints:
         assert resp.status_code == 422
         detail = resp.json()["detail"]
         assert "'data'" in detail
-        assert "chat, email, gaia" in detail
+        assert "Registered agent ids: gaia." in detail
         assert client.get("/api/sessions").json()["total"] == 0
+
+    def test_a_legacy_chat_id_is_accepted_but_not_listed(
+        self, client, gaia_only_registry
+    ):
+        """``chat`` resolves to the flagship (#6099): a client still sending it
+        gets a session, but it is not offered as an id of its own."""
+        assert (
+            client.post("/api/sessions", json={"agent_type": "chat"}).status_code == 200
+        )
+        detail = client.post("/api/sessions", json={"agent_type": "data"}).json()[
+            "detail"
+        ]
+        assert "chat" not in detail.split("Registered agent ids:")[1]
 
     def test_create_session_registered_agent_type_accepted(
         self, client, gaia_only_registry
@@ -1278,15 +1778,14 @@ class TestSessionEndpoints:
     def test_the_listed_ids_include_every_accepted_one(
         self, client, gaia_only_registry
     ):
-        """A sidecar id is accepted without a registry entry, so it is listed."""
+        """Every id the endpoint accepts is one it lists, and nothing more."""
         assert (
-            client.post("/api/sessions", json={"agent_type": "email"}).status_code
-            == 200
+            client.post("/api/sessions", json={"agent_type": "gaia"}).status_code == 200
         )
         detail = client.post("/api/sessions", json={"agent_type": "data"}).json()[
             "detail"
         ]
-        assert "Registered agent ids: chat, email, gaia." in detail
+        assert "Registered agent ids: gaia." in detail
 
     def test_update_session_mail_provider(self, client):
         sid = client.post("/api/sessions", json={}).json()["id"]
@@ -1506,7 +2005,81 @@ class TestExportEndpoint:
         resp = client.get(f"/api/sessions/{session_id}/export?format=markdown")
         content = resp.json()["content"]
         assert "*Created:" in content
-        assert "*Model:" in content
+        assert "*Model (current setting):" in content
+
+    def test_export_names_the_model_that_answers(self, client, db):
+        sid = client.post("/api/sessions", json={"model": "Stored-GGUF"}).json()["id"]
+        client.put("/api/settings", json={"custom_model": "My-Override-GGUF"})
+        db.add_message(sid, "user", "Hi")
+        db.add_message(sid, "assistant", "Hello")
+        db.add_message(
+            sid, "assistant", "Retried", inference_stats={"model": "Retry-GGUF"}
+        )
+
+        md = client.get(f"/api/sessions/{sid}/export?format=markdown").json()
+        # "Hello" has no recorded model, so the header can only name the setting.
+        assert "*Model (current setting): My-Override-GGUF*" in md["content"]
+        assert "Stored-GGUF" not in md["content"]
+        assert "**Assistant:**\n\nHello" in md["content"]
+        assert "**Assistant (Retry-GGUF):**\n\nRetried" in md["content"]
+
+        js = client.get(f"/api/sessions/{sid}/export?format=json").json()
+        assert js["session"]["model"] == "Stored-GGUF"
+        assert js["session"]["effective_model"] == "My-Override-GGUF"
+
+    def test_export_names_each_answers_own_model_after_a_switch(self, client, db):
+        sid = client.post("/api/sessions", json={"model": "Old-GGUF"}).json()["id"]
+        db.add_message(sid, "user", "Q1")
+        db.add_message(sid, "assistant", "A1", inference_stats={"model": "Old-GGUF"})
+        db.add_message(sid, "user", "Q2")
+        db.add_message(sid, "assistant", "A2", inference_stats={"model": "New-GGUF"})
+        client.put("/api/settings", json={"custom_model": "Later-GGUF"})
+
+        content = client.get(f"/api/sessions/{sid}/export").json()["content"]
+        assert "*Models: Old-GGUF, New-GGUF*" in content
+        assert "Later-GGUF" not in content
+        assert "**Assistant (Old-GGUF):**\n\nA1" in content
+        assert "**Assistant (New-GGUF):**\n\nA2" in content
+
+    def test_export_single_recorded_model_is_singular(self, client, db):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        db.add_message(sid, "user", "Q")
+        db.add_message(sid, "assistant", "A", inference_stats={"model": "Only-GGUF"})
+
+        content = client.get(f"/api/sessions/{sid}/export").json()["content"]
+        assert "*Model: Only-GGUF*" in content
+
+    def test_export_reads_like_a_document_not_a_database_dump(self, client, db):
+        sid = client.post(
+            "/api/sessions", json={"model": "fireworks.deepseek-v4p1-flash"}
+        ).json()["id"]
+        db.add_message(
+            sid,
+            "user",
+            "What color is it?\n\n"
+            "[notes.txt](/api/files/uploads/a23f365ad6b1_notes.txt)\n"
+            "![red square.png](/api/files/uploads/5f7e41b718f3_red_square.png)",
+        )
+        db.add_message(
+            sid,
+            "assistant",
+            "Red.",
+            inference_stats={"model": "fireworks.deepseek-v4p1-flash"},
+        )
+
+        content = client.get(f"/api/sessions/{sid}/export").json()["content"]
+
+        assert "+00:00" not in content
+        assert re.search(
+            r"\*Created: [A-Z][a-z]+ \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M\*", content
+        )
+        assert "*Model: deepseek-v4p1-flash*" in content
+        assert "**Assistant (deepseek-v4p1-flash):**" in content
+        assert "fireworks." not in content
+        assert "/api/files/uploads" not in content
+        assert "a23f365ad6b1" not in content
+        assert "Attached: notes.txt" in content
+        assert "Attached: red square.png" in content
 
     def test_export_json(self, client, db):
         create_resp = client.post("/api/sessions", json={"title": "JSON Export"})
@@ -1577,6 +2150,42 @@ class TestChatSendEndpoint:
         assert "content" in data
         assert data["content"] == "This is a response."
         assert "message_id" in data
+
+    @patch("gaia.ui.agent_loop.agent_loop.yield_to_user")
+    @patch("gaia.ui.routers.chat.turn_takes_the_line", return_value=True)
+    @patch("gaia.ui.server._get_chat_response")
+    def test_local_chat_request_preempts_a_goal_tick(
+        self, mock_chat, mock_takes_line, mock_yield, client
+    ):
+        mock_chat.return_value = "This is a response."
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+
+        response = client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+
+        assert response.status_code == 200
+        mock_takes_line.assert_called_once()
+        mock_yield.assert_called_once_with()
+
+    @patch("gaia.ui.agent_loop.agent_loop.yield_to_user")
+    @patch("gaia.ui.routers.chat.turn_takes_the_line", return_value=False)
+    @patch("gaia.ui.server._get_chat_response")
+    def test_cloud_chat_request_does_not_preempt_a_goal_tick(
+        self, mock_chat, mock_takes_line, mock_yield, client
+    ):
+        mock_chat.return_value = "This is a response."
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+
+        response = client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+
+        assert response.status_code == 200
+        mock_takes_line.assert_called_once()
+        mock_yield.assert_not_called()
 
     @patch("gaia.ui.server._get_chat_response")
     def test_non_streaming_saves_both_messages(self, mock_chat, client, db):
@@ -1792,6 +2401,21 @@ class TestSessionDocumentEndpoints:
             f"/api/sessions/{session_id}/documents", json={"document_id": "nonexistent"}
         )
         assert resp.status_code == 404
+
+    def test_attach_document_removed_mid_request_is_not_reported_attached(
+        self, client, db, monkeypatch
+    ):
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+        # The document passes the existence check, then is gone when the row is written.
+        monkeypatch.setattr(db, "get_document", lambda doc_id: {"id": doc_id})
+
+        resp = client.post(
+            f"/api/sessions/{session_id}/documents", json={"document_id": "gone"}
+        )
+
+        assert resp.status_code == 409
+        assert "try again" in resp.json()["detail"]
+        assert client.get(f"/api/sessions/{session_id}").json()["document_ids"] == []
 
     def test_detach_document(self, client, db):
         create_resp = client.post("/api/sessions", json={})

@@ -4,13 +4,6 @@ description: "Programmable interface for text chat, conversation memory, and doc
 icon: "comments"
 ---
 
-<Warning>
-The direct OpenAI and LiteLLM provider adapters have been removed. Any
-`use_chatgpt` field shown below is a migration-error shim: setting it to `True`
-raises before inference. Use the [Lemonade gateway path](/sdk/sdks/llm#gateway-migration).
-</Warning>
-
-
 <Info>
   **Source Code:** [`src/gaia/chat/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/chat/sdk.py) · [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
 </Info>
@@ -41,7 +34,6 @@ class AgentConfig:
     show_stats: bool = False
     logging_level: str = "INFO"
     use_claude: bool = False       # Use Claude API
-    use_chatgpt: bool = False      # Removed; True raises migration guidance
     use_local_llm: bool = True     # Use local LLM
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: Optional[str] = None # Lemonade server URL
@@ -106,7 +98,7 @@ print(response)
 # With options
 response = quick_chat(
     "Explain quantum computing",
-    model="Qwen3.5-35B-A3B-GGUF",
+    model="Qwen3.6-35B-A3B-GGUF",
     system_prompt="You are a physics teacher."
 )
 print(response)
@@ -250,6 +242,20 @@ chat.add_document("troubleshooting.pdf")
 
 # Disable RAG when done
 chat.disable_rag()
+```
+
+With RAG enabled, `send()` and `send_stream()` raise `RAGContextError` instead of answering without your documents. It fires when retrieval fails, or when the model's window leaves under 500 tokens for document context after the system prompt, history, question and reply reserve. The message says what to shrink or what broke, and history is left as it was.
+
+```python
+from gaia.chat.sdk import AgentSDK, RAGContextError
+
+chat = AgentSDK()
+chat.enable_rag(documents=["guide.pdf"])
+
+try:
+    response = chat.send("Summarize the guide")
+except RAGContextError as e:
+    print(f"Not sent: {e}")
 ```
 
 ### Advanced RAG Configuration

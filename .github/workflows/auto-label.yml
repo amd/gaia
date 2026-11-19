@@ -11,10 +11,70 @@ permissions:
   contents: read
   pull-requests: write
 
+# The repo's GITHUB_TOKEN shares one installation rate limit across every
+# running job, so a busy queue fails the labeler on PRs that did nothing wrong.
+# Retry with backoff, and if every attempt fails while that limit is spent,
+# fail under an infrastructure title so it can't be mistaken for a PR problem.
 jobs:
   label:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/labeler@v7
+      - id: attempt1
+        continue-on-error: true
+        uses: actions/labeler@v7
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Back off before retry
+        if: steps.attempt1.outcome == 'failure'
+        env:
+          MAX_WAIT: 120
+        run: &backoff |
+          if ! core=$(gh api rate_limit --jq '.resources.core | "\(.remaining) \(.reset)"'); then
+            echo "::warning::Could not read the rate limit, so retrying after the fixed backoff."
+            core="-1 $(date +%s)"
+          fi
+          read -r remaining reset <<<"$core"
+          wait=30
+          if [ "$remaining" -eq 0 ]; then
+            wait=$(( reset - $(date +%s) + 5 ))
+          fi
+          wait=$(( wait < MAX_WAIT ? wait : MAX_WAIT ))
+          wait=$(( wait > 0 ? wait : 1 ))
+          echo "Rate limit remaining: $remaining (resets $(date -u -d "@$reset" +%H:%M:%SZ)). Waiting ${wait}s."
+          sleep "$wait"
+
+      - id: attempt2
+        if: steps.attempt1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/labeler@v7
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Back off before final retry
+        if: steps.attempt2.outcome == 'failure'
+        env:
+          MAX_WAIT: 600
+        run: *backoff
+
+      - id: attempt3
+        if: steps.attempt2.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/labeler@v7
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Report labeler failure
+        if: steps.attempt3.outcome == 'failure'
+        run: |
+          if ! remaining=$(gh api rate_limit --jq '.resources.core.remaining'); then
+            echo "::error title=Auto label::actions/labeler failed 3 times and the rate-limit lookup failed too, so the cause is unknown. Re-run the job; if it fails again, check .github/labeler.yml and the attempt logs above."
+          elif [ "$remaining" -eq 0 ]; then
+            echo "::error title=Auto label (infrastructure)::The repo's GitHub API rate limit is spent, so the labeler never ran. This says nothing about the PR. Re-run the job once the limit resets."
+          else
+            echo "::error title=Auto label::actions/labeler failed 3 times with $remaining core API calls left. A secondary rate limit or an error in .github/labeler.yml can cause this; the attempt logs above say which."
+          fi
+          exit 1

@@ -1,0 +1,52 @@
+// Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+/**
+ * Source-level contract for main.cjs (it cannot be required without
+ * Electron): the install-time "Lemonade Server found" question is modal to
+ * the progress window and brought to the front, so it can't open hidden
+ * behind other windows while the install waits on it.
+ */
+
+const fs = require("fs");
+const path = require("path");
+
+// The slicing below matches "\n"; a CRLF checkout would never match it.
+const main = fs
+  .readFileSync(path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui", "main.cjs"), "utf8")
+  .replace(/\r\n/g, "\n");
+
+function body(name) {
+  const start = main.indexOf(`async function ${name}(`);
+  expect(start).toBeGreaterThan(-1);
+  return main.slice(start, main.indexOf("\n}\n", start));
+}
+
+test("a download's Save dialog is titled, not named after its blob: URL", () => {
+  expect(main).toMatch(/session\.defaultSession\.on\("will-download"[\s\S]{0,200}setSaveDialogOptions\(\{\s*title: "Save from GAIA"/);
+});
+
+test("a missing Downloads folder still opens the Save dialog instead of crashing the app", () => {
+  const start = main.indexOf("function saveFolderFor(");
+  expect(start).toBeGreaterThan(-1);
+  const fn = main.slice(start, main.indexOf("\n}\n", start));
+  expect(fn).toMatch(/try \{\s*return path\.join\(app\.getPath\("downloads"\), filename\);\s*\} catch/);
+  expect(fn).toMatch(/console\.warn/);
+  // The only Downloads lookup in the main process goes through the guarded helper.
+  expect(main.match(/getPath\("downloads"\)/g)).toHaveLength(1);
+});
+
+test("the will-download listener is added once, not on every window reopen", () => {
+  expect(main.match(/"will-download"/g)).toHaveLength(1);
+  const start = main.indexOf("function createWindow(");
+  expect(start).toBeGreaterThan(-1);
+  const rest = main.slice(start);
+  const createWindow = rest.slice(0, rest.search(/\r?\n\}\r?\n/));
+  expect(createWindow).not.toMatch(/will-download|titleDownloadSaveDialogs/);
+  expect(main.match(/titleDownloadSaveDialogs\(\);/g)).toHaveLength(1);
+});
+
+test("the backend-crash dialog is shown with the main window as its owner", () => {
+  const fn = body("handleBackendCrash");
+  expect(fn).toMatch(/showBackendCrashDialog\(\{[\s\S]*parent: mainWindow/);
+});

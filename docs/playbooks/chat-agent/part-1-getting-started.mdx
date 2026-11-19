@@ -5,7 +5,7 @@ icon: "book-open-reader"
 ---
 
 <Info>
-  **Source Code:** [`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
+  **Source Code:** [`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
 </Info>
 
 <Badge text="development" color="orange" />
@@ -20,7 +20,7 @@ icon: "book-open-reader"
 ## Why Build This Agent?
 
 <Info>
-**Privacy-First AI:** This agent runs entirely on your AI PC with Ryzen AI. All processing happens locally—document content never leaves your machine.
+**Privacy-First AI:** This agent runs on your AI PC with Ryzen AI. With a local model, all processing happens locally and document content never leaves your machine; if you pick a cloud model, the conversation goes to that provider.
 </Info>
 
 If you have hundreds of PDF documents spread across your system—manuals, reports, specifications—finding specific information is tedious. You need to remember which file contains what, open each one, search manually, and piece together information from multiple sources.
@@ -28,10 +28,10 @@ If you have hundreds of PDF documents spread across your system—manuals, repor
 This agent automates that process entirely on your AI PC:
 
 1. Finds relevant documents on your drive
-2. Indexes them with vector embeddings (NPU-accelerated on Ryzen AI)
+2. Indexes them with vector embeddings (GPU-accelerated on Ryzen AI)
 3. Searches semantically using cosine similarity
 4. Returns specific information with source citations
-5. Runs completely locally—no cloud, no data leaving your machine
+5. Runs locally by default—with a local model, no data leaves your machine
 
 **What you're building:**
 
@@ -92,20 +92,24 @@ Get a working agent running to understand the basic flow.
 
     <Tabs>
       <Tab title="Core + ChatAgent Source">
-        Create a new project folder. Install GAIA core from PyPI and ChatAgent from GitHub (requires Git):
+        Create a new project folder. Install GAIA core from PyPI and ChatAgent from GitHub (requires Git). Replace `<version>` with the GAIA release you use:
 
         ```bash
         mkdir my-chat-agent
         cd my-chat-agent
         uv venv .venv
         source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
-        uv pip install "amd-gaia[rag]==0.24.1"
-        uv pip install "gaia-agent-chat @ git+https://github.com/amd/gaia.git@v0.24.1#subdirectory=hub/agents/chat/python"
+        uv pip install "amd-gaia[rag]==<version>"
+        uv pip install "gaia-agent-gaia @ git+https://github.com/amd/gaia.git@v<version>#subdirectory=hub/agents/gaia/python"
         ```
 
         <Info>
-        Create your agent scripts in this folder. The standalone `gaia-agent-chat` wheel provides `ChatAgent`; its PyPI publishing is paused ([#2240](https://github.com/amd/gaia/issues/2240)), so install it from the repository subdirectory. GAIA has no `agent-chat` extra. The `rag` extra adds document-processing dependencies (faiss, PyMuPDF).
+        Create your agent scripts in this folder. `ChatAgent` ships in the flagship `gaia-agent-gaia` package (`gaia_agent.chat_agent`); its PyPI publishing is paused ([#2240](https://github.com/amd/gaia/issues/2240)), so install it from the repository subdirectory. The `rag` extra adds document-processing dependencies (faiss, pypdf, pypdfium2).
         </Info>
+
+        <Note>
+        Releases up to 0.25.3 ship `ChatAgent` in the separate `gaia-agent-chat` package instead: install `hub/agents/chat/python` from the tag and import it with `from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig`.
+        </Note>
 
         <Warning>
         Pin both lines to the same release — the `amd-gaia` version and the matching `v<version>` tag (a release candidate `0.25.0rc12` is tagged `v0.25.0-rc12`). Without the tag the URL installs `main`, which can require a newer `amd-gaia` than the one you installed.
@@ -121,11 +125,11 @@ Get a working agent running to understand the basic flow.
         uv venv .venv
         source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
         uv pip install -e ".[rag]"
-        uv pip install -e hub/agents/chat/python   # ChatAgent ships as a separate hub wheel
+        uv pip install -e hub/agents/gaia/python   # ChatAgent ships in the flagship hub wheel
         ```
 
         <Info>
-        Use this path if you want to modify GAIA source code or contribute to the project. `ChatAgent` lives in the standalone `gaia-agent-chat` package under `hub/agents/chat/python/`, so install it as a second editable wheel.
+        Use this path if you want to modify GAIA source code or contribute to the project. `ChatAgent` lives in the flagship `gaia-agent-gaia` package under `hub/agents/gaia/python/`, so install it as a second editable wheel.
         </Info>
       </Tab>
     </Tabs>
@@ -147,7 +151,7 @@ Get a working agent running to understand the basic flow.
 
     ```python title="my_chat_agent.py"
     import json
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
     # Create agent with a document
     config = ChatAgentConfig(
@@ -167,9 +171,9 @@ Get a working agent running to understand the basic flow.
     ```
 
     **What happens:**
-    1. PDF text extraction (PyMuPDF)
+    1. PDF text extraction (pypdf)
     2. Chunking into 500-token segments
-    3. Embedding generation (EmbeddingGemma 300M running on NPU/iGPU)
+    3. Embedding generation (EmbeddingGemma 300M running on the GPU)
     4. FAISS index creation
     5. Query processing via vector search
     6. LLM generates answer using retrieved chunks (Ryzen AI acceleration)
@@ -297,12 +301,12 @@ flowchart TD
         chunk_size=500,        # Tokens per chunk
         chunk_overlap=100,     # Context preservation
         max_chunks=5,          # Top-k retrieval
-        embedding_model="user.embeddinggemma-300m-GGUF"  # Runs on NPU/iGPU
+        embedding_model="user.embeddinggemma-300m-GGUF"  # Runs on the GPU
     )
     ```
 
     <Tip>
-    On AI PCs with Ryzen AI, embedding generation runs on the NPU for efficient, low-power processing.
+    On AI PCs with Ryzen AI, embedding generation runs on the integrated GPU, beside a chat model on the NPU.
     </Tip>
   </Tab>
 
@@ -351,7 +355,7 @@ flowchart TD
 - Overlap preserves context at chunk boundaries and reduces information loss
 
 <Note>
-**AMD Hardware Acceleration:** Embedding generation runs on the Ryzen AI NPU/iGPU, enabling fast document indexing with minimal CPU usage on AI PCs.
+**AMD Hardware Acceleration:** Embedding generation runs on the Radeon GPU, enabling fast document indexing with minimal CPU usage on AI PCs.
 </Note>
 
 ---
@@ -599,15 +603,15 @@ Add RAG capability to enable document search and retrieval.
 DocQAAgent(documents=["manual.pdf"])
   → RAGSDK instance created
   → For each PDF:
-      → PyMuPDF extracts text
+      → pypdf extracts text
       → Text split into 500-token chunks (100 overlap)
-      → EmbeddingGemma 300M generates embeddings (768 dimensions, runs on NPU/iGPU)
+      → EmbeddingGemma 300M generates embeddings (768 dimensions, runs on the GPU)
       → Embeddings stored in FAISS index (in-memory)
   → Ready for queries
 ```
 
 <Info>
-On AI PCs with Ryzen AI, the embedding model runs on the NPU for efficient processing.
+On AI PCs with Ryzen AI, the embedding model runs on the integrated GPU.
 </Info>
 
 **Query phase (`process_query`):**
@@ -615,7 +619,7 @@ On AI PCs with Ryzen AI, the embedding model runs on the NPU for efficient proce
 process_query("What are the system requirements?")
   → Agent decides to use query_documents tool
   → Tool execution:
-      → Generate query embedding (EmbeddingGemma 300M on NPU)
+      → Generate query embedding (EmbeddingGemma 300M on the GPU)
       → Compute cosine similarity vs all chunk embeddings
       → Sort by similarity score
       → Return top 5 chunks

@@ -13,6 +13,11 @@
  *   - process.on('unhandledRejection') catches rejected app.whenReady() chain.
  *   - installLogTee() attaches stream.on('error') so stream errors are handled
  *     before they can become uncaughtException (root-cause fix).
+ *
+ * A fatal error quits through app.quit(), not process.exit(): only the quit
+ * path (will-quit in main.cjs) stops the backend and the agents, so exiting
+ * directly left them running after the window was gone (#3498). A timer
+ * still forces the exit if that cleanup hangs.
  */
 
 "use strict";
@@ -22,21 +27,43 @@ const path = require("path");
 const os = require("os");
 
 // ── Counter helpers ───────────────────────────────────────────────────────────
-// The counter is currently forensic only — post-mortem grep of
-// ~/.gaia/electron-startup-failures.json.
-// TODO(#938): on next launch, if count >= 3, skip log-tee init and show
-// a "reset state?" dialog (safe-mode entry point).
+// ~/.gaia/electron-startup-failures.json counts crashes since the last time a
+// window was focused. At SAFE_MODE_THRESHOLD the next launch enters safe mode.
+
+/** Crashes in a row, with no focused window between them, that make the next launch start in safe mode. */
+const SAFE_MODE_THRESHOLD = 3;
+
+function warn(msg) {
+  try { process.stderr.write(`[safety-net] ${msg}\n`); } catch { }
+}
 
 function counterPath(homedir) {
   return path.join(homedir(), ".gaia", "electron-startup-failures.json");
 }
 
 function readCount(homedir) {
+  const p = counterPath(homedir);
+  let raw;
   try {
-    return JSON.parse(fs.readFileSync(counterPath(homedir), "utf8")).count || 0;
-  } catch {
+    raw = fs.readFileSync(p, "utf8");
+  } catch (err) {
+    if (err && err.code === "ENOENT") return 0;
+    warn(`cannot read ${p}, treating the crash count as 0: ${err.message}`);
     return 0;
   }
+  let count;
+  try {
+    count = JSON.parse(raw).count;
+  } catch (err) {
+    warn(`${p} is not valid JSON, treating the crash count as 0: ${err.message}`);
+    return 0;
+  }
+  if (count === undefined) return 0;
+  if (!Number.isInteger(count) || count < 0) {
+    warn(`${p} has an invalid count ${JSON.stringify(count)}, treating it as 0`);
+    return 0;
+  }
+  return count;
 }
 
 function writeCount(n, homedir) {
@@ -60,6 +87,9 @@ function appendLog(logPath, msg) {
   }
 }
 
+/** How long a fatal error's quit may take before the process is ended outright (ms). */
+const FATAL_EXIT_GRACE_MS = 25000;
+
 // ── Core installer ────────────────────────────────────────────────────────────
 
 /**
@@ -70,23 +100,68 @@ function appendLog(logPath, msg) {
  * @param {object}   opts.dialogModule  - Electron dialog (injected for tests).
  * @param {object}   opts.appModule     - Electron app EventEmitter (injected).
  * @param {Function} [opts.homedirFn]   - Override for os.homedir (tests).
+ * @param {Function} [opts.beforeQuit]  - Called before the fatal quit, e.g.
+ *   so the quit guard does not ask the user to confirm it.
+ * @param {number}   [opts.exitGraceMs] - Override for FATAL_EXIT_GRACE_MS.
+ * @param {Function} [opts.onRendererGone] - Called with (webContents, details)
+ *   when a window's page dies while GAIA runs on, e.g. to offer a reload.
+ *   Without it, or if it throws synchronously, the crash is fatal; an async
+ *   handler must handle its own failures.
  */
-function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
+function installSafetyNet({
+  logPath,
+  dialogModule,
+  appModule,
+  homedirFn,
+  beforeQuit,
+  exitGraceMs = FATAL_EXIT_GRACE_MS,
+  holdCrashCount = () => false,
+  onRendererGone,
+}) {
   const homedir = homedirFn || (() => os.homedir());
 
   // Per-handler re-entry guard (closure-scoped — each installSafetyNet
   // call gets its own, intentionally; see test_main_error_handling.js).
   let _inFatalHandler = false;
 
+  // Quit through will-quit so its cleanup stops the backend and agents; the
+  // timer ends the process if that cleanup never finishes.
+  function quitAfterFatal() {
+    const timer = setTimeout(() => {
+      appendLog(
+        logPath,
+        `[${new Date().toISOString()}] FATAL_EXIT cleanup did not finish within ${exitGraceMs} ms; exiting`
+      );
+      process.exit(1);
+    }, exitGraceMs);
+    if (typeof beforeQuit === "function") {
+      try {
+        beforeQuit();
+      } catch (hookErr) {
+        appendLog(logPath, `[${new Date().toISOString()}] FATAL_QUIT beforeQuit failed: ${hookErr.stack || hookErr}`);
+      }
+    }
+    try {
+      appModule.quit();
+    } catch (quitErr) {
+      clearTimeout(timer);
+      appendLog(logPath, `[${new Date().toISOString()}] FATAL_QUIT app.quit() failed, exiting now: ${quitErr.stack || quitErr}`);
+      process.exit(1);
+    }
+  }
+
   function fatal(err) {
+    const stack = (err && err.stack) ? err.stack : String(err);
+    const ts = new Date().toISOString();
+
+    // A second fatal while the first is still showing its dialog or quitting
+    // (an EPIPE from a child that died during cleanup, say) is logged only:
+    // exiting here would skip the cleanup that is already under way.
     if (_inFatalHandler) {
-      try { process.exit(2); } catch { }
+      appendLog(logPath, `[${ts}] FATAL (while already quitting) ${stack}`);
       return;
     }
     _inFatalHandler = true;
-
-    const stack = (err && err.stack) ? err.stack : String(err);
-    const ts = new Date().toISOString();
 
     // Write to log BEFORE showing dialog so the entry survives even if
     // dialog.showErrorBox itself crashes.
@@ -112,7 +187,7 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
       }
     } catch { } // intentional: fatal path, no upstream
 
-    try { process.exit(1); } catch { } // intentional: fatal path
+    quitAfterFatal();
   }
 
   // Wire process-level handlers.
@@ -124,12 +199,36 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
 
   // Reset counter on the first successful user interaction. Resetting at
   // loadApp() is too early — the user may crash before their first focus.
-  appModule.on("browser-window-focus", () => writeCount(0, homedir));
+  appModule.on("browser-window-focus", () => {
+    if (!holdCrashCount()) writeCount(0, homedir);
+  });
 
   // Renderer and GPU-process crashes don't fire uncaughtException — route
-  // them through fatal() so they get the same dialog + counter treatment.
-  appModule.on("render-process-gone", (_event, _webContents, details) => {
-    fatal(new Error(`render-process-gone: reason=${details && details.reason}`));
+  // them through fatal() so they get the same dialog + counter treatment,
+  // unless onRendererGone can bring the window back.
+  appModule.on("render-process-gone", (_event, webContents, details) => {
+    const reason = details && details.reason;
+    // The renderer exits cleanly when the app is signalled to stop (logout, a
+    // stopped app unit); that is a shutdown, not a crash.
+    if (reason === "clean-exit") {
+      appendLog(logPath, `[${new Date().toISOString()}] RENDER_PROCESS_EXITED reason=${reason}`);
+      return;
+    }
+    if (typeof onRendererGone === "function") {
+      // Only the page died: the backend and agents still run, so the window can come back.
+      appendLog(
+        logPath,
+        `[${new Date().toISOString()}] RENDER_PROCESS_GONE reason=${reason} exitCode=${details && details.exitCode}`
+      );
+      try {
+        onRendererGone(webContents, details);
+        writeCount(readCount(homedir) + 1, homedir);
+        return;
+      } catch (err) {
+        appendLog(logPath, `[${new Date().toISOString()}] RENDER_PROCESS_GONE handler failed: ${err.stack || err}`);
+      }
+    }
+    fatal(new Error(`render-process-gone: reason=${reason}`));
   });
 
   appModule.on("child-process-gone", (_event, details) => {
@@ -153,6 +252,72 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
   });
 
   return { fatal };
+}
+
+// ── Safe mode ─────────────────────────────────────────────────────────────────
+
+const SAFE_MODE_BUTTONS = ["Try again", "Open log folder", "Quit"];
+const SAFE_MODE_RESET = 0;
+const SAFE_MODE_OPEN_LOGS = 1;
+const SAFE_MODE_QUIT = 2;
+
+/**
+ * Ask a user whose last launches crashed what to do, before any other start-up
+ * work runs. Must be called after app ready: before it, showMessageBoxSync
+ * does nothing on Windows.
+ *
+ * Try again deletes the crash counter and relaunches; Open log folder opens
+ * ~/.gaia and asks again; Quit exits. If the dialog itself fails, GAIA exits
+ * with code 1 rather than retry the start-up that kept crashing.
+ *
+ * @param {object} opts
+ * @param {number}   opts.count         - The crash count read at launch.
+ * @param {object}   opts.dialogModule  - Electron dialog (injected for tests).
+ * @param {object}   opts.appModule     - Electron app (injected for tests).
+ * @param {object}   opts.shellModule   - Electron shell (injected for tests).
+ * @param {Function} [opts.homedirFn]   - Override for os.homedir (tests).
+ * @returns {Promise<"reset"|"quit"|"error">}
+ */
+async function runSafeModePrompt({ count, dialogModule, appModule, shellModule, homedirFn }) {
+  const homedir = homedirFn || (() => os.homedir());
+  const gaiaDir = path.join(homedir(), ".gaia");
+  let openFailure = "";
+  try {
+    for (;;) {
+      const choice = dialogModule.showMessageBoxSync({
+        type: "warning",
+        title: "GAIA keeps crashing",
+        message: `GAIA has crashed ${count} times in a row.`,
+        detail:
+          "Try again clears the crash count and starts GAIA normally. " +
+          `Open log folder shows the logs in ${gaiaDir} to attach to a bug report.` +
+          openFailure,
+        buttons: SAFE_MODE_BUTTONS,
+        defaultId: SAFE_MODE_RESET,
+        cancelId: SAFE_MODE_QUIT,
+        noLink: true,
+      });
+      if (choice === SAFE_MODE_RESET) {
+        fs.rmSync(counterPath(homedir), { force: true });
+        appModule.relaunch();
+        appModule.exit(0);
+        return "reset";
+      }
+      if (choice === SAFE_MODE_OPEN_LOGS) {
+        const err = await shellModule.openPath(gaiaDir);
+        openFailure = err ? `\n\nCould not open ${gaiaDir}: ${err}` : "";
+        continue;
+      }
+      appModule.exit(0);
+      return "quit";
+    }
+  } catch (err) {
+    const detail = (err && err.stack) || String(err);
+    warn(`safe mode failed: ${detail}`);
+    try { dialogModule.showErrorBox("GAIA could not recover", detail); } catch { } // intentional: exiting next
+    appModule.exit(1);
+    return "error";
+  }
 }
 
 // ── Log-tee helper ────────────────────────────────────────────────────────────
@@ -179,4 +344,11 @@ function installLogTee({ stream, logPath }) {
   });
 }
 
-module.exports = { installSafetyNet, installLogTee };
+module.exports = {
+  installSafetyNet,
+  installLogTee,
+  FATAL_EXIT_GRACE_MS,
+  readCount,
+  runSafeModePrompt,
+  SAFE_MODE_THRESHOLD,
+};

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -45,19 +46,9 @@ from gaia.connectors.flow import (
 from gaia.connectors.providers import _registry
 
 
-@pytest.fixture
-def google_provider(monkeypatch):
-    monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
-    _registry.clear()
-    from gaia.connectors.providers import get as get_provider
-
-    return get_provider("google")
-
-
 @pytest.fixture(autouse=True)
-def _no_browser(monkeypatch):
-    """Replace webbrowser.open so tests don't actually launch a browser."""
-    monkeypatch.setattr("webbrowser.open", lambda *_, **__: True)
+def _no_browser(no_browser):
+    """Every flow test runs with the browser launch stubbed (see conftest)."""
 
 
 def _mock_token_endpoint(scope="openid"):
@@ -76,11 +67,11 @@ def _mock_token_endpoint(scope="openid"):
                 "expires_in": 3600,
                 "scope": scope,
                 "id_token": (
-                    # JWT payload {"email": "alice@example.com"}; signature
+                    # JWT payload {"email": "alice@example.com", "sub": "alice-sub"}; signature
                     # is a placeholder — flow.py decodes only the email
                     # claim, not the signature.
                     "header."
-                    "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9"
+                    "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
                     ".sig"
                 ),
             },
@@ -172,7 +163,9 @@ class TestGrantedScopesTruthfulness:
                     "scope": "openid https://www.googleapis.com/auth/gmail.modify "
                     "https://www.googleapis.com/auth/gmail.send",
                     "id_token": (
-                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                        "header."
+                        "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
+                        ".sig"
                     ),
                 },
             )
@@ -215,7 +208,9 @@ class TestGrantedScopesTruthfulness:
                     "expires_in": 3600,
                     # No "scope" key at all.
                     "id_token": (
-                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                        "header."
+                        "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
+                        ".sig"
                     ),
                 },
             )
@@ -256,7 +251,9 @@ class TestGrantedScopesTruthfulness:
                     # Calendar was granted by an earlier connect and folded in.
                     "scope": " ".join(requested + [extra]),
                     "id_token": (
-                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                        "header."
+                        "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
+                        ".sig"
                     ),
                 },
             )
@@ -306,9 +303,16 @@ class TestTenantRecordedOnConnect:
                     "expires_in": 3600,
                     "scope": "openid",
                     "id_token": (
-                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                        "header."
+                        "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
+                        ".sig"
                     ),
                 },
+            )
+        )
+        respx.get(url__startswith="https://graph.microsoft.com/v1.0/me").mock(
+            return_value=httpx.Response(
+                200, json={"id": "alice-oid", "mail": "alice@example.com"}
             )
         )
         respx.route(host="127.0.0.1").pass_through()
@@ -397,6 +401,47 @@ class TestConsentDenied:
         with pytest.raises(ConsentDeniedError):
             await asyncio.wait_for(complete_authorization(info["flow_id"]), timeout=2.0)
 
+    @respx.mock
+    async def test_a_cancel_nobody_waits_on_reaches_the_app(
+        self, google_provider, monkeypatch, caplog
+    ):
+        """The apps start a flow and never await it: the cancel must reach them
+        as an event, and the next Connect must not log an unread exception."""
+        import gc
+        import logging
+
+        emitted = []
+
+        async def _emit(name, payload):
+            emitted.append((name, payload))
+
+        monkeypatch.setattr("gaia.connectors.flow.emit", _emit)
+        _mock_token_endpoint()
+        info = await start_authorization("google", scopes=["openid"])
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        async with httpx.AsyncClient() as c:
+            resp = await c.get(
+                f"{params['redirect_uri'][0]}?error=access_denied"
+                f"&state={params['state'][0]}"
+            )
+        assert resp.status_code == 400
+        assert emitted == [
+            (
+                "connector.oauth.error",
+                {
+                    "connector_id": "google",
+                    "reason": "cancelled",
+                    "error": "Sign-in was cancelled.",
+                },
+            )
+        ]
+
+        with caplog.at_level(logging.ERROR, logger="asyncio"):
+            await start_authorization("google", scopes=["openid"])
+            gc.collect()
+            await asyncio.sleep(0)
+        assert "never retrieved" not in caplog.text
+
 
 class TestTimeout:
     async def test_flow_timeout(self, google_provider, monkeypatch):
@@ -406,6 +451,59 @@ class TestTimeout:
         info = await start_authorization("google", scopes=["openid"])
         with pytest.raises(FlowTimeoutError):
             await complete_authorization(info["flow_id"])
+
+    async def test_a_sign_in_nobody_waits_on_times_out_and_closes_its_port(
+        self, google_provider, monkeypatch
+    ):
+        """The apps never await the flow: a closed sign-in tab must still end
+        it, close the callback port and tell the app."""
+        from gaia.connectors.flow import _pending
+
+        monkeypatch.setattr("gaia.connectors.flow._FLOW_TIMEOUT_SECONDS", 0.2)
+        emitted = []
+
+        async def _emit(name, payload):
+            emitted.append((name, payload))
+
+        monkeypatch.setattr("gaia.connectors.flow.emit", _emit)
+        info = await start_authorization("google", scopes=["openid"])
+        redirect_uri = parse_qs(urlparse(info["authorization_url"]).query)[
+            "redirect_uri"
+        ][0]
+
+        await asyncio.sleep(0.5)
+
+        assert info["flow_id"] not in _pending
+        assert emitted == [
+            (
+                "connector.oauth.error",
+                {
+                    "connector_id": "google",
+                    "reason": "timeout",
+                    "error": "Sign-in did not finish in time.",
+                },
+            )
+        ]
+        async with httpx.AsyncClient() as c:
+            with pytest.raises(httpx.ConnectError):
+                await c.get(f"{redirect_uri}?code=late&state=x")
+
+    async def test_a_finished_sign_in_is_not_reported_as_timed_out(
+        self, google_provider, monkeypatch
+    ):
+        monkeypatch.setattr("gaia.connectors.flow._FLOW_TIMEOUT_SECONDS", 0.2)
+        emitted = []
+
+        async def _emit(name, payload):
+            emitted.append((name, payload))
+
+        monkeypatch.setattr("gaia.connectors.flow.emit", _emit)
+        info = await start_authorization("google", scopes=["openid"])
+        await cancel_flow(info["flow_id"])
+
+        await asyncio.sleep(0.4)
+
+        assert emitted == []
 
 
 class TestKeyringIsSourceOfTruth:
@@ -694,3 +792,100 @@ class TestBrowserLaunchReporting:
         assert not any(
             "no browser could be launched" in r.message for r in caplog.records
         ), "a browser that opened fine was reported as failed"
+
+
+class TestCallbackPort:
+    @respx.mock
+    async def test_explicit_callback_port_bound_and_returned(self, google_provider):
+        _mock_token_endpoint()
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            free_port = s.getsockname()[1]
+
+        info = await start_authorization(
+            "google", scopes=["openid"], callback_port=free_port
+        )
+        assert info["callback_port"] == free_port
+
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        redirect_uri = params["redirect_uri"][0]
+        assert redirect_uri == f"http://127.0.0.1:{free_port}/callback"
+
+        state = params["state"][0]
+        async with httpx.AsyncClient() as c:
+            resp = await c.get(f"{redirect_uri}?code=test-code&state={state}")
+        assert resp.status_code == 200
+
+        result = await asyncio.wait_for(
+            complete_authorization(info["flow_id"]), timeout=2.0
+        )
+        assert result["account_email"] == "alice@example.com"
+
+    @respx.mock
+    async def test_explicit_callback_port_already_in_use_fails_cleanly(
+        self, google_provider
+    ):
+        from gaia.connectors.errors import ConnectorsError
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            busy_port = s.getsockname()[1]
+
+            with pytest.raises(ConnectorsError) as exc_info:
+                await start_authorization(
+                    "google", scopes=["openid"], callback_port=busy_port
+                )
+
+            assert f"Could not bind OAuth callback to port {busy_port}" in str(
+                exc_info.value
+            )
+            assert "port is already in use" in str(exc_info.value)
+            assert "--callback-port" in str(exc_info.value)
+
+    @pytest.mark.parametrize("invalid_port", [0, -1, 65536, 100000, True, False])
+    async def test_invalid_callback_port_rejected(self, google_provider, invalid_port):
+        from gaia.connectors.errors import ConnectorsError
+
+        with pytest.raises(ConnectorsError) as exc_info:
+            await start_authorization(
+                "google", scopes=["openid"], callback_port=invalid_port
+            )
+
+        assert "Invalid callback port" in str(exc_info.value)
+
+    @respx.mock
+    async def test_explicit_callback_port_permission_denied_reports_elevated_rights(
+        self, google_provider, monkeypatch
+    ):
+        from aiohttp.web import TCPSite
+
+        from gaia.connectors.errors import ConnectorsError
+
+        async def _fake_start(self):
+            raise PermissionError("Permission denied")
+
+        monkeypatch.setattr(TCPSite, "start", _fake_start)
+
+        with pytest.raises(ConnectorsError) as exc_info:
+            await start_authorization("google", scopes=["openid"], callback_port=80)
+
+        err_msg = str(exc_info.value)
+        assert "Could not bind OAuth callback to port 80" in err_msg
+        assert "permission denied (ports below 1024 need elevated rights)" in err_msg
+        assert "Choose a free port above 1024 with --callback-port" in err_msg
+
+    @respx.mock
+    async def test_invalid_callback_port_does_not_evict_existing_pending_flow(
+        self, google_provider
+    ):
+        from gaia.connectors.errors import ConnectorsError
+        from gaia.connectors.flow import _pending
+
+        info = await start_authorization("google", scopes=["openid"])
+        flow_id = info["flow_id"]
+        assert flow_id in _pending
+
+        with pytest.raises(ConnectorsError):
+            await start_authorization("google", scopes=["openid"], callback_port=-1)
+
+        assert flow_id in _pending

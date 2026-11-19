@@ -4,16 +4,17 @@ VERSION ?= dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 PKG      = github.com/amd/gaia/tui/internal/cli
+EXE     := $(shell go env GOEXE)
 LDFLAGS  = -ldflags="-s -w -X $(PKG).version=$(VERSION) -X $(PKG).commit=$(COMMIT) -X $(PKG).date=$(DATE)"
 
-# Built as gaia-tui, never as gaia: the Python CLI owns `gaia`, the two have
+# Built as gaia-cli, never as gaia: the Python CLI owns `gaia`, the two have
 # completely different subcommands, and a dev build called `gaia` shadows it on
 # PATH — which reads as the Python CLI having silently lost every command it has.
 build:
-	go build -o bin/gaia-tui ./cmd/gaia
+	go build -o bin/gaia-cli$(EXE) ./cmd/gaia
 
 build-release:
-	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-tui ./cmd/gaia
+	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-cli$(EXE) ./cmd/gaia
 
 test:
 	go test ./... -v
@@ -73,10 +74,10 @@ endef
 export COV_ROLLUP
 
 mock-agent:
-	go build -o bin/mock-agent ./test/mockagent
+	go build -o bin/mock-agent$(EXE) ./test/mockagent
 
 dev: build mock-agent
-	@echo "Built gaia-tui + mock-agent. Run: ./bin/gaia-tui"
+	@echo "Built gaia-cli + mock-agent. Run: ./bin/gaia-cli"
 
 clean:
 	rm -rf bin/
@@ -93,10 +94,10 @@ winres:
 # Cross-compile all 6 platform targets
 cross-compile: winres
 	@mkdir -p bin
-	GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-linux-amd64       ./cmd/gaia
-	GOOS=linux   GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-linux-arm64       ./cmd/gaia
-	GOOS=darwin  GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-darwin-amd64      ./cmd/gaia
-	GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-darwin-arm64      ./cmd/gaia
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-windows-amd64.exe ./cmd/gaia
-	GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-windows-arm64.exe ./cmd/gaia
+	GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-cli-linux-amd64 ./cmd/gaia
+	GOOS=linux   GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-cli-linux-arm64 ./cmd/gaia
+	GOOS=darwin  GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-cli-darwin-amd64 ./cmd/gaia
+	GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-cli-darwin-arm64 ./cmd/gaia
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-cli-windows-amd64.exe ./cmd/gaia
+	GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-cli-windows-arm64.exe ./cmd/gaia
 	@echo "Built 6 binaries:" && ls -lh bin/gaia-*

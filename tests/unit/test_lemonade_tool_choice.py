@@ -146,8 +146,13 @@ def test_provider_sends_tool_choice_through_to_the_body(client):
     assert body["tool_choice"] == "none"
 
 
-def test_provider_withholds_tool_choice_with_the_tools(client):
+def test_provider_withholds_tool_choice_with_the_tools(client, monkeypatch):
     """A model without native tool calls gets neither tools nor tool_choice."""
+    # No local chat model lacks native tool calls any more; force the path.
+    monkeypatch.setattr(
+        "gaia.llm.providers.lemonade.is_tool_calling_model",
+        lambda model: model != _NO_TOOL_MODEL,
+    )
     client.chat_completions = MagicMock(return_value=_REPLY)
 
     _provider(client).chat(

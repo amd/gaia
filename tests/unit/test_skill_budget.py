@@ -100,6 +100,9 @@ def test_the_window_is_resolved_once_per_model(monkeypatch):
     agent.model_id = "m2"
     skill_budget.window_budget(agent)
     assert len(calls) == 2
+    agent.chat = SimpleNamespace(effective_model="m3")
+    skill_budget.window_budget(agent)
+    assert len(calls) == 3
 
 
 # ── ranking and fitting ──────────────────────────────────────────────────
@@ -329,6 +332,47 @@ def test_an_agent_that_has_not_opted_in_is_unchanged(make_agent):
     prompt = _turn(agent, "alpha", "beta", "gamma")
     assert prompt.count("--- SKILL:") == 3
     assert skill_budget_report(agent) is None
+
+
+class _AlwaysOnStub(_StubAgent):
+    """A stub whose manifest pins ``voice`` on every turn."""
+
+    @property
+    def _always_on_skill_names(self):
+        return frozenset({"voice"})
+
+
+@pytest.mark.parametrize("window", [16_384, 65_536])
+def test_an_always_on_skill_renders_in_full_on_a_small_window(
+    tmp_path, monkeypatch, window
+):
+    root = tmp_path / "pkg" / "skills"
+    # ~2,400 tokens: over the whole 16K budget, most of the 64K one.
+    write_skill_dir(root, "voice", _skill_text("voice", 1_920))
+    for name in ("alpha", "beta"):
+        write_skill_dir(root, name, _skill_text(name, 1_560))
+    monkeypatch.setattr(
+        skill_budget, "resolve_skill_window", lambda _agent: (window, "test")
+    )
+    agent = _AlwaysOnStub(isolated_manager(tmp_path, agent_skill_dirs=[root]))
+    agent.scores = {"alpha": 0.9, "beta": 0.1}
+    for name in ("voice", "alpha", "beta"):
+        agent.load_skill(name)
+    agent._loaded_skills["voice"] = _ToolsOf(agent._loaded_skills["voice"], ["speak"])
+    agent._skill_requests = []
+    agent._refresh_active_skill_filter("about alpha")
+    agent.tools_this_turn = ["read_file", "voice/speak"]
+    agent._refresh_active_tool_filter("about alpha")
+    prompt = agent.get_skills_system_prompt()
+
+    assert "BODY-VOICE" in prompt
+    assert "- voice:" not in prompt  # never summarized
+    assert "BODY-ALPHA" in prompt  # the best other skill still shows in full
+    report = skill_budget_report(agent)
+    assert "voice" not in report["full"] + report["summarized"]
+    assert report["summarized"] == ["beta"]
+    assert report["used_tokens"] > report["budget"]
+    assert agent._active_tool_filter == ["read_file", "voice/speak"]
 
 
 # ── skill-provided tools ─────────────────────────────────────────────────

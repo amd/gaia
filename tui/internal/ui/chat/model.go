@@ -3,7 +3,6 @@ package chat
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -18,11 +17,13 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/components"
 
+	"github.com/amd/gaia/tui/internal/ui/modelsetup"
 	"github.com/amd/gaia/tui/internal/ui/providers"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -82,20 +83,6 @@ const queuedSendTimeout = 180 * time.Second
 // leaving the spinner to run out the general 300s watchdog with no word.
 type queuedSendStalledMsg struct{ turnSeq int }
 
-// preScanFetchedMsg / preScanFetchFailedMsg / preScanDegradedMsg deliver the
-// result of the on-open inbox pre-scan fetch (#2743, replacing the #2582
-// attention fetch) — a side-channel read, never a chat turn, so it carries
-// no query/answer pair and never touches the host-owned transcript Send()
-// pushes as `context`.
-type preScanFetchedMsg struct{ data json.RawMessage }
-type preScanFetchFailedMsg struct{ err error }
-
-// preScanDegradedMsg is delivered when the peer's contract predates
-// needs_you (client.ErrPreScanContractTooOld) — rendered as an honest
-// status note, never as the confident (and wrong) empty-needs_you card a
-// naive decode of an old sidecar's response would produce.
-type preScanDegradedMsg struct{ notice string }
-
 // ToggleHelpMsg signals the root model to toggle help overlay.
 type ToggleHelpMsg struct{}
 
@@ -130,6 +117,10 @@ var (
 	failStyle = lipgloss.NewStyle().
 			Foreground(theme.Danger)
 
+	// A step error the agent is retrying past: worth seeing, not an alarm.
+	retryStyle = lipgloss.NewStyle().
+			Foreground(theme.Warning)
+
 	dividerStyle = lipgloss.NewStyle().
 			Foreground(theme.Divider)
 
@@ -156,7 +147,20 @@ const (
 )
 
 type ChatModel struct {
+	// updateCheckOnLaunch makes Init ask once whether a newer GAIA is out
+	// (WithUpdateCheck). Off unless the launch opts in.
+	updateCheckOnLaunch bool
+
 	providerPanel *providers.Model
+	// modelSetup is /models, /gpu or first-run setup. It outlives its screen
+	// while a /models download runs in the background; modelSetupOpen is
+	// whether it is on screen.
+	modelSetup     *modelsetup.Model
+	modelSetupOpen bool
+	// setupChoices are first-run model choices left with esc, for /setup.
+	setupChoices *modelsetup.Choices
+	// gpuApplies is whether /gpu means anything on this PC (an integrated GPU).
+	gpuApplies bool
 	// agentsPanel is the in-chat "/agents" listing (nil unless open). It only
 	// lists and selects (agents.SelectedMsg's own doc comment); switching to
 	// the picked agent is the root model's job, so a SelectedMsg is left to
@@ -250,7 +254,10 @@ type ChatModel struct {
 	// name a different build than the one answering.
 	agentVersion string
 	gaiaVersion  string
-	dev          bool
+	// skillCommands are the installed skills the agent reported; the "/"
+	// palette lists each as /<name>, which the agent runs on that skill.
+	skillCommands []event.SkillCommand
+	dev           bool
 
 	width  int
 	height int
@@ -303,6 +310,13 @@ type ChatModel struct {
 	// acceptEdits is the "accept edits" permission mode: file edits in the
 	// workspace run unasked. Set only after the transport confirmed it.
 	acceptEdits bool
+
+	// readAloud is the reply being read aloud, nil when none is; readAloudSeq
+	// tells a stopped reading's late messages from the current one's.
+	readAloud    *readAloudRun
+	readAloudSeq int
+	// readAloudAuto mirrors read_aloud_auto: read each finished reply.
+	readAloudAuto bool
 
 	// warming is the warm-up stage before the first chat turn — see warmup.go.
 	// warmHidden is Esc on the stage: the chat shows while the warm-up turn
@@ -366,9 +380,9 @@ type ChatModel struct {
 	// help is this view's OWN help panel, used when nothing is wrapping it.
 	// `gaia run <agent>` puts this model straight in front of Bubble Tea, so a
 	// panel implemented only in the root model is absent there — which is why
-	// /help did nothing at all on that path. Under the hub, root intercepts
-	// ToggleHelpMsg before it reaches here and this stays closed, so the two
-	// never both draw.
+	// /help did nothing at all on that path. Under the root model, root
+	// intercepts ToggleHelpMsg before it reaches here and this stays closed, so
+	// the two never both draw.
 	help components.HelpState
 
 	// palette is the "/" command palette's open/selected state. Its filter
@@ -460,17 +474,6 @@ type ChatModel struct {
 	// sending a new message) restores it.
 	followTail bool
 
-	// pendingPreScan buffers a fetch resolved mid-turn until that turn ends, so it never lands between a question and its reply.
-	pendingPreScan json.RawMessage
-	// preScanRenderedThisTurn is true once the CURRENT turn's own typed
-	// tool_result has drawn the pre-scan card (#2743 checkpoint review).
-	// drainPendingPreScan checks it before draining the buffered on-open
-	// snapshot: without this, a "triage my inbox" turn that itself
-	// produces a fresh card would have that fresh data immediately
-	// clobbered by the shallower snapshot the on-open fetch buffered
-	// before the turn started.
-	preScanRenderedThisTurn bool
-
 	// setupChecking is true from construction (applyFirstBootGate) until the
 	// first-boot readiness probe (`gaia init --check`, fired by Init) answers.
 	// Enter queues rather than sends while true, same reasoning as m.streaming
@@ -484,11 +487,26 @@ type ChatModel struct {
 	// panel is on and what it has collected. Non-nil only between /slack setup
 	// and the flow finishing or being cancelled.
 	slackSetup *slackSetupState
+	// signIns is what every /connectors browser sign-in runs under, made on
+	// first use. Retire cancels it, so no CLI keeps waiting on the browser
+	// once the chat is gone.
+	signIns     context.Context
+	stopSignIns context.CancelFunc
 	// slackOffered records that the one-time Slack offer has already been shown
 	// this session, so a second launch-time probe cannot repeat it. The durable
 	// answer lives in `gaia slack decline`; this only stops a duplicate inside
 	// one run.
 	slackOffered bool
+	// discordSetup is the in-flight Discord setup: the token prompt, then the
+	// pairing step it watches. Nil when no setup is open.
+	discordSetup *discordSetupState
+	// discordOffered stops a second launch-time offer within one run.
+	discordOffered bool
+	// automationRefs are the ids /automations last listed, so
+	// "/automations pause 2" changes the one the user saw as 2.
+	automationRefs []string
+	// automationNames maps each listed name, lower-cased, to its id.
+	automationNames map[string]string
 	// setupCancel tears down the in-flight `gaia init` subprocess. Nil unless
 	// setupRunning.
 	setupCancel context.CancelFunc
@@ -580,9 +598,8 @@ func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, de
 	return m.applyFirstBootGate()
 }
 
-// NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
-// CanReturnToHub) for a real catalog agent, so agentID is the catalog id
-// rather than NewChatModel's default of the display name.
+// NewChatModelForCatalogAgent creates a standalone ChatModel for a real catalog
+// agent, so agentID is the catalog id rather than NewChatModel's display name.
 func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
@@ -636,18 +653,6 @@ func (m *ChatModel) CloseAgentsPanel() {
 	m.agentsPanel = nil
 }
 
-// preScanAgentID is the one agent this on-open fetch applies to today.
-// Scoped by id rather than by capability alone so a future agent that
-// happens to reuse the PreScanFetcher interface for something unrelated
-// doesn't unexpectedly get this fetch too.
-const preScanAgentID = "email"
-
-// preScanCardIdentity marks the singular inbox pre-scan card (#2743) so
-// both entry points that can produce one — the on-open fetch below and a
-// typed turn's own tool_result (canonical.go) — update the SAME message in
-// place instead of each appending its own. See Message.Identity.
-const preScanCardIdentity = "email_prescan"
-
 func (m ChatModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
@@ -657,6 +662,12 @@ func (m ChatModel) Init() tea.Cmd {
 		// or /memory has already run negotiate once — see
 		// probeCapabilitiesCmd.
 		m.probeCapabilitiesCmd(),
+		loadReadAloudAutoCmd,
+	}
+	if m.agentID == setupAgentID {
+		// Whether /gpu applies here: only a PC with an integrated GPU has a
+		// memory share to change, so only there does the palette offer it.
+		cmds = append(cmds, probeGPUCmd())
 	}
 	if m.agentID == setupAgentID && m.initialQuery == "" {
 		// The one-time Slack offer. Gated on an empty initial query so a user
@@ -665,9 +676,14 @@ func (m ChatModel) Init() tea.Cmd {
 		// Whether it actually shows is `gaia slack status`'s decision, not
 		// ours -- this only asks.
 		cmds = append(cmds, querySlackCmd(true /* offer */))
+		// Brings back a Discord bridge set to autostart, then may offer setup.
+		cmds = append(cmds, launchDiscordCmd())
 	}
 	if m.startup.pending && !m.setupChecking {
 		cmds = append(cmds, startupModelCmd())
+	}
+	if m.updateCheckOnLaunch {
+		cmds = append(cmds, checkUpdateCmd(true /* launch */, ""))
 	}
 	if m.setupChecking {
 		// The flagship agent's first-boot gate (see applyFirstBootGate):
@@ -679,16 +695,6 @@ func (m ChatModel) Init() tea.Cmd {
 		cmds = append(cmds, func() tea.Msg {
 			return sendQueryMsg{query: m.initialQuery}
 		})
-		// The on-open pre-scan card (#2743) is gone: it spent a Gmail scan
-		// before the user asked for anything, and showed a shallower version
-		// of what "triage my inbox" answers properly a moment later. The
-		// card still renders when a turn's own pre_scan_inbox result arrives.
-	} else if m.dev && m.preScanGateMismatch() {
-		// A client that could serve the pre-scan view but an agentID that
-		// doesn't match must not fail with no signal at all.
-		fmt.Fprintf(os.Stderr,
-			"[DEBUG] pre-scan fetch skipped: agentID %q has a PreScanFetcher client but does not match %q\n",
-			m.agentID, preScanAgentID)
 	}
 	// Behind the first-boot gate the warm-up waits for it: there may be no
 	// model to load yet (releaseAfterSetupGate starts it then).
@@ -699,96 +705,14 @@ func (m ChatModel) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// preScanGateMismatch reports whether m.client could serve the pre-scan
-// view even though m.agentID didn't earn the fetch.
-func (m ChatModel) preScanGateMismatch() bool {
-	if m.agentID == preScanAgentID {
-		return false
-	}
-	_, hasFetcher := m.client.(client.PreScanFetcher)
-	return hasFetcher
-}
-
-// fetchPreScan builds the Cmd that fetches the email agent's inbox pre-scan
-// (#2743). A transport that doesn't implement client.PreScanFetcher
-// (subprocess mode has no HTTP relay to ask) is skipped silently — this is
-// a best-effort side-channel read, never a requirement for the chat
-// surface to function. A peer whose contract predates needs_you degrades
-// to an honest notice rather than the confident empty card an unguarded
-// decode would produce.
-func (m ChatModel) fetchPreScan() tea.Cmd {
-	fetcher, ok := m.client.(client.PreScanFetcher)
-	if !ok {
-		return nil
-	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		data, err := fetcher.FetchPreScan(ctx)
-		if err != nil {
-			var tooOld *client.ErrPreScanContractTooOld
-			if errors.As(err, &tooOld) {
-				return preScanDegradedMsg{notice: tooOld.Error()}
-			}
-			return preScanFetchFailedMsg{err: err}
-		}
-		return preScanFetchedMsg{data: data}
-	}
-}
-
-// upsertCard appends a RoleCard message, or — when identity is non-empty and
-// a message already carries it — replaces that message's payload in place
-// (#2743). Looked up by identity across the CURRENT m.messages slice on
-// every call, never a tracked index: `/clear` sets m.messages to nil
-// (see the "/clear" case below), so a stale index would panic or silently
-// overwrite an unrelated message. The render cache is cleared so an
-// in-place update is never served the stale layout (Message.cardCache is
-// otherwise keyed on width alone).
-func (m *ChatModel) upsertCard(identity, toolName, render string, data json.RawMessage) {
-	if identity != "" {
-		for i := range m.messages {
-			if m.messages[i].Role == RoleCard && m.messages[i].Identity == identity {
-				m.messages[i].ToolName = toolName
-				m.messages[i].Render = render
-				m.messages[i].Data = data
-				m.messages[i].cardCache = ""
-				m.messages[i].cardCacheWidth = 0
-				return
-			}
-		}
-	}
+// appendCard appends a RoleCard message.
+func (m *ChatModel) appendCard(toolName, render string, data json.RawMessage) {
 	m.messages = append(m.messages, Message{
 		Role:     RoleCard,
-		Identity: identity,
 		ToolName: toolName,
 		Render:   render,
 		Data:     data,
 	})
-}
-
-// upsertPreScanCard draws or updates-in-place the one pre-scan card for
-// this session (#2743). Cross-card duplicate items against OTHER card
-// types are resolved at render time (see Message.renderCardDeduped), not
-// here.
-func (m *ChatModel) upsertPreScanCard(data json.RawMessage) {
-	m.upsertCard(preScanCardIdentity, "pre_scan_inbox", "email_pre_scan", data)
-}
-
-// drainPendingPreScan appends the buffered on-open pre-scan card now that
-// its turn has ended, whichever way it ended — UNLESS the turn's own typed
-// tool_result already drew a fresher card this same turn (#2743 checkpoint
-// review): draining the buffered snapshot over it would clobber the
-// fresher data with a shallower one.
-func (m *ChatModel) drainPendingPreScan() {
-	if m.pendingPreScan == nil {
-		return
-	}
-	data := m.pendingPreScan
-	m.pendingPreScan = nil
-	if m.preScanRenderedThisTurn {
-		return
-	}
-	m.upsertPreScanCard(data)
 }
 
 // Update dispatches the message, then releases a queued follow-up if that
@@ -880,6 +804,27 @@ func queuedSendWatchdogAfter(turnSeq int, d time.Duration) tea.Cmd {
 }
 
 func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if next, cmd, handled := m.handleReadAloudMsg(msg); handled {
+		return next, cmd
+	}
+	var setupCmd tea.Cmd
+	if m.modelSetup != nil {
+		next, cmd, handled := m.updateModelSetup(msg)
+		if handled {
+			return next, cmd
+		}
+		m, setupCmd = next.(ChatModel), cmd
+	}
+	if probed, ok := msg.(gpuProbedMsg); ok {
+		m.gpuApplies = probed.applies
+		return m, nil
+	}
+	next, cmd := m.updateChat(msg)
+	return next, tea.Batch(setupCmd, cmd)
+}
+
+// updateChat is update for everything the setup screens did not take.
+func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.providerPanel != nil {
 		switch v := msg.(type) {
 		case providers.ClosedMsg:
@@ -977,6 +922,48 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case slackStatusMsg:
 		return m.handleSlackStatus(msg)
 
+	case discordStatusMsg:
+		return m.handleDiscordStatus(msg)
+
+	case discordConnectedMsg:
+		return m.handleDiscordConnected(msg)
+
+	case discordActionMsg:
+		return m.handleDiscordAction(msg)
+
+	case discordPollMsg:
+		return m.handleDiscordPoll(msg)
+
+	case discordDeclinedMsg:
+		return m.handleDiscordDeclined(msg)
+
+	case automationsListMsg:
+		return m.handleAutomationsList(msg)
+
+	case connectorsListMsg:
+		return m.handleConnectorsList(msg)
+
+	case connectorsActivatedMsg:
+		return m.handleConnectorsActivated(msg)
+
+	case connectorsRevokedMsg:
+		return m.handleConnectorsRevoked(msg)
+
+	case connectorsSignInMsg:
+		return m.handleConnectorsSignIn(msg)
+
+	case connectorsReportMsg:
+		return m.handleConnectorsReport(msg)
+
+	case updateCheckedMsg:
+		return m.handleUpdateChecked(msg)
+
+	case updatePlannedMsg:
+		return m.handleUpdatePlanned(msg)
+
+	case updateSavedMsg:
+		return m.handleUpdateSaved(msg)
+
 	case slackDeclinedMsg:
 		return m.handleSlackDeclined(msg)
 
@@ -1003,39 +990,6 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role: RoleStatus,
 			Content: fmt.Sprintf("[!] could not deliver the cancel request: %v. "+
 				"Waiting for the run to finish on its own.", msg.err),
-		})
-		m.updateViewport()
-		return m, nil
-
-	case preScanFetchedMsg:
-		if m.streaming {
-			// Buffer -- appending now would land the card between this turn's question and its reply.
-			m.pendingPreScan = msg.data
-			return m, nil
-		}
-		m.upsertPreScanCard(msg.data)
-		m.updateViewport()
-		return m, nil
-
-	case preScanFetchFailedMsg:
-		// Best-effort side-channel read (#2743) — a failure (no mailbox
-		// connected, daemon unreachable, a transient connector error) is
-		// worth telling the user about, but it must never block or clutter
-		// the surface like a turn-ending error would.
-		m.messages = append(m.messages, Message{
-			Role:    RoleStatus,
-			Content: fmt.Sprintf("[!] inbox pre-scan unavailable: %v", msg.err),
-		})
-		m.updateViewport()
-		return m, nil
-
-	case preScanDegradedMsg:
-		// The peer's contract predates needs_you — an honest notice, never
-		// the confident (and wrong) empty card an unguarded decode would
-		// have produced (#2743).
-		m.messages = append(m.messages, Message{
-			Role:    RoleStatus,
-			Content: "[!] " + msg.notice,
 		})
 		m.updateViewport()
 		return m, nil
@@ -1109,7 +1063,6 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content: "Nothing was switched — this session is still on " + m.currentModelName() + ".",
 			})
 		}
-		m.drainPendingPreScan()
 		m.updateViewport()
 		return m, nil
 
@@ -1140,6 +1093,12 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m.handleSlackSetupAnswer(msg.RequestID, msg.Value)
 		}
+		if isDiscordSetupQuestion(msg.RequestID) {
+			// The bot token must never reach the agent or the transcript.
+			m.question = nil
+			m.updateViewport()
+			return m.handleDiscordSetupAnswer(msg.RequestID, msg.Value)
+		}
 		m.messages = append(m.messages, Message{
 			Role:    RoleUser,
 			Content: q.AnswerLabel(msg.Value),
@@ -1158,9 +1117,8 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case components.ConfirmationTimeoutMsg:
 		if m.confirmation == nil {
-			// Already resolved (the run's own final/error got there first, the
-			// overwhelmingly common case against the current stateless email
-			// sidecar) or the turn moved on. Dropping is correct — nothing to warn.
+			// Already resolved (the run's own final/error got there first) or
+			// the turn moved on. Dropping is correct — nothing to warn.
 			return m, nil
 		}
 		c, cmd := m.confirmation.ResolveTimeout(msg)
@@ -1215,6 +1173,14 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case mediaActionResultMsg:
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: mediaStatus(msg.path, msg.action, msg.err),
+		})
+		m.updateViewport()
+		return m, nil
+
 	case pasteClipboardMsg:
 		text := normalizePastedText(msg.text)
 		if msg.err != nil || strings.TrimSpace(text) == "" {
@@ -1253,7 +1219,7 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case capabilitiesProbedMsg:
 		if msg.err != nil && m.dev {
-			fmt.Fprintf(os.Stderr, "[DEBUG] capability probe failed (%v) — gated commands stay in their 'unknown' (shown) state\n", msg.err)
+			control.DevLogf("capability probe failed (%v) — gated commands stay in their 'unknown' (shown) state", msg.err)
 		}
 		return m, nil
 
@@ -1485,9 +1451,9 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.syncComposerHeight()
 
-		// Copying is local and read-only: there is no reason to make it wait
-		// for the turn to end.
-		if isCopyCommand(query) {
+		// Copying and reading aloud are local: there is no reason to make
+		// them wait for the turn to end.
+		if isCopyCommand(query) || isReadAloudCommand(query) || isVoiceCommand(query) {
 			return m.submit(query)
 		}
 
@@ -1544,6 +1510,12 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case tea.KeyCtrlF:
+		return m, m.mediaActionCmd("open")
+
+	case tea.KeyCtrlG:
+		return m, m.mediaActionCmd("reveal")
+
 	case tea.KeyCtrlV:
 		// Reaches here only when the terminal did NOT already turn this into a
 		// bracketed paste above — most terminals bind Ctrl+V to their own paste
@@ -1554,21 +1526,21 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, pasteFromClipboardOrImage()
 
 	case tea.KeyPgUp:
-		m.viewport.HalfViewUp()
+		m.viewport.HalfPageUp()
 		return m.afterScroll(), nil
 
 	case tea.KeyPgDown:
-		m.viewport.HalfViewDown()
+		m.viewport.HalfPageDown()
 		return m.afterScroll(), nil
 
 	case tea.KeyUp:
 		// The composer is one line high, so the arrows have no job there and
 		// belong to the transcript — which is where a reader reaches first.
-		m.viewport.LineUp(1)
+		m.viewport.ScrollUp(1)
 		return m.afterScroll(), nil
 
 	case tea.KeyDown:
-		m.viewport.LineDown(1)
+		m.viewport.ScrollDown(1)
 		return m.afterScroll(), nil
 
 	case tea.KeyHome, tea.KeyEnd:
@@ -1604,8 +1576,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // read of the SSE stream, and that local abort is what closed the channel —
 // well before the daemon's session run_lock was actually released by the
 // sidecar's worker thread, which notices a cancel only cooperatively, at the
-// next agent-loop step boundary (see
-// hub/agents/email/python/gaia_agent_email/query_routes.py). Calling
+// next agent-loop step boundary. Calling
 // cancelFn() here reproduced the exact race it was meant to close: 5/5
 // cancel-then-resend attempts still hit a bare-lock 409 downstream.
 //
@@ -1646,7 +1617,6 @@ func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 		Role:    RoleStatus,
 		Content: cancellingNotice + m.cancelHint(),
 	})
-	m.drainPendingPreScan()
 	m.updateViewport()
 
 	if canceler, ok := m.client.(client.AgentCanceler); ok {
@@ -1758,9 +1728,27 @@ func (m *ChatModel) restoreToComposer(text string) {
 // "/clear" typed mid-turn still clears when it finally lands instead of being
 // sent to the agent as a literal question.
 func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
+	// `/update` takes a free-form version argument, so like /model it is
+	// dispatched before the exact-match switch.
+	if isUpdateCommand(query) {
+		return m.runUpdateCommand(updateCommandArg(query))
+	}
+	// Free-form arguments too (a voice id, a speed), so also before the switch.
+	if isReadAloudCommand(query) {
+		return m.runReadAloudCommand(commandArg(query, readAloudCommand))
+	}
+	if isVoiceCommand(query) {
+		return m.runVoiceCommand(commandArg(query, voiceCommand))
+	}
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
+	if isSkillsCommand(query) {
+		return m.submitSkillsCommand(query)
+	}
+	if req, ok := parseConnectorsCommand(query); ok {
+		return m.startConnectorsCommand(req)
+	}
 	if isModelCommand(query) {
 		if !m.supportsModelCommand() {
 			// Same shape as setFullAccess's capability check (fullaccess.go): refuse
@@ -1812,7 +1800,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m, nil
 		}
-		panel := providers.New(m.lemonadeBaseURL, m.width, m.height).WithCurrent(providerOfBackend(m.modelBackend))
+		panel := providers.New(m.lemonadeBaseURL, m.width, m.height).WithCurrent(providerOfBackend(m.modelBackend)).WithCurrentModel(m.modelID)
 		m.providerPanel = &panel
 		m.palette.open = false
 		return m, panel.Init()
@@ -1843,6 +1831,12 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 
 	case "/gateway":
 		return m, func() tea.Msg { return OpenGatewayMsg{} }
+
+	case "/sessions":
+		return m, func() tea.Msg { return OpenSessionsMsg{} }
+
+	case "/sessions all":
+		return m, func() tea.Msg { return OpenSessionsMsg{AllKinds: true} }
 
 	case "/clear":
 		return m.clearConversation()
@@ -1902,6 +1896,23 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	case "/full-access never":
 		return m.setFullAccessDefault(false)
 
+	case "/models", "/gpu":
+		if m.agentID != setupAgentID {
+			m.messages = append(m.messages, Message{
+				Role:    RoleError,
+				Content: m.agentName + " has no model setup — only the gaia flagship agent does.",
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		if m.setupRunning {
+			return m.statusNote("Setup is running. Esc cancels it."), nil
+		}
+		if query == "/gpu" {
+			return m.openModelSetup(modelsetup.ModeGPU)
+		}
+		return m.openModelSetup(modelsetup.ModeModels)
+
 	case "/setup":
 		if m.agentID != setupAgentID {
 			m.messages = append(m.messages, Message{
@@ -1915,10 +1926,13 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		if m.setupRunning {
 			return m.statusNote("Setup is already running. Esc cancels it."), nil
 		}
-		return m.startSetupRun(false /* firstBoot */)
+		return m.openFirstRunSetup(false /* firstBoot */)
 
 	case "/slack":
 		return m.startSlackCheck()
+
+	case "/connectors":
+		return m.startConnectorsList()
 
 	case "/slack setup":
 		if m.slackSetup != nil {
@@ -1931,6 +1945,12 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 
 	case "/slack never":
 		return m, declineSlackCmd(true)
+	}
+	if query == "/discord" || strings.HasPrefix(query, "/discord ") {
+		return m.handleDiscordCommand(query)
+	}
+	if isAutomationsCommand(query) {
+		return m.handleAutomationsCommand(query)
 	}
 
 	return m.sendQuery(query)
@@ -1967,8 +1987,6 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	// Per-turn, like ttft above it. Left standing, a turn whose `final` carries
 	// no usage.steps reported the PREVIOUS turn's count as its own.
 	m.totalSteps = 0
-	// A new turn starts having drawn no card yet -- see drainPendingPreScan.
-	m.preScanRenderedThisTurn = false
 	m.updateViewport()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2073,6 +2091,17 @@ func (m *ChatModel) dropCancellingNotice() {
 			m.messages = append(m.messages[:i], m.messages[i+1:]...)
 			return
 		}
+	}
+}
+
+// Retire stops everything this chat started before it is dropped: the turn
+// and any reading aloud, which would otherwise play on with no way to stop it.
+func (m *ChatModel) Retire() {
+	m.CancelActiveTurn()
+	m.StopReadAloud()
+	if m.stopSignIns != nil {
+		m.stopSignIns()
+		m.signIns, m.stopSignIns = nil, nil
 	}
 }
 
@@ -2204,8 +2233,12 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		})
 		m.streaming = false
 		m.totalSteps = e.Steps
+		readable := !m.cancelPending && !m.awaitingModelSwitch && !m.warming
 		m.settleTurn()
 		m.updateViewport()
+		if readable {
+			return m.autoReadAloud(content)
+		}
 		return m, nil
 
 	case event.ChunkEvent:
@@ -2414,6 +2447,7 @@ func (m *ChatModel) syncViewportHeight(chrome int) {
 
 	m.confirmRows = 0
 	if m.confirmation != nil {
+		m.confirmation.SetMaxRows(budget - 1)
 		m.confirmRows = lipgloss.Height(m.confirmation.View())
 		// The transcript keeps at least one row. Past that the modal is
 		// clipped rather than allowed to push the composer and status bar off
@@ -2493,12 +2527,6 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	// seen accumulates message_ids across cards within one turn so a second
-	// card doesn't redraw an item its turn's first card already showed. It
-	// resets at each RoleUser message: a new turn's mail can legitimately
-	// repeat an id an earlier turn's card already rendered (still urgent on
-	// the next scan is not a duplicate), so dedup must not span turns.
-	seen := make(map[string]bool)
 	// Counted as the transcript is written rather than measured afterwards:
 	// re-scanning the buffer per message is quadratic in a long session, and
 	// this runs on every spinner tick of a streaming turn.
@@ -2509,7 +2537,6 @@ func (m *ChatModel) updateViewport() {
 	}
 	for i := range m.messages {
 		if m.messages[i].Role == RoleUser {
-			seen = make(map[string]bool)
 			// A blank line ahead of every turn but the first. Without it the
 			// transcript is one unbroken block and the eye has nothing to
 			// anchor on when scrolling back for "where did I ask that?".
@@ -2519,7 +2546,7 @@ func (m *ChatModel) updateViewport() {
 		}
 		start := line
 		// By index, not by value: rendering a card memoizes onto the message.
-		write(m.renderMessage(&m.messages[i], seen))
+		write(m.renderMessage(&m.messages[i]))
 		write("\n")
 		m.msgSpans = append(m.msgSpans, m.copyRegion(&m.messages[i], msgSpan{start: start, end: line, index: i}))
 		if spacedAfter(m.messages[i].Role) {
@@ -2656,24 +2683,6 @@ func (m ChatModel) answerWidth() int {
 	return w
 }
 
-// wrapForPane wraps text to the visible pane, leaving it untouched before the
-// first WindowSizeMsg (when no width is known yet).
-func (m ChatModel) wrapForPane(s string) string {
-	if m.width <= 0 {
-		return s
-	}
-	return components.WrapText(s, m.cardWidth())
-}
-
-// wrapProse wraps to the same measure an answer lays out at, so prose from
-// either side of the conversation shares one column.
-func (m ChatModel) wrapProse(s string) string {
-	if m.width <= 0 {
-		return s
-	}
-	return components.WrapText(s, m.answerWidth())
-}
-
 // spacedAfter reports whether a message gets a blank line under it. Substantial
 // blocks — a question, an answer, a card, an error — get air; consecutive status
 // notes stay tight, since spreading a run of one-liners apart makes them read as
@@ -2791,10 +2800,8 @@ func (m ChatModel) answerStats(msg *Message) string {
 	return strings.Join(stats, " · ")
 }
 
-// renderMessage draws one message. seen threads cross-card dedup for the
-// RoleCard case (see Message.renderCardDeduped); pass nil for a standalone
-// render with no dedup.
-func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
+// renderMessage draws one message.
+func (m ChatModel) renderMessage(msg *Message) string {
 	switch msg.Role {
 	case RoleUser:
 		// The WHOLE line is dimmed, prefix and text alike. Styling only the
@@ -2839,7 +2846,7 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		return panel
 
 	case RoleCard:
-		return msg.renderCardDeduped(m.cardWidth(), seen)
+		return msg.renderCard(m.cardWidth())
 
 	case RoleError:
 		panelWidth := m.width - 4
@@ -3027,7 +3034,7 @@ func (m ChatModel) renderLiveRegion() string {
 	// Paused while a prompt waits on the user, so it never jumps back on answering.
 	elapsed := m.turnElapsed(time.Now())
 
-	log := collapseActivity(m.visibleWork(m.activity))
+	log := collapseActivity(m.visibleWork(settleFailures(m.activity, false)))
 	if len(log) > workLogLines {
 		log = log[len(log)-workLogLines:]
 	}
@@ -3173,6 +3180,8 @@ func (m ChatModel) phasePhrase() string {
 			return "Reading the tool results"
 		}
 		return "Reading your request"
+	case "loading_tools":
+		return "Loading more tools"
 	case "reasoning":
 		if m.phase.words > 0 {
 			return "Reasoning · " + commas(m.phase.words) + " words"
@@ -3201,8 +3210,13 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 			last := &out[n-1]
 			// Different confirmation answers never fold: "x2 · approved" over a
 			// denied second call would misstate what the user said.
+			// Nor does a failed row, retried or not: folded, the next call's
+			// outcome would replace its error line. A failure folds under an
+			// earlier row only when it is a retry of that same call.
+			keep := stepFailed(*last) ||
+				(stepFailed(item) && (item.RetryKey == "" || item.RetryKey != last.RetryKey))
 			if last.Kind == item.Kind && activityKey(*last) == activityKey(item) &&
-				last.Approval == item.Approval {
+				last.Approval == item.Approval && !keep {
 				last.Repeat++
 				last.Content = mergeTargets(last.Content, item.Content)
 				last.Done = item.Done
@@ -3213,6 +3227,7 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 				// arguments under a line reading "x14" would be a lie about
 				// which call they came from.
 				last.Detail = item.Detail
+				last.Recovery = item.Recovery
 				last.Args = item.Args
 				last.Output = item.Output
 				continue
@@ -3278,8 +3293,9 @@ func formatElapsed(d time.Duration) string {
 // to a description of what it is timing.
 //
 // Failure is never signalled by colour or a glyph alone: a failed call's outcome
-// line begins with the word "failed" (see toolResultDetail / failureDetail), so
-// the state survives a terminal with no colour.
+// line begins with the word "failed" (see toolResultDetail / failureDetail) —
+// or "error" / "error, retried" while it is not a standing failure (see
+// settleFailures) — so the state survives a terminal with no colour.
 // maxRows is the height this ONE action may occupy, or 0 for the standard caps.
 // The live region passes a real number only when a single action is taller than
 // the whole region's budget: the cut has to be made HERE, inside the text, or
@@ -3326,7 +3342,7 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 		style = thinkingStyle
 	case item.Kind == "tool" || item.Kind == "confirm":
 		glyph, style = glyphTool, toolNameStyle
-		if item.Success != nil && !*item.Success {
+		if item.Success != nil && !*item.Success && item.Recovery == "" {
 			style = failStyle
 		}
 	case item.Kind == "status" || item.Kind == "thinking":
@@ -3349,14 +3365,25 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 	detail := clean(item.Detail)
 	// A sidecar's preview can report the failure its data did not flag; the
 	// word is the signal (markFailed puts it there for every failure we see).
-	failed := (item.Success != nil && !*item.Success) ||
-		strings.HasPrefix(strings.ToLower(detail), "failed")
+	failed := stepFailed(item)
+	// A failure the agent is working past, or already did, keeps its error
+	// in words but not in red: red is for what the turn ended on.
+	calm := failed && item.Recovery != ""
+	if calm {
+		detail, failed = calmDetail(detail, item.Recovery), false
+	}
 	detailRows := logDetailRows
 	if !m.expandWork {
 		switch {
 		case strings.HasPrefix(item.Approval, "denied"):
 			// The approval already says why it failed.
 			detail = ""
+		case item.Recovery == recoveryRetried:
+			// Settled: the one-line error is history. A pending one keeps its
+			// rows — if the turn ends on it, its tail is the remedy.
+			detailRows = 1
+		case calm:
+			// Still open: keeps its rows, like the failure it may become.
 		case !failed:
 			// A success earns one row, and only for what it found. A failure
 			// keeps its rows: its tail is the remedy.
@@ -3368,8 +3395,11 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 	}
 	if detail != "" && detailRows > 0 {
 		dstyle := activityStyle
-		if failed {
+		switch {
+		case failed:
 			dstyle = failStyle
+		case calm:
+			dstyle = retryStyle
 		}
 		drows := wrapLog(detail, "", width-2, detailRows)
 		lines = append(lines, "    "+dstyle.Render(glyphDetail+" "+drows[0]))
@@ -3598,6 +3628,9 @@ func (m ChatModel) contentHeaderRows() int {
 }
 
 func (m ChatModel) View() string {
+	if m.modelSetup != nil && m.modelSetupOpen {
+		return m.modelSetup.View()
+	}
 	if m.providerPanel != nil {
 		return m.providerPanel.View()
 	}
@@ -3652,15 +3685,7 @@ func (m ChatModel) View() string {
 	// empty, which it never is here, and the step count already rides the hint
 	// under --dev. Passing it kept a second renderer for one number alive, one
 	// that would print it in user mode the day the hint did come back empty.
-	barState := components.StatusBarState{
-		AgentName:        m.agentIdentity(),
-		Connected:        m.connected,
-		Streaming:        m.streaming,
-		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
-		Preparing:        m.warming || m.startup.inFlight,
-	}
-	barState.Hint = fitHints(m.statusHints(), m.hintBudget())
-	statusBar := components.RenderStatusBar(barState, m.width)
+	statusBar := m.renderStatusBar()
 
 	// The full access banner sits OUTSIDE the viewport, directly under the header,
 	// so it is in every frame and cannot be scrolled away. When full access is off
@@ -3837,4 +3862,17 @@ func (m ChatModel) coreVersionSuffix() string {
 // renderIdentityChip is agentIdentity styled as a header segment.
 func (m ChatModel) renderIdentityChip() string {
 	return lipgloss.NewStyle().Foreground(theme.Text).Render(" │ " + m.agentIdentity())
+}
+
+// renderStatusBar is the one-row bar at the foot of the chat screen.
+func (m ChatModel) renderStatusBar() string {
+	barState := components.StatusBarState{
+		AgentName:        m.agentIdentity(),
+		Connected:        m.connected,
+		Streaming:        m.streaming,
+		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
+		Preparing:        m.warming || m.startup.inFlight,
+	}
+	barState.Hint = fitHints(m.statusHints(), m.hintBudget())
+	return components.RenderStatusBar(barState, m.width)
 }

@@ -598,7 +598,13 @@ class TestSearchDuckDuckGoBs4Unavailable:
         mock_response.encoding = "utf-8"
         mock_response.apparent_encoding = "utf-8"
 
-        with patch.object(self.client, "_request", return_value=mock_response):
+        from gaia.web import client as web_client
+
+        instant_gate = web_client._SearchGate(min_interval=0.0, sleep=lambda s: None)
+        with (
+            patch.object(self.client, "_request", return_value=mock_response),
+            patch.object(web_client, "_SEARCH_GATE", instant_gate),
+        ):
             results = self.client.search_duckduckgo("test")
             assert isinstance(results, list)
 

@@ -11,6 +11,8 @@ are consistent. Catches missing packages that only break on non-editable install
 import re
 from pathlib import Path
 
+from tests.unit.packaging_helpers import find_source_packages
+
 # Project root and source directory
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
@@ -20,8 +22,6 @@ SETUP_PY = PROJECT_ROOT / "setup.py"
 EXCLUDED_DIRS = {
     "tests",
     "examples",
-    "__pycache__",
-    "node_modules",
 }
 
 
@@ -74,18 +74,7 @@ def _parse_setup_install_requires():
 
 def _find_filesystem_packages():
     """Find all directories under src/gaia/ that contain __init__.py."""
-    packages = set()
-    gaia_src = SRC_DIR / "gaia"
-    for init_file in gaia_src.rglob("__init__.py"):
-        pkg_dir = init_file.parent
-        # Convert path to dotted package name
-        rel = pkg_dir.relative_to(SRC_DIR)
-        pkg_name = ".".join(rel.parts)
-        # Skip excluded directories
-        if any(part in EXCLUDED_DIRS for part in rel.parts):
-            continue
-        packages.add(pkg_name)
-    return packages
+    return find_source_packages(SRC_DIR, frozenset(EXCLUDED_DIRS))
 
 
 class TestPackagingIntegrity:
@@ -362,3 +351,60 @@ class TestAgentWheelExtras:
             "makes amd-gaia unsatisfiable at that version and pip/uv "
             "silently backtrack-downgrade to an older release instead."
         )
+
+
+class TestSourcePackageWalker:
+    """The drift checks must see only real GAIA packages, whatever the runner
+    has installed under src/ (npm deps, build output, caches, venvs)."""
+
+    @staticmethod
+    def _pkg(root: Path, *parts: str) -> None:
+        for depth in range(1, len(parts) + 1):
+            d = root.joinpath(*parts[:depth])
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "__init__.py").write_text("", encoding="utf-8")
+
+    def test_non_source_trees_with_init_files_are_ignored(self, tmp_path):
+        self._pkg(tmp_path, "gaia", "apps", "webui")
+        self._pkg(
+            tmp_path,
+            "gaia",
+            "apps",
+            "webui",
+            "node_modules",
+            "node-gyp",
+            "gyp",
+            "pylib",
+            "gyp",
+        )
+        self._pkg(tmp_path, "gaia", "apps", "webui", "dist", "x")
+        self._pkg(tmp_path, "gaia", "apps", "webui", "build", "x")
+        self._pkg(tmp_path, "gaia", "llm", "__pycache__")
+        self._pkg(tmp_path, "gaia", ".venv", "lib", "site")
+        self._pkg(tmp_path, "gaia", "venv", "lib", "site")
+        self._pkg(tmp_path, "gaia", ".hidden", "pkg")
+
+        assert find_source_packages(tmp_path) == {
+            "gaia",
+            "gaia.apps",
+            "gaia.apps.webui",
+            "gaia.llm",
+        }
+
+    def test_nested_real_packages_are_still_found(self, tmp_path):
+        self._pkg(tmp_path, "gaia", "skills", "audit")
+        (tmp_path / "gaia" / "node_modules_notes").mkdir()
+        self._pkg(tmp_path, "gaia", "distribution")
+
+        assert find_source_packages(tmp_path) == {
+            "gaia",
+            "gaia.skills",
+            "gaia.skills.audit",
+            "gaia.distribution",
+        }
+
+    def test_caller_exclusions_are_added_to_the_defaults(self, tmp_path):
+        self._pkg(tmp_path, "gaia", "tests")
+        self._pkg(tmp_path, "gaia", "node_modules", "x")
+
+        assert find_source_packages(tmp_path, frozenset({"tests"})) == {"gaia"}

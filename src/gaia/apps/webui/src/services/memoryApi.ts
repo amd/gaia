@@ -5,10 +5,8 @@
 
 import { getApiBase } from '../utils/apiBase';
 
-const API_BASE = getApiBase();
-
 async function memFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const url = `${API_BASE}${path}`;
+    const url = `${getApiBase()}${path}`;
     const headers: Record<string, string> = {};
     if (method !== 'GET') headers['X-Gaia-UI'] = '1';
     if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -24,6 +22,8 @@ async function memFetch<T>(method: string, path: string, body?: unknown): Promis
         try { detail = JSON.parse(text).detail || text; } catch { /* noop */ }
         throw new Error(detail || `Memory API error (HTTP ${res.status})`);
     }
+    // A 204 has no body, whatever its content-type says.
+    if (res.status === 204) return undefined as T;
     const ct = res.headers.get('content-type') || '';
     if (!ct.includes('application/json')) return undefined as T;
     return res.json();
@@ -208,12 +208,12 @@ export interface InferenceInsight {
 
 /** Open an EventSource SSE stream for system discovery. */
 export function openDiscoveryStream(): EventSource {
-    return new EventSource(`${API_BASE}/memory/stream-discovery`);
+    return new EventSource(`${getApiBase()}/memory/stream-discovery`);
 }
 
 /** Open an EventSource SSE stream for LLM profile inference. */
 export function openInferenceStream(includeBrowser: boolean): EventSource {
-    return new EventSource(`${API_BASE}/memory/stream-inference?include_browser=${includeBrowser}`);
+    return new EventSource(`${getApiBase()}/memory/stream-inference?include_browser=${includeBrowser}`);
 }
 
 export function commitDiscovery(items: DiscoveryFinding[]) {
@@ -245,6 +245,42 @@ export interface MemorySettingsUpdateResponse extends MemorySettings {
 
 export function updateMemorySettings(settings: Partial<MemorySettings>) {
     return memFetch<MemorySettingsUpdateResponse>('PUT', '/memory/settings', settings);
+}
+
+export type EmbedderDevice = 'npu' | 'gpu';
+
+/** One device the embedder may run on; `available` null while the model server is starting. */
+export interface EmbedderOption {
+    device: EmbedderDevice;
+    model: string;
+    display_name: string;
+    /** False for a device GAIA hasn't proven; it is shown but can't be chosen. */
+    proven: boolean;
+    /** Whether this PC's hardware can run it; null while the model server is starting. */
+    present: boolean | null;
+    available: boolean | null;
+    reason: string | null;
+    downloaded: boolean | null;
+}
+
+/** Where every chat embeds documents and memory. */
+export interface EmbedderView {
+    device: EmbedderDevice;
+    /** True when the user chose the device; false when it is the default. */
+    chosen: boolean;
+    default_device: EmbedderDevice;
+    options: EmbedderOption[];
+    /** Set by a change: false when the embedder stayed the same. */
+    changed?: boolean;
+}
+
+export function getEmbedder() {
+    return memFetch<EmbedderView>('GET', '/memory/embedder');
+}
+
+/** `null` returns to the PC's setup. */
+export function setEmbedder(device: EmbedderDevice | null) {
+    return memFetch<EmbedderView>('PUT', '/memory/embedder', { device });
 }
 
 export function clearAllMemory() {
@@ -313,6 +349,16 @@ export interface Goal {
 export interface GoalStats {
     goals: Partial<Record<GoalStatus, number>>;
     tasks: Partial<Record<TaskStatus, number>>;
+}
+
+/** Why the background loop could not read the goal store; null when it can. */
+export function getGoalStoreHealth() {
+    return memFetch<{ error: string | null; damaged: boolean }>('GET', '/goals/health');
+}
+
+/** Move a damaged goal list aside and start an empty one; returns the kept file's name. */
+export function resetGoalStore() {
+    return memFetch<{ kept: string }>('POST', '/goals/store/reset');
 }
 
 export function getGoalStats() {

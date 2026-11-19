@@ -106,6 +106,23 @@ def test_a_prompt_inside_a_tool_does_not_count_against_its_timeout(layout, monke
     assert len(console.asked) == 1
 
 
+def test_an_answered_prompt_still_does_not_count_once_the_tool_carries_on(
+    layout, monkeypatch
+):
+    """The wait for an answer stays off the limit after the prompt closes."""
+    monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "2")
+    agent = _agent(layout, _Console(answer=True, delay=3.0))
+
+    @tool
+    def reads_then_works() -> dict:
+        """Asks for access, then keeps working."""
+        allowed, _reason = agent.path_validator.validate_read(str(layout["notes"]))
+        time.sleep(1.0)  # past the 2 s limit unless the 3 s answer is left out
+        return {"status": "success" if allowed else "error"}
+
+    assert agent._execute_tool("reads_then_works", {}) == {"status": "success"}
+
+
 def test_a_tool_that_hangs_after_the_prompt_is_still_abandoned(layout, monkeypatch):
     monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "0.3")
     agent = _agent(layout, _Console(answer=True, delay=0.2))
@@ -215,12 +232,12 @@ def test_the_rag_sdk_reads_a_file_the_user_granted(layout):
 
 
 def test_chat_agent_hands_its_validator_to_the_rag_sdk(layout):
-    pytest.importorskip("gaia_agent_chat")
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    pytest.importorskip("gaia_agent")
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
     with (
-        patch("gaia_agent_chat.agent.RAGSDK") as rag_sdk_cls,
-        patch("gaia_agent_chat.agent.SessionManager"),
+        patch("gaia_agent.chat_agent.RAGSDK") as rag_sdk_cls,
+        patch("gaia_agent.chat_agent.SessionManager"),
     ):
         agent = ChatAgent(
             ChatAgentConfig(
