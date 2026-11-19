@@ -100,6 +100,7 @@ export interface ApiSchemas {
   DownloadModelResponse: DownloadModelResponse;
   DownloadProgress: DownloadProgress;
   EditScheduleRequest: EditScheduleRequest;
+  EmbedderBody: EmbedderBody;
   EstimatedTokenizer: EstimatedTokenizer;
   EvalMailboxRequest: EvalMailboxRequest;
   ExactTokenizer: ExactTokenizer;
@@ -1596,6 +1597,12 @@ export interface EditScheduleRequest {
    * IANA time zone the schedule's times are in. Defaults to the server machine's zone.
    */
   timezone?: string | null;
+}
+/**
+ * ``npu`` or ``gpu``; None is the default (the GPU).
+ */
+export interface EmbedderBody {
+  device?: ("npu" | "gpu") | null;
 }
 export interface EvalMailboxRequest {
   attached: boolean;
