@@ -287,6 +287,9 @@ class _GatedAgent:
         pass
 
 
+_SIDECAR_TOKEN = "test-sidecar-token"
+
+
 @pytest.fixture
 def live_gaia_sidecar(monkeypatch):
     """The real flagship ``/v1/gaia`` app on a real port, with a gated agent."""
@@ -301,7 +304,8 @@ def live_gaia_sidecar(monkeypatch):
 
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
-    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    # Full access over HTTP needs caller auth, as the shipped sidecar has.
+    monkeypatch.setenv(caller_auth.TOKEN_ENV_VAR, _SIDECAR_TOKEN)
     agents: list = []
 
     def build(**kw):
@@ -346,7 +350,7 @@ def _relay_in_background(base_url):
     from gaia.ui.sidecar.proxy import SidecarProxy
 
     handler = SSEOutputHandler()
-    proxy = SidecarProxy(base_url, agent_id="gaia")
+    proxy = SidecarProxy(base_url, agent_id="gaia", auth_token=_SIDECAR_TOKEN)
     thread = threading.Thread(
         target=relay.relay_query,
         args=(handler, proxy),
@@ -451,7 +455,7 @@ def test_full_access_relays_a_gated_shell_prompt_to_the_ui(
     monkeypatch.setattr(sr, "build_session_agent", build)
 
     handler = SSEOutputHandler()
-    proxy = SidecarProxy(base_url, agent_id="gaia")
+    proxy = SidecarProxy(base_url, agent_id="gaia", auth_token=_SIDECAR_TOKEN)
     thread = threading.Thread(
         target=relay.relay_query,
         args=(handler, proxy),
