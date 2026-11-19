@@ -3025,6 +3025,7 @@ const messages: Messages = {
 
     'download.chip': 'جارٍ التنزيل {done} من {count} · {pct}%',
     'download.chipFailed': 'فشل أحد التنزيلات',
+    'download.dismissFailed': 'إغلاق التنزيل الفاشل',
     'download.chipAria': 'تنزيلات النماذج. افتح الإعدادات لعرضها.',
     // Updates
     'update.chip.installFailed': 'لم يُثبَّت التحديث',

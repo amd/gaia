@@ -3025,6 +3025,7 @@ export const enMessages = {
 
     'download.chip': 'Downloading {done} of {count} · {pct}%',
     'download.chipFailed': 'A download failed',
+    'download.dismissFailed': 'Dismiss the failed download',
     'download.chipAria': 'Model downloads. Open Settings to see them.',
     // Updates
     'update.chip.installFailed': 'The update didn\'t install',

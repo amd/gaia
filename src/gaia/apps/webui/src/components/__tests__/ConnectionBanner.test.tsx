@@ -1,15 +1,25 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as api from '../../services/api';
 import { ConnectionBanner } from '../ConnectionBanner';
 import { ErrorNotice } from '../settings/ErrorNotice';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import type { SystemStatus } from '../../types';
 
+vi.mock('../../services/api', async (importOriginal) => {
+    const real = await importOriginal<typeof api>();
+    const mocked = Object.fromEntries(Object.entries(real).map(([k, v]) => [k, typeof v === 'function' ? vi.fn() : v]));
+    return { ...mocked, ApiError: real.ApiError };
+});
+const mocked = vi.mocked(api);
+
 beforeEach(() => {
+    vi.clearAllMocks();
+    mocked.dismissDownloadFailure.mockResolvedValue({ status: 'dismissed', model: '' });
     useChatStore.setState({ backendConnected: true, currentSessionId: null, messages: [] });
     useModelStore.setState({ pickLoad: null });
 });
@@ -249,23 +259,57 @@ describe('a failed model download', () => {
         lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF', model_downloaded: true, expected_model_loaded: true,
         context_size_sufficient: true,
     };
-    const progress = (state: 'downloading' | 'error') => ({
-        state, model_name: 'Gemma-4-E4B-it-GGUF', percent: 40, file: null, file_index: 1, total_files: 1,
+    const progress = (state: 'downloading' | 'error', model = 'Gemma-4-E4B-it-GGUF') => ({
+        state, model_name: model, percent: 40, file: null, file_index: 1, total_files: 1,
         downloaded_bytes: 0, total_bytes: 0, message: state === 'error' ? 'disk full' : undefined,
     });
 
-    it('goes away when dismissed, and a later failure shows again', () => {
+    it('asks the server to forget the failure, then goes away, and a later failure shows again', async () => {
         useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('error') } as SystemStatus });
         const { rerender } = render(<ConnectionBanner />);
         expect(screen.getByRole('alert')).toHaveTextContent('failed');
         fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
-        expect(screen.queryByRole('alert')).toBeNull();
+        await waitFor(() => expect(mocked.dismissDownloadFailure).toHaveBeenCalledWith('Gemma-4-E4B-it-GGUF'));
+        await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
 
         act(() => { useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('downloading') } as SystemStatus }); });
         rerender(<ConnectionBanner />);
         act(() => { useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('error') } as SystemStatus }); });
         rerender(<ConnectionBanner />);
         expect(screen.getByRole('alert')).toHaveTextContent('failed');
+    });
+
+    it('keeps the warning when the server could not forget it', async () => {
+        mocked.dismissDownloadFailure.mockRejectedValueOnce(new Error('offline'));
+        useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('error') } as SystemStatus });
+        render(<ConnectionBanner />);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+
+        await waitFor(() => expect(mocked.dismissDownloadFailure).toHaveBeenCalledTimes(1));
+        expect(screen.getByRole('alert')).toHaveTextContent('failed');
+    });
+
+    it("names another model's failure and dismisses only it", async () => {
+        useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('error', 'settings-GGUF') } as SystemStatus });
+        render(<ConnectionBanner />);
+        expect(screen.getByRole('alert')).toHaveTextContent('Download of settings-GGUF failed');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+
+        await waitFor(() => expect(mocked.dismissDownloadFailure).toHaveBeenCalledWith('settings-GGUF'));
+        await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+
+        // The active model's own state is untouched: its later failure still shows.
+        act(() => { useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('error') } as SystemStatus }); });
+        expect(screen.getByRole('alert')).toHaveTextContent('Download of Gemma-4-E4B-it-GGUF failed');
+    });
+
+    it('offers no dismiss while the download is still running', () => {
+        useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('downloading') } as SystemStatus });
+        render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent('Downloading');
+        expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
     });
 });
 
