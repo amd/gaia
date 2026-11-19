@@ -41,7 +41,9 @@ export function ConnectionBanner() {
     const t = useT();
     const status = useSystemStatus();
     const { data, refetch } = status;
-    const { error } = useQueryFailure(status);
+    const held = useQueryFailure(status).error;
+    // A PC that answered once keeps its last status in the cache; its latest failure must still show.
+    const error = status.error ?? held;
     const picked = pickBanner(data, error, t);
     const { dismissed, dismiss, reconcile } = useBannerDismissedStore();
     useEffect(() => reconcile(picked), [picked?.id, picked?.dismissible, reconcile]); // eslint-disable-line react-hooks/exhaustive-deps

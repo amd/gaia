@@ -29,6 +29,8 @@ const gb = (bytes: number, digits: number) => (bytes / 1e9).toFixed(digits);
  * `fetchError` is the status request's failure, if it failed.
  */
 export function pickBanner(status: SystemStatus | undefined, fetchError: unknown, t: Translate): Banner | null {
+    // An unreachable PC's last status is stale; the web drops it too (App.tsx applyStatus).
+    if (fetchError instanceof GaiaNetworkError) status = undefined;
     const progress = status?.download_progress ?? null;
     if (progress?.state === 'downloading' || progress?.state === 'starting' || progress?.state === 'error') {
         const name = progress.model_name || status?.default_model_name || '';

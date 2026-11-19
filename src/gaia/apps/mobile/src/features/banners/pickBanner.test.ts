@@ -39,4 +39,13 @@ describe('pickBanner', () => {
         expect(banner?.progress?.label).toBe('50% · 5.00 / 10.00 GB');
         expect(id(withStatus({ download_progress: { ...download, state: 'error' } }))).toBe('download');
     });
+
+    it('says a PC that answered mid-download has gone away rather than show its last download, and keeps it for an HTTP error', () => {
+        const download = { state: 'downloading', model_name: 'M', percent: 50, file: 'a.gguf', file_index: 1, total_files: 2, downloaded_bytes: 5e9, total_bytes: 1e10, message: null } as const;
+        const last = withStatus({ download_progress: download });
+        expect(id(last, new GaiaNetworkError('http://pc', new Error('refused')))).toBe('unreachable');
+        expect(id(OK, new GaiaNetworkError('http://pc', new Error('refused')))).toBe('unreachable');
+        expect(id(last, new GaiaApiError(503, 'busy'))).toBe('download');
+        expect(id(OK, new GaiaApiError(503, 'busy'))).toBe('backendError');
+    });
 });
