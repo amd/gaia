@@ -280,6 +280,14 @@ class TriageResult:
                         else "."
                     )
                 )
+            if f.undecodable_chars:
+                out.append(
+                    f"{f.name}: {f.undecodable_chars} character(s) on "
+                    f"{f.undecodable_lines} line(s) (first: line "
+                    f"{f.undecodable_first_line}) are not valid {f.encoding} and were "
+                    "read as U+FFFD; ids and text on those lines may be damaged. If "
+                    "the file is in another encoding, convert it to UTF-8 and run again."
+                )
             if f.truncated_at_line:
                 out.append(
                     f"{f.name}: time budget ran out at line {f.truncated_at_line}; the rest "
@@ -618,6 +626,10 @@ class TriageResult:
                 row["header_lines"] = f.header
             if f.long_lines:
                 row["long_lines_cut"] = f.long_lines
+            if f.undecodable_chars:
+                row["undecodable_chars"] = f.undecodable_chars
+                row["undecodable_lines"] = f.undecodable_lines
+                row["encoding"] = f.encoding
             if f.no_timestamp:
                 row["no_timestamp"] = f.no_timestamp
                 # What the lines look like, to fit timestamp_regex to.

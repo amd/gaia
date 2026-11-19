@@ -44,6 +44,7 @@ from .limits import (
     NEW_TEMPLATE_MIN_FIRST_PCT,
     OUT_SAMPLE_CHARS,
     OUT_SAMPLES,
+    REPLACEMENT_CHAR,
     OUT_TEMPLATE_CHARS,
     SHORT_SPAN_PCT,
     SPIKE_FACTOR,
@@ -148,6 +149,10 @@ class FileReport:
     offsets: Counter = field(default_factory=Counter)
     truncated_at_line: Optional[int] = None
     error: Optional[str] = None
+    encoding: str = "utf-8"
+    undecodable_chars: int = 0
+    undecodable_lines: int = 0
+    undecodable_first_line: Optional[int] = None
     year_inferred: bool = False
     out_of_order: int = 0
 
@@ -377,6 +382,7 @@ class Analyzer:
         n = 0
         try:
             with _open_text(path) as f:
+                report.encoding = f.encoding or report.encoding
                 while True:
                     try:
                         raw, cut = _read_line(f, deadline)
@@ -389,6 +395,11 @@ class Analyzer:
                     n += 1
                     report.lines = n
                     report.long_lines += cut
+                    if REPLACEMENT_CHAR in raw:
+                        report.undecodable_chars += raw.count(REPLACEMENT_CHAR)
+                        report.undecodable_lines += 1
+                        if report.undecodable_first_line is None:
+                            report.undecodable_first_line = n
                     if n % 4096 == 0 and time.monotonic() > deadline:
                         report.truncated_at_line = n
                         self.out_of_time = True

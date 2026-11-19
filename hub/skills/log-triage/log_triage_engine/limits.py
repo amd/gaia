@@ -94,3 +94,5 @@ NON_LOG_SUFFIXES = frozenset(
 
 OUTPUT_MARKER = "gaia.triage_logs"
 BOM = "﻿"
+#: What a byte that is not valid in the file's encoding is decoded to.
+REPLACEMENT_CHAR = "\ufffd"

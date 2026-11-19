@@ -851,6 +851,30 @@ def test_a_list_that_is_mostly_baseline_says_so(tmp_path):
     assert any("small minority" in w for w in res.warnings)
 
 
+def test_bytes_that_do_not_decode_are_counted_and_reported(tmp_path):
+    good = [f"{_iso(T0 + i)} h-1 INFO job done, item {i}" for i in range(40)]
+    raw = ("\n".join(good) + "\n").encode("utf-8")
+    # Three lines in a single-byte encoding: five bytes that are not UTF-8.
+    for i, text in (
+        (3, "caf\xe9 ge\xf6ffnet"),
+        (9, "se\xf1al"),
+        (20, "na\xefve \xfcber"),
+    ):
+        raw += f"{_iso(T0 + 100 + i)} h-1 WARN {text}\n".encode("latin-1")
+    (tmp_path / "legacy.log").write_bytes(raw)
+    clean = _write(tmp_path / "clean.log", good)
+    out = _call(paths=[str(tmp_path / "legacy.log"), str(clean)])
+    rows = {f["file"]: f for f in out["coverage"]["files"]}
+    assert rows["legacy.log"]["undecodable_chars"] == 5
+    assert rows["legacy.log"]["undecodable_lines"] == 3
+    assert rows["legacy.log"]["encoding"] == "utf-8"
+    assert "undecodable_chars" not in rows["clean.log"]
+    (warning,) = [w for w in out["warnings"] if "U+FFFD" in w]
+    assert warning.startswith(
+        "legacy.log: 5 character(s) on 3 line(s) (first: line 41) are not valid utf-8"
+    )
+
+
 def test_counts_add_up(tmp_path):
     res = engine.report.triage([str(_steady(tmp_path / "a.log"))])
     c = res.checks
