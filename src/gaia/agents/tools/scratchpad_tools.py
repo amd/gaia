@@ -148,7 +148,16 @@ class ScratchpadToolsMixin:
 
                 count = mixin._scratchpad.insert_rows(table_name, parsed)
                 # The total shows rows an earlier batch or session left there.
-                held = mixin._scratchpad.row_count(table_name)
+                try:
+                    held = mixin._scratchpad.row_count(table_name)
+                except Exception as e:  # the rows are in; never report them lost
+                    logger.error(
+                        f"Inserted into '{table_name}' but could not count rows: {e}"
+                    )
+                    return (
+                        f"Inserted {count} row(s) into '{table_name}'; "
+                        f"its total row count could not be read: {e}"
+                    )
                 return (
                     f"Inserted {count} row(s) into '{table_name}'; "
                     f"it now holds {held} row(s)."
