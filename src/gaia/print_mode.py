@@ -156,6 +156,15 @@ def summarize(
 class PrintModeError(RuntimeError):
     """A refusal worded for the user, printed as it is."""
 
+    #: The exit code a run that ends on this error returns.
+    code = 1
+
+
+class DownloadStopped(PrintModeError):
+    """Ctrl+C during a model download."""
+
+    code = 130
+
 
 def configure_console(console: Any, skip_permissions: bool, full_access: bool) -> None:
     """Set a headless console's permissions from the -p flags."""
@@ -251,7 +260,7 @@ def run(
     except KeyboardInterrupt:
         return _emit_failure(output_format, "interrupted", code=130)
     except PrintModeError as exc:
-        return _emit_failure(output_format, str(exc))
+        return _emit_failure(output_format, str(exc), code=exc.code)
     except Exception as exc:  # noqa: BLE001 - CLI boundary: report, never a traceback
         # DEBUG, not INFO: the console handler prints INFO, traceback and all.
         log.debug("gaia -p failed", exc_info=True)
@@ -391,11 +400,10 @@ def _resolve_model(model: Optional[str]) -> Optional[str]:
 def _model_on_disk(
     model: Optional[str], base_url: Optional[str], setting: Optional[str] = None
 ) -> str:
-    """The model this run uses, refused unless it can answer without a download.
+    """The model this run uses, downloaded first when it is not on disk.
 
-    Unset means the model the Agent UI and TUI reopen on. A headless run never
-    downloads a model on its own: that is gigabytes nobody agreed to. *setting*
-    names the config key that chose *model*, for the refusal's remedy.
+    Unset means the model the Agent UI and TUI reopen on. *setting* names the
+    config key that chose *model*, for the remedy when the id is unknown.
     """
     from gaia.llm.lemonade_client import (
         LemonadeClient,
@@ -418,50 +426,162 @@ def _model_on_disk(
     if not info["listed"] and find_model_requirement(model) is None:
         raise PrintModeError(
             f"{model} isn't a model the model server knows, so gaia -p can't run "
-            f"it. {_missing_model_remedy(model, requested, setting, listed=False)}"
+            f"it. {_unknown_model_remedy(model, requested, setting)}"
         )
     if not info["downloaded"]:
-        raise PrintModeError(
-            f"{model} is not downloaded ({info['size_gb']:.1f} GB), and gaia -p "
-            f"does not download models. "
-            f"{_missing_model_remedy(model, requested, setting)}"
-        )
+        _download_model(client, model, info["size_gb"])
     return model
 
 
-def _missing_model_remedy(
-    model: str,
-    requested: Optional[str],
-    setting: Optional[str] = None,
-    listed: bool = True,
+class _DownloadProgress:
+    """Draws a model pull's streamed events on stderr; stdout stays the answer's.
+
+    A terminal gets one bar redrawn in place, anything else a plain line every
+    ``LOG_STEP`` percent. Lemonade reports bytes per file, so a model's bytes
+    are the files already finished plus the one in flight.
+    """
+
+    REDRAW_S = 0.2
+    LOG_STEP = 10
+    BAR_WIDTH = 24
+
+    def __init__(self, model: str, planned_bytes: int = 0, stream=None, clock=None):
+        self.model = model
+        self.stream = stream if stream is not None else sys.stderr
+        self.live = bool(getattr(self.stream, "isatty", lambda: False)())
+        self.bytes_done = 0
+        self.bytes_total = planned_bytes
+        self._planned = planned_bytes
+        self._clock = clock or time.monotonic
+        self._finished = 0
+        self._file: Optional[str] = None
+        self._file_total = 0
+        self._drawn_at: Optional[float] = None
+        self._next_log = self.LOG_STEP
+        self._line_open = False
+
+    def __call__(self, event: Dict[str, Any]) -> None:
+        kind = event.get("event")
+        if kind == "complete":
+            if self._line_open:
+                self.bytes_done = self.bytes_total
+                self._draw(100)
+            self.close()
+        if kind != "progress":
+            return
+        self._tally(event)
+        if not self.bytes_total:
+            return
+        percent = min(100, int(self.bytes_done * 100 / self.bytes_total))
+        if not self.live:
+            if percent >= self._next_log:
+                self._next_log = (percent // self.LOG_STEP + 1) * self.LOG_STEP
+                self._write(
+                    f"gaia -p: downloading {self.model}: {percent}% "
+                    f"({self._sizes()})\n"
+                )
+            return
+        now = self._clock()
+        if self._drawn_at is not None and now - self._drawn_at < self.REDRAW_S:
+            return
+        self._drawn_at = now
+        self._draw(percent)
+
+    def _draw(self, percent: int) -> None:
+        filled = self.BAR_WIDTH * percent // 100
+        bar = "#" * filled + "-" * (self.BAR_WIDTH - filled)
+        self._write(f"\r  [{bar}] {percent:3d}%  {self._sizes()}".ljust(60))
+        self._line_open = True
+
+    def close(self) -> None:
+        """End the bar's line, so what prints next starts on its own."""
+        if self._line_open:
+            self._line_open = False
+            self._write("\n")
+
+    def _tally(self, event: Dict[str, Any]) -> None:
+        name = event.get("file") or ""
+        done = int(event.get("bytes_downloaded") or 0)
+        if self._file is not None and name != self._file:
+            self._finished += self._file_total
+            self._file_total = 0
+        self._file = name
+        # Mid-file events can carry bytes_total 0, so keep the largest seen.
+        self._file_total = max(
+            self._file_total, int(event.get("bytes_total") or 0), done
+        )
+        self.bytes_done = self._finished + done
+        total = int(event.get("total_download_size") or 0)
+        self.bytes_total = max(
+            total or self._planned or self._finished + self._file_total,
+            self.bytes_done,
+        )
+
+    def _sizes(self) -> str:
+        unit, name = (1e9, "GB") if self.bytes_total >= 1e9 else (1e6, "MB")
+        return f"{self.bytes_done / unit:.1f} / {self.bytes_total / unit:.1f} {name}"
+
+    def _write(self, text: str) -> None:
+        self.stream.write(text)
+        self.stream.flush()
+
+
+def _download_model(client: Any, model: str, size_gb: Optional[float]) -> None:
+    """Download *model*, showing progress on stderr."""
+    from gaia.llm.lemonade_client import (
+        LemonadeClientError,
+        ModelDownloadCancelledError,
+    )
+
+    size = f" ({size_gb:.1f} GB)" if size_gb else ""
+    print(
+        f"gaia -p: {model} is not downloaded; downloading it{size}. "
+        "Ctrl+C stops the download.",
+        file=sys.stderr,
+    )
+    progress = _DownloadProgress(model, planned_bytes=int((size_gb or 0) * 1e9))
+    try:
+        client.ensure_model_downloaded(model, show_progress=False, on_progress=progress)
+    except (KeyboardInterrupt, ModelDownloadCancelledError) as exc:
+        raise DownloadStopped(
+            f"Download of {model} stopped. Run the same command again to "
+            "continue it."
+        ) from exc
+    except LemonadeClientError as exc:
+        raise PrintModeError(str(exc)) from exc
+    finally:
+        progress.close()
+    print(f"gaia -p: downloaded {model}", file=sys.stderr)
+
+
+def _unknown_model_remedy(
+    model: str, requested: Optional[str], setting: Optional[str] = None
 ) -> str:
-    """What makes the next run work, given where *model* came from.
+    """What makes the next run work, given where the unknown *model* came from.
 
     The order is ``--model``, then ``last_model``, then ``default_model``, so a
     remedy that changes a later one does nothing while an earlier one is set.
     """
     from gaia.config import GaiaConfig
 
-    download = (
-        "or download it from the GAIA app's Settings > Model."
-        if listed
-        else "or correct the id."
-    )
     if setting:
-        return f"Run `gaia config set {setting} <id>` with a model you have, {download}"
+        return (
+            f"Run `gaia config set {setting} <id>` with a model you have, or "
+            "correct the id."
+        )
     if requested:
-        return f"Pass --model with a model you have, {download}"
+        return "Pass --model with a model you have, or correct the id."
     if GaiaConfig.load().last_model == model:
         return (
             "It is the model the GAIA app last used (`last_model`), which wins "
             "over `default_model`. Pass --model with a model you have, pick "
             "one you have in the GAIA app, run `gaia config set last_model "
             '<id>` (or `gaia config set last_model ""` to use '
-            f"`default_model`), {download}"
+            "`default_model`), or correct the id."
         )
     return (
         "Pass --model with a model you have, run `gaia config set "
-        f"default_model <id>`, {download}"
+        "default_model <id>`, or correct the id."
     )
 
 

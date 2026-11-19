@@ -503,6 +503,10 @@ class _Catalog:
     downloaded = True
     listed = True
     cloud = False
+    size_gb = 5.6
+    #: What a download streams to ``on_progress``, then raises if it's an error.
+    events: list = []
+    download_error = None
 
     def __init__(self, **kwargs):
         _Catalog.calls.append(("__init__", kwargs))
@@ -515,10 +519,18 @@ class _Catalog:
         _Catalog.calls.append(("get_model_info", model))
         return {
             "id": model,
-            "size_gb": 5.6,
+            "size_gb": _Catalog.size_gb,
             "downloaded": _Catalog.downloaded,
             "listed": _Catalog.listed,
         }
+
+    def ensure_model_downloaded(self, model, **kwargs):
+        _Catalog.calls.append(("ensure_model_downloaded", model, kwargs))
+        for event in _Catalog.events:
+            kwargs["on_progress"](event)
+        if _Catalog.download_error is not None:
+            raise _Catalog.download_error
+        return True
 
     def __getattr__(self, name):
         def record(*args, **kwargs):
@@ -544,6 +556,9 @@ def stub_env(monkeypatch):
     _Catalog.downloaded = True
     _Catalog.listed = True
     _Catalog.cloud = False
+    _Catalog.size_gb = 5.6
+    _Catalog.events = []
+    _Catalog.download_error = None
     monkeypatch.setattr("gaia.llm.lemonade_client.LemonadeClient", _Catalog)
 
     manager = MagicMock()
@@ -702,66 +717,251 @@ def test_no_model_and_no_config_falls_back_to_the_shipped_default(
     assert _agent().config.model_id == DEFAULT_MODEL_NAME
 
 
-def test_a_local_model_that_is_not_downloaded_is_refused_not_downloaded(
+def _downloads():
+    return [c[1] for c in _Catalog.calls if c[0] == "ensure_model_downloaded"]
+
+
+def _progress(done, total, file="model.gguf", **extra):
+    return {
+        "event": "progress",
+        "file": file,
+        "bytes_downloaded": done,
+        "bytes_total": total,
+        **extra,
+    }
+
+
+def test_a_local_model_that_is_not_downloaded_is_downloaded_then_run(
     stub_env, monkeypatch, capsys
 ):
     from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
     _config(monkeypatch)
     _Catalog.downloaded = False
-    assert print_mode.run("q") == 1
-    err = capsys.readouterr().err
-    assert f"{DEFAULT_MODEL_NAME} is not downloaded (5.6 GB)" in err
-    assert "--model" in err
-    assert _StubAgent.instances == []
-    # The server was only reached, never asked to load (or fetch) a model.
-    assert [c.kwargs["preload"] for c in stub_env.call_args_list] == [False]
+    assert print_mode.run("q") == 0
+    out, err = capsys.readouterr()
+    assert out == "pong\n"
+    assert f"{DEFAULT_MODEL_NAME} is not downloaded; downloading it (5.6 GB)" in err
+    assert f"gaia -p: downloaded {DEFAULT_MODEL_NAME}" in err
+    assert _downloads() == [DEFAULT_MODEL_NAME]
+    assert _agent().config.model_id == DEFAULT_MODEL_NAME
+    # The model is fetched before the server is asked to load it.
+    assert [c.kwargs["preload"] for c in stub_env.call_args_list] == [False, True]
     assert [c[0] for c in _Catalog.calls] == [
         "__init__",
         "_is_cloud_model",
         "get_model_info",
+        "ensure_model_downloaded",
     ]
 
 
-def test_a_missing_last_model_names_last_model_not_default_model(
+def test_a_model_named_with_model_is_downloaded_with_streamed_progress(
+    stub_env, monkeypatch
+):
+    _config(monkeypatch, last_model="other")
+    _Catalog.downloaded = False
+    assert print_mode.run("q", model="user.Added-27B-GGUF") == 0
+    (call,) = [c for c in _Catalog.calls if c[0] == "ensure_model_downloaded"]
+    assert call[1] == "user.Added-27B-GGUF"
+    assert callable(call[2]["on_progress"])
+    assert call[2]["show_progress"] is False
+    assert _agent().config.model_id == "user.Added-27B-GGUF"
+
+
+def test_download_progress_goes_to_stderr_and_json_stdout_stays_one_object(
+    stub_env, monkeypatch, capsys
+):
+    _config(monkeypatch)
+    _Catalog.downloaded = False
+    _Catalog.size_gb = 2.0
+    total = 2_000_000_000
+    _Catalog.events = [
+        _progress(step * total // 20, total, total_download_size=total)
+        for step in range(21)
+    ] + [{"event": "complete", "percent": 100}]
+    assert print_mode.run("q", model="m1", output_format="json") == 0
+    out, err = capsys.readouterr()
+    assert out.count("\n") == 1
+    assert json.loads(out)["result"] == "pong"
+    # Not a terminal: one plain line every 10%, and no carriage returns.
+    lines = [line for line in err.splitlines() if "downloading m1:" in line]
+    assert [line.split("downloading m1: ")[1].split("%")[0] for line in lines] == [
+        str(p) for p in range(10, 101, 10)
+    ]
+    assert lines[4] == "gaia -p: downloading m1: 50% (1.0 / 2.0 GB)"
+    assert "\r" not in err
+    assert err.rstrip().endswith("gaia -p: downloaded m1")
+
+
+class _Terminal(io.StringIO):
+    def isatty(self):
+        return True
+
+
+def test_on_a_terminal_the_bar_redraws_in_place():
+    stream = _Terminal()
+    ticks = iter(range(100))
+    bar = print_mode._DownloadProgress(
+        "m1", planned_bytes=4_000_000_000, stream=stream, clock=lambda: next(ticks)
+    )
+    bar(_progress(1_000_000_000, 4_000_000_000))
+    bar(_progress(2_000_000_000, 4_000_000_000))
+    bar({"event": "complete"})
+    frames = stream.getvalue().split("\r")[1:]
+    assert [frame.strip() for frame in frames] == [
+        "[######------------------]  25%  1.0 / 4.0 GB",
+        "[############------------]  50%  2.0 / 4.0 GB",
+        "[########################] 100%  4.0 / 4.0 GB",
+    ]
+    assert stream.getvalue().endswith("\n")
+    assert stream.getvalue().count("\n") == 1
+
+
+def test_the_bar_is_not_redrawn_for_every_event():
+    stream = _Terminal()
+    now = [0.0]
+    bar = print_mode._DownloadProgress(
+        "m1", planned_bytes=1000, stream=stream, clock=lambda: now[0]
+    )
+    for done in range(0, 500):
+        bar(_progress(done, 1000))
+    assert stream.getvalue().count("\r") == 1
+    now[0] = 1.0
+    bar(_progress(500, 1000))
+    assert stream.getvalue().count("\r") == 2
+
+
+def test_progress_adds_up_the_files_of_one_model():
+    """Lemonade reports bytes per file: the weights, then the vision projector."""
+    stream = io.StringIO()
+    bar = print_mode._DownloadProgress("m1", planned_bytes=10**9, stream=stream)
+    bar(_progress(800_000_000, 800_000_000, file="weights.gguf"))
+    bar(_progress(100_000_000, 200_000_000, file="mmproj.gguf"))
+    assert bar.bytes_done == 900_000_000
+    assert bar.bytes_total == 1_000_000_000
+    assert stream.getvalue().splitlines()[-1] == (
+        "gaia -p: downloading m1: 90% (0.9 / 1.0 GB)"
+    )
+
+
+def test_progress_with_no_size_yet_draws_nothing():
+    stream = _Terminal()
+    bar = print_mode._DownloadProgress("m1", stream=stream)
+    bar(_progress(0, 0, file=""))
+    bar({"event": "complete"})
+    assert stream.getvalue() == ""
+
+
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_a_failed_download_exits_1_with_the_reason(stub_env, monkeypatch, capsys, fmt):
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    _config(monkeypatch)
+    _Catalog.downloaded = False
+    _Catalog.download_error = LemonadeClientError(
+        "Failed to download model 'm1': connection lost"
+    )
+    assert print_mode.run("q", model="m1", output_format=fmt) == 1
+    out, err = capsys.readouterr()
+    assert "❌ gaia -p: Failed to download model 'm1': connection lost" in err
+    assert "LemonadeClientError" not in err
+    if fmt == "json":
+        assert json.loads(out)["error"].startswith("Failed to download model 'm1'")
+    else:
+        assert out == ""
+    assert _StubAgent.instances == []
+
+
+@pytest.mark.parametrize("stop", ["ctrl_c", "cancelled"])
+def test_stopping_a_download_exits_130_with_a_clear_message(
+    stub_env, monkeypatch, capsys, stop
+):
+    from gaia.llm.lemonade_client import ModelDownloadCancelledError
+
+    _config(monkeypatch)
+    _Catalog.downloaded = False
+    _Catalog.events = [_progress(1, 10)]
+    _Catalog.download_error = (
+        KeyboardInterrupt()
+        if stop == "ctrl_c"
+        else ModelDownloadCancelledError("Download of m1 stopped at your request.")
+    )
+    assert print_mode.run("q", model="m1") == 130
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "❌ gaia -p: Download of m1 stopped. Run the same command again" in err
+    assert "Traceback" not in err
+    assert _StubAgent.instances == []
+
+
+def test_ctrl_c_ends_the_bar_line_before_the_message(monkeypatch, capsys):
+    """The stop message starts on its own line, not after a half-drawn bar."""
+    stream = _Terminal()
+    monkeypatch.setattr(sys, "stderr", stream)
+
+    class _Client:
+        def ensure_model_downloaded(self, model, **kwargs):
+            kwargs["on_progress"](_progress(1_000_000, 10_000_000))
+            raise KeyboardInterrupt
+
+    with pytest.raises(print_mode.DownloadStopped) as stopped:
+        print_mode._download_model(_Client(), "m1", 0.01)
+    assert stopped.value.code == 130
+    assert "\r" in stream.getvalue()
+    assert stream.getvalue().endswith("\n")
+
+
+def test_a_missing_last_model_is_downloaded_too(stub_env, monkeypatch, capsys):
+    _config(monkeypatch, last_model="Gemma-4-E4B-it-GGUF", default_model="other")
+    _Catalog.downloaded = False
+    assert print_mode.run("q") == 0
+    assert _downloads() == ["Gemma-4-E4B-it-GGUF"]
+    assert capsys.readouterr().out == "pong\n"
+
+
+def test_an_unknown_last_model_names_last_model_not_default_model(
     stub_env, monkeypatch, capsys
 ):
     """``last_model`` wins over ``default_model``, so setting the default can't help."""
-    _config(monkeypatch, last_model="Gemma-4-E4B-it-GGUF", default_model="other")
+    _config(monkeypatch, last_model="Nope-GGUF", default_model="other")
     _Catalog.downloaded = False
+    _Catalog.listed = False
     assert print_mode.run("q") == 1
     err = capsys.readouterr().err
-    assert err.startswith("❌ gaia -p: Gemma-4-E4B-it-GGUF is not downloaded")
+    assert err.startswith("❌ gaia -p: Nope-GGUF isn't a model the model server")
     assert "RuntimeError" not in err
     assert "`gaia config set last_model <id>`" in err
     assert '`gaia config set last_model ""`' in err
     assert "default_model <id>" not in err
     assert "--model" in err
+    assert _downloads() == []
 
 
-def test_a_missing_model_passed_with_model_names_only_what_helps(
+def test_an_unknown_model_passed_with_model_names_only_what_helps(
     stub_env, monkeypatch, capsys
 ):
     _config(monkeypatch, last_model="other")
     _Catalog.downloaded = False
+    _Catalog.listed = False
     assert print_mode.run("q", model="cfg-model", output_format="json") == 1
     out, err = capsys.readouterr()
     error = json.loads(out)["error"]
-    assert error.startswith("cfg-model is not downloaded")
+    assert error.startswith("cfg-model isn't a model the model server knows")
     assert "gaia config set" not in error
     assert "RuntimeError" not in err
 
 
-def test_a_missing_default_model_names_default_model(stub_env, monkeypatch, capsys):
+def test_an_unknown_default_model_names_default_model(stub_env, monkeypatch, capsys):
     _config(monkeypatch, default_model="cfg-model")
     _Catalog.downloaded = False
+    _Catalog.listed = False
     assert print_mode.run("q") == 1
     err = capsys.readouterr().err
     assert "`gaia config set default_model <id>`" in err
     assert "last_model" not in err
 
 
-def test_a_local_hybrid_classifier_that_is_not_downloaded_is_refused(
+def test_a_local_hybrid_classifier_that_is_not_downloaded_is_downloaded_first(
     stub_env, monkeypatch, capsys
 ):
     from gaia.llm import hybrid
@@ -775,16 +975,28 @@ def test_a_local_hybrid_classifier_that_is_not_downloaded_is_refused(
             )
 
         def decide(self, text, base_url=None):
-            raise AssertionError("the classifier must not run")
+            assert _downloads() == ["Local-Classifier-GGUF"]
+            return hybrid.RouteDecision(
+                model="amd.Cheap",
+                kind="chat",
+                difficulty=1,
+                stakes="low",
+                reason="test",
+                classified=True,
+                seconds=0.1,
+                policy=self.settings.policy,
+            )
 
     monkeypatch.setattr(hybrid, "HybridRouter", _Router)
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.cloud_model_provider",
+        lambda model: "amd" if model.startswith("amd.") else None,
+    )
     _config(monkeypatch)
     _Catalog.downloaded = False
-    assert print_mode.run("q", model="hybrid") == 1
-    err = capsys.readouterr().err
-    assert "Local-Classifier-GGUF is not downloaded (5.6 GB)" in err
-    assert "`gaia config set hybrid_classifier_model <id>`" in err
-    assert [c.kwargs["preload"] for c in stub_env.call_args_list] == [False]
+    assert print_mode.run("q", model="hybrid") == 0
+    assert _downloads() == ["Local-Classifier-GGUF"]
+    assert _agent().config.model_id == "amd.Cheap"
 
 
 def test_an_unknown_model_is_called_unknown_not_undownloaded(
@@ -801,7 +1013,7 @@ def test_an_unknown_model_is_called_unknown_not_undownloaded(
     assert _StubAgent.instances == []
 
 
-def test_a_gaia_model_the_server_has_not_listed_yet_is_not_downloaded(
+def test_a_gaia_model_the_server_has_not_listed_yet_is_downloaded(
     stub_env, monkeypatch, capsys
 ):
     from gaia.llm.lemonade_client import FLASH_OPTION_MODEL_NAME
@@ -809,11 +1021,9 @@ def test_a_gaia_model_the_server_has_not_listed_yet_is_not_downloaded(
     _config(monkeypatch, default_model=FLASH_OPTION_MODEL_NAME)
     _Catalog.downloaded = False
     _Catalog.listed = False
-    assert print_mode.run("q") == 1
-    err = capsys.readouterr().err
-    assert f"{FLASH_OPTION_MODEL_NAME} is not downloaded" in err
-    assert "Settings > Model" in err
-    assert "correct the id" not in err
+    assert print_mode.run("q") == 0
+    assert _downloads() == [FLASH_OPTION_MODEL_NAME]
+    assert "isn't a model the model server knows" not in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -823,7 +1033,7 @@ def test_a_gaia_model_the_server_has_not_listed_yet_is_not_downloaded(
         ("Local-Cheap-GGUF", "hybrid_cheap_model"),
     ],
 )
-def test_a_missing_routed_hybrid_model_names_its_setting(
+def test_a_missing_routed_hybrid_model_is_downloaded(
     stub_env, monkeypatch, capsys, routed, setting
 ):
     from gaia.llm import hybrid
@@ -851,12 +1061,9 @@ def test_a_missing_routed_hybrid_model_names_its_setting(
     monkeypatch.setattr(hybrid, "HybridRouter", _Router)
     _config(monkeypatch)
     _Catalog.downloaded = False
-    assert print_mode.run("q", model="hybrid") == 1
-    err = capsys.readouterr().err
-    assert f"{routed} is not downloaded" in err
-    assert f"`gaia config set {setting} <id>`" in err
-    assert "Pass --model" not in err
-    assert _StubAgent.instances == []
+    assert print_mode.run("q", model="hybrid") == 0
+    assert routed in _downloads()
+    assert _agent().config.model_id == routed
 
 
 def test_a_gateway_model_the_catalog_leaves_out_is_not_called_undownloaded(
@@ -879,11 +1086,24 @@ def test_a_downloaded_local_model_is_checked_then_loaded(stub_env, monkeypatch):
     assert _Catalog.calls[0][1]["base_url"] == "http://detected:13305/api/v1"
 
 
-def test_the_relayed_turn_refuses_a_missing_model_too(relay, monkeypatch, capsys):
+def test_the_relayed_turn_downloads_a_missing_model_first(relay, monkeypatch, capsys):
     _config(monkeypatch, default_model="cfg-model")
     _Catalog.downloaded = False
+    assert print_mode.run("q") == 0
+    assert _downloads() == ["cfg-model"]
+    assert len(relay) == 1
+
+
+def test_the_relayed_turn_does_not_run_after_a_failed_download(
+    relay, monkeypatch, capsys
+):
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    _config(monkeypatch, default_model="cfg-model")
+    _Catalog.downloaded = False
+    _Catalog.download_error = LemonadeClientError("Failed to download: disk full")
     assert print_mode.run("q") == 1
-    assert "cfg-model is not downloaded" in capsys.readouterr().err
+    assert "disk full" in capsys.readouterr().err
     assert list(relay) == []
 
 
@@ -1455,6 +1675,9 @@ def _attempt_doubles(monkeypatch, tmp_path, final_raises=None):
     _Catalog.downloaded = True
     _Catalog.listed = True
     _Catalog.cloud = False
+    _Catalog.size_gb = 5.6
+    _Catalog.events = []
+    _Catalog.download_error = None
     monkeypatch.setattr("gaia.llm.lemonade_client.LemonadeClient", _Catalog)
 
     def fake_attempts(text, count, flags):

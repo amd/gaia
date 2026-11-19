@@ -29,6 +29,12 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   of the limit, so one long early step no longer ends the turn near its
   halfway point, and the answer after a time-limit stop is a short summary (at
   most 2,048 tokens) that names files instead of repeating them.
+- **`gaia -p` downloads a local model that is not on disk yet**, then answers
+  with it, instead of refusing the run. The size is announced and the progress
+  goes to stderr: a bar with percent and downloaded/total size on a terminal,
+  one plain line every 10% in a pipe or log file. stdout still carries only
+  the answer. Ctrl+C stops the download and exits 130; a failed download exits
+  1 with the reason.
 ### Changed
 
 - **Office files are checked before they are handed over.** The bundled
@@ -104,6 +110,13 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
 ### Fixed
 
+- A model added with `gaia model add` downloads by its id alone. A pull that
+  did not stream progress sent no registration, so Lemonade answered "not
+  registered with Lemonade Server"; it now sends the added model's checkpoint,
+  recipe, vision projector and labels, as the streamed pull did.
+- A model's size is no longer guessed from part of its name when GAIA has it
+  on record: a 27B model added at 18.6 GB was reported as 5.0 GB, because
+  "27B" was read as "7B".
 - A reply that goes quiet partway through is requested again, up to twice,
   instead of ending the turn; the work done so far is kept either way.
 - A file a script wrote and the agent then showed whole with `cat` counts as
