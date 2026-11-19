@@ -175,7 +175,7 @@ def test_a_workbook_with_many_sheets_is_read_sheet_by_sheet(read_file, tmp_path)
     assert read_file(str(path))["status"] == "success"
 
 
-def test_a_workbook_past_the_text_cap_is_refused_not_cut(
+def test_a_workbook_past_the_text_cap_is_outlined_not_cut(
     read_file, tmp_path, monkeypatch
 ):
     openpyxl = pytest.importorskip("openpyxl")
@@ -191,8 +191,12 @@ def test_a_workbook_past_the_text_cap_is_refused_not_cut(
     result = read_file(str(path))
 
     assert time.monotonic() - started < 60
-    assert _is_clean_error(result), result
-    assert "index_document" in result["error"]
+    assert result["status"] == "success", result
+    # Its sheets and first rows under their own key, never as the file's text.
+    assert "content" not in result
+    assert "row 0 | 0 | 0" in result["overview"]
+    assert "row 5 |" not in result["overview"]
+    assert "too long to read in full" in result["note"]
 
 
 @pytest.mark.parametrize("size, refused", [(0, False), (1, False), (2, True)])

@@ -1174,7 +1174,7 @@ config = RAGConfig(
 
 ```python
 # 1. Use AMD NPU acceleration (if available)
-# Lemonade Server (https://lemonade-server.ai) automatically uses NPU for embeddings
+# Lemonade Server (https://lemonade-server.ai) runs the embedder on the GPU
 
 # 2. Index documents in a loop (each call processes one file)
 for doc in ["doc1.pdf", "doc2.pdf", "doc3.pdf"]:

@@ -65,7 +65,7 @@ def test_a_range_is_capped_in_lines_and_chars(read_file, tmp_path):
 
 @pytest.mark.parametrize(
     "start,end,message",
-    [(0, 5, "1-based"), (50, None, "past the end"), (8, 3, "before start_line")],
+    [(-1, 5, "1-based"), (50, None, "past the end"), (8, 3, "before start_line")],
 )
 def test_a_bad_range_says_what_is_wrong(read_file, tmp_path, start, end, message):
     result = read_file(str(_code(tmp_path, 20)), start_line=start, end_line=end)
@@ -74,7 +74,7 @@ def test_a_bad_range_says_what_is_wrong(read_file, tmp_path, start, end, message
 
 def test_lines_and_characters_are_not_mixed(read_file, tmp_path):
     result = read_file(str(_code(tmp_path, 20)), offset=10, start_line=1)
-    assert result["status"] == "error" and "not both" in result["error"]
+    assert result["status"] == "error" and "use one or the other" in result["error"]
 
 
 def test_a_small_file_still_comes_back_whole(read_file, tmp_path):

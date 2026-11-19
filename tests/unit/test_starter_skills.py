@@ -1002,7 +1002,7 @@ def test_daily_brief_and_guide_do_not_underclaim_tts_or_scheduling():
     ``text_to_speech`` is a real, always-registered ChatAgent tool
     (``gaia_agent/chat_agent.py``), so a doc listing it as a missing capability
     tells the model to under-promise. Skill-aware scheduling genuinely is still
-    missing (``gaia schedule add --skill`` is rejected, #1019), so that claim
+    missing (``gaia schedule add --skill`` is rejected, #6470), so that claim
     must stay.
     """
     gaia_agent = pytest.importorskip("gaia_agent")
@@ -1031,9 +1031,12 @@ def test_daily_brief_and_guide_do_not_underclaim_tts_or_scheduling():
         ), f"{doc_name} still claims TTS is not callable by an agent"
 
     # The scheduling limitation is still real — don't let a future edit
-    # accidentally claim it works before #1019 actually lands.
+    # accidentally claim it works before #6470 actually lands.
     assert "gaia schedule add" in daily_brief
     assert "gaia schedule add --skill" in guide
+    # #1019 is closed; the limitation must point at the issue that tracks it.
+    assert "issues/6470" in daily_brief
+    assert "issues/1019" not in daily_brief
 
 
 def test_the_guides_run_a_skill_snippet_still_type_checks():
