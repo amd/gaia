@@ -550,6 +550,13 @@ HttpResponse HttpClient::Impl::doGet(const std::string& path, const HttpHeaders&
             });
         if (over) {
             cli.stop();  // the rest of the body is still on this connection
+            // A long error page is still an error, not the content that was asked for.
+            const bool redirect = capped.status >= 300 && capped.status < 400;
+            if (!capped.ok() && !(redirect && config.returnRedirects)) {
+                throw HttpError("GET " + t.url + " returned HTTP " + std::to_string(capped.status) + ": " +
+                                    truncateForError(capped.body),
+                                t.url, capped.status, capped.body);
+            }
             return capped;
         }
         if (result) result->body = std::move(capped.body);

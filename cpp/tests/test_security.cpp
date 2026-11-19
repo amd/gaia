@@ -448,11 +448,18 @@ TEST(InternetRefusalTest, AnOverlongCommandIsRefusedBeforeItIsScanned) {
 TEST(ShellCommandScopeTest, AProgramGrantDoesNotCoverAPathOutOfTheFolder) {
     EXPECT_EQ(shellCommandScope("rm build.log"), "cmd:rm");
     for (const char* out : {"rm -rf ..", "rm -rf ~", "rm -rf ~/work", "cat ../../etc/passwd", "cp a.txt sub/../../x",
-                            "cp --target-directory=../x a.txt"}) {
+                            "cp --target-directory=../x a.txt",
+                            // A wildcard in an absolute path can match any folder.
+                            "rm -rf /*", "cat /h*/me/.ssh/id_rsa", "rm -rf /{home,x}/me", "rm C:/U*/me/x",
+                            // cmd.exe expands variables and drops carets before del or type sees the path.
+                            "del /q %USERPROFILE%/Documents", "type C^:/Users/me/x", "del !TEMP!/x",
+                            // Drive-relative climb.
+                            "type C:../../Users/me/x"}) {
         EXPECT_EQ(shellCommandScope(out), std::string("exact:") + out) << out;
     }
     EXPECT_EQ(shellCommandScope("cat notes..txt"), "cmd:cat") << "two dots inside a name climb nowhere";
     EXPECT_EQ(shellCommandScope("ls a..b/c"), "cmd:ls");
+    EXPECT_EQ(shellCommandScope("rm *.o"), "cmd:rm") << "a wildcard in the folder stays in the folder";
 }
 
 TEST(ReadOnlyShellCommandTest, ACredentialFileIsNotReadWithoutAsking) {

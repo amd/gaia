@@ -667,6 +667,10 @@ private:
                 if (it == run->decisions.end() || !it->second.empty()) {
                     return sendDetail(res, 409, "No pending approval" + (confirmId.empty() ? "" : " " + confirmId));
                 }
+                // A late yes for an approval that already closed must not approve the next one.
+                if (confirmId.empty() && decision != "deny" && decision != "timeout") {
+                    return sendDetail(res, 422, "Approving needs the confirm_id of the approval card");
+                }
                 it->second = decision;
             }
             run->cv.notify_all();

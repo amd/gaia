@@ -228,6 +228,24 @@ TEST(DocumentIndexTest, ToolsIndexFolderQueryAndRespectPathCheck) {
     EXPECT_NE(q["results"][0]["text"].get<std::string>().find("manager approval"), std::string::npos);
 }
 
+TEST(DocumentIndexTest, AFolderIndexSkipsALinkThatLeadsOut) {
+    TempDir inside, outside;
+    inside.write("policy.txt", "Remote work requires manager approval.");
+    const std::string secret = outside.write("credentials.txt", "aws_secret_access_key = abc");
+    std::error_code ec;
+    std::filesystem::create_symlink(secret, inside.path / "notes.txt", ec);
+    if (ec) GTEST_SKIP() << "can't create a symlink here: " << ec.message();
+    DocumentIndex idx;
+    ToolRegistry reg;
+    idx.registerTools(reg, [&inside](const std::string& p) {
+        return p.find(inside.path.string()) == 0 ? "" : std::string("Refused: outside");
+    });
+    json indexed = reg.executeTool("index_document", json{{"path", inside.path.string()}});
+    ASSERT_EQ(indexed["status"], "success") << indexed.dump();
+    ASSERT_EQ(indexed["indexed"].size(), 1u) << indexed.dump();
+    EXPECT_NE(indexed["indexed"][0]["file"].get<std::string>().find("policy.txt"), std::string::npos);
+}
+
 TEST(DocumentIndexTest, AWordFileInAFolderWithASpaceIsRead) {
     // A minimal .docx: one stored zip entry, word/document.xml, with two paragraphs.
     static const char* const kDocxHex =

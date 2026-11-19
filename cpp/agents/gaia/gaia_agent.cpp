@@ -98,8 +98,9 @@ void GaiaAgent::registerTools() {
             ShellSession& session = shell ? *shell : BashTools::defaultSession();
             // An exported PATH or preload decides which program `ls` is.
             for (const auto& [name, value] : session.environment()) {
-                static const std::set<std::string> steering = {"PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "BASH_ENV",
-                                                               "ENV", "PS4", "CDPATH", "PROMPT_COMMAND", "IFS"};
+                static const std::set<std::string> steering = {
+                    "PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "DYLD_INSERT_LIBRARIES",
+                    "DYLD_LIBRARY_PATH", "GCONV_PATH", "BASH_ENV", "ENV", "PS4", "CDPATH", "PROMPT_COMMAND", "IFS"};
                 std::string upper = name;
                 std::transform(upper.begin(), upper.end(), upper.begin(),
                                [](unsigned char c) { return static_cast<char>(std::toupper(c)); });

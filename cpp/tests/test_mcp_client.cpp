@@ -9,6 +9,7 @@
 #include <gaia/tool_registry.h>
 
 #include <filesystem>
+#include <fstream>
 
 #include "support/mock_llm_server.h"
 
@@ -84,6 +85,26 @@ TEST(MCPClientTest, StdioTransportWithArgs) {
     StdioTransport transport("echo", {"hello", "world"}, 10, false);
     EXPECT_FALSE(transport.isConnected());
 }
+
+#ifdef _WIN32
+TEST(MCPClientTest, ABatchFileServerRefusesAnArgumentCmdWouldActOn) {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "gaia-mcp-cmd-args";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path script = dir / "server.cmd";
+    { std::ofstream(script) << "@echo off\r\n"; }
+    for (const char* arg : {"https://h/x?a=1&b=2", "%PATH%", "a|b"}) {
+        StdioTransport transport(script.string(), {arg}, 5, false);
+        try {
+            transport.connect();
+            ADD_FAILURE() << arg << " reached cmd.exe";
+        } catch (const std::runtime_error& e) {
+            EXPECT_NE(std::string(e.what()).find("cmd.exe"), std::string::npos) << e.what();
+        }
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+#endif
 
 TEST(MCPClientTest, StdioTransportSendWithoutConnect) {
     StdioTransport transport("echo hello", 10, false);

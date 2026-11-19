@@ -181,6 +181,8 @@ std::vector<std::string> indexableFiles(const std::string& root, bool withDocume
             continue;
         }
         if (dir || !it->is_regular_file(ec)) continue;
+        // A link can lead out of the folder the user granted.
+        if (it->is_symlink(ec)) continue;
         bool document = false;
         if (!indexableExtension(p, withDocuments, &document)) continue;
         if (ignore.isIgnored(p.u8string(), false)) {
@@ -453,6 +455,14 @@ void DocumentIndex::registerTools(ToolRegistry& registry,
         json done = json::array(), failed = json::array();
         size_t total = 0;
         for (const auto& t : targets) {
+            // Each file too: a folder inside the granted one can be a junction to elsewhere.
+            if (checkPath && t != path) {
+                const std::string why = checkPath(t);
+                if (!why.empty()) {
+                    failed.push_back({{"file", t}, {"error", why}});
+                    continue;
+                }
+            }
             try {
                 const size_t n = indexFile(t);
                 total += n;

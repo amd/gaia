@@ -534,6 +534,10 @@ void StdioServer::applyControl(const json& message) {
             note("dropped a '" + decision + "' decision: nothing is waiting for one");
         } else if (!id.empty() && id != pendingConfirmId_) {
             note("dropped a '" + decision + "' decision for " + id + ": the open approval is " + pendingConfirmId_);
+        } else if (id.empty() && decision != "deny" && decision != "timeout") {
+            // A late yes for an approval that already closed must not approve the next one.
+            note("dropped a '" + decision + "' decision with no confirm_id: approving needs the id of " +
+                 pendingConfirmId_);
         } else {
             decision_ = decision;
             decisionCv_.notify_all();

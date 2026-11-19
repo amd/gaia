@@ -105,7 +105,16 @@ std::string MemoryStore::refusalFor(const std::string& content) {
     static const std::regex secret(
         R"((sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY|\b(password|passwd|api[ _-]?key|secret|token)\b\s*[:=]\s*\S{6,}))",
         std::regex::icase);
-    if (std::regex_search(content, secret) || looksLikeCredential(content)) {
+    // In overlapping windows: std::regex recurses once per character and a long fact overflows the stack.
+    constexpr size_t kWindow = 4096, kOverlap = 256;
+    bool matched = false;
+    for (size_t at = 0; !matched && at < content.size(); at += kWindow - kOverlap) {
+        const auto first = content.begin() + static_cast<std::string::difference_type>(at);
+        const auto last = content.begin() + static_cast<std::string::difference_type>((std::min)(content.size(), at + kWindow));
+        matched = std::regex_search(first, last, secret);
+        if (at + kWindow >= content.size()) break;
+    }
+    if (matched || looksLikeCredential(content)) {
         return "Not stored — this looks like a credential (API key, password, or similar "
                "secret). GAIA does not keep secrets in memory, so a new chat won't know it. "
                "The user's message is still in this chat, as it was sent.";

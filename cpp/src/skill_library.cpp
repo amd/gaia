@@ -331,8 +331,11 @@ std::string SkillLibrary::hubUrl() {
 std::string SkillLibrary::installFromHub(const std::string& name, const std::string& version,
                                          const std::string& destRoot, bool allowExperimental,
                                          std::string* tierOut) {
-    if (name.empty() || name.find_first_of("/\\.") != std::string::npos) {
-        throw SkillError("Not a skill name: '" + name + "'");
+    // The name reaches the unpack command line, so only plain skill-name characters.
+    if (name.empty() || name[0] == '-' ||
+        name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-") !=
+            std::string::npos) {
+        throw SkillError("Not a skill name: '" + name + "'. A skill name uses letters, digits, - and _.");
     }
     if (version.find_first_of("^~*<>= ,") != std::string::npos) {
         throw SkillError("gaiacpp installs exact versions only (e.g. " + name +

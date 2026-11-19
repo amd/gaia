@@ -578,7 +578,8 @@ std::string shellCommandScope(const std::string& command) {
     if (start == std::string::npos) return "exact:";
     const std::string cmd = command.substr(start, command.find_last_not_of(" \t\r\n") - start + 1);
     // Anything that runs a second thing or hides a word is approved only as written.
-    for (const char* op : {";", "&", "|", "`", "$", ">", "<", "\n", "(", "\\", "\"", "'"}) {
+    // cmd.exe expands %VAR% and !VAR! and drops ^ before the program sees its words.
+    for (const char* op : {";", "&", "|", "`", "$", ">", "<", "\n", "(", "\\", "\"", "'", "%", "^", "!"}) {
         if (cmd.find(op) != std::string::npos) return "exact:" + cmd;
     }
     std::istringstream words(cmd);
@@ -607,8 +608,13 @@ std::string shellCommandScope(const std::string& command) {
         for (std::string w; words >> w;) {
             // A grant for a program covers work in the folder, not a path that climbs out of it or names home.
             if (w[0] == '~') return "exact:" + cmd;
+            // A wildcard in an absolute path (/*, /h*/me) can match any folder on the machine.
+            const bool absolute = w[0] == '/' || (w.size() > 1 && w[1] == ':');
+            if (absolute && w.find_first_of("*?[{") != std::string::npos) return "exact:" + cmd;
             for (size_t dots = w.find(".."); dots != std::string::npos; dots = w.find("..", dots + 1)) {
-                const bool starts = dots == 0 || w[dots - 1] == '/' || w[dots - 1] == '\\' || w[dots - 1] == '=';
+                // C:..\x climbs from the drive's current folder.
+                const bool starts = dots == 0 || w[dots - 1] == '/' || w[dots - 1] == '\\' || w[dots - 1] == '=' ||
+                                    w[dots - 1] == ':';
                 const size_t next = dots + 2;
                 if (starts && (next == w.size() || w[next] == '/' || w[next] == '\\')) return "exact:" + cmd;
             }

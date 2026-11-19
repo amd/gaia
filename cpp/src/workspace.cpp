@@ -198,6 +198,21 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
         pathWords.emplace_back(i, command.substr(i, end - i));
         i = end;  // the character that ended this word may open the next
     }
+    static const std::set<std::string> fsCommands = {
+        "find", "ls", "du", "cd", "rm", "cp", "mv", "tar", "chmod", "chown", "grep", "cat", "head", "tail",
+        "rg", "fd", "locate", "tree", "stat", "rsync", "zip", "7z", "dir", "type", "del", "Get-ChildItem"};
+    // The program of the command segment a word at `at` belongs to.
+    const auto programBefore = [&command](size_t at) {
+        const size_t segStart = command.find_last_of(";|&
+(", at);
+        std::istringstream seg(command.substr(segStart == std::string::npos ? 0 : segStart + 1,
+                                              at - (segStart == std::string::npos ? 0 : segStart + 1)));
+        std::string w, program;
+        while (seg >> w) {
+            if (program.empty() && w.find('=') == std::string::npos && w != "sudo") program = w;
+        }
+        return fs::u8path(program).filename().u8string();
+    };
     for (const auto& [tokenAt, tokenText] : pathWords) {
         std::string token = tokenText;
         if (!posixShell && looksLikeCmdSwitch(token)) continue;
@@ -219,17 +234,7 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
             if (!word) continue;
             // ...and only as an argument to a command that walks or changes the
             // filesystem; `a / b` in inline code is division.
-            static const std::set<std::string> fsCommands = {
-                "find", "ls", "du", "cd", "rm", "cp", "mv", "tar", "chmod", "chown", "grep",
-                "rg", "fd", "locate", "tree", "stat", "rsync", "zip", "7z", "dir", "Get-ChildItem"};
-            const size_t segStart = command.find_last_of(";|&\n(", at);
-            std::istringstream seg(command.substr(segStart == std::string::npos ? 0 : segStart + 1,
-                                                  at - (segStart == std::string::npos ? 0 : segStart + 1)));
-            std::string w, program;
-            while (seg >> w) {
-                if (program.empty() && w.find('=') == std::string::npos && w != "sudo") program = w;
-            }
-            if (!fsCommands.count(fs::u8path(program).filename().u8string())) continue;
+            if (!fsCommands.count(programBefore(tokenAt))) continue;
         }
 #ifdef _WIN32
         // Not files: no folder check can place them, and they reach the clipboard and the registry.
@@ -238,7 +243,13 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
         const std::string expanded = expandHome(fromShellPath(token));
         if (contains(expanded)) continue;
         const std::string abs = normalized(fs::u8path(expanded));
-        if (inSystemDir(abs) || looksLikePattern(abs)) continue;
+        // Unquoted after a file command, /* or /h*/me is expanded by the shell into real folders.
+        const bool unquoted = tokenAt == 0 || std::isspace(static_cast<unsigned char>(command[tokenAt - 1]));
+        const fs::path rel = fs::u8path(expanded).relative_path();
+        const bool globbedTop = unquoted && !rel.empty() &&
+                                rel.begin()->u8string().find_first_of("*?[{") != std::string::npos &&
+                                fsCommands.count(programBefore(tokenAt));
+        if (inSystemDir(abs) || (!globbedTop && looksLikePattern(abs))) continue;
         if (looksLikeCmdSwitch(token)) {
             return refusal(token) + " Commands here run in bash, where " + token +
                    " is a path, not a switch: use bash commands such as ls -R or find "
@@ -291,6 +302,16 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
 namespace {
 using Inside = std::function<bool(const std::string&)>;
 
+// An entry the shell could read through to somewhere else.
+bool mayLeadOut(const fs::directory_entry& entry, std::error_code& ec) {
+    if (entry.is_symlink(ec)) return true;
+#ifdef _WIN32
+    // A junction is not a symlink to the standard library, so a folder is judged by where it resolves.
+    if (entry.is_directory(ec)) return true;
+#endif
+    return false;
+}
+
 // The shell expands a wildcard and reads through a link it matches, and the word never names that
 // link. False when the wildcard's folder holds a link that leads out, or can't be told to hold none.
 bool wildcardStaysInside(const fs::path& folder, const std::string& word, const Inside& inside) {
@@ -303,7 +324,7 @@ bool wildcardStaysInside(const fs::path& folder, const std::string& word, const 
                                    fs::directory_options::skip_permission_denied, ec), end;
          !ec && it != end; it.increment(ec)) {
         if (++seen > 5000) return false;
-        if (it->is_symlink(ec) && !inside(normalized(it->path()))) return false;
+        if (mayLeadOut(*it, ec) && !inside(normalized(it->path()))) return false;
     }
     return true;
 }
@@ -316,7 +337,7 @@ bool treeStaysInside(const fs::path& root, const Inside& inside) {
     for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
          !ec && it != end; it.increment(ec)) {
         if (++seen > 20000) return false;
-        if (it->is_symlink(ec) && !inside(normalized(it->path()))) return false;
+        if (mayLeadOut(*it, ec) && !inside(normalized(it->path()))) return false;
     }
     return true;
 }

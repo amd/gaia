@@ -1383,6 +1383,26 @@ TEST_F(GaiacppStdio, AMalformedControlIsRejectedAndChangesNothing) {
     EXPECT_TRUE(logBuf_.contains("ignored unknown control verb 'make_coffee'"));
 }
 
+TEST_F(GaiacppStdio, AnApprovalWithoutItsIdApprovesNothing) {
+    const fs::path out = work_ / "late.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", out.string()}, {"content", "hi"}}));
+    mock_.pushResponse(answer("Not written."));
+    start();
+    ASSERT_TRUE(waitFor("status").is_object());
+    ask("write it");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    // A yes with no id could be a late answer to an approval that already closed.
+    control({{"gaia_control", "tool_decision"}, {"decision", "allow"}});
+    control({{"gaia_control", "tool_decision"}, {"decision", "always"}});
+    ASSERT_TRUE(logBuf_.waitForText("decision with no confirm_id"));
+    EXPECT_FALSE(fs::exists(out)) << "an id-less yes approved the open prompt";
+    // A no needs no id: it can only make the agent do less.
+    control({{"gaia_control", "tool_decision"}, {"decision", "deny"}});
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    EXPECT_FALSE(fs::exists(out));
+}
+
 TEST_F(GaiacppStdio, AClosedStdoutEndsTheServerWithoutWaitingForStdin) {
     start();
     ASSERT_TRUE(waitFor("status").is_object());

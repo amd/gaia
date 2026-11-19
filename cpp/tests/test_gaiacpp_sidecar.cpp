@@ -708,6 +708,12 @@ TEST_F(GaiacppSidecar, ApprovalAllowRunsDenySkipsAndStaleOrUnknownIdsAreRejected
     auto noRun = decide("no-such-run", "allow", id1);
     ASSERT_TRUE(noRun);
     EXPECT_EQ(noRun->status, 404) << noRun->body;
+    // A yes without the card's id could be a late answer to a card that already closed.
+    for (const char* yes : {"allow", "always"}) {
+        auto idless = decide(run, yes, "");
+        ASSERT_TRUE(idless);
+        EXPECT_EQ(idless->status, 422) << yes << ": " << idless->body;
+    }
     EXPECT_FALSE(fs::exists(allowed));
 
     auto allow = decide(run, "allow", id1);

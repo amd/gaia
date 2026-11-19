@@ -186,7 +186,7 @@ void printUsage() {
         "Serve:\n"
         "  --host H                  Bind address (default 127.0.0.1)\n"
         "  --port N                  Port (default 8200; 0 = any free port)\n"
-        "  --server-key-env VAR      Require 'Authorization: Bearer $VAR' from clients\n"
+        "  --server-key-env VAR      Require 'Authorization: Bearer $VAR' from clients (required)\n"
         "  --allow-origin ORIGIN     Allow a browser origin (repeatable)\n"
         "  --expose-tool-routes      Enable POST /v1/tools/:name (direct tool runs)\n"
         "Stdio (the terminal UI passes these):\n"
@@ -757,6 +757,11 @@ int runPrint(const Cli& cli) {
 }
 
 int runServe(const Cli& cli) {
+    // Tools run unasked here, so a server anyone on this PC can reach would run their commands.
+    if (cli.serveKeyEnv.empty()) {
+        usageError("serve needs --server-key-env VAR naming a variable that holds the clients' key, "
+                   "for example: SERVE_KEY=$(openssl rand -hex 32) gaiacpp serve --server-key-env SERVE_KEY");
+    }
     const Settings settings = buildSettings(cli);
     gaia::AgentConfig cfg = settings.cfg;
     cfg.silentMode = true;

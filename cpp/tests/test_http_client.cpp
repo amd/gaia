@@ -803,6 +803,21 @@ TEST(HttpClientTest, AResponseSizeLimitStopsTheDownload) {
     EXPECT_NE(next.body[0], 'x') << "left-over bytes of the big body were read as this reply";
 }
 
+TEST(HttpClientTest, AnErrorPageOverTheSizeLimitIsStillAnError) {
+    bench::MockLlmServer server;
+    HttpClientConfig cfg;
+    cfg.baseUrl          = server.baseUrl();
+    cfg.maxResponseBytes = 1000;
+    HttpClient http(cfg);
+    try {
+        http.get("/test/big-error");
+        ADD_FAILURE() << "a cut-short 500 page came back as content";
+    } catch (const HttpError& e) {
+        EXPECT_EQ(e.status(), 500);
+    }
+    EXPECT_TRUE(http.get("/api/v1/health").ok()) << "the connection must be usable afterwards";
+}
+
 TEST(HttpClientTest, ACancelCheckEndsARequestThatCannotBeInterrupted) {
     // An address that answers nothing: the connect attempt just waits, with no open socket to close.
     std::atomic<bool> stop{false};

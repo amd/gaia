@@ -4,6 +4,7 @@
 #include "gaia/mcp_client.h"
 #include "gaia/keyring.h"
 
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -647,6 +648,29 @@ StdioTransport::~StdioTransport() = default;
 StdioTransport::StdioTransport(StdioTransport&& other) noexcept = default;
 StdioTransport& StdioTransport::operator=(StdioTransport&& other) noexcept = default;
 
+#ifdef _WIN32
+namespace {
+// True when CreateProcess would run `command` through cmd.exe: a .cmd or .bat file, named or found on PATH.
+bool runsUnderCmd(const std::string& command) {
+    std::string lower;
+    for (const char c : command) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const auto endsWith = [&lower](const char* ext) {
+        const size_t n = std::strlen(ext);
+        return lower.size() >= n && lower.compare(lower.size() - n, n, ext) == 0;
+    };
+    if (endsWith(".cmd") || endsWith(".bat")) return true;
+    if (command.empty() || command.find_first_of("\\/:.") != std::string::npos) return false;
+    char found[MAX_PATH];
+    if (SearchPathA(nullptr, command.c_str(), ".exe", MAX_PATH, found, nullptr) != 0) return false;
+    for (const char* ext : {".cmd", ".bat"}) {
+        const DWORD n = SearchPathA(nullptr, command.c_str(), ext, MAX_PATH, found, nullptr);
+        if (n != 0 && n < MAX_PATH) return true;
+    }
+    return false;
+}
+}  // namespace
+#endif
+
 std::string StdioTransport::quoteArgument(const std::string& arg, bool windows) {
     if (!windows) {
         // /bin/sh: anything but plain characters goes in single quotes, where nothing is special.
@@ -693,6 +717,18 @@ bool StdioTransport::connect() {
             cmdLine += " " + quoteArg(arg);
         }
     }
+
+#ifdef _WIN32
+    // npx and npm ship as .cmd files, so cmd.exe reads the line and acts on these characters itself.
+    if (runsUnderCmd(command_)) {
+        for (const auto& arg : args_) {
+            if (arg.find_first_of("&|<>^%!\"\r\n") == std::string::npos) continue;
+            throw std::runtime_error("the argument '" + arg + "' holds a character cmd.exe would act on (& | < > ^ % ! \"), "
+                                     "and " + command_ + " is a batch file that runs under cmd.exe. Start the "
+                                     "server's .exe or node directly in mcp.json, or move the value to an env entry.");
+        }
+    }
+#endif
 
     if (debug_) {
         std::cerr << "[MCP] Starting server: " << cmdLine << std::endl;

@@ -95,6 +95,12 @@ TEST(WorkspaceTest, CommandChecks) {
         << "division in inline code is not the root folder";
     EXPECT_NE(ws.checkCommand("sudo find / -name x"), "");
     EXPECT_NE(ws.checkCommand("cd /tmp && rm -rf / "), "");
+    // The shell expands an unquoted wildcard in the top folder into real folders.
+    for (const char* globbed : {"rm -rf /*", "cat /h*/me/.ssh/id_rsa", "rm -rf /{home,x}/me", "ls /[a-z]*"}) {
+        EXPECT_NE(ws.checkCommand(globbed), "") << globbed;
+    }
+    EXPECT_EQ(ws.checkCommand("grep -rn '/v[0-9]*/' src"), "") << "quoted, it is a pattern";
+    EXPECT_EQ(ws.checkCommand("cat > a.js <<'EOF'\n/* a comment */\nEOF"), "") << "a comment, not a command";
     EXPECT_NE(ws.checkCommand("cat " + (d.other / "secret.txt").string()), "");
     EXPECT_NE(ws.checkCommand("python3 -c \"open('" + (d.other / "f").string() + "')\""), "");
 #ifndef _WIN32
@@ -298,6 +304,23 @@ TEST(WorkspaceTest, AWildcardOrLinkFollowingReadAsksWhenALinkLeadsOut) {
     for (const char* ok : {"cat notes.txt", "grep -rn x sub", "find . -name x", "ls -la", "grep -L x notes.txt"}) {
         EXPECT_TRUE(staysInside(ws, ok, cwd)) << ok << " (follows no link)";
     }
+}
+#else
+TEST(WorkspaceTest, AJunctionThatLeadsOutMakesAWalkingReadAsk) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    const std::string cwd = d.work.string();
+    EXPECT_TRUE(staysInside(ws, "grep -R x .", cwd)) << "no junction yet";
+    const fs::path junction = d.work / "sub" / "deps";
+    // A junction needs no privilege, unlike a Windows symlink.
+    const std::string mklink = "cmd /c mklink /J \"" + junction.string() + "\" \"" + d.other.string() + "\" >nul";
+    if (std::system(mklink.c_str()) != 0) GTEST_SKIP() << "mklink /J failed";
+    for (const char* asks : {"grep -R x .", "cat sub/*"}) {
+        EXPECT_FALSE(staysInside(ws, asks, cwd)) << asks;
+    }
+    EXPECT_TRUE(staysInside(ws, "cat notes.txt", cwd));
+    std::error_code ec;
+    fs::remove(junction, ec);  // the junction, not what it points at
 }
 #endif
 
