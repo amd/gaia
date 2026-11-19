@@ -809,6 +809,7 @@ class GaiaAgent(
 
     #: Share of the model's context window the skill bodies rendering this turn
     #: may fill for an auto-load to go ahead: ~5,900 tokens of the default 32,768.
+    #: Only with ``SKILL_CONTEXT_BUDGET`` off; with it on, that budget decides.
     SKILL_AUTOLOAD_CONTEXT_SHARE: ClassVar[float] = 0.18
 
     #: Lowest hub tier whose skills load without the model asking.
