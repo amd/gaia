@@ -12,6 +12,7 @@ text as a .docx.
 import hashlib
 import importlib.util
 import inspect
+import os
 import re
 import shutil
 import sys
@@ -1045,7 +1046,8 @@ def test_the_reference_examples_build_files_the_tool_accepts(agent, folders):
     for ref in ("word.md", "powerpoint.md"):
         text = (SKILL_DIR / "references" / ref).read_text(encoding="utf-8")
         code = re.findall(r"```python\n(.*?)\n```", text, re.S)[0]
-        code = code.replace("C:\\Users\\me\\Documents", str(folders[0]))
+        code = code.replace("C:\\Users\\me\\Documents\\", f"{folders[0]}{os.sep}")
+        assert "\\me\\" not in code, f"{ref} has a path the test can't map"
         scope: dict = {}
         exec(compile(code, ref, "exec"), scope)  # pylint: disable=exec-used
         built[ref] = _check_document(agent, scope["path"])
