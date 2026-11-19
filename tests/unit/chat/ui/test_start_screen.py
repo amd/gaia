@@ -103,8 +103,8 @@ def test_working_folder_is_the_project_directory(tmp_path, monkeypatch):
 def relayed_gaia(monkeypatch):
     """The flagship runs as a daemon sidecar, as on an installed GAIA."""
     from gaia.ui import session_environment
-    from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.routers import skills
+    from gaia.ui.sidecar import daemon_client
 
     monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
     monkeypatch.setattr(ss, "_mail_connected", lambda: False)
@@ -149,7 +149,7 @@ def test_a_flagship_that_cannot_start_says_why_and_offers_no_folder(
     tmp_path, monkeypatch, relayed_gaia
 ):
     from gaia.daemon.sidecars.errors import SidecarError
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     def fail(_agent_id):
         raise SidecarError("sidecar crashed")

@@ -30,9 +30,8 @@ import './ConnectorRetryBanner.css';
  * Given the error message and the current connector rows, decide whether the
  * provider the message referenced is now connected. Pure + exported for tests.
  *
- * ``detectProvider`` returns 'google' | 'microsoft' | 'microsoft_work' | 'all'
- * (ambiguous). For an ambiguous message, any of the three connecting is
- * enough to retry.
+ * ``detectProvider`` returns 'google' | 'microsoft' | 'all' (ambiguous). For
+ * an ambiguous message, either one connecting is enough to retry.
  */
 export function referencedProviderConnected(
     content: string,
@@ -47,8 +46,7 @@ export function referencedProviderConnected(
     const provider = detectProvider(content);
     if (provider === 'google') return isFixed('google');
     if (provider === 'microsoft') return isFixed('microsoft');
-    if (provider === 'microsoft_work') return isFixed('microsoft_work');
-    return isFixed('google') || isFixed('microsoft') || isFixed('microsoft_work');
+    return isFixed('google') || isFixed('microsoft');
 }
 
 /** Whether each provider's sign-in has happened since `before`; `accounts` names the account a card offered. */
@@ -63,7 +61,7 @@ function fixedIn(connectors: ConnectorListEntry[], before: ConnectorListEntry[],
 /**
  * Human label for the connected provider, for the banner copy. An ambiguous
  * message resolves to whichever provider is actually configured, preferring
- * Google, then Microsoft, then Microsoft 365 (the connectors' canonical
+ * Google, then Microsoft (the connectors' canonical
  * display order).
  */
 export function connectedProviderLabel(
@@ -82,10 +80,8 @@ export function connectedProviderLabel(
     const provider = detectProvider(content);
     if (provider === 'google') return 'Google';
     if (provider === 'microsoft') return 'Microsoft';
-    if (provider === 'microsoft_work') return 'Microsoft 365';
     if (isFixed('google')) return 'Google';
     if (isFixed('microsoft')) return 'Microsoft';
-    if (isFixed('microsoft_work')) return 'Microsoft 365';
     return 'Google';
 }
 

@@ -42,7 +42,7 @@ const FLAGSHIP = {
     namespaced_agent_id: 'installed:gaia',
     required_connections: [{ connector_id: 'google' }],
 } as unknown as AgentInfo;
-const EMAIL = { id: 'email', namespaced_agent_id: 'installed:email', required_connections: [{ connector_id: 'google' }] } as unknown as AgentInfo;
+const OTHER = { id: 'my-agent', namespaced_agent_id: 'installed:my-agent', required_connections: [{ connector_id: 'google' }] } as unknown as AgentInfo;
 
 const card = { kind: 'connect_account', providers: ['google'], agent_id: 'installed:gaia' };
 const shown = () => stripIsolates(document.body.textContent ?? '');
@@ -51,7 +51,7 @@ beforeEach(() => {
     vi.clearAllMocks();
     mocked.getConnector.mockResolvedValue(google([JANE]));
     mocked.authorizeConnector.mockResolvedValue({ flow_id: 'f', authorization_url: 'https://accounts.example/auth' });
-    act(() => useChatStore.getState().setAgents([FLAGSHIP, EMAIL]));
+    act(() => useChatStore.getState().setAgents([FLAGSHIP, OTHER]));
     vi.spyOn(window, 'open').mockReturnValue(null);
 });
 afterEach(() => {
@@ -187,7 +187,7 @@ describe('email Connect button with several accounts', () => {
         expect(shown()).not.toMatch(/Connect Google/);
         fireEvent.click(screen.getByTitle('jane.old@example.com'));
         await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledWith(
-            'google', ['openid'], ['installed:email'], { account: EXPIRED.account_id },
+            'google', [], ['installed:gaia'], { account: EXPIRED.account_id },
         ));
     });
 

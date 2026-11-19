@@ -8,7 +8,7 @@ Why a dedicated harness
 -----------------------
 An in-process Agent UI test cannot see the v2 distributed seam at all: the sidecar's
 ``POST /v1/<agent>/query`` loop (V2-2 / #2016) and the frozen canonical-event wire
-contract (§0.2) that every front-door — the daemon relay, ``gaia email``,
+contract (§0.2) that every front-door — the daemon relay, ``gaia chat``,
 ``gaia api`` — relays. This harness exercises exactly that surface over REST, so
 a drift in the §0.2 vocabulary or the loop→SSE translation is caught before a
 third-party agent amplifies it.
@@ -348,7 +348,7 @@ class QuerySequenceScenario:
     """One ``/query`` eval scenario driven through the sidecar path.
 
     Attributes:
-        agent_id: The relay/sidecar agent id (e.g. ``"email"``) — selects the
+        agent_id: The relay/sidecar agent id (e.g. ``"gaia"``) — selects the
             ``/v1/<agent_id>/query`` route.
         query: The natural-language request driving the agent loop.
         baseline: The committed expected event-sequence shape.
