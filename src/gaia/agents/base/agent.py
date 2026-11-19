@@ -12569,6 +12569,7 @@ Do NOT wrap conversational replies in JSON.
         spent_in, spent_out = _sum_conversation_tokens(
             conversation, list(getattr(self, "_tool_reported_usage", None) or [])
         )
+        errors = self._turn_errors()
         return {
             "status": "incomplete",
             "result": message,
@@ -12578,8 +12579,8 @@ Do NOT wrap conversational replies in JSON.
             "max_steps_reached": False,
             "input_tokens": spent_in,
             "output_tokens": spent_out,
-            "error_count": len(self._turn_errors()),
-            "error_history": self._turn_errors(),
+            "error_count": len(errors),
+            "error_history": errors,
         }
 
     def _drain_followups(self, messages: List[Dict], conversation: List[Dict]) -> int:
