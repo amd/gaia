@@ -15,6 +15,7 @@ import {
     BookOpen,
     Database,
     FolderOpen,
+    Folder,
     BarChart3,
     Globe,
     FileEdit,
@@ -183,7 +184,9 @@ function toolFallbackLabel(step: AgentStep, t: Translate): string {
     return step.active
         ? say(t, meta.activeLabel)
         : step.timedOut ? t('tool.timedOut', { label: meta.activeLabel })
+        : step.autoDeclined ? t('tool.autoDeclined', { label: meta.activeLabel })
         : step.declined ? t('tool.declined', { label: meta.activeLabel })
+        : step.refused ? t('tool.refused', { label: meta.activeLabel })
         : step.success === false ? t('tool.failed', { label: meta.activeLabel })
         : unfinished ? t('tool.unfinished', { label: meta.activeLabel }) : say(t, meta.label);
 }
@@ -195,7 +198,7 @@ export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     // GAIA writes this row itself, so it can say it in the UI's language.
     if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: step.detail });
     // A present-tense narration would read as if a call that never ran had run.
-    if ((step.declined || step.timedOut) && !step.active) return toolFallbackLabel(step, t);
+    if ((step.declined || step.timedOut || step.refused || step.autoDeclined) && !step.active) return toolFallbackLabel(step, t);
     return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step, t);
 }
 
@@ -206,6 +209,18 @@ const MCP_OUTPUT_PREVIEW_LINES = 5;
 
 /** Below this many call rows the list is short enough to scan without a filter. */
 const FILTER_MIN_TOOL_ROWS = 6;
+
+const FETCH_ERROR = /^Error fetching page:\s*(\d{3})?/;
+
+/** What a failed page fetch shows on its row; the library's own error stays in the opened step. */
+export function failureText(step: AgentStep, t: Translate): string {
+    const result = step.result ?? '';
+    const match = step.tool === 'fetch_page' ? FETCH_ERROR.exec(result) : null;
+    if (!match) return result;
+    const code = match[1];
+    if (code && ['401', '403', '429'].includes(code)) return t('activity.fetchBlocked', { code });
+    return t('activity.fetchFailed');
+}
 
 /**
  * Shorten the detail of "Reading file: <long path>" to the part that differs
@@ -352,14 +367,16 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             return;
         }
 
-        // Merge consecutive thinking steps; concatenate so accumulated text survives.
+        // Merge consecutive thinking steps; concatenate so accumulated text survives. A step
+        // that has a duration ends a thought; saved token pieces have none until their last.
         if (step.type === 'thinking' && prev && prev.type === 'thinking') {
-            const merged = (prev.detail || '') + (step.detail || '');
+            const gap = prev.latencyMs != null && /\S$/.test(prev.detail || '') && /^\S/.test(step.detail || '') ? '\n\n' : '';
+            const merged = (prev.detail || '') + gap + (step.detail || '');
             result[result.length - 1] = { ...step, timestamp: prev.timestamp, detail: merged || prev.detail };
             return;
         }
         // Merge consecutive status steps, never over a warning
-        if (step.type === 'status' && prev && prev.type === 'status' && prev.success !== false && step.active !== false) {
+        if (step.type === 'status' && prev && prev.type === 'status' && prev.success !== false && step.active !== false && !prev.kept && !step.kept) {
             result[result.length - 1] = { ...step, label: step.label || prev.label };
             return;
         }
@@ -369,7 +386,7 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             return;
         }
         // Absorb status into adjacent thinking — preserve thinking detail
-        if (step.type === 'status' && step.success !== false && prev && prev.type === 'thinking') {
+        if (step.type === 'status' && step.success !== false && !step.kept && prev && prev.type === 'thinking') {
             result[result.length - 1] = { ...prev, label: step.label || prev.label, active: step.active ?? prev.active };
             return;
         }
@@ -441,12 +458,14 @@ const SUMMARY_KINDS = 3;
 
 /** The one line a folded run of steps shows: what it did, in order. */
 export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
-    const kinds: { label: MessageRef; failedLabel?: MessageRef; allFailed: boolean; id: string; count: number }[] = [];
+    const kinds: { label: MessageRef; failedLabel?: MessageRef; allFailed: boolean; failures: number; id: string; count: number }[] = [];
     for (const row of rows) {
         let label: MessageRef;
         let failedLabel: MessageRef | undefined;
         if (row.type === 'tool' && row.timedOut) label = ref('activity.timedOut');
+        else if (row.type === 'tool' && row.autoDeclined) label = ref('activity.autoDeclined');
         else if (row.type === 'tool' && row.declined) label = ref('activity.youDeclined');
+        else if (row.type === 'tool' && row.refused) label = ref('activity.gaiaRefused');
         else if (row.type === 'tool') {
             const meta = getToolMeta(row.tool, row);
             const skill = skillName(row);
@@ -460,11 +479,13 @@ export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
         const id = `${label.ref}:${JSON.stringify(label.params ?? {})}`;
         const failed = row.type === 'tool' && row.success === false;
         const seen = kinds.find((k) => k.id === id);
+        const n = row.count ?? 1;
         if (seen) {
-            seen.count += row.count ?? 1;
+            seen.count += n;
             seen.allFailed &&= failed;
+            seen.failures += failed ? n : 0;
         }
-        else kinds.push({ label, failedLabel, allFailed: failed, id, count: row.count ?? 1 });
+        else kinds.push({ label, failedLabel, allFailed: failed, failures: failed ? n : 0, id, count: n });
     }
     // Written once per language, so a bracketed locale brackets the whole line, not each piece.
     return t.compose((sayIn) => {
@@ -474,7 +495,10 @@ export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
             const shown = k.allFailed && k.failedLabel ? k.failedLabel : k.label;
             const label = sayIn(shown.ref, shown.params);
             const text = i === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1);
-            return k.count > 1 ? `${text} ×${k.count}` : text;
+            const counted = k.count > 1 ? `${text} ×${k.count}` : text;
+            // "Ran command ×3" over one that failed would hide the failure.
+            const some = k.failedLabel && !k.allFailed && k.failures > 0;
+            return some ? sayIn('activity.someFailed', { text: counted, n: k.failures }) : counted;
         });
         const list = parts.join(sayIn('activity.summarySep'));
         const rest = kinds.length - parts.length;
@@ -490,6 +514,11 @@ function isTurnError(row: ActivityRow): boolean {
 /** A warning the agent raised mid-turn ("Execution paused"); it carries no phase for the live line, and stays with the turn. */
 function isWarning(row: ActivityRow): boolean {
     return row.type === 'status' && row.success === false;
+}
+
+/** A finished step the user waited on (a download); it stays with the turn, unlike a passing status. */
+function isKept(row: ActivityRow): boolean {
+    return row.type === 'status' && row.kept === true;
 }
 
 /** Whether a row draws anything; the live line, not a row, says what the model is doing. */
@@ -537,6 +566,21 @@ interface AgentActivityProps {
     toolStatus?: string | null;
     /** The turn's answer, so a note it repeats is not shown twice. */
     answer?: string;
+}
+
+const needsVision = (step: AgentStep) => step.type === 'tool' && step.needsModel === 'vision' && !step.active;
+
+/** The download an image step needs, offered where the user is looking. */
+function VisionOffer() {
+    const t = useT();
+    return (
+        <div className="flow-tool-offer">
+            <span>{t('activity.visionNeeded')}</span>
+            <button type="button" className="btn-secondary" onClick={() => { void ensureModel('vision'); }}>
+                {t('activity.getVisionModel')}
+            </button>
+        </div>
+    );
 }
 
 /** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
@@ -601,7 +645,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
             // While the turn runs, the live checklist below stands in for it.
             return step === livePlan ? null : <PlanChecklist key={step.id} step={step} />;
         }
-        if (step.type === 'status') return <FlowWarning key={step.id} step={step} />;
+        if (step.type === 'status') return step.kept ? <FlowDone key={step.id} step={step} /> : <FlowWarning key={step.id} step={step} />;
         if (step.type === 'error') return <FlowError key={step.id} step={step} />;
         if (step.type === 'policy_alert') return <FlowPolicyAlert key={step.id} step={step} />;
         return null;
@@ -613,7 +657,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
 
     const lastIndex = timeline.length - 1;
     const visibleRows = (rows: ActivityRow[]) =>
-        foldThoughts(rows.filter((r) => (shownWhenDone(r) || isWarning(r)) && !isPlanShownLive(r, livePlan)));
+        foldThoughts(rows.filter((r) => (shownWhenDone(r) || isWarning(r) || isKept(r)) && !isPlanShownLive(r, livePlan)));
     // Calls in the runs that are open; folded runs and lone rows have nothing to sift.
     const openCalls = timeline.reduce((n, item, i) => {
         if (item.kind !== 'steps') return n;
@@ -653,7 +697,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                                 >
                                     {failed
                                         ? <AlertCircle size={13} className="agent-icon-error" />
-                                        : visible.some((r) => r.type === 'tool' && r.declined)
+                                        : visible.some((r) => r.type === 'tool' && (r.declined || r.refused || r.autoDeclined))
                                             ? <Ban size={13} className="flow-steps-done" />
                                             : <CheckCircle2 size={13} className="flow-steps-done" />}
                                     <span className="flow-steps-text">{stepsSummary(visible, t)}</span>
@@ -663,6 +707,8 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                             {open && <div className="flow-steps-rows">{shown.map(renderRow)}</div>}
                             {/* A warning never hides behind the fold. */}
                             {!open && visible.filter(isWarning).map(renderRow)}
+                            {/* Nor does the download an image step asked for. */}
+                            {!open && !live && visible.some(needsVision) && <VisionOffer />}
                         </div>
                     );
                 })}
@@ -709,6 +755,17 @@ function FlowWarning({ step }: { step: AgentStep }) {
         <div className="flow-warning" role="status">
             <AlertCircle size={13} />
             <span>{step.label}</span>
+        </div>
+    );
+}
+
+function FlowDone({ step }: { step: AgentStep }) {
+    const t = useT();
+    return (
+        <div className="flow-done" role="status">
+            <Check size={13} aria-hidden="true" />
+            {/* Saved in English; translated when drawn so a reopened chat follows the language. */}
+            <span>{localizeLiveStatus(t, step.label)}</span>
         </div>
     );
 }
@@ -818,7 +875,7 @@ export function linkifyPaths(text: string, t: Translate = tEn): React.ReactNode 
     return <>{parts}</>;
 }
 
-// ── Flow: File list from file search tools ───────────────────────────────
+// ── Flow: File list from file search and folder listing tools ────────────
 
 function FileListView({ fileList }: { fileList: { files: Array<Record<string, unknown>>; total: number } }) {
     const t = useT();
@@ -842,7 +899,9 @@ function FileListView({ fileList }: { fileList: { files: Array<Record<string, un
         <div className="file-list-view">
             {displayFiles.map((f, i) => (
                 <div key={i} className="file-list-item">
-                    <File size={11} className="file-list-icon" />
+                    {f.kind === 'folder'
+                        ? <Folder size={11} className="file-list-icon" data-kind="folder" />
+                        : <File size={11} className="file-list-icon" />}
                     <span className="file-list-name">{getFileName(f, i)}</span>
                     {getDirectory(f) && <span className="file-list-dir">{getDirectory(f)}</span>}
                 </div>
@@ -884,8 +943,9 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
     const line = waiting ? t('activity.waiting') : live || toolRowText(step, t);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
-    const notRun = (!!step.declined || !!step.timedOut) && !step.active;
-    const failure = step.success === false && step.result && !notRun ? step.result : '';
+    const notRun = (!!step.declined || !!step.timedOut || !!step.refused || !!step.autoDeclined) && !step.active;
+    // A missing vision model is said by the offer under the row, not by the tool's raw error.
+    const failure = step.success === false && step.result && !notRun && !step.needsModel ? failureText(step, t) : '';
     const timing = waiting
         ? ''
         : step.active
@@ -935,14 +995,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                 </div>
             </button>
 
-            {step.needsModel === 'vision' && !step.active && (
-                <div className="flow-tool-offer">
-                    <span>{t('activity.visionNeeded')}</span>
-                    <button type="button" className="btn-secondary" onClick={() => { void ensureModel('vision'); }}>
-                        {t('activity.getVisionModel')}
-                    </button>
-                </div>
-            )}
+            {step.needsModel === 'vision' && !step.active && <VisionOffer />}
 
             {isExpanded && (
                 <div className="flow-tool-detail">

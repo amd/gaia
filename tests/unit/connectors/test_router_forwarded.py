@@ -32,7 +32,6 @@ UI_HEADER = {"x-gaia-ui": "1"}
 FWD_CLIENT_ID = "forwarded-host-app.apps.googleusercontent.com"
 FWD_CLIENT_SECRET = "FWD-SECRET-do-not-leak"
 FWD_REFRESH = "FWD-REFRESH-TOKEN-do-not-leak"
-# Includes all 4 scopes declared in EmailTriageAgent.REQUIRED_CONNECTORS (ALL_SCOPES).
 # The router now resolves required_scopes from the granted agents' REQUIRED_CONNECTORS,
 # so FULL_SCOPES must be a superset of that union for the forward to succeed.
 FULL_SCOPES = [
@@ -89,12 +88,8 @@ class TestForwardPost:
         assert resp.status_code == 403
 
     def test_scope_shortfall_fails_loudly(self, ui_api_client):
-        # The email agent ships as the standalone gaia-agent-email wheel (#1102)
-        # and is registered via entry-point discovery only when that wheel is
-        # installed. The connector test jobs install gaia core but not the wheel,
-        # so inject the email agent's registry entry directly — this keeps the
-        # router's scope-resolution check deterministic and independent of which
-        # agent wheels happen to be installed in the test env.
+        # A fake registry entry keeps scope resolution independent of which
+        # agent packages the test env happens to have installed.
         ui_api_client.app.state.agent_registry = make_fake_agent_registry(
             connector_id="google", scopes=FULL_SCOPES, nsid="installed:email"
         )

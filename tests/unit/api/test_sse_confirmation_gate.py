@@ -113,6 +113,10 @@ class TestFailsClosed:
         handler = SSEOutputHandler()
         agent = _make_agent(handler)
         agent._tools_registry[gated_tool] = agent._tools_registry["write_file"]
+        # A ``path`` on run_python runs a saved script through execute_python_file.
+        agent._tools_registry["execute_python_file"] = agent._tools_registry[
+            "write_file"
+        ]
 
         result = agent._execute_tool(gated_tool, {"path": "/tmp/pwn", "content": "x"})
 

@@ -117,6 +117,18 @@ describe('Sidebar chat search', () => {
         expect(within(list()).queryByRole('button', { name: /Tax questions/ })).not.toBeInTheDocument();
     });
 
+    it('clears the search once a result is opened, so the whole list is back', async () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        await type('trip');
+        expect(within(list()).queryByRole('button', { name: /Fix the build/ })).not.toBeInTheDocument();
+
+        fireEvent.click(within(list()).getByRole('button', { name: 'Plan the trip' }));
+        expect(useChatStore.getState().currentSessionId).toBe('b');
+        expect(searchbox()).toHaveValue('');
+        expect(within(list()).getByRole('button', { name: 'Fix the build' })).toBeInTheDocument();
+        expect(within(list()).getByRole('button', { name: 'Tax questions' })).toBeInTheDocument();
+    });
+
     it('moves through results with the arrow keys and opens one with Enter', async () => {
         mockedApi.searchSessions.mockResolvedValue({ query: 'trip', results: [TRIP_IN_TAX] });
         render(<Sidebar onNewChat={vi.fn()} />);
@@ -153,6 +165,24 @@ describe('Sidebar chat search', () => {
         fireEvent.keyDown(searchbox(), { key: 'Escape' });
         expect(searchbox()).toHaveValue('');
         expect(within(list()).getByRole('button', { name: 'Fix the build' })).toBeInTheDocument();
+    });
+
+    it('Escape gives focus back to the message box the shortcut took it from (#7709)', async () => {
+        render(<><textarea className="composer-input" aria-label="Message" /><Sidebar onNewChat={vi.fn()} /></>);
+        const box = screen.getByLabelText('Message');
+        box.focus();
+        vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => { cb(0); return 0; });
+        act(() => { window.dispatchEvent(new CustomEvent('gaia:focus-search')); });
+        expect(searchbox()).toHaveFocus();
+        fireEvent.keyDown(searchbox(), { key: 'Escape' });
+        expect(box).toHaveFocus();
+    });
+
+    it('Escape goes to the message box when nothing had focus before the search', async () => {
+        render(<><textarea className="composer-input" aria-label="Message" /><Sidebar onNewChat={vi.fn()} /></>);
+        searchbox().focus();
+        fireEvent.keyDown(searchbox(), { key: 'Escape' });
+        expect(screen.getByLabelText('Message')).toHaveFocus();
     });
 
     it('says when nothing matches, only once the backend has answered', async () => {

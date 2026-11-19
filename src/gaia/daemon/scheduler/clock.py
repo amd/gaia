@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from gaia.daemon.scheduler import store
 from gaia.daemon.scheduler.lease import (
@@ -40,6 +40,7 @@ from gaia.daemon.scheduler.lease import (
 from gaia.daemon.scheduler.models import STATUS_FAILED, STATUS_PENDING
 from gaia.database.mixin import DatabaseMixin
 from gaia.logger import get_logger
+from gaia.retired_agents import RETIRED_AGENT_JOB_MESSAGE, is_retired_agent_source
 
 log = get_logger(__name__)
 
@@ -78,6 +79,7 @@ class DaemonClock:
         poll_seconds: float = 30.0,
         stale_firing_seconds: float = DEFAULT_STALE_FIRING_SECONDS,
         heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
+        on_pass: Sequence[Callable[[], None]] = (),
     ) -> None:
         if poll_seconds <= 0:
             raise ValueError(f"poll_seconds must be > 0, got {poll_seconds}")
@@ -98,6 +100,7 @@ class DaemonClock:
             )
         self._db_path = db_path
         self._executors = dict(executors)
+        self._on_pass = list(on_pass)
         self._poll_seconds = poll_seconds
         self._stale_firing_seconds = stale_firing_seconds
         self._heartbeat_seconds = heartbeat_seconds
@@ -261,6 +264,8 @@ class DaemonClock:
                     f"(source {job['source']!r}) — the job cannot fire in the "
                     "daemon process"
                 )
+                if is_retired_agent_source(job["source"]):
+                    msg = RETIRED_AGENT_JOB_MESSAGE
                 recorded = store.mark_failed(
                     db, job_id=job_id, claim_id=claim_id, error=msg
                 )
@@ -311,6 +316,19 @@ class DaemonClock:
             fired.append(job_id)
         return {"fired": fired, "failed": failed}
 
+    def run_pass_hooks(self) -> None:
+        """Run each ``on_pass`` hook once; one that fails is logged, not fatal.
+
+        Hooks are the clock's other duties that keep their own state, such as
+        GAIA automations (:mod:`gaia.automations.daemon_tick`). A hook with a
+        ``stop()`` method is stopped with the clock.
+        """
+        for hook in self._on_pass:
+            try:
+                hook()
+            except Exception:  # noqa: BLE001 - logged; the next pass runs it again
+                log.exception("daemon clock: pass hook %r failed", hook)
+
     # -- Default driver: polling thread ---------------------------------
 
     def start(self) -> None:
@@ -345,6 +363,12 @@ class DaemonClock:
             )
             return
         self._thread = None
+        for hook in self._on_pass:
+            # A hook holding something for this daemon (the automations tick)
+            # gives it back here.
+            stop = getattr(hook, "stop", None)
+            if stop is not None:
+                stop()
 
     @property
     def running(self) -> bool:
@@ -387,6 +411,7 @@ class DaemonClock:
                 # Log loudly and keep the thread alive — jobs stay pending in
                 # SQLite and fire once the store recovers.
                 log.exception("daemon clock: polling pass failed")
+            self.run_pass_hooks()
             if self._stop_event.wait(self._poll_seconds):
                 return
 

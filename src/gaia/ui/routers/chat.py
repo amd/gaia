@@ -24,13 +24,16 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from gaia.agents.base.tool_grants import grant_scope
+from gaia.browser.picked import page_elements_json, with_page_elements
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
+from .. import session_environment
 from .._chat_helpers import (
     _set_provisional_title,
     _spawn_background,
     model_context_messages,
+    refuse_unstreamed_sidecar_chat,
     stuck_producer,
     turn_takes_the_line,
 )
@@ -103,6 +106,9 @@ async def send_message(
        from having overlapping requests that would corrupt conversation
        state.
     """
+    # A blank message would still run a whole turn and store an empty exchange.
+    if not request.message.strip():
+        raise HTTPException(status_code=422, detail="The message is empty.")
     # Verify session exists
     session = db.get_session(request.session_id)
     if not session:
@@ -110,6 +116,8 @@ async def send_message(
     request.agent_type = flagship_only(
         http_request, request.agent_type, session.get("agent_type") or "chat"
     )
+    if not request.stream:
+        refuse_unstreamed_sidecar_chat(request.agent_type)
 
     # ── Per-session lock ─────────────────────────────────────────────
     # setdefault is atomic: safe under concurrent requests for the same session
@@ -151,9 +159,10 @@ async def send_message(
     # so a long wait never loses it.
     holds_turn = False
     question_id = None
+    picked = page_elements_json(request.page_elements or [])
     if not request.stream:
         try:
-            question_id = db.begin_turn(sid, request.message)
+            question_id = db.begin_turn(sid, request.message, picked)
             _set_provisional_title(db, sid, request.message)
             if takes_line:
                 await turn_queue.acquire(sid)
@@ -181,9 +190,15 @@ async def send_message(
     # that patch("gaia.ui.server._stream_chat_response") work correctly.
     srv = _server_mod()
 
-    # The transcript keeps the browser link; the agent gets the file's path.
+    # The transcript keeps the browser link; the agent gets the file's path,
+    # and any elements picked in the browser pane as one block of page data.
     agent_request = request.model_copy(
-        update={"message": resolve_upload_links(request.message)}
+        update={
+            "message": resolve_upload_links(
+                with_page_elements(request.message, request.page_elements)
+            ),
+            "page_elements": None,
+        }
     )
 
     try:
@@ -213,7 +228,7 @@ async def send_message(
 
             async def _stream():
                 try:
-                    db.begin_turn(request.session_id, request.message)
+                    db.begin_turn(request.session_id, request.message, picked)
                     _set_provisional_title(db, request.session_id, request.message)
                     # The detached lifecycle owns producer + persistence;
                     # this subscriber only relays buffered and live events.
@@ -263,6 +278,7 @@ async def send_message(
                         response_text,
                         model_messages=model_messages or None,
                         ends_turn=True,
+                        failed=bool(turn_box.get("failed")),
                     )
                     if "recording" in turn_box:
                         turn_box["recording"].link_message(msg_id)
@@ -294,7 +310,7 @@ async def send_message(
                         model_id=turn_box.get("model"),
                     )
                 )
-                run_status = "done"
+                run_status = "failed" if turn_box.get("failed") else "done"
                 return ChatResponse(
                     message_id=msg_id,
                     content=response_text,
@@ -411,7 +427,7 @@ async def _confirm_relayed_tool(
     from starlette.concurrency import run_in_threadpool
 
     from gaia.daemon.sidecars.errors import SidecarError
-    from gaia.ui.email_sidecar import grants as relayed_grants
+    from gaia.ui.sidecar import grants as relayed_grants
 
     always = request.always and request.approved
     scope = handler.relay_always_scope(request.confirm_id)
@@ -426,6 +442,7 @@ async def _confirm_relayed_tool(
             ),
         )
     proxy = handler.active_relay_proxy
+    path_access = handler.relay_path_access(request.confirm_id)
     try:
         # Off the event loop: this is an HTTP round trip to the sidecar.
         delivered = await run_in_threadpool(
@@ -440,6 +457,8 @@ async def _confirm_relayed_tool(
         ) from exc
     if not delivered:
         raise stale
+    if request.approved and path_access:
+        session_environment.note_approved_path(request.session_id, path_access)
     if always:
         try:
             await run_in_threadpool(relayed_grants.refresh, proxy, request.session_id)
@@ -617,8 +636,8 @@ async def _revoke_relayed(session_id: str, agent_id: str, key: Optional[str]) ->
     from starlette.concurrency import run_in_threadpool
 
     from gaia.daemon.sidecars.errors import SidecarError
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar import grants as relayed_grants
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar import grants as relayed_grants
 
     from .._chat_helpers import _active_sse_handlers
 
@@ -950,19 +969,34 @@ async def retry_with(
     http_request: Request,
     db: ChatDatabase = Depends(get_db),
 ):
-    """Answer the latest question again on another local model, to compare.
+    """Answer the latest question again on another model, to compare.
 
+    The other model runs on this PC, or at the cloud service that gave the
+    answer: the chat has already gone there, so nothing new leaves the PC.
     The answer is held until ``/api/chat/retry-with/choose`` keeps one.
     """
     from gaia.llm.lemonade_client import LemonadeClientError, resolve_ctx_size
+    from gaia.llm.local_only import cloud_blocked
 
-    from .._chat_helpers import _runs_on_this_pc
+    from .._chat_helpers import _runs_on_this_pc, _ui_cloud_provider
 
     sid = request.session_id
     if not db.get_session(sid):
         raise HTTPException(status_code=404, detail="Session not found")
+    record = db.get_message_record(sid, request.message_id)
+    cloud = _ui_cloud_provider(request.model)
+    answered_by = ((record or {}).get("inference_stats") or {}).get("model")
+    same_cloud = bool(cloud and answered_by) and cloud == _ui_cloud_provider(
+        answered_by
+    )
+    if same_cloud and cloud_blocked():
+        raise HTTPException(
+            status_code=400,
+            detail="Local only is on, so Retry with… can't use a cloud model. "
+            "Turn it off in Settings › Privacy, or pick a model on this PC.",
+        )
     try:
-        local = await asyncio.to_thread(_runs_on_this_pc, request.model)
+        local = same_cloud or await asyncio.to_thread(_runs_on_this_pc, request.model)
     except LemonadeClientError as exc:
         logger.error(
             "Retry with: couldn't check %s runs locally: %s", request.model, exc
@@ -976,14 +1010,14 @@ async def retry_with(
     if not local:
         raise HTTPException(
             status_code=400,
-            detail="Retry with… compares models on this PC; pick a local model.",
+            detail="Retry with… compares models on this PC or at the cloud "
+            "service that answered; pick one of those.",
         )
     if db.latest_message_id(sid) != request.message_id:
         raise HTTPException(
             status_code=409,
             detail="Only the latest answer can be retried with another model.",
         )
-    record = db.get_message_record(sid, request.message_id)
     if record is None or record["role"] != "assistant":
         raise HTTPException(
             status_code=409, detail="Only an answer from GAIA can be retried."
@@ -1012,7 +1046,7 @@ async def retry_with(
                 earlier, question, resolve_ctx_size(request.model)
             )
             result = await asyncio.to_thread(
-                answer_retry.answer_with, request.model, messages
+                answer_retry.answer_with, request.model, messages, cloud=same_cloud
             )
         except answer_retry.RetryError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc

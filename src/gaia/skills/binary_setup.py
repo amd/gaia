@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess  # nosec B404 - argv comes from the policy table, never a caller
 import sys
 import threading
@@ -44,6 +43,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
+from gaia import package_manager_errors, program_lookup
 from gaia.env import child_env
 from gaia.logger import get_logger
 from gaia.skills.binaries import BinaryPolicy, BinarySetup
@@ -223,14 +223,14 @@ def _require_setup(policy: BinaryPolicy) -> BinarySetup:
 def detect(
     policy: BinaryPolicy,
     *,
-    which: Callable[[str], Optional[str]] = shutil.which,
+    which: Callable[[str], Optional[str]] = program_lookup.resolve_refreshing,
     runner: Callable[..., subprocess.CompletedProcess] = _run,
 ) -> SetupStatus:
     """Which of the five states *policy*'s CLI is in, right now.
 
-    Read-only and side-effect free: it runs the CLI's own status command and
-    nothing else, so it is safe to call unprompted and is what every other
-    entry point here checks first.
+    Read-only: it runs the CLI's own status command and nothing else, so it is
+    safe to call unprompted and is what every other entry point here checks
+    first. A CLI installed since GAIA started is found without a restart.
 
     Raises:
         SetupError: the status command could not be run or did not return the
@@ -482,9 +482,11 @@ def run_install(plan: InstallPlan, *, timeout: float = 600.0) -> str:
 
     output = scrub_secrets(f"{result.stdout or ''}\n{result.stderr or ''}".strip())
     if result.returncode != 0:
+        meaning = package_manager_errors.explain(plan.argv[0], result.returncode)
         raise SetupError(
-            f"Installing '{plan.binary}' failed (exit {result.returncode}) "
-            f"running '{plan.command}'. Install by hand from {plan.docs_url}. "
+            f"Installing '{plan.binary}' failed (exit {result.returncode}). "
+            f"{meaning + ' ' if meaning else ''}It ran '{plan.command}'. "
+            f"Install by hand from {plan.docs_url}. "
             f"It said: {output or '(no output)'}"
         )
     return output

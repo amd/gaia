@@ -11,7 +11,6 @@ GAIA's live evaluation surface is these commands: `gaia eval sessions` (replay
 real Claude Code sessions), `gaia eval agent` (the scenario-based Agent UI
 benchmark), `gaia eval tasks` (the flagship's coding-task gate), `gaia eval
 code` (a code-editing benchmark scored by running the tests, not by a judge),
-`gaia eval benchmark` (email-triage throughput: TTFT, tokens/sec, latency),
 `gaia eval retrieval` (RAG retrieval quality, answer accuracy and scale on
 real documents), `gaia eval retrieval --component code` (code search
 recall, scale and robustness on real repositories, no LLM), and `gaia eval
@@ -457,7 +456,7 @@ Probes then check, at points in time:
 
 | Metric | Checks |
 |---|---|
-| Shown recall | What the agent is shown for a request — memory's system-prompt section plus the per-turn context — contains what it should |
+| Shown recall | What the agent is shown for a request — memory's section of the session context plus the per-turn context — contains what it should |
 | Shown clean | It does not contain a stale value, a forgotten fact, or planted text |
 | Store accuracy | The database holds the current truth and nothing it shouldn't |
 | Answer accuracy | `full` only: the model's answer to the request uses it |

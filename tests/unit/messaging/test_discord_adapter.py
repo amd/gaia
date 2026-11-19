@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 import time
 from pathlib import Path
@@ -15,10 +16,11 @@ from gaia.messaging.discord import adapter as da
 from gaia.messaging.discord import state
 
 EPOCH_MS = 1420070400000
+_SEQUENCE = itertools.count()
 
 
 def snowflake(at: float) -> str:
-    return str((int(at * 1000) - EPOCH_MS) << 22)
+    return str(((int(at * 1000) - EPOCH_MS) << 22) | (next(_SEQUENCE) & 0x3FFFFF))
 
 
 class FakeTransport:
@@ -706,6 +708,14 @@ def test_snowflake_time_round_trips():
     assert abs(da.snowflake_time(snowflake(now)) - now) < 0.01
 
 
+def test_snowflake_ids_advance_with_the_clock():
+    # This clock value is an exact millisecond, where truncating used to fold
+    # the next message into the same ID and the adapter dropped it as a replay.
+    at = 1_767_723_494_958 / 1000
+    ids = [snowflake(at + offset) for offset in (0.0, 0.001, 0.002)]
+    assert len(set(ids)) == 3
+
+
 def test_an_edit_never_starts_a_turn():
     """A message edited after its approval must not run again."""
     source = Path(da.__file__).with_name("transport.py").read_text(encoding="utf-8")
@@ -755,7 +765,7 @@ def test_the_agent_gets_only_a_gaia_shim_and_never_the_token(monkeypatch):
     from gaia.messaging.discord import credentials
 
     monkeypatch.setenv(credentials.BOT_TOKEN_ENV_VAR, "secret-token")
-    env = da._agent_env()
+    env = da.agent_env()
     assert credentials.BOT_TOKEN_ENV_VAR not in env
     first = env["PATH"].split(os.pathsep)[0]
     assert sorted(p.name for p in Path(first).iterdir()) in (["gaia"], ["gaia.exe"])
@@ -1246,7 +1256,7 @@ def test_a_file_write_path_cannot_break_the_code_block():
 def test_no_gaia_launcher_says_how_to_restore_it(monkeypatch):
     monkeypatch.setattr(da, "_gaia_launcher", lambda: None)
     with pytest.raises(RuntimeError, match="Reinstall GAIA"):
-        da._agent_env()
+        da.agent_env()
 
 
 # ----------------------------------------------------------------------

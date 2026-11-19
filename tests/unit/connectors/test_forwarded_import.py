@@ -165,11 +165,11 @@ class TestCacheEviction:
     def test_evicts_token_cache(self):
         from gaia.connectors import tokens
 
-        tokens._cache[("google", "alice@example.com")] = tokens._AccessTokenCache(
+        tokens._cache[("google", "default")] = tokens._AccessTokenCache(
             access_token="STALE", expires_at=10**12
         )
         _do_import()
-        assert ("google", "alice@example.com") not in tokens._cache
+        assert ("google", "default") not in tokens._cache
 
 
 class TestLoudFailures:

@@ -26,6 +26,8 @@ export interface DiscordStatus {
     bot_name: string;
     owner_name: string;
     autostart: boolean;
+    /** What each remembered "Always allow" permits, as its prompt described it. */
+    always_allowed: string[];
     model: string | null;
     portal_url: string;
     bot_page_url: string;
@@ -66,6 +68,15 @@ export function startDiscord(takeOver = false): Promise<DiscordStatus> {
 
 export function stopDiscord(): Promise<DiscordStatus> {
     return apiFetch('POST', '/messaging/discord/stop', undefined, UI_HEADER);
+}
+
+export function restartDiscord(): Promise<DiscordStatus> {
+    return apiFetch('POST', '/messaging/discord/restart', undefined, UI_HEADER);
+}
+
+/** Forget every "Always allow" answered in Discord. */
+export function forgetDiscordAlways(): Promise<DiscordStatus> {
+    return apiFetch('POST', '/messaging/discord/forget-always', undefined, UI_HEADER);
 }
 
 /** Forget the paired account and show a new code. */

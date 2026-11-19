@@ -34,6 +34,16 @@ afterEach(() => {
 });
 
 describe('permission prompt in Arabic', () => {
+    it('labels an email in Arabic, its addresses left to right', () => {
+        prompt({ tool: 'send_now', toolArgs: { _exact_text: 'From: jane@example.com\nTo: dana@example.com\nSubject: مرحبا\n\nنص' } });
+        const header = screen.getByTestId('perm-mail-header');
+        expect([...header.querySelectorAll('dt')].map((dt) => stripIsolates(dt.textContent!))).toEqual(
+            expect.arrayContaining([expect.stringMatching(/^من/), expect.stringMatching(/^إلى/), expect.stringMatching(/^الموضوع/)]),
+        );
+        expect(header.textContent).not.toMatch(/From:|To:/);
+        expect(header.querySelector('.perm-mail-from bdi')).toHaveAttribute('dir', 'ltr');
+    });
+
     it('keeps the code to run left to right, and the details too', () => {
         prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: CODE } });
         expect(screen.getByTestId('perm-code')).toHaveAttribute('dir', 'ltr');
@@ -42,7 +52,7 @@ describe('permission prompt in Arabic', () => {
     });
 
     it('asks in Arabic, the tool kept left to right', () => {
-        prompt({ tool: 'edit_file', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt', old_content: 'a', new_content: 'b' } });
+        prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt', old_content: 'a', new_content: 'b' } });
         const title = screen.getByRole('heading');
         expect(title.textContent).toMatch(/^⁧?هل تسمح بـ/);
         expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^editing file$/);

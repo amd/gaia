@@ -9,6 +9,7 @@ import logging
 import shutil
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -138,11 +139,17 @@ async def _pull_body(model_name: str) -> Dict[str, Any]:
 # touching callers.
 _download_progress: Dict[str, Dict[str, Any]] = {}
 _download_progress_lock = threading.Lock()
-_DOWNLOAD_PROGRESS_TTL = 30.0  # seconds to retain a terminal entry post-finish
+# A completed entry lingers this long so a poll can see 100%; a failed one
+# stays until the next pull of that model, because Settings may already be
+# closed and no poll was running when the failure arrived.
+_DOWNLOAD_PROGRESS_TTL = 30.0
 
 
 def _set_download_progress(model_name: str, payload: Dict[str, Any]) -> None:
     with _download_progress_lock:
+        # Reinsert so the map is ordered oldest to newest; the status surface
+        # takes the newest when no download belongs to the chat's model.
+        _download_progress.pop(model_name, None)
         _download_progress[model_name] = payload
 
 
@@ -164,21 +171,48 @@ def _get_download_progress(model_name: str) -> Optional[Dict[str, Any]]:
         return dict(entry) if entry else None
 
 
-def _clear_download_progress(model_name: str) -> None:
-    with _download_progress_lock:
-        _download_progress.pop(model_name, None)
-
-
 async def _evict_progress_after_ttl(model_name: str) -> None:
-    """Delay-evict a terminal progress entry so the frontend's poll cycle
-    has a chance to observe the ``complete`` / ``error`` state once.
-    Without this, a fast download finishes between two polls and the UI
-    misses the "complete" beat entirely.
+    """Retire a finished entry so a completed download doesn't linger.
+
+    A failed entry stays until the next pull of that model replaces it: the
+    failure has to outlive Settings closing and a hidden window's stopped poll,
+    and a retry then overwrites it with a fresh ``starting``. Only ``complete``
+    is retired, so an old eviction or a cancelled one can never erase a live
+    retry's progress.
     """
     try:
         await asyncio.sleep(_DOWNLOAD_PROGRESS_TTL)
     finally:
-        _clear_download_progress(model_name)
+        with _download_progress_lock:
+            entry = _download_progress.get(model_name)
+            if entry and entry.get("state") == "complete":
+                _download_progress.pop(model_name, None)
+
+
+def _surface_download_progress(
+    target_model: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """The pull the app chrome should show: one in flight, else a failure.
+
+    A download started from Settings is for a model the chat may not be using,
+    so looking only at ``target_model`` hides it and its failure. Prefer the
+    chat's own pull, then the most recent other one. A completed entry has
+    nothing to show; the model list carries that state.
+    """
+    with _download_progress_lock:
+        entries = list(_download_progress.items())
+    for states in (("starting", "downloading"), ("error",)):
+        candidates = [
+            (name, entry) for name, entry in entries if entry.get("state") in states
+        ]
+        if not candidates:
+            continue
+        if target_model:
+            for name, entry in reversed(candidates):
+                if _model_ids_match(name, target_model):
+                    return dict(entry)
+        return dict(candidates[-1][1])
+    return None
 
 
 def _parse_pull_event_block(block: str) -> Optional[Dict[str, Any]]:
@@ -231,6 +265,20 @@ def _install_npu_backend(model_name: str) -> None:
     from gaia.llm.lemonade_client import LemonadeClient
 
     LemonadeClient(verbose=False).ensure_npu_backend(model_name)
+
+
+def _interrupted_reason(exc: BaseException) -> str:
+    """A readable reason when the transport's own message is empty.
+
+    A dropped stream often raises ``ReadError`` or ``RemoteProtocolError``
+    with no text, which used to render as ``Download stream interrupted: ``.
+    """
+    detail = str(exc).strip()
+    if detail:
+        return detail
+    if type(exc).__name__ in {"ReadError", "RemoteProtocolError", "ConnectError"}:
+        return "the connection to the model server closed"
+    return type(exc).__name__
 
 
 async def _stream_lemonade_pull(
@@ -455,6 +503,22 @@ async def _stream_lemonade_pull(
                             logger.error(
                                 "Pull stream error for %s: %s", model_name, err_msg
                             )
+                # Only "complete" retires, so a stream that just ends must not
+                # leave the download showing as running forever.
+                current = _get_download_progress(model_name)
+                if current and current.get("state") in ("starting", "downloading"):
+                    logger.error("Pull stream ended early for %s", model_name)
+                    _set_download_progress(
+                        model_name,
+                        {
+                            **current,
+                            "state": "error",
+                            "message": (
+                                "Download stream interrupted: the model server "
+                                "ended the download before it finished"
+                            ),
+                        },
+                    )
     except LemonadeClientError as exc:
         logger.error("NPU backend not ready for %s: %s", model_name, exc)
         _set_download_progress(
@@ -484,7 +548,7 @@ async def _stream_lemonade_pull(
                 "total_files": 0,
                 "downloaded_bytes": 0,
                 "total_bytes": 0,
-                "message": f"Download stream interrupted: {exc}",
+                "message": f"Download stream interrupted: {_interrupted_reason(exc)}",
             },
         )
     finally:
@@ -555,11 +619,64 @@ def _loaded_chat_entry(
 # Most the Lemonade probes in /api/system/status may take together.
 _STATUS_PROBE_BUDGET_S = 20.0
 
+# The daemon start of GAIA's own stopped server that a status poll asked for.
+_own_server_restart: Optional[threading.Thread] = None
+_own_server_restart_failed_at: Optional[float] = None
+# How long a failed start waits before a poll asks again.
+_OWN_SERVER_RESTART_RETRY_S = 30.0
+
+
+def _gaia_lemonade_is_stopped() -> bool:
+    """True when this install runs GAIA's own server and it is not running.
+
+    Its address is then not probed: only its recorded, running server is it.
+    """
+    from gaia.llm.lemonade_client import running_embedded_lemonade_url
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    return gaia_runs_lemonade() and running_embedded_lemonade_url() is None
+
+
+def _restart_gaia_lemonade() -> None:
+    """Have the daemon start GAIA's own server again, one start at a time."""
+    global _own_server_restart
+    if _own_server_restart is not None and _own_server_restart.is_alive():
+        return
+    failed_at = _own_server_restart_failed_at
+    if (
+        failed_at is not None
+        and time.monotonic() - failed_at < _OWN_SERVER_RESTART_RETRY_S
+    ):
+        return
+
+    def _start() -> None:
+        global _own_server_restart_failed_at
+        from gaia.daemon.errors import DaemonError
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        try:
+            LemonadeManager.start_embedded_if_stopped()
+        except DaemonError as exc:
+            _own_server_restart_failed_at = time.monotonic()
+            logger.warning("Could not restart GAIA's model server: %s", exc)
+        except Exception:
+            _own_server_restart_failed_at = time.monotonic()
+            raise
+        else:
+            _own_server_restart_failed_at = None
+
+    logger.warning("GAIA's model server has stopped; asking the daemon to start it")
+    _own_server_restart = threading.Thread(
+        target=_start, name="gaia-lemonade-restart", daemon=True
+    )
+    _own_server_restart.start()
+
 
 @router.get("/api/system/status", response_model=SystemStatus)
 async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
     from gaia.config import GaiaConfigError
+    from gaia.installer.model_choice import download_size_gb
     from gaia.llm.lemonade_choice import LemonadeChoiceError
 
     # The config names the Lemonade server, so a broken one is reported, not raised.
@@ -577,13 +694,16 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     # renders the same answer. Never fatal: a banner losing its hint is far
     # better than the status endpoint failing.
     try:
-        from gaia.llm.lemonade_launcher import describe_start_hint
+        from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
 
-        # Resolve WITH the required ctx so the rendered command carries it;
-        # callers must print it verbatim, never append their own flag.
-        hint = describe_start_hint(_MIN_CONTEXT_SIZE)
-        status.start_instruction = hint.instruction
-        status.start_command = hint.command
+        # GAIA starts its own server by itself; the app has nothing to tell
+        # the user to run, so its own "it starts on its own" line shows.
+        if not gaia_runs_lemonade():
+            # Resolve WITH the required ctx so the rendered command carries it;
+            # callers must print it verbatim, never append their own flag.
+            hint = describe_start_hint(_MIN_CONTEXT_SIZE)
+            status.start_instruction = hint.instruction
+            status.start_command = hint.command
     except Exception as exc:  # noqa: BLE001
         logger.warning("system status: could not resolve the start hint: %s", exc)
 
@@ -613,6 +733,10 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         # Failures of the supplementary probes below: transport, bad JSON, or
         # an unexpected payload shape.
         probe_errors = (httpx.HTTPError, ValueError, TypeError, AttributeError)
+
+        if _gaia_lemonade_is_stopped():
+            _restart_gaia_lemonade()
+            raise httpx.ConnectError("GAIA's own model server is not running")
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             base_url = resolve_lemonade_base_url()
@@ -658,7 +782,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                     if models_resp.status_code == 200:
                         for m in _catalog_entries(models_resp.json()):
                             if m.get("id") == status.model_loaded:
-                                status.model_size_gb = m.get("size")
+                                status.model_size_gb = download_size_gb(
+                                    status.model_loaded, m.get("size")
+                                )
                                 status.model_labels = m.get("labels")
                             if "embed" in (m.get("id") or "").lower():
                                 status.embedding_model_loaded = True
@@ -742,9 +868,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                                     # "not downloaded" banner can show an
                                     # accurate hint instead of a hard-coded
                                     # number that drifts with model changes.
-                                    cat_size = m.get("size")
-                                    if cat_size is not None:
-                                        status.default_model_size_gb = float(cat_size)
+                                    status.default_model_size_gb = download_size_gb(
+                                        _target, m.get("size")
+                                    )
                                     break
                             # Model not found in catalog → treat as not downloaded
                             if status.model_downloaded is None:
@@ -930,7 +1056,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         _shutil = sys.modules.get("gaia.ui.server", sys.modules[__name__])
         _shutil_mod = getattr(_shutil, "shutil", shutil)
         usage = _shutil_mod.disk_usage(Path.home())
-        status.disk_space_gb = round(usage.free / (1024**3), 1)
+        # Decimal GB, the unit setup and the model sizes use.
+        status.disk_space_gb = round(usage.free / 1e9, 1)
         _probe_ok("disk")
     except OSError as exc:
         _probe_failed(status, "disk", f"Could not read free disk space: {exc}")
@@ -982,15 +1109,16 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         else:
             status.init_state = "ready"
         status.init_tasks = [
-            InitTaskInfo(name=j.name, status=j.status.value) for j in visible
+            InitTaskInfo(name=j.name, step=j.step, status=j.status.value)
+            for j in visible
         ]
 
     # ── Live download progress ──────────────────────────────────────────
-    # Surfaced for whichever model the UI cares about (custom override
-    # wins, else the registered default). Looking up by model name keeps
-    # us decoupled from concurrent pulls of unrelated models.
+    # Surface a download the user can see anywhere: the chat's own pull when
+    # one runs, else the most recent pull, such as the one Settings started
+    # for another model. A failure stays until that model's next pull.
     target_model = db.get_setting("custom_model") or default_model
-    progress_dict = _get_download_progress(target_model)
+    progress_dict = _surface_download_progress(target_model)
     if progress_dict:
         status.download_progress = DownloadProgress(**progress_dict)
 
@@ -1118,7 +1246,9 @@ def _resolve_dynamic_tools_setting() -> tuple[bool, bool]:
 @router.get("/api/settings", response_model=SettingsResponse)
 async def get_settings(db: ChatDatabase = Depends(get_db)):
     """Get current user settings with model status."""
-    custom_model = db.get_setting("custom_model")
+    from .providers import custom_model_override
+
+    custom_model = custom_model_override(db)
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
@@ -1146,6 +1276,22 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
     )
 
 
+def _load_newly_selected_model(db: ChatDatabase) -> None:
+    """Load the model new turns now run; nothing else would until the next message."""
+    from gaia.config import GaiaConfigError
+
+    from .providers import LOCAL, provider_of
+
+    try:
+        model = (db.get_setting("custom_model") or "").strip() or _default_model_name()
+    except GaiaConfigError as e:
+        # The setting is saved; the next message reports the config and loads.
+        logger.warning("Not loading the newly selected model: %s", e)
+        return
+    if provider_of(model) == LOCAL:
+        warmup.request_warm_up("model setting", fresh=True, model=model)
+
+
 @router.put("/api/settings", response_model=SettingsResponse)
 async def update_settings(
     request: SettingsUpdateRequest,
@@ -1155,8 +1301,9 @@ async def update_settings(
     """Update user settings.
 
     Setting ``custom_model`` to an **empty string** clears the override
-    and reverts to the default model. Sending ``null`` (or omitting the
-    field) is a no-op — by GAIA convention only explicit ``""`` clears.
+    and reverts to the model picked under Model (the default model when
+    there is no pick; see ``model_after_clearing_custom``). Sending
+    ``null`` (or omitting the field) is a no-op — by GAIA convention only explicit ``""`` clears.
     Pydantic *can* distinguish an explicit ``null`` from an unset field
     via ``model_fields_set``; we don't lean on that distinction here so
     clients have a single, simple rule (omit to keep, ``""`` to clear).
@@ -1174,7 +1321,9 @@ async def update_settings(
         from gaia.config import GaiaConfig, GaiaConfigError
 
         from .providers import (
+            PICKED_MODEL_SETTING,
             clear_restore_notice,
+            model_after_clearing_custom,
             provider_of,
             refuse_blocked_cloud_model,
         )
@@ -1183,8 +1332,11 @@ async def update_settings(
             refuse_blocked_cloud_model(value)
             logger.info("Custom model override set: %s", value)
         else:
-            logger.info("Custom model override cleared")
-            value = None
+            # Back to the model chosen under Model, as the field says.
+            value = model_after_clearing_custom(db)
+            logger.info("Custom model override cleared; running %s", value or "default")
+            if value:
+                db.set_setting(PICKED_MODEL_SETTING, value)
         # last_model is what the flagship sidecar warms and the next start restores.
         try:
             GaiaConfig.save_keys(
@@ -1198,8 +1350,14 @@ async def update_settings(
                 status_code=500,
                 detail=f"The custom model was not saved: {e} Then save it again.",
             ) from e
+        previous = (db.get_setting("custom_model") or "").strip() or None
+        changed = (value is None) != (previous is None) or (
+            value is not None and not _model_ids_match(value, previous)
+        )
         db.set_setting("custom_model", value)
         clear_restore_notice()
+        if changed:
+            _load_newly_selected_model(db)
 
     # Only touch context_size when the field was explicitly included in the request.
     if "context_size" in request.model_fields_set:
@@ -1274,9 +1432,12 @@ async def update_settings(
                 _ui_cloud_provider(custom) or custom.lower().startswith("claude")
             ):
                 db.set_setting("custom_model", None)
+                _load_newly_selected_model(db)
         logger.info("Network policy set: %s", result["policy"].value)
 
-    custom_model = db.get_setting("custom_model")
+    from .providers import custom_model_override
+
+    custom_model = custom_model_override(db)
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
@@ -1318,15 +1479,14 @@ def _read_model_server(custom_model: Optional[str]) -> ModelServerInfo:
     from gaia.llm.lemonade_client import (
         LemonadeClient,
         LemonadeClientError,
-        _read_embedded_lemonade_state,
+        gaia_lemonade_port,
     )
     from gaia.llm.model_server_info import describe_model_server, server_owner
 
     preferred = GaiaConfig.load().llamacpp_backend
     client = LemonadeClient(verbose=False)
     base_url = client.base_url
-    state = _read_embedded_lemonade_state()
-    owner = server_owner(base_url, state.get("port") if state else None)
+    owner = server_owner(base_url, gaia_lemonade_port())
     try:
         health = client.health_check(timeout=5)
     except LemonadeClientError as exc:
@@ -1612,6 +1772,40 @@ class DownloadModelRequest(BaseModel):
     model_name: str
     force: bool = False
     load_after: bool = False
+
+
+def _dismiss_download_failure(model_name: str) -> int:
+    """Drop the failed entry for `model_name`; return how many were dropped.
+
+    Only ``error`` entries go: an active download for the same model, and every
+    other model's entry, must survive a dismissal.
+    """
+    with _download_progress_lock:
+        stale = [
+            name
+            for name, entry in _download_progress.items()
+            if entry.get("state") == "error" and _model_ids_match(name, model_name)
+        ]
+        for name in stale:
+            _download_progress.pop(name, None)
+    return len(stale)
+
+
+class DismissDownloadRequest(BaseModel):
+    model_name: str
+
+
+@router.post("/api/system/download-progress/dismiss")
+async def dismiss_download_failure(body: DismissDownloadRequest):
+    """Forget a failed download so its warning stays gone after a reload."""
+    model_name = body.model_name.strip()
+    if not model_name:
+        raise HTTPException(status_code=400, detail="model_name must not be empty")
+    cleared = _dismiss_download_failure(model_name)
+    return {
+        "status": "dismissed" if cleared else "unchanged",
+        "model": model_name,
+    }
 
 
 @router.post("/api/system/download-model", status_code=202)

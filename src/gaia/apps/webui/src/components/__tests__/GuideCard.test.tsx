@@ -70,6 +70,15 @@ describe('GuideCard', () => {
         expect(screen.getByRole('button', { name: 'Pause 15 minutes timer' })).toBeInTheDocument();
     });
 
+    it('keeps punctuation that ends a duration next to the words, not after the chip', () => {
+        const data = { ...recipe, steps: ['Simmer: Cook for 20 minutes.', 'Sear 5 minutes, then flip.'] };
+        render(<RenderCard render="guide" data={data} />);
+        const chip = screen.getByRole('button', { name: 'Start 20 minutes timer' });
+        expect(chip.parentElement?.textContent).toMatch(/for 20 minutes\.\s*20:00$/);
+        const comma = screen.getByRole('button', { name: 'Start 5 minutes timer' });
+        expect(comma.parentElement?.textContent).toMatch(/Sear 5 minutes,\s*5:00 then flip\.$/);
+    });
+
     it('shows the unsupported card for a payload that breaks the shape', () => {
         render(<RenderCard render="guide" data={{ ...recipe, servings: 'four' }} />);
         expect(screen.getByText('Invalid guide payload')).toBeInTheDocument();

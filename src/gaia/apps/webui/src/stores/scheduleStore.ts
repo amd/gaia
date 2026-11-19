@@ -5,9 +5,10 @@
 
 import { create } from 'zustand';
 import type { Schedule, ScheduleResult } from '../types';
-import * as api from '../services/api';
+import * as api from '../services/scheduleApi';
 import { getT } from '../i18n/useT';
 import { log } from '../utils/logger';
+import { plainPreview } from '../utils/plainPreview';
 import { useNotificationStore } from './notificationStore';
 
 /** Extract a human-readable message from an API error. */
@@ -25,6 +26,48 @@ function parseApiError(err: unknown, fallback: string): string {
     return raw;
 }
 
+const ANNOUNCED_ERRORS_KEY = 'gaia-schedule-announced-errors';
+
+/** error_count per schedule id that the bell has already covered, from the last session. */
+function loadAnnouncedErrors(): Record<string, number> {
+    let raw: string | null;
+    try {
+        raw = localStorage.getItem(ANNOUNCED_ERRORS_KEY);
+    } catch (err) {
+        log.system.warn(
+            'Announced schedule failures unreadable; failures from before launch may be announced again. ' +
+                'localStorage is blocked -- check private-browsing or site-data settings.',
+            err,
+        );
+        return {};
+    }
+    if (!raw) return {};
+    try {
+        const parsed: unknown = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return Object.fromEntries(
+                Object.entries(parsed).filter(([, v]) => typeof v === 'number'),
+            ) as Record<string, number>;
+        }
+        log.system.warn(`Ignored malformed "${ANNOUNCED_ERRORS_KEY}"; failures from before launch may be announced again.`);
+    } catch (err) {
+        log.system.warn(`"${ANNOUNCED_ERRORS_KEY}" is corrupt; failures from before launch may be announced again.`, err);
+    }
+    return {};
+}
+
+function saveAnnouncedErrors(counts: Record<string, number>): void {
+    try {
+        localStorage.setItem(ANNOUNCED_ERRORS_KEY, JSON.stringify(counts));
+    } catch (err) {
+        log.system.warn(
+            'Announced schedule failures not saved; they may be announced again on the next launch. ' +
+                'localStorage is blocked -- check private-browsing or site-data settings.',
+            err,
+        );
+    }
+}
+
 /** Raise an error notification for each schedule that failed since *seen* was taken. */
 function notifyNewFailures(seen: Record<string, number>, list: Schedule[]): void {
     const { addNotification } = useNotificationStore.getState();
@@ -35,7 +78,7 @@ function notifyNewFailures(seen: Record<string, number>, list: Schedule[]): void
             type: 'error',
             agentId: 'scheduler',
             agentName: 'GAIA',
-            title: `Scheduled task "${s.name}" failed`,
+            title: getT()('schedules.failed', { name: s.name }),
             message: s.last_error,
             timestamp: Date.now(),
             read: false,
@@ -63,7 +106,7 @@ function notifyNewFinishes(seenErrors: Record<string, number>, seenFinished: Rec
             agentId: 'scheduler',
             agentName: 'GAIA',
             title: getT()('schedules.finished', { name: s.name }),
-            message: s.last_result ?? '',
+            message: plainPreview(s.last_result ?? ''),
             timestamp: Date.now(),
             read: false,
             dismissed: false,
@@ -97,6 +140,8 @@ interface ScheduleState {
 
     loadSchedules: () => Promise<void>;
     createSchedule: (name: string, interval: string, prompt: string) => Promise<void>;
+    /** Change when a schedule runs and what it asks; throws so the form can show why. */
+    editSchedule: (name: string, interval: string, prompt: string) => Promise<void>;
     updateScheduleStatus: (name: string, status: string) => Promise<void>;
     runScheduleNow: (name: string) => Promise<void>;
     deleteSchedule: (name: string) => Promise<void>;
@@ -126,17 +171,19 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
         try {
             const data = await api.listSchedules();
             const schedules: Schedule[] = data.schedules || [];
-            const seen = get().errorCounts;
+            const loaded = get().errorCounts;
             const seenFinished = get().finishedCounts;
-            // The first load is the state at launch, not news.
-            if (seen) {
-                notifyNewFailures(seen, schedules);
-                notifyNewFinishes(seen, seenFinished, schedules);
-            }
+            // On the first load, compare against what the last session announced, so failures while the app was closed still reach the bell.
+            const seen = loaded ?? loadAnnouncedErrors();
+            notifyNewFailures(seen, schedules);
+            // Finished runs at launch are not news.
+            if (loaded) notifyNewFinishes(seen, seenFinished, schedules);
+            const errorCounts = Object.fromEntries(schedules.map((s) => [s.id, s.error_count]));
+            saveAnnouncedErrors(errorCounts);
             set({
                 schedules,
                 loading: false,
-                errorCounts: Object.fromEntries(schedules.map((s) => [s.id, s.error_count])),
+                errorCounts,
                 // Max, because Run now marks a run in flight just before counting it.
                 finishedCounts: Object.fromEntries(
                     schedules.map((s) => [s.id, Math.max(finishedRuns(s), seenFinished[s.id] ?? 0)]),
@@ -155,6 +202,20 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
         } catch (err) {
             // The create form shows this error itself, so don't repeat it above the list.
             log.api.error('Failed to create schedule', err);
+            throw err;
+        }
+    },
+
+    editSchedule: async (name, interval, prompt) => {
+        try {
+            const updated = await api.editSchedule(name, interval, prompt);
+            set((state) => ({
+                schedules: state.schedules.map((s) => (s.name === name ? updated : s)),
+                actionError: null,
+            }));
+        } catch (err) {
+            // The edit form shows this error itself.
+            log.api.error(`Failed to edit schedule "${name}"`, err);
             throw err;
         }
     },

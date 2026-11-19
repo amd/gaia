@@ -58,6 +58,15 @@ class TestPrJourney:
             WORKFLOWS / "test_setup_journey.yml"
         ).read_text(encoding="utf-8")
 
+    def test_the_assistant_is_mirrored_once_not_fetched_live_by_every_test(self):
+        # ~20 live 150 MB downloads per OS left tests stuck on "Downloading".
+        names = [s.get("name", "") for s in self.job["steps"]]
+        mirror = names.index("Mirror the GAIA assistant from the hub")
+        walk = names.index("Walk first-run setup")
+        assert mirror < walk
+        assert "hub_mirror.py" in self.job["steps"][mirror]["run"]
+        assert "GAIA_E2E_HUB_MIRROR" in self.job["steps"][walk]["env"]
+
     def test_uploads_screenshots_even_when_a_journey_fails(self):
         uploads = [
             s for s in self.job["steps"] if "upload-artifact" in str(s.get("uses"))

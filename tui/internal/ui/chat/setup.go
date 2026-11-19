@@ -283,7 +283,7 @@ func (m ChatModel) cancelSetup() (tea.Model, tea.Cmd) {
 // setupProgressIdentity marks the one "what gaia init is doing right now"
 // message so a run producing dozens of lines over several minutes updates a
 // single spot in the transcript instead of scrolling everything else off
-// screen -- the same in-place-update trick as upsertCard, for RoleStatus.
+// screen.
 const setupProgressIdentity = "setup_progress"
 
 func (m *ChatModel) upsertSetupProgress(line string) {

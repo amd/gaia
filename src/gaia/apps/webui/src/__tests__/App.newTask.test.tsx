@@ -10,10 +10,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../services/api');
 vi.mock('../services/memoryApi');
+vi.mock('../services/scheduleApi');
 
 import App from '../App';
 import * as api from '../services/api';
 import * as memoryApi from '../services/memoryApi';
+import * as scheduleApi from '../services/scheduleApi';
 import { NEW_CHAT_RESEARCH, researchOn, useChatStore } from '../stores/chatStore';
 import { useModelStore } from '../stores/modelStore';
 import type { Session, SetupCheck, StartCard } from '../types';
@@ -399,9 +401,10 @@ describe('a private new chat', () => {
             id: 'sess-new-0001', title: 'New Task', message_count: 0, agent_type: 'gaia', private: !!data?.private,
         }));
         render(<App />);
-        const chip = await screen.findByRole('button', { name: 'Turn on private chat' });
+        const chip = await screen.findByRole('button', { name: 'Memory for this chat: Remember across chats: on' });
         await userEvent.click(chip);
-        expect(chip).toHaveAccessibleName('Turn off private chat');
+        await userEvent.click(screen.getByRole('button', { name: /Private chat/ }));
+        expect(chip).toHaveAccessibleName('Memory for this chat: Private');
         await sendFirstMessage('Please remember: my bank PIN hint is the dog');
 
         await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
@@ -651,7 +654,7 @@ describe('opening the app on a chat link', () => {
 
 describe('sidebar destinations', () => {
     it('opens Scheduled tasks over the chat, and Documents in its place', async () => {
-        mocked.listSchedules.mockResolvedValue({ schedules: [], total: 0 });
+        vi.mocked(scheduleApi).listSchedules.mockResolvedValue({ schedules: [], total: 0 });
         render(<App />);
         await userEvent.click(await screen.findByRole('button', { name: 'Scheduled tasks' }));
 
@@ -700,5 +703,16 @@ describe('New chat right after sending a first message', () => {
 
         expect(useChatStore.getState().pendingPrompt).toEqual({ sessionId: 'elsewhere', text: 'NOT-MINE' });
         expect(await screen.findByLabelText('Message')).toHaveValue('');
+    });
+});
+
+describe('the keyboard shortcuts sheet', () => {
+    it('opens with Ctrl+/ and closes with it again', async () => {
+        render(<App />);
+        await screen.findByLabelText('Message');
+        fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+        expect(await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
+        fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+        await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument());
     });
 });

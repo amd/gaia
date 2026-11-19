@@ -131,6 +131,9 @@ def test_scheduled_runs_use_the_flagship(monkeypatch):
         def process_query(self, prompt):
             return {"result": f"did {prompt}"}
 
+        def close(self):
+            pass
+
     fake = types.ModuleType("gaia_agent.agent")
     fake.GaiaAgent = FakeGaiaAgent
     fake.GaiaAgentConfig = FakeConfig

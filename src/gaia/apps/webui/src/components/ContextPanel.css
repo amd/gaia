@@ -35,7 +35,7 @@
 .cp-header h2 {
     margin: 0;
     font-size: 15px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .cp-icon {
@@ -70,7 +70,7 @@
 .cp-body h3 {
     margin: 0 0 10px;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-secondary);

@@ -41,9 +41,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Set, Tuple
 
+from gaia.automations import outbox
 from gaia.automations import runner as automations
+from gaia.automations import tick as automation_tick
 from gaia.logger import get_logger
 from gaia.messaging.bridge import (
+    CONTROL_CLEAR_HISTORY,
     DECISION_ALLOW,
     DECISION_ALWAYS,
     DECISION_DENY,
@@ -52,7 +55,11 @@ from gaia.messaging.bridge import (
     resolve_agent_argv,
 )
 from gaia.messaging.discord import github_watch, state
-from gaia.security import is_scratch_path
+from gaia.security import (
+    SENSITIVE_EXTENSIONS,
+    SENSITIVE_FILE_NAMES,
+    is_scratch_path,
+)
 
 log = get_logger(__name__)
 
@@ -70,10 +77,17 @@ DISCORD_REPLY_NOTE = (
     "write each PR, issue, commit or page as a Markdown link to its full URL, "
     "like [#6779](https://github.com/amd/gaia/pull/6779), never a bare number "
     "or name. Discord shows no tables: use a short bullet list instead. A "
-    "file you write is posted here on its own, just above your reply. The "
-    "user is likely on their phone: never tell them to run a command; name the "
-    "GAIA app screen that does it, like Settings → Connectors. Reminders, "
-    "alerts and watches have no screen: they change them by asking you here.)"
+    "file you write, a screenshot you take or an image you make is posted "
+    "here on its own. To send any other file on this PC, put [[send: its full "
+    "path]] on a line of its own in your reply; that line is removed before "
+    "they see it, so never mention it or copy one from a file. Leave out the "
+    "paths of your own working files. The "
+    "user is likely on their phone: never tell them to run a command or paste "
+    "one for them to run; name the GAIA app screen that does it, like Settings "
+    "→ Connectors, or say what you could not do and leave it there. On the "
+    "PC, Settings → Automations lists their reminders, alerts and triggers "
+    "and pauses, resumes or removes one; changing what one does, and GitHub "
+    "watches, happen by asking you here.)"
 )
 
 PAIRING_PROMPT = (
@@ -95,8 +109,8 @@ OPEN_PLACEHOLDER = "placeholder"
 OPEN_PROMPT = "prompt"
 
 RESTART_HINT = (
-    "Restart Discord from Settings → Messaging in the GAIA app, or type "
-    "/discord restart in the terminal app."
+    "In the GAIA app, open Settings → Messaging and press Stop, then Start; or "
+    "type /discord restart in the terminal app."
 )
 
 #: Discord rejects a message over 2000 characters; chunks leave room for the
@@ -107,6 +121,10 @@ CHUNK_LIMIT = 1900
 #: Discord's upload ceiling for a bot in a DM.
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
+#: How much of a replied-to message is quoted to the agent.
+REPLY_QUOTE_CHARS = 400
+#: Shared files older than this are removed when the bridge starts.
+INBOX_KEEP_SECONDS = 14 * 24 * 3600
 
 #: A message or click older than this is never executed.
 STALE_SECONDS = 120.0
@@ -166,6 +184,48 @@ TYPED_DECISIONS = {
 STOP_WORDS = frozenset(
     {"stop", "cancel", "abort", "nevermind", "never mind", "stop it", "halt"}
 )
+#: Ends the first answer after a start, when the DM holds an older conversation.
+FORGOT_NOTICE = (
+    "-# GAIA restarted since your last message, so it doesn't remember what was "
+    "said here before. Anything you asked it to remember is still there."
+)
+#: A message that is only one of these starts a fresh conversation.
+NEW_CHAT_WORDS = frozenset(
+    {"new chat", "new conversation", "start over", "start fresh", "reset chat"}
+)
+NEW_CHAT_REPLY = (
+    "-# Started a new conversation. I still remember what you've asked me to "
+    "keep, and your reminders and alerts are unchanged."
+)
+#: A message that is only one of these gets :data:`HELP_TEXT`, not the model.
+HELP_WORDS = frozenset({"help", "/help", "commands", "what can you do here"})
+HELP_TEXT = "\n".join(
+    (
+        "**GAIA on Discord**",
+        "- Ask anything, or attach a file for me to read.",
+        "- I ask before I change anything: press a button, or reply *yes*, "
+        "*no* or *always*.",
+        "- *stop* ends what I'm doing. *new chat* starts a fresh conversation.",
+        "- *retry* runs your last request again after an approval expired.",
+        '- Reminders and alerts: "remind me at 5pm to…", "tell me when…", '
+        '"what are you watching?".',
+        '- Files I make are sent here. Ask "send me <file>" for any other file '
+        "on the PC (up to 10 MB).",
+    )
+)
+#: A message that is only one of these re-runs the request an expired approval ended.
+RETRY_WORDS = frozenset({"retry", "try again", "run it again", "again"})
+#: Tools whose result names a file made for the user, and the keys naming it.
+PRODUCER_TOOLS = frozenset(
+    {"take_screenshot", "generate_image", "generate_music", "generate_sound_effect"}
+)
+PRODUCED_FILE_KEYS = ("file_path", "image_path", "audio_path")
+#: A reply line asking for a file on this PC to be attached.
+SEND_MARK = re.compile(r"^[ \t]*\[\[send:\s*(.+?)\s*\]\][ \t]*$", re.MULTILINE)
+#: Where the OS keeps app settings and sign-ins, directly under the home folder.
+APP_DATA_FOLDERS = frozenset({"appdata", "library"})
+#: Files sent from one reply, so a confused model cannot flood the DM.
+MAX_SENDS_PER_REPLY = 5
 _BUTTON_DECISIONS = {
     BUTTON_ALLOW: DECISION_ALLOW,
     BUTTON_ALWAYS: DECISION_ALWAYS,
@@ -221,6 +281,8 @@ class InboundMessage:
     attachments: List[Attachment] = field(default_factory=list)
     #: When the user last edited it (epoch seconds); 0 for a new message.
     edited_at: float = 0.0
+    #: The text of the message this one replies to with Discord's Reply.
+    reply_to: str = ""
 
 
 @dataclass
@@ -498,8 +560,10 @@ def split_message(text: str, limit: int = CHUNK_LIMIT) -> List[str]:
     pieces: List[str] = []
     for line in text.splitlines(keepends=True):
         while len(line) > room:
-            pieces.append(line[:room])
-            line = line[room:]
+            # Cut at a space when there is one, so a link is not split in two.
+            cut = line.rfind(" ", room // 2, room) + 1 or room
+            pieces.append(line[:cut])
+            line = line[cut:]
         pieces.append(line)
     chunks: List[str] = []
     current = ""
@@ -545,6 +609,9 @@ class ReplyTarget:
     tools: List[str] = field(default_factory=list)
     uploaded: Set[str] = field(default_factory=set)
     pending_upload: str = ""
+    #: The tool whose result is awaited, and the question that started the turn.
+    last_tool: str = ""
+    question: str = ""
     #: A line put above the answer (a scheduled run's name).
     heading: str = ""
     #: The user stopped it; whatever the cancelled turn ends with is not shown.
@@ -566,6 +633,8 @@ class _Pending:
     scope: str = ""
     #: The agent's own keys for that grant, which are what get remembered.
     grant_keys: Tuple[str, ...] = ()
+    #: The request that led here, offered again if the prompt expires.
+    question: str = ""
 
 
 class DiscordAdapter:
@@ -614,6 +683,8 @@ class DiscordAdapter:
         self._lease_at = 0
         prior = state.read_status()
         self._last_message_id = prior.last_message_id
+        #: This DM has earlier messages the freshly started agent never saw.
+        self._forgot_notice = bool(prior.last_message_id)
         self._refused: Set[str] = set(prior.refused_user_ids)
         #: message id -> (channel id, kind) of what is open right now.
         self._open: Dict[str, Any] = {}
@@ -636,8 +707,12 @@ class DiscordAdapter:
         self._in_flight: List[ReplyTarget] = []
         #: The last automations failure the user was told about.
         self._automation_error = ""
+        #: Queued deliveries whose turn failed to start.
+        self._stalled: Set[str] = set()
         #: The DM was searched for buttons a dead bridge left; done once.
         self._scanned = False
+        #: The request an expired approval ended; "retry" runs it again.
+        self._retry_question = ""
 
     # ------------------------------------------------------------------
     # Status
@@ -684,11 +759,25 @@ class DiscordAdapter:
         self._channel = self._channel_factory(
             on_event=self._on_agent_event,
             argv=argv,
-            env=_agent_env(),
+            env=agent_env(),
             on_busy=self._on_busy,
             restart_hint=RESTART_HINT,
         )
         self._channel.start()
+        self._prune_inbox()
+
+    def _prune_inbox(self) -> None:
+        """Remove shared files nobody has needed for two weeks."""
+        cutoff = time.time() - INBOX_KEEP_SECONDS
+        folder = state.inbox_dir()
+        if not folder.is_dir():
+            return
+        for item in folder.iterdir():
+            try:
+                if item.is_file() and item.stat().st_mtime < cutoff:
+                    item.unlink()
+            except OSError as e:
+                log.warning("Could not remove old shared file %s: %s", item, e)
 
     def _agent(self) -> AgentChannel:
         if self._channel is None:
@@ -754,6 +843,10 @@ class DiscordAdapter:
             self._untrack(message_id)
         if self._channel is not None:
             self._channel.close()
+        try:
+            automation_tick.release(automation_tick.OWNER_DISCORD)
+        except (state.StateFileError, OSError) as e:
+            log.error("Could not release the automations tick: %s", e)
 
     # ------------------------------------------------------------------
     # Open messages: placeholders and prompts that must not outlive the bridge
@@ -845,7 +938,7 @@ class DiscordAdapter:
         if self._state == state.STATE_CONNECTED:
             if self.claim_lease(force=False, heartbeat=True):
                 try:
-                    automations.run_due(_DiscordSink(self), self._clock())
+                    self._run_automations()
                     self._automation_error = ""
                 except state.DamagedStateFile as e:
                     self._report_damage(e, "Ask me to set up your automations again.")
@@ -866,6 +959,39 @@ class DiscordAdapter:
         elif self._state == state.STATE_TAKEN_OVER and self.claim_lease(force=False):
             # The other PC stopped refreshing its lease; answer again.
             self._set_state(state.STATE_CONNECTED)
+
+    def _run_automations(self) -> None:
+        """Deliver what the daemon queued; run what is due when no daemon does."""
+        now = self._clock()
+        if automation_tick.claim(automation_tick.OWNER_DISCORD, now):
+            automations.run_due(_DiscordSink(self), now)
+        sink = _DiscordSink(self)
+        for delivery in outbox.pending():
+            note = outbox.late_note(delivery, now)
+            late = f"\n{note}" if note else ""
+            if delivery.kind != outbox.KIND_TURN:
+                if not sink.post(delivery.text + late):
+                    # Kept for the next tick; the failed send is in the log.
+                    continue
+            else:
+                try:
+                    sink.start_turn(
+                        delivery.text,
+                        delivery.heading + late,
+                        # A retry shows no placeholder: one dead message is enough.
+                        quiet=delivery.quiet or delivery.id in self._stalled,
+                        answer_filter=outbox.answer_filter(delivery),
+                    )
+                except Exception as e:  # noqa: BLE001 - kept queued, said once
+                    self._stalled.add(delivery.id)
+                    log.exception("Queued automation %s did not start", delivery.name)
+                    # The rest waits too: the agent that failed would fail them.
+                    raise ValueError(
+                        f"{delivery.name} could not start: {e}. It runs when the "
+                        f"agent answers again. {RESTART_HINT}"
+                    ) from e
+            self._stalled.discard(delivery.id)
+            outbox.remove(delivery.id)
 
     def _always_keys(self) -> Set[str]:
         try:
@@ -1037,9 +1163,22 @@ class DiscordAdapter:
             return
         if not msg.attachments and self._answer_by_text(msg):
             return
-        if not msg.attachments and _is_stop_word(msg.content):
+        words = "" if msg.attachments else _only_words(msg.content)
+        if words in STOP_WORDS:
             self._stop_work(msg.channel_id)
             return
+        if words in HELP_WORDS:
+            self._send(msg.channel_id, HELP_TEXT)
+            return
+        if words in NEW_CHAT_WORDS:
+            self._new_chat(msg.channel_id, msg.id)
+            return
+        retry, self._retry_question = self._retry_question, ""
+        if words in RETRY_WORDS and retry:
+            question = retry
+        elif msg.reply_to:
+            quoted = " ".join(msg.reply_to.split())[:REPLY_QUOTE_CHARS]
+            question = f'(Replying to this earlier message: "{quoted}")\n{question}'
         if self._fold_into_waiting(question):
             return
         self._start_turn(msg.channel_id, msg.id, question, "-# Thinking…")
@@ -1069,6 +1208,25 @@ class DiscordAdapter:
             return
         audit.info("Did not run edited Discord message %s: edits never run", msg.id)
         self._send(msg.channel_id, EDIT_NOTICE)
+
+    def _new_chat(self, channel_id: str, message_id: str) -> None:
+        """Clear the agent's conversation, in its turn behind anything running."""
+        target = ReplyTarget(
+            channel_id=channel_id,
+            message_id=message_id,
+            answer_filter=lambda _answer: NEW_CHAT_REPLY,
+        )
+        turn = Turn(
+            text="",
+            context=target,
+            sender=self.config.owner_id,
+            control=CONTROL_CLEAR_HISTORY,
+        )
+        with self._lock:
+            self._in_flight.append(target)
+            self._waiting = None
+        audit.info("The paired user started a new conversation")
+        self._agent().submit(turn)
 
     def _stop_work(self, channel_id: str) -> None:
         """Withdraw the waiting message and cancel the running one."""
@@ -1136,6 +1294,7 @@ class DiscordAdapter:
             heading=heading,
             quiet=quiet,
             answer_filter=answer_filter,
+            question=question if message_id else "",
         )
         if placeholder is not None and not quiet:
             target.reply_id = self._send(channel_id, placeholder, buttons=STOP_BUTTONS)
@@ -1147,7 +1306,18 @@ class DiscordAdapter:
         )
         with self._lock:
             self._in_flight.append(target)
-        ahead = self._agent().submit(turn)
+        try:
+            ahead = self._agent().submit(turn)
+        except Exception:
+            # Nothing will ever answer under it: close it, then say why upstream.
+            with self._lock:
+                self._in_flight.remove(target)
+            if target.reply_id:
+                self._edit(
+                    channel_id, target.reply_id, INTERRUPTED_TEXT, clear_buttons=True
+                )
+                self._untrack(target.reply_id)
+            raise
         # Only typed messages are folded together; a schedule stands alone.
         with self._lock:
             self._waiting = (turn, target, [question]) if ahead and message_id else None
@@ -1272,11 +1442,13 @@ class DiscordAdapter:
         )
         self._agent().decide(DECISION_DENY, pending.confirm_id)
         self._untrack(pending.message_id)
+        self._retry_question = pending.question
+        again = " Send **retry** to run it again." if pending.question else ""
         self._edit(
             pending.channel_id,
             pending.message_id,
             f"-# ⛔ Denied — no answer within {int(self.confirm_timeout // 60)} "
-            f"minutes · {_record(pending.label)}",
+            f"minutes · {_record(pending.label)}{again}",
             clear_buttons=True,
         )
 
@@ -1353,7 +1525,7 @@ class DiscordAdapter:
                     "-# Queued — GAIA is waiting for your answer above (tap a button, "
                     "or reply yes or no)…"
                     if asking
-                    else f"-# Queued — finishing {ahead} earlier message"
+                    else f"-# Queued — finishing {ahead} earlier task"
                     f"{'s' if ahead != 1 else ''} first…"
                 ),
             )
@@ -1386,6 +1558,7 @@ class DiscordAdapter:
             if tool not in target.tools:
                 target.tools.append(tool)
             target.text = ""
+            target.last_tool = tool
             self._update(target, f"-# {neutralize(tool_words(tool))}…")
             self._remember_written_file(target, tool, event.get("args"))
         elif etype == "tool_result":
@@ -1480,6 +1653,7 @@ class DiscordAdapter:
                 timer,
                 scope,
                 grant_keys,
+                target.question,
             )
         timer.start()
         self._track(target.channel_id, message_id, OPEN_PROMPT)
@@ -1508,42 +1682,82 @@ class DiscordAdapter:
         target.pending_upload = raw if isinstance(raw, str) else ""
 
     def _maybe_upload(self, target: ReplyTarget, event: Dict[str, Any]) -> None:
-        """Send back the file the preceding write tool produced, within limits."""
+        """Send back the file the preceding tool wrote or made, within limits."""
         raw = target.pending_upload
         target.pending_upload = ""
-        if not raw:
-            return
+        tool, target.last_tool = target.last_tool, ""
         data = event.get("data")
-        if isinstance(data, dict) and data.get("success") is False:
+        if isinstance(data, dict) and (
+            data.get("success") is False or data.get("status") == "error"
+        ):
             return
+        if not raw and tool in PRODUCER_TOOLS and isinstance(data, dict):
+            raw = next(
+                (
+                    data[key]
+                    for key in PRODUCED_FILE_KEYS
+                    if isinstance(data.get(key), str) and data[key]
+                ),
+                "",
+            )
+        if raw:
+            self._upload(target, raw)
+
+    def _upload(self, target: ReplyTarget, raw: str, *, asked: bool = False) -> None:
+        """Post one file from this PC in the DM.
+
+        *asked* is a file the reply named with ``[[send: …]]``: a refusal is
+        then said in the DM, since the user is waiting for that file.
+        """
+
+        def refuse(why: str) -> None:
+            audit.warning("Did not send %s to Discord: %s", raw, why)
+            if asked:
+                self._send(target.channel_id, f"-# Not sent: {why}")
+
         try:
             path = Path(raw).expanduser().resolve()
-        except OSError:
+        except (OSError, ValueError) as e:
+            refuse(f"`{neutralize(raw)}` is not a path I can read ({e}).")
             return
         key = str(path)
-        if key in target.uploaded or not path.is_file():
+        if key in target.uploaded:
             return
-        if is_scratch_path(path):
+        name = f"`{neutralize(path.name)}`"
+        if not path.is_file():
+            refuse(f"{name} is not a file on this PC.")
+            return
+        if is_scratch_path(path) and not asked:
             # The agent's own working files (a smoke-test log), not a deliverable.
             return
-        if not any(path == root or root in path.parents for root in self.upload_roots):
-            audit.warning(
-                "Refused to upload %s — outside the allowed upload roots %s",
-                path,
-                ", ".join(str(r) for r in self.upload_roots),
+        roots = [r for r in self.upload_roots if path == r or r in path.parents]
+        if not roots:
+            refuse(f"{name} is outside the folders GAIA may send files from.")
+            return
+        if (
+            path.name.lower() in {n.lower() for n in SENSITIVE_FILE_NAMES}
+            or path.suffix.lower() in SENSITIVE_EXTENSIONS
+        ):
+            refuse(f"{name} looks like a key or password file, so it stays on your PC.")
+            return
+        if asked and _holds_settings(path, max(roots, key=lambda r: len(r.parts))):
+            refuse(
+                f"{name} is in a hidden or app-settings folder, where sign-ins are "
+                "kept, so it stays on your PC."
             )
             return
         if path.stat().st_size > MAX_UPLOAD_BYTES:
             self._send(
                 target.channel_id,
-                f"-# `{neutralize(path.name)}` is larger than Discord's 10 MB limit, "
+                f"-# {name} is larger than Discord's 10 MB limit, "
                 "so it stays on your PC.",
             )
             return
+        if asked and len(target.uploaded) >= MAX_SENDS_PER_REPLY:
+            refuse(f"{name}: only {MAX_SENDS_PER_REPLY} files are sent per reply.")
+            return
         target.uploaded.add(key)
-        self._send(
-            target.channel_id, f"Here's `{neutralize(path.name)}`.", file_path=path
-        )
+        self._send(target.channel_id, f"Here's {name}.", file_path=path)
 
     def _finish(self, target: ReplyTarget, answer: str, failed: bool = False) -> None:
         """Post the answer as new messages below everything else, then drop the
@@ -1558,6 +1772,13 @@ class DiscordAdapter:
                 target.reply_id = ""
             return
         answer = answer or target.text
+        asked: List[str] = []
+        only_files = False
+        if not failed and SEND_MARK.search(answer):
+            asked = [raw.strip("`\"' ") for raw in SEND_MARK.findall(answer)]
+            answer = re.sub(r"\n{3,}", "\n\n", SEND_MARK.sub("", answer)).strip()
+            only_files = not answer
+            answer = answer or "-# Sent."
         # A failure is shown as it is: it is not an alert's news, nor silence.
         if target.answer_filter is not None and not failed:
             kept = target.answer_filter(answer)
@@ -1569,8 +1790,19 @@ class DiscordAdapter:
             answer = kept
         if target.heading:
             answer = f"{target.heading}\n{answer}"
+        if self._forgot_notice and target.question and target.answer_filter is None:
+            self._forgot_notice = False
+            answer = f"{answer}\n\n{FORGOT_NOTICE}"
+        if only_files:
+            # Nothing else to say: the files are the answer, then "Sent."
+            for raw in asked:
+                self._upload(target, raw, asked=True)
+            asked = []
         for chunk in split_message(untable(answer) or "-# (no answer)"):
             self._send(target.channel_id, chunk)
+        # After the words, so a refusal is the last thing said about the file.
+        for raw in asked:
+            self._upload(target, raw, asked=True)
         if target.reply_id:
             self._delete(target.channel_id, target.reply_id)
             target.reply_id = ""
@@ -1613,8 +1845,26 @@ class DiscordAdapter:
         self._edit(target.channel_id, target.reply_id, text)
 
 
-def _is_stop_word(text: str) -> bool:
-    return " ".join(text.lower().strip(" .!").split()) in STOP_WORDS
+def _holds_settings(path: Path, root: Path) -> bool:
+    """Whether *path*, somewhere below *root*, is where apps keep sign-ins.
+
+    A hidden file or folder anywhere on the way down, or the OS's app-data
+    folder directly under the home folder. A folder the user picked as a root
+    is theirs to send from, whatever it is called.
+    """
+    parts = path.relative_to(root).parts
+    if any(part.startswith(".") for part in parts):
+        return True
+    return (
+        root == Path.home().resolve()
+        and len(parts) > 1
+        and parts[0].lower() in APP_DATA_FOLDERS
+    )
+
+
+def _only_words(text: str) -> str:
+    """*text* lowered and trimmed, for matching a message that is one phrase."""
+    return " ".join(text.lower().strip(" .!?").split())
 
 
 def _grant_keys(action: str, event: Dict[str, Any]) -> Tuple[str, ...]:
@@ -1660,7 +1910,7 @@ class _DiscordSink:
         )
 
     def check_env(self) -> Optional[Dict[str, str]]:
-        return _agent_env()
+        return agent_env()
 
 
 def _turn_text(questions: List[str]) -> str:
@@ -1674,7 +1924,7 @@ def _turn_text(questions: List[str]) -> str:
     )
 
 
-def _agent_env() -> Dict[str, str]:
+def agent_env() -> Dict[str, str]:
     """The agent's environment: this install's ``gaia`` on PATH, no bot token.
 
     The automations skill runs ``gaia automation ...``, and an app install

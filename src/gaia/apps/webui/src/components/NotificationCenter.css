@@ -5,8 +5,8 @@
 .notification-center {
   display: flex;
   flex-direction: column;
-  width: 400px;
-  max-height: 600px;
+  width: min(400px, calc(100vw - 24px));
+  max-height: min(600px, calc(100dvh - 72px));
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -15,16 +15,10 @@
   animation: notifSlideIn var(--duration) var(--ease);
 }
 
-[data-theme="dark"] .notification-center {
-  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
-  backdrop-filter: blur(20px) saturate(1.2);
-  -webkit-backdrop-filter: blur(20px) saturate(1.2);
-}
-
 @keyframes notifSlideIn {
   from {
     opacity: 0;
-    transform: translateY(-8px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -49,7 +43,7 @@
 
 .notification-center-title {
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-primary);
   margin: 0;
 }
@@ -65,7 +59,7 @@
   background: var(--text-primary);
   color: var(--bg-primary);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .notification-center-close {
@@ -102,7 +96,7 @@
 .notification-filter-tab.active {
   background: var(--bg-active);
   color: var(--text-primary);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 /* ── Notification List ───────────────────────────────────────────────── */
@@ -244,11 +238,13 @@
 
 .notification-agent {
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
+  animation: fade-cut-inline both;
+  animation-timeline: scroll(self inline);
 }
 
 .notification-time {
@@ -260,7 +256,7 @@
 
 .notification-title {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-primary);
   line-height: 1.3;
 }
@@ -271,6 +267,8 @@
   line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 3;
+  animation: fade-cut-block both;
+  animation-timeline: scroll(self block);
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -322,7 +320,7 @@
   padding: 4px 12px;
   border-radius: var(--radius-sm);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   transition: all var(--duration-fast) var(--ease);
 }
 
@@ -351,7 +349,7 @@
   padding: 2px 8px;
   border-radius: var(--radius-full);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
   margin-top: 4px;
   width: fit-content;
 }

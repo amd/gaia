@@ -89,10 +89,12 @@ interface NumberFieldProps {
     onChange: (value: number) => void;
 }
 
-/** A typed box and a slider on one value. The box keeps what is typed until it reads as a number in range. */
+/** A typed box and a slider on one value. The box keeps what is typed until it reads as a number in range,
+ *  and shows the value with thousands separators until it is focused for editing. */
 function NumberField({ field, value, money, onChange }: NumberFieldProps) {
     const t = useT();
     const [draft, setDraft] = useState<string | null>(null);
+    const [focused, setFocused] = useState(false);
     const sliderMax = Math.min(field.max, Math.max(field.sliderMax ?? field.max, value));
     const prefix = field.format === 'currency' ? currencySymbol(money) : '';
     const suffix = field.format === 'percent' ? '%' : field.format === 'years' ? t.bare('cards.yearsShort') : '';
@@ -113,15 +115,16 @@ function NumberField({ field, value, money, onChange }: NumberFieldProps) {
                 <span className="render-calc__box">
                     {prefix && <span className="render-calc__affix">{prefix}</span>}
                     <input
-                        type="number"
+                        type={focused ? 'number' : 'text'}
                         inputMode="decimal"
                         min={field.min}
                         max={field.max}
                         step={field.step}
-                        value={draft ?? String(value)}
+                        value={draft ?? (focused ? String(value) : new Intl.NumberFormat(money.locale, { maximumFractionDigits: 10 }).format(value))}
                         aria-label={label}
                         onChange={(e) => onType(e.target.value)}
-                        onBlur={() => setDraft(null)}
+                        onFocus={() => setFocused(true)}
+                        onBlur={() => { setFocused(false); setDraft(null); }}
                     />
                     {suffix && <span className="render-calc__affix">{suffix}</span>}
                 </span>

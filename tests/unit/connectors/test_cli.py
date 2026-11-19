@@ -107,8 +107,8 @@ class TestConnectSelfDocuments:
         assert "gaia connectors configure google --client-id" in err  # exact command
         # connect authorizes scopes and grants the agent in one flow (#2347).
         assert "gaia connectors connect google --scopes" in err
-        assert "--grant-agent installed:email" in err
-        assert "gmail.modify" in err  # copy-paste example has real scopes
+        assert "--grant-agent installed:gaia" in err
+        assert "gmail.readonly" in err  # copy-paste example has real scopes
         assert "amd-gaia.ai/docs/connectors/google" in err
 
 
@@ -169,11 +169,15 @@ class TestConnectGrantAgent:
 
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["connector_id"] = connector_id
             captured["scopes"] = list(scopes)
             captured["grant_agents"] = grant_agents
-            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
 
         async def _fake_complete(flow_id):
             return {"account_email": "alice@example.com"}
@@ -204,11 +208,15 @@ class TestConnectGrantAgent:
     def test_grant_agent_passes_grant_agents_to_the_flow(self, monkeypatch):
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["connector_id"] = connector_id
             captured["scopes"] = list(scopes)
             captured["grant_agents"] = grant_agents
-            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
 
         async def _fake_complete(flow_id):
             return {"account_email": "alice@example.com"}
@@ -275,7 +283,7 @@ class TestConnectGrantAgent:
 
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes):
+        async def _fake_start(connector_id, *, scopes, **_account):
             captured["start_connector_id"] = connector_id
             captured["start_scopes"] = list(scopes)
             return {
@@ -286,6 +294,7 @@ class TestConnectGrantAgent:
                 "scopes": list(scopes),
                 "interval": 1,
                 "expires_in": 900,
+                "intent": None,
             }
 
         async def _fake_poll(
@@ -296,6 +305,7 @@ class TestConnectGrantAgent:
             interval,
             expires_in,
             grant_agents=None,
+            intent=None,
         ):
             captured["poll_connector_id"] = connector_id
             captured["device_code"] = device_code
@@ -343,7 +353,7 @@ class TestConnectGrantAgent:
             monkeypatch, requested, connector_id="microsoft"
         )
 
-        async def _fake_start(connector_id, *, scopes):
+        async def _fake_start(connector_id, *, scopes, **_account):
             return {
                 "message": "Go to https://microsoft.example and enter CODE",
                 "device_code": "device-code",
@@ -352,6 +362,7 @@ class TestConnectGrantAgent:
                 "scopes": list(scopes),
                 "interval": 1,
                 "expires_in": 900,
+                "intent": None,
             }
 
         async def _fake_poll(
@@ -362,6 +373,7 @@ class TestConnectGrantAgent:
             interval,
             expires_in,
             grant_agents=None,
+            intent=None,
         ):
             return {"account_email": "alice@example.com"}
 
@@ -392,7 +404,7 @@ class TestConnectGrantAgent:
 
     @pytest.mark.allow_network  # asyncio's Windows event loop uses a local socketpair
     def test_device_connect_describes_microsoft_graph_scopes(self, monkeypatch):
-        async def _fake_start(connector_id, *, scopes):
+        async def _fake_start(connector_id, *, scopes, **_account):
             assert connector_id == "microsoft"
             return {
                 "message": "Go to https://microsoft.example and enter CODE",
@@ -402,6 +414,7 @@ class TestConnectGrantAgent:
                 "scopes": list(scopes),
                 "interval": 1,
                 "expires_in": 900,
+                "intent": None,
             }
 
         async def _fake_poll(
@@ -412,6 +425,7 @@ class TestConnectGrantAgent:
             interval,
             expires_in,
             grant_agents=None,
+            intent=None,
         ):
             return {"account_email": "alice@example.com"}
 
@@ -437,9 +451,13 @@ class TestConnectGrantAgent:
     def test_plain_connect_passes_no_grant_agents(self, monkeypatch):
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["grant_agents"] = grant_agents
-            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
 
         async def _fake_complete(flow_id):
             return {"account_email": "bob@example.com"}
@@ -478,10 +496,14 @@ class TestConnectGrantAgent:
 
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["scopes"] = sorted(scopes)
             captured["grant_agents"] = grant_agents
-            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
 
         async def _fake_complete(flow_id):
             return {"account_email": "alice@example.com"}
@@ -517,9 +539,13 @@ class TestConnectGrantAgent:
         default_scopes for a genuine first-time connect)."""
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["scopes"] = list(scopes)
-            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
 
         async def _fake_complete(flow_id):
             return {"account_email": "bob@example.com"}
@@ -1065,3 +1091,146 @@ class TestActivationsRejectOauth:
         )
         assert rc == 3
         assert "MCP-server" in err
+
+
+class TestListShowsActivations:
+    """``list --json`` carries each MCP server's per-agent activations, so a
+    front-end like the TUI can show a standing activation and revoke it (#7546).
+    """
+
+    @staticmethod
+    def _row(connector_id):
+        rc, out, err = _run("connectors", "list", "--json")
+        assert rc == 0, err
+        return next(r for r in json.loads(out) if r["id"] == connector_id)
+
+    def test_cold_state_has_no_activations(self):
+        assert self._row("mcp-github")["activations"] == {}
+
+    def test_activation_shows_and_deactivation_clears_it(self):
+        _run(
+            "connectors",
+            "activations",
+            "activate",
+            "mcp-github",
+            "installed:gaia",
+            "--scopes",
+            "use",
+        )
+        assert self._row("mcp-github")["activations"] == {"installed:gaia": True}
+        # Another server's row must not borrow this one's activation.
+        assert self._row("mcp-slack")["activations"] == {}
+
+        _run("connectors", "activations", "deactivate", "mcp-github", "installed:gaia")
+        assert self._row("mcp-github")["activations"].get("installed:gaia") is not True
+
+    def test_oauth_rows_carry_an_empty_map(self):
+        assert self._row("google")["activations"] == {}
+
+    def test_corrupt_ledger_fails_loudly_naming_the_file(self, tmp_path):
+        path = tmp_path / ".gaia" / "connectors" / "activations.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json", encoding="utf-8")
+        rc, out, err = _run("connectors", "list", "--json")
+        assert rc == 5
+        assert out == ""
+        assert "activations.json" in err
+
+
+class TestConnectCallbackPort:
+    def test_connect_passes_explicit_callback_port(self, monkeypatch):
+        captured = {}
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **kwargs):
+            captured["connector_id"] = connector_id
+            captured["scopes"] = list(scopes)
+            captured["callback_port"] = kwargs.get("callback_port")
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": kwargs.get("callback_port"),
+            }
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        rc, out, err = _run(
+            "connectors", "connect", "google", "--callback-port", "8912"
+        )
+        assert rc == 0, err
+        assert captured["callback_port"] == 8912
+        assert "127.0.0.1:8912" in out
+        assert "ssh -L 8912:127.0.0.1:8912 <user>@<host>" in out
+
+    def test_connect_rejects_out_of_range_callback_port(self):
+        rc, _out, err = _run("connectors", "connect", "google", "--callback-port", "0")
+        assert rc == 2
+        assert "Invalid --callback-port 0: port must be between 1 and 65535." in err
+
+        rc2, _out2, err2 = _run(
+            "connectors", "connect", "google", "--callback-port", "70000"
+        )
+        assert rc2 == 2
+        assert (
+            "Invalid --callback-port 70000: port must be between 1 and 65535." in err2
+        )
+
+    def test_connect_remote_ssh_session_prints_ready_forward_command(self, monkeypatch):
+        monkeypatch.setenv("SSH_CONNECTION", "10.0.0.1 51234 10.0.0.2 22")
+        monkeypatch.setenv("USER", "ubuntu")
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **kwargs):
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        rc, out, err = _run(
+            "connectors", "connect", "google", "--callback-port", "8085"
+        )
+        assert rc == 0, err
+        assert "Remote session detected (SSH)" in out
+        assert "ssh -L 8085:127.0.0.1:8085 ubuntu@10.0.0.2" in out
+
+    def test_connect_remote_ssh_session_fallback_without_ssh_connection_ip(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        monkeypatch.setenv("SSH_TTY", "/dev/pts/1")
+        monkeypatch.delenv("USER", raising=False)
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **kwargs):
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        rc, out, err = _run(
+            "connectors", "connect", "google", "--callback-port", "8085"
+        )
+        assert rc == 0, err
+        assert "Remote session detected (SSH)" in out
+        assert "ssh -L 8085:127.0.0.1:8085 <user>@<host>" in out

@@ -36,7 +36,7 @@ on:
 jobs:
   eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120  # rag_quality runs its scenarios one at a time; see Typical Costs
 
     steps:
       - uses: actions/checkout@v4
@@ -162,7 +162,7 @@ on:
 jobs:
   eval-regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 150
 
     steps:
       - uses: actions/checkout@v4
@@ -234,11 +234,13 @@ When a scenario exceeds its budget, it receives the `BUDGET_EXCEEDED` status and
 
 | Scope | Approximate Cost | Time |
 |-------|:----------------:|:----:|
-| Single scenario | $0.02 -- $0.10 | 30s -- 3min |
-| RAG quality category (7 scenarios) | $0.20 -- $0.70 | 5 -- 15min |
-| Context retention (4 scenarios) | $0.10 -- $0.40 | 3 -- 10min |
-| Full benchmark (all scenarios) | $1.00 -- $5.00 | 20 -- 60min |
+| Single scenario | $0.01 -- $0.40 | 1 -- 10min (outliers past 20min) |
+| RAG quality category (16 scenarios) | $1.00 -- $2.00 | 60 -- 90min |
+| Context retention (4 scenarios) | $0.50 -- $1.00 | 15 -- 20min |
+| Full benchmark (all scenarios) | $20 -- $35 | 15+ hours serial |
 | Architecture audit | $0.00 | < 1min |
+
+Figures come from the committed flagship baseline (`tests/fixtures/eval_baselines/gaia-flagship/`), captured on a Strix Halo runner with local Lemonade and a Sonnet-tier `--model`. Scenarios run one at a time, so a category's wall clock is the sum of its scenarios. Size `timeout-minutes` from the Time column with headroom, not from the low end.
 
 <Note>
   Costs depend on `--model`, which drives each scenario as well as judging it. The default is `claude-opus-5`; a Sonnet tier is roughly 5x cheaper and usually enough. Whichever you pick has to match the model your baseline was captured with — changing it changes the tool sequences and the wall clock, so the comparison stops measuring the agent and starts measuring the driver.
@@ -280,11 +282,11 @@ jobs:
       - name: Architecture Audit
         run: gaia eval agent --audit-only
 
-  # PR only: run core categories (~$0.50)
+  # PR only: run core categories (~$2.50 on a Sonnet tier)
   core-eval:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -319,13 +321,15 @@ jobs:
             eval/results/*/summary.md
           retention-days: 14
 
-  # Manual or main push: full benchmark (~$3.00)
+  # Manual or main push: full benchmark (~$25 on a Sonnet tier)
   full-eval:
     if: >
       github.event_name == 'workflow_dispatch' && github.event.inputs.full_eval == 'true'
       || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # A serial full run outlasts the 6-hour hosted-job limit; split
+    # categories across parallel jobs (as eval_flagship.yml does) to fit.
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -455,7 +459,7 @@ The startup term is a fixed reservation, not a measurement: the runner sets asid
 
 | Context | Timeout | Reasoning |
 |---------|---------|-----------|
-| Quick PR check | `300` (5min) | A floor only: the startup reservation raises it to at least 440s per scenario. Most single-turn RAG scenarios finish in 1-2 minutes |
+| Quick PR check | `300` (5min) | A floor only: the startup reservation raises it to at least 440s per scenario, more for multi-turn ones. RAG scenarios in the flagship baseline take 2 -- 15 minutes |
 | Standard CI run | `900` (default) | Covers multi-turn and multi-document scenarios |
 | Full benchmark | `1200` | Extra buffer for large-document and vision scenarios |
 

@@ -1,6 +1,6 @@
 ---
 name: contributor-triage
-description: "Load whenever the user is auditing, triaging, reviewing, or completing amd/gaia pull requests or issues — 'audit/triage PRs', 'what's outstanding', 'complete the ready PRs', 'merge what's ready', 'check third-party/external/community PRs or issues', 'approve workflows for contributors', 'what's left for the release', 'label good first issues', 'close stale issues', 'are contributor fixes in main/the release notes'. Outside contributors come first, bug fixes before features. A PR merges only with CI green, no conflicts, every comment addressed and an independent verifier pass. Runs a scanner for the ranked worklist, approves stalled fork CI for reviewed commits, drives the per-PR loop, and cuts release candidates at checkpoints. Parallel subagent mechanics: pr-backlog-triage. Reply wording: github-issue-response."
+description: "Load whenever the user is auditing, triaging, reviewing, or completing amd/gaia pull requests or issues — 'audit/triage PRs', 'what's outstanding', 'complete the ready PRs', 'merge what's ready', 'check third-party/external/community PRs or issues', 'approve workflows for contributors', 'what's left for the release', 'label good first issues', 'close stale issues', 'are contributor fixes in main/the release notes'. Outside contributors come first, bug fixes before features. A PR merges only with CI green, no conflicts, every comment addressed and an independent verifier pass, unless the user asks for the express lane (pr-backlog-triage). Runs a scanner for the ranked worklist, approves stalled fork CI for reviewed commits, drives the per-PR loop, and cuts release candidates at checkpoints. Parallel subagent mechanics: pr-backlog-triage. Reply wording: github-issue-response."
 ---
 
 # Contributor-first PR and issue triage
@@ -32,6 +32,9 @@ A PR is **ready** only when all four hold:
 
 The bar is strict by default and the **user** sets any waiver ("bug-only PRs, force-complete
 if comments are addressed"). A model never relaxes it on its own.
+The express lane in [`pr-backlog-triage`](../pr-backlog-triage/SKILL.md) is one such
+user-set waiver of the verifier and of unrelated CI failures, and applies only when the user
+asks for it.
 
 Authority: merge when the user has asked to complete PRs into `main`. Pushing a fix onto a
 PR branch is part of completing it. RC and final tags follow [`gaia-release`](../gaia-release/SKILL.md),

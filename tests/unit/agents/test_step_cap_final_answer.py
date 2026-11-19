@@ -676,7 +676,7 @@ def _forced_stops(agent, chat) -> list:
         m["content"]
         for m in _model_calls(agent, chat)[-1].kwargs["messages"]
         if isinstance(m.get("content"), str)
-        and m["content"].startswith("Maximum plan iterations")
+        and m["content"].startswith("No room for another plan")
     ]
 
 
@@ -706,17 +706,25 @@ def test_the_plan_cap_still_binds_late_and_asks_for_the_deliverables():
     assert len(forced) == 1
     assert "write them now from what you already have" in forced[0]
     assert "unverified" in forced[0]
+    # Honest numbers: what is left of the budget, not a plan count it never hit.
+    assert "of 10 steps left after 3 plans" in forced[0]
+    assert "Maximum plan iterations" not in forced[0]
 
 
 @pytest.mark.parametrize(
     "plans, cap, taken, limit, expected",
     [
         (3, 3, 15, 50, False),  # most of the budget left
-        (3, 3, 25, 50, True),  # half spent
+        (3, 3, 29, 50, False),
+        (3, 3, 30, 50, True),  # the first budget notice's 20 steps left
         (2, 3, 49, 50, False),  # under the plan count
         (9, 0, 49, 50, False),  # 0 = unlimited
-        (3, 3, 75, 150, True),
-        (3, 3, 74, 150, False),
+        (3, 3, 129, 150, False),
+        (3, 3, 130, 150, True),
+        # The long-horizon run: 500 of 1000 steps spent is not the end.
+        (9, 3, 530, 1000, False),
+        (9, 3, 979, 1000, False),
+        (9, 3, 980, 1000, True),
     ],
 )
 def test_plan_cap_reached(agent, plans, cap, taken, limit, expected):

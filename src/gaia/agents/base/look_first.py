@@ -15,6 +15,8 @@ import os
 import re
 from typing import List
 
+from gaia.agents.base.text_task import instruction_part
+
 #: A path-like token: has a separator, or ends in a short file extension.
 _PATH_TOKEN = re.compile(
     r"(?<![\w@])(?:[A-Za-z]:[\\/]|/)?[\w.\-]+(?:[\\/][\w.\-]+)+|"
@@ -36,7 +38,7 @@ def named_workspace_paths(request: str, root: str) -> List[str]:
     """
     root_real = os.path.realpath(root)
     found: List[str] = []
-    for token in _PATH_TOKEN.findall(request or ""):
+    for token in _PATH_TOKEN.findall(instruction_part(request)):
         token = token.rstrip(".")
         if not token or token in found:
             continue

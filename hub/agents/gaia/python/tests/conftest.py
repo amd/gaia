@@ -30,11 +30,36 @@ def _empty_hub_skill_catalog(monkeypatch):
 
 
 @pytest.fixture
-def flagship(monkeypatch, tmp_path):
-    """Build a network-isolated flagship for the prompt-prefix contract tests.
+def user_terminal(monkeypatch):
+    """Run the test as the user's terminal, not an agent tool or its child.
 
-    Imports are intentionally local: most hub tests do not build this agent and
-    should not need its optional runtime dependencies merely to collect.
+    Trust-changing skill calls refuse under an agent's marker, and pytest
+    inherits it when GAIA runs this suite. Opt in per module with
+    ``pytestmark = pytest.mark.usefixtures("user_terminal")``.
+    """
+    from gaia.skills import human_only
+
+    monkeypatch.delenv(human_only.AGENT_CHILD_ENV, raising=False)
+    token = human_only._IN_AGENT_TOOL.set(False)
+    yield
+    human_only._IN_AGENT_TOOL.reset(token)
+
+
+@pytest.fixture
+def flagship(make_flagship):
+    """A network-isolated flagship for the prompt-prefix contract tests."""
+    return make_flagship()
+
+
+@pytest.fixture
+def make_flagship(monkeypatch, tmp_path):
+    """Build network-isolated flagships, one fresh session per call.
+
+    Every session shares one GAIA home (one profile). ``build(work)`` starts a
+    session in *work* (default ``tmp_path / "work"``) and returns ``(agent,
+    model, doc)``. Imports are intentionally local: most hub tests do not build
+    this agent and should not need its optional runtime dependencies merely to
+    collect.
     """
     import contextlib
     import hashlib
@@ -122,13 +147,16 @@ def flagship(monkeypatch, tmp_path):
         "_embed_texts_batch",
         lambda self, texts: np.stack([fake_embedding(t) for t in texts]),
     )
-    work = tmp_path / "work"
-    work.mkdir()
-    monkeypatch.chdir(work)
-    doc = work / "handbook.md"
-    doc.write_text("# Safety handbook\n\nWear goggles in the lab.\n", encoding="utf-8")
+    built = []
 
-    with isolated_registry():
+    def build(work=None):
+        work = work or tmp_path / "work"
+        work.mkdir(parents=True, exist_ok=True)
+        monkeypatch.chdir(work)
+        doc = work / "handbook.md"
+        doc.write_text(
+            "# Safety handbook\n\nWear goggles in the lab.\n", encoding="utf-8"
+        )
         agent_config = importlib.import_module(
             "test_prompt_prefix_stability"
         ).GaiaAgentConfig
@@ -142,7 +170,9 @@ def flagship(monkeypatch, tmp_path):
             )
         )
         assert agent._memory_store is not None, "memory must be on for this test"
-        agent.conversation_history = SessionHistory(str(tmp_path / "history.sqlite3"))
+        agent.conversation_history = SessionHistory(
+            str(tmp_path / f"history-{len(built)}.sqlite3")
+        )
 
         class FakeRag:
             def __init__(self):
@@ -193,7 +223,12 @@ def flagship(monkeypatch, tmp_path):
         monkeypatch.setattr(
             agent.chat.llm_client._backend, "slot_count", lambda _model: 3
         )
+        built.append(agent)
+        return agent, model, doc
+
+    with isolated_registry():
         try:
-            yield agent, model, doc
+            yield build
         finally:
-            agent.close()
+            for agent in built:
+                agent.close()

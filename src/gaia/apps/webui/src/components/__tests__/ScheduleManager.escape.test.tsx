@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import * as api from '../../services/api';
+import * as api from '../../services/scheduleApi';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScheduleManager } from '../ScheduleManager';
 import { useChatStore } from '../../stores/chatStore';
 import { useScheduleStore } from '../../stores/scheduleStore';
 
 vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 beforeEach(() => {
     useChatStore.setState({ showSchedules: true });
@@ -47,19 +48,31 @@ describe('ScheduleManager', () => {
         expect(screen.getByText(/Try "every 30m"/).closest('.schedule-parsed-hint')).not.toBeNull();
     });
 
+    it('previews the next run the way the schedule list does', async () => {
+        vi.mocked(api.parseScheduleInput).mockResolvedValue({
+            valid: true,
+            description: 'Every 3 hours',
+            next_run_at: new Date(Date.now() + 3 * 3_600_000 + 30_000).toISOString(),
+        } as never);
+        render(<ScheduleManager />);
+        fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
+        fireEvent.change(screen.getByPlaceholderText(/Describe your schedule/), { target: { value: 'every 3 hours' } });
+        expect(await screen.findByText(/^Next run: .+ \(in 3h\)$/, {}, { timeout: 3000 })).toBeInTheDocument();
+    });
+
     it('keeps what was typed in the New schedule form when Escape closes the dialog', () => {
         const first = render(<ScheduleManager />);
         fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
         fireEvent.change(screen.getByLabelText('When to run'), { target: { value: 'every 3 hours' } });
         fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Stretch break' } });
-        fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Stand up and stretch.' } });
+        fireEvent.change(screen.getByLabelText('What GAIA does'), { target: { value: 'Stand up and stretch.' } });
         fireEvent.keyDown(document, { key: 'Escape' });
         first.unmount();
 
         render(<ScheduleManager />);
         expect(screen.getByLabelText('When to run')).toHaveValue('every 3 hours');
         expect(screen.getByLabelText('Name')).toHaveValue('Stretch break');
-        expect(screen.getByLabelText('Prompt')).toHaveValue('Stand up and stretch.');
+        expect(screen.getByLabelText('What GAIA does')).toHaveValue('Stand up and stretch.');
     });
 
     it('starts with the form closed again after Cancel', () => {
@@ -81,7 +94,7 @@ describe('ScheduleManager', () => {
         fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
         fireEvent.change(screen.getByLabelText('When to run'), { target: { value: 'every 3 hours' } });
         fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Stretch break' } });
-        fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Stand up and stretch.' } });
+        fireEvent.change(screen.getByLabelText('What GAIA does'), { target: { value: 'Stand up and stretch.' } });
         fireEvent.click(screen.getByRole('button', { name: /^Create/ }));
         expect(createSchedule).toHaveBeenCalled();
         first.unmount();

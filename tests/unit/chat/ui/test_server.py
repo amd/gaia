@@ -937,6 +937,53 @@ class TestSystemStatus:
         assert data["model_downloaded"] is True
         assert data["default_model_size_gb"] == 23.3
 
+    @patch("httpx.AsyncClient")
+    def test_system_status_sizes_match_setup(self, mock_httpx_cls, client):
+        """Lemonade's 21.7 (GiB) for Qwen3.6 reads as GAIA's 23.3 GB; a model
+        GAIA has no figure for keeps Lemonade's."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "TinyModel-0.5B-GGUF",
+            "all_models_loaded": [
+                {
+                    "model_name": "TinyModel-0.5B-GGUF",
+                    "type": "llm",
+                    "recipe_options": {"ctx_size": 4096},
+                }
+            ],
+        }
+        catalog = {
+            "data": [
+                {"id": "TinyModel-0.5B-GGUF", "downloaded": True, "size": 0.4},
+                {"id": "Qwen3.6-35B-A3B-GGUF", "downloaded": True, "size": 21.7},
+            ]
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/models" in url:
+                return make_response(200, catalog)
+            return make_response(200, {})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        client.put("/api/settings", json={"custom_model": "Qwen3.6-35B-A3B-GGUF"})
+        data = client.get("/api/system/status").json()
+        assert data["model_size_gb"] == 0.4
+        assert data["default_model_size_gb"] == 23.3
+
     @pytest.mark.parametrize(
         "query, expected",
         [("", ("new chat", False)), ("?fresh=true", ("model pick retry", True))],
@@ -1234,7 +1281,10 @@ class TestCustomModelIsTheChosenModel:
 
         assert resp.status_code == 409
         detail = resp.json()["detail"]
-        assert "Can't switch to big-model · othercloud: Local only is on." in detail
+        assert (
+            "Can't switch to big-model · othercloud: Local only is on, so it was blocked: it is a cloud model."
+            in detail
+        )
         assert "Settings > Privacy" in detail and "gaia config" not in detail
         assert asked == [("GET", "models?show_all=true")]
         assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
@@ -1443,6 +1493,8 @@ class TestNetworkPolicySetting:
                 "severity": "warning",
                 "url": None,
                 "reason": "server refused",
+                "cause": None,
+                "models": None,
             }
         ]
 
@@ -1465,6 +1517,8 @@ class TestNetworkPolicySetting:
                 "severity": "info",
                 "url": "http://127.0.0.1:1234",
                 "reason": None,
+                "cause": None,
+                "models": None,
             }
         ]
 
@@ -1634,7 +1688,7 @@ class TestSessionEndpoints:
     def test_create_session_microsoft_mail_provider(self, client):
         resp = client.post(
             "/api/sessions",
-            json={"agent_type": "email", "mail_provider": "microsoft"},
+            json={"mail_provider": "microsoft"},
         )
         assert resp.status_code == 200
         sid = resp.json()["id"]
@@ -1676,7 +1730,7 @@ class TestSessionEndpoints:
         assert resp.status_code == 422
         detail = resp.json()["detail"]
         assert "'data'" in detail
-        assert "email, gaia" in detail
+        assert "Registered agent ids: gaia." in detail
         assert client.get("/api/sessions").json()["total"] == 0
 
     def test_a_legacy_chat_id_is_accepted_but_not_listed(
@@ -1724,15 +1778,14 @@ class TestSessionEndpoints:
     def test_the_listed_ids_include_every_accepted_one(
         self, client, gaia_only_registry
     ):
-        """A sidecar id is accepted without a registry entry, so it is listed."""
+        """Every id the endpoint accepts is one it lists, and nothing more."""
         assert (
-            client.post("/api/sessions", json={"agent_type": "email"}).status_code
-            == 200
+            client.post("/api/sessions", json={"agent_type": "gaia"}).status_code == 200
         )
         detail = client.post("/api/sessions", json={"agent_type": "data"}).json()[
             "detail"
         ]
-        assert "Registered agent ids: email, gaia." in detail
+        assert "Registered agent ids: gaia." in detail
 
     def test_update_session_mail_provider(self, client):
         sid = client.post("/api/sessions", json={}).json()["id"]
@@ -2348,6 +2401,21 @@ class TestSessionDocumentEndpoints:
             f"/api/sessions/{session_id}/documents", json={"document_id": "nonexistent"}
         )
         assert resp.status_code == 404
+
+    def test_attach_document_removed_mid_request_is_not_reported_attached(
+        self, client, db, monkeypatch
+    ):
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+        # The document passes the existence check, then is gone when the row is written.
+        monkeypatch.setattr(db, "get_document", lambda doc_id: {"id": doc_id})
+
+        resp = client.post(
+            f"/api/sessions/{session_id}/documents", json={"document_id": "gone"}
+        )
+
+        assert resp.status_code == 409
+        assert "try again" in resp.json()["detail"]
+        assert client.get(f"/api/sessions/{session_id}").json()["document_ids"] == []
 
     def test_detach_document(self, client, db):
         create_resp = client.post("/api/sessions", json={})

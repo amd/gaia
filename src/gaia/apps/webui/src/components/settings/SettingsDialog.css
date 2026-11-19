@@ -15,8 +15,8 @@
 
 .settings-dialog {
     display: flex;
-    width: min(920px, 100%);
-    height: min(680px, 100%);
+    width: min(960px, 100%);
+    height: min(820px, 100%);
     overflow: hidden;
     background: var(--bg-primary);
     border: 1px solid var(--border-light);
@@ -40,7 +40,7 @@
     padding: 4px 10px 12px;
     color: var(--text-primary);
     font-size: 16px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .settings-nav-item {
@@ -60,12 +60,13 @@
 .settings-nav-item.is-active {
     background: var(--bg-active);
     color: var(--text-primary);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .settings-body {
     position: relative;
     display: flex;
+    flex-direction: column;
     flex: 1;
     min-width: 0;
     min-height: 0;
@@ -83,7 +84,7 @@
     position: absolute;
     top: 14px;
     inset-inline-end: 14px;
-    z-index: 1;
+    z-index: 2;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -99,12 +100,31 @@
     color: var(--text-primary);
 }
 
+/* Settings > About: one link per line. */
+.settings-about-links {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    list-style: none;
+}
+
+.settings-about-links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent);
+    font-size: 13.5px;
+}
+
 /* "Back to Setup" after a Setup row opened another section. */
 .settings-back {
     display: inline-flex;
     align-items: center;
+    flex: none;
+    align-self: flex-start;
     gap: 4px;
-    margin-block-end: 8px;
+    margin-block: 14px 0;
+    margin-inline: 26px 60px;
     padding-block: 2px;
     padding-inline: 2px 6px;
     border-radius: var(--radius-sm);
@@ -119,7 +139,7 @@
 
 /* The setting a Setup row pointed at, marked for a moment after landing. */
 .settings-target-hit {
-    scroll-margin-top: 64px;
+    scroll-margin-top: 76px;
     outline: 2px solid var(--accent);
     outline-offset: 4px;
 }
@@ -140,7 +160,24 @@
 .settings-pane-title {
     color: var(--text-primary);
     font-size: 18px;
-    font-weight: 600;
+    font-weight: 500;
+}
+
+/* The tab title stays in view, and rows scroll under it rather than under the close button. */
+.settings-scroll > .settings-pane > .settings-pane-title {
+    position: sticky;
+    top: -24px;
+    z-index: 1;
+    margin: -24px -28px 0;
+    padding: 24px 28px 10px;
+    background: var(--bg-primary);
+}
+
+/* Below "Back to Setup" the title must not reach up over the button. */
+.settings-scroll > .settings-back + .settings-pane > .settings-pane-title {
+    top: 0;
+    margin-top: 0;
+    padding-top: 0;
 }
 
 .settings-pane-lede {
@@ -174,7 +211,7 @@
 .settings-label {
     color: var(--text-primary);
     font-size: 13.5px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .settings-hint,
@@ -531,6 +568,11 @@
     margin-inline-start: 0;
 }
 
+/* One fact per line, so two never run into each other. */
+.model-chips .settings-more > .model-row-meta {
+    display: block;
+}
+
 /* The card that answers "what am I using?". */
 .model-in-use {
     align-items: flex-start;
@@ -548,7 +590,7 @@
     max-inline-size: 100%;
     color: var(--text-primary);
     font-size: 17px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.3;
     overflow-wrap: anywhere;
 }
@@ -615,7 +657,7 @@
 
 .settings-disclosure-title {
     font-size: 13.5px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .settings-disclosure-hint {
@@ -720,9 +762,14 @@
     color: var(--text-primary);
 }
 
-.settings-more[open] {
+/* Flex open or closed: a display change on opening would skip the grow-open ease.
+   The gap only when open: closed, the hidden content box is still a flex item. */
+.settings-more {
     display: flex;
     flex-direction: column;
+}
+
+.settings-more[open] {
     gap: 3px;
 }
 
@@ -739,9 +786,37 @@
 
 .skill-row-desc {
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 1;
+    /* One line: a fade down the block would dim the whole line, so fade its end. */
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self block);
     -webkit-box-orient: vertical;
     overflow: hidden;
+}
+
+.skill-row-desc.is-open {
+    display: block;
+    overflow: visible;
+}
+
+.skill-row-desc.is-toggle {
+    cursor: pointer;
+}
+
+.skill-row-more {
+    align-self: flex-start;
+    padding: 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-decoration: none;
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+.skill-row-more:hover {
+    color: var(--text-primary);
+    text-decoration: underline;
 }
 
 .model-row > button,
@@ -841,6 +916,12 @@
         padding: 18px 16px 28px;
     }
 
+    .settings-scroll > .settings-pane > .settings-pane-title {
+        top: -18px;
+        margin: -18px -16px 0;
+        padding: 18px 16px 10px;
+    }
+
     .model-in-use-field {
         grid-template-columns: minmax(0, 1fr);
         gap: 4px;
@@ -898,7 +979,7 @@
     text-align: start;
 }
 
-.settings-setup-row:hover {
+.settings-setup-row:not(.is-fact):hover {
     background: var(--bg-hover);
 }
 
@@ -916,7 +997,8 @@
     font-size: 15px;
 }
 
-.messaging-steps {
+.messaging-steps,
+.setup-steps {
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -925,13 +1007,15 @@
     list-style: none;
 }
 
-.messaging-step {
+.messaging-step,
+.setup-step {
     display: flex;
     align-items: flex-start;
     gap: 12px;
 }
 
-.messaging-step-number {
+.messaging-step-number,
+.setup-step-number {
     display: inline-flex;
     flex: none;
     align-items: center;
@@ -942,10 +1026,11 @@
     background: var(--bg-tertiary);
     color: var(--text-primary);
     font-size: 12.5px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
-.messaging-step-body {
+.messaging-step-body,
+.setup-step-body {
     display: flex;
     flex: 1;
     flex-direction: column;
@@ -953,7 +1038,8 @@
     min-inline-size: 0;
 }
 
-.messaging-step-body > p {
+.messaging-step-body > p,
+.setup-step-body > p {
     margin: 0;
     line-height: 1.5;
 }
@@ -999,7 +1085,7 @@
     color: var(--text-primary);
     font-family: var(--font-mono);
     font-size: 26px;
-    font-weight: 600;
+    font-weight: 500;
     letter-spacing: 0.12em;
     user-select: all;
 }
@@ -1024,7 +1110,7 @@
     margin: 0;
     color: var(--text-primary);
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .messaging-answering-text {
@@ -1043,6 +1129,86 @@
 .messaging-footer {
     padding-block-start: 12px;
     border-block-start: 1px solid var(--border-light);
+}
+
+.messaging-always-list {
+    margin: 4px 0 8px;
+    padding-inline-start: 1.25em;
+    overflow-wrap: anywhere;
+}
+
+/* ── Automations ───────────────────────────────────────────────── */
+
+.automation-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.automation-card.is-paused .automation-name,
+.automation-card.is-paused .automation-detail {
+    color: var(--text-secondary);
+}
+
+.automation-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-inline-size: 0;
+}
+
+.automation-name {
+    margin: 0;
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+}
+
+.automation-kind,
+.automation-paused {
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
+.automation-paused {
+    background: transparent;
+    border: 1px solid var(--border-light);
+}
+
+.automation-when {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin: 0;
+}
+
+.automation-detail {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    animation: fade-cut-block both;
+    animation-timeline: scroll(self block);
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.automation-check {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.automation-messaging {
+    align-self: flex-start;
 }
 
 /* Add skills from a link */
@@ -1168,7 +1334,9 @@
     display: block;
     overflow: hidden;
     white-space: nowrap;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 
 .skill-link-tag {
@@ -1205,3 +1373,22 @@
 .skill-link-perms code {
     font-size: 11px;
 }
+
+/* A connector's outside setup as numbered steps; the form below is the last one. */
+.connector-guide {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.setup-step-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    text-decoration: none;
+}
+
+[dir='rtl'] .setup-step-link-icon {
+    transform: scaleX(-1);
+}
+

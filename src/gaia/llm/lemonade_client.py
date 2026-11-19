@@ -42,14 +42,12 @@ from typing import (
     Union,
 )
 
-import openai  # For exception types
 import requests
-
-# Import OpenAI client for internal use
-from openai import OpenAI
 
 from gaia.env import child_env, load_env
 from gaia.llm import call_ledger, stream_watchdog
+from gaia.llm.degenerate_output import DegenerateOutput, DegenerateOutputGuard
+from gaia.llm.lazy_openai import OpenAI, loaded_openai_errors, openai
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -104,7 +102,7 @@ from gaia.ports import (
 )
 from gaia.utils import awake_clock, perf_trace
 from gaia.utils.terminal import windows_hidden_popen_kwargs
-from gaia.version import parse_version
+from gaia.version import base_version, parse_version
 
 # For the module-level helpers; the client class keeps its own ``self.log``.
 log = get_logger(__name__)
@@ -148,12 +146,33 @@ def _embedded_lemonade_url() -> str:
     alongside its API key. Nothing exports either, so a client that assumed the
     default port looked at an address with nothing on it and reported the models
     as missing — while the embedded server held every one of them.
+
+    A stopped embedded server resolves to the port it last ran on, where the
+    daemon starts it again, never to the default port: another Lemonade may be
+    listening there, and it is not the one this install was set up with.
     """
     state = _read_embedded_lemonade_state()
     port = state.get("port") if state else None
     if isinstance(port, int) and port > 0:
         return f"http://{DEFAULT_HOST}:{port}"
+    port = _stopped_gaia_lemonade_port()
+    if port is not None:
+        return f"http://{DEFAULT_HOST}:{port}"
     return DEFAULT_LEMONADE_URL
+
+
+def _stopped_gaia_lemonade_port() -> Optional[int]:
+    """The port GAIA's own installed server last ran on, or None.
+
+    None too when GAIA's server is not installed, or has never started.
+    """
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, is_gaias_to_start
+
+    embedded = EmbeddedLemonade()
+    if not is_gaias_to_start(embedded):
+        return None
+    port = embedded.last_port()
+    return port if isinstance(port, int) and not isinstance(port, bool) else None
 
 
 def _read_embedded_lemonade_state(
@@ -194,6 +213,12 @@ def _read_embedded_lemonade_state(
         if not pid_exists(pid):
             return None
     return state
+
+
+def gaia_lemonade_port() -> Optional[int]:
+    """The port of GAIA's own server: where it runs, or last ran while stopped."""
+    state = _read_embedded_lemonade_state()
+    return state["port"] if state else _stopped_gaia_lemonade_port()
 
 
 def running_embedded_lemonade_url() -> Optional[str]:
@@ -472,10 +497,15 @@ def resolve_default_chat_model() -> str:
     ``~/.gaia/config.json``'s ``default_model`` — which ``gaia init`` sets from
     the hardware — else :data:`DEFAULT_MODEL_NAME`. Every agent resolves the
     same way, so switching agents never evicts the resident model.
+
+    A ``hybrid`` default resolves to its cheap model here: only the flagship
+    agent routes per turn, and it reads ``default_model`` itself.
     """
     from gaia.config import GaiaConfig
+    from gaia.llm.hybrid import start_model
 
-    return GaiaConfig.load().resolve_model(None, DEFAULT_MODEL_NAME)
+    config = GaiaConfig.load()
+    return start_model(config.resolve_model(None, DEFAULT_MODEL_NAME), config)
 
 
 def resolve_chat_model() -> str:
@@ -483,8 +513,10 @@ def resolve_chat_model() -> str:
     Agent UI or TUI, else :func:`resolve_default_chat_model`. May be a cloud model.
     """
     from gaia.config import GaiaConfig
+    from gaia.llm.hybrid import start_model
 
-    return GaiaConfig.load().last_model or resolve_default_chat_model()
+    config = GaiaConfig.load()
+    return start_model(config.last_model, config) or resolve_default_chat_model()
 
 
 #: Default chat models that also read images, so indexing a scan loads no second model.
@@ -541,8 +573,11 @@ def vision_off_reason(base_url: Optional[str] = None) -> str:
     return VISION_OFF_ON_NPU if installed else VISION_NOT_INSTALLED
 
 
-def resolve_default_vision_model() -> Optional[str]:
+def resolve_default_vision_model(chat_model: Optional[str] = None) -> Optional[str]:
     """The model that reads text in scans and images when nobody passed one.
+
+    *chat_model* is the model chat runs now, for a session that switched;
+    default: the model chat reopens on.
 
     None while the chat model runs on the NPU: reading images is off there, so
     no second model is loaded next to it (:func:`vision_off_reason` says why).
@@ -557,7 +592,7 @@ def resolve_default_vision_model() -> Optional[str]:
 
     config = GaiaConfig.load()
     model = resolve_default_chat_model()
-    current = config.last_model or model
+    current = chat_model or config.last_model or model
     cloud = current.startswith("claude-") or bool(
         cloud_model_provider(current) or is_cloud_model(current)
     )
@@ -574,17 +609,22 @@ def resolve_default_vision_model() -> Optional[str]:
     return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
 
-def resident_vision_model(configured: str, base_url: Optional[str] = None) -> str:
+def resident_vision_model(
+    configured: str,
+    base_url: Optional[str] = None,
+    client: Optional["LemonadeClient"] = None,
+) -> str:
     """The already-loaded vision model to read images with, else ``configured``.
 
     Reading a scan with a model that is already resident spares a reload and
     evicting chat. Only :data:`VISION_CHAT_MODELS` count, because those have
     been tested; a model named outside that set was chosen on purpose and stays.
+    The server asked is *client*'s when given, else the one at *base_url*.
     """
     if configured not in VISION_CHAT_MODELS:
         return configured
     try:
-        loaded = LemonadeClient(base_url=base_url).health_check()
+        loaded = (client or LemonadeClient(base_url=base_url)).health_check()
     except LemonadeClientError as e:
         # VLMClient.check_availability reports the unreachable server next.
         log.warning("Could not read the loaded models from Lemonade: %s", e)
@@ -656,6 +696,14 @@ EMBEDDER_MODELS = frozenset(
 #: than its ubatch (default 512), so every embedder load carries this one.
 EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
+#: A reranker scores query + chunk as one input, which must fit one ubatch; the
+#: ubatch cannot exceed the batch (default 2048), so both are raised together.
+RERANKER_BATCH_TOKENS = 4096
+RERANKER_LLAMACPP_ARGS = (
+    f"--batch-size {RERANKER_BATCH_TOKENS} --ubatch-size {RERANKER_BATCH_TOKENS}"
+)
+#: Longest query sent to the reranker, so a full chunk plus it fits the ubatch.
+RERANK_QUERY_MAX_CHARS = 1024
 #: Headroom for the BOS/EOS tokens the server adds to every input.
 _EMBED_RESERVED_TOKENS = 48
 #: Worst realistic ratio: Gemma's tokenizer gives every digit its own token.
@@ -841,9 +889,13 @@ NPU_BACKEND_INSTALL_TIMEOUT = 600  # seconds; the FastFlowLM release download
 # slot over one shared KV pool keeps the conversation resident, so the RAM copy
 # buys nothing; the similarity floor keeps a short side prompt off its slot. The
 # third slot holds the full tool list primed, out of the side jobs' way.
+# llama.cpp keeps up to 32 context checkpoints per slot in host RAM (63 MB each
+# for Qwen3.6-35B); 16 halves that and re-reads no more tokens on a new chat,
+# an edit or a regenerate.
 # Args the user saved for the model in Lemonade win (users_llamacpp_args).
 CHAT_LLAMACPP_ARGS = (
-    "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5"
+    "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5 "
+    "--ctx-checkpoints 16"
 )
 #: Slots requests are pinned to (llama.cpp ``id_slot``). Left to LRU, a memory
 #: extraction landed on the conversation's slot and overwrote it, and the next
@@ -860,6 +912,7 @@ FULL_TOOLS_SLOT = 2
 _GAIA_SAVED_CHAT_ARGS = frozenset(
     {
         CHAT_LLAMACPP_ARGS,
+        "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
         "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
         "--parallel 1",
     }
@@ -1237,6 +1290,16 @@ def _free_memory_for(url: str, model_id: str):
     return npu_free_memory(_system_info(url), read_os_memory()), resident
 
 
+class _Resident(dict):
+    """``{loaded model: ctx}``, plus the chat models a chat-model load unloads."""
+
+    #: Lemonade keeps one chat model: loading another unloads these first.
+    replaced_by_chat_load: Tuple[str, ...] = ()
+    #: The GPU pool's free memory once the NPU models among them are unloaded.
+    #: Their memory is RAM, which is only part of what a GPU pool counts.
+    free_without_npu_chat: Any = None
+
+
 def _free_memory_snapshot(url: str):
     """``(FreeMemory or None, {loaded model: ctx})`` for the Lemonade at *url*.
 
@@ -1244,16 +1307,36 @@ def _free_memory_snapshot(url: str):
     :class:`~gaia.llm.model_fit.ModelFitError` when its ``/system-info`` is
     unusable.
     """
+    import dataclasses
+
     from gaia.llm.model_fit import free_memory, read_os_memory
 
-    free = free_memory(_system_info(url), read_os_memory())
+    os_memory = read_os_memory()
+    free = free_memory(_system_info(url), os_memory)
     health = LemonadeClient(base_url=url, verbose=False).health_check(timeout=10)
-    resident = {}
+    resident = _Resident()
+    chat = []
     for entry in health.get("all_models_loaded") or []:
         name = entry.get("model_name") or entry.get("id")
         if name:
             options = entry.get("recipe_options") or {}
             resident[name] = int(options.get("ctx_size") or 0)
+            if entry.get("type") in ("llm", "vlm") and entry.get("recipe") != "cloud":
+                chat.append(name)
+    if (health.get("max_models") or {}).get("llm") == 1:
+        resident.replaced_by_chat_load = tuple(chat)
+        npu_gb = 0.0
+        for name in chat:
+            leaving = find_model_requirement(name)
+            if leaving is not None and leaving.size_gb and runs_on_npu(name):
+                npu_gb += _footprint_gb(leaving, resident[name] or leaving.min_ctx_size)
+        if npu_gb and free is not None:
+            resident.free_without_npu_chat = free_memory(
+                _system_info(url),
+                dataclasses.replace(
+                    os_memory, ram_available_gb=os_memory.ram_available_gb + npu_gb
+                ),
+            )
     return free, resident
 
 
@@ -1268,14 +1351,35 @@ def _footprint_gb(requirement: "ModelRequirement", ctx: int) -> float:
 
 
 def _with_own_memory(free, resident, requirement: "ModelRequirement"):
-    """*free* plus what *requirement*'s model already holds: a reload replaces it."""
+    """*free* plus the memory this load gets back: what *requirement*'s model
+    already holds (a reload replaces it), and what the chat model it replaces
+    holds, which Lemonade unloads first. Without the second, switching between
+    a model's NPU and GPU builds is sized against the build being left.
+    """
     from gaia.llm.model_fit import FreeMemory
 
+    back = 0.0
     for name, ctx in resident.items():
         if _model_ids_match(name, requirement.model_id):
-            own = _footprint_gb(requirement, ctx or requirement.min_ctx_size)
-            return FreeMemory(free.free_gb + own, free.limit_gb + own)
-    return free
+            back += _footprint_gb(requirement, ctx or requirement.min_ctx_size)
+    if requirement.model_type in (ModelType.LLM, ModelType.VLM):
+        on_npu = runs_on_npu(requirement.model_id)
+        if not on_npu:
+            free = getattr(resident, "free_without_npu_chat", None) or free
+        for name in getattr(resident, "replaced_by_chat_load", ()):
+            leaving = find_model_requirement(name)
+            if (
+                leaving is None
+                or not leaving.size_gb
+                or _model_ids_match(name, requirement.model_id)
+                # Across the two pools the snapshot's own figure applies, or none.
+                or runs_on_npu(name) != on_npu
+            ):
+                continue
+            back += _footprint_gb(leaving, resident[name] or leaving.min_ctx_size)
+    if not back:
+        return free
+    return FreeMemory(free.free_gb + back, free.limit_gb + back)
 
 
 def free_memory_verdict(url: str, requirement: "ModelRequirement", window: int):
@@ -2142,7 +2246,7 @@ MODELS = {
         max_ctx_size=131072,
         kv_bytes_per_token=36864,
     ),
-    # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
+    # --- Gemma 4 E2B: the small on-device NPU model ---
     # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
     # ``gemma4-it:e2b``), NOT the llama.cpp GGUF variant — only the FLM build
     # runs on the Strix Halo NPU. Validated on hardware: device=npu,
@@ -2233,14 +2337,10 @@ MODELS = {
         # Q8_0 weights; held in memory beside the chat model (CO_RESIDENT_MODELS).
         size_gb=0.33,
     ),
-    # --- NPU-native FLM embedder for the NPU profile (#1744) ---
-    # EmbeddingGemma 300M built for the FastFlowLM/NPU backend. On a shared-
-    # memory Ryzen AI APU a GGUF embedder runs on Vulkan/llama.cpp and
-    # reclaims the memory the FLM chat model holds, so loading it evicts the
-    # chat model — every chat turn then thrashes NPU<->Vulkan (#1676). Keeping
-    # the embedder on the same FLM/NPU backend as the chat model lets both stay
-    # co-resident. Built-in Lemonade *-FLM model: pull by name only (no recipe;
-    # passing recipe triggers user-model registration and 400s — #1655).
+    # --- NPU-native FLM embedder (#1744) ---
+    # EmbeddingGemma 300M built for FastFlowLM. No profile uses it: its search
+    # ranked at chance on FLM 1.0.7 (GaiaConfig.TESTED_EMBEDDING_DEVICES).
+    # Built-in Lemonade *-FLM model: pull by name only (no recipe — #1655).
     "embed-gemma-flm": ModelRequirement(
         model_type=ModelType.EMBEDDING,
         model_id="embed-gemma-300m-FLM",
@@ -3873,6 +3973,10 @@ class LemonadeAuthError(LemonadeClientError):
     """Raised when Lemonade returns 401 Unauthorized (wrong or missing API key)."""
 
 
+class ModelListShapeError(LemonadeClientError):
+    """The server answered ``/models``, but not with a list of model objects."""
+
+
 class LemonadeUnresponsiveError(LemonadeClientError):
     """Lemonade accepted the connection but sent no answer before the read
     timeout: it is up and busy (often loading a model), or stuck — not down."""
@@ -4080,6 +4184,20 @@ class ContextReloadUnverifiedError(LemonadeClientError):
     """Reloads at a larger ``ctx_size`` keep reporting a smaller window."""
 
 
+#: Said when a reply stream turned into noise (``degenerate_output``).
+OUTPUT_CORRUPTED_MESSAGE = (
+    "The model's answer came back corrupted, so GAIA stopped it. "
+    "Send your message again."
+)
+
+
+class ModelOutputCorruptedError(LemonadeClientError):
+    """A streamed reply turned into noise and was stopped before it was shown."""
+
+    def __init__(self, message: str = OUTPUT_CORRUPTED_MESSAGE):
+        super().__init__(message)
+
+
 class UsersServerUnchangedError(LemonadeClientError):
     """A request would change the setup of the user's own Lemonade Server.
 
@@ -4087,7 +4205,7 @@ class UsersServerUnchangedError(LemonadeClientError):
     """
 
 
-def _cloud_error_status(error: openai.APIError) -> Optional[int]:
+def _cloud_error_status(error: "openai.APIError") -> Optional[int]:
     """Read numeric status fields; never interpret or display upstream text."""
     status = getattr(error, "status_code", None)
     if (
@@ -5275,7 +5393,7 @@ class LemonadeClient:
         except (
             LemonadeClientError,
             requests.exceptions.RequestException,
-            openai.APIError,
+            *loaded_openai_errors("APIError"),
         ) as e:
             if not self._recover_stopped_gaia_lemonade(e, model):
                 raise
@@ -5295,7 +5413,7 @@ class LemonadeClient:
         except (
             LemonadeClientError,
             requests.exceptions.RequestException,
-            openai.APIError,
+            *loaded_openai_errors("APIError"),
         ) as e:
             if yielded or not self._recover_stopped_gaia_lemonade(e, model):
                 raise
@@ -5770,8 +5888,9 @@ class LemonadeClient:
             model_name: Name of the model
 
         Returns:
-            Dict with ``id``, ``downloaded``, and ``size_gb`` — the catalog's
-            ``size``, or a name-based estimate when the catalog lacks one
+            Dict with ``id``, ``downloaded``, ``size_gb`` — the catalog's
+            ``size``, or a name-based estimate when the catalog lacks one — and
+            ``listed``, False when the catalog doesn't know the model at all
 
         Raises:
             LemonadeClientError: If the catalog can't be fetched
@@ -5786,12 +5905,14 @@ class LemonadeClient:
                         float(size) if size else self._estimate_model_size(model_name)
                     ),
                     "downloaded": bool(model.get("downloaded", False)),
+                    "listed": True,
                 }
 
         return {
             "id": model_name,
             "size_gb": self._estimate_model_size(model_name),
             "downloaded": False,
+            "listed": False,
         }
 
     def _model_storage_free_bytes(self) -> Tuple[int, str]:
@@ -7009,20 +7130,39 @@ class LemonadeClient:
                 )
                 return
 
+            def _open_chunks():
+                return self._stream_chat_chunks(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_completion_tokens=max_completion_tokens,
+                    stop=stop,
+                    timeout=timeout,
+                    logprobs=logprobs,
+                    tools=tools,
+                    **kwargs,
+                )
+
             produced = False
-            for chunk in self._stream_chat_chunks(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_completion_tokens=max_completion_tokens,
-                stop=stop,
-                timeout=timeout,
-                logprobs=logprobs,
-                tools=tools,
-                **kwargs,
-            ):
-                produced = True
-                yield chunk
+            try:
+                for chunk in _open_chunks():
+                    produced = True
+                    yield chunk
+            except LemonadeClientError as e:
+                if produced:
+                    raise
+
+                # A client outside the lease can evict the model after the
+                # check above; reload once, as chat_completions does.
+                def _reopen_chunks():
+                    check_cancelled(f"'{model}' to reload")
+                    return _open_chunks()
+
+                for chunk in self._execute_with_auto_download(
+                    _reopen_chunks, model, auto_download, error=e
+                ):
+                    produced = True
+                    yield chunk
 
             # A cloud model that streamed nothing has not "finished" — the
             # gateway accepted the request and sent no tokens. Falling back is
@@ -7315,14 +7455,26 @@ class LemonadeClient:
             # Use the client to stream responses
             self.log.debug(f"Starting streaming chat completion with model: {model}")
             tokens_generated = 0
-            for chunk in self._model_retrier(model, gone_server_waits=True).stream(
+            guard = DegenerateOutputGuard()
+            chunks = self._model_retrier(model, gone_server_waits=True).stream(
                 _open_stream,
                 is_output=_chunk_carries_output,
                 what="Streaming chat completion",
                 state=state,
-            ):
-                tokens_generated += 1
-                yield chunk
+            )
+            try:
+                for chunk in chunks:
+                    for out in guard.feed(chunk):
+                        tokens_generated += 1
+                        yield out
+                for out in guard.flush():
+                    tokens_generated += 1
+                    yield out
+            except DegenerateOutput as noise:
+                chunks.close()
+                raise self._corrupted_output(
+                    model, messages, noise, tokens_generated
+                ) from noise
 
             self.log.debug(
                 f"Completed streaming chat completion. Generated {tokens_generated} tokens."
@@ -7330,6 +7482,8 @@ class LemonadeClient:
             if tokens_generated and self.cloud_model_provider(model):
                 _remember_cloud_availability(model, ok=True)
 
+        except ModelOutputCorruptedError:
+            raise
         except openai.AuthenticationError as e:
             if self.cloud_model_provider(model):
                 if _own_key_refused(getattr(e, "body", None)):
@@ -7381,6 +7535,50 @@ class LemonadeClient:
             )
         finally:
             self._record_retries(state)
+
+    def _corrupted_output(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        noise: DegenerateOutput,
+        chunks_shown: int,
+    ) -> ModelOutputCorruptedError:
+        """Log a reply that turned into noise and unload the model that sent it.
+
+        The noise outlived new conversations on the same loaded model, so the
+        next message must get a freshly loaded one.
+        """
+        chars = sum(len(str(m.get("content") or "")) for m in messages)
+        self.log.error(
+            "%s's reply turned into noise (%s %r) after %d chunk(s); stopped it. "
+            "Request: %d messages, %d chars (~%d tokens).",
+            model,
+            noise.reason,
+            noise.token[:40],
+            chunks_shown,
+            len(messages),
+            chars,
+            chars // 4,
+        )
+        if self.cloud_model_provider(model) or is_cloud_model(model):
+            return ModelOutputCorruptedError()
+        if self.is_users_server():
+            self.log.error(
+                "Left %s loaded: GAIA does not unload models on your own "
+                "Lemonade Server. Unload or reload it there if this repeats.",
+                model,
+            )
+            return ModelOutputCorruptedError()
+        try:
+            self.unload_model(model, ignore_if_not_loaded=True)
+        except LemonadeClientError as e:
+            self.log.error(
+                "Could not unload %s after its corrupted reply, so the next "
+                "message may reuse the same state: %s",
+                model,
+                e,
+            )
+        return ModelOutputCorruptedError()
 
     @guard_inference()
     def completions(
@@ -7704,6 +7902,33 @@ class LemonadeClient:
             self.load_model(model_name, prompt=False)
         finally:
             self.model = active_model
+
+    @guard_inference()
+    def rerank(
+        self,
+        query: str,
+        documents: List[str],
+        model: str,
+        timeout: int = DEFAULT_REQUEST_TIMEOUT,
+    ) -> Dict[str, Any]:
+        """Score *documents* against *query* with a downloaded Lemonade reranker.
+
+        The caller chooses a model from the downloaded catalog. This method does
+        not pull models, so a retrieval feature can never start a surprise model
+        download.
+        """
+        if not query.strip():
+            raise ValueError("Reranking query must not be empty.")
+        if not documents:
+            raise ValueError("Reranking requires at least one document.")
+        if not model.strip():
+            raise ValueError("Reranking requires a model ID.")
+        return self._send_request(
+            "POST",
+            f"{self.base_url}/rerank",
+            data={"model": model, "query": query, "documents": documents},
+            timeout=timeout,
+        )
 
     @guard_inference()
     def generate_audio(
@@ -8111,7 +8336,7 @@ class LemonadeClient:
             if bad is None:
                 return
             got = f"entry {bad[0]} of 'data' as a JSON {_json_type_name(bad[1])}"
-        raise LemonadeClientError(
+        raise ModelListShapeError(
             f"The model list{self._from_server()} isn't in the expected shape: "
             f"expected an object whose 'data' is a list of model objects, got "
             f"{got}. Check that LEMONADE_BASE_URL points at Lemonade Server and "
@@ -10739,7 +10964,7 @@ class LemonadeClient:
 
         check_lemonade_version(actual_version, self.base_url)
 
-        if actual_version != expected_version and not quiet:
+        if base_version(actual_version) != base_version(expected_version) and not quiet:
             print(
                 f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version: "
                 f"v{actual_version} (expected v{expected_version})"

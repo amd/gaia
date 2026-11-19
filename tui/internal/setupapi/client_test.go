@@ -12,6 +12,14 @@ import (
 	"github.com/amd/gaia/tui/internal/daemon"
 )
 
+// A cold start has no daemon to attach to, and the probe must not create one
+// just to read a verdict. NewAttachedDaemon is the constructor that says so.
+func TestNewAttachedDaemonNeverStartsOne(t *testing.T) {
+	if !NewAttachedDaemon().attachOnly {
+		t.Fatal("NewAttachedDaemon must attach only")
+	}
+}
+
 func TestDecodeReadsAPlan(t *testing.T) {
 	var p Plan
 	ack, err := decode("/daemon/v1/setup/plan", "read", 200,
@@ -24,6 +32,23 @@ func TestDecodeReadsAPlan(t *testing.T) {
 	}
 	if p.Catalog[0].Fits != nil {
 		t.Error("a null fit must stay unknown, not become false")
+	}
+}
+
+// A daemon before v0.25.4 sends no npu field. Decoding it must leave the
+// verdict nil, so callers can tell an absent answer from a reported absence.
+func TestDecodeLeavesAMissingNPUVerdictUnknown(t *testing.T) {
+	for _, body := range []string{
+		`{"chat_model":{"id":"Gemma-4-E4B-it-GGUF"}}`,
+		`{"chat_model":{"id":"Gemma-4-E4B-it-GGUF"},"npu":null}`,
+	} {
+		var p Plan
+		if _, err := decode("/daemon/v1/setup/plan", "read", 200, []byte(body), &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.NPU != nil {
+			t.Fatalf("npu = %+v, want nil for %s", p.NPU, body)
+		}
 	}
 }
 

@@ -6,9 +6,11 @@
 import logging
 import sqlite3
 import threading
-from typing import Optional, get_args
+import time
+from typing import Callable, Optional, get_args
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, field_validator
 
 from gaia.agents.base.goal_store import (
@@ -17,11 +19,44 @@ from gaia.agents.base.goal_store import (
     GoalTransitionError,
     Priority,
     TaskStatus,
+    is_damaged_store_error,
 )
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["goals"])
+
+def _store_failure(exc: sqlite3.Error) -> HTTPException:
+    """Why the goal list could not be read or saved, and what the user can do."""
+    if is_damaged_store_error(exc):
+        detail = (
+            f"GAIA's goal list is damaged ({exc}), so goals can't be shown or "
+            "saved. Start a new goal list on this page; the damaged file is kept."
+        )
+    else:
+        detail = (
+            f"GAIA couldn't open its goal list: {exc}. Close other GAIA windows "
+            "using it, then try again."
+        )
+    return HTTPException(status_code=503, detail=detail)
+
+
+class _GoalStoreRoute(APIRoute):
+    """Answers a goal-store failure with what went wrong, not a bare 500."""
+
+    def get_route_handler(self) -> Callable:
+        handler = super().get_route_handler()
+
+        async def guarded(request: Request) -> Response:
+            try:
+                return await handler(request)
+            except sqlite3.Error as exc:
+                logger.error("Goal store request %s failed: %s", request.url.path, exc)
+                raise _store_failure(exc) from exc
+
+        return guarded
+
+
+router = APIRouter(tags=["goals"], route_class=_GoalStoreRoute)
 
 # ---------------------------------------------------------------------------
 # GoalStore singleton  (same double-checked locking pattern as memory.py)
@@ -178,10 +213,72 @@ def get_goal_stats():
 
 @router.get("/api/goals/health")
 def get_goal_store_health():
-    """Why the background loop could not read the goal store, or null."""
+    """Why the goal store can't be read, and whether it is damaged; null when it reads."""
     from gaia.ui.agent_loop import agent_loop
 
-    return {"error": agent_loop.goal_store_error}
+    if agent_loop.goal_store_error:
+        return {
+            "error": agent_loop.goal_store_error,
+            "damaged": agent_loop.goal_store_damaged,
+        }
+    # The loop may not have ticked yet; the page still needs to offer the fix.
+    try:
+        _get_store().get_stats()
+    except sqlite3.Error as exc:
+        return {
+            "error": _store_failure(exc).detail,
+            "damaged": is_damaged_store_error(exc),
+        }
+    return {"error": None, "damaged": False}
+
+
+@router.post("/api/goals/store/reset")
+def start_new_goal_list():
+    """Move a damaged goals.db aside and start an empty goal list in its place."""
+    from gaia.config import gaia_home
+    from gaia.ui.agent_loop import agent_loop
+
+    path = gaia_home() / "goals.db"
+    fine = HTTPException(
+        status_code=409,
+        detail="GAIA's goal list opens fine, so there is nothing to replace.",
+    )
+    if not path.exists():
+        raise fine
+    probe = sqlite3.connect(str(path))
+    try:
+        # quick_check reads every page: a header can open while a table is torn.
+        damaged = probe.execute("PRAGMA quick_check").fetchall() != [("ok",)]
+    except sqlite3.Error as exc:
+        if not is_damaged_store_error(exc):
+            raise
+        damaged = True
+    finally:
+        probe.close()
+    if not damaged:
+        raise fine
+
+    close_store()
+    kept = path.with_name(f"goals.db.damaged-{time.strftime('%Y%m%d-%H%M%S')}")
+    try:
+        path.rename(kept)
+        for suffix in ("-wal", "-shm"):
+            side = path.with_name(path.name + suffix)
+            if side.exists():
+                side.rename(kept.with_name(kept.name + suffix))
+    except OSError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"GAIA couldn't move the damaged goal list aside ({exc}). Close "
+                "other GAIA windows, then press Start a new goal list again."
+            ),
+        ) from exc
+    _get_store()
+    agent_loop.goal_store_error = None
+    agent_loop.goal_store_damaged = False
+    logger.warning("Started a new goal list; the damaged one is kept at %s", kept)
+    return {"kept": kept.name}
 
 
 @router.get("/api/goals/pending-approval")

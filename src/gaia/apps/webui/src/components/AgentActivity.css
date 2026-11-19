@@ -58,7 +58,9 @@
 .flow-steps-text {
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     min-width: 0;
 }
 .flow-steps-done { color: var(--text-muted); flex-shrink: 0; }
@@ -88,6 +90,19 @@
 .flow-warning > svg {
     flex-shrink: 0;
     color: var(--accent-yellow);
+}
+
+.flow-done {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.flow-done > svg {
+    flex-shrink: 0;
+    color: var(--accent-green);
 }
 
 .flow-live-line {
@@ -246,7 +261,9 @@
 .flow-tool-label {
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     color: var(--text-secondary);
     font-size: 13px;
     min-width: 0;
@@ -259,7 +276,7 @@
 .flow-tool-count {
     flex-shrink: 0;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     padding: 0 6px;
     border-radius: 999px;
     background: var(--bg-hover);
@@ -271,8 +288,12 @@
     color: var(--danger);
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
+    /* Takes only what the label leaves, so the page's site name is never the part that gets cut. */
+    flex: 1 1 0;
+    min-width: 12ch;
 }
 
 /* A step that needs a model offers it right under the row. */
@@ -418,7 +439,7 @@
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-secondary);
     margin-bottom: 4px;
 }
@@ -451,7 +472,9 @@
 .flow-plan-text {
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     min-width: 0;
 }
 .flow-plan-item.running .flow-plan-text {
@@ -483,8 +506,14 @@
     border-radius: var(--radius-xs);
     background: color-mix(in srgb, var(--danger) 4%, transparent);
     border: 1px solid color-mix(in srgb, var(--danger) 15%, transparent);
-    font-size: 12px;
-    font-family: var(--font-mono);
+    font-size: 13px;
+    font-family: var(--font-sans);
+    color: var(--text-secondary);
+}
+
+.flow-error > svg {
+    flex-shrink: 0;
+    margin-top: 2px;
     color: var(--danger);
 }
 
@@ -522,7 +551,7 @@
     gap: 6px;
     color: var(--accent-yellow);
     font-size: 12px;
-    font-weight: 700;
+    font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.7px;
 }
@@ -582,7 +611,7 @@
 .detail-section-label {
     display: block;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-mono);
     text-transform: uppercase;
     letter-spacing: 0.8px;
@@ -621,7 +650,7 @@
 .arg-key {
     font-family: var(--font-mono);
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-muted);
     flex-shrink: 0;
     min-width: 60px;
@@ -748,11 +777,13 @@
 .chunk-source {
     font-family: var(--font-mono);
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     max-width: 200px;
 }
 
@@ -813,7 +844,9 @@
     font-style: italic;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 
 .chunk-content {
@@ -881,7 +914,7 @@
 
 .cmd-header-title {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-code);
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -892,7 +925,9 @@
     color: var(--text-code-dim);
     max-width: 200px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -909,7 +944,7 @@
 
 .cmd-exit-code {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--code-danger);
     padding: 0 4px;
     border-radius: 2px;
@@ -949,7 +984,7 @@
 
 .cmd-prompt {
     color: var(--code-accent);
-    font-weight: 700;
+    font-weight: 500;
     flex-shrink: 0;
     user-select: none;
 }

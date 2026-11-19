@@ -127,15 +127,6 @@ func hostilePayloads(t *testing.T, s string) []hostilePayload {
 		{"table", json.RawMessage(`{"title":` + q + `,"columns":["a",` + q + `],"rows":[[` + q + `,"x"]]}`)},
 		{"key_value", json.RawMessage(`{"title":` + q + `,"items":[{"key":` + q + `,"value":` + q + `}]}`)},
 		{"list", json.RawMessage(`{"title":` + q + `,"items":[` + q + `,"plain"]}`)},
-		{"email_pre_scan", json.RawMessage(`{"kind":"email_pre_scan",
-			"urgent":[],"actionable":[],"informational_count":1,"suggested_archives":[],
-			"suggested_drafts":[],"needs_review":[],"scanned":1,
-			"needs_you":[{"ref":1,"kind":"urgent","message_id":"m1","sender":` + q + `,"subject":` + q + `,
-				"why":` + q + `,"detail":[` + q + `,` + q + `],"due_hint":` + q + `}],
-			"needs_you_total":1,
-			"bulk":{"count":1,"filter_tests":[` + q + `]},
-			"preferences_applied":{"priority_senders":[` + q + `],"low_priority_senders":[],"category_defaults":{}},
-			"mailbox_errors":[{"mailbox":` + q + `,"error":` + q + `}]}`)},
 		{"unknown_card", json.RawMessage(`{"anything":` + q + `}`)},
 	}
 }

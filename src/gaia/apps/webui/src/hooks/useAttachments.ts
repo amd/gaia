@@ -6,8 +6,10 @@ import type { Translate } from '../i18n/useT';
 import { useT } from '../i18n/useT';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { usePickedElementsStore } from '../stores/pickedElementsStore';
 import { isMediaFile } from '../utils/mediaFiles';
 import type { Attachment } from '../types';
+import type { PageElementWire } from '../../services/browser-pane/contract';
 
 /** Files attached to the message being composed, uploaded as soon as they are added. */
 export interface UseAttachments {
@@ -23,7 +25,11 @@ export interface UseAttachments {
     uploading: boolean;
     /** The message text with markdown links to the uploaded files appended. */
     compose: (text: string) => string;
+    /** The chips picked in the browser pane, for the request being sent; clears them. */
+    takeElements: () => PageElementWire[] | undefined;
 }
+
+const MODERN_OFFICE: Record<string, string> = { '.doc': '.docx', '.xls': '.xlsx', '.ppt': '.pptx' };
 
 /** The upload refusal in the chosen language; a refusal this build doesn't know shows the server's own words. */
 function uploadErrorText(err: unknown, t: Translate): string {
@@ -31,7 +37,11 @@ function uploadErrorText(err: unknown, t: Translate): string {
     const { extension, size_mb: size, max_mb: max } = err.body ?? {};
     switch (err.reason) {
         case 'no_extension': return t('composer.upload.noExtension');
-        case 'unsupported_type': return t('composer.upload.unsupported', { ext: String(extension) });
+        case 'unsupported_type': {
+            const modern = MODERN_OFFICE[String(extension)];
+            if (modern) return t('composer.upload.legacyOffice', { ext: String(extension), modern });
+            return t('composer.upload.unsupported', { ext: String(extension) });
+        }
         case 'empty_file': return t('composer.upload.empty');
         case 'too_large': return t('composer.upload.tooLarge', { size: String(size), max: String(max) });
         default: return err.message;
@@ -46,6 +56,8 @@ export function useAttachments(): UseAttachments {
     const t = useT();
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const mounted = useRef(true);
+    const current = useRef<Attachment[]>([]);
+    current.current = attachments;
     const uploads = useRef(new Map<string, AbortController>());
     useEffect(() => {
         mounted.current = true;
@@ -80,7 +92,11 @@ export function useAttachments(): UseAttachments {
     }, [t]);
 
     const addFiles = useCallback((files: File[]) => {
+        const taken = [...current.current];
         for (const file of files) {
+            // The same file picked twice is one chip; a refused one may be retried.
+            if (taken.some((a) => !a.error && a.file.name === file.name && a.file.size === file.size
+                && a.file.lastModified === file.lastModified)) continue;
             const isImage = file.type.startsWith('image/');
             const attachment: Attachment = {
                 id: `attach-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -92,6 +108,7 @@ export function useAttachments(): UseAttachments {
                 isImage,
                 isMedia: isMediaFile(file.name),
             };
+            taken.push(attachment);
             setAttachments((prev) => [...prev, attachment]);
             void upload(attachment);
         }
@@ -150,5 +167,6 @@ export function useAttachments(): UseAttachments {
         hasImage: attachments.some((a) => a.uploaded && a.isImage),
         uploading: attachments.some((a) => a.uploading),
         compose,
+        takeElements: usePickedElementsStore.getState().take,
     };
 }
