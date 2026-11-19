@@ -47,6 +47,13 @@ FILES = {
     "src/gaia/spawn_logger.py": (
         "import logging, subprocess\nLOG = logging.getLogger('gaia.core.home')\n"
     ),
+    # A level table's keys are logger names; a plain dict's are not.
+    "src/gaia/spawn_levels.py": (
+        "import logging, subprocess\n"
+        "LEVELS = {'gaia.core.home': logging.INFO, 'gaia.core.base': 'DEBUG'}\n"
+        "LEVELS['gaia.tools.sinks'] = logging.ERROR\n"
+        "ROUTES = {'gaia.core.consts': 'run'}\n"
+    ),
     # Spawns something, and names the server only where nothing runs it.
     "src/gaia/daemon_hint.py": (
         '"""Pairs with ``python -m gaia.daemon_server``."""\n'
@@ -391,6 +398,7 @@ def test_a_module_named_only_in_a_docstring_is_not_a_spawned_child(graph):
         ("src/gaia/spawn_prefix.py", None),
         ("src/gaia/spawn_url.py", None),
         ("src/gaia/spawn_logger.py", None),
+        ("src/gaia/spawn_levels.py", "src/gaia/core/consts.py"),
         ("src/gaia/daemon_client.py", "src/gaia/daemon_server.py"),
     ],
 )

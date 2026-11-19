@@ -43,7 +43,8 @@ everything for nearly any change.
   shipped code, counts with all its imports, since coverage can't see inside.
   A module named only in a docstring is not run that way: docstrings never run.
   Shipped code names a child only by a whole module name, never by part of a
-  URL, a file name (``gaia.log``) or a logger name (``getLogger("gaia.llm")``).
+  URL, a file name (``gaia.log``) or a logger name (``getLogger("gaia.llm")``,
+  or a key of a table of logging levels).
 - A test the map never ran, or source file it has no entry for (added since
   the nightly build), follows imports inside functions too.
 
@@ -109,6 +110,7 @@ _DOTTED_RE = re.compile(r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+(:[A-Za-z_]\w*)?$")
 _PATH_SPLIT_RE = re.compile(r"[\\/]")
 _ISOLATION_RE = re.compile(r"isolate|guard|restore|block|forbid")
 _SPAWN_RE = re.compile(r"sys\.executable|\bsubprocess\b|\bPopen\b|create_subprocess")
+_LEVEL_NAMES = {"NOTSET", "DEBUG", "INFO", "WARN", "WARNING", "ERROR", "CRITICAL"}
 
 FULL_RUN_FILES = {
     "setup.py",
@@ -338,7 +340,8 @@ class _Imports(ast.NodeVisitor):
         self.strings: List[str] = []
         # Never executed, so they name modules but never a child process.
         self.docstrings: List[str] = []
-        # First arguments of getLogger(): logger names, not child processes.
+        # Logger names, not child processes: getLogger()'s first argument, and
+        # the keys of (and lookups in) a table of logging levels.
         self.logger_names: List[str] = []
         # Pieces of a joined path: "SKILL.md" there is not a bare file name.
         self.path_pieces: List[str] = []
@@ -365,7 +368,36 @@ class _Imports(ast.NodeVisitor):
 
     def visit_Module(self, node: ast.Module) -> None:
         self._mark_docstring(node)
+        self._mark_level_tables(node)
         self.generic_visit(node)
+
+    def _mark_level_tables(self, tree: ast.Module) -> None:
+        """Mark the keys of every dict assigned a logging level per key, and
+        the string keys later looked up in it by the name it was assigned to."""
+        tables: Set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            if not _is_level_table(node.value):
+                continue
+            self._logger_ids.update(id(k) for k in node.value.keys if k is not None)
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            tables.update(ast.unparse(t) for t in targets)
+        if not tables:
+            return
+        for node in ast.walk(tree):
+            key = None
+            if isinstance(node, ast.Subscript):
+                table, key = node.value, node.slice
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("get", "setdefault", "pop")
+                and node.args
+            ):
+                table, key = node.func.value, node.args[0]
+            if isinstance(key, ast.Constant) and ast.unparse(table) in tables:
+                self._logger_ids.add(id(key))
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._mark_docstring(node)
@@ -448,6 +480,23 @@ class _Imports(ast.NodeVisitor):
         if name == "getLogger" and node.args and isinstance(node.args[0], ast.Constant):
             self._logger_ids.add(id(node.args[0]))
         self.generic_visit(node)
+
+
+def _is_level_table(node: Optional[ast.AST]) -> bool:
+    """A dict literal whose every value is a logging level (``logging.INFO``
+    or ``"INFO"``)."""
+    if not isinstance(node, ast.Dict) or not node.values:
+        return False
+    for value in node.values:
+        if isinstance(value, ast.Attribute):
+            name = value.attr
+        elif isinstance(value, ast.Constant) and isinstance(value.value, str):
+            name = value.value
+        else:
+            return False
+        if name not in _LEVEL_NAMES:
+            return False
+    return True
 
 
 def _names_a_child(
