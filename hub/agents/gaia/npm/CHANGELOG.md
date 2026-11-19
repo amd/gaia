@@ -6,7 +6,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
+Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
 - **`gaia -p --time-limit` uses the time it is given.** One slow step made the
   agent stop with minutes left, so a found answer often never reached the
