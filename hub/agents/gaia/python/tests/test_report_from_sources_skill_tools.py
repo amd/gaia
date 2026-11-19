@@ -8,9 +8,6 @@ roots and the real ``Agent.load_skill`` must register the three namespaced
 tools; unloading must remove them; and the default registered surface (the
 ``tools_count`` the capability docs pin) must not change, because skill tools
 are not part of the default construction.
-
-Driven through a stub that borrows the real ``Agent`` methods, like
-``test_skill_prompt_budget.py``, so no LLM client or model server is started.
 """
 
 from __future__ import annotations
@@ -20,7 +17,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from gaia.agents.base.agent import Agent
 from gaia.skills.manager import SkillManager
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -31,59 +27,31 @@ TOOLS = {
 }
 
 
+@pytest.fixture(scope="module")
+def flagship():
+    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
-class _StubAgent:
-    REQUIRED_CONNECTORS: list = []
-    SKILL_DIRS: list = []
-    SKILL_MANIFEST = None
-    _instance_tools = None
-    _loaded_skills = None
-    _skill_sets = None
-    _requested_skill_set = None
-    _active_skill_set = None
-    _skill_set_loaded = None
-    _active_skill_filter = None
-    _SKILL_MANIFEST_FILENAME = Agent._SKILL_MANIFEST_FILENAME
-
-    skill_manager = Agent.skill_manager
-    loaded_skills = Agent.loaded_skills
-    granted_binaries = Agent.granted_binaries
-    _tools_registry = Agent._tools_registry
-    _note_skill_active = Agent._note_skill_active
-    _active_skill_names = Agent._active_skill_names
-    _always_on_skill_names = Agent._always_on_skill_names
-    _loaded_skill_tools = Agent._loaded_skill_tools
-    load_skill = Agent.load_skill
-    unload_skill = Agent.unload_skill
-
-    def __init__(self, manager):
-        self._skill_manager = manager
-        self._instance_tools = {}
-
-    def rebuild_system_prompt(self):
-        pass
+    return GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
 
 
-@pytest.fixture
-def agent():
-    import gaia_agent.agent as flagship
-
-    roots = flagship._bundled_skill_roots()
-    assert any((Path(r) / SKILL / "tools.py").is_file() for r in roots), roots
-    return _StubAgent(SkillManager(agent_skill_dirs=[Path(r) for r in roots]))
-
-
-def test_loading_the_skill_registers_its_tools(agent):
-    assert not TOOLS & set(agent._tools_registry)
-    skill = agent.load_skill(SKILL)
+def test_loading_the_skill_registers_its_tools(flagship, tmp_path):
+    manager = SkillManager(
+        agent_skill_dirs=flagship.SKILL_DIRS,
+        user_skills_root=tmp_path / "user-skills",
+        include_claude_roots=False,
+    )
+    before = set(flagship._tools_registry)
+    assert not TOOLS & before
+    skill = flagship.load_skill(SKILL, manager=manager)
     try:
-        assert TOOLS <= set(agent._tools_registry)
-        assert TOOLS <= set(agent._instance_tools)
+        assert set(flagship._tools_registry) - before == TOOLS
+        offered = {s["function"]["name"] for s in flagship._build_openai_tool_schemas()}
+        assert TOOLS <= offered
         # The consumed tools still reach the prompt through the skill signal.
-        assert set(skill.gaia.tools_required) <= set(agent._loaded_skill_tools())
+        assert set(skill.gaia.tools_required) <= set(flagship._loaded_skill_tools())
     finally:
-        agent.unload_skill(SKILL)
-    assert not TOOLS & set(agent._tools_registry)
+        assert flagship.unload_skill(SKILL)
+    assert set(flagship._tools_registry) == before
 
 
 def test_default_tool_count_is_unchanged_by_the_skill():
