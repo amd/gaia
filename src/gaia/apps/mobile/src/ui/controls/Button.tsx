@@ -22,7 +22,7 @@ export interface ButtonProps {
     busy?: boolean;
     disabled?: boolean;
     full?: boolean;
-    /** Let a long label take more lines instead of truncating. */
+    /** Pad a multi-line label, for a tall answer button; any label too wide for its row wraps rather than run off the screen. */
     wrap?: boolean;
     /** What a screen reader says instead of the visible label. */
     accessibilityLabel?: string;
@@ -54,7 +54,7 @@ export function Button({
     const pressedBg = { primary: colors.accentSolid, secondary: colors.bgActive, ghost: colors.bgTertiary, danger: colors.dangerDim };
     const v = look[variant];
     return (
-        <View style={full ? { alignSelf: 'stretch' } : { alignSelf: 'flex-start' }}>
+        <View style={full ? { alignSelf: 'stretch' } : { alignSelf: 'flex-start', flexShrink: 1, maxWidth: '100%' }}>
             <Pressable
                 onPress={busy ? undefined : onPress}
                 disabled={disabled}
@@ -82,17 +82,11 @@ export function Button({
                         ) : icon ? (
                             <Icon icon={icon} size="sm" tone={v.tone} />
                         ) : null}
-                        {wrap || largeText ? (
-                            <View style={{ flexShrink: 1, paddingVertical: 10 }}>
-                                <Text role={size === 'sm' ? 'caption' : 'ui'} weight="medium" tone={v.tone} align="center" glossInline>
-                                    {label}
-                                </Text>
-                            </View>
-                        ) : (
-                            <Text role={size === 'sm' ? 'caption' : 'ui'} weight="medium" tone={v.tone} numberOfLines={1}>
+                        <View style={{ flexShrink: 1, minWidth: 0, paddingVertical: wrap || largeText ? 10 : size === 'sm' ? 2 : 4 }}>
+                            <Text role={size === 'sm' ? 'caption' : 'ui'} weight="medium" tone={v.tone} align="center" glossInline>
                                 {label}
                             </Text>
-                        )}
+                        </View>
                         {iconEnd && !busy ? <Icon icon={iconEnd} size="sm" tone={v.tone} /> : null}
                     </Row>
                 </View>

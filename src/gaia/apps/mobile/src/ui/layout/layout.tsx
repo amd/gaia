@@ -101,7 +101,11 @@ export function Row({ children, wrap, stack, align = 'center', testID, accessibi
     style.flexDirection = stacked ? 'column' : 'row';
     if (stacked) style.alignItems = 'stretch';
     // At large text a label beside its value stacks instead of squeezing or clipping.
-    if (!stacked && (wrap || (largeText && box.justify === 'between' && wrap === undefined))) style.flexWrap = 'wrap';
+    if (!stacked && (wrap || (largeText && box.justify === 'between' && wrap === undefined))) {
+        style.flexWrap = 'wrap';
+        // A wrapping row nested in another row must wrap inside it, not run past it at its one-line width.
+        if (box.maxWidth === undefined) style.maxWidth = '100%';
+    }
     return (
         <View style={style} testID={testID} accessibilityRole={accessibilityRole}>
             {stacked ? Children.map(children, unflexed) : largeText ? Children.map(children, shrinkable) : children}
