@@ -285,6 +285,9 @@ def _pptx_blocks(path: str) -> List[Block]:
     return blocks
 
 
+_OFFICE_SUFFIXES = (".xlsx", ".docx", ".pptx")
+
+
 def read_blocks(path: str) -> List[Block]:
     """The figures-bearing content of the file at *path*, bounded in size.
 
@@ -299,6 +302,11 @@ def read_blocks(path: str) -> List[Block]:
             logger.info(
                 "Not checking figures in %s: larger than %d bytes", path, MAX_FILE_BYTES
             )
+            return []
+        if suffix in _OFFICE_SUFFIXES and not zipfile.is_zipfile(path):
+            # Text saved under an Office name: python-docx and python-pptx raise
+            # their own error class for it, which the handlers below don't name.
+            logger.warning("Not checking figures in %s: not an Office file", path)
             return []
         if suffix == ".xlsx":
             return _xlsx_blocks(path)

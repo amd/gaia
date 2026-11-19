@@ -618,3 +618,22 @@ def test_no_step_left_means_no_check(agent, tmp_path, caplog):
     assert result["status"] == "success"
     assert "skipped mode=skip" in _log_lines(caplog)[0]
     assert "(no step left)" in _log_lines(caplog)[0]
+
+
+def test_text_saved_under_an_office_name_is_raised_not_fatal(tmp_path):
+    """A model that writes prose to `brief.docx` with a text tool leaves a file
+    Word cannot open; python-docx and python-pptx raise their own error for it."""
+    from gaia.agents.base.deliverables import read_blocks
+
+    brief, deck = str(tmp_path / "brief.docx"), str(tmp_path / "deck.pptx")
+    for path in (brief, deck):
+        Path(path).write_text("CFO brief\n\nRevenue rose 4%.", encoding="utf-8")
+    assert read_blocks(brief) == []
+    assert read_blocks(deck) == []
+    findings = mechanical_findings("Build a 3-slide deck and a brief", [brief, deck])
+    assert findings == [
+        "`brief.docx` is not a Word document: it holds plain text under a .docx "
+        "name, so it will not open.",
+        "`deck.pptx` is not a presentation: it holds plain text under a .pptx "
+        "name, so it will not open.",
+    ]

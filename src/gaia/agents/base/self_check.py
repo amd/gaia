@@ -167,6 +167,8 @@ def stated_word_limit(request: str) -> Optional[int]:
 
 def _slide_count(path: str) -> Optional[int]:
     try:
+        if not zipfile.is_zipfile(path):
+            return None  # reported by mechanical_findings as not an Office file
         from pptx import Presentation  # pylint: disable=import-outside-toplevel
 
         return len(Presentation(path).slides)
@@ -214,6 +216,13 @@ def _same_tab(asked: str, title: str) -> bool:
     return asked == title or asked in title or title in asked
 
 
+_OFFICE_KINDS = {
+    ".docx": "Word document",
+    ".xlsx": "workbook",
+    ".pptx": "presentation",
+}
+
+
 def mechanical_findings(
     request: str,
     written: Sequence[str],
@@ -230,8 +239,14 @@ def mechanical_findings(
     findings: List[str] = []
     for path in written:
         try:
+            suffix = os.path.splitext(path)[1].lower()
             if os.path.getsize(path) == 0:
                 findings.append(f"`{_name(path)}` is empty.")
+            elif suffix in _OFFICE_KINDS and not zipfile.is_zipfile(path):
+                findings.append(
+                    f"`{_name(path)}` is not a {_OFFICE_KINDS[suffix]}: it holds "
+                    f"plain text under a {suffix} name, so it will not open."
+                )
         except OSError as error:
             findings.append(f"`{_name(path)}` cannot be opened: {error}.")
     stems = {
