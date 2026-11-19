@@ -6,6 +6,7 @@ import { displayItem, parseQuantity } from '../render/guide/quantity';
 import { convertTemperatures, fractionText, matchUnit } from '../render/guide/units';
 import { findDurations, formatClock, parseSets, splitTitle } from '../render/guide/durations';
 import { formatGuideText } from '../render/guide/guideText';
+import { tEn } from '../../i18n/useT';
 import { isGuideWire, parseGuideDoc } from '../render/guide/guideDoc';
 import type { GuideWire } from '../render/guide/guideDoc';
 
@@ -200,7 +201,7 @@ describe('guide document', () => {
         const doc = parseGuideDoc(itinerary);
         expect(doc.features.timeline).toBe(true);
         expect(doc.steps[0]).toEqual({ title: 'Day 1 - Lisbon', body: 'Alfama walk, tram 28' });
-        expect(formatGuideText(doc, { servings: null, system: 'us', checked: new Set([0]) })).toBe([
+        expect(formatGuideText(doc, { servings: null, system: 'us', checked: new Set([0]) }, tEn)).toBe([
             'Two days in Lisbon',
             '',
             'Packing',
@@ -223,7 +224,7 @@ describe('guide document', () => {
 
     it('formats one text for copy, share and print', () => {
         const doc = parseGuideDoc(recipe);
-        expect(formatGuideText(doc, { servings: 2, system: 'metric', checked: new Set() })).toBe([
+        expect(formatGuideText(doc, { servings: 2, system: 'metric', checked: new Set() }, tEn)).toBe([
             'Roast chicken',
             'Crisp skin, juicy meat.',
             'Makes 2 servings',
@@ -247,7 +248,7 @@ describe('guide document', () => {
             kind: 'guide', guideType: 'checklist', title: 'Packing', servings: null,
             items: ['Passport', 'Charger'], steps: [],
         });
-        expect(formatGuideText(doc, { servings: null, system: 'us', checked: new Set([1]) }))
+        expect(formatGuideText(doc, { servings: null, system: 'us', checked: new Set([1]) }, tEn))
             .toBe('Packing\n\nItems\n[ ] Passport\n[x] Charger');
     });
 

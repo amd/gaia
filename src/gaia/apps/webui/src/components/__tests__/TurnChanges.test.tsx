@@ -109,7 +109,7 @@ describe('TurnChanges', () => {
         });
         render(<TurnChanges sessionId="s1" messageId={7} />);
         expect(await screen.findByRole('note')).toHaveTextContent(
-            "GAIA also ran 1 command it can't track. If it changed any files, Undo won't restore them.",
+            "GAIA also ran 1 command. Undo only restores files GAIA edited itself, so anything it changed or installed stays.",
         );
         expect(screen.getByText('Command: npm run build')).toBeInTheDocument();
     });
@@ -121,7 +121,7 @@ describe('TurnChanges', () => {
         });
         render(<TurnChanges sessionId="s1" messageId={7} />);
         expect(await screen.findByRole('note')).toHaveTextContent(
-            "GAIA ran 7 Python snippets it can't track. If they changed any files, Undo won't restore them.",
+            "GAIA ran 7 Python snippets. Undo only restores files GAIA edited itself, so anything they changed or installed stays.",
         );
         expect(screen.getAllByRole('listitem')).toHaveLength(1);
         expect(screen.getByText('Python: reads incident logs, counts errors by hour ×7')).toBeInTheDocument();
@@ -217,6 +217,32 @@ describe('DiffCard', () => {
         const { container } = render(<DiffCard data={{ unified: '-a\r\n+b\r\n' }} />);
         const lines = Array.from(container.querySelectorAll('.render-diff__line')).map((el) => el.textContent);
         expect(lines).toEqual(['-a', '+b']);
+    });
+
+    it('shows only the changed lines of a new file, without the diff headers', () => {
+        const { container } = render(<DiffCard data={{
+            unified: '--- /dev/null\n+++ b/shopping.txt\n@@ -0,0 +1,3 @@\n+milk\n+eggs\n+bread\n',
+        }} />);
+        const lines = Array.from(container.querySelectorAll('.render-diff__line')).map((el) => el.textContent);
+        expect(lines).toEqual(['+milk', '+eggs', '+bread']);
+    });
+
+    it('marks the gap between hunks and colors a removed line that starts with dashes', () => {
+        const { container } = render(<DiffCard data={{
+            unified: '--- a/x.md\n+++ b/x.md\n@@ -1 +1 @@\n-a\n+b\n@@ -9 +9 @@\n--- rule\n+***\n',
+        }} />);
+        const lines = Array.from(container.querySelectorAll('.render-diff__line'));
+        expect(lines.map((el) => el.textContent)).toEqual(['-a', '+b', '⋯', '--- rule', '+***']);
+        expect(lines[2]).toHaveClass('render-diff__line--hunk');
+        expect(lines[3]).toHaveClass('render-diff__line--removed');
+    });
+
+    it('titles a file diff with its name and shows the full path under it, breaking only between folders', () => {
+        const { container } = render(<DiffCard data={{ path: '/home/me/documents/shopping.txt', badge: 'Created', unified: '' }} />);
+        expect(container.querySelector('.render-diff__title')).toHaveTextContent(/^Createdshopping\.txt$/);
+        const path = container.querySelector('.render-diff__path');
+        expect(path).toHaveTextContent('/home/me/documents/shopping.txt');
+        expect(path?.querySelectorAll('wbr')).toHaveLength(5);
     });
 
     it('shows a note and badge, and no body when there is no text diff', () => {

@@ -328,7 +328,7 @@ func MissingBinaryMessage(binary string, l Lookup) string {
 	return fmt.Sprintf(
 		"%s is the program that does the thinking, and it is not on this machine. "+
 			"Nothing runs without it.\nLooked in:  %s\n"+
-			"Fix:        re-run the GAIA installer — it ships %s alongside gaia-tui\n"+
+			"Fix:        re-run the GAIA installer — it ships %s alongside gaia-cli\n"+
 			"            %s\nlook:       %s",
 		binary, strings.Join(l.Looked, ", "), binary, InstallerURL, AgentDocsURL)
 }
@@ -486,7 +486,7 @@ func (c *Catalog) LoadInstalledAgents() {
 // applyInstalledRecord records what a sentinel actually proves — that this id
 // is installed at this version — without inventing the metadata only the hub
 // index carries. upsertHubEntry would overwrite a cached name, publisher, tier,
-// and size with blanks, degrading "Email · AMD · 31.1 MB" to a bare id in
+// and size with blanks, degrading "GAIA · AMD · 31.1 MB" to a bare id in
 // exactly the offline case this function exists to serve.
 func (c *Catalog) applyInstalledRecord(id, version, artifactKind string) {
 	idx := -1
@@ -562,16 +562,6 @@ func UpdateCommand(agentID string) string {
 
 func seedAgents() []Agent {
 	return []Agent{
-		{
-			// The email agent is an HTTP sidecar the daemon supervises, not a
-			// binary the TUI can spawn — it is reached through the daemon relay.
-			// Not on the launch path: `gaia-tui chat --agent email` is how it is
-			// reached, and it keeps the daemon readiness gate.
-			ID: "email", Name: "Email", Description: "Email triage, drafting, and calendar",
-			Category: "Productivity", Tags: []string{"email", "gmail", "calendar", "communication"},
-			Icon: "📧", Version: "0.1.0", Status: StatusAvailable,
-			Transport: TransportDaemon,
-		},
 		// The flagship, spawned directly as a child process: TUI -> agent ->
 		// Lemonade, with no daemon, HTTP port, bearer token or model-slot lease
 		// in the path. The child is started once and kept, which is what makes a
@@ -593,7 +583,7 @@ func seedAgents() []Agent {
 			Transport:       TransportSubprocess,
 			BinaryPath:      "gaia-agent",
 			CanonicalEvents: true,
-			// `gaia-tui --dev` also puts the child at DEBUG in
+			// `gaia-cli --dev` also puts the child at DEBUG in
 			// ~/.gaia/logs/gaia-agent.log. Without this the TUI would go verbose
 			// while the agent kept logging errors only — and the log is where the
 			// answer usually is.

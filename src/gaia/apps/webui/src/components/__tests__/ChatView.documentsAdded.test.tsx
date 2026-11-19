@@ -46,6 +46,7 @@ beforeEach(() => {
     callbacks = null;
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
     mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
+    mockedApi.listTurnChanges.mockResolvedValue({ turns: [] });
     mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({
@@ -93,7 +94,7 @@ it('shows a document the agent indexed in the chat and the library', async () =>
     const state = useChatStore.getState();
     expect(state.documents.map((d) => d.id)).toEqual(['doc-1']);
     expect(state.sessions[0].document_ids).toEqual(['doc-1']);
-    const bar = screen.getByLabelText('1 indexed document');
+    const bar = screen.getByLabelText('1 document added to this chat');
     expect(within(bar).getByText('plant_manual.md')).toBeInTheDocument();
 });
 

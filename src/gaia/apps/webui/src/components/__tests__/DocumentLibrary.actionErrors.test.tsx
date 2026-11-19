@@ -9,7 +9,7 @@
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DocumentLibrary } from '../DocumentLibrary';
+import { DocumentLibrary, REMOVE_UNDO_MS } from '../DocumentLibrary';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { Document } from '../../types';
@@ -27,6 +27,14 @@ function doc(id: string, filename: string, status: Document['indexing_status'] =
 }
 
 const REPORT = doc('d1', 'report.pdf');
+
+/** Clicks Remove and lets its Undo window run out. */
+function removeNow(name: string) {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fireEvent.click(screen.getByRole('button', { name: `Remove ${name}` }));
+    act(() => { vi.advanceTimersByTime(REMOVE_UNDO_MS); });
+    vi.useRealTimers();
+}
 const NOTES = doc('d2', 'notes.md');
 
 function listing(documents: Document[]) {
@@ -49,7 +57,7 @@ describe('Document Library actions that fail say so', () => {
         render(<DocumentLibrary />);
         await screen.findByText('report.pdf');
 
-        fireEvent.click(screen.getByRole('button', { name: 'Remove report.pdf' }));
+        removeNow('report.pdf');
 
         expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't remove report.pdf: database is locked");
         expect(screen.getByText('report.pdf')).toBeInTheDocument();
@@ -130,7 +138,7 @@ describe('Document Library actions that fail say so', () => {
         render(<DocumentLibrary />);
         await screen.findByText('report.pdf');
 
-        fireEvent.click(screen.getByRole('button', { name: 'Remove report.pdf' }));
+        removeNow('report.pdf');
         act(() => useChatStore.getState().setDocuments([REPORT, NOTES]));
         await act(async () => finishDelete());
 

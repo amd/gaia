@@ -58,7 +58,7 @@
             "module": "gaia.cli",
             "args": [
                 "chat",
-                "--index", "C:\\Users\\14255\\Work\\gaia\\data\\pdf\\Oil-and-Gas-Activity-Operations-Manual-1-10.pdf",
+                "--index", "${workspaceFolder}/data/pdf/Oil-and-Gas-Activity-Operations-Manual-1-10.pdf",
                 "--query", "what is this document about?",
                 "--debug"
             ],

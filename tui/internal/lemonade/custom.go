@@ -50,6 +50,55 @@ func ReadCustomModels() ([]Recommended, error) {
 	return parseCustomModels(raw, path)
 }
 
+// ReadChosenModels returns config.json's default_model and last_model, the
+// models the user already chose. A missing file or key is none.
+func ReadChosenModels() ([]string, error) {
+	path := ConfigPathFrom(os.Getenv, os.UserHomeDir)
+	if path == "" {
+		return nil, nil
+	}
+	raw, err := filelock.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cannot read %s for the models you chose: %v", path, err)
+	}
+	var doc struct {
+		Default string `json:"default_model"`
+		Last    string `json:"last_model"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("%s cannot be read (%v) — fix the file by hand or delete it", path, err)
+	}
+	var out []string
+	for _, id := range []string{doc.Default, doc.Last} {
+		if id = strings.TrimSpace(id); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+// OnlyProvenNPU drops NPU builds GAIA has not run its evals on: an NPU entry
+// stays only when it is recommended (the NPU ladder), added from a link, or in
+// keep, the models the user already chose, so an earlier choice still loads.
+func OnlyProvenNPU(entries []Entry, keep []string) []Entry {
+	out := entries[:0:0]
+	for _, e := range entries {
+		npu := e.OnNPU() || strings.HasSuffix(strings.ToLower(e.Model.ID), "-flm")
+		kept := e.Recommended != nil
+		for _, id := range keep {
+			kept = kept || strings.EqualFold(id, e.Model.ID)
+		}
+		if npu && !kept {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 func parseCustomModels(raw []byte, path string) ([]Recommended, error) {
 	var doc struct {
 		Custom []customModel `json:"custom_models"`

@@ -163,3 +163,23 @@ def test_an_empty_reply_is_not_an_answer(agent):
         "write_file", {"file_path": "C:/x/a.txt", "content": "x"}
     )
     assert shown.get(NEEDS_PERSON_ARG) is True
+
+
+def test_a_question_with_no_channel_holds_the_next_change(agent):
+    """Over Discord nobody can answer mid-run; the default must not become
+    the go-ahead for a change once Full access is on."""
+    agent.console.answers_questions = False
+
+    result = _ask(
+        message="Delete these 28 files?",
+        choices=["yes, delete them", "cancel"],
+        default_if_no_response="yes, delete them",
+    )
+
+    assert result.startswith("__NO_RESPONSE__")
+    assert "yes, delete them" not in result
+    assert agent.console.asked == []
+    shown = agent.confirmation_args_for_call("run_shell_command", {"command": "del *"})
+    assert shown.get(NEEDS_PERSON_ARG) is True
+    read = agent.confirmation_args_for_call("run_shell_command", {"command": "dir"})
+    assert NEEDS_PERSON_ARG not in (read or {})

@@ -745,15 +745,19 @@ def test_no_shipped_skill_has_a_section_named_after_its_own_sample_data():
 
 
 def test_the_broken_command_really_fails_on_this_platform():
-    """The premise. `gh` need not be installed for the quoting failure to bite.
+    """The premise: cmd.exe hands the real `gh` a broken argv.
 
     On Windows `shell_tools` passes the raw string to cmd.exe (shell=True); on
     POSIX it passes a pre-split argv with no shell. The POSIX-quoted form is
     only broken on the former, which is exactly why this belongs in a
     machine-local learned delta and not in the cross-platform authored skill.
+    Needs the real `gh`: without it cmd.exe stops at "'gh' is not recognized",
+    and a stand-in would only echo back the failure the test asserts.
     """
     if os.name != "nt":
         pytest.skip("the cmd.exe quoting failure is Windows-only by construction")
+    if shutil.which("gh") is None:
+        pytest.skip("gh CLI not installed")
 
     result = subprocess.run(
         BROKEN_INBOX_CMD,
@@ -1950,3 +1954,48 @@ def test_the_undo_notice_says_it_applies_on_the_next_start(store):
 
     assert "takes effect when GAIA next starts" in result["message"]
     assert result["undo_command"] in result["message"]
+
+
+def test_changes_stored_under_an_agents_old_scope_still_apply(store):
+    """An agent that gained a registry id still reads what it learned without one."""
+    old = store.put_delta(
+        base_name="github-triage",
+        scope="GaiaAgent",
+        kind=KIND_REPLACE_SECTION,
+        anchor_section="procedure",
+        anchor_digest=_digest_of(BASE_SKILL, "procedure"),
+        payload={"body": "## Procedure\n\nOLD SCOPE LESSON."},
+        provenance=dict(TRUSTED),
+    )
+    store.approve_delta(old)
+    new = store.put_delta(
+        base_name="github-triage",
+        scope="installed:gaia",
+        kind=KIND_REPLACE_SECTION,
+        anchor_section="rules",
+        anchor_digest=_digest_of(BASE_SKILL, "rules"),
+        payload={"body": "## Rules\n\nNEW SCOPE LESSON."},
+        provenance=dict(TRUSTED),
+    )
+    store.approve_delta(new)
+
+    rows = store.search_deltas(
+        base_name="github-triage",
+        scope=("installed:gaia", "GaiaAgent"),
+        status=STATUS_ACTIVE,
+        limit=None,
+    )
+    assert [r["id"] for r in rows] == [old, new]
+    assert [r["id"] for r in store.search_deltas(scope="GaiaAgent")] == [old]
+
+
+def test_an_agent_reads_its_id_scope_then_its_class_scope():
+    class FlagshipLike(Agent):
+        def _register_tools(self):
+            pass
+
+    agent = FlagshipLike.__new__(FlagshipLike)
+    agent._gaia_namespaced_agent_id = "installed:gaia"
+    assert agent.learned_skill_scopes() == ("installed:gaia", "FlagshipLike")
+    del agent._gaia_namespaced_agent_id
+    assert agent.learned_skill_scopes() == ("FlagshipLike",)

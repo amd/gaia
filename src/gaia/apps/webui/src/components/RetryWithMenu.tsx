@@ -7,44 +7,77 @@ import { Popover } from './Popover';
 import * as api from '../services/api';
 import { displayModelName, useModelStore } from '../stores/modelStore';
 import { useT } from '../i18n/useT';
+import type { ProviderId } from '../types';
 
-interface LocalModel { id: string; name: string; sizeGb: number | null }
+interface RetryModel { id: string; name: string; sizeGb: number | null }
 
-/** Downloaded models on this PC, from every local provider. */
-async function localModels(): Promise<LocalModel[]> {
-    const { providers, lemonade_error } = await api.listProviders();
-    if (lemonade_error) throw new Error(lemonade_error);
-    const lists = await Promise.all(
-        providers.filter((p) => !p.remote).map((p) => api.listProviderModels(p.id)),
-    );
-    return lists.flatMap((l) => l.models
-        .filter((m) => m.downloaded)
-        .map((m) => ({ id: m.id, name: m.display_name ?? displayModelName(m.id), sizeGb: m.size_gb ?? null })));
+interface RetryChoices {
+    /** The other models of the cloud service in use; empty on a local chat. */
+    cloud: RetryModel[];
+    /** Downloaded models on this PC, from every local provider. */
+    local: RetryModel[];
 }
 
-/** "Retry with…": pick another local model to answer the same question. */
+function toRetryModel(m: { id: string; display_name?: string; size_gb?: number | null }): RetryModel {
+    return { id: m.id, name: m.display_name ?? displayModelName(m.id), sizeGb: m.size_gb ?? null };
+}
+
+async function retryChoices(cloudProvider: ProviderId | null): Promise<RetryChoices> {
+    const { providers, lemonade_error } = await api.listProviders();
+    if (lemonade_error) throw new Error(lemonade_error);
+    const localLists = providers.filter((p) => !p.remote).map((p) => api.listProviderModels(p.id));
+    const inUse = cloudProvider ? providers.find((p) => p.remote && p.id === cloudProvider) : undefined;
+    const [cloudList, ...lists] = await Promise.all([
+        inUse ? api.listProviderModels(inUse.id) : Promise.resolve(null),
+        ...localLists,
+    ]);
+    return {
+        cloud: cloudList && !cloudList.blocked
+            ? cloudList.models.filter((m) => m.available !== false).map((m) => ({ ...toRetryModel(m), sizeGb: null }))
+            : [],
+        local: lists.flatMap((l) => l.models.filter((m) => m.downloaded).map(toRetryModel)),
+    };
+}
+
+/** "Retry with…": pick another model to answer the same question. */
 export function RetryWithMenu({ answeredBy, onPick }: { answeredBy?: string | null; onPick: (model: string) => void }) {
     const anchor = useRef<HTMLButtonElement>(null);
     const t = useT();
-    // Retry compares on this PC; a cloud chat is told so before a local model loads.
-    const cloud = useModelStore((s) => (s.active?.remote ? s.active.provider_name ?? null : null));
+    const active = useModelStore((s) => s.active);
+    const cloudName = active?.remote ? active.provider_name ?? null : null;
+    const cloudProvider = active?.remote ? active.provider : null;
     const [open, setOpen] = useState(false);
-    const [models, setModels] = useState<LocalModel[] | null>(null);
+    const [choices, setChoices] = useState<RetryChoices | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const load = useCallback(async () => {
-        setModels(null);
+        setChoices(null);
         setError(null);
         try {
-            setModels(await localModels());
+            setChoices(await retryChoices(cloudProvider));
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         }
-    }, []);
+    }, [cloudProvider]);
 
     useEffect(() => { if (open) void load(); }, [open, load]);
 
-    const others = models?.filter((m) => m.id !== answeredBy) ?? [];
+    const cloud = choices?.cloud.filter((m) => m.id !== answeredBy) ?? [];
+    const local = choices?.local.filter((m) => m.id !== answeredBy) ?? [];
+    const item = (m: RetryModel, hint: string) => (
+        <button
+            key={m.id}
+            type="button"
+            className="retry-menu-item"
+            title={m.id}
+            onClick={() => { setOpen(false); onPick(m.id); }}
+        >
+            <span className="retry-menu-name">{m.name}</span>
+            <span className="retry-menu-meta">
+                {m.sizeGb ? <bdi dir="ltr">{m.sizeGb} GB</bdi> : hint}
+            </span>
+        </button>
+    );
     return (
         <>
             <button
@@ -61,26 +94,21 @@ export function RetryWithMenu({ answeredBy, onPick }: { answeredBy?: string | nu
             <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label="Retry with" placement="below" align="end">
                 <div className="retry-menu">
                     <div className="retry-menu-head">{t('retry.head')}</div>
-                    {cloud && <div className="retry-menu-note">{t('retry.onThisPc', { provider: cloud })}</div>}
                     {error && <div className="retry-menu-error" role="alert">{error}</div>}
-                    {!error && models === null && (
-                        <div className="retry-menu-empty"><Loader2 size={12} className="spin" aria-hidden="true" /> Loading models…</div>
+                    {!error && choices === null && (
+                        <div className="retry-menu-empty"><Loader2 size={12} className="spin" aria-hidden="true" /> {t('retry.loading')}</div>
                     )}
-                    {models !== null && others.length === 0 && (
-                        <div className="retry-menu-empty">No other model is downloaded on this PC. Add one in Settings → Model.</div>
+                    {cloud.length > 0 && cloudName && (
+                        <div className="retry-menu-note">{t('retry.onProvider', { provider: cloudName })}</div>
                     )}
-                    {others.map((m) => (
-                        <button
-                            key={m.id}
-                            type="button"
-                            className="retry-menu-item"
-                            title={m.id}
-                            onClick={() => { setOpen(false); onPick(m.id); }}
-                        >
-                            <span className="retry-menu-name">{m.name}</span>
-                            {m.sizeGb ? <span className="retry-menu-meta"><bdi dir="ltr">{m.sizeGb} GB</bdi></span> : null}
-                        </button>
-                    ))}
+                    {cloud.map((m) => item(m, t('retry.cloudHint')))}
+                    {local.length > 0 && cloudName && (
+                        <div className="retry-menu-note">{t('retry.onThisPc', { provider: cloudName })}</div>
+                    )}
+                    {local.map((m) => item(m, t('retry.localHint')))}
+                    {choices !== null && cloud.length === 0 && local.length === 0 && (
+                        <div className="retry-menu-empty">{t('retry.none')}</div>
+                    )}
                 </div>
             </Popover>
         </>

@@ -5513,6 +5513,31 @@ class TestIterSessions:
         )
         assert store.iter_sessions(min_steps=3)[0]["declined_count"] == 0
 
+    def test_a_refused_folder_access_counts_as_declined(self, store):
+        """Denying "Let GAIA use this folder?" leaves an Access denied error, not
+        a "denied" status; the run is still not a success to learn from."""
+        error = (
+            "Access denied: '/home/u/Documents/snap' is not in allowed paths. "
+            "To use it, ask again and approve access when prompted."
+        )
+        refusal = {"executed": False, "status": "error", "error": error}
+        store.store_turn("sessPath", "user", "daily status snapshot")
+        for i in range(3):
+            store.log_tool_call("sessPath", f"good{i}", {}, "ok", True)
+        store.log_tool_call(
+            "sessPath",
+            "list_directory",
+            {},
+            str(refusal),
+            False,
+            error=error,
+            executed=False,
+        )
+
+        s = store.iter_sessions(min_steps=3)[0]
+        assert s["declined_count"] == 1
+        assert s["attempt_count"] == 3
+
     def test_since_watermark_excludes_older_rows(self, store):
         """since= counts only tool calls strictly newer than the watermark."""
         store.store_turn("sessW", "user", "goal")

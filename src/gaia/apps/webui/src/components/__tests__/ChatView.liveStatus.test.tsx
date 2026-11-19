@@ -374,4 +374,18 @@ describe('mid-turn notes', () => {
         expect(thought.active).toBe(false);
         expect(thought.latencyMs).toBeGreaterThanOrEqual(0);
     });
+
+    it('counts a load_skill call as a skill use, so the Skills panel re-reads mid-reply', async () => {
+        useChatStore.setState({ skillUses: 0 });
+        await driveSend();
+        act(() => {
+            emit({ type: 'tool_start', tool: 'load_skill', narration: 'Loading skill: file-ops' });
+        });
+        expect(useChatStore.getState().skillUses).toBe(1);
+
+        act(() => {
+            emit({ type: 'tool_start', tool: 'read_file', narration: 'Reading notes.md' });
+        });
+        expect(useChatStore.getState().skillUses).toBe(1);
+    });
 });

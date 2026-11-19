@@ -1,0 +1,37 @@
+---
+title: "v0.26.1"
+description: "Settings changes reach open chats, honest Outlook availability, and setup fixes."
+---
+
+# GAIA v0.26.1 Release Notes
+
+## Summary
+
+- Changing the model server, connectors or skills in Settings now takes effect in chats that are already open, including the terminal UI.
+- "Am I free?" no longer says yes when an Outlook meeting's time can't be read.
+- A chat on a cloud model is no longer offered a large local download.
+- After an agent crash, the next message gets a fresh answer instead of the old one continued.
+- 11 PRs merged since v0.26.0.
+
+## What's New
+
+- **Settings reach open chats** — a model server, connector or skill change applies on the chat's next message, in the Agent UI and the terminal UI. The terminal UI and `gaia -p` now offer only the MCP servers turned on for GAIA. (PRs [#8389](https://github.com/amd/gaia/pull/8389), [#8394](https://github.com/amd/gaia/pull/8394), [#8399](https://github.com/amd/gaia/pull/8399), [#8400](https://github.com/amd/gaia/pull/8400))
+
+## Bug Fixes
+
+- **Outlook availability is no longer guessed** — a meeting whose time can't be read is reported instead of skipped, and Outlook times parse on Python 3.10. (PR [#8267](https://github.com/amd/gaia/pull/8267))
+- **No unwanted local download on a cloud model** — Settings › Manage downloads leaves the local chat model unticked while chat runs on a cloud model. (PR [#8086](https://github.com/amd/gaia/pull/8086))
+- **A reply cut short by a crash isn't continued** — the next message is answered fresh. (PR [#8391](https://github.com/amd/gaia/pull/8391))
+- **A command's timeout never outlasts the turn's time limit.** (PR [#8424](https://github.com/amd/gaia/pull/8424))
+- **An MCP connector shows Connected only after a check has started it.** (PR [#8434](https://github.com/amd/gaia/pull/8434))
+- **A document overlap of 0 repeats nothing between chunks.** (PR [#8382](https://github.com/amd/gaia/pull/8382))
+- **Closing the resource strip says how to bring it back.** (PR [#8432](https://github.com/amd/gaia/pull/8432))
+- **A release candidate names its own pre-release as the agent's source.** (PR [#8433](https://github.com/amd/gaia/pull/8433))
+- **The "GAIA doesn't run this model server" line is translated in Arabic.** (PR [#8435](https://github.com/amd/gaia/pull/8435))
+- **Relay tests run against fake agents that match the real one.** (PR [#8393](https://github.com/amd/gaia/pull/8393))
+
+## Full Changelog
+
+**11 PRs** since v0.26.0. The PR links above are the changelog.
+
+Full Changelog: [v0.26.0...v0.26.1](https://github.com/amd/gaia/compare/v0.26.0...v0.26.1)

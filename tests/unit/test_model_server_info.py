@@ -348,6 +348,59 @@ def test_auxiliary_vision_model_is_listed_when_chat_model_is_loaded():
     assert [m["name"] for m in info["loaded_models"]] == ["vision-encoder"]
 
 
+def _shared_server_last_used_by_a_cloud_model():
+    return {
+        "model_loaded": "amd.DeepSeek-V4.1-Flash",
+        "all_models_loaded": [
+            _llm(),
+            {"model_name": "amd.DeepSeek-V4.1-Flash", "type": "llm", "recipe": "cloud"},
+        ],
+    }
+
+
+def test_chat_model_is_the_one_gaia_chats_with_not_the_last_used():
+    info = describe_model_server(
+        base_url="http://localhost:13305/api/v1",
+        owner="user",
+        health=_shared_server_last_used_by_a_cloud_model(),
+        system_info=SYSINFO,
+        preferred_backend=None,
+        chat_model_id="Gemma-4-E4B-it-GGUF",
+    )
+    assert info["chat_model"]["name"] == "Gemma-4-E4B-it-GGUF"
+    assert info["chat_model"]["backend"] == "vulkan"
+    assert [(m["name"], m["backend"]) for m in info["loaded_models"]] == [
+        ("amd.DeepSeek-V4.1-Flash", "remote")
+    ]
+
+
+def test_chat_model_is_none_while_gaias_model_is_not_loaded():
+    health = _shared_server_last_used_by_a_cloud_model()
+    health["all_models_loaded"] = health["all_models_loaded"][1:]
+    info = describe_model_server(
+        base_url="http://localhost:13305/api/v1",
+        owner="user",
+        health=health,
+        system_info=SYSINFO,
+        preferred_backend=None,
+        chat_model_id="Gemma-4-E4B-it-GGUF",
+    )
+    assert info["chat_model"] is None
+    assert [m["name"] for m in info["loaded_models"]] == ["amd.DeepSeek-V4.1-Flash"]
+
+
+def test_user_prefixed_chat_model_matches_lemonades_listing():
+    info = describe_model_server(
+        base_url="http://localhost:13305/api/v1",
+        owner="user",
+        health={"all_models_loaded": [_llm(name="Qwen3.8-Flash-Next-GGUF")]},
+        system_info=SYSINFO,
+        preferred_backend=None,
+        chat_model_id="user.Qwen3.8-Flash-Next-GGUF",
+    )
+    assert info["chat_model"]["name"] == "Qwen3.8-Flash-Next-GGUF"
+
+
 @pytest.mark.parametrize(
     "url,port,owner",
     [
@@ -573,6 +626,18 @@ def test_panel_survives_a_failed_system_info(ui):
     assert body["chat_model"]["backend"] is None
     assert body["available_backends"] == []
     assert "system info" in body["system_info_error"]
+
+
+@pytest.mark.allow_network
+def test_panel_names_gaias_chat_model_on_a_shared_server(ui):
+    body = (
+        ui(health=_shared_server_last_used_by_a_cloud_model(), sysinfo=SYSINFO)
+        .get("/api/system/model-server")
+        .json()
+    )
+    assert body["chat_model"]["name"] == "Gemma-4-E4B-it-GGUF"
+    assert body["chat_model"]["backend"] == "vulkan"
+    assert [m["backend"] for m in body["loaded_models"]] == ["remote"]
 
 
 @pytest.mark.allow_network

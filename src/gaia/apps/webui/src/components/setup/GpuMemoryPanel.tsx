@@ -1,12 +1,14 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { AlertTriangle, Check, Copy, Info, Loader2, RotateCcw } from 'lucide-react';
 import * as api from '../../services/api';
 import { useT } from '../../i18n/useT';
 import type { Say } from '../../i18n/registry';
+import { useModelStore } from '../../stores/modelStore';
 import type { GpuMemoryPreset, GpuMemoryStatus } from '../../types';
+import { RadioGroup } from '../RadioGroup';
 import { ConfirmSheet } from './ConfirmSheet';
 import { SetupFooter } from './SetupFooter';
 import { formatSize } from './format';
@@ -112,30 +114,13 @@ interface PresetPickerProps {
 /** A radiogroup of safe sizes, after keeping the current one; arrow keys move between them. */
 function PresetPicker({ presets, value, onChange, recommended, max, keepGb, disabled }: PresetPickerProps) {
     const t = useT();
-    const refs = useRef<Array<HTMLButtonElement | null>>([]);
-    const choices: Array<number | null> = [...(keepGb != null ? [null] : []), ...presets.map((p) => p.setting_gb)];
-    const at = Math.max(0, choices.indexOf(value));
-    const onKey = (e: KeyboardEvent) => {
-        const delta = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
-        if (!delta) return;
-        e.preventDefault();
-        const rtl = getComputedStyle(e.currentTarget).direction === 'rtl';
-        const horizontal = e.key === 'ArrowRight' || e.key === 'ArrowLeft';
-        const step = horizontal && rtl ? -delta : delta;
-        const next = (at + step + choices.length) % choices.length;
-        onChange(choices[next]);
-        refs.current[next]?.focus();
-    };
-    const offset = keepGb != null ? 1 : 0;
     return (
-        <div className="gpu-presets" role="radiogroup" aria-label={t('gpu.presets.label')} onKeyDown={onKey}>
+        <RadioGroup className="gpu-presets" aria-label={t('gpu.presets.label')}>
             {keepGb != null && (
                 <button
-                    ref={(el) => { refs.current[0] = el; }}
                     type="button"
                     role="radio"
                     aria-checked={value === null}
-                    tabIndex={at === 0 ? 0 : -1}
                     className={`gpu-preset${value === null ? ' is-active' : ''}`}
                     disabled={disabled}
                     onClick={() => onChange(null)}
@@ -143,14 +128,12 @@ function PresetPicker({ presets, value, onChange, recommended, max, keepGb, disa
                     <bdi>{t('gpu.presets.keep', { gb: formatSize(keepGb) })}</bdi>
                 </button>
             )}
-            {presets.map((p, i) => (
+            {presets.map((p) => (
                 <button
                     key={p.setting_gb}
-                    ref={(el) => { refs.current[i + offset] = el; }}
                     type="button"
                     role="radio"
                     aria-checked={p.setting_gb === value}
-                    tabIndex={i + offset === at ? 0 : -1}
                     className={`gpu-preset${p.setting_gb === value ? ' is-active' : ''}`}
                     disabled={disabled}
                     onClick={() => onChange(p.setting_gb)}
@@ -160,7 +143,7 @@ function PresetPicker({ presets, value, onChange, recommended, max, keepGb, disa
                     {p.setting_gb === max && <>{' '}<span className="gpu-tag is-max">{t('gpu.presets.max')}</span></>}
                 </button>
             ))}
-        </div>
+        </RadioGroup>
     );
 }
 
@@ -176,6 +159,8 @@ export interface GpuMemoryPanelProps {
     onContinue?: () => void;
     /** Setup's Back. */
     onBack?: () => void;
+    /** The user picked a cloud model in this run of setup. */
+    cloud?: boolean;
 }
 
 /**
@@ -185,8 +170,10 @@ export interface GpuMemoryPanelProps {
  * AMD Software or the BIOS where it can't. Every reading comes from the backend
  * re-reading the machine, never from what was asked for.
  */
-export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContinue, onBack, headingId }: GpuMemoryPanelProps) {
+export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContinue, onBack, headingId, cloud = false }: GpuMemoryPanelProps) {
     const t = useT();
+    // Chat answered in the cloud: no local model to recommend a split for.
+    const chatInCloud = useModelStore((s) => !!s.active?.remote) || cloud;
     const focusHeading = useCallback(() => {
         const el = headingId ? document.getElementById(headingId) : null;
         if (el) focusInView(el);
@@ -197,7 +184,8 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
     const stepsId = useId();
     const presets = status.presets ?? [];
     // Nothing to gain from a change: keeping the current share is what's picked.
-    const [target, setTarget] = useState<number | null>(status.recommended_setting_gb ?? (status.gpu_gb != null ? null : presets[0]?.setting_gb ?? null));
+    const recommended = chatInCloud ? null : status.recommended_setting_gb ?? null;
+    const [target, setTarget] = useState<number | null>(recommended ?? (status.gpu_gb != null ? null : presets[0]?.setting_gb ?? null));
     const [guided, setGuided] = useState(false);
     const [guidedSteps, setGuidedSteps] = useState<string[] | null>(null);
     const [guidedValue, setGuidedValue] = useState<string | null | undefined>(undefined);
@@ -207,12 +195,11 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
     const [copied, setCopied] = useState<string | null>(null);
 
     const preset = presets.find((p) => p.setting_gb === target) ?? null;
-    const recommended = status.recommended_setting_gb ?? null;
     // The top preset is the most GAIA allows: the CPU keeps only its floor there.
     const max = presets.length > 0 && presets[presets.length - 1].setting_gb === status.setting?.max_gb ? presets[presets.length - 1].setting_gb : null;
     const cpuLeft = preset && status.total_gb != null ? Math.max(0, status.total_gb - preset.gpu_gb) : null;
     // No raise unlocks a default model: the split already runs the best one GAIA picks.
-    const fitsNow = recommended == null ? (status.models ?? []).find((m) => m.default && m.fits_now) : undefined;
+    const fitsNow = recommended == null && !chatInCloud ? (status.models ?? []).find((m) => m.default && m.fits_now) : undefined;
     const unlocks = (preset?.unlocks ?? []).slice(0, 2).map((id) => names[id] ?? id);
     const pending = status.pending ?? null;
     const canApply = status.method === 'apply';

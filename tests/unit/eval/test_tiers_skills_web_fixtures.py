@@ -25,6 +25,8 @@ import pytest
 from gaia.agents.base.tool_output import elide_text
 from gaia.web.client import WebClient
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "gaia"
 TIERS = FIXTURES / "tiers_skills_web"

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import logging
 import os
 import sys
 import threading
@@ -242,6 +243,72 @@ def test_a_repeating_failure_logs_its_traceback_once(caplog):
     assert sum("again" in r.getMessage() for r in caplog.records) == 2
 
 
+class MissingProbe(FakeProbe):
+    """Returns no data on the calls named in *missing*."""
+
+    def __init__(self, missing):
+        super().__init__()
+        self.missing = missing
+
+    def sample(self) -> rm.Sample:
+        self.calls += 1
+        if self.missing(self.calls):
+            raise rm.SampleMissed("CPU utility counter returned no data")
+        return sample(float(self.calls))
+
+
+def _wait_for_calls(probe, sampler, calls):
+    deadline = time.monotonic() + 5
+    while probe.calls < calls and time.monotonic() < deadline:
+        sampler.snapshot(wait_s=0)
+        time.sleep(0.01)
+
+
+def test_a_sample_with_no_data_is_skipped_and_logged_once_quietly(caplog):
+    caplog.set_level("DEBUG", logger=rm.logger.name)
+    probe = MissingProbe(lambda call: call in (3, 6))
+    sampler = rm.ResourceSampler(lambda: probe, interval_s=0.01)
+    try:
+        sampler.snapshot()
+        _wait_for_calls(probe, sampler, 8)
+        history = sampler.snapshot()["cpu"]["history"]
+    finally:
+        sampler.stop()
+    # One probe throughout: the history was never thrown away and restarted.
+    assert 3.0 not in history and 6.0 not in history
+    assert {1.0, 2.0, 4.0, 5.0, 7.0} <= set(history)
+    assert not [r for r in caplog.records if r.levelname in ("ERROR", "WARNING")]
+    assert not [r for r in caplog.records if r.exc_info]
+    assert sum("no data" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_a_counter_that_keeps_returning_no_data_is_reported(caplog):
+    probe = MissingProbe(lambda call: call > 1)
+    sampler = rm.ResourceSampler(lambda: probe, interval_s=0.001)
+    sampler.snapshot()
+    assert probe.closed.wait(5)
+    assert probe.calls == 1 + rm.MAX_MISSED_SAMPLES
+    # The next read tries again and reports it, as any other failed sample.
+    with pytest.raises(rm.ResourceProbeError, match="returned no data"):
+        sampler.snapshot()
+    assert [r for r in caplog.records if r.levelname == "ERROR"]
+
+
+def test_windows_cpu_counter_with_no_data_is_a_missed_sample():
+    class _NoData:
+        def collect(self):
+            pass
+
+        def value(self, _name):
+            return None
+
+    probe = rm.WindowsProbe.__new__(rm.WindowsProbe)
+    probe._query = _NoData()
+
+    with pytest.raises(rm.SampleMissed, match="CPU utility counter"):
+        probe.sample()
+
+
 # ── Linux sysfs ──────────────────────────────────────────────────────────────
 
 
@@ -252,6 +319,22 @@ def test_posix_probe_without_a_clock_reading_leaves_the_speed_blank(
     s = rm.PosixProbe(drm_root=tmp_path).sample()
     assert s.cpu_ghz is None
     assert 0 <= s.cpu_percent <= 100
+
+
+def test_posix_probe_shows_cpu_and_memory_when_the_clock_read_breaks(
+    tmp_path, monkeypatch, caplog
+):
+    def broken_cpu_freq():  # psutil 7.2 on Apple silicon
+        raise SystemError("<built-in function cpu_freq> returned a result")
+
+    monkeypatch.setattr(psutil, "cpu_freq", broken_cpu_freq, raising=False)
+    probe = rm.PosixProbe(drm_root=tmp_path)
+    with caplog.at_level(logging.DEBUG, logger=rm.logger.name):
+        samples = [probe.sample() for _ in range(3)]
+    assert all(s.cpu_ghz is None for s in samples)
+    assert all(0 <= s.cpu_percent <= 100 for s in samples)
+    assert samples[-1].memory_total_bytes > 0
+    assert sum("clock speed" in r.getMessage() for r in caplog.records) == 1
 
 
 def test_posix_probe_reads_amd_gpus_from_sysfs(tmp_path):
@@ -279,10 +362,14 @@ def test_posix_probe_leaves_a_sleeping_gpu_asleep(tmp_path):
     (dev / "gpu_busy_percent").write_text("7")
     (dev / "power" / "runtime_status").write_text("suspended\n")
     probe = rm.PosixProbe(drm_root=tmp_path)
-    (dev / "gpu_busy_percent").unlink()  # a read would fail, as on newer kernels
+    # A read would fail, as on newer kernels.
+    (dev / "gpu_busy_percent").unlink()
+    (dev / "gpu_busy_percent").mkdir()
     [gpu] = probe.sample().devices
     assert (gpu.percent, gpu.memory_used_bytes) == (0.0, None)
     (dev / "power" / "runtime_status").write_text("active\n")
+    for _ in range(rm.OptionalPart.MAX_FAILURES - 1):
+        assert probe.sample().devices_error is None
     assert "gpu_busy_percent" in probe.sample().devices_error
 
 
@@ -292,11 +379,13 @@ def test_a_gpu_that_stops_reporting_says_why_and_cpu_still_shows(tmp_path, caplo
     (dev / "gpu_busy_percent").write_text("1")
     probe = rm.PosixProbe(drm_root=tmp_path)
     (dev / "gpu_busy_percent").unlink()
-    s = probe.sample()
+    (dev / "gpu_busy_percent").mkdir()  # still listed, but unreadable
+    for _ in range(rm.OptionalPart.MAX_FAILURES):
+        s = probe.sample()
     assert s.devices == []
     assert "gpu_busy_percent" in s.devices_error
     assert 0 <= s.cpu_percent <= 100
-    # Stays off and logs the cause once, not every second.
+    # Once it gives up it stays off and logs that once, not every second.
     probe.sample()
     assert len([r for r in caplog.records if "unavailable" in r.getMessage()]) == 1
     payload = rm.to_payload([s], 1.0)
@@ -308,7 +397,9 @@ def test_an_optional_part_that_cannot_start_reports_why():
         raise rm.ResourceProbeError("PdhAddEnglishCounter failed (0xc0000bb8)")
 
     part = rm.OptionalPart("GPU and NPU", no_counters)
-    assert part.read(lambda state: [1]) == []
+    for _ in range(rm.OptionalPart.MAX_FAILURES - 1):
+        assert part.error is None
+        assert part.read(lambda state: [1]) == []
     assert part.error == "PdhAddEnglishCounter failed (0xc0000bb8)"
 
 
@@ -320,9 +411,64 @@ def test_an_optional_part_closes_what_it_opened_when_a_read_breaks():
         raise OSError("adapter vanished")
 
     assert part.read(broken) == []
-    assert closed == ["state"] and part.error == "adapter vanished"
+    assert closed == ["state"] and part.error is None
     part.close()
     assert closed == ["state"]  # closed once
+
+
+def flaky_reads(*values):
+    queue = list(values)
+
+    def read(state):
+        value = queue.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    return read, queue
+
+
+def test_an_optional_part_reopens_after_one_failed_read(caplog):
+    opened = []
+    read, _ = flaky_reads(
+        rm.ResourceProbeError("PdhCollectQueryData (0xc0000bba)"), [7]
+    )
+
+    def start():
+        opened.append(len(opened))
+        return opened[-1]
+
+    part = rm.OptionalPart("GPU and NPU", start)
+    assert part.read(read) == []
+    assert part.error is None  # one bad tick doesn't show "Unavailable"
+    assert part.read(read) == [7]
+    assert opened == [0, 1]  # reopened on the next poll
+    [retry] = [r for r in caplog.records if "retrying" in r.getMessage()]
+    assert "0xc0000bba" in retry.getMessage()
+
+
+def test_an_optional_part_gives_up_only_after_failures_in_a_row(caplog):
+    n = rm.OptionalPart.MAX_FAILURES
+    glitch = OSError("glitch")
+    # One success between failures resets the count.
+    read, left = flaky_reads(*[glitch] * (n - 1), [7], *[glitch] * n, ["unread"])
+    starts = []
+    part = rm.OptionalPart("GPU and NPU", lambda: starts.append(1) or "state")
+
+    for _ in range(n - 1):
+        assert part.read(read) == []
+    assert part.read(read) == [7] and part.error is None
+    for _ in range(n):
+        assert part.read(read) == []
+    assert part.error == "glitch"
+
+    opened = len(starts)
+    assert part.read(read) == [] and len(starts) == opened  # stays off
+    assert left == [["unread"]]
+    retries = [r for r in caplog.records if "retrying" in r.getMessage()]
+    assert len(retries) == 2 * (n - 1)  # every failure is logged
+    [gave_up] = [r for r in caplog.records if "giving up" in r.getMessage()]
+    assert gave_up.levelname == "ERROR"
 
 
 # ── Linux NPUs (amdxdna) ─────────────────────────────────────────────────────
@@ -571,26 +717,35 @@ def test_an_npu_that_cannot_report_usage_says_why_and_the_gpu_still_shows(tmp_pa
     gpu = drm / "card1" / "device"
     gpu.mkdir(parents=True)
     (gpu / "gpu_busy_percent").write_text("42")
-    npu = FakeNpu(tmp_path, [rm.ResourceProbeError(rm._NO_USAGE)])
+    npu = FakeNpu(tmp_path, [rm.ResourceProbeError(rm._NO_USAGE)] * 10)
 
     probe = rm.PosixProbe(drm_root=drm, npus=npu.reader)
-    s = probe.sample()
+    for _ in range(rm.OptionalPart.MAX_FAILURES):
+        s = probe.sample()
     assert [d.kind for d in s.devices] == ["gpu"]
     assert s.devices_error is None
     assert "Linux 7.1" in s.npus_error
-    assert npu.closed == [11]  # the device it opened is closed again
+    # Each attempt closes the device it opened again.
+    assert npu.closed == [11] * rm.OptionalPart.MAX_FAILURES
     payload = rm.to_payload([s], 1.0)
     assert "Linux 7.1" in payload["npus_error"]
     resources_router.ResourceUsage(**payload)
 
 
 def test_an_npu_that_breaks_later_closes_and_says_why(tmp_path):
-    npu = FakeNpu(tmp_path, [3.0, 5.0, rm.ResourceProbeError("boom")])
+    boom = rm.ResourceProbeError("boom")
+    npu = FakeNpu(tmp_path, [3.0, 5.0, boom, 9.0, 4.0, *[boom] * 10])
     probe = rm.PosixProbe(drm_root=tmp_path / "drm", npus=npu.reader)
     assert probe.sample().devices[0].percent == 5.0
     s = probe.sample()
-    assert s.devices == [] and s.npus_error == "boom"
+    assert s.devices == [] and s.npus_error is None
     assert npu.closed == [11]
+    # Reopened on the next poll: the open reads 9.0, the sample 4.0.
+    assert probe.sample().devices[0].percent == 4.0
+    for _ in range(rm.OptionalPart.MAX_FAILURES):
+        s = probe.sample()
+    assert s.devices == [] and s.npus_error == "boom"
+    assert npu.closed == [11] * (1 + rm.OptionalPart.MAX_FAILURES)
 
 
 def test_a_gpu_that_fails_does_not_hand_its_history_to_the_npu():
@@ -883,7 +1038,8 @@ def test_windows_cpu_and_memory_survive_missing_gpu_counters():
     probe = rm.WindowsProbe(open_gpus=no_gpus, read_networks=no_networks)
     try:
         time.sleep(1)
-        s = probe.sample()
+        for _ in range(rm.OptionalPart.MAX_FAILURES):
+            s = probe.sample()
     finally:
         probe.close()
     assert 0 <= s.cpu_percent <= 100 and s.memory_total_bytes > 0

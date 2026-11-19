@@ -31,6 +31,8 @@ from ..lemonade_client import (
     DEFAULT_MODEL_NAME,
     FULL_TOOLS_SLOT,
     KV_CACHE_SHARED_PHRASES,
+    OUTPUT_CORRUPTED_MESSAGE,
+    CloudContextOverflowError,
     CloudModelUnavailableError,
     CloudProviderDisconnectedError,
     GaiaLemonadeStartError,
@@ -38,6 +40,7 @@ from ..lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeServerDownError,
+    ModelOutputCorruptedError,
     active_profile_ctx_size,
     cloud_model_provider,
     is_tool_calling_model,
@@ -48,6 +51,7 @@ from ..lemonade_client import (
     runs_on_npu,
 )
 from ..lemonade_launcher import describe_client_hint
+from ..retry import StreamStalledError
 from ..surface_hints import (
     APP_WEDGED_SERVER_HINT,
     TUI_MODEL_SWITCH_HINT,
@@ -97,14 +101,34 @@ READ_TIMEOUT_RE = re.compile(r"read timed out|readtimeouterror", re.IGNORECASE)
 
 
 def _reasoning_tokens(usage: dict) -> Optional[int]:
-    """Reasoning tokens from an OpenAI-shape ``usage``, when reported."""
-    for key in ("completion_tokens_details", "output_tokens_details"):
-        details = usage.get(key)
+    """Reasoning tokens from an OpenAI-shape ``usage``, when reported.
+
+    Nested under ``*_details`` (OpenAI, Fireworks), or top-level as the AMD
+    gateway streams it for DeepSeek.
+    """
+    for details in (
+        usage.get("completion_tokens_details"),
+        usage.get("output_tokens_details"),
+        usage,
+    ):
         if isinstance(details, dict):
             value = details.get("reasoning_tokens")
             if isinstance(value, int) and not isinstance(value, bool):
                 return value
     return None
+
+
+_THINK_TAG_RE = re.compile(r"<(/?)think>", re.IGNORECASE)
+
+
+def _defang_think_tags(text: str) -> str:
+    """*text* with ``<think>`` / ``</think>`` broken up.
+
+    Streamed reasoning is wrapped in those tags for the agent to split off. A
+    tag inside the reasoning itself would end the block early and leak the rest
+    (a tool-call-shaped line included) into the parsed answer.
+    """
+    return _THINK_TAG_RE.sub(r"< \1think>", text)
 
 
 #: Seconds between progress reports while a tool call's arguments stream in.
@@ -409,6 +433,31 @@ class LemonadeStreamCutOffError(LemonadeError):
     )
 
 
+class LemonadeReplyStalledError(LemonadeStreamCutOffError):
+    """A streamed reply went quiet partway through: a fragment, like any cut-off."""
+
+
+def _stalls_as_cut_offs(stream):
+    """Yield *stream*, turning a stall after the reply began into a cut-off."""
+    try:
+        yield from stream
+    except LemonadeClientError as e:
+        stall = e.__cause__
+        if isinstance(stall, StreamStalledError) and not stall.before_output:
+            raise LemonadeReplyStalledError(str(e)) from e
+        raise
+
+
+class LemonadeOutputCorruptedError(LemonadeError):
+    """The reply turned into noise and was stopped before it was shown.
+
+    Not retried automatically: the client unloaded the model, and the user
+    decides whether to send the message again.
+    """
+
+    user_message = OUTPUT_CORRUPTED_MESSAGE
+
+
 class LemonadeModelNotFoundError(LemonadeError):
     """The requested model is not installed on this Lemonade Server (HTTP 404).
 
@@ -436,6 +485,35 @@ class LemonadeModelNotFoundError(LemonadeError):
             message = (
                 f"The model this agent needs (`{model_id}`) isn't installed on "
                 f"the local LLM server. {pull}. Or: {TUI_SETUP_HINT}"
+            )
+        super().__init__(user_message=message, payload=payload)
+
+
+class LemonadeUnknownModelError(LemonadeError):
+    """The model server lists no model by this name, so there is nothing to download.
+
+    A typed or stale model id: a download never starts, so neither a resend nor
+    setup helps. The fix is another model.
+    """
+
+    retryable = False
+    user_message = (
+        "The model server doesn't list this model, so it can't be downloaded. "
+        f"{TUI_MODEL_SWITCH_HINT}"
+    )
+
+    def __init__(
+        self,
+        model_id: Optional[str] = None,
+        payload: Optional[dict] = None,
+    ):
+        self.model_id = model_id
+        message = None
+        if model_id:
+            message = (
+                f"There is no model called `{model_id}` to download: the model "
+                "server doesn't list it. Check the name for a typo. "
+                f"{TUI_MODEL_SWITCH_HINT}"
             )
         super().__init__(user_message=message, payload=payload)
 
@@ -537,6 +615,9 @@ _LOAD_PREFIX_RE = re.compile(
 _QUOTED_MODEL_RE = re.compile(r"\bmodel ['\"`]([^'\"`]+)['\"`]", re.IGNORECASE)
 _WRAPPER_MODEL_RE = re.compile(
     r"failed to load(?: model)? ['\"`]?([^'\"`:\s]+)['\"`]?", re.IGNORECASE
+)
+_UNKNOWN_MODEL_RE = re.compile(
+    r"model name must include the [`'\"]?user[`'\"]? namespace", re.IGNORECASE
 )
 _ERROR_ENVELOPE_RE = re.compile(r"\{\s*['\"]error['\"]\s*:")
 _HTTP_STATUS_RE = re.compile(r"(?:status|error code:?)\s*\(?(\d{3})\b", re.IGNORECASE)
@@ -834,8 +915,7 @@ def _classify_lemonade_response(
         # profile's window, not a flat 64K: on NPU a correct load is 32K,
         # so a flat GPU threshold makes every real overflow look
         # retryable (#2884). NOTE (#1892): a client running under an
-        # exact ctx pin (LemonadeClient.ctx_size_override, e.g. the email
-        # eval's 16K envelope — see gaia_agent_email.context_budget)
+        # exact ctx pin (LemonadeClient.ctx_size_override)
         # legitimately sits below this threshold; the retryable hint is
         # wrong there, but the pinned eval path never consumes it.
         n_ctx_reported = 0
@@ -912,10 +992,15 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
             return LemonadeServerUnreachableError(str(cur), cur.endpoint)
         if isinstance(cur, LemonadeAuthError):
             return LemonadeAuthRejectedError(user_message=str(cur))
+        if isinstance(cur, ModelOutputCorruptedError):
+            return LemonadeOutputCorruptedError()
         if isinstance(cur, CloudProviderDisconnectedError):
             return LemonadeCloudDisconnectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
             return LemonadeCloudModelUnavailableError(cur.model_id, cur.provider)
+        if isinstance(cur, CloudContextOverflowError):
+            # A hosted model has no wrong-size load to fix: never reloadable.
+            return LemonadeContextOverflowError()
         if isinstance(cur, CloudDisabledError):
             return LemonadeLocalOnlyError(user_message=str(cur))
         chain_text.append(str(cur))
@@ -950,6 +1035,10 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     )
     if rejected:
         return LemonadeAuthRejectedError(user_message=rejected.group(0).strip())
+    # Lemonade's refusal to pull a name outside its catalog, enveloped or not.
+    if _UNKNOWN_MODEL_RE.search(raw):
+        m = re.search(r"Received:\s*([^\s'\"`]+)", raw) or _QUOTED_MODEL_RE.search(raw)
+        return LemonadeUnknownModelError(model_id=m.group(1) if m else None)
     # Lemonade's own error code beats any wording or status below.
     envelope = lemonade_error_envelope(exc)
     if envelope is not None:
@@ -962,6 +1051,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     down = _SERVER_DOWN_RE.search(raw)
     if down:
         return LemonadeServerUnreachableError(down.group(0).strip(), down.group(1))
+    if OUTPUT_CORRUPTED_MESSAGE.lower() in text:
+        return LemonadeOutputCorruptedError()
     if "no model loaded" in text or "model_not_loaded" in text:
         return LemonadeModelNotLoadedError()
     # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the
@@ -1294,11 +1385,17 @@ class LemonadeProvider(LLMClient):
             )
 
         content = message.get("content") or ""
-        if not content and finish_reason == "stop" and reasoning:
+        if (
+            not content
+            and finish_reason == "stop"
+            and reasoning
+            and not self._backend.cloud_model_provider(effective_model)
+        ):
             # Some llama.cpp builds route a completed answer into
             # ``reasoning_content``. A reply cut off by the token limit
             # (``finish_reason="length"``) is left empty on purpose — that text
-            # is an unfinished thought, not an answer.
+            # is an unfinished thought, not an answer. A cloud provider's
+            # reasoning is never the answer: parsed, it could run a tool.
             logger.warning(
                 "Lemonade returned empty 'content' with finish_reason=stop; "
                 "treating 'reasoning_content' as the answer (model=%s)",
@@ -1454,11 +1551,11 @@ class LemonadeProvider(LLMClient):
 
         def close_thinking():
             nonlocal in_thinking, thought
-            out = (thought + "</think>") if thought else "</think>"
+            out = _defang_think_tags(thought) + "</think>"
             in_thinking, thought = False, ""
             return out
 
-        for chunk in response:
+        for chunk in _stalls_as_cut_offs(response):
             # The usage chunk arrives last and carries no choices. It is the
             # only token accounting a streamed turn gets — see the
             # stream_options request in lemonade_client.
@@ -1491,6 +1588,37 @@ class LemonadeProvider(LLMClient):
                         next_progress = (
                             time.perf_counter() + TOOL_CALL_PROGRESS_INTERVAL_S
                         )
+                # Thinking models (e.g. Qwen3.5) stream reasoning in a
+                # separate field. Wrap in <think> tags so the UI can display it
+                # in a collapsible section. Read before content: a
+                # non-streaming reply arrives as one delta carrying both.
+                reasoning = delta.get("reasoning_content")
+                if reasoning:
+                    reasoning_seen.append(reasoning)
+                    now = time.perf_counter()
+                    if next_reasoning_progress is None:
+                        next_reasoning_progress = now + REASONING_PROGRESS_INTERVAL_S
+                    elif (
+                        self.reasoning_progress is not None
+                        and now >= next_reasoning_progress
+                    ):
+                        self.reasoning_progress(len("".join(reasoning_seen).split()))
+                        next_reasoning_progress = now + REASONING_PROGRESS_INTERVAL_S
+                    if not in_thinking:
+                        yield "<think>"
+                        in_thinking = True
+                    # Released a line at a time, never a token at a time:
+                    # every surface renders a thought as ONE replaced line,
+                    # so per-token reasoning blanks the sentence before it
+                    # and the status line reads as ". / just / `." churn.
+                    # A tag has no newline, so no cut can split one. Only the
+                    # new piece is searched: a long line stays linear.
+                    cut = reasoning.rfind("\n")
+                    if cut >= 0:
+                        yield _defang_think_tags(thought + reasoning[: cut + 1])
+                        thought = reasoning[cut + 1 :]
+                    else:
+                        thought += reasoning
                 content = delta.get("content")
                 if (
                     tool_calls
@@ -1508,47 +1636,13 @@ class LemonadeProvider(LLMClient):
                         yield close_thinking()
                     text_seen.append(content)
                     yield content
-                else:
-                    # Thinking models (e.g. Qwen3.5) stream reasoning in a
-                    # separate field. Wrap in <think> tags so the UI can
-                    # display it in a collapsible section.
-                    reasoning = delta.get("reasoning_content")
-                    if reasoning:
-                        reasoning_seen.append(reasoning)
-                        now = time.perf_counter()
-                        if next_reasoning_progress is None:
-                            next_reasoning_progress = (
-                                now + REASONING_PROGRESS_INTERVAL_S
-                            )
-                        elif (
-                            self.reasoning_progress is not None
-                            and now >= next_reasoning_progress
-                        ):
-                            self.reasoning_progress(
-                                len("".join(reasoning_seen).split())
-                            )
-                            next_reasoning_progress = (
-                                now + REASONING_PROGRESS_INTERVAL_S
-                            )
-                        if not in_thinking:
-                            yield "<think>"
-                            in_thinking = True
-                        # Released a line at a time, never a token at a time:
-                        # every surface renders a thought as ONE replaced line,
-                        # so per-token reasoning blanks the sentence before it
-                        # and the status line reads as ". / just / `." churn.
-                        thought += reasoning
-                        cut = thought.rfind("\n")
-                        if cut >= 0:
-                            yield thought[: cut + 1]
-                            thought = thought[cut + 1 :]
-                    elif "text" in choice:
-                        text = choice["text"]
-                        if text:
-                            if in_thinking:
-                                yield close_thinking()
-                            text_seen.append(text)
-                            yield text
+                elif not reasoning and "text" in choice:
+                    text = choice["text"]
+                    if text:
+                        if in_thinking:
+                            yield close_thinking()
+                        text_seen.append(text)
+                        yield text
         if ran_past_call:
             logger.warning(
                 "%s kept writing after its tool call; stopped the stream there",

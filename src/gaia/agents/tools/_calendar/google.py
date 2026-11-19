@@ -25,6 +25,7 @@ from gaia.agents.tools._calendar.model import (
     NewEvent,
     event_path_segment,
 )
+from gaia.agents.tools._calendar.scopes import GOOGLE_CONNECTOR_ID
 
 GOOGLE_CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 _EVENTS_PATH = "/calendars/primary/events"
@@ -132,8 +133,11 @@ class GoogleCalendarBackend:
         reason = _error_reason(response)
         if code == 401:
             raise CalendarAuthError(
-                "Google Calendar rejected the access token (401). Reconnect with "
-                f"`gaia connectors connect google`, then retry. (request: {where})"
+                "Google Calendar rejected the access token (401), so the Google "
+                "connection needs reconnecting. "
+                f"(request: {where})",
+                connect=(GOOGLE_CONNECTOR_ID,),
+                reconnect=(GOOGLE_CONNECTOR_ID,),
             )
         if code == 404:
             raise CalendarEventNotFound(f"Google Calendar found no event ({where}).")
@@ -148,8 +152,10 @@ class GoogleCalendarBackend:
         if code == 403 and reason in _SCOPE_REASONS:
             raise CalendarAuthError(
                 "Google refused the calendar request because the connection lacks "
-                "the calendar.events scope. Reconnect Google with `gaia connectors "
-                f"connect google --grant-agent installed:gaia`. (request: {where})"
+                "calendar access, so it needs reconnecting with calendar access "
+                f"ticked. (request: {where})",
+                connect=(GOOGLE_CONNECTOR_ID,),
+                reconnect=(GOOGLE_CONNECTOR_ID,),
             )
         if code == 429 or (
             code == 403 and reason.lower().endswith("ratelimitexceeded")

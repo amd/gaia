@@ -56,9 +56,9 @@ Context window is pinned per device profile, not per agent: `GPU_CTX_SIZE` (6553
 |--------|---------|------------|
 | OGA | ONNX GenAI | Ryzen AI 300-series NPU |
 | llamacpp | llama.cpp | Vulkan / ROCm / Metal / CPU |
-| FLM (FastFlowLM) | NPU-native LLM + embedder runtime | Ryzen AI NPU (`gemma4-it-e2b-FLM` chat, `embed-gemma-300m-FLM` embedder) |
+| FLM (FastFlowLM) | NPU-native LLM runtime | Ryzen AI NPU (`gemma4-it-e2b-FLM` chat; its `embed-gemma-300m-FLM` embedder isn't used: its search ranked at chance on FLM 1.0.7) |
 
-Hybrid mode (NPU + iGPU) is the sweet spot on Ryzen AI 300 series. FLM caps context at `NPU_CTX_SIZE` (32768) — hand it the GPU window and it fails to load. Keeping the embedder on FLM too lets chat model and embedder stay co-resident instead of evicting each other.
+Hybrid mode (NPU + iGPU) is the sweet spot on Ryzen AI 300 series. FLM caps context at `NPU_CTX_SIZE` (32768) — hand it the GPU window and it fails to load. Documents and memory embed on the GPU even then: FLM's embedder ranked text at chance on FLM 1.0.7, and Lemonade keeps one model per type, so the GGUF embedder loads beside the FLM chat model.
 
 ## Python integration via GAIA
 

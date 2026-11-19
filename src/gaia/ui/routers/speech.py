@@ -119,6 +119,7 @@ class SpeechModel(BaseModel):
 
 def _speech_model() -> SpeechModel:
     from gaia.audio.lemonade_tts import LemonadeTTSClient, LemonadeTTSError
+    from gaia.installer.model_choice import download_size_gb
 
     client = LemonadeTTSClient()
     entry = next((m for m in client.catalog() if m.get("id") == client.model), None)
@@ -127,10 +128,9 @@ def _speech_model() -> SpeechModel:
             f"Lemonade at {client.base_url} has no voice model '{client.model}'. "
             "Update Lemonade Server, then try again."
         )
-    size = entry.get("size")
     return SpeechModel(
         downloaded=entry.get("downloaded") is True,
-        size_gb=float(size) if isinstance(size, (int, float)) else None,
+        size_gb=download_size_gb(client.model, entry.get("size")),
     )
 
 

@@ -5,6 +5,11 @@
 // hit the network so only their pagination/error-shape behavior is covered
 // here, with fetch stubbed.
 
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -14,10 +19,32 @@ import {
   isReleaseCandidateTag,
   pickReleaseCandidate,
   pickStableRelease,
+  retryDelayMs,
+  retryWaitMs,
   streamReleases,
   sumAssetDownloads,
+  sumInstallDownloads,
   type GithubRelease,
 } from './github';
+
+describe('sumInstallDownloads', () => {
+  it('leaves out update feeds, update data, checksums and signatures', () => {
+    const files = [
+      ['gaia-agent-ui-0.26.0-x64-setup.exe', 282],
+      ['gaia-0.26.0-darwin-x64.pkg', 7],
+      ['latest.yml', 706],
+      ['latest-mac.yml', 66],
+      ['gaia-agent-ui-0.26.0-x64-setup.exe.blockmap', 101],
+      ['gaia-core-SHA256SUMS.txt', 37],
+      ['amd_gaia-0.26.0.tar.gz.sigstore.json', 4],
+    ] as const;
+    expect(sumInstallDownloads(files.map(([name, download_count]) => ({ name, download_count })))).toBe(289);
+  });
+});
+
+const FIXTURE = fileURLToPath(
+  new URL('../../../tests/fixtures/github/releases.json', import.meta.url),
+);
 
 describe('isMainReleaseTag', () => {
   it('matches a plain semver tag', () => {
@@ -98,6 +125,7 @@ describe('formatCount', () => {
 describe('getReleaseStats — pagination and error handling', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.resetModules();
   });
 
@@ -134,15 +162,110 @@ describe('getReleaseStats — pagination and error handling', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('throws a [github]-prefixed error naming the endpoint on a non-200 response', async () => {
+  it('names the API rate limit or exhausted quota on a 403 when a token is set', async () => {
     vi.resetModules();
+    vi.stubEnv('GITHUB_TOKEN', 'test-token');
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '0');
     const fetchMock = vi.fn(
       async () => new Response('rate limited', { status: 403, statusText: 'Forbidden' }),
     );
     vi.stubGlobal('fetch', fetchMock);
 
     const mod = await import('./github');
-    await expect(mod.getReleaseStats()).rejects.toThrow(/\[github\].*releases.*HTTP 403/s);
+    await expect(mod.getReleaseStats()).rejects.toThrow(
+      /\[github\].*releases.*HTTP 403 after 1 attempt.*hourly quota/s,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('checked-in GitHub fixture', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('serves repo stats, the stable release and the candidate without fetching', async () => {
+    vi.stubEnv('GAIA_GITHUB_FIXTURE', FIXTURE);
+    const fetchMock = vi.fn(() => {
+      throw new Error('fetch should not run with a fixture');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    expect(await mod.getRepoStats()).toEqual({ stars: 1626, forks: 237 });
+
+    const stable = await mod.getStableRelease();
+    expect(stable.tag).toBe('v0.26.0');
+    expect(stable.assets.length).toBeGreaterThan(0);
+
+    const candidate = await mod.getReleaseCandidate();
+    expect(candidate?.tag).toBe('v0.26.1-rc2');
+    expect(candidate?.downloads.length).toBeGreaterThan(0);
+
+    const stats = await mod.getReleaseStats();
+    expect(stats.releases.map((r) => [r.tag, r.kind])).toEqual([
+      ['v0.26.1-rc2', 'rc'],
+      ['v0.26.0', 'stable'],
+    ]);
+    expect(stats.totalReleaseCount).toBe(1);
+    expect(stats.totalDownloadCount).toBeGreaterThan(0);
+    expect(stats.latestRelease?.tag).toBe('v0.26.0');
+    expect(stats.latestRelease?.installDownloads).toBeGreaterThan(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fails loudly on a missing fixture instead of falling back to the network', async () => {
+    vi.stubEnv('GAIA_GITHUB_FIXTURE', join(tmpdir(), 'gaia-no-such-fixture.json'));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getReleaseStats()).rejects.toThrow(
+      /Failed to read GAIA_GITHUB_FIXTURE/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fails loudly on a malformed fixture', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gaia-fixture-'));
+    const path = join(dir, 'bad.json');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        repo: { stargazers_count: 1, forks_count: 2 },
+        releases: [{ tag_name: 'v0.26.0' }],
+      }),
+    );
+    vi.stubEnv('GAIA_GITHUB_FIXTURE', path);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getRepoStats()).rejects.toThrow(/malformed release or asset/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('applies the same release transformations as a live API response', async () => {
+    const payload = JSON.parse(readFileSync(FIXTURE, 'utf8')) as {
+      releases: GithubRelease[];
+    };
+
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(payload.releases)));
+    const live = await import('./github');
+    const liveStats = await live.getReleaseStats();
+    const liveStable = await live.getStableRelease();
+    const liveCandidate = await live.getReleaseCandidate();
+
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    vi.stubEnv('GAIA_GITHUB_FIXTURE', FIXTURE);
+    const fixture = await import('./github');
+
+    expect(await fixture.getReleaseStats()).toEqual(liveStats);
+    expect(await fixture.getStableRelease()).toEqual(liveStable);
+    expect(await fixture.getReleaseCandidate()).toEqual(liveCandidate);
   });
 });
 
@@ -425,11 +548,14 @@ describe('pickStableRelease', () => {
 describe('getStableRelease', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.resetModules();
   });
 
-  it('fails loudly, naming the fix, when the GitHub API is rate limited', async () => {
+  it('fails loudly, naming the fix, when the GitHub API is rate limited and no token is set', async () => {
     vi.resetModules();
+    vi.stubEnv('GITHUB_TOKEN', '');
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '0');
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
     const mod = await import('./github');
     await expect(mod.getStableRelease()).rejects.toThrow(/HTTP 403.*set GITHUB_TOKEN/s);
@@ -440,5 +566,146 @@ describe('getStableRelease', () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json([])));
     const mod = await import('./github');
     await expect(mod.getStableRelease()).rejects.toThrow(/no published stable release/);
+  });
+});
+
+describe('githubFetch retries', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    vi.resetModules();
+  });
+
+  it('retries a 403 and resolves once the next response is 200', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'test-token');
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '3');
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response('', { status: 403, headers: { 'retry-after': '0' } }),
+      )
+      .mockResolvedValueOnce(Response.json([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    const stats = await mod.getReleaseStats();
+
+    expect(stats.totalReleaseCount).toBe(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops after the configured retries and names the attempt count', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'test-token');
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '2');
+    const fetchMock = vi.fn(
+      async () => new Response('', { status: 403, headers: { 'retry-after': '0' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getReleaseStats()).rejects.toThrow(
+      /HTTP 403 after 3 attempt.*hourly quota/s,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry unless GITHUB_FETCH_RETRIES opts in', async () => {
+    vi.stubEnv('GITHUB_TOKEN', '');
+    const fetchMock = vi.fn(async () => new Response('', { status: 403 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getReleaseStats()).rejects.toThrow(/HTTP 403.*set GITHUB_TOKEN/s);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a non-integer GITHUB_FETCH_RETRIES instead of treating it as zero', async () => {
+    vi.stubEnv('GITHUB_FETCH_RETRIES', 'not-a-number');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getReleaseStats()).rejects.toThrow(
+      /GITHUB_FETCH_RETRIES must be an integer, got "not-a-number"/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an out-of-range GITHUB_FETCH_RETRIES', async () => {
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '9');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getReleaseStats()).rejects.toThrow(
+      /GITHUB_FETCH_RETRIES must be from 0 to 5, got 9/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a 500 even with retries enabled', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'test-token');
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '3');
+    const fetchMock = vi.fn(async () => new Response('', { status: 500 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getReleaseStats()).rejects.toThrow(/HTTP 500/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('retryDelayMs', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('honors Retry-After seconds', () => {
+    const res = new Response('', { status: 403, headers: { 'retry-after': '2' } });
+    expect(retryDelayMs(res, 1)).toBe(2000);
+  });
+
+  it('honors Retry-After as an HTTP date', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-19T00:00:00Z'));
+    const res = new Response('', {
+      status: 403,
+      headers: { 'retry-after': 'Thu, 19 Nov 2026 00:00:05 GMT' },
+    });
+    expect(retryDelayMs(res, 1)).toBe(5000);
+  });
+
+  it('falls back to the rate limit reset', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-19T00:00:00Z'));
+    const reset = Math.floor(Date.now() / 1000) + 10;
+    const res = new Response('', {
+      status: 403,
+      headers: { 'x-ratelimit-reset': String(reset) },
+    });
+    expect(retryDelayMs(res, 1)).toBe(10_000);
+  });
+
+  it('caps the wait at 30 s and backs off exponentially without headers', () => {
+    const capped = new Response('', { status: 403, headers: { 'retry-after': '60' } });
+    expect(retryDelayMs(capped, 1)).toBe(30_000);
+    const bare = new Response('', { status: 403 });
+    expect(retryDelayMs(bare, 1)).toBe(500);
+    expect(retryDelayMs(bare, 3)).toBe(2000);
+  });
+});
+
+describe('retryWaitMs', () => {
+  it('allows a capped 30 s wait that lands exactly on the budget', () => {
+    const res = new Response('', { status: 403, headers: { 'retry-after': '60' } });
+    expect(retryWaitMs(res, 1, 0)).toBe(30_000);
+  });
+
+  it('refuses a final wait that would take the total past 30 s', () => {
+    const res = new Response('', { status: 403, headers: { 'retry-after': '20' } });
+    const bare = new Response('', { status: 403 });
+    expect(retryWaitMs(res, 1, 10_000)).toBe(20_000);
+    expect(retryWaitMs(res, 1, 20_000)).toBeNull();
+    expect(retryWaitMs(bare, 1, 29_500)).toBe(500);
+    expect(retryWaitMs(bare, 1, 29_501)).toBeNull();
   });
 });
