@@ -274,6 +274,7 @@ export interface AgentStepResponse {
   policyVersion?: string | null;
   reason?: string | null;
   receiptId?: string | null;
+  refused?: boolean | null;
   render?: string | null;
   result?: string | null;
   ruleIds?: string[] | null;

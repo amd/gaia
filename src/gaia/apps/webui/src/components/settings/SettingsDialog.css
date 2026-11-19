@@ -40,7 +40,7 @@
     padding: 4px 10px 12px;
     color: var(--text-primary);
     font-size: 16px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .settings-nav-item {
@@ -60,7 +60,7 @@
 .settings-nav-item.is-active {
     background: var(--bg-active);
     color: var(--text-primary);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .settings-body {
@@ -160,7 +160,7 @@
 .settings-pane-title {
     color: var(--text-primary);
     font-size: 18px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 /* The tab title stays in view, and rows scroll under it rather than under the close button. */
@@ -211,7 +211,7 @@
 .settings-label {
     color: var(--text-primary);
     font-size: 13.5px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .settings-hint,
@@ -590,7 +590,7 @@
     max-inline-size: 100%;
     color: var(--text-primary);
     font-size: 17px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.3;
     overflow-wrap: anywhere;
 }
@@ -657,7 +657,7 @@
 
 .settings-disclosure-title {
     font-size: 13.5px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .settings-disclosure-hint {
@@ -787,6 +787,9 @@
 .skill-row-desc {
     display: -webkit-box;
     -webkit-line-clamp: 1;
+    /* One line: a fade down the block would dim the whole line, so fade its end. */
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self block);
     -webkit-box-orient: vertical;
     overflow: hidden;
 }
@@ -994,7 +997,8 @@
     font-size: 15px;
 }
 
-.messaging-steps {
+.messaging-steps,
+.setup-steps {
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -1003,13 +1007,15 @@
     list-style: none;
 }
 
-.messaging-step {
+.messaging-step,
+.setup-step {
     display: flex;
     align-items: flex-start;
     gap: 12px;
 }
 
-.messaging-step-number {
+.messaging-step-number,
+.setup-step-number {
     display: inline-flex;
     flex: none;
     align-items: center;
@@ -1020,10 +1026,11 @@
     background: var(--bg-tertiary);
     color: var(--text-primary);
     font-size: 12.5px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
-.messaging-step-body {
+.messaging-step-body,
+.setup-step-body {
     display: flex;
     flex: 1;
     flex-direction: column;
@@ -1031,7 +1038,8 @@
     min-inline-size: 0;
 }
 
-.messaging-step-body > p {
+.messaging-step-body > p,
+.setup-step-body > p {
     margin: 0;
     line-height: 1.5;
 }
@@ -1077,7 +1085,7 @@
     color: var(--text-primary);
     font-family: var(--font-mono);
     font-size: 26px;
-    font-weight: 600;
+    font-weight: 500;
     letter-spacing: 0.12em;
     user-select: all;
 }
@@ -1102,7 +1110,7 @@
     margin: 0;
     color: var(--text-primary);
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .messaging-answering-text {
@@ -1188,6 +1196,8 @@
     overflow-wrap: anywhere;
     display: -webkit-box;
     -webkit-line-clamp: 3;
+    animation: fade-cut-block both;
+    animation-timeline: scroll(self block);
     -webkit-box-orient: vertical;
     overflow: hidden;
 }
@@ -1324,7 +1334,9 @@
     display: block;
     overflow: hidden;
     white-space: nowrap;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 
 .skill-link-tag {
@@ -1361,3 +1373,22 @@
 .skill-link-perms code {
     font-size: 11px;
 }
+
+/* A connector's outside setup as numbered steps; the form below is the last one. */
+.connector-guide {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.setup-step-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    text-decoration: none;
+}
+
+[dir='rtl'] .setup-step-link-icon {
+    transform: scaleX(-1);
+}
+

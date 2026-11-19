@@ -74,6 +74,10 @@ _STRIP_BLOCKS = (
         re.compile(r"(?:<\|start\|>assistant)?<\|channel\|>\s*commentary\s+to="),
         re.compile(r"<\|call\|>"),
     ),
+    (
+        re.compile(r"(?:<tool_call>\s*)?<function=[A-Za-z_][\w.\-]*>"),
+        re.compile(r"</function>(?:\s*</tool_call>)?"),
+    ),
 )
 _ANY_MARKUP = re.compile(
     "|".join(
@@ -219,13 +223,19 @@ _JSON_CALL_START = re.compile(r"<tool_call>(?=\s*\{)")
 _XML_CLOSE = re.compile(r"</invoke>")
 _XML_PARAM_OPEN = re.compile(r"<parameter\b")
 _XML_STRUCT = re.compile(r"<parameter\b|</invoke>")
+# Qwen's XML form: <function=NAME><parameter=KEY>value</parameter></function>,
+# usually inside <tool_call>.
+_QWEN_FUNCTION = re.compile(r"(?:<tool_call>\s*)?<function=([A-Za-z_][\w.\-]*)>")
+_QWEN_PARAM = re.compile(r"<parameter=([A-Za-z_][\w.\-]*)>(.*?)</parameter>", re.DOTALL)
+_QWEN_CLOSE = re.compile(r"</function>(?:\s*</tool_call>)?")
 
 
 def parse_text_tool_calls(text: str) -> Optional[MarkupParse]:
     """Tool calls a model wrote as text in any supported dialect, or ``None``.
 
-    DeepSeek DSML and special tokens, Anthropic-style ``<invoke>`` XML, and
-    Hermes/Qwen ``<tool_call>{json}</tool_call>``.
+    DeepSeek DSML and special tokens, Anthropic-style ``<invoke>`` XML,
+    Hermes/Qwen ``<tool_call>{json}</tool_call>``, and Qwen's
+    ``<function=NAME><parameter=KEY>`` XML.
 
     Raises:
         MalformedToolMarkup: the markup is there but truncated or unparseable.
@@ -244,7 +254,42 @@ def parse_text_tool_calls(text: str) -> Optional[MarkupParse]:
     start = _outside_code(_JSON_CALL_START, text)
     if start is not None:
         return _parse_json_calls(text, start)
+    start = _outside_code(_QWEN_FUNCTION, text)
+    if start is not None:
+        return _parse_qwen_functions(text, start)
     return None
+
+
+def _parse_qwen_functions(text: str, start: int) -> MarkupParse:
+    calls: List[MarkupToolCall] = []
+    pos, spans = start, []
+    while True:
+        at = _outside_code(_QWEN_FUNCTION, text, pos)
+        if at is None:
+            break
+        opening = _QWEN_FUNCTION.match(text, at)
+        close = _QWEN_CLOSE.search(text, opening.end())
+        if close is None:
+            raise MalformedToolMarkup(
+                f"Tool call '{opening.group(1)}' was cut off before </function>."
+            )
+        body = text[opening.end() : close.start()]
+        args = {
+            m.group(1): _strip_one_newline(m.group(2))
+            for m in _QWEN_PARAM.finditer(body)
+        }
+        if "<parameter" in _QWEN_PARAM.sub("", body):
+            raise MalformedToolMarkup(
+                f"A parameter of tool call '{opening.group(1)}' was cut off "
+                "before </parameter>."
+            )
+        calls.append(MarkupToolCall(name=opening.group(1), args=args, raw_strings=True))
+        spans.append((opening.start(), close.end()))
+        pos = close.end()
+    prose = text
+    for lo, hi in reversed(spans):
+        prose = prose[:lo] + prose[hi:]
+    return MarkupParse(calls=calls, prose=prose.strip())
 
 
 def _parse_xml_invokes(text: str, start: int) -> MarkupParse:

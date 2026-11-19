@@ -114,7 +114,9 @@
 
 .bp-tab-title > span:last-child {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -354,7 +356,7 @@
 .bp-newtab-title {
     margin: 0 0 12px;
     font-size: var(--fs-title);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .bp-newtab-empty {
@@ -384,7 +386,9 @@
 .bp-recent-title,
 .bp-recent-url {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -423,7 +427,7 @@
 }
 
 .bp-devserver-name {
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
 }
 
@@ -442,7 +446,9 @@
     overflow: hidden;
     color: var(--text-secondary);
     font-size: var(--fs-caption);
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -451,7 +457,9 @@
     color: var(--text-muted);
     font-family: var(--font-mono);
     font-size: var(--fs-caption);
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
