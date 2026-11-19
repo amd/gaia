@@ -5,8 +5,8 @@
 import pytest
 
 from gaia.agents.base.tools import partial_json_string, tool
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import GAIA_PROFILE
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 
@@ -42,7 +42,7 @@ def test_a_draft_crosses_the_sidecar_relay_unchanged():
         source.event_queue.get_nowait()
     )
     ui = SSEOutputHandler()
-    relay._dispatch_one(ui, canonical[0], EMAIL_PROFILE, False)
+    relay._dispatch_one(ui, canonical[0], GAIA_PROFILE, False)
     assert ui.event_queue.get_nowait() == {
         "type": "draft",
         "tool": "slide-decks/build_deck_from_markdown",
