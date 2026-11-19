@@ -76,8 +76,11 @@ incident.
   more than 150 ids call again with
   `output_path="<folder>/anomalous_entities.csv"` and give the user that file.
   Say how many were flagged out of `total`.
-- **Baseline is not the incident.** `baseline` templates are routine even at
-  ERROR or FATAL. Report them once as background, never in an anomaly total.
+- **Baseline is not the incident, unless it is the whole log.** Report
+  `baseline` templates once as background, never in an anomaly total. Steady
+  ERROR or FATAL templates in `persistent_errors` are either routine or an
+  outage that covers the whole log: say which reading the evidence supports,
+  and ask the user when the log cannot tell.
 - **Quote, do not round.** Copy every timestamp, count and host number
   exactly as the result prints it.
 - **Base every finding on lines in the logs you were given**; do not fill

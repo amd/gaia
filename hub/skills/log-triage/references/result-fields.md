@@ -19,11 +19,15 @@ Read the result in this order.
    templates found `only_here`, and `vs_quiet_window`: the same-length quiet
    stretch just before, with what `rose` and what `fell_silent` (a heartbeat
    or a host's routine traffic stopping is often the clearest clue).
-5. **`baseline`** - templates steady across the range. Routine, even when they
-   say ERROR or FATAL: a platform that logs thousands of FATAL lines a day is
-   telling you its normal. Report them once as background; never add them to
-   an anomaly or alert total.
-6. **`timeline`**, **`clock_offsets`**, **`quiet_hosts`**, **`warnings`** -
+5. **`baseline`** - templates steady across the range. Report them once as
+   background; never add them to an anomaly or alert total.
+6. **`persistent_errors`** - baseline templates at ERROR or FATAL, listed when
+   nothing is anomalous or the range is under two hours. Each is steady across
+   the whole range: either routine, or an outage that covers the whole log.
+   The log alone cannot tell. Say which reading the evidence supports (what
+   the user reported, whether any stretch of the log is free of the error,
+   whether requests still succeed beside it), and ask the user if you cannot.
+7. **`timeline`**, **`clock_offsets`**, **`quiet_hosts`**, **`warnings`** -
    the cross-file order of first occurrences, steady offsets measured on ids
    that two files share (clock skew, a pipeline delay, or close to whole hours:
    a time zone written without an offset), hosts that stopped logging early,

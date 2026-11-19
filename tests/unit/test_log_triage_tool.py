@@ -498,6 +498,55 @@ def test_steady_errors_are_baseline_and_a_short_fault_is_an_anomaly(tmp_path):
     assert res.loc(burst["start_loc"])["file"] == "a.log"
 
 
+def _refused_every_third_line(path: Path) -> Path:
+    """30 minutes, one line every 3 s, every third one the same ERROR."""
+    lines = []
+    for i in range(600):
+        ts = _iso(T0 + i * 3)
+        if i % 3 == 0:
+            lines.append(f"{ts} app-01 ERROR db connection refused")
+        else:
+            lines.append(f"{ts} app-01 INFO served request {i}")
+    return _write(path, lines)
+
+
+def test_an_error_that_lasts_the_whole_log_is_reported_as_persistent(tmp_path):
+    out = _call(paths=[str(_refused_every_third_line(tmp_path / "app.log"))])
+    assert out["anomalies"] == [] and out["bursts"] == []
+    (row,) = out["persistent_errors"]
+    assert row["template"] == "db connection refused"
+    assert (row["count"], row["severity"]) == (200, "ERROR")
+    assert row["first"]["line"] == 1 and row["last"]["line"] == 598
+    assert row["reading"] == lt.PERSISTENT_READING
+    assert "1 persistent error template(s)" in out["headline"]
+    assert "outage that covers the whole log" in out["headline"]
+    assert "app.log:1" in out["next_step"]
+    assert "outage that covers the whole log" in out["next_step"]
+
+
+def test_routine_errors_beside_an_incident_in_a_long_log_stay_background(tmp_path):
+    extra = [
+        (
+            T0 + 4 * 3600 + k * 7,
+            f"{_iso(T0 + 4 * 3600 + k * 7)} app-0{k % 5 + 1} FATAL disk controller reset on bay {k % 3}",
+        )
+        for k in range(20)
+    ]
+    res = lt.triage([str(_steady(tmp_path / "a.log", extra=extra))])
+    assert res.anomalies and any(t.sev >= 3 for t in res.baseline)
+    out = res.compact()
+    assert out["persistent_errors"] == []
+    assert "persistent" not in out["headline"]
+
+
+def test_a_long_log_with_only_steady_errors_reports_them_as_persistent(tmp_path):
+    out = lt.triage([str(_steady(tmp_path / "a.log"))]).compact()
+    assert out["anomalies"] == []
+    assert [r["template"] for r in out["persistent_errors"]] == [
+        "cache backend timeout after <*> ms"
+    ]
+
+
 def test_spike_of_a_routine_error_is_an_anomaly_with_a_peak(tmp_path):
     t = T0 + 3 * 3600
     extra = [
@@ -824,6 +873,7 @@ def test_skill_md_body_stays_lean_with_rules_and_linked_references():
     assert len(body) // 4 <= 1200
     assert "do not rebuild them by hand" in body
     assert "Baseline is not the incident" in body
+    assert "`persistent_errors`" in body
     refs = re.findall(r"`(references/[\w-]+\.md)`", body)
     assert len(refs) >= 4
     for ref in refs:

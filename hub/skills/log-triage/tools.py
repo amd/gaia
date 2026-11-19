@@ -20,7 +20,9 @@ counting deterministically, in one streaming pass per file:
    presence, peak against its own median, first and last occurrence with
    ``file:line``. A template steady across most of the range is BASELINE
    whatever its level; one that is short-lived, new, spiking, escalating or
-   hits many hosts at once is an ANOMALY.
+   hits many hosts at once is an ANOMALY. Baseline errors are also reported
+   as PERSISTENT when nothing is anomalous or the range is short: the log
+   alone cannot tell routine errors from an outage that covers all of it.
 4. **Bursts.** Buckets where errors and anomaly lines rise far above their
    median, merged into windows with exact first and last timestamps and the
    templates that occur only there.
@@ -105,6 +107,12 @@ ENTITY_SHARE_WARN = 0.30
 #: Below this share of parsed lines a file's format was probably misread.
 MIN_PARSED_SHARE = 0.95
 ENTITY_TEMPLATE_SHARE_DROP = 0.50
+#: A steady error in a range this short may be an outage that covers the log.
+PERSISTENT_SHORT_RANGE_S = 2 * 3600.0
+PERSISTENT_READING = (
+    "steady across the whole range: either routine or an outage that covers "
+    "the whole log"
+)
 
 # Output caps: the compact result must fit a small model's context.
 OUT_TEMPLATE_CHARS = 160
@@ -113,6 +121,7 @@ OUT_FILES = 20
 OUT_BURSTS = 5
 OUT_TIMELINE = 15
 OUT_BASELINE = 8
+OUT_PERSISTENT = 5
 OUT_ENTITIES = 25
 OUT_WARNINGS = 12
 OUT_WARNING_CHARS = 300
@@ -2268,9 +2277,8 @@ def _anomaly_window(tpl: _Tpl) -> Optional[set]:
 def find_bursts(an: Analyzer, nb: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Buckets where error and anomaly lines rise far above their median.
 
-    Baseline templates are left out of the series: a platform that logs a
-    steady stream of FATAL lines would otherwise raise the median until a real
-    burst disappears into it. A baseline template that spikes is an anomaly,
+    Baseline templates are left out of the series: steady error lines
+    would otherwise raise the median until a real burst disappears into it. A baseline template that spikes is an anomaly,
     so it still counts.
     """
     contrib = [
@@ -2780,6 +2788,14 @@ class TriageResult:
             (t for t in tpls if t.cls == "baseline"), key=lambda t: -t.count
         )
         self.intermittent = [t for t in tpls if t.cls == "intermittent"]
+        # Steady errors are baseline, but with nothing else wrong, or in a
+        # short log, they may be the outage itself: report them apart.
+        self.persistent: List[_Tpl] = []
+        if not self.anomalies or meta["span_s"] <= PERSISTENT_SHORT_RANGE_S:
+            self.persistent = sorted(
+                (t for t in self.baseline if t.sev >= 3 and t.m.get("timed")),
+                key=lambda t: (-t.sev, -t.count),
+            )
         nb = meta["nb"]
         self.bursts, self.burst_stats = (
             find_bursts(an, nb) if an.gmin is not None else ([], {})
@@ -2995,6 +3011,22 @@ class TriageResult:
             view["files"] = sorted({self.an.files[i].name for i in t.file_first})
         return view
 
+    def _persistent_view(self, limit: Optional[int]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "id": t.tid,
+                "template": _short(t.key, 100),
+                "severity": SEVERITY_NAMES[t.sev],
+                "count": t.count,
+                "hosts": len(t.hosts),
+                "span_pct": round(t.m.get("span_pct", 0.0), 1),
+                "first": {"ts": self.ts(t.first), **(self.loc(t.first_loc) or {})},
+                "last": {"ts": self.ts(t.last), **(self.loc(t.last_loc) or {})},
+                "reading": PERSISTENT_READING,
+            }
+            for t in self.persistent[:limit]
+        ]
+
     def _burst_view(self, b: Dict[str, Any], *, full: bool = False) -> Dict[str, Any]:
         rows = b["templates"]
         unique = [r for r in rows if r[2] >= 0.5 and r[3]]
@@ -3164,6 +3196,7 @@ class TriageResult:
             "anomaly_templates": len(self.anomalies),
             "bursts": [self._burst_view(b) for b in self.bursts[:OUT_BURSTS]],
             "timeline": self._timeline(),
+            "persistent_errors": self._persistent_view(OUT_PERSISTENT),
             "baseline": {
                 "templates": len(self.baseline),
                 "lines": baseline_lines,
@@ -3212,6 +3245,14 @@ class TriageResult:
             result["next_step"] = (
                 f"read_file around {first['file']}:{first['line']} to see the context of {self.anomalies[0].tid}."
             )
+        elif self.persistent and self.persistent[0].first_loc:
+            first = self.loc(self.persistent[0].first_loc)
+            result["next_step"] = (
+                f"{self.persistent[0].tid} is {PERSISTENT_READING}. read_file around "
+                f"{first['file']}:{first['line']}, then say which reading the evidence "
+                "supports; if the log cannot tell, ask the user whether these errors "
+                "are expected."
+            )
         return result
 
     def _entities_view(self) -> Dict[str, Any]:
@@ -3257,6 +3298,11 @@ class TriageResult:
             f"{len(self.baseline)} baseline template(s) cover "
             f"{sum(t.count for t in self.baseline) / max(1, an.entries):.0%} of entries"
         )
+        if self.persistent:
+            parts.append(
+                f"{len(self.persistent)} persistent error template(s) "
+                f"{PERSISTENT_READING}"
+            )
         return "; ".join(parts) + "."
 
     def full(self) -> Dict[str, Any]:
@@ -3278,6 +3324,7 @@ class TriageResult:
             "templates": [self._tpl_view(t, full=True) for t in tpls],
             "bursts": [self._burst_view(b, full=True) for b in self.bursts],
             "burst_threshold": self.burst_stats,
+            "persistent_errors": self._persistent_view(None),
             "entities": {
                 **{
                     k: v
