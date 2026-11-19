@@ -1,6 +1,12 @@
 ---
 name: oss-dashboard
 description: Build a private maintainer dashboard for an open-source GitHub project — adoption (release and registry downloads), growth (stars, forks, newcomers, retention, outside contributions, bus factor), development velocity (PRs, issues, time to merge), CI health (pass rate, flaky commits, CI time, test counts) and optional eval/benchmark results — as a Cloudflare Worker + D1 behind Cloudflare Access, with nightly collection that keeps the history GitHub throws away. Use when asked to build, scaffold, deploy, audit or extend a project/admin/maintainer/traction/metrics/KPI dashboard for an OSS repo, or to track downloads, stars, contributors or CI trends over time.
+metadata:
+  gaia:
+    permissions:
+      - env:read
+      - network:write
+      - filesystem:write
 ---
 
 # OSS project dashboard
@@ -41,7 +47,7 @@ Needs: Node 22.5+, Python 3.11+, the GitHub CLI or a `GITHUB_TOKEN`, and a Cloud
 
 ### 1. Probe the repository
 ```bash
-python <skill>/scripts/probe_repo.py owner/name --out probe.json
+GITHUB_TOKEN="$(gh auth token)" python <skill>/scripts/probe_repo.py owner/name --out probe.json
 ```
 Read every warning. Confirm with the user: default branch, the test workflow (the probe lists candidates — it
 is a guess; for Go it must run with `-v`, `-json` or gotestsum to be countable), which events CI runs on the
@@ -59,7 +65,7 @@ pass untouched. "project" checks this repository: `assets.test.ts` fails until e
 published is an install with a product and an OS, or metadata (update feed, checksum, signature, SBOM);
 `tags.test.ts` checks `RELEASE_TAG` against its real tags — in a monorepo, scaffold picks the most common tag prefix
 as the main product line; confirm that choice with the user. Fix `PRODUCT_RULES`, `OS_RULES`, `META_FILES` or `RELEASE_TAG` in
-`src/config.ts`, or list a file that truly has no OS in `ACCEPTED_NO_OS` in `test/assets.test.ts` — never weaken a
+`<dir>/src/config.ts`, or list a file that truly has no OS in `ACCEPTED_NO_OS` in `test/assets.test.ts` — never weaken a
 test otherwise. Rename the generated product labels with the user.
 
 ### 3. Run it on real data
@@ -71,7 +77,7 @@ set each green floor a little above them. Peers go in `BENCHMARKS` as context, n
 
 ### 4. Audit until a round finds nothing
 ```bash
-python scripts/audit_numbers.py http://127.0.0.1:8787/<path> --repo owner/name    # scaffold copies the scripts in
+GITHUB_TOKEN="$(gh auth token)" python scripts/audit_numbers.py http://127.0.0.1:8787/<path> --repo owner/name    # scaffold copies the scripts in
 ```
 It re-counts PRs, issues, CI pass rate, stars and downloads straight from GitHub over the exact windows the
 dashboard used. Then walk `references/accuracy-checklist.md`. Best results came from independent reviewer
@@ -119,11 +125,11 @@ API limits and quirks for each source: `references/data-sources.md`. UI conventi
 
 | Path | What |
 |------|------|
-| `template/` | The Worker: `src/config.ts` (all project settings), collectors, API, pages, migrations, ~370 tests on real SQLite |
-| `scripts/probe_repo.py` | Sizes the repo, checks token access, finds the test workflow and the CI events on the default branch, packages, every release file and tag |
-| `scripts/scaffold.py` | Template + probe → configured project (`--route` with optional `--zone`, or `--workers-dev`): config, release-file and tag tests, and the two scripts below copied in |
-| `scripts/audit_numbers.py` | Re-counts headline numbers from GitHub over the dashboard's exact windows |
-| `scripts/verify_deploy.py` | Proves a deployment is private and its sources healthy (`--anonymous-only` before a service token exists) |
+| `template/` | The Worker: `template/src/config.ts` (all project settings), collectors, API, pages, migrations, ~370 tests on real SQLite |
+| `<skill>/scripts/probe_repo.py` | Sizes the repo, checks token access, finds the test workflow and the CI events on the default branch, packages, every release file and tag |
+| `<skill>/scripts/scaffold.py` | Template + probe → configured project (`--route` with optional `--zone`, or `--workers-dev`): config, release-file and tag tests, and the two scripts below copied in |
+| `<skill>/scripts/audit_numbers.py` | Re-counts headline numbers from GitHub over the dashboard's exact windows |
+| `<skill>/scripts/verify_deploy.py` | Proves a deployment is private and its sources healthy (`--anonymous-only` before a service token exists) |
 | `references/` | metrics and thresholds, data sources, accuracy checklist, UX, publishing, extending, evals contract |
 
 The template is derived from the GAIA admin dashboard (github.com/amd/gaia `workers/admin`, MIT).

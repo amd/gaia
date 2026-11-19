@@ -287,3 +287,65 @@ describe('the GAIA agent is not installed', () => {
         expect(mocked.sendMessageStream).not.toHaveBeenCalled();
     });
 });
+
+describe('the version setup works on', () => {
+    function stubUpdater() {
+        const bridge = {
+            getStatus: vi.fn(async () => ({ status: 'idle' })),
+            onStatusChange: vi.fn(() => () => {}),
+            markSetupWorked: vi.fn(async () => ({ status: 'idle' })),
+        };
+        vi.stubGlobal('gaiaUpdater', bridge);
+        return bridge;
+    }
+
+    it('is recorded when the launch check finds setup ready', async () => {
+        const bridge = stubUpdater();
+        render(<App />);
+        await advance(0);
+        expect(bridge.markSetupWorked).toHaveBeenCalledTimes(1);
+    });
+
+    it('is recorded when first-run setup finishes, not before', async () => {
+        const bridge = stubUpdater();
+        mocked.checkSetup.mockResolvedValue({ ready: false, steps: [] });
+        render(<App />);
+        await advance(0);
+        expect(bridge.markSetupWorked).not.toHaveBeenCalled();
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start chatting' })); });
+        await advance(0);
+        expect(bridge.markSetupWorked).toHaveBeenCalledTimes(1);
+    });
+
+    it('is not recorded on a cloud model, which never ran local setup', async () => {
+        const bridge = stubUpdater();
+        mocked.getActiveModel.mockResolvedValue({
+            provider: 'fireworks', model: 'qwen', label: 'Qwen', display_name: 'Qwen', remote: true, is_default: false,
+        } as never);
+        render(<App />);
+        await advance(0);
+        expect(mocked.checkSetup).toHaveBeenCalled();
+        expect(bridge.markSetupWorked).not.toHaveBeenCalled();
+    });
+
+    it('is not recorded when updating the model server failed, and the way back is offered', async () => {
+        const bridge = stubUpdater();
+        bridge.getStatus.mockResolvedValue({
+            status: 'idle', currentVersion: '0.26.0', lastWorking: { version: '0.25.0', at: '2026-11-02T09:30:00.000Z' },
+        } as never);
+        mocked.checkSetup.mockResolvedValue({ ready: false, stage: 'upgrade', steps: [] } as never);
+        mocked.getSetupStatus.mockResolvedValue({ state: 'failed', upgrade_embedded: true, error: 'exit code 127', steps: [] } as never);
+        render(<App />);
+        await advance(0);
+        expect(screen.getByRole('button', { name: 'Go back to GAIA 0.25.0' })).toBeInTheDocument();
+        expect(bridge.markSetupWorked).not.toHaveBeenCalled();
+    });
+
+    it('is not recorded when setup could not be checked', async () => {
+        const bridge = stubUpdater();
+        mocked.checkSetup.mockRejectedValue(new Error('HTTP 500'));
+        render(<App />);
+        await advance(0);
+        expect(bridge.markSetupWorked).not.toHaveBeenCalled();
+    });
+});

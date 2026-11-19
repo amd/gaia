@@ -29,8 +29,62 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   of the limit, so one long early step no longer ends the turn near its
   halfway point, and the answer after a time-limit stop is a short summary (at
   most 2,048 tokens) that names files instead of repeating them.
+- **`gaia -p` can download a local model that is not on disk yet**, then
+  answer with it, instead of refusing the run. It asks first, on stderr, with
+  the model and its size (`Download it now? [y/N]`); only `y` or `yes`
+  downloads. Where nobody can answer (a script, a piped prompt, redirected
+  stderr) nothing is downloaded and the run exits 1 naming `--yes` (`-y`),
+  which agrees in advance. The progress goes to stderr: a bar with percent and
+  downloaded/total size on a terminal, one plain line every 10% in a pipe or
+  log file. stdout still carries only the answer. Ctrl+C at the question or
+  during the download exits 130; a failed download exits 1 with the reason.
 ### Changed
 
+- **A file a skill's tool saves counts as saved.** A deck or report written by
+  a skill tool existed on disk, yet the turn ended "incomplete" with "No
+  successful write to `deck.pptx` is recorded for this turn", because the
+  completion check only knew the built-in write tools. A write made through
+  `gaia.skills.context` (`check_write`, `open_write`) is now on the same
+  record once the file has really changed, and so is a file whose path a
+  tool's result reports and that changed during the call.
+- **A built file gets one short self-check, not a second pass over the
+  work.** On long local-model tasks a requirement the request stated was
+  dropped (a tab, a chart, a length limit), an implausible result went out
+  unquestioned, or a duplicate input row reached a total. A turn that built a
+  document or data file is now asked once, in a few lines, to mark each
+  stated requirement met or not and to answer three plausibility questions;
+  figures are checked against sources only in prose that quotes them. With
+  nothing wrong it costs one short model step and the answer is unchanged.
+  Slide counts, named tabs, word limits, empty files and wrong extensions are
+  checked in code and raised only when wrong. The check shrinks or is skipped
+  when a time limit is nearly used up, never ends a finished turn
+  "incomplete", logs each firing (`[check:self]`), and is turned off with
+  `GAIA_AGENT_SELF_CHECK=0`.
+- **Finished work is no longer reported as unfinished or unsourced.** A turn
+  whose file exists ends `success`; a file not read back after its last
+  change is a "Not checked:" line in the answer, listed in
+  `completion_caveats`. A skill's check tool that opened the file has read it
+  back, and so has a full read followed only by in-place edits. A check tool
+  that returns findings (`"status": "errors_found"`, `"ok": false`) is a
+  successful call, not a tool error. Figures in a file a script or tool built
+  are no longer listed as "figures I found no source for" unless a call typed
+  them.
+- **A loaded skill's tools stay on the tool list, and `load_skill` says
+  which ones.** A skill loaded by a skill set, or by any agent that picks
+  its own tools each turn, could name tools the model was never sent. Every
+  loaded skill's tools are now listed each turn, whether or not its
+  instructions are showing. The `load_skill` result lists the tools now
+  callable (`tools_available`) and names any that are turned off
+  (`unavailable_tools`) instead of reporting plain success, and the log
+  records tools added mid-turn (`TOOL_LOADER ... "event": "admit"`).
+- **Declining one tool call no longer ends the task.** A declined call told the
+  model not to get the same result "another way" and to stop, so one refused
+  script closed every other route to the work. The no now covers that action
+  only: the same command, script, host or change to the same file is still
+  stopped whichever tool carries it, and the model is told to carry on by
+  other means and say what it could not do. A declined command covers what it
+  named (`pip install pandas`, not every `pip install`), and a file a declined
+  Python script would only have created is no longer off limits.
 - **Office files are checked before they are handed over.** The bundled
   `office-docs` skill ships two tools that never write the file.
   `verify_workbook` recalculates a copy of an .xlsx (with LibreOffice when
@@ -104,6 +158,13 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
 ### Fixed
 
+- A model added with `gaia model add` downloads by its id alone. A pull that
+  did not stream progress sent no registration, so Lemonade answered "not
+  registered with Lemonade Server"; it now sends the added model's checkpoint,
+  recipe, vision projector and labels, as the streamed pull did.
+- A model's size is no longer guessed from part of its name when GAIA has it
+  on record: a 27B model added at 18.6 GB was reported as 5.0 GB, because
+  "27B" was read as "7B".
 - A reply that goes quiet partway through is requested again, up to twice,
   instead of ending the turn; the work done so far is kept either way.
 - A file a script wrote and the agent then showed whole with `cat` counts as

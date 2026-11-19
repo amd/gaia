@@ -1813,6 +1813,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 sessionId={sessionId}
                 messages={messages}
                 busy={busy}
+                usage={contextUsage}
                 onUsage={showContextUsage}
                 onJumpToMessage={jumpToMessage}
             />
