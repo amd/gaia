@@ -54,6 +54,15 @@ GAIA_CONFIG_FILE = Path(
     os.getenv("GAIA_CONFIG_FILE", str(GAIA_CONFIG_DIR / "config.json"))
 )
 
+#: Where the image tool saves what it generates, below ``GAIA_CONFIG_DIR``.
+GENERATED_IMAGES_SUBDIR = Path("cache", "sd", "images")
+
+
+def generated_images_dir() -> Path:
+    """Return the folder the image tool saves into, read at call time."""
+    return GAIA_CONFIG_DIR / GENERATED_IMAGES_SUBDIR
+
+
 # Read-aloud speed, as a percentage of Kokoro's normal speed.
 READ_ALOUD_MIN_SPEED = 50
 READ_ALOUD_MAX_SPEED = 200
@@ -130,6 +139,14 @@ def unsafe_gaia_home_reason(resolved: Path, user_home: Path) -> Optional[str]:
     return None
 
 
+#: Config keys naming a model for the ``hybrid`` router (see gaia.llm.hybrid).
+HYBRID_MODEL_KEYS = (
+    "hybrid_cheap_model",
+    "hybrid_strong_model",
+    "hybrid_classifier_model",
+)
+
+
 @dataclass
 class GaiaConfig:
     """Persistent GAIA configuration.
@@ -180,6 +197,11 @@ class GaiaConfig:
             or ``cpu``) GAIA asks Lemonade for when it loads a local chat
             model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
             Takes effect on the next load; the embedding model keeps its own.
+        cloud_reasoning_effort: ``off`` (the default) sends cloud models no
+            ``reasoning_effort``, leaving each at its provider's default.
+            ``low``, ``medium`` or ``high`` turns on a one-time probe per cloud
+            model and sends that effort to each one seen reasoning, at the cost
+            of more tokens and slower replies.
         context_sizes: Context window, in tokens, the user chose per local
             model in the Agent UI (model id -> tokens). Every load of that
             model uses it; a model not listed gets GAIA's automatic size.
@@ -206,6 +228,18 @@ class GaiaConfig:
             form, and move to every tool at most once, so the first reply reads
             less and the prompt cache survives. Applies to new sessions.
             ``GAIA_DYNAMIC_TOOLS`` overrides it.
+        hybrid_cheap_model: Model the ``hybrid`` model id runs a turn on when
+            the classifier judges it routine. ``None`` uses
+            ``amd.DeepSeek-V4.1-Flash``. See :mod:`gaia.llm.hybrid`.
+        hybrid_strong_model: Model ``hybrid`` runs every other turn on.
+            ``None`` uses ``amd.Claude-Opus-5-5``.
+        hybrid_classifier_model: Model that labels each turn for ``hybrid``.
+            ``None`` uses the cheap model.
+        hybrid_classifier_timeout: Seconds ``hybrid`` waits for the label
+            (1-120) before running the turn on the strong model.
+        hybrid_policy: How readily ``hybrid`` uses the cheap model:
+            ``quality`` (default) or ``balanced``, which also sends
+            medium-difficulty code changes to it.
     """
 
     profile: str = "chat"
@@ -221,6 +255,7 @@ class GaiaConfig:
     lemonade_env_url_ignored: Optional[str] = None
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
+    cloud_reasoning_effort: str = "off"
     context_sizes: Dict[str, int] = field(default_factory=dict)
     undo_retention_days: int = 7
     undo_max_mb: int = 500
@@ -230,6 +265,11 @@ class GaiaConfig:
     read_aloud_speed: int = 100
     read_aloud_auto: bool = False
     dynamic_tools: bool = True
+    hybrid_cheap_model: Optional[str] = None
+    hybrid_strong_model: Optional[str] = None
+    hybrid_classifier_model: Optional[str] = None
+    hybrid_classifier_timeout: int = 15
+    hybrid_policy: str = "quality"
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None
@@ -280,6 +320,14 @@ class GaiaConfig:
             return check_read_aloud_voice(value)
         if key == "read_aloud_speed":
             return check_read_aloud_speed(cls._whole_number(key, value))
+        if key in HYBRID_MODEL_KEYS:
+            return cls._check_hybrid_model(key, value, "gaia config")
+        if key == "hybrid_classifier_timeout":
+            return cls._check_hybrid_timeout(
+                cls._whole_number(key, value), "gaia config"
+            )
+        if key == "hybrid_policy":
+            return cls._check_hybrid_policy(value, "gaia config")
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
@@ -375,6 +423,22 @@ class GaiaConfig:
             )
         return word
 
+    #: Values ``cloud_reasoning_effort`` accepts; ``off`` sends no effort.
+    CLOUD_REASONING_EFFORT_CHOICES = ("off", "low", "medium", "high")
+
+    @classmethod
+    def _check_cloud_reasoning_effort(cls, value: Any, where: str) -> str:
+        """Normalise a ``cloud_reasoning_effort`` value, raising on anything else."""
+        word = str(value).strip().lower() if isinstance(value, str) else value
+        if word not in cls.CLOUD_REASONING_EFFORT_CHOICES:
+            raise GaiaConfigError(
+                f"{where}: 'cloud_reasoning_effort' must be one of "
+                f"{', '.join(cls.CLOUD_REASONING_EFFORT_CHOICES)}, but it is "
+                f"{value!r}. Run `gaia config set cloud_reasoning_effort off` to "
+                "restore the default."
+            )
+        return word
+
     @staticmethod
     def _check_project_context(value: Any, where: str, remedy: str) -> Optional[str]:
         """``full`` or ``off``; ``auto`` (or empty) is stored as None."""
@@ -389,6 +453,46 @@ class GaiaConfig:
         except ProjectContextError as e:
             raise GaiaConfigError(str(e)) from e
         return None if word == AUTO else word
+
+    @staticmethod
+    def _check_hybrid_model(key: str, value: Any, where: str) -> Optional[str]:
+        """A hybrid model id; empty means the default (stored as None)."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise GaiaConfigError(
+                f"{where}: '{key}' must be a model id, but it is {value!r}."
+            )
+        value = value.strip()
+        if value.lower() == "hybrid":
+            raise GaiaConfigError(
+                f"{where}: '{key}' can't be 'hybrid', which would route to itself. "
+                f'Set it to a concrete model id, or "" for the default.'
+            )
+        return value or None
+
+    @staticmethod
+    def _check_hybrid_timeout(value: int, where: str) -> int:
+        if not 1 <= value <= 120:
+            raise GaiaConfigError(
+                f"{where}: 'hybrid_classifier_timeout' must be 1-120 seconds, but "
+                f"it is {value}. Run `gaia config set hybrid_classifier_timeout 15` "
+                "for the default."
+            )
+        return value
+
+    @staticmethod
+    def _check_hybrid_policy(value: Any, where: str) -> str:
+        from gaia.llm.hybrid import DEFAULT_POLICY, POLICIES
+
+        word = value.strip().lower() if isinstance(value, str) else value
+        if word not in POLICIES:
+            raise GaiaConfigError(
+                f"{where}: 'hybrid_policy' must be one of {', '.join(POLICIES)}, "
+                f"but it is {value!r}. Run `gaia config set hybrid_policy "
+                f"{DEFAULT_POLICY}` for the default."
+            )
+        return word
 
     @staticmethod
     def _check_context_sizes(value: Any, config_file: Path) -> None:
@@ -533,6 +637,22 @@ class GaiaConfig:
         if "llamacpp_backend" in kwargs:
             kwargs["llamacpp_backend"] = cls._check_llamacpp_backend(
                 kwargs["llamacpp_backend"], f"GAIA config at {config_file}"
+            )
+        if "cloud_reasoning_effort" in kwargs:
+            kwargs["cloud_reasoning_effort"] = cls._check_cloud_reasoning_effort(
+                kwargs["cloud_reasoning_effort"], f"GAIA config at {config_file}"
+            )
+        where = f"GAIA config at {config_file}"
+        for key in HYBRID_MODEL_KEYS:
+            if key in kwargs:
+                kwargs[key] = cls._check_hybrid_model(key, kwargs[key], where)
+        if "hybrid_classifier_timeout" in kwargs:
+            kwargs["hybrid_classifier_timeout"] = cls._check_hybrid_timeout(
+                kwargs["hybrid_classifier_timeout"], where
+            )
+        if "hybrid_policy" in kwargs:
+            kwargs["hybrid_policy"] = cls._check_hybrid_policy(
+                kwargs["hybrid_policy"], where
             )
         if "project_context" in kwargs:
             kwargs["project_context"] = cls._check_project_context(
@@ -685,6 +805,9 @@ class GaiaConfig:
                     "auto to let Lemonade pick."
                 )
             setattr(self, key, backend)
+            return
+        if key == "cloud_reasoning_effort":
+            setattr(self, key, self._check_cloud_reasoning_effort(value, "gaia config"))
             return
         if key == "context_sizes":
             raise GaiaConfigError(

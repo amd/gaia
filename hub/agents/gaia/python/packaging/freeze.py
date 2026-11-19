@@ -80,6 +80,8 @@ SKILLS_DEST = "gaia_agent/skills"
 # Linux only: the bundled OpenSSL looks for CA certs where the BUILD distro keeps
 # them, so point it at the host's bundle (see the hook's docstring).
 LINUX_CA_HOOK = HERE / "rthook_linux_ca.py"
+#: Every platform: caps OpenBLAS's pool before the entry script can load numpy.
+BLAS_THREADS_HOOK = REPO_ROOT / "src" / "gaia" / "blas_threads.py"
 #: Third-party licence notices for the libraries the binary bundles.
 NOTICES = [
     (REPO_ROOT / "THIRD_PARTY_NOTICES.md", "."),
@@ -521,6 +523,7 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         args += ["--add-data", f"{source}{os.pathsep}{dest}"]
     for mod in EXCLUDES:
         args += ["--exclude-module", mod]
+    args += ["--runtime-hook", str(BLAS_THREADS_HOOK)]
     if sys.platform.startswith("linux"):
         args += ["--runtime-hook", str(LINUX_CA_HOOK)]
     args.append("--onefile" if onefile else "--onedir")

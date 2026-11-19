@@ -266,7 +266,7 @@ class TestIdentityContext:
                     provider="google",
                     scopes=["https://www.googleapis.com/auth/gmail.readonly"],
                     agent_id=None,
-                    account_email="default",
+                    slot="default",
                 )
         assert exc.value.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED
 

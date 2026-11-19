@@ -69,8 +69,17 @@ from uuid import uuid4
 import numpy as np
 
 from gaia.agents.base import turn_metrics
+from gaia.agents.base.checks import (
+    CheckResult,
+    command_check_target,
+    summary_reports_failure,
+)
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.history import MEMORY_CONTEXT_HEADER, frame_user_message
+from gaia.agents.base.memory_privacy import (  # noqa: F401  # pylint: disable=unused-import
+    memory_off_reason,
+    memory_writes_refused,
+)
 from gaia.agents.base.memory_store import (
     CONSOLIDATION_MIN_TURNS,
     EXTRACTABLE_CATEGORIES,
@@ -81,6 +90,7 @@ from gaia.agents.base.memory_store import (
     MemoryContentError,
     MemoryScrubError,
     content_stems,
+    fact_words,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
 from gaia.agents.base.tool_outcome import (
@@ -91,6 +101,7 @@ from gaia.agents.base.tool_outcome import (
 )
 from gaia.agents.base.verification import check_was_executed
 from gaia.chat.sdk import AgentSDK, LLMCallCancelled
+from gaia.credential_shapes import TOKEN_SHAPES
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     EMBED_MAX_CHARS,
@@ -99,6 +110,7 @@ from gaia.llm.lemonade_client import (
     backend_crash_remedy,
     configured_lemonade_url,
     find_model_requirement,
+    reasoning_headroom,
 )
 from gaia.llm.reasoning import strip_reasoning
 from gaia.llm.retry import (
@@ -307,7 +319,11 @@ _STABLE_PERSONAL_SECTIONS = (
     ("preference", "Preferences"),
     ("fact", "Known facts"),
     ("skill", "Skills"),
-    ("error", "Problems seen before (may be fixed since; check again when asked)"),
+    (
+        "error",
+        "Problems seen before (GAIA's own notes, not about the user; "
+        "may be fixed since; check again when asked)",
+    ),
     ("reminder", "Reminders on file (bring up only when relevant)"),
     ("note", "Notes"),
 )
@@ -440,9 +456,9 @@ def _forget_shared(words: set, content: str) -> set:
     }
 
 
-def _forget_text(item: Dict) -> str:
-    """*item*'s words in order, for telling copies of one memory apart."""
-    return " ".join(re.findall(r"[a-z0-9]+", str(item.get("content", "")).lower()))
+def _forget_text(item: Dict) -> Tuple[str, ...]:
+    """*item*'s words bar filler, for telling copies of one memory apart."""
+    return fact_words(str(item.get("content", "")))
 
 
 _FORGET_SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
@@ -603,6 +619,33 @@ SAVE_WHEN_ASKED_PROMPT = (
     "was saved. Call `remember` now with what they asked you to keep, then give "
     "your answer."
 )
+
+
+def _saved_despite(ignored: Dict[str, str], knowledge_id: str) -> str:
+    """What remember tells the model after saving without a bad optional argument.
+
+    Opens with "Saved": the model repeats a tool result's first words to the user.
+    """
+    parts = ["Saved."]
+    if "category" in ignored:
+        name = ignored["category"]
+        why = (
+            f"a chat can't write the '{name}' category"
+            if name in VALID_CATEGORIES
+            else f"'{name}' is not a category"
+        )
+        parts.append(
+            f"Filed as a fact: {why} "
+            f"(use one of {sorted(EXTRACTABLE_CATEGORIES)}), so it was ignored."
+        )
+    if "due_at" in ignored:
+        parts.append(
+            f"No due date was set: '{ignored['due_at']}' is not an ISO 8601 "
+            "date, so there is no reminder yet. To add one, call "
+            f"update_memory(knowledge_id='{knowledge_id}', due_at=...) with a "
+            "date like 2026-11-20T09:00."
+        )
+    return " ".join(parts)
 
 
 def _own_words(text: str) -> List[str]:
@@ -921,17 +964,23 @@ WRITE_FAILURE_INDEX = "index"  # vector stored, not in this session's index
 WRITE_FAILURE_STORE = "store"  # row not saved at all
 
 
-def memory_off_reason(agent) -> str:
-    """Why *agent* is not storing memory, in words the user can act on."""
-    reason = getattr(agent, "_incognito_reason", None)
-    if reason == "private":
-        return "This is a private chat, so nothing is saved to memory."
-    if reason == "memory_off":
-        return (
-            "Memory is turned off in Settings, so nothing is saved. "
-            "It can be turned back on there."
-        )
-    return "Memory is off for this session, so nothing is saved."
+#: Where the user can still make a change a chat may not, by what was refused.
+_REFUSED_CHANGE_REMEDY = {
+    "updated": " Nothing was updated; the user can change it on the Memory page.",
+    "erased": " Nothing was erased; the user can erase it on the Memory page.",
+}
+
+
+def _writes_refused_result(agent, done: str) -> Optional[dict]:
+    """The tool result for a memory change refused now, or None."""
+    reason = memory_writes_refused(agent)
+    if reason is None:
+        return None
+    remedy = _REFUSED_CHANGE_REMEDY.get(done, "")
+    return {
+        "status": "skipped",
+        "message": f"{reason}{remedy} Don't tell the user it was {done}.",
+    }
 
 
 _REEMBED_HINT = (
@@ -1138,6 +1187,15 @@ def _classify_embedding_failure(exc: Exception) -> str:
     return MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE
 
 
+#: What remember / update_memory say when they refuse a secret. Unsaid, the
+#: model took "not stored" as "gone" and denied a secret still on screen.
+_CREDENTIAL_NOT_STORED = (
+    "Not stored — this looks like a credential (API key, password, or similar "
+    "secret). GAIA does not keep secrets in memory, so a new chat won't know "
+    "it. The user's message is still in this chat, as it was sent."
+)
+
+
 class MemoryMixin(ProceduralMemoryMixin):
     """
     Mixin that gives any Agent persistent memory across sessions (v2).
@@ -1293,6 +1351,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
 
         self._memory_embedder_pending = False
+        # Startup writes a private or memory-off session holds for a memory-on turn.
+        self._memory_startup_writes_pending = False
+        self._system_context_pending = False
         if incognito:
             # Memory is off for this session: load the embedder on first use.
             self._incognito = True
@@ -1302,10 +1363,10 @@ class MemoryMixin(ProceduralMemoryMixin):
             return
 
         # Step 10: Initialize system context on first run (non-blocking)
-        try:
-            self.init_system_context()
-        except Exception as e:
-            logger.warning("[MemoryMixin] system context initialization failed: %s", e)
+        if memory_writes_refused(self):
+            self._system_context_pending = True
+        else:
+            self._init_system_context_at_startup()
 
         logger.info(
             "[MemoryMixin] v2 initialized, session_id=%s context=%s",
@@ -1440,6 +1501,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         # instance with Lemonade up will init memory normally), and tracked
         # via ``_memory_store is None`` checks at every memory operation.
         # A reachable Lemonade that lacks the embedder gets it pulled first.
+        refused = memory_writes_refused(self)
         try:
             try:
                 dim = self._probe_embedder()
@@ -1463,8 +1525,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                 self._embedding_model,
                 self._embedding_dim,
             )
-            # Clears vectors from any other embedder so backfill re-embeds them.
-            self._memory_store.reconcile_embedder(self._embedding_model)
+            if not refused:
+                # Clears vectors from any other embedder so backfill re-embeds them.
+                self._memory_store.reconcile_embedder(self._embedding_model)
         except Exception as e:
             reason = _classify_embedding_failure(e)
             self._memory_unavailable_reason = reason
@@ -1501,9 +1564,23 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._reminder_last_turn_at = None
             return False
 
-        # (Embedder-change migration is handled above via the store's
-        # reconcile_embedder.)
+        if refused:
+            logger.info(
+                "[MemoryMixin] %s Embedder reconcile, embedding backfill and "
+                "confidence decay wait for a turn with memory on.",
+                refused,
+            )
+            self._memory_startup_writes_pending = True
+            self._index_stored_vectors_read_only()
+        else:
+            self._apply_startup_writes()
 
+        # Steps 6-8 need self.chat, so they run on the first query; prune follows consolidation.
+        self._memory_post_init_pending = True
+        return True
+
+    def _apply_startup_writes(self) -> None:
+        """Backfill, index and decay (startup steps 3-5), after the embedder reconcile."""
         # Step 3: Backfill embeddings for items missing them
         backfilled = self._backfill_embeddings(limit=100)
         if backfilled > 0:
@@ -1520,17 +1597,66 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Step 5: apply_confidence_decay()
         self._memory_store.apply_confidence_decay()
 
-        # Steps 6-8 need self.chat, so they run on the first query; prune follows consolidation.
-        self._memory_post_init_pending = True
-        return True
+    def _index_stored_vectors_read_only(self) -> None:
+        """Build the in-memory indexes without changing the store.
+
+        Vectors stamped by another embedder live in a different space, and
+        clearing them is a write, so they stay out of the index until a
+        memory-on turn re-embeds them.
+        """
+        store = self._memory_store
+        stamped = store.get_embedder_id()
+        if stamped != self._embedding_model:
+            stored = store.iter_items_with_embeddings(include_sensitive=True)
+            if next(iter(stored), None) is not None:
+                logger.warning(
+                    "[MemoryMixin] stored memory vectors came from embedder %s, "
+                    "not %s. Memory writes are off in this session, so they are "
+                    "not re-embedded: recall by meaning is off here and keyword "
+                    "recall still works. A turn with memory on re-embeds them.",
+                    stamped or "an unrecorded, pre-2026-07 embedder",
+                    self._embedding_model,
+                )
+            with self._get_faiss_lock():
+                self._faiss_index = None
+                self._faiss_id_map = []
+            self._proc_faiss_index = None
+            self._proc_faiss_id_map = []
+            return
+        self._rebuild_faiss_index()
+        self._rebuild_proc_faiss_index()
+
+    def _init_system_context_at_startup(self) -> None:
+        """Store system context; a failure is logged, never fatal to start-up."""
+        try:
+            self.init_system_context()
+        except Exception as e:
+            logger.warning("[MemoryMixin] system context initialization failed: %s", e)
+
+    def _run_deferred_startup_writes(self) -> None:
+        """Run the startup writes a private or memory-off start held, once allowed."""
+        if getattr(self, "_memory_store", None) is None or memory_writes_refused(self):
+            return
+        if getattr(self, "_memory_startup_writes_pending", False):
+            self._memory_startup_writes_pending = False
+            logger.info("[MemoryMixin] memory on — running the held startup upkeep")
+            self._memory_store.reconcile_embedder(self._embedding_model)
+            self._apply_startup_writes()
+        if getattr(self, "_system_context_pending", False):
+            self._system_context_pending = False
+            self._init_system_context_at_startup()
 
     def _finish_deferred_memory_init(self) -> None:
-        """Load the embedder ``init_memory(incognito=True)`` deferred, once."""
-        if not getattr(self, "_memory_embedder_pending", False):
-            return
-        self._memory_embedder_pending = False
-        logger.info("[MemoryMixin] memory in use — loading the deferred embedder")
-        self._start_memory_embedder()
+        """Load the embedder ``init_memory(incognito=True)`` deferred, once.
+
+        Its store writes wait until memory writes are allowed.
+        """
+        if getattr(self, "_memory_embedder_pending", False):
+            self._memory_embedder_pending = False
+            logger.info("[MemoryMixin] memory in use — loading the deferred embedder")
+            if not self._start_memory_embedder():
+                return
+        self._run_deferred_startup_writes()
 
     @staticmethod
     def _system_context_refresh_reason(existing: List[Dict]) -> Optional[str]:
@@ -2358,10 +2484,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             )
             pool_by_id = {item["id"]: item for item in candidate_pool}
 
-            # Preserve FAISS ranking order, only keep items that pass filters
+            # Preserve FAISS ranking order, only keep items that pass filters.
+            # The embedding BLOB is for the index; results go to the model.
             for kid, _score in faiss_hits:
                 item = pool_by_id.get(kid)
                 if item is not None:
+                    item.pop("embedding", None)
                     vector_results.append(item)
 
         # Step 3: FTS5 BM25 search
@@ -2428,7 +2556,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         results = [all_items[kid] for kid in final_ids]
 
         # Step 6: Bump confidence + use_count on recalled items.
-        if count_as_use:
+        if count_as_use and not memory_writes_refused(self):
             store.count_use(results)
 
         return results
@@ -2845,8 +2973,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         memory lifted from it apart from one the user stated.
 
         Only reached when ``_execute_tool`` resolves to this mixin. An agent
-        listing ``Agent`` ahead of ``MemoryMixin`` — ``EmailTriageAgent`` does,
-        and documents it on its ``process_query`` — shadows this override, so
+        listing ``Agent`` ahead of ``MemoryMixin`` shadows this override, so
         its source check sees only the answer.
         """
         cap = EXTRACTION_TOOL_RECORD_DETAIL_CHARS
@@ -3514,7 +3641,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                     messages=[{"role": "user", "content": prompt}],
                     system_prompt="You are a memory reconciliation engine. Return valid JSON only.",
                     temperature=0.1,
-                    max_tokens=256,
+                    max_tokens=256
+                    + reasoning_headroom(getattr(self.chat, "effective_model", None)),
                     **self._side_request_kwargs(),
                 )
 
@@ -3591,11 +3719,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                         e,
                     )
 
-            except json.JSONDecodeError:
-                logger.debug(
-                    "[MemoryMixin] reconciliation JSON parse failed for pair %s/%s",
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    "[MemoryMixin] reconciliation reply for pair %s/%s was not JSON "
+                    "(%s) — it will be re-checked next startup",
                     id_a[:8],
                     id_b[:8],
+                    e,
                 )
             except Exception as e:
                 logger.debug(
@@ -4012,7 +4142,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             # In-session first, so a failed persist below still can't repeat
             # the item on the next turn.
             self._reminders_surfaced.add(item["id"])
-            if getattr(self, "_incognito", False):
+            if memory_writes_refused(self):
                 continue
             try:
                 self._memory_store.update(item["id"], reminded_at=now_iso)
@@ -4235,7 +4365,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             # Run deferred LLM startup tasks on first real query (after self.chat
             # exists). Not in a private or memory-off turn: upkeep sends existing
             # memories to this turn's model, so it waits for a memory-on turn.
-            if not getattr(self, "_incognito", False) and getattr(
+            if not memory_writes_refused(self) and getattr(
                 self, "_memory_post_init_pending", False
             ):
                 self._memory_post_init_pending = False
@@ -4332,9 +4462,9 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             # Log to tool_history before re-raising
             try:
-                if getattr(self, "_memory_store", None) is not None and not getattr(
-                    self, "_incognito", False
-                ):
+                if getattr(
+                    self, "_memory_store", None
+                ) is not None and not memory_writes_refused(self):
                     self._memory_store.log_tool_call(
                         session_id=self.memory_session_id,
                         tool_name=tool_name,
@@ -4370,9 +4500,9 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Log to tool_history
         try:
             with turn_metrics.span("memory_tool_log", tool=tool_name):
-                if getattr(self, "_memory_store", None) is not None and not getattr(
-                    self, "_incognito", False
-                ):
+                if getattr(
+                    self, "_memory_store", None
+                ) is not None and not memory_writes_refused(self):
                     self._memory_store.log_tool_call(
                         session_id=self.memory_session_id,
                         tool_name=tool_name,
@@ -4467,14 +4597,7 @@ class MemoryMixin(ProceduralMemoryMixin):
     _CREDENTIAL_PATTERNS: ClassVar[tuple] = tuple(
         re.compile(p, re.IGNORECASE)
         for p in (
-            r"\bsk-ant-[a-zA-Z0-9_-]{10,}",  # Anthropic API key
-            r"\bsk-[a-zA-Z0-9_-]{20,}",  # OpenAI-style API key
-            r"\bgh[pousr]_[a-zA-Z0-9]{20,}",  # GitHub token (ghp_/gho_/ghu_/ghs_/ghr_)
-            r"\bgithub_pat_[a-zA-Z0-9_]{20,}",  # GitHub fine-grained PAT
-            r"\bAKIA[0-9A-Z]{16}\b",  # AWS access key id
-            r"\bAIza[0-9A-Za-z_-]{20,}",  # Google API key
-            r"\bxox[baprs]-[a-zA-Z0-9-]{10,}",  # Slack token
-            r"\bglpat-[a-zA-Z0-9_-]{20,}",  # GitLab PAT
+            *TOKEN_SHAPES,
             r"\bBearer\s+[a-zA-Z0-9._-]{20,}",  # raw Bearer token
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
@@ -4731,7 +4854,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         store = getattr(self, "_memory_store", None)
         turn_erase_count = getattr(self, "_turn_erase_count", None)
         return (
-            getattr(self, "_incognito", False)
+            memory_writes_refused(self) is not None
             or store is None
             # This turn began before the user erased all of memory.
             or (turn_erase_count is not None and store.erased_since(turn_erase_count))
@@ -4814,11 +4937,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         from gaia.agents.base.project_map import resolve_project_root
         from gaia.agents.tools.search_scope import path_validator_of
+        from gaia.agents.tools.workspace_paths import _workspace_default
 
-        # Same explicit config ProjectMapMixin passes, so lessons and the
-        # project map can never describe two different trees.
+        # Same explicit config and start folder ProjectMapMixin passes, so
+        # lessons and the project map can never describe two different trees.
         explicit = getattr(getattr(self, "config", None), "project_root", None)
-        root = resolve_project_root(explicit)
+        root = resolve_project_root(explicit, start=_workspace_default(self))
         if root:
             return root
         validator = path_validator_of(self)
@@ -5044,7 +5168,11 @@ class MemoryMixin(ProceduralMemoryMixin):
         failures = getattr(self, "_turn_failures", None)
         if failures is None:
             failures = self._turn_failures = {}
-        failures[operation] = {"args": tool_args, "error": error_msg}
+        failures[operation] = {
+            "args": tool_args,
+            "error": error_msg,
+            "counted": self._check_reported_failures(result),
+        }
 
         call = self._canonical_args(tool_args)
         for lesson in self._workspace_lessons():
@@ -5087,6 +5215,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                 self._confirm_lesson(lesson)
                 return
         if failure is None or self._canonical_args(failure["args"]) == call:
+            return
+        if failure.get("counted") and self._same_check(failure["args"], tool_args):
+            # The code changed between the runs, not the check that ran.
             return
 
         difference = self._call_difference(failure["args"], tool_args)
@@ -5219,6 +5350,30 @@ class MemoryMixin(ProceduralMemoryMixin):
         )
 
     @staticmethod
+    def _same_check(before: Any, after: Any) -> bool:
+        """Whether two shell calls ran the same check, output trimming aside."""
+        commands = [
+            args.get("command") if isinstance(args, dict) else None
+            for args in (before, after)
+        ]
+        if not all(isinstance(c, str) for c in commands):
+            return False
+        return command_check_target(commands[0]) == command_check_target(commands[1])
+
+    @staticmethod
+    def _check_reported_failures(result: Any) -> bool:
+        """Whether *result* failed only because the check it ran counted failures.
+
+        Failing tests or lint findings are about the project, not the call.
+        """
+        check = CheckResult.from_result(tool_result_dict(result))
+        return (
+            check is not None
+            and not check.passed
+            and summary_reports_failure(check.summary)
+        )
+
+    @staticmethod
     def _was_refused(result: Any) -> bool:
         """Whether *result*, a dict or a JSON envelope, says the call never ran."""
         data = tool_result_dict(result)
@@ -5247,6 +5402,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             if self._was_refused(result):
                 logger.debug(
                     "[MemoryMixin] not persisting a refusal for '%s': %s",
+                    tool_name,
+                    error_msg[:80],
+                )
+                return
+            if self._check_reported_failures(result):
+                logger.debug(
+                    "[MemoryMixin] not persisting a check's findings for '%s': %s",
                     tool_name,
                     error_msg[:80],
                 )
@@ -5307,7 +5469,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         if getattr(self, "_memory_store", None) is None:
             return
-        if getattr(self, "_incognito", False):
+        if memory_writes_refused(self):
             return
 
         # Use original (pre-augmentation) user text for storage.
@@ -5727,21 +5889,18 @@ class MemoryMixin(ProceduralMemoryMixin):
             """
             if (gone := _store_gone()) is not None:
                 return gone
-            if getattr(mixin, "_incognito", False):
-                return {
-                    "status": "skipped",
-                    "message": memory_off_reason(mixin),
-                }
+            if (refused := _writes_refused_result(mixin, "stored")) is not None:
+                return refused
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
 
+            # A bad label must not lose the fact: save without it and say so.
+            ignored: Dict[str, str] = {}
+            # Privileged categories too: those rows lead every prompt, so a
+            # chat can't write one, but the fact itself is kept.
             if category not in EXTRACTABLE_CATEGORIES:
-                return {
-                    "status": "error",
-                    "message": (
-                        f"Invalid category. Use: {sorted(EXTRACTABLE_CATEGORIES)}"
-                    ),
-                }
+                ignored["category"] = category
+                category = "fact"
 
             if category == "error" and MemoryMixin._is_unlearnable_error(fact):
                 return {
@@ -5783,11 +5942,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
                 return {
                     "status": "skipped",
-                    "message": (
-                        "Not stored — this looks like a credential (API key, "
-                        "password, or similar secret). GAIA does not keep "
-                        "secrets in memory; use a password manager instead."
-                    ),
+                    "message": _CREDENTIAL_NOT_STORED
+                    + " Use a password manager instead.",
                 }
 
             if category not in UNSOURCED_CATEGORIES and mixin._unrequested_material(
@@ -5804,10 +5960,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 try:
                     datetime.fromisoformat(due_at)
                 except ValueError:
-                    return {
-                        "status": "error",
-                        "message": "Invalid due_at. Use ISO 8601 format.",
-                    }
+                    ignored["due_at"] = due_at
+                    due_at = ""
 
             # The agent owns scoping. A label the model picks can file a
             # memory where no later session reads it.
@@ -5843,14 +5997,19 @@ class MemoryMixin(ProceduralMemoryMixin):
             )
 
             msg = f"Remembered: {fact[:80]}"
+            if ignored:
+                msg = f"{_saved_despite(ignored, knowledge_id)} {msg}"
             if was_truncated:
                 msg += f" (note: content was truncated to {MAX_CONTENT_LENGTH} chars)"
-            return {
+            result = {
                 "status": "stored",
                 "stored": 1,
                 "knowledge_id": knowledge_id,
                 "message": msg,
             }
+            if ignored:
+                result["ignored"] = ignored
+            return result
 
         @tool
         def recall(
@@ -5869,7 +6028,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             With query=, runs hybrid semantic + keyword search. Without it,
             lists every entry matching the filters — use that to list, browse,
             or count rather than to find one specific memory. A bare recall()
-            lists recent non-sensitive rows.
+            lists the recent non-sensitive memories about the user, the ones
+            Memory > About you shows.
 
             Args:
                 query: Free-text search; enables hybrid search mode.
@@ -6005,6 +6165,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 page = mixin._memory_store.get_all_knowledge(
                     context=context or None,
                     sensitive=False if unfiltered else None,
+                    # Matches Memory > About you, which the user can see and forget.
+                    about_user=unfiltered,
                     limit=limit,
                     offset=offset,
                 )
@@ -6015,7 +6177,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 results = page.get("items", [])
                 if unfiltered:
                     withheld = mixin._memory_store.get_all_knowledge(
-                        context=context or None, sensitive=True, limit=1
+                        context=context or None,
+                        sensitive=True,
+                        about_user=True,
+                        limit=1,
                     ).get("total", 0)
 
             total_ms = (time.perf_counter() - _recall_t0) * 1000
@@ -6071,6 +6236,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Update an existing memory entry by ID. Only non-empty fields change. reminded_at is maintained for you — do not set it after mentioning an item."""
             if (gone := _store_gone()) is not None:
                 return gone
+            if (refused := _writes_refused_result(mixin, "updated")) is not None:
+                return refused
             kwargs = {}
             if content:
                 if not content.strip():
@@ -6085,11 +6252,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     )
                     return {
                         "status": "skipped",
-                        "message": (
-                            "Not stored — this looks like a credential (API "
-                            "key, password, or similar secret). GAIA does not "
-                            "keep secrets in memory."
-                        ),
+                        "message": _CREDENTIAL_NOT_STORED,
                     }
                 # Untruncated: the store checks it for markup, then truncates.
                 kwargs["content"] = content
@@ -6185,15 +6348,20 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Remove one memory: its ID from recall, or the user's words for it (e.g. 'allergic to shellfish'). Words erase only the one memory they clearly match; otherwise nothing is erased and the matching IDs come back. To erase all memory, use forget_everything."""
             if (gone := _store_gone()) is not None:
                 return gone
+            if (refused := _writes_refused_result(mixin, "erased")) is not None:
+                return refused
+            ctx = mixin._memory_context
+            contexts = None if ctx == "global" else (ctx, "global")
             try:
                 # forget(), not delete(): extraction must not learn it again.
-                removed = mixin._memory_store.forget(knowledge_id)
+                erased_ids = mixin._memory_store.forget_with_copies(
+                    knowledge_id, contexts
+                )
             except ValueError as exc:
                 return {"status": "error", "message": str(exc)}
             matches: List[Dict] = []
             candidates: List[Dict] = []
-            erased_ids = [knowledge_id] if removed else []
-            if not removed:
+            if not erased_ids:
                 description = knowledge_id
                 try:
                     matches, candidates = mixin._forget_lookup(description)
@@ -6209,8 +6377,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "display_message": "Couldn't search memory, so nothing was erased",
                     }
                 for item in matches:
-                    if mixin._memory_store.forget(item["id"]):
-                        erased_ids.append(item["id"])
+                    if item["id"] not in erased_ids:
+                        erased_ids += mixin._memory_store.forget_with_copies(
+                            item["id"], contexts
+                        )
             if erased_ids:
                 for kid in erased_ids:
                     mixin._faiss_remove(kid)
@@ -6280,6 +6450,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Erase all of memory in one call: every fact, preference and reminder, sensitive ones included, and stored past conversations. Use for 'forget everything about me' or 'delete all my data'; for one topic use forget. Cannot be undone."""
             if (gone := _store_gone()) is not None:
                 return gone
+            if (refused := _writes_refused_result(mixin, "erased")) is not None:
+                return refused
             try:
                 cleared = mixin._memory_store.clear_all()
             except MemoryScrubError as e:
@@ -6455,7 +6627,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         Generates new session ID and applies confidence decay.
         """
         if getattr(self, "_memory_store", None) is not None:
-            self._memory_store.apply_confidence_decay()
+            if (refused := memory_writes_refused(self)) is not None:
+                logger.info("[MemoryMixin] %s Confidence decay skipped.", refused)
+            else:
+                self._memory_store.apply_confidence_decay()
             self._memory_session_id = str(uuid4())
             # A new session reopens the reminder window; anything still due
             # (reminded_at < due_at) may be raised once on its first turn.

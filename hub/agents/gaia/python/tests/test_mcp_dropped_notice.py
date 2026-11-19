@@ -13,6 +13,7 @@ import pytest
 from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 from gaia.agents.base.console import SilentConsole
+from gaia.mcp.client.mcp_client import MCPTool
 
 
 class _Console:
@@ -27,8 +28,14 @@ class _Console:
 
 
 class _Client:
+    name = prefix = "fake"
+
     def __init__(self, n_tools):
-        self._tools = [{"name": f"t{i}"} for i in range(n_tools)]
+        # Real MCPTools: the agent converts each one before counting it.
+        self._tools = [
+            MCPTool(name=f"t{i}", description="d", input_schema={})
+            for i in range(n_tools)
+        ]
 
     def list_tools(self):
         return self._tools
@@ -37,9 +44,10 @@ class _Client:
 class _Manager:
     """The slice of MCPClientManager that ``_load_mcp_tools`` uses."""
 
-    def __init__(self, servers, load_error=None):
+    def __init__(self, servers, load_error=None, failed=None):
         self._clients = {name: _Client(n) for name, n in servers.items()}
         self._load_error = load_error
+        self._failed = dict(failed or {})
         self.config = MagicMock(load_report={})
         self.config.get_servers.return_value = dict.fromkeys(servers, {})
 
@@ -55,6 +63,9 @@ class _Manager:
 
     def get_client(self, name):
         return self._clients.get(name)
+
+    def failed_servers_for_agent(self, _agent_id):
+        return dict(self._failed)
 
 
 @pytest.fixture
@@ -126,6 +137,43 @@ def test_tool_limit_skip_names_each_server_and_count(configured_home):
     assert "gaia " not in warning  # no CLI command as the remedy
 
 
+def test_a_server_that_fails_to_start_is_named(configured_home):
+    """The rest still load; the one that didn't start is named with why."""
+    manager = _Manager(
+        {"github": 3},
+        failed={"weatherbox": "[WinError 2] The system cannot find the file"},
+    )
+    agent = _skeleton(manager)
+    with patch.object(ChatAgent, "_register_mcp_tools") as register:
+        agent._load_mcp_tools()
+    register.assert_called_once()
+    assert agent.report_mcp_dropped() is True
+
+    [warning] = agent.console.warnings
+    assert "weatherbox" in warning
+    assert "cannot find the file" in warning
+    assert "github" not in warning
+    # A hand-added server isn't listed in Settings > Connectors: name its file.
+    assert "Settings > Connectors" not in warning
+    assert f"weatherbox is set up in {configured_home / 'mcp_servers.json'}" in warning
+
+
+def test_a_failed_connector_points_at_settings_and_a_hand_added_one_at_its_file(
+    configured_home,
+):
+    manager = _Manager(
+        {},
+        failed={"mcp-github": "exited with code 1", "weatherbox": "no such command"},
+    )
+    agent = _skeleton(manager)
+    agent._load_mcp_tools()
+    agent.report_mcp_dropped()
+
+    [warning] = agent.console.warnings
+    assert "Check GitHub in Settings > Connectors." in warning
+    assert f"weatherbox is set up in {configured_home / 'mcp_servers.json'}" in warning
+
+
 def test_servers_within_the_limit_load_without_a_notice(configured_home):
     agent = _skeleton(_Manager({"github": 3}))
     with patch.object(ChatAgent, "_register_mcp_tools") as register:
@@ -166,3 +214,50 @@ def test_process_query_reports_before_the_turn(configured_home):
         assert agent.process_query("hi") == "ok"
     turn.assert_called_once_with("hi")
     assert len(agent.console.warnings) == 1
+
+
+def test_the_model_is_told_what_the_user_was_told(configured_home):
+    """Asked about weatherbox, the model said it wasn't set up, under a row saying it was."""
+    manager = _Manager({}, failed={"weatherbox": "[WinError 2] not found"})
+    agent = _skeleton(manager)
+    agent._load_mcp_tools()
+    with (
+        patch(
+            "gaia.agents.base.memory.MemoryMixin.get_memory_dynamic_context",
+            return_value="",
+        ),
+        patch.object(ChatAgent, "_indexed_documents_line", return_value=""),
+    ):
+        context = agent.get_memory_dynamic_context()
+    assert "weatherbox" in context
+    assert "no tools this session" in context
+
+
+def test_no_notice_adds_nothing_for_the_model(configured_home):
+    agent = _skeleton(_Manager({"github": 3}))
+    with patch.object(ChatAgent, "_register_mcp_tools"):
+        agent._load_mcp_tools()
+    assert agent._mcp_dropped_line() == ""
+
+
+def test_a_corrupt_settings_file_reads_as_plain_words(tmp_path):
+    """The row ended '...recreate it on next configure().).'"""
+    from gaia.connectors.errors import ConnectorsError
+    from gaia.mcp.client.config import MCPConfig
+
+    broken = tmp_path / "mcp_servers.json"
+    broken.write_text(
+        '{"mcpServers": {"weatherbox": {"command": "npx", "args": [', "utf-8"
+    )
+    with pytest.raises(ConnectorsError) as caught:
+        MCPConfig._read_servers(MCPConfig.__new__(MCPConfig), broken)
+    message = str(caught.value)
+    assert "configure()" not in message
+    assert "Settings > Connectors" in message
+
+    agent = _skeleton(None)
+    agent._mcp_unavailable_error = message
+    with patch("gaia_agent.chat_agent.gaia_home", return_value=tmp_path):
+        agent._load_mcp_tools()
+    assert ").)" not in agent._mcp_dropped_notice
+    assert agent._mcp_dropped_notice.startswith("Your MCP servers are unavailable")

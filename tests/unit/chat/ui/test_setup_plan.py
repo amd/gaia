@@ -241,6 +241,23 @@ def test_use_mine_on_a_big_pc_names_the_large_model_and_its_real_size(running):
     assert plan["memory_gb"] == round(96 * GB_PER_GIB)
 
 
+def test_chat_on_a_cloud_model_plans_no_local_chat_download(running, config_file):
+    """Settings must not arm a 23 GB download nobody chose while chat runs in the cloud."""
+    running(BIG_GPU)
+    config_file.write_text(
+        json.dumps(
+            {"last_provider": "fireworks", "last_model": "fireworks.deepseek-v3p2"}
+        )
+    )
+    plan = sp.build_plan()
+    assert _plan_ids(plan) == [DEFAULT_EMBEDDING_MODEL]
+    assert [e["id"] for e in plan["catalog"] if e["selected"]] == [
+        DEFAULT_EMBEDDING_MODEL
+    ]
+    # Setup's own run says what it downloads; choosing local there still plans it.
+    assert LARGE_DEFAULT_MODEL_NAME in _plan_ids(sp.build_plan(skip_chat_model=False))
+
+
 def test_an_already_downloaded_model_costs_nothing(running):
     running(BIG_GPU, downloaded={LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME})
     plan = sp.build_plan()
@@ -470,6 +487,156 @@ def test_plan_endpoint(client, running):
     assert r.json()["chat_model"]["id"] == LARGE_DEFAULT_MODEL_NAME
 
 
+def test_plan_endpoint_ticks_nothing_new_while_chat_runs_in_the_cloud(
+    client, running, config_file
+):
+    running(BIG_GPU)
+    config_file.write_text(json.dumps({"last_model": "fireworks.deepseek-v3p2"}))
+    r = client.get("/api/setup/plan", headers=UI)
+    assert r.status_code == 200
+    assert _plan_ids(r.json()) == [DEFAULT_EMBEDDING_MODEL]
+
+
+_CLOUD = {"last_provider": "fireworks", "last_model": "fireworks.deepseek-v3p2"}
+
+
+def test_setup_screen_still_sees_what_a_local_setup_downloads(
+    client, running, config_file
+):
+    """Run setup again from a cloud model and choose this PC: the plan shows the
+    chat model the run will pull, not the cloud-mode plan."""
+    running(BIG_GPU)
+    config_file.write_text(json.dumps(_CLOUD))
+    r = client.get("/api/setup/plan?skip_chat_model=false", headers=UI)
+    assert r.status_code == 200
+    planned = _plan_ids(r.json())
+    assert LARGE_DEFAULT_MODEL_NAME in planned and DEFAULT_MODEL_NAME in planned
+    # It matches what /api/setup/run downloads for the same choice.
+    assert planned == _plan_ids(sp.build_plan(skip_chat_model=False))
+    # An explicit true matches the cloud run, whatever chat ran on before.
+    config_file.write_text(json.dumps({"last_model": DEFAULT_MODEL_NAME}))
+    r = client.get("/api/setup/plan?skip_chat_model=true", headers=UI)
+    assert _plan_ids(r.json()) == [DEFAULT_EMBEDDING_MODEL]
+
+
+def test_switching_chat_back_to_a_local_model_plans_it_again(running, config_file):
+    running(BIG_GPU)
+    config_file.write_text(json.dumps(_CLOUD))
+    assert LARGE_DEFAULT_MODEL_NAME not in _plan_ids(sp.build_plan())
+    config_file.write_text(
+        json.dumps({"last_provider": "lemonade", "last_model": DEFAULT_MODEL_NAME})
+    )
+    plan = sp.build_plan()
+    assert LARGE_DEFAULT_MODEL_NAME in _plan_ids(plan)
+    assert LARGE_DEFAULT_MODEL_NAME in [
+        e["id"] for e in plan["catalog"] if e["selected"]
+    ]
+
+
+def test_a_local_chat_model_plans_exactly_what_it_did_before(running, config_file):
+    running(BIG_GPU)
+    config_file.write_text(json.dumps({"last_model": DEFAULT_MODEL_NAME}))
+    assert sp.build_plan() == sp.build_plan(skip_chat_model=False)
+
+
+def test_a_claude_chat_model_also_plans_no_local_chat_download(running, config_file):
+    running(BIG_GPU)
+    config_file.write_text(json.dumps({"last_model": "claude-sonnet-5"}))
+    assert _plan_ids(sp.build_plan()) == [DEFAULT_EMBEDDING_MODEL]
+
+
+def test_with_no_server_a_cloud_chat_model_reads_no_catalog(
+    no_server, config_file, monkeypatch
+):
+    """Lemonade down: no catalog read to classify the model, and setup's plan stands."""
+    import gaia.llm.lemonade_client as lc
+
+    def no_read(*a, **k):
+        raise AssertionError("classified the chat model with no server to ask")
+
+    monkeypatch.setattr(lc, "is_cloud_model_with_catalog", no_read)
+    config_file.write_text(json.dumps(_CLOUD))
+    plan = sp.build_plan()
+    assert plan["lemonade"]["reachable"] is False
+    assert plan["chat_model"]["id"]
+
+
+def test_choices_on_the_setup_screen_return_its_local_plan(
+    client, running, config_file
+):
+    running(BIG_GPU)
+    config_file.write_text(json.dumps(_CLOUD))
+    r = client.post(
+        "/api/setup/chat-model?skip_chat_model=false",
+        json={"model_id": DEFAULT_MODEL_NAME},
+        headers=UI,
+    )
+    assert r.status_code == 200
+    assert DEFAULT_MODEL_NAME in _plan_ids(r.json())
+    r = client.post(
+        "/api/setup/vision-model?skip_chat_model=false",
+        json={"model_id": None},
+        headers=UI,
+    )
+    assert r.status_code == 200
+    assert DEFAULT_MODEL_NAME in _plan_ids(r.json())
+
+
+def test_setup_screen_can_skip_the_local_chat_pick_while_chat_is_on_the_cloud(
+    client, running, config_file
+):
+    running(BIG_GPU)
+    config_file.write_text(json.dumps(_CLOUD))
+    # Settings follows where chat runs: the local pick isn't planned, so no skip.
+    unplanned = client.post(
+        "/api/setup/models/skip", json={"model_id": DEFAULT_MODEL_NAME}, headers=UI
+    )
+    assert unplanned.status_code == 422
+    r = client.post(
+        "/api/setup/models/skip?skip_chat_model=false",
+        json={"model_id": DEFAULT_MODEL_NAME},
+        headers=UI,
+    )
+    assert r.status_code == 200
+    assert r.json()["skipped_models"] == [DEFAULT_MODEL_NAME]
+    assert DEFAULT_MODEL_NAME not in _plan_ids(r.json())
+
+
+@pytest.mark.parametrize("value", ["maybe", "2", ""])
+def test_plan_endpoint_refuses_a_skip_chat_model_that_is_not_a_bool(
+    client, running, value
+):
+    running(BIG_GPU)
+    r = client.get(f"/api/setup/plan?skip_chat_model={value}", headers=UI)
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize("skip_chat_model", [False, True])
+def test_init_skip_model_keeps_its_own_choice_while_chat_is_on_the_cloud(
+    running, config_file, skip_chat_model
+):
+    """`gaia init --skip-model` checks against what init downloads, not Settings' view,
+    with or without --skip-chat-model, as it always has."""
+    from types import SimpleNamespace
+
+    from gaia import cli
+
+    running(BIG_GPU)
+    config_file.write_text(json.dumps(_CLOUD))
+    args = SimpleNamespace(
+        skip_model=[DEFAULT_MODEL_NAME],
+        download_model=[],
+        use_model=None,
+        acknowledge_no_fit=False,
+        plan=False,
+        skip_chat_model=skip_chat_model,
+        json=False,
+    )
+    assert cli._init_model_choices(args, sp.PROFILE) is None
+    saved = json.loads(config_file.read_text())
+    assert DEFAULT_MODEL_NAME in saved["skipped_models"]
+
+
 def test_plan_endpoint_needs_the_ui_header(client, running):
     running(BIG_GPU)
     assert client.get("/api/setup/plan", headers={"X-Gaia-UI": ""}).status_code == 403
@@ -577,6 +744,72 @@ def test_catalog_offers_the_users_flm_model_but_not_speech_or_strays(flm_box):
     assert flm["chat_choice"] and flm["downloaded"] and flm["size_gb"] == 0.0
     assert flm["recipe"] == "flm" and not flm["planned"]
     assert not _entry(plan, DEFAULT_EMBEDDING_MODEL)["chat_choice"]
+
+
+def test_catalog_shows_settings_size_for_a_model_outside_setups_own(
+    running, monkeypatch
+):
+    """Lemonade lists Muse Glimmer in GiB (19.9); Settings shows 21.4 GB."""
+    from gaia.llm.lemonade_client import MUSE_GLIMMER_MODEL_NAME
+
+    fake = running(BIG_GPU)
+    listed = fake.list_models
+    muse = {
+        "id": MUSE_GLIMMER_MODEL_NAME,
+        "downloaded": False,
+        "size": 19.9,
+        "recipe": "llamacpp",
+        "labels": ["chat", "tool-calling"],
+    }
+    monkeypatch.setattr(
+        fake, "list_models", lambda show_all=False: {"data": listed()["data"] + [muse]}
+    )
+    plan = sp.build_plan()
+    shown = sp.model_choice.download_size_gb(MUSE_GLIMMER_MODEL_NAME, 19.9)
+    assert shown == 21.36
+    assert _entry(plan, MUSE_GLIMMER_MODEL_NAME)["full_size_gb"] == shown
+    # Setup's own models keep the size the plan's fit checks run on.
+    assert _entry(plan, DEFAULT_MODEL_NAME)["full_size_gb"] == 5.6
+
+
+def test_catalog_leaves_out_cloud_models_lemonade_lists_as_downloaded(
+    flm_box, monkeypatch
+):
+    fake = flm_box()
+    listed = fake.list_models
+    cloud = {
+        "id": "fireworks.deepseek-v4p1-flash",
+        "downloaded": True,
+        "recipe": "cloud",
+        "labels": ["chat", "cloud"],
+    }
+    monkeypatch.setattr(
+        fake, "list_models", lambda show_all=False: {"data": listed()["data"] + [cloud]}
+    )
+    ids = [e["id"] for e in sp.build_plan()["catalog"]]
+    assert FLM in ids
+    assert cloud["id"] not in ids
+
+
+@pytest.mark.parametrize(
+    "entry, kept",
+    [
+        ({"id": "fireworks.glm-5p3-flash", "labels": ["chat"]}, False),
+        ({"id": "openrouter.some-model", "labels": ["chat", "cloud"]}, False),
+        ({"id": "user.My-Local-GGUF", "labels": ["chat"], "device": "none"}, True),
+    ],
+)
+def test_catalog_tells_a_local_model_from_a_cloud_one(
+    flm_box, monkeypatch, entry, kept
+):
+    fake = flm_box()
+    listed = fake.list_models
+    row = {"downloaded": True, "recipe": "llamacpp", **entry}
+    monkeypatch.setattr(
+        fake, "list_models", lambda show_all=False: {"data": listed()["data"] + [row]}
+    )
+    ids = [e["id"] for e in sp.build_plan()["catalog"]]
+    assert (row["id"] in ids) is kept
 
 
 def test_catalog_says_what_each_planned_model_is_for_and_costs(flm_box):
@@ -1186,3 +1419,42 @@ def test_a_cloud_setup_is_not_refused_for_a_saved_npu_model(
     r = client.post("/api/setup/run", json={"skip_chat_model": True}, headers=UI)
     assert r.status_code == 200
     assert len(started) == 1
+
+
+@pytest.mark.parametrize("bundled", [True, False])
+def test_a_model_server_the_installer_carries_is_marked_bundled(
+    monkeypatch, tmp_path, bundled
+):
+    """The row read "From included with GAIA"."""
+    from gaia.llm import lemonade_embedded
+
+    if bundled:
+        monkeypatch.setenv(lemonade_embedded.BUNDLED_ARCHIVE_DIR_ENV, str(tmp_path))
+    else:
+        monkeypatch.delenv(lemonade_embedded.BUNDLED_ARCHIVE_DIR_ENV, raising=False)
+    monkeypatch.setattr(
+        lemonade_embedded.EmbeddedLemonade, "is_installed", lambda self: False
+    )
+    server = sp._components({"mode": "embedded"}, skip_models=True)[0]
+    assert server["id"] == "server"
+    assert server["bundled"] is bundled
+    assert "included" not in server["source"]
+
+
+def test_a_release_candidates_plan_names_its_own_pre_release_for_the_agent(
+    running, monkeypatch
+):
+    from gaia.hub import prerelease
+
+    running(BIG_GPU)
+    monkeypatch.delenv(prerelease.ASSETS_URL_ENV, raising=False)
+
+    def agent_source():
+        return next(c for c in sp.build_plan()["components"] if c["id"] == "agent")[
+            "source"
+        ]
+
+    monkeypatch.setattr(prerelease, "CORE_VERSION", "0.26.0")
+    assert agent_source() == "hub.amd-gaia.ai"
+    monkeypatch.setattr(prerelease, "CORE_VERSION", "0.26.0rc32")
+    assert agent_source() == "github.com/amd/gaia/releases/tag/v0.26.0-rc32"

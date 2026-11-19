@@ -76,6 +76,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia_agent import __version__ as agent_version
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
+from gaia_agent.session_index import IndexedOut, SessionIndex, guarded, open_index
 
 from gaia.agents.base.readiness import (
     probe_model_present,
@@ -166,6 +167,13 @@ CONTROL_CLEAR_HISTORY = "clear_history"
 
 class _ClearHistory:
     """Queue sentinel: the turn loop (which owns the agent) performs the clear."""
+
+
+def _reset_hybrid_route(agent: Any) -> None:
+    """A cleared conversation forgets hybrid's sticky escalation too."""
+    reset = getattr(agent, "reset_hybrid_route", None)
+    if callable(reset):
+        reset()
 
 
 #: ``cancel`` stops the running turn but not the process, so loaded skills,
@@ -512,6 +520,20 @@ def is_model_command(query: str) -> bool:
     )
 
 
+#: Prefix that dispatches a stdin line to ``run_skills_command``.
+SKILLS_COMMAND_PREFIX = "/skills"
+#: Last word of ``/skills add <link> confirm`` — the user saw the warning.
+SKILLS_CONFIRM_WORD = "confirm"
+
+
+def is_skills_command(query: str) -> bool:
+    """Whether *query* is ``/skills`` or ``/skills <args>``, not a real question."""
+    stripped = query.strip()
+    return stripped == SKILLS_COMMAND_PREFIX or stripped.startswith(
+        SKILLS_COMMAND_PREFIX + " "
+    )
+
+
 def _model_display_name(model_id: str, is_claude: bool) -> str:
     """Friendly header name for *model_id* — falls back to the raw id."""
     if is_claude:
@@ -691,7 +713,55 @@ def _snapshot_switch_state(agent: Any) -> _SwitchState:
         "model_features": getattr(agent, "model_features", None),
         "instance_tools": _copy_or_none(getattr(agent, "_instance_tools", None)),
         "withheld_tools": _copy_or_none(getattr(agent, "_withheld_tool_entries", None)),
+        "tool_overrides": _copy_or_none(getattr(agent, "_tool_overrides", None)),
+        "followers": _snapshot_followers(agent),
     }
+
+
+#: What ``follow_model_switch`` and ``apply_context_eviction`` move with the model.
+_FOLLOWER_ATTRS = (
+    "vlm_model",
+    "vlm_client",
+    "context_eviction_enabled",
+    "_context_evictor",
+)
+
+
+def _rag_model_holders(agent: Any) -> list:
+    """The objects that name the model documents are summarized with."""
+    state = vars(agent)
+    holders = [state.get("_rag_config")]
+    holders.append(getattr(getattr(state.get("_rag"), "chat", None), "config", None))
+    return [h for h in holders if hasattr(h, "model")]
+
+
+def _snapshot_followers(agent: Any) -> Dict[str, Any]:
+    state = {name: vars(agent)[name] for name in _FOLLOWER_ATTRS if name in vars(agent)}
+    rag_kwargs = vars(agent).get("_rag_config_kwargs")
+    if isinstance(rag_kwargs, dict):
+        state["rag_model"] = rag_kwargs.get("model")
+        state["rag_vlm_models"] = [
+            (h, h.vlm_model)
+            for h in _rag_model_holders(agent)
+            if hasattr(h, "vlm_model")
+        ]
+    return state
+
+
+def _restore_followers(agent: Any, state: Dict[str, Any]) -> None:
+    state = dict(state)
+    rag_vlm_models = state.pop("rag_vlm_models", [])
+    has_rag = "rag_model" in state
+    rag_model = state.pop("rag_model", None)
+    for name, value in state.items():
+        setattr(agent, name, value)
+    if not has_rag:
+        return
+    agent._rag_config_kwargs["model"] = rag_model
+    for holder in _rag_model_holders(agent):
+        holder.model = rag_model
+    for holder, vlm_model in rag_vlm_models:
+        holder.vlm_model = vlm_model
 
 
 def _copy_or_none(mapping: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -719,6 +789,12 @@ def _restore_switch_state(agent: Any, snapshot: _SwitchState) -> None:
         agent._instance_tools = snapshot["instance_tools"]
     if snapshot["withheld_tools"] is not None:
         agent._withheld_tool_entries = snapshot["withheld_tools"]
+    if snapshot["tool_overrides"] is not None:
+        agent._tool_overrides = snapshot["tool_overrides"]
+    elif "_tool_overrides" in vars(agent):
+        # The switch created it; the old model had none.
+        del agent._tool_overrides
+    _restore_followers(agent, snapshot["followers"])
 
 
 def _apply_switch(
@@ -765,6 +841,22 @@ def _apply_switch(
         # The new model may be offered more features than the old one, or fewer.
         if hasattr(agent, "apply_model_features"):
             agent.apply_model_features(agent.model_id)
+        # A chat started on a model with no reasoning-effort setting has no tool for it.
+        if hasattr(agent, "register_reasoning_effort_tools") and (
+            "set_reasoning_effort"
+            not in (getattr(agent, "_instance_tools", None) or {})
+        ):
+            agent.register_reasoning_effort_tools()
+        # getattr: tests build agents without running Agent.__init__.
+        if getattr(agent, "_context_eviction_mode", None) is not None:
+            lookup = getattr(new_client, "cloud_model_provider", None)
+            agent.apply_context_eviction(
+                agent.model_id,
+                cloud=use_claude or bool(callable(lookup) and lookup(agent.model_id)),
+            )
+        # Image reading and document summaries were set up for the old model.
+        if hasattr(agent, "follow_model_switch"):
+            agent.follow_model_switch()
         # Gemma-family prompts carry an embedded-JSON tool-call envelope
         # Claude doesn't need (it speaks native tool_calls) — the cached
         # system prompt must be recomposed under the new backend or the next
@@ -972,7 +1064,40 @@ def switch_model(
 
     *on_status* receives a plain-language line while the switch waits for
     GAIA's model server to come back after a restart.
+
+    A session started on ``hybrid`` (see :mod:`gaia.llm.hybrid`) stops routing
+    here: the user picked *target* by name. *target* ``hybrid`` starts routing,
+    on the cheap model until the next turn's route says otherwise.
     """
+    from gaia.llm.hybrid import (
+        HYBRID_MODEL_ID,
+        HybridRouter,
+        check_local_only,
+        is_hybrid_model,
+    )
+
+    if is_hybrid_model(target):
+        if not hasattr(agent, "reset_hybrid_route"):
+            raise RuntimeError(
+                "hybrid routing runs only in the GAIA agent. Pick a concrete "
+                "model with /model <id>, or switch to the GAIA agent first."
+            )
+        router = HybridRouter()
+        check_local_only(router.settings)
+        switch_concrete_model(agent, router.settings.cheap_model, on_status)
+        agent.hybrid_router = router
+        agent.last_route = None
+        return HYBRID_MODEL_ID
+    display = switch_concrete_model(agent, target, on_status)
+    if getattr(agent, "hybrid_router", None) is not None:
+        agent.hybrid_router = None
+    return display
+
+
+def switch_concrete_model(
+    agent: Any, target: str, on_status: Optional[Callable[[str], None]] = None
+) -> str:
+    """:func:`switch_model` to a model by name, leaving hybrid routing as it is."""
     from gaia.llm.lemonade_client import cloud_model_provider
     from gaia.llm.local_only import SETTINGS_HINT, cloud_blocked
 
@@ -1038,6 +1163,143 @@ def _format_model_list(agent: Any) -> str:
     return "\n".join(lines)
 
 
+def _skills_usage() -> str:
+    return (
+        "`/skills` lists installed skills. `/skills add <link>` shows what a skill "
+        "or skills library holds — a GitHub repo or folder, `owner/repo`, a "
+        "skills.sh page, or an https .zip — then `/skills add <link> confirm` adds "
+        "it. Add `--allow-code` to also add skills that ship scripts."
+    )
+
+
+def _format_link_preview(preview: Any, allow_code: bool) -> list:
+    """Markdown lines for each skill behind a link: what it is, may do, and the audit."""
+    lines = [f"**Skills at {preview.source}** ({len(preview.skills)}):"]
+    for s in preview.skills:
+        if s.error:
+            lines.append(f"- ✗ `{s.name}` — {s.error}")
+        else:
+            notes = []
+            if s.has_code:
+                notes.append("ships code" + ("" if allow_code else ", skipped"))
+            if s.installed:
+                notes.append("will update" if s.update else "installed from elsewhere")
+            if s.verdict == "REVIEW":
+                notes.append("audit: review")
+            suffix = f" ({', '.join(notes)})" if notes else ""
+            lines.append(f"- `{s.name}`{suffix} — {s.description}")
+        if s.permissions:
+            lines.append("  - Can:")
+            lines.extend(f"    - {g['text']} (`{g['grant']}`)" for g in s.permissions)
+        elif s.permissions_unreadable:
+            lines.append("  - Can: unknown (permissions could not be read)")
+        else:
+            lines.append(
+                "  - Can: nothing beyond GAIA's own tools (no permissions declared)"
+            )
+        lines.extend(f"  - Audit: {f}" for f in s.findings)
+    return lines
+
+
+def run_skills_command(agent: Any, query: str, out) -> None:
+    """Handle ``/skills`` — list, preview, or add skills from a link.
+
+    Guarantees exactly one terminal event, same contract as ``run_turn``.
+    """
+    from gaia.skills.errors import SkillError
+    from gaia.skills.link import (
+        APP_LOCAL_COPY_REMEDY,
+        SECURITY_WARNING,
+        SkillLinkChangedError,
+        SkillLinkNotFoundError,
+        add_from_link,
+        preview_link,
+    )
+
+    args = query.strip()[len(SKILLS_COMMAND_PREFIX) :].split()
+    if not args:
+        skills = sorted(agent.skill_manager.reload())
+        listing = ", ".join(f"`{n}`" for n in skills) or "none"
+        _write(
+            {
+                "type": "final",
+                "answer": f"**Installed skills ({len(skills)}):** {listing}\n\n"
+                + _skills_usage(),
+            },
+            out,
+        )
+        return
+    if args[0] != "add" or len(args) < 2:
+        _write({"type": "error", "detail": _skills_usage()}, out)
+        return
+
+    allow_code = "--allow-code" in args
+    rest = [a for a in args[1:] if a != "--allow-code"]
+    confirmed = bool(rest) and rest[-1] == SKILLS_CONFIRM_WORD
+    if confirmed:
+        rest = rest[:-1]
+    if len(rest) != 1:
+        _write({"type": "error", "detail": _skills_usage()}, out)
+        return
+    link = rest[0]
+
+    _write({"type": "status", "status": "working", "message": f"Reading {link}…"}, out)
+    pins = getattr(agent, "_skill_link_pins", None)
+    if pins is None:
+        pins = agent._skill_link_pins = {}
+    pin = pins.get(link)
+    try:
+        if not confirmed or not pin:
+            preview = preview_link(link, manager=agent.skill_manager)
+            # The confirm turn installs exactly this version, or nothing.
+            pins[link] = preview.pin
+            lines = []
+            if confirmed:
+                lines.append(
+                    "**Nothing was added yet.** Review what this link holds first, "
+                    "then confirm again.\n"
+                )
+            lines.extend(_format_link_preview(preview, allow_code))
+            flag = " --allow-code" if allow_code else ""
+            lines.append(f"\n⚠️ {SECURITY_WARNING}")
+            lines.append(
+                f"\nTo add them, send `/skills add {link}{flag} {SKILLS_CONFIRM_WORD}`."
+            )
+            _write({"type": "final", "answer": "\n".join(lines)}, out)
+            return
+
+        result = add_from_link(
+            link,
+            allow_code=allow_code,
+            pin=pin,
+            manager=agent.skill_manager,
+        )
+    except SkillError as exc:
+        if isinstance(exc, SkillLinkChangedError):
+            # A stale pin can never match again; the next confirm previews anew.
+            pins.pop(link, None)
+        logger.warning("/skills add %s failed: %s", link, exc)
+        detail = str(exc)
+        if isinstance(exc, SkillLinkNotFoundError):
+            detail = f"{detail} {APP_LOCAL_COPY_REMEDY}"
+        _write({"type": "error", "detail": detail}, out)
+        return
+    # One preview covers one add; a later add of the same link previews again.
+    pins.pop(link, None)
+
+    agent.skill_manager.reload()
+    # The skill catalog sits in the cached prompt head; recompose so this
+    # session can see what was just added.
+    agent.rebuild_system_prompt()
+    lines = [f"Added {len(result.added)} skill(s) from {link}."]
+    if result.added:
+        lines.append(", ".join(f"`{a['name']}`" for a in result.added))
+    if result.failed:
+        lines.append(f"\nNot added ({len(result.failed)}):")
+        lines.extend(f"- `{name}` — {why}" for name, why in result.failed.items())
+    _write({"type": "final", "answer": "\n".join(lines)}, out)
+
+
 def run_model_command(agent: Any, query: str, out) -> None:
     """Handle ``/model`` and ``/model <id>`` — never reaches ``agent.process_query``.
 
@@ -1069,6 +1331,18 @@ def run_model_command(agent: Any, query: str, out) -> None:
 
     logger.info("switched model to %s (%s)", arg, display)
     _write(_model_state_event(agent), out)
+    router = getattr(agent, "hybrid_router", None)
+    if router is not None:
+        settings = router.settings
+        _write(
+            {
+                "type": "final",
+                "answer": f"Switched to **hybrid**: each turn runs on "
+                f"`{settings.cheap_model}` or `{settings.strong_model}`.",
+            },
+            out,
+        )
+        return
     # Pass the live client's classifier, as the system prompt does — the id
     # prefix knows only two providers, so a runtime-discovered one would be
     # called local here while the prompt calls it cloud.
@@ -1147,6 +1421,44 @@ def _write_if_wire_alive(event: Dict[str, Any], out) -> bool:
     except OSError as exc:
         logger.warning("stdout is gone (%s) — nothing left to report to", exc)
         return False
+
+
+def follow_settings(agent: Any, config_kwargs: Dict[str, Any]) -> Any:
+    """The agent to run the next turn on: a new one when Settings changed since.
+
+    Its model server and MCP tools are fixed as it is built. The new agent
+    runs the model this session is on, keeps its transcript, and gets what
+    the session set on the old one.
+    """
+    changed = getattr(agent, "built_settings_changed", None)
+    if not callable(changed) or changed() is not True:
+        return agent
+    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaia_agent.session_registry import _carry_session_state, close_agent
+
+    kwargs = {
+        k: v
+        for k, v in config_kwargs.items()
+        if k not in ("model_id", "claude_model", "use_claude")
+    }
+    if getattr(agent, "hybrid_router", None) is not None:
+        # model_id is the turn's routed model; the session runs on hybrid.
+        from gaia.llm.hybrid import HYBRID_MODEL_ID
+
+        kwargs["model_id"] = HYBRID_MODEL_ID
+    elif getattr(agent, "_use_claude", False):
+        kwargs["use_claude"] = True
+        kwargs["claude_model"] = agent.model_id
+    elif agent.model_id:
+        kwargs["model_id"] = agent.model_id
+    new = GaiaAgent(config=GaiaAgentConfig(**kwargs))
+    history = agent.conversation_history
+    _carry_session_state(agent, new, "terminal")
+    new.conversation_history = history
+    agent.conversation_history = []
+    close_agent(agent)
+    logger.info("rebuilt the agent for settings changed since it was built")
+    return new
 
 
 def _drain_memory(agent) -> None:
@@ -1396,18 +1708,36 @@ def model_server_failure(exc: BaseException) -> Optional[Any]:
     return classify_lemonade_exception(exc)
 
 
-def model_server_message(typed: Any) -> str:
-    """*typed*'s user message, with a start instruction for a server GAIA doesn't run.
+def model_server_message(typed: Any, surface: str = "tui") -> str:
+    """*typed*'s user message; a lost server GAIA doesn't run is its owner's to start.
 
-    The daemon restarts GAIA's own server; a server the user runs is theirs
-    to start.
+    The daemon restarts GAIA's own server. For the other, a terminal gets this
+    machine's start instruction; the Agent UI never names a command.
     """
     from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
-    from gaia.llm.providers.lemonade import LemonadeNetworkError
+    from gaia.llm.providers.lemonade import (
+        LemonadeNetworkError,
+        LemonadeServerUnreachableError,
+    )
+    from gaia.llm.surface_hints import APP_OTHER_SERVER_START_HINT
 
-    if isinstance(typed, LemonadeNetworkError) and not gaia_runs_lemonade():
+    if not isinstance(typed, LemonadeNetworkError) or gaia_runs_lemonade():
+        return typed.user_message
+    app = surface == "agent_ui"
+    if isinstance(typed, LemonadeServerUnreachableError):
+        # That one already says to start the server.
+        if app:
+            return typed.user_message
         return f"{typed.user_message} {describe_start_hint().instruction}"
-    return typed.user_message
+    hint = (
+        f"{APP_OTHER_SERVER_START_HINT}." if app else describe_start_hint().instruction
+    )
+    # Also a running server whose request failed, so sending again comes first.
+    return (
+        "The model server didn't answer. It may be loading or briefly busy, "
+        "so send your message again. If it keeps failing, it may have "
+        f"stopped. {hint}"
+    )
 
 
 def _terminal_error(exc: BaseException) -> Dict[str, Any]:
@@ -1440,8 +1770,24 @@ def _memory_dump_event(agent: Any) -> Dict[str, Any]:
     return {"type": "final", "answer": json.dumps(payload)}
 
 
-def _usage_from_result(value: Any) -> Dict[str, Any]:
-    """Token counts for a turn that ended without printing its answer.
+def _tool_count_from_result(value: Dict[str, Any], *, fallback: int = 0) -> int:
+    """Count executed tool calls on a result whose answer was not printed."""
+    explicit = value.get("tools_used")
+    if isinstance(explicit, int) and not isinstance(explicit, bool):
+        return max(explicit, 0)
+    # Not model_messages: it carries earlier turns' tool results too.
+    messages = value.get("conversation")
+    if isinstance(messages, list):
+        return sum(
+            1 for msg in messages if isinstance(msg, dict) and msg.get("role") == "tool"
+        )
+    if isinstance(fallback, int) and not isinstance(fallback, bool) and fallback > 0:
+        return fallback
+    return 0
+
+
+def _usage_from_result(value: Any, *, tool_count: int = 0) -> Dict[str, Any]:
+    """Turn counts for a turn that ended without printing its answer.
 
     Error exits (and a step limit whose summary could not be written) return
     the answer instead of printing it, so no ``answer`` event carried the usage
@@ -1449,6 +1795,12 @@ def _usage_from_result(value: Any) -> Dict[str, Any]:
     rule as the printed path: a count that is absent or zero is left out.
     """
     if not isinstance(value, dict):
+        if (
+            isinstance(tool_count, int)
+            and not isinstance(tool_count, bool)
+            and tool_count > 0
+        ):
+            return {"tools_used": tool_count}
         return {}
     usage: Dict[str, Any] = {}
     for src, dst in (
@@ -1462,6 +1814,9 @@ def _usage_from_result(value: Any) -> Dict[str, Any]:
     cached = value.get("cached_tokens")
     if "input_tokens" in usage and isinstance(cached, int) and cached >= 0:
         usage["cached_tokens"] = cached
+    tools_used = _tool_count_from_result(value, fallback=tool_count)
+    if tools_used > 0:
+        usage["tools_used"] = tools_used
     return usage
 
 
@@ -1516,6 +1871,10 @@ def run_turn(
         debug=dev,
     )
     result: Dict[str, Any] = {}
+    # Skills added or removed since the catalogue was built, e.g. in the Agent UI.
+    follow_skills = getattr(agent, "follow_installed_skills", None)
+    if callable(follow_skills):
+        follow_skills()
 
     def _run() -> None:
         try:
@@ -1641,7 +2000,7 @@ def run_turn(
             _write(_terminal_error(exc), out)
             return
         final: Dict[str, Any] = {"type": "final", "answer": answer}
-        usage = _usage_from_result(value)
+        usage = _usage_from_result(value, tool_count=getattr(handler, "_tool_count", 0))
         if usage:
             final["usage"] = usage
         _write(final, out)
@@ -1743,12 +2102,14 @@ def dispatch_query(
     out,
     dev: bool = False,
     state: Optional[PermissionState] = None,
+    index: Optional[SessionIndex] = None,
 ) -> None:
     """Route one line off the query queue: a sentinel, or a real turn.
 
     Sentinels short-circuit before run_turn/process_query — they never reach
     the LLM and are never recorded as chat turns (see _record_turn's docstring
-    on why a turn's own answer is what gets kept).
+    on why a turn's own answer is what gets kept). Only a real turn moves the
+    session *index*.
     """
     setup = getattr(agent, "_engineering_setup", None)
     if isinstance(setup, dict):
@@ -1766,9 +2127,12 @@ def dispatch_query(
             agent._engineering_reported_setup_status = setup_status
     if query == CLEAR_CONVERSATION_QUERY:
         agent.conversation_history.clear()
+        _reset_hybrid_route(agent)
         loader = getattr(agent, "tool_loader", None)
         if loader is not None:
             loader.reset_session()
+        if index is not None:
+            guarded(index, index.cleared, out)
         _write({"type": "final", "answer": "conversation_cleared"}, out)
         return
     if query == MEMORY_DUMP_QUERY:
@@ -1780,6 +2144,12 @@ def dispatch_query(
     if is_model_command(query):
         run_model_command(agent, query, out)
         return
+    if is_skills_command(query):
+        run_skills_command(agent, query, out)
+        return
+    if index is not None:
+        guarded(index, lambda: index.turn_started(query), out)
+        out = IndexedOut(out, index)
     run_turn(agent, query, out, dev=dev, state=state)
 
 
@@ -1811,6 +2181,13 @@ def build_parser() -> "argparse.ArgumentParser":
         "--history-file",
         default=os.environ.get("GAIA_HISTORY_FILE"),
         help="Session transcript SQLite path; reuse the path to resume tool history.",
+    )
+    parser.add_argument(
+        "--session-kind",
+        default=os.environ.get("GAIA_SESSION_KIND"),
+        help="Keep a listing of this session beside --history-file so a host "
+        "can show and reopen it: 'chat' for an interactive session, or "
+        "another word (e.g. 'eval', 'scheduled') that hosts hide by default.",
     )
     parser.add_argument(
         "--use-claude",
@@ -1923,6 +2300,7 @@ def main(argv: Optional[list] = None) -> int:
         )
         agent.conversation_history = SessionHistory(history_path)
         logger.info("Session transcript: %s", history_path)
+        index = open_index(history_path, args.session_kind)
     except Exception as exc:
         print(traceback.format_exc(), file=sys.stderr)
         _write_if_wire_alive(_terminal_error(exc), out)
@@ -1962,21 +2340,28 @@ def main(argv: Optional[list] = None) -> int:
             history = getattr(agent, "conversation_history", None)
             if history is not None:
                 history.clear()
+            _reset_hybrid_route(agent)
+            if index is not None:
+                guarded(index, index.cleared)
             logger.info("conversation history cleared by host /clear")
             continue
         try:
-            dispatch_query(agent, query, out, dev=args.dev, state=state)
+            agent = follow_settings(agent, config_kwargs)
+            dispatch_query(agent, query, out, dev=args.dev, state=state, index=index)
         except BrokenPipeError:
             # The wire is the parent. It being gone is not a turn to report.
             logger.warning("stdout closed mid-turn — ending the run loop")
             break
         except Exception as exc:  # never let one bad turn kill the process
             logger.exception("stdio turn crashed outside the run loop")
-            if not _write_if_wire_alive(_terminal_error(exc), out):
+            wire = IndexedOut(out, index) if index is not None else out
+            if not _write_if_wire_alive(_terminal_error(exc), wire):
                 break
 
     # stdin closed: the parent is done with us.
     _drain_memory(agent)
+    if index is not None:
+        guarded(index, index.closed)
     _exit_cleanly(out)
 
 

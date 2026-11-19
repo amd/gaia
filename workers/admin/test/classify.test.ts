@@ -34,11 +34,14 @@ describe("classifyAsset", () => {
     ["gaia-windows-amd64.exe", "Windows", "CLI / TUI"],
     ["gaia-linux-arm64", "Linux", "CLI / TUI"],
     ["gaia-darwin-arm64", "macOS", "CLI / TUI"],
+    ["gaia-cli-windows-amd64.exe", "Windows", "CLI / TUI"],
+    ["gaia-cli-linux-arm64", "Linux", "CLI / TUI"],
+    ["gaia-cli-darwin-amd64", "macOS", "CLI / TUI"],
     ["amd_gaia-0.25.1-py3-none-any.whl", "Cross-platform", "Python package"],
     ["amd_gaia-0.25.1.tar.gz", "Cross-platform", "Python package"],
     ["gaia-agent-linux-x64", "Linux", "Agents"],
     ["gaia-agent-win32-x64.exe", "Windows", "Agents"],
-    ["gaia_agent_email-0.5.0-py3-none-any.whl", "Cross-platform", "Agents"],
+    ["gaia_agent_hello_world-0.5.0-py3-none-any.whl", "Cross-platform", "Agents"],
     ["jira-0.1.0-setup.exe", "Windows", "Agents"],
   ])("classifies %s as %s / %s", (name, os, product) => {
     expect(classifyAsset(name)).toEqual({ kind: "install", os, product });

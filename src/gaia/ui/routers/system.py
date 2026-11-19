@@ -9,6 +9,7 @@ import logging
 import shutil
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -514,6 +515,22 @@ def _probe_ok(probe: str) -> None:
     _last_probe_warning.pop(probe, None)
 
 
+def _catalog_entries(body: Any) -> List[Dict[str, Any]]:
+    """The model entries of a Lemonade ``/models`` answer.
+
+    Raises:
+        ValueError: The answer is not a list of model objects.
+    """
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, list) or not all(isinstance(m, dict) for m in data):
+        raise ValueError(
+            "Lemonade's model list came back in an unexpected shape (it answers, "
+            "but not with a list of models). Check that the model server URL in "
+            "Settings > Advanced > Model server points at Lemonade."
+        )
+    return data
+
+
 def _loaded_chat_entry(
     health: Dict[str, Any],
     loaded: List[Dict[str, Any]],
@@ -539,11 +556,64 @@ def _loaded_chat_entry(
 # Most the Lemonade probes in /api/system/status may take together.
 _STATUS_PROBE_BUDGET_S = 20.0
 
+# The daemon start of GAIA's own stopped server that a status poll asked for.
+_own_server_restart: Optional[threading.Thread] = None
+_own_server_restart_failed_at: Optional[float] = None
+# How long a failed start waits before a poll asks again.
+_OWN_SERVER_RESTART_RETRY_S = 30.0
+
+
+def _gaia_lemonade_is_stopped() -> bool:
+    """True when this install runs GAIA's own server and it is not running.
+
+    Its address is then not probed: only its recorded, running server is it.
+    """
+    from gaia.llm.lemonade_client import running_embedded_lemonade_url
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    return gaia_runs_lemonade() and running_embedded_lemonade_url() is None
+
+
+def _restart_gaia_lemonade() -> None:
+    """Have the daemon start GAIA's own server again, one start at a time."""
+    global _own_server_restart
+    if _own_server_restart is not None and _own_server_restart.is_alive():
+        return
+    failed_at = _own_server_restart_failed_at
+    if (
+        failed_at is not None
+        and time.monotonic() - failed_at < _OWN_SERVER_RESTART_RETRY_S
+    ):
+        return
+
+    def _start() -> None:
+        global _own_server_restart_failed_at
+        from gaia.daemon.errors import DaemonError
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        try:
+            LemonadeManager.start_embedded_if_stopped()
+        except DaemonError as exc:
+            _own_server_restart_failed_at = time.monotonic()
+            logger.warning("Could not restart GAIA's model server: %s", exc)
+        except Exception:
+            _own_server_restart_failed_at = time.monotonic()
+            raise
+        else:
+            _own_server_restart_failed_at = None
+
+    logger.warning("GAIA's model server has stopped; asking the daemon to start it")
+    _own_server_restart = threading.Thread(
+        target=_start, name="gaia-lemonade-restart", daemon=True
+    )
+    _own_server_restart.start()
+
 
 @router.get("/api/system/status", response_model=SystemStatus)
 async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
     from gaia.config import GaiaConfigError
+    from gaia.installer.model_choice import download_size_gb
     from gaia.llm.lemonade_choice import LemonadeChoiceError
 
     # The config names the Lemonade server, so a broken one is reported, not raised.
@@ -561,13 +631,16 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     # renders the same answer. Never fatal: a banner losing its hint is far
     # better than the status endpoint failing.
     try:
-        from gaia.llm.lemonade_launcher import describe_start_hint
+        from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
 
-        # Resolve WITH the required ctx so the rendered command carries it;
-        # callers must print it verbatim, never append their own flag.
-        hint = describe_start_hint(_MIN_CONTEXT_SIZE)
-        status.start_instruction = hint.instruction
-        status.start_command = hint.command
+        # GAIA starts its own server by itself; the app has nothing to tell
+        # the user to run, so its own "it starts on its own" line shows.
+        if not gaia_runs_lemonade():
+            # Resolve WITH the required ctx so the rendered command carries it;
+            # callers must print it verbatim, never append their own flag.
+            hint = describe_start_hint(_MIN_CONTEXT_SIZE)
+            status.start_instruction = hint.instruction
+            status.start_command = hint.command
     except Exception as exc:  # noqa: BLE001
         logger.warning("system status: could not resolve the start hint: %s", exc)
 
@@ -597,6 +670,10 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         # Failures of the supplementary probes below: transport, bad JSON, or
         # an unexpected payload shape.
         probe_errors = (httpx.HTTPError, ValueError, TypeError, AttributeError)
+
+        if _gaia_lemonade_is_stopped():
+            _restart_gaia_lemonade()
+            raise httpx.ConnectError("GAIA's own model server is not running")
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             base_url = resolve_lemonade_base_url()
@@ -636,14 +713,31 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
                 # Catalog for size and labels; its ctx_size is the saved option,
                 # not the loaded window.
-                models_resp = await client.get(f"{base_url}/models", headers=_auth)
-                if models_resp.status_code == 200:
-                    for m in models_resp.json().get("data", []):
-                        if m.get("id") == status.model_loaded:
-                            status.model_size_gb = m.get("size")
-                            status.model_labels = m.get("labels")
-                        if "embed" in m.get("id", "").lower():
-                            status.embedding_model_loaded = True
+                model_list_malformed = False
+                try:
+                    models_resp = await client.get(f"{base_url}/models", headers=_auth)
+                    if models_resp.status_code == 200:
+                        for m in _catalog_entries(models_resp.json()):
+                            if m.get("id") == status.model_loaded:
+                                status.model_size_gb = download_size_gb(
+                                    status.model_loaded, m.get("size")
+                                )
+                                status.model_labels = m.get("labels")
+                            if "embed" in (m.get("id") or "").lower():
+                                status.embedding_model_loaded = True
+                        _probe_ok("models")
+                    else:
+                        _probe_failed(
+                            status,
+                            "models",
+                            "Could not read Lemonade's model list: it returned "
+                            f"HTTP {models_resp.status_code}.",
+                        )
+                except probe_errors as exc:
+                    model_list_malformed = isinstance(exc, ValueError)
+                    _probe_failed(
+                        status, "models", f"Could not read Lemonade's model list: {exc}"
+                    )
 
                 # Validate that the loaded model matches what GAIA Chat (or any
                 # registered agent) expects. A custom_model override wins over
@@ -675,7 +769,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 # When the expected model isn't loaded, check if it is downloaded.
                 # Respects the custom_model override.
                 # Uses show_all=true to see models that are in the catalog but not
-                # yet pulled to disk.
+                # yet pulled to disk. A list already named malformed above
+                # would only warn twice.
                 expected_missing = (
                     not status.model_loaded or not status.expected_model_loaded
                 )
@@ -683,6 +778,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                     expected_missing
                     and status.default_model_name
                     and not status.default_model_is_cloud
+                    and not model_list_malformed
                 ):
                     _target = status.default_model_name
                     try:
@@ -702,16 +798,16 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             )
                         else:
                             default_lower = _norm_model_id(_target)
-                            for m in catalog_resp.json().get("data", []):
-                                if _norm_model_id(m.get("id", "")) == default_lower:
+                            for m in _catalog_entries(catalog_resp.json()):
+                                if _norm_model_id(m.get("id") or "") == default_lower:
                                     status.model_downloaded = m.get("downloaded", False)
                                     # Capture the catalog size so the
                                     # "not downloaded" banner can show an
                                     # accurate hint instead of a hard-coded
                                     # number that drifts with model changes.
-                                    cat_size = m.get("size")
-                                    if cat_size is not None:
-                                        status.default_model_size_gb = float(cat_size)
+                                    status.default_model_size_gb = download_size_gb(
+                                        _target, m.get("size")
+                                    )
                                     break
                             # Model not found in catalog → treat as not downloaded
                             if status.model_downloaded is None:
@@ -897,7 +993,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         _shutil = sys.modules.get("gaia.ui.server", sys.modules[__name__])
         _shutil_mod = getattr(_shutil, "shutil", shutil)
         usage = _shutil_mod.disk_usage(Path.home())
-        status.disk_space_gb = round(usage.free / (1024**3), 1)
+        # Decimal GB, the unit setup and the model sizes use.
+        status.disk_space_gb = round(usage.free / 1e9, 1)
         _probe_ok("disk")
     except OSError as exc:
         _probe_failed(status, "disk", f"Could not read free disk space: {exc}")
@@ -949,7 +1046,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         else:
             status.init_state = "ready"
         status.init_tasks = [
-            InitTaskInfo(name=j.name, status=j.status.value) for j in visible
+            InitTaskInfo(name=j.name, step=j.step, status=j.status.value)
+            for j in visible
         ]
 
     # ── Live download progress ──────────────────────────────────────────
@@ -987,13 +1085,17 @@ async def get_warm_up():
 
 
 async def _check_model_status(model_name: str) -> ModelStatus:
-    """Check if a model is found, downloaded, and loaded on Lemonade server."""
+    """Check if a model is found, downloaded, and loaded on Lemonade server.
+
+    ``checked`` stays False when the model list couldn't be read, so "not
+    found" is never claimed for a server that didn't answer.
+    """
     status = ModelStatus()
     if not model_name:
         return status
-    try:
-        import httpx
+    import httpx
 
+    try:
         base_url = resolve_lemonade_base_url()
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -1003,41 +1105,55 @@ async def _check_model_status(model_name: str) -> ModelStatus:
                 params={"show_all": "true"},
                 headers=_auth,
             )
+            listed: Optional[List[Dict[str, Any]]] = None
             if models_resp.status_code == 200:
+                try:
+                    listed = _catalog_entries(models_resp.json())
+                except ValueError as e:
+                    logger.info("Model list for %s unreadable: %s", model_name, e)
+            if listed is not None:
+                status.checked = True
                 model_name_lower = model_name.lower()
-                for m in models_resp.json().get("data", []):
-                    mid = m.get("id", "").lower()
-                    mname = m.get("name", "").lower()
-                    if model_name_lower in (mid, mname):
+                for m in listed:
+                    mid = str(m.get("id") or "")
+                    mname = str(m.get("name") or "").lower()
+                    if _model_ids_match(mid, model_name) or model_name_lower == mname:
                         status.found = True
-                        status.downloaded = m.get("downloaded", False)
+                        status.downloaded = bool(m.get("downloaded", False))
                         break
 
             # Check health: is model currently loaded?
             health_resp = await client.get(f"{base_url}/health", headers=_auth)
-            if health_resp.status_code == 200:
-                health_data = health_resp.json()
-                loaded_model = health_data.get("model_loaded", "")
-                if loaded_model and loaded_model.lower() == model_name.lower():
+            health_data = health_resp.json() if health_resp.status_code == 200 else None
+            if isinstance(health_data, dict):
+                loaded_model = health_data.get("model_loaded")
+                if isinstance(loaded_model, str) and _model_ids_match(
+                    loaded_model, model_name
+                ):
                     status.found = True
                     status.downloaded = True
                     status.loaded = True
                 # Also check all_models_loaded list
-                for m in health_data.get("all_models_loaded", []):
-                    if m.get("model_name", "").lower() == model_name.lower():
+                loaded_list = health_data.get("all_models_loaded")
+                for m in loaded_list if isinstance(loaded_list, list) else []:
+                    if isinstance(m, dict) and _model_ids_match(
+                        str(m.get("model_name") or ""), model_name
+                    ):
                         status.found = True
                         status.downloaded = True
                         status.loaded = True
                         break
-    except Exception as e:
-        logger.debug("Model status check failed for %s: %s", model_name, e)
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as e:
+        # Unchecked, which Settings says in words; InvalidURL isn't an HTTPError.
+        logger.info("Could not check model %s on the model server: %s", model_name, e)
 
     logger.debug(
-        "Model status for %s: found=%s, downloaded=%s, loaded=%s",
+        "Model status for %s: found=%s, downloaded=%s, loaded=%s, checked=%s",
         model_name,
         status.found,
         status.downloaded,
         status.loaded,
+        status.checked,
     )
     return status
 
@@ -1067,7 +1183,9 @@ def _resolve_dynamic_tools_setting() -> tuple[bool, bool]:
 @router.get("/api/settings", response_model=SettingsResponse)
 async def get_settings(db: ChatDatabase = Depends(get_db)):
     """Get current user settings with model status."""
-    custom_model = db.get_setting("custom_model")
+    from .providers import custom_model_override
+
+    custom_model = custom_model_override(db)
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
@@ -1095,6 +1213,22 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
     )
 
 
+def _load_newly_selected_model(db: ChatDatabase) -> None:
+    """Load the model new turns now run; nothing else would until the next message."""
+    from gaia.config import GaiaConfigError
+
+    from .providers import LOCAL, provider_of
+
+    try:
+        model = (db.get_setting("custom_model") or "").strip() or _default_model_name()
+    except GaiaConfigError as e:
+        # The setting is saved; the next message reports the config and loads.
+        logger.warning("Not loading the newly selected model: %s", e)
+        return
+    if provider_of(model) == LOCAL:
+        warmup.request_warm_up("model setting", fresh=True, model=model)
+
+
 @router.put("/api/settings", response_model=SettingsResponse)
 async def update_settings(
     request: SettingsUpdateRequest,
@@ -1104,8 +1238,9 @@ async def update_settings(
     """Update user settings.
 
     Setting ``custom_model`` to an **empty string** clears the override
-    and reverts to the default model. Sending ``null`` (or omitting the
-    field) is a no-op — by GAIA convention only explicit ``""`` clears.
+    and reverts to the model picked under Model (the default model when
+    there is no pick; see ``model_after_clearing_custom``). Sending
+    ``null`` (or omitting the field) is a no-op — by GAIA convention only explicit ``""`` clears.
     Pydantic *can* distinguish an explicit ``null`` from an unset field
     via ``model_fields_set``; we don't lean on that distinction here so
     clients have a single, simple rule (omit to keep, ``""`` to clear).
@@ -1120,12 +1255,46 @@ async def update_settings(
     """
     if request.custom_model is not None:
         value = request.custom_model.strip() if request.custom_model else None
+        from gaia.config import GaiaConfig, GaiaConfigError
+
+        from .providers import (
+            PICKED_MODEL_SETTING,
+            clear_restore_notice,
+            model_after_clearing_custom,
+            provider_of,
+            refuse_blocked_cloud_model,
+        )
+
         if value:
+            refuse_blocked_cloud_model(value)
             logger.info("Custom model override set: %s", value)
         else:
-            logger.info("Custom model override cleared")
-            value = None
+            # Back to the model chosen under Model, as the field says.
+            value = model_after_clearing_custom(db)
+            logger.info("Custom model override cleared; running %s", value or "default")
+            if value:
+                db.set_setting(PICKED_MODEL_SETTING, value)
+        # last_model is what the flagship sidecar warms and the next start restores.
+        try:
+            GaiaConfig.save_keys(
+                {
+                    "last_model": value,
+                    "last_provider": provider_of(value) if value else None,
+                }
+            )
+        except GaiaConfigError as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"The custom model was not saved: {e} Then save it again.",
+            ) from e
+        previous = (db.get_setting("custom_model") or "").strip() or None
+        changed = (value is None) != (previous is None) or (
+            value is not None and not _model_ids_match(value, previous)
+        )
         db.set_setting("custom_model", value)
+        clear_restore_notice()
+        if changed:
+            _load_newly_selected_model(db)
 
     # Only touch context_size when the field was explicitly included in the request.
     if "context_size" in request.model_fields_set:
@@ -1200,9 +1369,12 @@ async def update_settings(
                 _ui_cloud_provider(custom) or custom.lower().startswith("claude")
             ):
                 db.set_setting("custom_model", None)
+                _load_newly_selected_model(db)
         logger.info("Network policy set: %s", result["policy"].value)
 
-    custom_model = db.get_setting("custom_model")
+    from .providers import custom_model_override
+
+    custom_model = custom_model_override(db)
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
@@ -1234,24 +1406,24 @@ async def health(db: ChatDatabase = Depends(get_db)):
     }
 
 
-def _read_model_server() -> ModelServerInfo:
+def _read_model_server(custom_model: Optional[str]) -> ModelServerInfo:
     """Read Lemonade's /health and /system-info into the Model server panel.
 
     Unreachable is an answer, not an exception: the panel shows one line.
+    ``custom_model`` is the user's chat model override, if any.
     """
     from gaia.config import GaiaConfig
     from gaia.llm.lemonade_client import (
         LemonadeClient,
         LemonadeClientError,
-        _read_embedded_lemonade_state,
+        gaia_lemonade_port,
     )
     from gaia.llm.model_server_info import describe_model_server, server_owner
 
     preferred = GaiaConfig.load().llamacpp_backend
     client = LemonadeClient(verbose=False)
     base_url = client.base_url
-    state = _read_embedded_lemonade_state()
-    owner = server_owner(base_url, state.get("port") if state else None)
+    owner = server_owner(base_url, gaia_lemonade_port())
     try:
         health = client.health_check(timeout=5)
     except LemonadeClientError as exc:
@@ -1277,6 +1449,7 @@ def _read_model_server() -> ModelServerInfo:
         system_info=system_info if isinstance(system_info, dict) else None,
         preferred_backend=preferred,
         is_cloud_model=cloud_model_provider,
+        chat_model_id=custom_model or _default_model_name(),
     )
     return ModelServerInfo(**info, system_info_error=system_info_error)
 
@@ -1286,18 +1459,22 @@ def _config_http_error(exc: Exception) -> HTTPException:
 
 
 @router.get("/api/system/model-server", response_model=ModelServerInfo)
-async def model_server():
+async def model_server(db: ChatDatabase = Depends(get_db)):
     """Which Lemonade GAIA uses, where, and what backend each loaded model runs on."""
     from gaia.config import GaiaConfigError
 
     try:
-        return await asyncio.to_thread(_read_model_server)
+        return await asyncio.to_thread(
+            _read_model_server, db.get_setting("custom_model")
+        )
     except GaiaConfigError as exc:
         raise _config_http_error(exc) from exc
 
 
 @router.put("/api/system/model-server/backend", response_model=ModelServerInfo)
-async def set_model_server_backend(body: ModelServerBackendRequest):
+async def set_model_server_backend(
+    body: ModelServerBackendRequest, db: ChatDatabase = Depends(get_db)
+):
     """Save the llama.cpp backend for chat models; it applies on the next load.
 
     Only a backend GAIA has tested and Lemonade can run on this machine is accepted.
@@ -1305,9 +1482,10 @@ async def set_model_server_backend(body: ModelServerBackendRequest):
     from gaia.config import GaiaConfig, GaiaConfigError
 
     choice = body.backend.strip().lower()
+    custom_model = db.get_setting("custom_model")
     try:
         if choice != "auto":
-            current = await asyncio.to_thread(_read_model_server)
+            current = await asyncio.to_thread(_read_model_server, custom_model)
             if not current.reachable:
                 raise HTTPException(status_code=503, detail=current.error)
             usable = sorted(b.name for b in current.available_backends)
@@ -1322,7 +1500,7 @@ async def set_model_server_backend(body: ModelServerBackendRequest):
                     ),
                 )
         await asyncio.to_thread(GaiaConfig.save_key, "llamacpp_backend", choice)
-        return await asyncio.to_thread(_read_model_server)
+        return await asyncio.to_thread(_read_model_server, custom_model)
     except GaiaConfigError as exc:
         raise _config_http_error(exc) from exc
 

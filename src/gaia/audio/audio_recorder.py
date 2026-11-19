@@ -9,12 +9,16 @@ import time
 # Third-party imports next
 import numpy as np
 
+from gaia.audio.sounddevice_hint import sounddevice_missing_message
+from gaia.logger import get_logger
+
 try:
     import sounddevice as sd
-except ImportError:
-    sd = None
 
-from gaia.logger import get_logger
+    _SD_IMPORT_ERROR = None
+except (ImportError, OSError) as _e:  # OSError: installed, but no PortAudio
+    sd = None
+    _SD_IMPORT_ERROR = _e
 
 
 class AudioRecorder:
@@ -28,8 +32,7 @@ class AudioRecorder:
 
         if sd is None:
             raise ImportError(
-                "sounddevice is required for audio recording.\n"
-                'Install with: uv pip install -e ".[talk]"'
+                sounddevice_missing_message("audio recording", _SD_IMPORT_ERROR)
             )
 
         # Add thread attributes

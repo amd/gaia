@@ -5,17 +5,9 @@
  * Contract tests for the five generic render primitives added in issue
  * #2108, Increment 2: `table`, `key_value`, `list`, `image`, `diff`.
  *
- * None of these render keys are registered yet — `CARD_REGISTRY` (see
- * ../render/registry.tsx) only knows `email_pre_scan` as of Increment 1.
- * Every assertion below that expects real card output is EXPECTED TO FAIL
- * right now: RenderCard falls back to UnsupportedCard, so e.g.
- * `screen.getByRole('table')` will not find anything. That is correct TDD —
- * this file pins the frozen contract the Increment 2 implementer must
- * conform to; do not loosen these assertions to match a different shape
- * without confirming it against the plan in issue #2108.
- *
- * Only test #18 (oversized payload notice) is expected to pass today — it
- * exercises UnsupportedCard behavior that already shipped in Increment 1.
+ * This file pins the frozen contract of these primitives; do not loosen
+ * these assertions to match a different shape without confirming it
+ * against the plan in issue #2108.
  *
  * Everything is driven through the public `<RenderCard render data />`
  * surface; the primitive components' file/module layout is the
@@ -172,35 +164,17 @@ describe('image primitive', () => {
 });
 
 describe('diff primitive', () => {
-    it('applies per-line classes by +/-/@@ prefix, with plain context lines carrying only the base class', () => {
-        const unified = '@@ -1,2 +1,2 @@\n context\n-old line\n+new line';
+    it('applies per-line classes by +/- prefix, with a gap mark between hunks and plain context lines', () => {
+        const unified = '@@ -1,2 +1,2 @@\n context\n-old line\n+new line\n@@ -9 +9 @@\n-c\n+d';
         const { container } = render(<RenderCard render="diff" data={{ unified }} />);
 
         const lines = Array.from(container.querySelectorAll('.render-diff__line'));
-        expect(lines.length).toBeGreaterThan(0);
+        expect(lines.map((el) => el.textContent)).toEqual([' context', '-old line', '+new line', '\u22ef', '-c', '+d']);
 
-        const hunkLine = lines.find((el) => el.textContent?.includes('@@ -1,2 +1,2 @@'));
-        const removedLine = lines.find((el) => el.textContent?.includes('old line'));
-        const addedLine = lines.find((el) => el.textContent?.includes('new line'));
-        const contextLine = lines.find(
-            (el) => el.textContent?.includes('context') && !el.textContent?.includes('old line') && !el.textContent?.includes('new line'),
-        );
-
-        expect(hunkLine).toBeTruthy();
-        expect(hunkLine?.classList.contains('render-diff__line--hunk')).toBe(true);
-
-        expect(removedLine).toBeTruthy();
-        expect(removedLine?.classList.contains('render-diff__line')).toBe(true);
-        expect(removedLine?.classList.contains('render-diff__line--removed')).toBe(true);
-
-        expect(addedLine).toBeTruthy();
-        expect(addedLine?.classList.contains('render-diff__line--added')).toBe(true);
-
-        expect(contextLine).toBeTruthy();
-        expect(contextLine?.classList.contains('render-diff__line')).toBe(true);
-        expect(contextLine?.classList.contains('render-diff__line--added')).toBe(false);
-        expect(contextLine?.classList.contains('render-diff__line--removed')).toBe(false);
-        expect(contextLine?.classList.contains('render-diff__line--hunk')).toBe(false);
+        expect(lines[3].classList.contains('render-diff__line--hunk')).toBe(true);
+        expect(lines[1].classList.contains('render-diff__line--removed')).toBe(true);
+        expect(lines[2].classList.contains('render-diff__line--added')).toBe(true);
+        expect(lines[0].className).toBe('render-diff__line');
     });
 
     it('renders the invalid-payload fallback for a malformed payload', () => {
@@ -209,26 +183,14 @@ describe('diff primitive', () => {
         expect(screen.getByText('Invalid diff payload')).toBeInTheDocument();
     });
 
-    it('styles unified-diff file header lines as neutral, not added/removed', () => {
+    it('drops the file header and first hunk range, still coloring only changed lines', () => {
         const unified = '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new';
         const { container } = render(<RenderCard render="diff" data={{ unified }} />);
 
         const lines = Array.from(container.querySelectorAll('.render-diff__line'));
-
-        const minusHeader = lines.find((el) => el.textContent === '--- a/x');
-        const plusHeader = lines.find((el) => el.textContent === '+++ b/x');
-        const removedLine = lines.find((el) => el.textContent === '-old');
-        const addedLine = lines.find((el) => el.textContent === '+new');
-
-        expect(minusHeader).toBeTruthy();
-        expect(minusHeader?.className).toBe('render-diff__line');
-        expect(plusHeader).toBeTruthy();
-        expect(plusHeader?.className).toBe('render-diff__line');
-
-        expect(removedLine).toBeTruthy();
-        expect(removedLine?.classList.contains('render-diff__line--removed')).toBe(true);
-        expect(addedLine).toBeTruthy();
-        expect(addedLine?.classList.contains('render-diff__line--added')).toBe(true);
+        expect(lines.map((el) => el.textContent)).toEqual(['-old', '+new']);
+        expect(lines[0].classList.contains('render-diff__line--removed')).toBe(true);
+        expect(lines[1].classList.contains('render-diff__line--added')).toBe(true);
     });
 });
 

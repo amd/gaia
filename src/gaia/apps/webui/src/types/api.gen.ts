@@ -7,6 +7,7 @@
 // default are optional here even though the server always sends them.
 
 export interface ApiSchemas {
+  AccountUpdateRequest: AccountUpdateRequest;
   ActivationRequest: ActivationRequest;
   AdminClearRequest: AdminClearRequest;
   AdminSeedItem: AdminSeedItem;
@@ -34,6 +35,8 @@ export interface ApiSchemas {
   CreateSessionRequest: CreateSessionRequest;
   CustomModelRequest: CustomModelRequest;
   DeviceUsage: DeviceUsage;
+  DiscordConnectRequest: DiscordConnectRequest;
+  DiscordStartRequest: DiscordStartRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
@@ -117,6 +120,8 @@ export interface ApiSchemas {
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
   SetupRunRequest: SetupRunRequest;
+  SkillLinkAddRequest: SkillLinkAddRequest;
+  SkillLinkRequest: SkillLinkRequest;
   SkipModelRequest: SkipModelRequest;
   SourceInfo: SourceInfo;
   SpeakRequest: SpeakRequest;
@@ -128,6 +133,7 @@ export interface ApiSchemas {
   TaskCreate: TaskCreate;
   TaskStatusUpdate: TaskStatusUpdate;
   ToolConfirmRequest: ToolConfirmRequest;
+  TurnRouteResponse: TurnRouteResponse;
   TurnSummaryCost: TurnSummaryCost;
   TurnSummaryDocument: TurnSummaryDocument;
   TurnSummaryFile: TurnSummaryFile;
@@ -150,6 +156,13 @@ export interface ApiSchemas {
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
   gaia__ui__routers__system__DownloadModelRequest: Gaia_Ui_Routers_System__DownloadModelRequest;
+}
+/**
+ * Body for ``PATCH /api/connectors/{id}/accounts/{account_id}``. Only
+ * ``true`` is accepted: to change the default, make another account it.
+ */
+export interface AccountUpdateRequest {
+  is_default: boolean;
 }
 /**
  * Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
@@ -233,13 +246,16 @@ export interface AgentListResponse {
  */
 export interface AgentStepResponse {
   active?: boolean;
+  autoDeclined?: boolean | null;
   commandOutput?: CommandOutputResponse | null;
   currentStep?: number | null;
   data?: unknown;
   decision?: string | null;
+  declined?: boolean | null;
   detail?: string | null;
   fileList?: FileListResponse | null;
   id: number;
+  kept?: boolean | null;
   label: string;
   latencyMs?: number | null;
   mcpOutput?: McpOutputResponse | null;
@@ -247,6 +263,7 @@ export interface AgentStepResponse {
   mcpServerLabel?: string | null;
   mcpTool?: string | null;
   narration?: string | null;
+  needsModel?: string | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;
@@ -256,6 +273,7 @@ export interface AgentStepResponse {
   result?: string | null;
   ruleIds?: string[] | null;
   success?: boolean | null;
+  timedOut?: boolean | null;
   timestamp?: number;
   tool?: string | null;
   type: string;
@@ -295,6 +313,8 @@ export interface AttachDocumentRequest {
   document_id: string;
 }
 export interface AuthorizeRequest {
+  account?: string | null;
+  add_account?: boolean;
   grant_agents?: string[];
   scopes?: string[];
 }
@@ -317,6 +337,7 @@ export interface BodyUploadFileApiFilesUploadPost {
 export interface BrowseResponse {
   current_path: string;
   entries: FileEntry[];
+  folder_refusal?: string | null;
   parent_path?: string | null;
   quick_links?: QuickLink[];
 }
@@ -463,6 +484,14 @@ export interface DeviceUsage {
    * Load of the device's busiest engine.
    */
   percent: number;
+}
+export interface DiscordConnectRequest {
+  model?: string | null;
+  token: string;
+}
+export interface DiscordStartRequest {
+  model?: string | null;
+  take_over?: boolean;
 }
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];
@@ -630,8 +659,9 @@ export interface FollowUpRequest {
  * OAuth, no consent step.
  *
  * ``refresh_token`` / ``client_secret`` are secret INPUTS — they are never
- * echoed back in any response. ``account_email`` is display-only in v1
- * (the keyring slot is single-account per provider). ``grant_agents`` is
+ * echoed back in any response. ``account_email`` picks which stored account
+ * the forward replaces (the one with that address); with other accounts
+ * stored and no match, the forward is refused. ``grant_agents`` is
  * the list of namespaced agent ids (e.g. ``installed:email``) to grant the
  * forwarded scopes so they can resolve the connection ambiently.
  */
@@ -698,6 +728,7 @@ export interface IndexFolderResponse {
   failed?: number;
   indexed?: number;
   skipped?: number;
+  skipped_images?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];
@@ -724,10 +755,20 @@ export interface InferenceStatsResponse {
   output_tokens?: number;
   place?: string | null;
   retried?: boolean | null;
+  route?: TurnRouteResponse | null;
   seconds?: number | null;
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
+}
+/**
+ * The model a ``hybrid`` turn was routed to, and why.
+ */
+export interface TurnRouteResponse {
+  degraded?: boolean;
+  model: string;
+  notice?: string;
+  reason?: string;
 }
 /**
  * Summary of a boot-time initialization task (embedded in SystemStatus).
@@ -735,6 +776,7 @@ export interface InferenceStatsResponse {
 export interface InitTaskInfo {
   name: string;
   status: string;
+  step?: string | null;
 }
 /**
  * Body for ``POST /api/agents/install``.
@@ -986,6 +1028,7 @@ export interface ModelServerInfo {
  * Status of a custom model on the Lemonade server.
  */
 export interface ModelStatus {
+  checked?: boolean;
   downloaded?: boolean;
   found?: boolean;
   loaded?: boolean;
@@ -1085,7 +1128,9 @@ export interface PermissionModeRequest {
  * Structured Local only notice translated by the Agent UI.
  */
 export interface PolicyNotice {
+  cause?: string | null;
   code: string;
+  models?: string[] | null;
   reason?: string | null;
   severity: "info" | "warning";
   url?: string | null;
@@ -1345,6 +1390,16 @@ export interface SetupRunRequest {
   server_only?: boolean;
   skip_chat_model?: boolean;
   upgrade_embedded?: boolean;
+}
+export interface SkillLinkAddRequest {
+  allow_code?: boolean;
+  force?: boolean;
+  names?: string[] | null;
+  pin: string;
+  url: string;
+}
+export interface SkillLinkRequest {
+  url: string;
 }
 export interface SkipModelRequest {
   model_id: string;

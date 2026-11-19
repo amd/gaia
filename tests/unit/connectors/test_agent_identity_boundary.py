@@ -270,7 +270,7 @@ class TestEveryCredentialDoorIsGuarded:
                 provider="google",
                 scopes=[],
                 agent_id="builtin:chat",
-                account_email="default",
+                slot="default",
             )
         assert "named no scopes" in str(exc.value)
 
@@ -283,7 +283,7 @@ class TestEveryCredentialDoorIsGuarded:
                 provider="google",
                 scopes=[_GMAIL_READ],
                 agent_id="builtin:chat",
-                account_email="default",
+                slot="default",
             )
         assert exc.value.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED
 
@@ -304,7 +304,7 @@ class TestEveryCredentialDoorIsGuarded:
                 provider="google",
                 scopes=[],
                 agent_id=None,
-                account_email="default",
+                slot="default",
             )
         assert exc.value.reason is AuthRequiredError.Reason.NOT_CONNECTED
 
@@ -320,7 +320,7 @@ class TestEveryCredentialDoorIsGuarded:
                     provider="google",
                     scopes=[_GMAIL_READ],
                     agent_id=None,
-                    account_email="default",
+                    slot="default",
                 )
         assert exc.value.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED
         assert exc.value.agent_id is None

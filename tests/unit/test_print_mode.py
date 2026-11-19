@@ -9,7 +9,7 @@ import logging
 import os
 import sys
 import types
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -181,6 +181,7 @@ def test_main_forwards_flags_and_exits_with_runs_code(monkeypatch):
         skip_permissions=True,
         full_access=False,
         base_url="http://h:1/api/v1",
+        time_limit=None,
     )
 
 
@@ -200,6 +201,7 @@ def test_main_defaults_output_format_to_text(monkeypatch):
         ["--output-format", "json"],
         ["--verbose"],
         ["--max-steps", "3"],
+        ["--time-limit", "600"],
         ["--attempts", "2"],
         ["--dangerously-skip-permissions"],
         ["--full-access"],
@@ -591,7 +593,7 @@ def test_agent_config_is_headless(stub_env):
     print_mode.run("q", model="m1", max_steps=5)
     cfg = _agent().config
     assert cfg.silent_mode is True
-    assert cfg.streaming is False
+    assert cfg.streaming is True
     assert cfg.max_steps == 5
     assert cfg.model_id == "m1"
     assert cfg.base_url == "http://detected:13305/api/v1"
@@ -671,12 +673,20 @@ def test_memory_is_drained_even_when_the_turn_raises(stub_env):
 
 class _Outcome:
     def __init__(
-        self, terminal_type, final_answer=None, error_detail=None, failed=False
+        self,
+        terminal_type,
+        final_answer=None,
+        error_detail=None,
+        failed=False,
+        usage=None,
+        model_messages=None,
     ):
         self.terminal_type = terminal_type
         self.final_answer = final_answer
         self.error_detail = error_detail
         self.failed = failed
+        self.usage = usage
+        self.model_messages = model_messages
 
 
 @pytest.fixture
@@ -711,6 +721,78 @@ def test_without_the_agent_package_the_turn_runs_on_the_agent_binary(
     assert kwargs["allowed_paths"] == [str(tmp_path)]
 
 
+_RELAY_USAGE = {
+    "steps": 2,
+    "tools_used": 1,
+    "tokens": 12,
+    "input_tokens": 4000,
+    "cached_tokens": 3500,
+}
+_RELAY_MESSAGES = [
+    {"role": "assistant", "tool_calls": [{"function": {"name": "read_file"}}]},
+    {"role": "tool", "name": "read_file", "content": "amber-lynx-47"},
+    {"role": "assistant", "content": "The second code is amber-lynx-47."},
+]
+
+
+def test_a_relayed_json_record_counts_steps_tools_and_tokens(relay, capsys):
+    relay.outcome = _Outcome("final", final_answer="amber", usage=_RELAY_USAGE)
+
+    assert print_mode.run("q", model="m", output_format="json") == 0
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["num_steps"] == 2
+    assert record["num_tool_calls"] == 1
+    assert record["input_tokens"] == 4000
+    assert record["cached_tokens"] == 3500
+    assert record["output_tokens"] == 12
+    assert "conversation" not in record
+    [(_, _, kwargs)] = relay
+    assert "turns" not in kwargs
+
+
+def test_a_relayed_verbose_record_carries_the_conversation(relay, capsys):
+    relay.outcome = _Outcome(
+        "final",
+        final_answer="amber",
+        usage=_RELAY_USAGE,
+        model_messages=_RELAY_MESSAGES,
+    )
+
+    assert print_mode.run("q", model="m", output_format="json", verbose=True) == 0
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["conversation"] == _RELAY_MESSAGES
+    assert record["num_tool_calls"] == 1
+    # Sending turns, even empty, is how the agent is asked for model_messages.
+    [(_, _, kwargs)] = relay
+    assert kwargs["turns"] == []
+
+
+def test_a_relayed_final_without_a_tool_count_keeps_the_conversations(relay, capsys):
+    """An error-exit final carries steps and tokens but no ``tools_used``."""
+    usage = {"steps": 2, "tokens": 12, "input_tokens": 4000}
+    relay.outcome = _Outcome(
+        "final", final_answer="amber", usage=usage, model_messages=_RELAY_MESSAGES
+    )
+
+    assert print_mode.run("q", model="m", output_format="json", verbose=True) == 0
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["num_tool_calls"] == 1
+    assert record["num_steps"] == 2
+
+
+def test_a_relayed_final_with_no_usage_reports_zeros_not_a_crash(relay, capsys):
+    relay.outcome = _Outcome("final", final_answer="amber")
+
+    assert print_mode.run("q", model="m", output_format="json") == 0
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["num_tool_calls"] == 0
+    assert record["cached_tokens"] == 0
+
+
 def test_a_relayed_turn_leaves_the_model_server_to_the_daemon(relay, stub_env):
     """The daemon brings up the model server for its agent, as it does for the
     Agent UI; starting one here would race it."""
@@ -738,6 +820,8 @@ def test_a_relayed_turn_that_errors_exits_1_with_the_reason(relay, capsys):
         ({"skip_permissions": True}, "--dangerously-skip-permissions"),
         ({"full_access": True}, "--full-access"),
         ({"base_url": "http://h:1/api/v1"}, "--base-url"),
+        # The relay has no way to stop the binary's turn at a deadline.
+        ({"time_limit": 60}, "--time-limit"),
     ],
 )
 def test_flags_the_agent_binary_cannot_honour_are_refused(relay, capsys, flags, named):
@@ -975,6 +1059,79 @@ def test_an_unexpected_failure_does_not_log_its_traceback_at_info(
     assert not [r for r in caplog.records if r.exc_info]
 
 
+# ---------------------------------------------------------------------------
+# --time-limit
+# ---------------------------------------------------------------------------
+
+
+def test_time_limit_parses_and_defaults_to_none(parser):
+    assert parser.parse_args(["-p", "x"]).print_time_limit is None
+    assert parser.parse_args(["-p", "x", "--time-limit", "600"]).print_time_limit == 600
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "ten", "1.5"])
+def test_time_limit_must_be_a_positive_integer(parser, capsys, value):
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["-p", "x", "--time-limit", value])
+    assert exc.value.code == 2
+    assert "--time-limit" in capsys.readouterr().err
+
+
+def test_main_forwards_time_limit(monkeypatch):
+    run = MagicMock(return_value=0)
+    monkeypatch.setattr(print_mode, "run", run)
+    _run_main(monkeypatch, ["-p", "hi", "--time-limit", "900"])
+    assert run.call_args.kwargs["time_limit"] == 900
+
+
+def test_no_time_limit_arms_nothing(stub_env):
+    print_mode.run("q", model="m1")
+    agent = _agent()
+    assert not hasattr(agent, "time_limit_s")
+    assert not hasattr(agent, "_cancel_event")
+
+
+def test_a_time_limit_reaches_the_agent_and_is_disarmed_after(stub_env):
+    from gaia.agents.base.agent import TurnCancel
+
+    print_mode.run("q", model="m1", time_limit=60)
+
+    agent = _agent()
+    assert agent.time_limit_s == 60
+    assert isinstance(agent._cancel_event, TurnCancel)
+    # The turn finished in time: the stop never fired.
+    assert not agent._cancel_event.is_set()
+
+
+def test_a_turn_still_running_at_the_limit_is_stopped_and_reported(stub_env, capsys):
+    """The hard stop: a tool outlived the wrap-up, so the limit ends the turn."""
+
+    def _slow_turn(self, text):
+        self.queries.append(text)
+        stopped = self._cancel_event.wait(10)
+        return {
+            "status": "incomplete",
+            "result": self._cancel_event.message if stopped else "never stopped",
+            "time_limit_reached": stopped,
+        }
+
+    with patch.object(_StubAgent, "process_query", _slow_turn):
+        code = print_mode.run("q", model="m1", output_format="json", time_limit=1)
+
+    record = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert code == 1
+    assert "1-second time limit" in record["result"]
+    assert record["time_limit_reached"] is True
+
+
+def test_summarize_reports_a_time_limit_stop():
+    record = print_mode.summarize(
+        {"status": "incomplete", "result": "x", "time_limit_reached": True}, "m", 1.0
+    )
+    assert record["time_limit_reached"] is True
+    assert record["is_error"] is True
+
+
 @pytest.mark.parametrize("value", ["0", "5", "two"])
 def test_attempts_out_of_range_is_a_usage_error(monkeypatch, value):
     run = MagicMock(return_value=0)
@@ -1108,3 +1265,27 @@ def test_one_attempt_never_copies_the_folder(monkeypatch):
         },
     )
     assert print_mode.run("t", attempts=1) == 0
+
+
+def test_time_limit_with_attempts_is_a_usage_error_before_anything_runs(
+    monkeypatch, capsys
+):
+    started = MagicMock()
+    monkeypatch.setattr(print_mode, "_run_turn", started)
+    monkeypatch.setattr(print_mode, "_run_with_attempts", started)
+
+    assert print_mode.run("q", attempts=2, time_limit=60) == 2
+    started.assert_not_called()
+    assert "--time-limit can't be combined with --attempts" in capsys.readouterr().err
+
+
+def test_streamed_text_never_reaches_stdout(capsys):
+    """-p streams its model calls; the console it runs with must swallow them."""
+    from gaia.agents.base.console import SilentConsole
+
+    console = SilentConsole()
+    console.print_streaming_text("partial answer")
+    console.print_streaming_text("", end_of_stream=True)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""

@@ -5,7 +5,7 @@
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from gaia.logger import get_logger
 from gaia.mcp.protocol import MCP_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
@@ -286,6 +286,14 @@ def mcp_tool_error(result: Any) -> Optional[str]:
     return "\n".join(t for t in texts if t) or "The MCP tool reported an error."
 
 
+#: ``_meta`` key through which an MCP tool declares its ``@tool(dedup_key=...)``.
+MCP_DEDUP_KEY_META = "ai.amd-gaia/dedup_key"
+
+
+class MCPToolDeclarationError(ValueError):
+    """An MCP server declared tool metadata GAIA cannot honor."""
+
+
 @dataclass
 class MCPTool:
     """Represents an MCP tool with its schema.
@@ -297,12 +305,43 @@ class MCPTool:
         annotations: MCP tool annotations (``readOnlyHint``, ``destructiveHint``,
             …). Server-supplied and therefore advisory — see
             :func:`mcp_tool_requires_confirmation` for how far they are trusted.
+        meta: The tool's ``_meta`` object, where servers put metadata the
+            MCP spec does not define (e.g. ``ai.amd-gaia/dedup_key``).
     """
 
     name: str
     description: str
     input_schema: Dict[str, Any]
     annotations: Dict[str, Any] = field(default_factory=dict)
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+    def declared_dedup_key(self, server_name: str) -> Optional[Tuple[str, ...]]:
+        """The argument names this tool's ``_meta`` gives the repeat-call guard.
+
+        Returns:
+            The validated names, or ``None`` when the tool declares none.
+
+        Raises:
+            MCPToolDeclarationError: The declaration is malformed or names an
+                argument the tool does not take.
+        """
+        declared = self.meta.get(MCP_DEDUP_KEY_META)
+        if declared is None:
+            return None
+        # Deferred: the tools module pulls in the agent stack, which only a
+        # server that opts in should pay for.
+        from gaia.agents.base.tools import validate_dedup_key
+
+        properties = self.input_schema.get("properties", {})
+        try:
+            return validate_dedup_key(self.name, declared, properties)
+        except (TypeError, ValueError) as e:
+            raise MCPToolDeclarationError(
+                f"MCP server {server_name!r} declares a bad "
+                f"{MCP_DEDUP_KEY_META} {declared!r}: {e} None of its "
+                "tools were registered; fix the declaration in the "
+                "server's tool _meta."
+            ) from e
 
     def to_gaia_format(
         self, prefix: str, raw_server_name: Optional[str] = None
@@ -486,11 +525,29 @@ class MCPClient:
     def connect(self) -> bool:
         """Connect to the MCP server and initialize.
 
-        On failure, stores the error message in ``self.last_error``.
+        A server started through ``npx`` that dies before its first answer is
+        started once more: GAIA's own starts are serialized, but an npx run
+        from outside GAIA (another app, an older GAIA) may still have been
+        installing the same package. On failure, stores the error message in
+        ``self.last_error``.
 
         Returns:
             bool: True if connection and initialization successful
         """
+        if self._connect_once():
+            return True
+        package = getattr(self.transport, "died_installing", None)
+        if not isinstance(package, str):
+            return False
+        logger.info(
+            "MCP server '%s' exited on its first start through npx (%s); "
+            "starting it once more",
+            self.name,
+            package,
+        )
+        return self._connect_once()
+
+    def _connect_once(self) -> bool:
         self.last_error = None
         logger.debug(f"Connecting to MCP server '{self.name}'...")
 
@@ -615,6 +672,7 @@ class MCPClient:
                     if isinstance(tool.get("annotations"), dict)
                     else {}
                 ),
+                meta=tool["_meta"] if isinstance(tool.get("_meta"), dict) else {},
             )
             for tool in tools_data
         ]

@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
 import { useChatStore } from '../../stores/chatStore';
@@ -64,6 +64,12 @@ describe('Sidebar', () => {
         expect(screen.queryByText('Fix the build')).not.toBeInTheDocument();
     });
 
+    it('Connectors opens the connectors settings pane', () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Connectors' }));
+        expect(useChatStore.getState().settingsSection).toBe('connectors');
+    });
+
     it('puts search above New chat, expanded and collapsed', () => {
         const above = (a: HTMLElement, b: HTMLElement) =>
             !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -89,6 +95,12 @@ describe('Sidebar', () => {
         expect(onNewChat).toHaveBeenCalledOnce();
     });
 
+    it('Skills opens the skills settings, beside Memory and Scheduled tasks', () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: /Skills/ }));
+        expect(useChatStore.getState().settingsSection).toBe('skills');
+    });
+
     it('opens a chat', () => {
         render(<Sidebar onNewChat={vi.fn()} />);
         fireEvent.click(screen.getByRole('button', { name: 'Plan the trip' }));
@@ -101,6 +113,14 @@ describe('Sidebar', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Plan the trip' }));
         expect(useChatStore.getState().currentSessionId).toBe('b');
         expect(useChatStore.getState().showMemoryDashboard).toBe(false);
+    });
+
+    it('marks only Memory as selected while it replaces the chat', () => {
+        useChatStore.setState({ currentSessionId: 'a', showMemoryDashboard: true });
+        const { container } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(container.querySelectorAll('.sb-row.is-active, .sb-nav-item.is-active')).toHaveLength(1);
+        expect(container.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+        expect(container.querySelector('.sb-nav-item.is-active')).toHaveAccessibleName('Memory');
     });
 
     it('clicking the open chat leaves the Memory dashboard too', () => {
@@ -119,6 +139,21 @@ describe('Sidebar', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Confirm delete Tax questions' }));
         await waitFor(() => expect(mockedApi.deleteSession).toHaveBeenCalledExactlyOnceWith('c'));
         await waitFor(() => expect(screen.queryByText('Tax questions')).not.toBeInTheDocument());
+    });
+
+    it('keeps the delete confirmation while the pointer rests on it', () => {
+        // Reverting under the pointer swaps the wide label for Pin, so the confirming click pins.
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        const button = screen.getByRole('button', { name: 'Delete Tax questions' });
+        fireEvent.pointerEnter(button);
+        fireEvent.click(button);
+        act(() => { vi.advanceTimersByTime(10_000); });
+        expect(screen.getByRole('button', { name: 'Confirm delete Tax questions' })).toBeInTheDocument();
+
+        fireEvent.pointerLeave(button);
+        act(() => { vi.advanceTimersByTime(3_000); });
+        expect(screen.getByRole('button', { name: 'Delete Tax questions' })).toBeInTheDocument();
     });
 
     it('shows a chat still holding messages to send, and flags one that failed', () => {
@@ -184,7 +219,7 @@ describe('Sidebar', () => {
 
     it('shows a cloud location for a cloud model', () => {
         useModelStore.setState({
-            active: { provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi-k2', label: 'Kimi', remote: true, is_default: false },
+            active: { provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi-k2', label: 'Kimi', remote: true, is_default: false, provider_name: 'Fireworks AI' },
         });
         render(<Sidebar onNewChat={vi.fn()} />);
         expect(screen.getByRole('button', { name: 'Fireworks AI · kimi-k2' })).toBeInTheDocument();

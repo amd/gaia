@@ -54,7 +54,11 @@ from gaia.llm.local_only import (
     local_only_key_message,
 )
 from gaia.llm.retry import http_body_text
-from gaia.llm.surface_hints import TUI_GATEWAY_KEY_HINT, TUI_MODEL_SWITCH_HINT
+from gaia.llm.surface_hints import (
+    TUI_GATEWAY_INSTALL_HINT,
+    TUI_GATEWAY_KEY_HINT,
+    TUI_MODEL_SWITCH_HINT,
+)
 from gaia.logger import get_logger
 from gaia.version import LEMONADE_MIN_VERSION
 
@@ -245,6 +249,11 @@ class GatewayState:
     # When a model's tool-calling probe last failed, ``{model_id: "<UTC ISO>"}``,
     # so a down gateway is not re-probed at every start.
     tool_calling_probe_failures: Dict[str, str] = field(default_factory=dict)
+    # Whether a model reasons when sent ``reasoning_effort``, learned the same
+    # way: the gateway's catalog says nothing about it.
+    reasoning_models: List[str] = field(default_factory=list)
+    no_reasoning_models: List[str] = field(default_factory=list)
+    reasoning_probe_failures: Dict[str, str] = field(default_factory=dict)
     # Models whose last call came back "not found" (HTTP 404) from the cloud
     # provider, keyed by id: ``{"status": 404, "at": "<UTC ISO time>"}``. A
     # later successful call clears the entry. Nothing switches models on it —
@@ -289,6 +298,12 @@ class GatewayState:
             },
             # ``own_tool_markup_models`` is not read: own markup switches only
             # the session that wrote it, never later ones.
+            reasoning_models=list(raw.get("reasoning_models") or []),
+            no_reasoning_models=list(raw.get("no_reasoning_models") or []),
+            reasoning_probe_failures={
+                str(k): str(v)
+                for k, v in (raw.get("reasoning_probe_failures") or {}).items()
+            },
             unavailable_models={
                 str(k): dict(v)
                 for k, v in (raw.get("unavailable_models") or {}).items()
@@ -308,6 +323,11 @@ class GatewayState:
             "no_tool_calling_models": sorted(self.no_tool_calling_models),
             "tool_calling_probe_failures": dict(
                 sorted(self.tool_calling_probe_failures.items())
+            ),
+            "reasoning_models": sorted(self.reasoning_models),
+            "no_reasoning_models": sorted(self.no_reasoning_models),
+            "reasoning_probe_failures": dict(
+                sorted(self.reasoning_probe_failures.items())
             ),
             "unavailable_models": dict(sorted(self.unavailable_models.items())),
         }
@@ -837,13 +857,24 @@ class GatewayManager:
                 f"they need {GATEWAY_ENV_VAR} set to it in GAIA's environment too."
             )
         if response.status_code == 404 and "cloud" in url:
-            from gaia.llm.lemonade_launcher import describe_upgrade_hint
+            # Lemonade answers this until POST /install registers a provider:
+            # "Cloud provider 'amd' is not installed. Call POST /v1/install ..."
+            # It carries no type of its own, so the message is the only marker.
+            if "is not installed" in detail:
+                return GatewayError(
+                    f"Lemonade at {self.base_url} has no cloud provider registered "
+                    f"for this gateway, so it cannot accept a token yet. "
+                    f"{TUI_GATEWAY_INSTALL_HINT}"
+                )
+            # An empty type is what an older server's 404 body looks like.
+            if error_type in ("", "not_found"):
+                from gaia.llm.lemonade_launcher import describe_upgrade_hint
 
-            return GatewayError(
-                f"Lemonade at {self.base_url} has no cloud-provider API, so it "
-                f"is older than v{LEMONADE_MIN_VERSION}, the oldest version GAIA "
-                f"supports. {describe_upgrade_hint(self.base_url)}"
-            )
+                return GatewayError(
+                    f"Lemonade at {self.base_url} has no cloud-provider API, so it "
+                    f"is older than v{LEMONADE_MIN_VERSION}, the oldest version GAIA "
+                    f"supports. {describe_upgrade_hint(self.base_url)}"
+                )
         return GatewayError(
             f"{method} {url} failed with HTTP {response.status_code}"
             + (f": {detail}" if detail else "")

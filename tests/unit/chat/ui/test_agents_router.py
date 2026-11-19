@@ -156,12 +156,12 @@ class TestInstalledSidecarAgentsMerge:
     """
 
     @staticmethod
-    def _email_sentinel():
+    def _gaia_sentinel():
         from gaia.hub.installer import InstalledAgent
 
         return {
-            "email": InstalledAgent(
-                id="email",
+            "gaia": InstalledAgent(
+                id="gaia",
                 version="0.5.0",
                 language="python",
                 installed_at="2026-01-01T00:00:00Z",
@@ -174,21 +174,21 @@ class TestInstalledSidecarAgentsMerge:
         app.state.agent_registry = make_mock_registry()  # cold: no agents
         return TestClient(app)
 
-    def test_installed_email_appears_with_empty_registry(self):
+    def test_installed_flagship_appears_with_empty_registry(self):
         client = self._client_with_empty_registry()
         with (
             patch(
-                "gaia.hub.installer.list_installed", return_value=self._email_sentinel()
+                "gaia.hub.installer.list_installed", return_value=self._gaia_sentinel()
             ),
             patch(
                 "gaia.hub.catalog.cached_index_agents",
                 return_value=[
                     {
-                        "id": "email",
-                        "name": "Email Triage",
-                        "description": "Triage Gmail locally",
-                        "category": "productivity",
-                        "icon": "mail",
+                        "id": "gaia",
+                        "name": "GAIA",
+                        "description": "The flagship agent",
+                        "category": "general",
+                        "icon": "sparkles",
                     }
                 ],
             ),
@@ -196,32 +196,32 @@ class TestInstalledSidecarAgentsMerge:
             data = client.get("/api/agents").json()
 
         ids = [a["id"] for a in data["agents"]]
-        assert ids == ["email"]
-        email = data["agents"][0]
-        assert email["name"] == "Email Triage"
-        assert email["description"] == "Triage Gmail locally"
-        assert email["source"] == "installed"
-        assert email["icon"] == "mail"
+        assert ids == ["gaia"]
+        gaia = data["agents"][0]
+        assert gaia["name"] == "GAIA"
+        assert gaia["description"] == "The flagship agent"
+        assert gaia["source"] == "installed"
+        assert gaia["icon"] == "sparkles"
 
     def test_falls_back_to_spec_name_without_catalog_cache(self):
         """No cached catalog → still a real card using the daemon spec name."""
         client = self._client_with_empty_registry()
         with (
             patch(
-                "gaia.hub.installer.list_installed", return_value=self._email_sentinel()
+                "gaia.hub.installer.list_installed", return_value=self._gaia_sentinel()
             ),
             patch("gaia.hub.catalog.cached_index_agents", return_value=[]),
         ):
             data = client.get("/api/agents").json()
 
-        assert [a["id"] for a in data["agents"]] == ["email"]
+        assert [a["id"] for a in data["agents"]] == ["gaia"]
         # Same name the catalog path gives above: the spec's display_name now
         # matches gaia-agent.yaml, so the card no longer depends on whether a
         # catalog happened to be cached (#4161).
-        assert data["agents"][0]["name"] == "Email Triage"  # spec.display_name
+        assert data["agents"][0]["name"] == "GAIA"  # spec.display_name
 
     def test_registry_entry_wins_over_sidecar(self):
-        """A registered (wheel) email is not duplicated by the sidecar merge.
+        """A registered (wheel) agent is not duplicated by the sidecar merge.
 
         Gives the mock registration a non-empty required_connections (#2408)
         so this also locks in that a registry-sourced sidecar registration
@@ -236,21 +236,21 @@ class TestInstalledSidecarAgentsMerge:
         )
         app = create_app(db_path=":memory:")
         app.state.agent_registry = make_mock_registry(
-            ("email", "Email (wheel)", None, [cr])
+            ("gaia", "GAIA (wheel)", None, [cr])
         )
         client = TestClient(app)
         with (
             patch(
-                "gaia.hub.installer.list_installed", return_value=self._email_sentinel()
+                "gaia.hub.installer.list_installed", return_value=self._gaia_sentinel()
             ),
             patch("gaia.hub.catalog.cached_index_agents", return_value=[]),
         ):
             data = client.get("/api/agents").json()
 
-        emails = [a for a in data["agents"] if a["id"] == "email"]
-        assert len(emails) == 1
-        assert emails[0]["name"] == "Email (wheel)"
-        assert emails[0]["required_connections"] != []
+        agents = [a for a in data["agents"] if a["id"] == "gaia"]
+        assert len(agents) == 1
+        assert agents[0]["name"] == "GAIA (wheel)"
+        assert agents[0]["required_connections"] != []
 
     def test_uninstalled_sidecar_agent_absent(self):
         """No install sentinel → the agent is NOT phantom-listed."""

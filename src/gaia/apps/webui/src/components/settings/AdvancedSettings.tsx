@@ -7,18 +7,28 @@ import * as api from '../../services/api';
 import { log } from '../../utils/logger';
 import { DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
+import { syncModelAfterSettingChange, useModelStore } from '../../stores/modelStore';
 import { formatGb } from '../../utils/modelLabels';
-import { useT } from '../../i18n/useT';
+import { useT, type Translate } from '../../i18n/useT';
+import { isolate, type MessageKey } from '../../i18n/registry';
 import { SaveAllLogs } from '../LogsDialog';
 import { useLogsStore } from '../../stores/logsStore';
-import type { SystemStatus, MCPServerStatus } from '../../types';
+import type { SystemStatus, MCPServerStatus, ModelStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
-import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
+import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton, startInstructionText } from './ErrorNotice';
 import { ModelServerPanel } from './ModelServerPanel';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../SettingsModal.css';
 
-/** Model server status and choice, context size, custom model id, beta flags, MCP status, version. */
+type CustomModelNote = { kind: 'unlisted' | 'unchecked'; id: string };
+
+/** The warning a saved custom ID carries: the model server doesn't list it, or couldn't be asked. */
+function customModelNote(id: string, status: ModelStatus | null | undefined): CustomModelNote | null {
+    if (!id || !status || status.found) return null;
+    return { kind: status.checked ? 'unlisted' : 'unchecked', id };
+}
+
+/** Model server status and choice, context size, custom model id, beta flags, MCP status. */
 export function AdvancedSettings() {
     const t = useT();
     const [status, setStatus] = useState<SystemStatus | null>(null);
@@ -31,6 +41,8 @@ export function AdvancedSettings() {
     const [settingsLoaded, setSettingsLoaded] = useState(false);
     const [savingModel, setSavingModel] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
+    /** A saved ID the model server doesn't list ('unlisted') or couldn't be asked about ('unchecked'). */
+    const [saveNote, setSaveNote] = useState<{ kind: 'unlisted' | 'unchecked'; id: string } | null>(null);
     const [justSaved, setJustSaved] = useState(false);
     const justSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -72,6 +84,8 @@ export function AdvancedSettings() {
                 const value = s.custom_model ?? '';
                 setCustomModel(value);
                 setSavedCustomModel(value);
+                // The saved ID's state, not only the last save's.
+                setSaveNote(customModelNote(value, s.model_status));
                 setDynamicTools(s.dynamic_tools);
                 setDynamicToolsLocked(s.dynamic_tools_locked);
             })
@@ -88,8 +102,10 @@ export function AdvancedSettings() {
     const saveCustomModel = useCallback(async () => {
         const trimmed = customModel.trim();
         const payload = trimmed.length > 0 ? trimmed : '';
+        const modelBefore = useModelStore.getState().active?.model;
         setSavingModel(true);
         setSaveError(null);
+        setSaveNote(null);
         setJustSaved(false);
         try {
             log.system.info('Saving custom_model override', { custom_model: payload });
@@ -97,17 +113,22 @@ export function AdvancedSettings() {
             const nextValue = updated.custom_model ?? '';
             setCustomModel(nextValue);
             setSavedCustomModel(nextValue);
+            // The chip, the picker and this pane's own status still name the old model.
+            void syncModelAfterSettingChange(modelBefore);
+            api.getSystemStatus().then(setStatus).catch((err) => log.system.error('Failed to get system status', err));
+            setSaveNote(customModelNote(nextValue, updated.model_status));
             setJustSaved(true);
             if (justSavedTimerRef.current) clearTimeout(justSavedTimerRef.current);
             justSavedTimerRef.current = setTimeout(() => setJustSaved(false), 2200);
         } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
             log.system.error('Failed to save custom_model', err);
-            setSaveError(msg);
+            // The backend's 422 is pydantic's English; say it in the UI's language.
+            const refused = err instanceof api.ApiError && err.httpStatus === 422 && err.fields.includes('custom_model');
+            setSaveError(refused ? t('settings.advanced.customModelInvalid') : err instanceof Error ? err.message : String(err));
         } finally {
             setSavingModel(false);
         }
-    }, [customModel]);
+    }, [customModel, t]);
 
     const toggleDynamicTools = useCallback(async () => {
         if (dynamicToolsLocked || savingDynamicTools) return;
@@ -139,11 +160,11 @@ export function AdvancedSettings() {
     const modelName = status ? status.default_model_name : DEFAULT_MODEL_NAME;
     const { isLoadingModel, isDownloadingModel, downloadError, loadModel, downloadModel } = useModelActions(modelName ?? undefined);
 
-    const version = __APP_VERSION__;
 
     // A cloud model runs off this PC: no device, download, load or context to manage.
     const cloudModel   = !!status?.default_model_is_cloud;
-    const wrongModel   = !cloudModel && !!(status?.lemonade_running && status.model_loaded && status.expected_model_loaded === false);
+    // A model Lemonade doesn't have (e.g. a mistyped custom ID) can't be loaded, so offer no Load.
+    const wrongModel   = !cloudModel && !!(status?.lemonade_running && status.model_loaded && status.expected_model_loaded === false && status.model_downloaded !== false);
     const smallContext = !cloudModel && !!(status?.lemonade_running && status.model_loaded && status.context_size_sufficient === false);
     const notDownloaded = !cloudModel && !!(status?.lemonade_running && !status.model_loaded && status.model_downloaded === false);
     const needsLoad    = (wrongModel || smallContext) && modelName !== null;
@@ -169,7 +190,7 @@ export function AdvancedSettings() {
                                 hint={!status.lemonade_running
                                     ? (needsLocalSetup(status) ? t('settings.advanced.notInstalledHint')
                                         : status.lemonade_error ? t('settings.advanced.queryFailed', { reason: status.lemonade_error })
-                                        : status.start_instruction && !namesSetupCommand(status.start_instruction) ? status.start_instruction : t('settings.advanced.notRunningHint'))
+                                        : status.start_instruction && !namesSetupCommand(status.start_instruction) ? startInstructionText(t, status.start_instruction) ?? undefined : t('settings.advanced.notRunningHint'))
                                     : undefined}
                             />
                             {needsLocalSetup(status) && <SetUpLocalButton className="btn-primary" />}
@@ -178,7 +199,7 @@ export function AdvancedSettings() {
                                 value={status.model_loaded || t('settings.advanced.noneLoaded')}
                                 ok={!!status.model_loaded && (cloudModel || status.expected_model_loaded !== false)}
                                 hint={!status.model_loaded
-                                    ? t('settings.advanced.loadsFirst')
+                                    ? t(status.lemonade_running ? 'settings.advanced.loadsFirst' : 'settings.advanced.loadsWhenBack')
                                     : !cloudModel && status.expected_model_loaded === false
                                     ? t('settings.advanced.expected', { name: modelName ?? '' })
                                     : undefined}
@@ -200,7 +221,7 @@ export function AdvancedSettings() {
                                     </span>
                                 </div>
                                 <button
-                                    className="btn-model-action btn-model-action--download"
+                                    className="btn-primary"
                                     onClick={() => downloadModel(false, undefined, !status.model_loaded)}
                                     disabled={isDownloadingModel}
                                 >
@@ -225,7 +246,7 @@ export function AdvancedSettings() {
                                     </span>
                                 </div>
                                 <button
-                                    className="btn-model-action btn-model-action--load"
+                                    className="btn-primary"
                                     onClick={() => loadModel()}
                                     disabled={isLoadingModel}
                                 >
@@ -251,7 +272,7 @@ export function AdvancedSettings() {
                                     <StatusRow label={t('settings.advanced.context')} value={t('settings.ctx.tokens', { size: `${(status.model_context_size / 1024).toFixed(0)}K` })} ok={status.context_size_sufficient} />
                                 )}
                                 {status.model_labels && status.model_labels.length > 0 && (
-                                    <StatusRow label={t('settings.advanced.capabilities')} value={status.model_labels.join(', ')} ok={true} />
+                                    <StatusRow label={t('settings.advanced.capabilities')} value={capabilitiesText(t, status.model_labels)} ok={true} />
                                 )}
                                 <StatusRow label={t('settings.advanced.embedding')} value={status.embedding_model_loaded ? t('settings.advanced.available') : t('settings.advanced.notLoaded')} ok={status.embedding_model_loaded} />
                                 {status.gpu_name && (
@@ -270,7 +291,7 @@ export function AdvancedSettings() {
                                 <div className="force-redownload-row">
                                     <span className="force-redownload-label">{t('settings.advanced.corrupted')}</span>
                                     <button
-                                        className="btn-force-redownload"
+                                        className="btn-secondary"
                                         onClick={() => downloadModel(true, undefined, !status.model_loaded)}
                                         disabled={isDownloadingModel}
                                     >
@@ -294,12 +315,12 @@ export function AdvancedSettings() {
 
             <LogsCard />
 
-            <SettingsDisclosure title={t('settings.advanced.serverTitle')} hint={t('settings.advanced.serverHint')}>
+            <SettingsDisclosure title={t('settings.advanced.serverTitle')} hint={t('settings.advanced.serverHint')} targetId="model-server">
                 <ModelServerPanel />
                 <LemonadeServerSection />
             </SettingsDisclosure>
 
-            <SettingsDisclosure title={t('settings.advanced.customTitle')} hint={savedCustomModel || t('settings.advanced.customHint')}>
+            <SettingsDisclosure title={t('settings.advanced.customTitle')} hint={savedCustomModel ? isolate(savedCustomModel, 'ltr') : t('settings.advanced.customHint')} targetId="custom-model">
                 <p className="model-override-desc">{t('settings.advanced.customDesc')}</p>
                 <div className="model-input-row">
                     <input
@@ -307,7 +328,8 @@ export function AdvancedSettings() {
                         className={`model-input${savedCustomModel ? ' has-override' : ''}`}
                         placeholder={t.bare('settings.advanced.customPlaceholder')}
                         value={customModel}
-                        onChange={(e) => { setCustomModel(e.target.value); setSaveError(null); setJustSaved(false); }}
+                        dir={customModel ? 'ltr' : undefined}
+                        onChange={(e) => { setCustomModel(e.target.value); setSaveError(null); setSaveNote(null); setJustSaved(false); }}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' && !savingModel && customModelDirty && settingsLoaded) {
                                 e.preventDefault();
@@ -322,7 +344,7 @@ export function AdvancedSettings() {
                     />
                     <div className="model-btn-group">
                         <button
-                            className={`btn-model-save${justSaved ? ' saved' : ''}`}
+                            className="btn-primary"
                             onClick={() => { void saveCustomModel(); }}
                             disabled={!settingsLoaded || savingModel || (!customModelDirty && !justSaved)}
                             aria-label={t('settings.advanced.customSave')}
@@ -339,6 +361,18 @@ export function AdvancedSettings() {
                 </div>
                 <p className="model-status-hint">{t('settings.advanced.customIds')}</p>
                 {saveError && <SaveError message={saveError} />}
+                {saveNote && (
+                    <div className="model-warning" role="status">
+                        <AlertCircle size={14} />
+                        <div className="model-warning-content">
+                            <p>
+                                {saveNote.kind === 'unlisted'
+                                    ? t('settings.advanced.customNotListed', { id: saveNote.id })
+                                    : t('settings.advanced.customNotChecked')}
+                            </p>
+                        </div>
+                    </div>
+                )}
             </SettingsDisclosure>
 
             <SettingsDisclosure title={t('settings.advanced.dynamicTitle')}>
@@ -387,11 +421,6 @@ export function AdvancedSettings() {
                     </div>
                 </SettingsDisclosure>
             )}
-
-            <div className="about-info">
-                <p><bdi dir="ltr">GAIA v{version}</bdi> <span className="beta-badge">BETA</span></p>
-                <p className="about-sub">{t('settings.advanced.about')}</p>
-            </div>
         </div>
     );
 }
@@ -427,6 +456,27 @@ function SaveError({ message }: { message: string }) {
             </div>
         </div>
     );
+}
+
+// Lemonade's model labels; one it adds later shows as sent.
+const CAPABILITIES: Record<string, MessageKey> = {
+    cloud: 'settings.advanced.capability.cloud',
+    chat: 'settings.advanced.capability.chat',
+    vision: 'settings.advanced.capability.vision',
+    'tool-calling': 'settings.advanced.capability.toolCalling',
+    reasoning: 'settings.advanced.capability.reasoning',
+    embeddings: 'settings.advanced.capability.embeddings',
+    reranking: 'settings.advanced.capability.reranking',
+    coding: 'settings.advanced.capability.coding',
+    audio: 'settings.advanced.capability.audio',
+    image: 'settings.advanced.capability.image',
+    tts: 'settings.advanced.capability.tts',
+    stt: 'settings.advanced.capability.stt',
+    transcription: 'settings.advanced.capability.transcription',
+};
+
+function capabilitiesText(t: Translate, labels: string[]): string {
+    return t.compose((say) => labels.map((l) => (CAPABILITIES[l] ? say(CAPABILITIES[l]) : l)).join(say('mem.listSeparator')));
 }
 
 function StatusRow({ label, value, ok, hint }: { label: string; value: ReactNode; ok: boolean; hint?: string }) {

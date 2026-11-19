@@ -18,8 +18,9 @@ import re
 import socket
 import threading
 import time
+from collections import deque
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Deque, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 
 import requests
@@ -319,6 +320,20 @@ def _cap_timeout(timeout, remaining: float):
     return timeout
 
 
+class BlockedHostError(ValueError):
+    """A URL whose host is a private, link-local, loopback or reserved address.
+
+    Attributes:
+        host: The host as the URL named it.
+        address: The address it resolved to, or the literal it already was.
+    """
+
+    def __init__(self, message: str, host: str, address: str):
+        super().__init__(message)
+        self.host = host
+        self.address = address
+
+
 def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
     """Return True if ``ip`` points at a private/internal range we must not fetch."""
     # ::ffff:10.0.0.1 reaches 10.0.0.1 -- judge the IPv4 address it carries.
@@ -363,8 +378,10 @@ def _assert_ip_allowed(ip_str: str, hostname: str) -> None:
     except ValueError:
         # Not parseable as an IP — treat as unsafe rather than letting an
         # unvalidated value reach the socket layer (fail loudly).
-        raise ValueError(
-            f"Blocked: {hostname} resolved to unparseable address {ip_str!r}."
+        raise BlockedHostError(
+            f"Blocked: {hostname} resolved to unparseable address {ip_str!r}.",
+            hostname,
+            ip_str,
         )
     # Opt-in affordance: loopback ONLY, for a host the operator named. Not
     # `is_private` — that covers 169.254.0.0/16, so it would reopen the cloud
@@ -372,9 +389,11 @@ def _assert_ip_allowed(ip_str: str, hostname: str) -> None:
     if hostname in _loopback_allowed_hosts() and ip.is_loopback:
         return
     if _is_blocked_ip(ip):
-        raise ValueError(
+        raise BlockedHostError(
             f"Blocked: {hostname} resolves to private/reserved IP {ip}. "
-            "Cannot fetch internal network addresses."
+            "Cannot fetch internal network addresses.",
+            hostname,
+            str(ip),
         )
 
 
@@ -613,20 +632,51 @@ class SearchUnavailableError(RuntimeError):
         self.status = status
 
 
+class SearchStatusError(RuntimeError):
+    """The search endpoint answered a status that is neither results nor a block.
+
+    A ``RuntimeError`` as before, with ``status`` so a caller can tell a server
+    error (5xx) from a refused request (4xx) without parsing the message.
+    """
+
+    def __init__(self, service: str, status: int):
+        if status >= 500:
+            hint = "It may be down for a moment; try again later."
+        elif status >= 400:
+            hint = "It rejected the request; check the query or URL and try again."
+        else:
+            hint = "Try again later."
+        super().__init__(
+            f"{service} answered HTTP {status}, so no results were read. {hint}"
+        )
+        self.status = status
+
+
 class _SearchGate:
     """Process-wide pacing for search requests, shared by every ``WebClient``.
 
     Agents fire searches in parallel; each caller reserves the next free slot,
-    so requests leave at least ``min_interval`` apart. A block signal pushes
-    every caller back until ``blocked_until``.
+    so requests leave at least ``min_interval`` apart. With ``burst`` set, no
+    more than ``burst`` requests leave in any ``window`` seconds, which keeps a
+    long research turn under the burst that makes DuckDuckGo refuse. A block
+    signal pushes every caller back until ``blocked_until``.
     """
 
-    def __init__(self, min_interval: float, sleep=time.sleep) -> None:
+    def __init__(
+        self,
+        min_interval: float,
+        sleep=time.sleep,
+        burst: int = 0,
+        window: float = 0.0,
+    ) -> None:
         self.min_interval = min_interval
+        self.burst = burst
+        self.window = window
         self._sleep = sleep
         self._lock = threading.Lock()
         self._next_slot = 0.0
         self._blocked_until = 0.0
+        self._recent: Deque[float] = deque()
 
     def blocked_for(self) -> float:
         """Seconds until searching is allowed again after a block, or 0."""
@@ -641,6 +691,12 @@ class _SearchGate:
         with self._lock:
             now = time.monotonic()
             slot = max(now, self._next_slot, self._blocked_until)
+            if self.burst > 0:
+                if len(self._recent) >= self.burst:
+                    slot = max(slot, self._recent[-self.burst] + self.window)
+                self._recent.append(slot)
+                while self._recent[0] <= slot - self.window:
+                    self._recent.popleft()
             self._next_slot = slot + self.min_interval
         remaining = slot - now
         if should_stop is None:
@@ -663,7 +719,9 @@ class _SearchGate:
             self._blocked_until = max(self._blocked_until, time.monotonic() + seconds)
 
 
-_SEARCH_GATE = _SearchGate(min_interval=1.5)
+#: Measured from one PC: 14 quick searches in ~35 s answered, the 15th was
+#: refused. Ten a minute stays under that with room for the html->lite retry.
+_SEARCH_GATE = _SearchGate(min_interval=1.5, burst=10, window=60.0)
 
 
 def _retry_after_seconds(response: requests.Response) -> Optional[float]:
@@ -820,9 +878,11 @@ class WebClient:
                 continue
 
             if _is_blocked_ip(ip):
-                raise ValueError(
+                raise BlockedHostError(
                     f"Blocked: {hostname} resolves to private/reserved IP {ip}. "
-                    "Cannot fetch internal network addresses."
+                    "Cannot fetch internal network addresses.",
+                    hostname,
+                    str(ip),
                 )
 
     # -- Rate Limiting -------------------------------------------------------
@@ -1456,7 +1516,7 @@ class WebClient:
         Raises:
             SearchUnavailableError: every attempt was turned away.
             ToolCancelled: ``should_stop`` returned True during a wait.
-            RuntimeError: DDG answered another non-200 status.
+            SearchStatusError: DDG answered another non-200 status (a RuntimeError).
         """
         if not BS4_AVAILABLE:
             raise ImportError("beautifulsoup4 is required for web search.")
@@ -1476,10 +1536,7 @@ class WebClient:
                 blocked = _ddg_block_reason(response)
                 if blocked is None:
                     if response.status_code != 200:
-                        raise RuntimeError(
-                            f"DuckDuckGo answered HTTP {response.status_code}, so "
-                            "no results were read."
-                        )
+                        raise SearchStatusError("DuckDuckGo", response.status_code)
                     if reason:
                         log.warning(
                             "DuckDuckGo %s endpoint answered after an earlier "

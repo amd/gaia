@@ -175,7 +175,8 @@ describe('a failed turn (#599)', () => {
         await act(async () => {
             sends[0].cbs.onDone({ type: 'done', content: 'Hello!', message_id: 2 } as never);
         });
-        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        // The failed-turn button; the answer's own retry icon shares its name.
+        expect(document.querySelector('.msg-try-again')).toBeNull();
         // Let the end-of-turn reload land here, not in the next test.
         await waitFor(() => expect(mockedApi.getMessages).toHaveBeenCalledTimes(2));
     });
@@ -265,7 +266,8 @@ describe('Try again on a failed turn', () => {
         const last = () => useChatStore.getState().messages[useChatStore.getState().messages.length - 1];
         await waitFor(() => expect(last()?.content).toContain('did not start this answer'));
         expect(last()?.failed).toBe(false);
-        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        // The failed-turn button; the answer's own retry icon shares its name.
+        expect(document.querySelector('.msg-try-again')).toBeNull();
     });
 
     it('sends once when Try again is clicked twice', async () => {
@@ -343,7 +345,7 @@ describe('Try again never deletes an answer written since the failure', () => {
 
         await waitFor(() => expect(useChatStore.getState().messages.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']));
         expect(useChatStore.getState().messages.some((m) => m.failed)).toBe(false);
-        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        expect(document.querySelector('.msg-try-again')).toBeNull();
         expect(document.querySelector('.msg-error')).toBeNull();
         expect(server.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']);
     });
@@ -372,7 +374,7 @@ describe('Try again never deletes an answer written since the failure', () => {
         await pollServer();
         await waitFor(() => expect(useChatStore.getState().messages[1]?.content).toBe('REAL ANSWER'));
         expect(useChatStore.getState().messages[1].failed).toBeFalsy();
-        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        expect(document.querySelector('.msg-try-again')).toBeNull();
         expect(server.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']);
     });
 

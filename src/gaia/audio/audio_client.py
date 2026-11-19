@@ -205,10 +205,8 @@ class AudioClient:
                     self.log.debug("Waiting for process thread to finish...")
                     process_thread.join(timeout=2.0)
 
-        except ImportError:
-            self.log.error(
-                'Voice input needs sounddevice: uv pip install "amd-gaia[talk]"'
-            )
+        except ImportError as e:
+            self.log.error("Voice input is unavailable: %s", e)
             raise
         except Exception as e:
             self.log.error(f"Failed to initialize voice chat: {str(e)}")

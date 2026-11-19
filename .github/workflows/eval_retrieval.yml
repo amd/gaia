@@ -108,7 +108,7 @@ jobs:
         chcp 65001 | Out-Null
 
         try {
-            .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+            .\installer\scripts\ensure-lemonade-running.ps1 -JobScoped -Port 13305 -NoModel
             if ($LASTEXITCODE -ne 0) { throw "Lemonade server failed to start" }
 
             # The answer model (the RAG default), the VLM that reads PDF images,

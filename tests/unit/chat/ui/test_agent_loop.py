@@ -85,6 +85,39 @@ class TestGoalStoreFailure:
         ):
             assert AgentLoop()._get_actionable_goals() == ["g1", "g2"]
 
+    def test_failure_is_kept_for_the_ui_until_the_store_opens(self, tmp_path):
+        loop = AgentLoop()
+        target = "gaia.agents.base.goal_store.GoalStore.get_actionable_goals"
+        with patch.dict(os.environ, {"GAIA_HOME": str(tmp_path / ".gaia")}):
+            with patch(
+                target,
+                side_effect=sqlite3.DatabaseError("file is not a database"),
+            ):
+                with pytest.raises(RuntimeError) as excinfo:
+                    loop._get_actionable_goals()
+            assert loop.goal_store_error == str(excinfo.value)
+            # A file that is not a database is not fixed by a restart.
+            assert loop.goal_store_damaged is True
+            assert "damaged" in loop.goal_store_error
+            assert "Start a new goal list" in loop.goal_store_error
+            assert "restart" not in loop.goal_store_error.lower()
+            with patch(target, return_value=[]):
+                loop._get_actionable_goals()
+        assert loop.goal_store_error is None
+        assert loop.goal_store_damaged is False
+
+    def test_a_locked_goal_store_says_to_close_the_other_window(self, tmp_path):
+        loop = AgentLoop()
+        target = "gaia.agents.base.goal_store.GoalStore.get_actionable_goals"
+        with patch.dict(os.environ, {"GAIA_HOME": str(tmp_path / ".gaia")}):
+            with patch(
+                target, side_effect=sqlite3.OperationalError("database is locked")
+            ):
+                with pytest.raises(RuntimeError):
+                    loop._get_actionable_goals()
+        assert loop.goal_store_damaged is False
+        assert "close other GAIA windows" in loop.goal_store_error
+
 
 class TestRunStepModeGate:
     """_run_step pauses on 'manual' and idles without goals otherwise."""

@@ -21,9 +21,9 @@ from gaia.llm.lemonade_client import GPU_CTX_SIZE, LemonadeClientError
 from gaia.llm.model_fit import ModelFitError
 from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 from gaia.ui import _chat_helpers as helpers
-from gaia.ui.email_sidecar import daemon_client
-from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, GAIA_PROFILE
 from gaia.ui.models import ChatRequest
+from gaia.ui.sidecar import daemon_client
+from gaia.ui.sidecar.profiles import GAIA_PROFILE
 from gaia.ui.sse_handler import SSEOutputHandler
 
 LOCAL_MODEL = "Qwen3.6-35B-A3B-GGUF"
@@ -212,26 +212,6 @@ def test_a_stable_cut_is_announced_once_per_chat(monkeypatch):
     assert second == []
 
 
-def test_the_email_sidecar_gets_the_same_history(monkeypatch):
-    _window(monkeypatch, 65536)
-    mail = "Forwarded thread:\n" + "From: a@example.com\n" * 900
-
-    bodies, cuts, _ = _relay(
-        monkeypatch,
-        [(mail, "Two senders.")],
-        profile=EMAIL_PROFILE,
-        api_version="2.4",
-        message="who else wrote?",
-    )
-
-    assert bodies[0]["query"] == "who else wrote?"
-    assert bodies[0]["context"] == [
-        {"role": "user", "content": mail},
-        {"role": "assistant", "content": "Two senders."},
-    ]
-    assert cuts == []
-
-
 def test_a_window_that_cannot_be_read_stops_the_turn_loudly(monkeypatch):
     def _broken(**_kw):
         raise LemonadeClientError("GAIA_CTX_SIZE must be a positive integer")
@@ -319,8 +299,13 @@ def test_the_sidecar_refits_pushed_history_to_its_own_prompt(monkeypatch):
     fitted = history.fit_pushed_history(agent, pushed, query, cuts.append)
 
     assert 0 < len(fitted) < len(pushed)
-    assert fitted == pushed[-len(fitted) :]
-    assert fitted[0]["role"] == "user"
+    # The oldest turn still sent tells the model earlier ones exist.
+    kept_as_sent = pushed[-len(fitted) :]
+    assert fitted[1:] == kept_as_sent[1:]
+    assert fitted[0] == {
+        "role": "user",
+        "content": f"{history.HIDDEN_TURNS_NOTE}\n\n{kept_as_sent[0]['content']}",
+    }
     kept = sum(history.turn_cost(fitted[i : i + 2]) for i in range(0, len(fitted), 2))
     assert kept <= own
     assert len(cuts) == 1

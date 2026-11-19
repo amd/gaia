@@ -85,6 +85,21 @@ describe('the log viewer', () => {
         expect(mocked.getLog).toHaveBeenCalledWith('model_server', { file: null, after: null });
     });
 
+    it('gives focus back to the button that opened it when it closes', async () => {
+        const opener = document.createElement('button');
+        opener.textContent = 'View logs';
+        document.body.appendChild(opener);
+        opener.focus();
+        render(<LogsDialog />);
+        await act(async () => { useLogsStore.getState().show(); });
+        expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+        await act(async () => { fireEvent.keyDown(document, { key: 'Escape' }); });
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        // Not the page body, where the next Tab would start from the top behind Settings.
+        expect(opener).toHaveFocus();
+        opener.remove();
+    });
+
     it('has a tab for every log GAIA keeps', async () => {
         await openLogs();
         const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);

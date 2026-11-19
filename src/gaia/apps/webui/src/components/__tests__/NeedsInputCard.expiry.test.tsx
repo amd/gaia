@@ -49,7 +49,7 @@ function gone(status: number): Error {
 
 beforeEach(() => {
     vi.clearAllMocks();
-    useChatStore.setState({ liveQuestions: {} });
+    useChatStore.setState({ liveQuestions: {}, questionAnswers: {} });
     mockedApi.respondToInput.mockResolvedValue({ status: 'ok', request_id: 'req-1' });
 });
 
@@ -133,7 +133,7 @@ describe('NeedsInputCard expiry', () => {
         render(<NeedsInputCard data={card} />);
         fireEvent.click(screen.getByRole('button', { name: 'Allow once' }));
         await act(async () => {});
-        expect(screen.getByText('Answered')).toBeInTheDocument();
+        expect(screen.getByText('You answered: Allow once')).toBeInTheDocument();
         expect(useChatStore.getState().liveQuestions['req-1']).toBeUndefined();
     });
 });
@@ -169,7 +169,10 @@ describe('ChatView question lifecycle', () => {
             pendingPrompt: null,
             systemStatus: null,
             liveQuestions: {},
+            questionAnswers: {},
+            messageQueues: {},
         });
+        localStorage.removeItem('gaia-chat-message-queues');
         useNotificationStore.setState({ notifications: [], showPanel: false, typeFilter: null });
     });
 
@@ -192,6 +195,101 @@ describe('ChatView question lifecycle', () => {
             } as unknown as StreamEvent);
         });
     }
+
+    it('the message box answers a waiting question instead of queueing a new message', async () => {
+        await send();
+        const box = screen.getByLabelText('Message');
+        expect(box).toHaveAttribute('placeholder', "Answer GAIA's question");
+        await act(async () => {
+            fireEvent.change(box, { target: { value: 'allow once' } });
+            fireEvent.keyDown(box, { key: 'Enter' });
+        });
+        expect(mockedApi.respondToInput).toHaveBeenCalledWith(SESSION.id, 'req-1', 'Allow once');
+        expect(box).toHaveValue('');
+        expect(screen.queryByText(/Sends when this reply ends/)).not.toBeInTheDocument();
+        await waitFor(() => expect(screen.getByText('You answered: Allow once')).toBeInTheDocument());
+        expect(box).toHaveAttribute('placeholder', 'Queue your next message');
+    });
+
+    it('a typed answer the server could not take goes back in the box with the reason', async () => {
+        mockedApi.respondToInput.mockRejectedValueOnce(new Error('relay down'));
+        await send();
+        const box = screen.getByLabelText('Message');
+        await act(async () => {
+            fireEvent.change(box, { target: { value: 'maybe later' } });
+            fireEvent.keyDown(box, { key: 'Enter' });
+        });
+        expect(box).toHaveValue('maybe later');
+        expect(screen.getByText("Couldn't send your answer: relay down")).toBeInTheDocument();
+    });
+
+    it('the message box never answers a permission prompt, whatever is typed', async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'delete it' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        act(() => {
+            callbacks!.onAgentEvent({
+                type: 'permission_request', tool: 'run_shell_command', confirm_id: 'c-1',
+                summary: 'del note.txt', args: { command: 'del note.txt' },
+            } as unknown as StreamEvent);
+        });
+        const box = screen.getByLabelText('Message');
+        expect(box).not.toHaveAttribute('placeholder', "Answer GAIA's question");
+        for (const typed of ['allow', 'Allow once', '1', 'yes']) {
+            await act(async () => {
+                fireEvent.change(box, { target: { value: typed } });
+                fireEvent.keyDown(box, { key: 'Enter' });
+            });
+        }
+        expect(mockedApi.confirmTool).not.toHaveBeenCalled();
+        expect(mockedApi.respondToInput).not.toHaveBeenCalled();
+        expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    });
+
+    it('a choose-only question keeps text that names no choice, and does not answer', async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'go' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        act(() => {
+            callbacks!.onAgentEvent({
+                type: 'needs_input', request_id: 'req-1', question: card.question, options: card.options,
+                allow_free_text: false, sensitive: false, timeout_seconds: 300,
+            } as unknown as StreamEvent);
+        });
+        const box = screen.getByLabelText('Message');
+        await act(async () => {
+            fireEvent.change(box, { target: { value: '3' } });
+            fireEvent.keyDown(box, { key: 'Enter' });
+        });
+        expect(mockedApi.respondToInput).not.toHaveBeenCalled();
+        expect(box).toHaveValue('3');
+        expect(useChatStore.getState().liveQuestions['req-1']).toBeDefined();
+    });
+
+    it('a sensitive question is never answered from the message box', async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'go' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        act(() => {
+            callbacks!.onAgentEvent({
+                type: 'needs_input', request_id: 'req-1', question: 'Paste the client secret', options: [],
+                allow_free_text: true, sensitive: true, timeout_seconds: 300,
+            } as unknown as StreamEvent);
+        });
+        const box = screen.getByLabelText('Message');
+        expect(box).not.toHaveAttribute('placeholder', "Answer GAIA's question");
+        await act(async () => {
+            fireEvent.change(box, { target: { value: 'hunter2' } });
+            fireEvent.keyDown(box, { key: 'Enter' });
+        });
+        expect(mockedApi.respondToInput).not.toHaveBeenCalled();
+    });
 
     it('a needs_input event opens the question with its deadline', async () => {
         const before = Date.now();

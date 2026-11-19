@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import logging
 import os
 import sys
 import threading
@@ -242,6 +243,72 @@ def test_a_repeating_failure_logs_its_traceback_once(caplog):
     assert sum("again" in r.getMessage() for r in caplog.records) == 2
 
 
+class MissingProbe(FakeProbe):
+    """Returns no data on the calls named in *missing*."""
+
+    def __init__(self, missing):
+        super().__init__()
+        self.missing = missing
+
+    def sample(self) -> rm.Sample:
+        self.calls += 1
+        if self.missing(self.calls):
+            raise rm.SampleMissed("CPU utility counter returned no data")
+        return sample(float(self.calls))
+
+
+def _wait_for_calls(probe, sampler, calls):
+    deadline = time.monotonic() + 5
+    while probe.calls < calls and time.monotonic() < deadline:
+        sampler.snapshot(wait_s=0)
+        time.sleep(0.01)
+
+
+def test_a_sample_with_no_data_is_skipped_and_logged_once_quietly(caplog):
+    caplog.set_level("DEBUG", logger=rm.logger.name)
+    probe = MissingProbe(lambda call: call in (3, 6))
+    sampler = rm.ResourceSampler(lambda: probe, interval_s=0.01)
+    try:
+        sampler.snapshot()
+        _wait_for_calls(probe, sampler, 8)
+        history = sampler.snapshot()["cpu"]["history"]
+    finally:
+        sampler.stop()
+    # One probe throughout: the history was never thrown away and restarted.
+    assert 3.0 not in history and 6.0 not in history
+    assert {1.0, 2.0, 4.0, 5.0, 7.0} <= set(history)
+    assert not [r for r in caplog.records if r.levelname in ("ERROR", "WARNING")]
+    assert not [r for r in caplog.records if r.exc_info]
+    assert sum("no data" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_a_counter_that_keeps_returning_no_data_is_reported(caplog):
+    probe = MissingProbe(lambda call: call > 1)
+    sampler = rm.ResourceSampler(lambda: probe, interval_s=0.001)
+    sampler.snapshot()
+    assert probe.closed.wait(5)
+    assert probe.calls == 1 + rm.MAX_MISSED_SAMPLES
+    # The next read tries again and reports it, as any other failed sample.
+    with pytest.raises(rm.ResourceProbeError, match="returned no data"):
+        sampler.snapshot()
+    assert [r for r in caplog.records if r.levelname == "ERROR"]
+
+
+def test_windows_cpu_counter_with_no_data_is_a_missed_sample():
+    class _NoData:
+        def collect(self):
+            pass
+
+        def value(self, _name):
+            return None
+
+    probe = rm.WindowsProbe.__new__(rm.WindowsProbe)
+    probe._query = _NoData()
+
+    with pytest.raises(rm.SampleMissed, match="CPU utility counter"):
+        probe.sample()
+
+
 # ── Linux sysfs ──────────────────────────────────────────────────────────────
 
 
@@ -252,6 +319,22 @@ def test_posix_probe_without_a_clock_reading_leaves_the_speed_blank(
     s = rm.PosixProbe(drm_root=tmp_path).sample()
     assert s.cpu_ghz is None
     assert 0 <= s.cpu_percent <= 100
+
+
+def test_posix_probe_shows_cpu_and_memory_when_the_clock_read_breaks(
+    tmp_path, monkeypatch, caplog
+):
+    def broken_cpu_freq():  # psutil 7.2 on Apple silicon
+        raise SystemError("<built-in function cpu_freq> returned a result")
+
+    monkeypatch.setattr(psutil, "cpu_freq", broken_cpu_freq, raising=False)
+    probe = rm.PosixProbe(drm_root=tmp_path)
+    with caplog.at_level(logging.DEBUG, logger=rm.logger.name):
+        samples = [probe.sample() for _ in range(3)]
+    assert all(s.cpu_ghz is None for s in samples)
+    assert all(0 <= s.cpu_percent <= 100 for s in samples)
+    assert samples[-1].memory_total_bytes > 0
+    assert sum("clock speed" in r.getMessage() for r in caplog.records) == 1
 
 
 def test_posix_probe_reads_amd_gpus_from_sysfs(tmp_path):

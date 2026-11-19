@@ -395,14 +395,15 @@ jobs:
           path: test_map.json
           key: unit-test-map-${{ github.sha }}-${{ github.run_id }}
 
-      - name: Run relay document tests
+      - name: Run flagship relay tests
+        shell: bash  # expand the relay glob on Windows too
         env:
           GAIA_MEMORY_DISABLED: "1"
         run: |
           # Keep the optional flagship package out of the main unit suite: its
           # install activates unrelated characterization tests owned by other lanes.
           uv pip install --system -e "hub/agents/gaia/python"
-          pytest tests/unit/test_relay_flagship_documents.py -v --tb=short
+          pytest tests/unit/test_relay_*.py tests/unit/chat/ui/test_relayed_internet_switch.py -v --tb=short
 
       - name: Run CLI tool-confirmation integration tests
         env:
@@ -470,6 +471,15 @@ jobs:
           echo "acceptable. Skips itself when the runner has no network."
           echo ""
           pytest tests/integration/test_web_client_live_sni.py -v --tb=short --timeout=300
+
+      - name: Run MCP catalog launch test
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "=== Launching every catalog MCP server at its pinned version ==="
+          echo "A pin test only proves the version is named; this proves it starts and lists tools"
+          echo ""
+          pytest tests/integration/test_mcp_catalog_launch.py -v --tb=short --timeout=900
 
       - name: Run Lemonade checksum pinning test
         env:
@@ -636,7 +646,6 @@ jobs:
             tests/integration/test_chat_hub_wheel_journey.py \
             tests/integration/test_chat_ui_integration.py \
             tests/integration/test_documents_router.py \
-            tests/integration/test_email_thin_client.py \
             tests/integration/test_files_router.py \
             tests/integration/test_files_search_budget.py \
             tests/integration/test_folder_indexing.py \
@@ -717,14 +726,15 @@ jobs:
             pytest @platform.txt -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
           fi
 
-      - name: Run relay document tests
+      - name: Run flagship relay tests
+        shell: bash  # expand the relay glob on Windows too
         env:
           GAIA_MEMORY_DISABLED: "1"
         run: |
           # Keep the optional flagship package out of the main unit suite: its
           # install activates unrelated characterization tests owned by other lanes.
           uv pip install --system -e "hub/agents/gaia/python"
-          pytest tests/unit/test_relay_flagship_documents.py -v --tb=short
+          pytest tests/unit/test_relay_*.py tests/unit/chat/ui/test_relayed_internet_switch.py -v --tb=short
 
       - name: Check no GAIA daemon outlived the tests
         if: ${{ !cancelled() }}
@@ -791,14 +801,15 @@ jobs:
             pytest @platform.txt -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
           fi
 
-      - name: Run relay document tests
+      - name: Run flagship relay tests
+        shell: bash  # expand the relay glob on Windows too
         env:
           GAIA_MEMORY_DISABLED: "1"
         run: |
           # Keep the optional flagship package out of the main unit suite: its
           # install activates unrelated characterization tests owned by other lanes.
           uv pip install --system -e "hub/agents/gaia/python"
-          pytest tests/unit/test_relay_flagship_documents.py -v --tb=short
+          pytest tests/unit/test_relay_*.py tests/unit/chat/ui/test_relayed_internet_switch.py -v --tb=short
 
       - name: Run daemon lifetime integration tests (Windows)
         shell: bash

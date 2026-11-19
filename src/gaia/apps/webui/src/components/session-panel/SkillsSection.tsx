@@ -12,7 +12,7 @@ import { Sparkles } from 'lucide-react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
 import { log } from '../../utils/logger';
-import { useTurnEnd } from '../../hooks/useTurnEnd';
+import { useRereadWhileStarting, useTurnEnd } from '../../hooks/useTurnEnd';
 import { useChatStore } from '../../stores/chatStore';
 import { PanelSection } from './PanelSection';
 import type { ActiveSkill, SkillOrigin } from '../../types/sessionPanel';
@@ -30,18 +30,9 @@ interface SkillsSectionProps {
     busy: boolean;
 }
 
-export function SkillsSection({ sessionId, busy }: SkillsSectionProps) {
-    const t = useT();
-    return (
-        <PanelSection id="skills" title={t('skills.title')}>
-            <SkillList sessionId={sessionId} busy={busy} />
-        </PanelSection>
-    );
-}
-
 type Failure = { notRunning: boolean; text: string };
 
-function SkillList({ sessionId, busy }: SkillsSectionProps) {
+export function SkillsSection({ sessionId, busy }: SkillsSectionProps) {
     const t = useT();
     const skillUses = useChatStore((s) => s.skillUses);
     // undefined: not read yet; null: the agent runs elsewhere and doesn't report them.
@@ -74,12 +65,23 @@ function SkillList({ sessionId, busy }: SkillsSectionProps) {
     // skillUses: a skill picked up mid-reply shows without waiting for the reply to end.
     useEffect(load, [load, skillUses]);
     useTurnEnd(busy, load);
+    useRereadWhileStarting(busy, failure?.notRunning === true, load);
 
+    // An agent that runs elsewhere doesn't report its skills, so there is nothing to show.
+    if (skills === null) return null;
+    return (
+        <PanelSection id="skills" title={t('skills.title')}>
+            <SkillList skills={skills} failure={failure} />
+        </PanelSection>
+    );
+}
+
+function SkillList({ skills, failure }: { skills: ActiveSkill[] | undefined; failure: Failure | null }) {
+    const t = useT();
     if (failure?.notRunning) return <p className="sp-meta" role="status">{t('skills.notRunning')}</p>;
     // Open by default, so a failed read is shown, not announced; alerts are for what the user just did.
     if (failure) return <p className="sp-error">{t('skills.listError', { error: failure.text })}</p>;
     if (skills === undefined) return <p className="sp-meta">{t('sp.checking')}</p>;
-    if (skills === null) return <p className="sp-meta">{t('skills.notReported')}</p>;
     if (skills.length === 0) return <p className="sp-meta">{t('skills.empty')}</p>;
 
     return (
