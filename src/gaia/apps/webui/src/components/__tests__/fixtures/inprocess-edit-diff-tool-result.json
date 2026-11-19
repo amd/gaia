@@ -1,5 +1,6 @@
 {
   "type": "tool_result",
+  "tool": "edit_file",
   "title": "Result",
   "summary": "success",
   "success": true,

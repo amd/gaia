@@ -2149,6 +2149,9 @@ def dispatch_query(
             agent._engineering_reported_setup_status = setup_status
     if query == CLEAR_CONVERSATION_QUERY:
         agent.conversation_history.clear()
+        # Facts seen in the cleared chat must not ground the next one's numbers.
+        if hasattr(agent, "clear_seen_sources"):
+            agent.clear_seen_sources()
         _reset_hybrid_route(agent)
         loader = getattr(agent, "tool_loader", None)
         if loader is not None:
