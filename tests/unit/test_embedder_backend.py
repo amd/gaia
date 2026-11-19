@@ -18,15 +18,15 @@ from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_ON_CPU_WITH_ROCM,
-    EMBEDDER_VULKAN_TABLE_ARGS,
+    VULKAN_TOKEN_TABLE_ARGS,
     LemonadeClient,
     LemonadeClientError,
     embedder_llamacpp_args,
     manages_embedder_backend,
-    without_embedder_table_args,
+    without_vulkan_token_tables,
 )
 
-_VULKAN_ARGS = f"{EMBEDDER_LLAMACPP_ARGS} {EMBEDDER_VULKAN_TABLE_ARGS}"
+_VULKAN_ARGS = f"{EMBEDDER_LLAMACPP_ARGS} {VULKAN_TOKEN_TABLE_ARGS}"
 
 _STARTUP_FAILURE = "model_load_error: llama-server failed to start"
 
@@ -131,7 +131,7 @@ def test_only_vulkan_keeps_the_token_table_on_the_gpu():
     assert embedder_llamacpp_args("vulkan") == _VULKAN_ARGS
     for backend in ("cpu", "rocm", "metal", None):
         assert embedder_llamacpp_args(backend) == EMBEDDER_LLAMACPP_ARGS
-    assert without_embedder_table_args(_VULKAN_ARGS) == EMBEDDER_LLAMACPP_ARGS
+    assert without_vulkan_token_tables(_VULKAN_ARGS) == EMBEDDER_LLAMACPP_ARGS
 
 
 def test_the_cpu_fallback_drops_the_vulkan_token_table_override(not_macos):

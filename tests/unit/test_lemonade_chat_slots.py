@@ -23,9 +23,11 @@ from gaia.llm.lemonade_client import (
     EMBEDDER_LLAMACPP_ARGS,
     FULL_TOOLS_SLOT,
     SIDE_SLOT,
+    VULKAN_TOKEN_TABLE_ARGS,
     LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
+    users_llamacpp_args,
 )
 from gaia.llm.providers.lemonade import LemonadeProvider
 
@@ -61,6 +63,58 @@ def test_a_llamacpp_chat_load_gets_three_slots_and_no_ram_cache(client):
     assert sent["llamacpp_args"] == CHAT_LLAMACPP_ARGS
     for flag in ("--parallel 3", "--kv-unified", "--cache-ram 0"):
         assert flag in sent["llamacpp_args"]
+
+
+_CHAT_MODEL = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+_VULKAN_CHAT_ARGS = f"{CHAT_LLAMACPP_ARGS} {VULKAN_TOKEN_TABLE_ARGS}"
+
+
+def _sent_load_on(client, default_backend, chosen=None, system="Windows"):
+    with (
+        patch("gaia.llm.lemonade_client.platform.system", return_value=system),
+        patch.object(client, "_default_llamacpp_backend", return_value=default_backend),
+        patch(
+            "gaia.llm.lemonade_client.preferred_llamacpp_backend", return_value=chosen
+        ),
+    ):
+        return _sent_load(client, _CHAT_MODEL, ctx_size=65536)
+
+
+def test_on_vulkan_a_chat_load_keeps_the_token_tables_on_the_gpu(client):
+    """llama.cpp holds them in host RAM otherwise: 2.2 GB for Gemma-4-E4B."""
+    sent = _sent_load_on(client, "vulkan")
+    assert sent["llamacpp_args"] == _VULKAN_CHAT_ARGS
+    # Saved together, so a reload never pairs the override with another backend.
+    assert sent["llamacpp_backend"] == "vulkan"
+
+
+@pytest.mark.parametrize(
+    "default_backend, chosen",
+    [
+        ("cpu", None),
+        ("rocm", None),
+        (None, None),
+        ("vulkan", "rocm"),
+        ("vulkan", "cpu"),
+    ],
+)
+def test_other_backends_get_no_vulkan_override(client, default_backend, chosen):
+    """llama-server refuses to start with a Vulkan device named on another backend."""
+    sent = _sent_load_on(client, default_backend, chosen)
+    assert sent["llamacpp_args"] == CHAT_LLAMACPP_ARGS
+    assert sent.get("llamacpp_backend") == chosen
+
+
+def test_macos_chat_loads_are_left_to_lemonade(client):
+    sent = _sent_load_on(client, "vulkan", system="Darwin")
+    assert sent["llamacpp_args"] == CHAT_LLAMACPP_ARGS
+    assert "llamacpp_backend" not in sent
+
+
+def test_gaias_saved_vulkan_chat_args_are_not_taken_for_the_users():
+    """Else a later load keeps them, and they cannot start on another backend."""
+    entry = {"recipe_options": {"llamacpp_args": _VULKAN_CHAT_ARGS}}
+    assert users_llamacpp_args(entry) is None
 
 
 def test_the_load_limits_context_checkpoints():
@@ -152,9 +206,12 @@ def test_a_known_recipe_reads_the_catalog_once_for_saved_args(client):
     client._model_metadata["Qwen3-30B-A3B-Instruct-2507-GGUF"] = {"recipe": "llamacpp"}
     with responses.RequestsMock() as rsps:
         rsps.add(responses.GET, f"{BASE}/models", json={"data": CATALOG})
-        with patch.object(
-            client, "_post_load_with_transient_retry", return_value={}
-        ) as post:
+        with (
+            patch.object(client, "_default_llamacpp_backend", return_value=None),
+            patch.object(
+                client, "_post_load_with_transient_retry", return_value={}
+            ) as post,
+        ):
             client.load_model(
                 "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=65536, prompt=False
             )

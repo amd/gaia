@@ -697,21 +697,27 @@ EMBEDDER_MODELS = frozenset(
 #: than its ubatch (default 512), so every embedder load carries this one.
 EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
-#: llama.cpp otherwise keeps a second copy of the token table in host RAM.
-#: Names a Vulkan device, so any other backend refuses to start with it.
-EMBEDDER_VULKAN_TABLE_ARGS = "-ot token_embd.weight=Vulkan0"
+#: llama.cpp otherwise keeps the token tables in host RAM (2.2 GB for
+#: Gemma-4-E4B); the pattern also matches Gemma's per-layer table. Names a
+#: Vulkan device, so any other backend refuses to start with it.
+VULKAN_TOKEN_TABLE_ARGS = "-ot token_embd.weight=Vulkan0"
+
+
+def with_vulkan_token_tables(args: str, backend: Optional[str]) -> str:
+    """*args* for a load on *backend*, keeping the token tables on a Vulkan GPU."""
+    if backend == "vulkan":
+        return f"{args} {VULKAN_TOKEN_TABLE_ARGS}"
+    return args
 
 
 def embedder_llamacpp_args(backend: Optional[str]) -> str:
     """GAIA's llama.cpp args for an embedder loaded on *backend*."""
-    if backend == "vulkan":
-        return f"{EMBEDDER_LLAMACPP_ARGS} {EMBEDDER_VULKAN_TABLE_ARGS}"
-    return EMBEDDER_LLAMACPP_ARGS
+    return with_vulkan_token_tables(EMBEDDER_LLAMACPP_ARGS, backend)
 
 
-def without_embedder_table_args(args: str) -> str:
+def without_vulkan_token_tables(args: str) -> str:
     """*args* with the Vulkan-only token-table override removed."""
-    return " ".join(args.replace(EMBEDDER_VULKAN_TABLE_ARGS, " ").split())
+    return " ".join(args.replace(VULKAN_TOKEN_TABLE_ARGS, " ").split())
 
 
 #: A reranker scores query + chunk as one input, which must fit one ubatch; the
@@ -930,6 +936,7 @@ FULL_TOOLS_SLOT = 2
 _GAIA_SAVED_CHAT_ARGS = frozenset(
     {
         CHAT_LLAMACPP_ARGS,
+        with_vulkan_token_tables(CHAT_LLAMACPP_ARGS, "vulkan"),
         "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
         "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
         "--parallel 1",
@@ -1008,10 +1015,10 @@ def _recent_crash(key: tuple) -> Optional[Tuple[float, str]]:
 
 def _load_args_hint(sent_args: Optional[str], users_args: Optional[str]) -> str:
     """Which llama.cpp args the failed load used, and how the user changes them."""
-    if sent_args == CHAT_LLAMACPP_ARGS:
+    if sent_args and without_vulkan_token_tables(sent_args) == CHAT_LLAMACPP_ARGS:
         return (
             f" GAIA started it with its chat flags (llamacpp_args "
-            f"'{CHAT_LLAMACPP_ARGS}'), which some models and llama.cpp builds "
+            f"'{sent_args}'), which some models and llama.cpp builds "
             "cannot start with. To use your own llama.cpp arguments instead, "
             "save them for the model in Lemonade (its model settings, or a "
             "load with save_options); GAIA then loads it with those. See "
@@ -6572,8 +6579,8 @@ class LemonadeClient:
             raise
         except LemonadeClientError as e:
             self.log.warning(
-                f"Could not read {self.base_url}/system-info to pick the embedding "
-                f"model's llama.cpp backend ({e}); letting Lemonade choose it."
+                f"Could not read {self.base_url}/system-info to see which "
+                f"llama.cpp backend this PC uses ({e}); letting Lemonade choose it."
             )
             return None
         llamacpp = (info.get("recipes") or {}).get("llamacpp") or {}
@@ -6614,7 +6621,7 @@ class LemonadeClient:
                 _CPU_FALLBACK_EMBEDDERS.add((self.base_url, model_name))
             request_data["llamacpp_backend"] = "cpu"
             if request_data.get("llamacpp_args"):
-                request_data["llamacpp_args"] = without_embedder_table_args(
+                request_data["llamacpp_args"] = without_vulkan_token_tables(
                     request_data["llamacpp_args"]
                 )
             return self._post_load_with_transient_retry(
@@ -10323,6 +10330,13 @@ class LemonadeClient:
         )
         if chosen_backend:
             request_data["llamacpp_backend"] = chosen_backend
+        if llamacpp_args == CHAT_LLAMACPP_ARGS and platform.system() != "Darwin":
+            chat_backend = chosen_backend or self._default_llamacpp_backend()
+            llamacpp_args = with_vulkan_token_tables(llamacpp_args, chat_backend)
+            if chat_backend == "vulkan":
+                # Saved with the args, so a reload never pairs them with
+                # another backend.
+                request_data["llamacpp_backend"] = chat_backend
         avoiding_rocm = False
         if managed_embedder:
             with _PINNED_BACKENDS_LOCK:
