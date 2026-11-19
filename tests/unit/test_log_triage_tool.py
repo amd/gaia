@@ -20,9 +20,10 @@ from types import SimpleNamespace
 import pytest
 
 from gaia.security import PathValidator
-from tests.unit.log_triage_scenarios import TOOLS_PATH, bound, load_tools
+from tests.unit.log_triage_scenarios import TOOLS_PATH, bound, load_engine, load_tools
 
 lt = load_tools()
+engine = load_engine()
 
 
 @pytest.fixture(autouse=True)
@@ -108,23 +109,25 @@ def _steady(path: Path, hours: float = 6, per_min: int = 2, extra=()) -> Path:
     ],
 )
 def test_timestamp_layouts(text, kind, expected, has_tz):
-    tm = lt.parse_timestamp(text)
+    tm = engine.parsing.parse_timestamp(text)
     assert tm is not None, text
     assert tm.kind == kind
-    assert lt.format_ts(tm.epoch) == expected
+    assert engine.parsing.format_ts(tm.epoch) == expected
     assert tm.has_tz is has_tz
 
 
 def test_syslog_takes_the_year_it_is_given():
-    tm = lt.parse_timestamp("Mar  4 10:00:00 host x", year_hint=2023)
-    assert lt.format_ts(tm.epoch) == "2023-03-04 10:00:00"
+    tm = engine.parsing.parse_timestamp("Mar  4 10:00:00 host x", year_hint=2023)
+    assert engine.parsing.format_ts(tm.epoch) == "2023-03-04 10:00:00"
 
 
 def test_impossible_dates_and_out_of_range_epochs_do_not_parse():
-    assert lt.parse_timestamp("2025-13-40 10:00:00 x") is None
-    assert lt.parse_timestamp("1234567 x") is None
-    assert lt.parse_timestamp_value(5) is None
-    assert lt.parse_timestamp_value(1741082400000).epoch == pytest.approx(1741082400)
+    assert engine.parsing.parse_timestamp("2025-13-40 10:00:00 x") is None
+    assert engine.parsing.parse_timestamp("1234567 x") is None
+    assert engine.parsing.parse_timestamp_value(5) is None
+    assert engine.parsing.parse_timestamp_value(1741082400000).epoch == pytest.approx(
+        1741082400
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -133,13 +136,15 @@ def test_impossible_dates_and_out_of_range_epochs_do_not_parse():
 
 
 def test_levels_and_keyword_fallback():
-    assert lt.level_severity("warning") == 2
-    assert lt.level_severity("[ERROR]") == 3
-    assert lt.level_severity("trace4") == 0
-    assert lt.level_severity(40) == 3  # numeric levels follow Python logging: 40 ERROR
-    assert lt.level_severity(60) == 4
-    assert lt.level_severity("banana") is None
-    assert lt.keyword_severity("all good") == 1
+    assert engine.parsing.level_severity("warning") == 2
+    assert engine.parsing.level_severity("[ERROR]") == 3
+    assert engine.parsing.level_severity("trace4") == 0
+    assert (
+        engine.parsing.level_severity(40) == 3
+    )  # numeric levels follow Python logging: 40 ERROR
+    assert engine.parsing.level_severity(60) == 4
+    assert engine.parsing.level_severity("banana") is None
+    assert engine.parsing.keyword_severity("all good") == 1
 
 
 @pytest.mark.parametrize(
@@ -171,21 +176,24 @@ def test_levels_and_keyword_fallback():
     ],
 )
 def test_keyword_severity_for_lines_without_a_level(message, severity):
-    assert lt.keyword_severity(message) == severity
+    assert engine.parsing.keyword_severity(message) == severity
 
 
 def test_masking_keeps_structure_and_hides_values():
-    a = lt.mask_message(
+    a = engine.parsing.mask_message(
         "req-a3f9c2d1 from 10.0.0.1:443 took 123 ms reading /var/lib/x/y.db 0xdeadbeef"
     )
-    b = lt.mask_message(
+    b = engine.parsing.mask_message(
         "req-12345678 from 10.9.8.7:80 took 7 ms reading /srv/data/z.db 0x1"
     )
     assert a == b
     assert "<IP>" in a and "<PATH>" in a and "<*>" in a
-    uuid = lt.mask_message("job 123e4567-e89b-12d3-a456-426614174000 done")
+    uuid = engine.parsing.mask_message("job 123e4567-e89b-12d3-a456-426614174000 done")
     assert uuid == "job <UUID> done"
-    assert lt.mask_message("see https://example.test/a?b=1 now") == "see <URL> now"
+    assert (
+        engine.parsing.mask_message("see https://example.test/a?b=1 now")
+        == "see <URL> now"
+    )
 
 
 def test_high_cardinality_word_merges_into_one_template(tmp_path):
@@ -194,7 +202,7 @@ def test_high_cardinality_word_merges_into_one_template(tmp_path):
         f"{_iso(T0 + i * 30)} app-01 INFO login ok for {users[i % 16]} via sso"
         for i in range(400)
     ]
-    res = lt.triage([str(_write(tmp_path / "a.log", lines))])
+    res = engine.report.triage([str(_write(tmp_path / "a.log", lines))])
     assert len(res.an.tpls) == 1
     assert next(iter(res.an.tpls)) == "login ok for <*> via sso"
 
@@ -205,7 +213,9 @@ def test_template_cap_pools_the_rest_and_says_so(tmp_path):
         for i in range(300)
     ]
     path = _write(tmp_path / "a.log", lines)
-    res = lt.triage([str(path)], lt.TriageOptions(max_templates=50))
+    res = engine.report.triage(
+        [str(path)], engine.analysis.TriageOptions(max_templates=50)
+    )
     assert len(res.an.tpls) <= 50
     assert res.an.overflow is not None
     assert any("distinct templates" in w for w in res.warnings)
@@ -218,7 +228,9 @@ def test_template_cap_pools_the_rest_and_says_so(tmp_path):
 
 
 def _formats(tmp_path, name, lines, **opts):
-    res = lt.triage([str(_write(tmp_path / name, lines))], lt.TriageOptions(**opts))
+    res = engine.report.triage(
+        [str(_write(tmp_path / name, lines))], engine.analysis.TriageOptions(**opts)
+    )
     return res, res.an.files[0]
 
 
@@ -408,8 +420,8 @@ def test_level_before_the_timestamp(tmp_path):
     res, f = _formats(tmp_path, "a.log", lines)
     assert f.format == "timestamped"
     assert (f.entries, f.unparsed, f.no_timestamp) == (120, 0, 0)
-    assert lt.format_ts(f.first) == "2025-03-04 10:00:00"
-    assert lt.format_ts(f.last) == "2025-03-04 10:01:59"
+    assert engine.parsing.format_ts(f.first) == "2025-03-04 10:00:00"
+    assert engine.parsing.format_ts(f.last) == "2025-03-04 10:01:59"
     assert dict(res.an.level_totals) == {"ERROR": 12, "INFO": 108}
     assert sorted(res.an.tpls) == [
         "[worker-<*>] connection refused",
@@ -427,7 +439,7 @@ def test_level_and_logger_name_before_the_timestamp(tmp_path):
     res, f = _formats(tmp_path, "a.log", lines)
     assert f.format == "timestamped"
     assert (f.entries, f.unparsed, f.no_timestamp) == (60, 0, 0)
-    assert lt.format_ts(f.first) == "2025-03-04 10:00:00.250"
+    assert engine.parsing.format_ts(f.first) == "2025-03-04 10:00:00.250"
     assert dict(res.an.level_totals) == {"WARNING": 12, "INFO": 48}
     assert sorted(res.an.tpls) == [
         "app.worker handled job <*>",
@@ -475,13 +487,13 @@ def _event_export(path: Path) -> Path:
 
 
 def test_event_viewer_csv_export(tmp_path):
-    res = lt.triage([str(_event_export(tmp_path / "events.csv"))])
+    res = engine.report.triage([str(_event_export(tmp_path / "events.csv"))])
     f = res.an.files[0]
     assert f.format == "csv"
     assert (f.entries, f.header, f.continuation, f.unparsed) == (30, 1, 3, 0)
     assert f.no_timestamp == 0
-    assert lt.format_ts(f.first) == "2025-03-04 10:00:00"
-    assert lt.format_ts(f.last) == "2025-03-04 10:29:00"
+    assert engine.parsing.format_ts(f.first) == "2025-03-04 10:00:00"
+    assert engine.parsing.format_ts(f.last) == "2025-03-04 10:29:00"
     assert dict(res.an.level_totals) == {"ERROR": 3, "INFORMATION": 27}
     assert sorted(res.an.tpls) == [
         "[Backup Agent] Backup of volume <*> finished.",
@@ -506,7 +518,7 @@ def test_csv_export_with_named_columns_and_semicolons(tmp_path):
 def test_empty_and_blank_files(tmp_path):
     (tmp_path / "empty.log").write_text("", encoding="utf-8")
     _write(tmp_path / "blank.log", ["", "   ", ""])
-    res = lt.triage([str(tmp_path)])
+    res = engine.report.triage([str(tmp_path)])
     assert {f.name for f in res.an.files} == {"empty.log", "blank.log"}
     assert res.an.entries == 0 and res.checks["ok"]
     assert res.compact()["anomalies"] == []
@@ -523,7 +535,7 @@ def test_crlf_bom_unicode_utf16_and_gzip(tmp_path):
     gz = tmp_path / "old.log.gz"
     with gzip.open(gz, "wt", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-    res = lt.triage([str(p) for p in (crlf, bom, utf16, gz)])
+    res = engine.report.triage([str(p) for p in (crlf, bom, utf16, gz)])
     for f in res.an.files:
         assert (f.entries, f.unparsed) == (5, 0), f.name
     assert list(res.an.tpls) == ["café überlast <*> 東京"]
@@ -533,7 +545,7 @@ def test_binary_and_non_log_files_are_skipped_with_a_reason(tmp_path):
     (tmp_path / "core.dump").write_bytes(b"\x00\x01\x02" * 100)
     (tmp_path / "pic.png").write_bytes(b"\x89PNG")
     _steady(tmp_path / "app.log", hours=1)
-    res = lt.triage([str(tmp_path)])
+    res = engine.report.triage([str(tmp_path)])
     assert [f.name for f in res.an.files] == ["app.log"]
     reasons = {Path(s["file"]).name: s["reason"] for s in res.skipped}
     assert reasons["core.dump"] == "binary content"
@@ -543,7 +555,9 @@ def test_binary_and_non_log_files_are_skipped_with_a_reason(tmp_path):
 def test_glob_filters_a_folder(tmp_path):
     _steady(tmp_path / "a.log", hours=1)
     _steady(tmp_path / "b.txt", hours=1)
-    res = lt.triage([str(tmp_path)], lt.TriageOptions(glob="*.log"))
+    res = engine.report.triage(
+        [str(tmp_path)], engine.analysis.TriageOptions(glob="*.log")
+    )
     assert [f.name for f in res.an.files] == ["a.log"]
 
 
@@ -561,7 +575,7 @@ def _per_host_folders(root: Path, sub: str = "") -> None:
 def test_one_folder_per_host_with_the_same_file_name(tmp_path, sub):
     _per_host_folders(tmp_path, sub)
     below = f"{sub}/" if sub else ""
-    res = lt.triage([str(tmp_path)])
+    res = engine.report.triage([str(tmp_path)])
     assert set(res.an.hosts) == {"node1", "node2", "node3"}
     out = res.compact()
     assert out["coverage"]["hosts"] == 3
@@ -575,7 +589,7 @@ def test_rotated_files_in_one_folder_stay_one_host(tmp_path):
         _write(
             tmp_path / name, [f"{_iso(T0 + i * 60)} INFO tick {i}" for i in range(30)]
         )
-    res = lt.triage([str(tmp_path)])
+    res = engine.report.triage([str(tmp_path)])
     assert set(res.an.hosts) == {"app"}
     assert [f.name for f in res.an.files] == ["app.log", "app.log.1"]
 
@@ -598,7 +612,7 @@ def test_timestamp_regex_with_components_and_level_host_overrides(tmp_path):
     )
     res, f = _formats(tmp_path, "a.log", lines, **opts)
     assert f.format == "custom" and f.entries == 20 and f.unparsed == 0
-    assert lt.format_ts(f.first) == "2025-03-04 10:00:00"
+    assert engine.parsing.format_ts(f.first) == "2025-03-04 10:00:00"
     tpl = next(iter(res.an.tpls.values()))
     assert set(tpl.hosts) == {"n0", "n1", "n2"}
     assert len(tpl.ents) == 20 and "order-1000" in tpl.ents
@@ -606,13 +620,15 @@ def test_timestamp_regex_with_components_and_level_host_overrides(tmp_path):
 
 def test_invalid_options_fail_loudly():
     with pytest.raises(ValueError, match="entity_regex"):
-        lt.triage([], lt.TriageOptions(entity_regex="(unclosed"))
+        engine.report.triage(
+            [], engine.analysis.TriageOptions(entity_regex="(unclosed")
+        )
     with pytest.raises(ValueError, match="bucket"):
-        lt.triage([], lt.TriageOptions(bucket="soon"))
+        engine.report.triage([], engine.analysis.TriageOptions(bucket="soon"))
     assert (
-        lt.parse_bucket("5min") == 300
-        and lt.parse_bucket("1h") == 3600
-        and lt.parse_bucket("30") == 30
+        engine.analysis.parse_bucket("5min") == 300
+        and engine.analysis.parse_bucket("1h") == 3600
+        and engine.analysis.parse_bucket("30") == 30
     )
 
 
@@ -649,11 +665,11 @@ def test_a_repeated_group_that_repeats_inside_is_refused(tmp_path, arg, pattern)
 
 def test_a_slow_regex_is_stopped_by_the_probe_before_streaming(tmp_path, monkeypatch):
     """Not nested, so only timing finds it: each 'a' can pair up or stand alone."""
-    monkeypatch.setattr(lt, "REGEX_PROBE_BUDGET_S", 0.05)
+    monkeypatch.setattr(engine.parsing, "REGEX_PROBE_BUDGET_S", 0.05)
     path = _steady(tmp_path / "a.log", hours=1)
     streamed = []
     monkeypatch.setattr(
-        lt.Analyzer, "run_file", lambda self, p, ctx: streamed.append(p)
+        engine.analysis.Analyzer, "run_file", lambda self, p, ctx: streamed.append(p)
     )
     out = _call(paths=[str(path)], entity_regex=r"(a|aa)+$")
     assert out["status"] == "error"
@@ -679,8 +695,9 @@ def test_ordinary_regexes_are_accepted(tmp_path, pattern):
 
 
 def test_explicit_bucket_is_used(tmp_path):
-    res = lt.triage(
-        [str(_steady(tmp_path / "a.log", hours=2))], lt.TriageOptions(bucket="1min")
+    res = engine.report.triage(
+        [str(_steady(tmp_path / "a.log", hours=2))],
+        engine.analysis.TriageOptions(bucket="1min"),
     )
     assert res.an.bucket_s == 60
     assert res.compact()["coverage"]["bucket"] == "1min"
@@ -699,7 +716,7 @@ def test_steady_errors_are_baseline_and_a_short_fault_is_an_anomaly(tmp_path):
         )
         for k in range(20)
     ]
-    res = lt.triage([str(_steady(tmp_path / "a.log", extra=extra))])
+    res = engine.report.triage([str(_steady(tmp_path / "a.log", extra=extra))])
     by_key = {t.key: t for t in res.an.tpls.values()}
     assert by_key["cache backend timeout after <*> ms"].cls == "baseline"
     fault = by_key["disk controller reset on bay <*>"]
@@ -731,7 +748,7 @@ def test_an_error_that_lasts_the_whole_log_is_reported_as_persistent(tmp_path):
     assert row["template"] == "db connection refused"
     assert (row["count"], row["severity"]) == (200, "ERROR")
     assert row["first"]["line"] == 1 and row["last"]["line"] == 598
-    assert row["reading"] == lt.PERSISTENT_READING
+    assert row["reading"] == engine.limits.PERSISTENT_READING
     assert "1 persistent error template(s)" in out["headline"]
     assert "outage that covers the whole log" in out["headline"]
     assert "app.log:1" in out["next_step"]
@@ -746,7 +763,7 @@ def test_routine_errors_beside_an_incident_in_a_long_log_stay_background(tmp_pat
         )
         for k in range(20)
     ]
-    res = lt.triage([str(_steady(tmp_path / "a.log", extra=extra))])
+    res = engine.report.triage([str(_steady(tmp_path / "a.log", extra=extra))])
     assert res.anomalies and any(t.sev >= 3 for t in res.baseline)
     out = res.compact()
     assert out["persistent_errors"] == []
@@ -754,7 +771,7 @@ def test_routine_errors_beside_an_incident_in_a_long_log_stay_background(tmp_pat
 
 
 def test_a_long_log_with_only_steady_errors_reports_them_as_persistent(tmp_path):
-    out = lt.triage([str(_steady(tmp_path / "a.log"))]).compact()
+    out = engine.report.triage([str(_steady(tmp_path / "a.log"))]).compact()
     assert out["anomalies"] == []
     assert [r["template"] for r in out["persistent_errors"]] == [
         "cache backend timeout after <*> ms"
@@ -767,7 +784,7 @@ def test_spike_of_a_routine_error_is_an_anomaly_with_a_peak(tmp_path):
         (t + k, f"{_iso(t + k)} app-01 ERROR cache backend timeout after 500 ms")
         for k in range(60)
     ]
-    res = lt.triage([str(_steady(tmp_path / "a.log", extra=extra))])
+    res = engine.report.triage([str(_steady(tmp_path / "a.log", extra=extra))])
     tpl = res.an.tpls["cache backend timeout after <*> ms"]
     assert tpl.cls == "anomaly"
     assert any(r.startswith("spike") for r in tpl.reasons)
@@ -790,7 +807,7 @@ def test_entities_come_only_from_the_anomaly_window(tmp_path):
         )
         for k in range(5)
     ]
-    res = lt.triage([str(_steady(tmp_path / "a.log", extra=extra + early))])
+    res = engine.report.triage([str(_steady(tmp_path / "a.log", extra=extra + early))])
     flagged = set(res.entities["flagged"])
     assert {f"sess-{k:04x}9" for k in range(60)} <= flagged
     assert not any(e.startswith("sess-ff") for e in flagged)
@@ -816,7 +833,7 @@ def _lease_log(tmp_path, *, narrow: bool):
                 f"{_iso(burst_t + 30 + i)} h-1 FATAL job-{250 + i} corrupted checkpoint"
             )
     lines.sort()
-    return lt.triage([str(_write(tmp_path / "a.log", lines))])
+    return engine.report.triage([str(_write(tmp_path / "a.log", lines))])
 
 
 def test_a_broad_anomaly_template_is_left_out_of_the_entity_list(tmp_path):
@@ -835,7 +852,7 @@ def test_a_list_that_is_mostly_baseline_says_so(tmp_path):
 
 
 def test_counts_add_up(tmp_path):
-    res = lt.triage([str(_steady(tmp_path / "a.log"))])
+    res = engine.report.triage([str(_steady(tmp_path / "a.log"))])
     c = res.checks
     assert c["ok"] and c["template_count_sum"] == c["entries"] == c["level_count_sum"]
     f = res.an.files[0]
@@ -856,7 +873,7 @@ def test_offsets_are_normalised_to_utc(tmp_path):
         tmp_path / "b.log",
         [f"2025-03-04T05:00:0{i}-05:00 b-1 ERROR boom {i}" for i in range(3)],
     )
-    res = lt.triage([str(a), str(b)])
+    res = engine.report.triage([str(a), str(b)])
     assert res.an.files[0].first == res.an.files[1].first
     assert res.utc
     assert any("several UTC offsets" in w for w in res.warnings)
@@ -875,7 +892,7 @@ def test_naive_file_shifted_by_hours_is_flagged(tmp_path):
 
     a = _write(tmp_path / "a.log", lines(0, "a-1"))
     b = _write(tmp_path / "b.log", lines(2, "b-1"))
-    res = lt.triage([str(a), str(b)])
+    res = engine.report.triage([str(a), str(b)])
     assert any(
         "time zones" in w or "time zone" in w for w in res.warnings
     ), res.warnings
@@ -891,7 +908,7 @@ def test_clock_skew_between_files_is_measured_on_shared_ids(tmp_path):
 
     a = _write(tmp_path / "a.log", lines(0, "a-1"))
     b = _write(tmp_path / "b.log", lines(37, "b-1"))
-    res = lt.triage([str(a), str(b)])
+    res = engine.report.triage([str(a), str(b)])
     assert res.clock == [
         {
             "file": "b.log",
@@ -918,11 +935,11 @@ def test_large_generated_file_is_fully_read_in_bounded_structures(tmp_path):
             f.write(
                 f"{_iso(ts)} node-{rng.randint(1, 50):02d} INFO op {rng.getrandbits(48):x} took {rng.randint(1, 999)} ms id={rng.random()}\n"
             )
-    res = lt.triage([str(path)])
+    res = engine.report.triage([str(path)])
     assert res.an.entries == n and res.checks["ok"]
     assert len(res.an.tpls) <= 3
     tpl = max(res.an.tpls.values(), key=lambda t: t.count)
-    assert len(tpl.cells) <= lt.MAX_BUCKETS
+    assert len(tpl.cells) <= engine.limits.MAX_BUCKETS
     assert len(json.dumps(res.compact(), default=str)) < 12_000
 
 
@@ -937,7 +954,7 @@ def _days_of_ticks(path: Path, n: int = 60_000, step: float = 5.0) -> Path:
 def test_a_multi_day_gz_keeps_its_buckets_bounded_while_streaming(tmp_path):
     """A .gz is sampled from its head, so its first bucket is far too small."""
     path = _days_of_ticks(tmp_path / "days.log.gz")
-    an = lt.Analyzer(lt.TriageOptions())
+    an = engine.analysis.Analyzer(engine.analysis.TriageOptions())
     ((_, ctx, _info),) = an.prepare([path])
     assert an.bucket_s == 5  # the head sample covers about half an hour
     sizes = []
@@ -951,9 +968,9 @@ def test_a_multi_day_gz_keeps_its_buckets_bounded_while_streaming(tmp_path):
     an.run_file(path, ctx)
     sizes.append(max(len(t.cells) for t in an.tpls.values()))
     assert len(sizes) > 1, "the buckets were never widened"
-    assert max(sizes) <= lt.MAX_BUCKETS + 1
+    assert max(sizes) <= engine.limits.MAX_BUCKETS + 1
     an.finalize()
-    assert an.bucket_s == lt.choose_bucket(60_000 * 5.0) == 600
+    assert an.bucket_s == engine.analysis.choose_bucket(60_000 * 5.0) == 600
     (tpl,) = an.tpls.values()
     assert sum(cell[0] for cell in tpl.cells.values()) == 60_000
     assert len(tpl.cells) == 500
@@ -965,8 +982,8 @@ def test_a_multi_day_gz_gives_the_same_result_as_the_plain_file(tmp_path):
     plain.parent.mkdir()
     with gzip.open(gz, "rt", encoding="utf-8") as src:
         plain.write_text(src.read(), encoding="utf-8", newline="\n")
-    a = lt.triage([str(gz)])
-    b = lt.triage([str(plain)])
+    a = engine.report.triage([str(gz)])
+    b = engine.report.triage([str(plain)])
     assert a.an.bucket_s == b.an.bucket_s
     assert a.checks["ok"] and a.an.entries == b.an.entries == 20_000
     assert [t.cls for t in a.an.tpls.values()] == [t.cls for t in b.an.tpls.values()]
@@ -975,9 +992,12 @@ def test_a_multi_day_gz_gives_the_same_result_as_the_plain_file(tmp_path):
 
 def test_a_fixed_bucket_that_is_far_too_small_is_widened_and_says_so(tmp_path):
     path = _days_of_ticks(tmp_path / "days.log.gz", n=20_000, step=15.0)
-    res = lt.triage([str(path)], lt.TriageOptions(bucket="1s"))
+    res = engine.report.triage([str(path)], engine.analysis.TriageOptions(bucket="1s"))
     assert res.an.bucket_s > 1 and res.checks["ok"]
-    assert max(len(t.cells) for t in res.an.tpls.values()) <= 20 * lt.MAX_BUCKETS
+    assert (
+        max(len(t.cells) for t in res.an.tpls.values())
+        <= 20 * engine.limits.MAX_BUCKETS
+    )
     assert any("widened to" in w for w in res.warnings)
 
 
@@ -988,7 +1008,7 @@ def test_a_file_with_no_line_breaks_is_never_read_whole(tmp_path, monkeypatch):
     path.write_text("[" + ",".join([record] * 60_000) + "]", encoding="utf-8")
     assert path.stat().st_size > 3_000_000
     largest = 0
-    real_open = lt._open_text
+    real_open = engine.reading._open_text
 
     def open_and_watch(p):
         f = real_open(p)
@@ -1004,10 +1024,11 @@ def test_a_file_with_no_line_breaks_is_never_read_whole(tmp_path, monkeypatch):
         f.readline = readline
         return f
 
-    monkeypatch.setattr(lt, "_open_text", open_and_watch)
-    res = lt.triage([str(path)])
+    monkeypatch.setattr(engine.reading, "_open_text", open_and_watch)
+    monkeypatch.setattr(engine.analysis, "_open_text", open_and_watch)
+    res = engine.report.triage([str(path)])
     f = res.an.files[0]
-    assert largest <= lt.READ_CHUNK_CHARS
+    assert largest <= engine.limits.READ_CHUNK_CHARS
     assert (f.lines, f.entries, f.long_lines) == (1, 1, 1)
     assert res.checks["ok"]
     assert any("one long line" in w for w in res.warnings)
@@ -1072,7 +1093,7 @@ def test_tool_writes_json_and_csv_beside_the_logs_and_never_overwrites(tmp_path)
     out = _call(paths=[str(tmp_path)], output_path=str(tmp_path / "triage.json"))
     assert out["output"]["written"], out["output"]
     payload = json.loads((tmp_path / "triage.json").read_text(encoding="utf-8"))
-    assert payload["generator"] == lt.OUTPUT_MARKER and payload["templates"]
+    assert payload["generator"] == engine.limits.OUTPUT_MARKER and payload["templates"]
     out = _call(paths=[str(tmp_path)], output_path=str(tmp_path / "bad.csv"))
     rows = (tmp_path / "bad.csv").read_text(encoding="utf-8").splitlines()
     assert rows[0].startswith("entity,") and len(rows) == 31
@@ -1194,7 +1215,7 @@ def test_engine_refuses_to_run_outside_a_skill_call(tmp_path):
     token = _ACTIVE.set(None)
     try:
         with pytest.raises(SkillContextError):
-            lt.triage([str(path)])
+            engine.report.triage([str(path)])
     finally:
         _ACTIVE.reset(token)
 

@@ -21,9 +21,10 @@ from typing import List, Set, Tuple
 
 import pytest
 
-from tests.unit.log_triage_scenarios import bound, load_tools
+from tests.unit.log_triage_scenarios import bound, load_engine, load_tools
 
 lt = load_tools()
+engine = load_engine()
 
 T0 = datetime(2025, 5, 6, tzinfo=timezone.utc).timestamp()
 HOURS = 6
@@ -198,7 +199,7 @@ STYLES = {
 def test_the_id_kind_is_learned_and_the_list_is_precise(style, tmp_path):
     generate, kind = STYLES[style]
     path, truth = generate(tmp_path, random.Random(42))
-    res = lt.triage([str(path)])
+    res = engine.report.triage([str(path)])
     ent = res.compact()["entities"]
     assert ent["mode"] == "auto-detected"
     assert [k["kind"] for k in ent["kinds_used"]] == [kind], ent
@@ -212,17 +213,19 @@ def test_the_id_kind_is_learned_and_the_list_is_precise(style, tmp_path):
 
 def test_shared_tokens_are_skipped_with_a_reason(tmp_path):
     path, _ = volume_ids(tmp_path, random.Random(1))
-    ent = lt.triage([str(path)]).compact()["entities"]
+    ent = engine.report.triage([str(path)]).compact()["entities"]
     skipped = {k["kind"]: k["why"] for k in ent["kinds_skipped"]}
     assert "ip:port" in skipped and "routine templates" in skipped["ip:port"]
 
 
 def test_the_reported_regex_reproduces_the_list(tmp_path):
     path, _ = volume_ids(tmp_path, random.Random(2))
-    auto = lt.triage([str(path)])
+    auto = engine.report.triage([str(path)])
     regex = auto.compact()["entities"]["kinds_used"][0]["regex"]
     assert regex == r"(vol-[0-9a-fA-F]+)"
-    pinned = lt.triage([str(path)], lt.TriageOptions(entity_regex=regex))
+    pinned = engine.report.triage(
+        [str(path)], engine.analysis.TriageOptions(entity_regex=regex)
+    )
     assert set(pinned.entities["flagged"]) == set(auto.entities["flagged"])
     assert pinned.compact()["entities"]["mode"] == "entity_regex"
 
@@ -232,7 +235,7 @@ def test_the_list_is_written_when_output_path_is_given(tmp_path):
     out = lt.triage_logs(paths=[str(path)], output_path=str(tmp_path / "bad.txt"))
     assert out["output"]["written"], out["output"]
     marker, *ids = (tmp_path / "bad.txt").read_text(encoding="utf-8").splitlines()
-    assert marker.startswith("# " + lt.OUTPUT_MARKER)
+    assert marker.startswith("# " + engine.limits.OUTPUT_MARKER)
     assert ids == out["entities"]["list"]
     out = lt.triage_logs(paths=[str(path)], output_path=str(tmp_path / "bad.csv"))
     header = (tmp_path / "bad.csv").read_text(encoding="utf-8").splitlines()[0]
@@ -240,16 +243,16 @@ def test_the_list_is_written_when_output_path_is_given(tmp_path):
 
 
 def test_a_long_list_points_at_output_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(lt, "OUT_ENTITY_LIST", 10)
+    monkeypatch.setattr(engine.report, "OUT_ENTITY_LIST", 10)
     path, _ = volume_ids(tmp_path, random.Random(4))
-    ent = lt.triage([str(path)]).compact()["entities"]
+    ent = engine.report.triage([str(path)]).compact()["entities"]
     assert "list" not in ent and "output_path" in ent["full_list"]
-    assert len(ent["sample"]) == lt.OUT_ENTITIES
+    assert len(ent["sample"]) == engine.limits.OUT_ENTITIES
 
 
 def test_the_timeline_carries_the_exact_burst_bounds(tmp_path):
     path, _ = backend_ip_port(tmp_path, random.Random(5))
-    res = lt.triage([str(path)])
+    res = engine.report.triage([str(path)])
     timeline = res.compact()["timeline"]
     burst = res.compact()["bursts"][0]
     events = {e["event"]: e["ts"] for e in timeline}

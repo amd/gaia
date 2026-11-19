@@ -209,9 +209,10 @@ everything the user asked for.
 Finds the incident in a log rather than the noise. Its `triage_logs` tool
 (registered as `log-triage/triage_logs`) streams every file over its full time
 range, detects the format (JSON lines, syslog, Apache/Nginx, glog, `key=value`,
-timestamp-led lines with stack traces), groups messages into templates, keeps
-steady baseline templates apart from anomalies, finds bursts with exact first
-and last timestamps, compares each burst with the quiet window before it,
+CSV exports, timestamp-led lines with stack traces), groups messages into
+templates, keeps steady baseline templates apart from anomalies, reports errors
+that last the whole log as persistent, finds bursts with exact first and last
+timestamps, compares each burst with the quiet window before it,
 measures clock offsets between files, and lists the hosts and ids an anomaly
 hit. The model then reads around the first burst line and writes a blameless
 postmortem.

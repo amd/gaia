@@ -36,15 +36,35 @@ TOOLS_PATH = REPO_ROOT / "hub" / "skills" / "log-triage" / "tools.py"
 _MODULE_NAME = "starter_log_triage_tools"
 
 
+ENGINE_MODULES = ("limits", "parsing", "reading", "analysis", "report")
+
+
 def load_tools():
-    """Import the skill's ``tools.py`` directly, as the loader would."""
+    """Import the skill's ``tools.py`` directly, as the loader would.
+
+    Like the loader, the skill folder is on ``sys.path`` only while the module
+    imports, which is when it imports its ``log_triage_engine`` package.
+    """
     if _MODULE_NAME in sys.modules:
         return sys.modules[_MODULE_NAME]
     spec = importlib.util.spec_from_file_location(_MODULE_NAME, TOOLS_PATH)
     module = importlib.util.module_from_spec(spec)
     sys.modules[_MODULE_NAME] = module
-    spec.loader.exec_module(module)
+    skill_dir = str(TOOLS_PATH.parent)
+    sys.path.insert(0, skill_dir)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(skill_dir)
+    module.ENGINE = SimpleNamespace(
+        **{n: sys.modules[f"log_triage_engine.{n}"] for n in ENGINE_MODULES}
+    )
     return module
+
+
+def load_engine() -> SimpleNamespace:
+    """The engine modules ``tools.py`` imported, by name (``engine.parsing``)."""
+    return load_tools().ENGINE
 
 
 def bound(agent: object = None):

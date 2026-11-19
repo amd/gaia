@@ -26,6 +26,7 @@ hub/skills/
 └── <name>/
     ├── SKILL.md     # required — YAML front matter + the procedure body
     ├── tools.py     # optional — Python tools the skill registers
+    ├── <module>/    # optional — modules tools.py imports (see log-triage)
     └── scripts/     # optional — anything else it ships
 ```
 
