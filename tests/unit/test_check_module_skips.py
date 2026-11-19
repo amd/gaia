@@ -94,6 +94,19 @@ class TestCollection:
         with pytest.raises(RuntimeError, match="cannot be checked"):
             skips_guard.collect_skips(["tests/unit"])
 
+    def test_a_path_glob_is_expanded_before_pytest_sees_it(self, repo):
+        # The workflow's relay step passes `tests/unit/test_relay_*.py` as one
+        # argument and no shell expands it here, so pytest exited 4 on the star.
+        _write(repo, "tests/unit/test_relay_one.py", PLAIN)
+        _write(repo, "tests/unit/test_relay_two.py", GATED)
+        _write(repo, "tests/unit/test_other.py", PLAIN)
+        found = skips_guard.collect_skips(["tests/unit/test_relay_*.py"])
+        assert [s["path"] for s in found] == ["tests/unit/test_relay_two.py"]
+
+    def test_a_glob_matching_nothing_still_fails_loudly(self, repo):
+        with pytest.raises(RuntimeError, match=r"test_nope_\*\.py"):
+            skips_guard.collect_skips(["tests/unit/test_nope_*.py"])
+
 
 class TestJudge:
     ENTRIES = [

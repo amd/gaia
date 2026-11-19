@@ -762,9 +762,14 @@
     color: var(--text-primary);
 }
 
-.settings-more[open] {
+/* Flex open or closed: a display change on opening would skip the grow-open ease.
+   The gap only when open: closed, the hidden content box is still a flex item. */
+.settings-more {
     display: flex;
     flex-direction: column;
+}
+
+.settings-more[open] {
     gap: 3px;
 }
 

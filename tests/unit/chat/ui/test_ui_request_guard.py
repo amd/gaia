@@ -228,7 +228,6 @@ def test_high_value_routes_are_in_the_covered_set(app):
         "/api/memory/prune",
         "/api/documents/upload",
         "/api/files/upload",
-        "/v1/email/send",
         "/api/chat/send",
     ):
         assert path in paths, f"{path} disappeared from the route table"

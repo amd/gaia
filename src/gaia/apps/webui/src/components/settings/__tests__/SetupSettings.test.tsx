@@ -59,6 +59,13 @@ describe('SetupSettings', () => {
         useChatStore.getState().setSystemStatus(null);
     });
 
+    it('names a local model as every other screen does, not by its id', async () => {
+        useModelStore.setState({ active: { ...LOCAL, label: `${QWEN} · local` } });
+        render(<SetupSettings />);
+        expect(await screen.findByText('Running Qwen3.6 35B A3B')).toBeTruthy();
+        expect(screen.queryByText(/GGUF|· local/)).toBeNull();
+    });
+
     it('falls back to the planned model before the active model is known', async () => {
         useModelStore.setState({ active: null });
         render(<SetupSettings />);
