@@ -98,3 +98,51 @@ def test_no_searchable_folder_is_said_plainly(home, monkeypatch):
 
     assert "Searched:" not in out
     assert "No folder in scope 'home' could be searched." in out
+
+
+def _tiny_budget(monkeypatch, entries):
+    from gaia.agents.tools import filesystem_tools
+
+    real = filesystem_tools.SearchBudget
+    monkeypatch.setattr(
+        filesystem_tools, "SearchBudget", lambda: real(seconds=600, entries=entries)
+    )
+
+
+def _finished_part(out):
+    if "Finished searching: " not in out:
+        return ""
+    return out.split("Finished searching: ", 1)[1].split(".", 1)[0]
+
+
+def test_a_search_that_stopped_early_does_not_say_repeating_is_useless(
+    home, monkeypatch
+):
+    for i in range(50):
+        (home / "Work" / f"file_{i}.txt").write_text("x")
+    _tiny_budget(monkeypatch, entries=5)
+
+    out = _find_files([str(home)])("no_such_file_xyz", scope="home")
+
+    assert "stopped early" in out
+    assert "Repeating this search will not find it" not in out
+    assert "Searched:" not in out
+    # The root it stopped in is unfinished, so it is not reported as finished.
+    assert str(home.resolve()) not in _finished_part(out)
+    assert "Not finished:" in out
+
+
+def test_a_stopped_search_names_only_the_roots_it_finished(home, monkeypatch):
+    (home / "Downloads").mkdir()
+    for i in range(50):
+        (home / "Work" / f"file_{i}.txt").write_text("x")
+    _tiny_budget(monkeypatch, entries=5)
+
+    out = _find_files([str(home)])("no_such_file_xyz", scope="smart")
+
+    assert "Repeating this search will not find it" not in out
+    finished = _finished_part(out)
+    not_finished = out.split("Not finished: ", 1)[1]
+    for root in finished.split(", ") if finished else []:
+        assert root not in not_finished
+    assert str((home / "Work").resolve()) not in finished

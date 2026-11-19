@@ -1090,8 +1090,12 @@ class FileSystemToolsMixin:
                         )
                     else:
                         found_none = f"No files found matching '{query}'."
-                    # Naming the folders lets the model see the scan was complete.
-                    if searched:
+                    # Only a completed scan may tell the model not to repeat it.
+                    finished = [r for r in searched if r not in budget.unfinished_paths]
+                    if budget.truncated:
+                        if finished:
+                            found_none += f" Finished searching: {', '.join(finished)}."
+                    elif searched:
                         found_none += (
                             f" Searched: {', '.join(searched)}. Repeating this "
                             "search will not find it; try another scope or ask "
