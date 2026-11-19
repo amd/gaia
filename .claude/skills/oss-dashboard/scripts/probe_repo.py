@@ -8,8 +8,8 @@ install channels (Homebrew, Docker Hub, RubyGems, NuGet, conda-forge) exist,
 and which release tags and files are published. Writes a JSON report that
 scaffold.py turns into src/config.ts.
 
-Auth: the GITHUB_TOKEN environment variable, else the token of a logged-in
-GitHub CLI (`gh auth token`). Requests go straight to the REST API with urllib.
+Auth: the GITHUB_TOKEN environment variable (`GITHUB_TOKEN="$(gh auth token)"`
+reuses a logged-in GitHub CLI). Requests go straight to the REST API with urllib.
 Read-only; makes about 50-150 requests (more for a busy CI or many releases).
 Needs Python 3.11 or later (tomllib).
 
@@ -33,8 +33,6 @@ import http.client
 import json
 import os
 import re
-import shutil
-import subprocess
 import time
 import tomllib
 import urllib.error
@@ -44,18 +42,6 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 API = "https://api.github.com"
-GH = shutil.which("gh") or next(
-    (
-        p
-        for p in (
-            r"C:\Program Files\GitHub CLI\gh.exe",
-            "/usr/local/bin/gh",
-            "/opt/homebrew/bin/gh",
-        )
-        if os.path.exists(p)
-    ),
-    None,
-)
 RELEASE_PAGE_CAP = 20
 # Events GitHub can attach to a workflow run, asked about one by one when the default branch has too many runs to list.
 KNOWN_EVENTS = (
@@ -93,19 +79,7 @@ class ApiError(Exception):
         self.status = status
 
 
-def _token() -> str | None:
-    if os.environ.get("GITHUB_TOKEN"):
-        return os.environ["GITHUB_TOKEN"]
-    if GH:
-        r = subprocess.run(
-            [GH, "auth", "token"], capture_output=True, text=True, timeout=30
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
-    return None
-
-
-TOKEN = _token()
+TOKEN = os.environ.get("GITHUB_TOKEN")
 
 
 def get(
@@ -848,7 +822,7 @@ def main() -> int:
     a = ap.parse_args()
     if not TOKEN:
         print(
-            "No GitHub token: set GITHUB_TOKEN or log in with `gh auth login`. Unauthenticated calls hit the 60/hour limit.",
+            'No GitHub token: set GITHUB_TOKEN, e.g. GITHUB_TOKEN="$(gh auth token)" with a logged-in GitHub CLI. Unauthenticated calls hit the 60/hour limit.',
             file=sys.stderr,
         )
         return 2

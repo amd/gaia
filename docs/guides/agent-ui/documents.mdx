@@ -99,40 +99,68 @@ is open, and which sections are expanded are remembered. On windows narrower
 than about 1,100 px it opens on top of the chat instead, and Escape closes it.
 
 The panel reads when it opens, when you expand a section, and when an answer
-finishes. It never checks on a timer, and a closed panel or a collapsed section
-reads nothing.
+finishes. It never checks on a timer, and a closed panel reads nothing.
 
-It leads with what the chat made and may touch: **This answer**, **Outputs**,
-**Changes**, **Folders and access** and **Skills**. How the chat ran, **Context
-& performance** and **Agent info**, sits last under **Details**; those sections
-start collapsed.
+It leads with **Environment**: where the chat runs and what it may touch, one
+line each. **This answer**, **Outputs**, **Changes** and **Skills** follow, and
+each appears only once it has something to show, so a new chat is a short
+panel. How the chat ran, **Context & performance**, **Agent info** and
+**Session**, sits last under **Details**; those sections start collapsed.
+Explanations open from the **ⓘ** beside a line, or show when you hover over it.
 
-- **This answer** shows what the latest turn used and where its data went:
+The panel shapes itself to what the chat is doing, read from what it has
+actually done rather than guessed from its words. Chips under the title name
+the work, and each kind brings its own rows. Anything that turns up while the
+panel is open eases in, so you can see what is new:
+
+| The chat… | Chip | What the panel adds |
+|---|---|---|
+| only talks | **Chat** | Nothing: just where it runs and what it may touch |
+| changed files, loaded the coding skill, or ran a developer tool such as `git` or `npm` | **Coding** | Once it has changed files: the repository and branch with the uncommitted count, and **Changes** moves up under Environment. Before that, the chip alone |
+| ran shell commands | **Commands** | A **Commands** section: each command newest first, marked as run, failed, stopped, running or not run, with the failures counted; a command takes you to the turn that ran it |
+| holds documents | **Documents** | A **Documents** section: each file, whether it is still being indexed or failed, how many passages it was split into, and how many the latest answer used |
+| is run by a schedule | **Scheduled** | A **Schedule** section: when it runs, the next run, the run count, the last failure, and **Pause** and **Run now** |
+| is working through a plan | **Working a plan** | A **Plan** checklist that ticks over while the reply runs, then stays as the turn left it (each step done, failed, stopped or not started, matching the checklist in the transcript) until your next message |
+| contacted websites | **Web** | The number of sites across the whole chat. The latest answer's sites and sources are under **This answer** |
+| is an email chat | **Email** | The mailbox it reads |
+
+A chat can be several of these at once. A chip with a section takes you to it.
+Once the chat has used any of its context window, Environment also shows how
+full it is; the bar turns amber from 80%, and the line opens the breakdown.
+GAIA's own folders, the same in every chat, wait behind one line.
+
+- **This answer** shows what the latest turn used and where its data went. A
+  turn answered on this PC that read no sources, wrote no files and contacted
+  no website has nothing to report, so the section is absent:
   - **Sources:** the web pages it read and the document passages it drew on,
     named by file and page.
   - **Files:** what it created or changed, with **Open** and **Show in
     folder**. Scripts, programs and web pages offer only Show in folder,
     because opening them would run code. A file deleted since the turn shows
     as no longer on disk, and one changed since then says so.
-  - **This turn:** where the model ran (**This PC**, or the cloud provider
-    such as Fireworks AI or the AMD LLM Gateway), whether your documents
-    stayed here, which websites GAIA's web tools contacted, and the cost (a
-    list-price estimate for Fireworks models).
+  - **This turn:** only what happened gets a line: the cloud provider that
+    answered (such as Fireworks AI or the AMD LLM Gateway), whether your
+    documents stayed here, which websites GAIA's web tools contacted, and the
+    cost (a list-price estimate for Fireworks models). A model on this PC has
+    no cost line.
 
-  While a new turn runs, it says the answer is in progress rather than showing
-  the previous one. When every web lookup in a turn failed, it says **Couldn't
+  While a new turn runs, the section is hidden rather than showing the
+  previous answer. When every web lookup in a turn failed, it says **Couldn't
   get live data**, so you know the answer isn't based on current information;
   with the panel closed, its button turns amber.
-- **Folders and access** shows what the chat may touch and where it runs. Each
+- **Environment** shows where the chat runs and what it may touch. Each
   change applies from GAIA's next step, without a restart:
-  - **Can read and write:** the folders and files GAIA may use in this chat,
-    and where each came from. **Add folder** gives it another folder, picked
+  - **Where it runs:** this PC with its device and backend (for example
+    `GPU · Vulkan`) or the cloud provider, then the model with the context
+    window it loaded with. Hover over the model for the memory in use.
+  - **Folders and files:** what GAIA may use in this chat, each with its
+    path; hover over the path for where it came from. **Add folder** gives it another folder, picked
     the same way as from a new chat's folder;
     **Remove** takes one away. A removed folder is refused by every file and
     shell tool, even under full access and even inside a wider folder, until
     you add it back. A document attached to the chat is removed from the
     document bar instead, which also takes it out of the chat's search.
-  - **Permission mode:** Ask or Full access, the same setting as the shield in
+  - **Permissions:** Ask or Full access, the same setting as the shield in
     the message box. It covers this chat only; new chats follow **Settings →
     Permissions**.
   - **Internet:** this is a filter, not a firewall. Turn it off and GAIA
@@ -148,8 +176,6 @@ start collapsed.
     opens full screen. The app does not keep access between sessions: each
     time you turn mobile access on, scan the new QR code, and if the
     home-screen app no longer connects, open the new link and add it again.
-  - **Runs on:** this PC with its device and backend (for example
-    `GPU · Vulkan`), the model and the memory in use, or the cloud provider.
 
   A Hub-installed GAIA, which runs as its own process, is held to the
   internet setting. It can be given another folder, but a folder can't be
@@ -163,9 +189,12 @@ start collapsed.
   turning the internet off while an older one is working ends that turn. An
   agent that keeps its own network rules, such as the email agent, isn't
   held to either setting.
+- **Session** gives the chat ID with a copy button, when the chat started, its
+  agent, and the GAIA and Lemonade versions, for a bug report or a log search.
 - **Context & performance** is the breakdown described in
   [See how full the context is](/guides/agent-ui/chat#see-how-full-the-context-is).
-- **Outputs** lists everything the chat produced, newest first: files created
+- **Outputs** appears once the chat has produced something. It lists
+  everything, newest first: files created
   or changed, exports (PDF, Word, Excel, CSV and similar), images, documents
   indexed, scheduled tasks and memories saved. Each shows when it was made and
   **Go to turn** scrolls to the answer that made it. Files have **Open** and
@@ -189,7 +218,6 @@ start collapsed.
     Create PR pushes the current branch (never forced) and opens the pull
     request with GitHub's `gh` tool; it isn't offered from the default branch
     or while the chat's internet is off.
-
 
 ## Undo a turn
 

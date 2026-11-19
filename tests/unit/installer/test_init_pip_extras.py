@@ -178,7 +178,11 @@ class TestExtrasInstallFailureIsLoud:
     def test_skip_pip_extras_installs_no_packages(self, monkeypatch):
         """The apps pass --skip-pip-extras: they ship their packages and never pip-install."""
         cmd = InitCommand(
-            profile="rag", yes=True, skip_models=True, skip_pip_extras=True
+            profile="rag",
+            yes=True,
+            skip_models=True,
+            skip_pip_extras=True,
+            skip_webui_build=True,
         )
         cmd._print = lambda msg, end="\n": None
         monkeypatch.setattr(cmd, "_ensure_lemonade_ready", lambda: True)

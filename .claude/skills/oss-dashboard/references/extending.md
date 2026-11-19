@@ -9,10 +9,10 @@ Every source follows the same six steps; skipping one is how a number goes quiet
 2. **Collector** — a function `(env, fetcher, ...) => Promise<string>` returning a one-line summary for the
    footer. Throw with an actionable message on any failure; never return partial data as success. Write each
    all-or-nothing unit with `writeAtomic(db, insertMany(...))`. Add its name to `SOURCES` and a step in
-   `collectAll` (`src/collector.ts`), gated on config if the project may not have it.
+   `collectAll` (`<dir>/src/collector.ts`), gated on config if the project may not have it.
 3. **Incremental reads** — use `sinceLastSuccess(db, source)` so missed nights are caught up, and support
    `full=1` for the first fill.
-4. **API** — a branch in `handleApi` (`src/api.ts`). End windows at `collectedAt(<your source>)`, return the
+4. **API** — a branch in `handleApi` (`<dir>/src/api.ts`). End windows at `collectedAt(<your source>)`, return the
    window you counted, and return `null` (not 0) for days with no data.
 5. **Page** — a `card(...)` with an info text stating the definition, the bands and their source; an empty state
    that says why it is empty; respect `S.range`.
@@ -41,9 +41,9 @@ LinearB "pickup time" for PRs: <4 h good, >16 h slow).
 
 ## Adding a registry
 
-Add the field to `PACKAGES` in `src/config.ts`, a loop in `collectPackageHistory` (`src/history.ts`) with the
+Add the field to `PACKAGES` in `<dir>/src/config.ts`, a loop in `collectPackageHistory` (`<dir>/src/history.ts`) with the
 registry's own "not computed yet" rule, the source to `packageDaily` / `DownloadDay` and `REGISTRIES` in
-`src/page.ts`. Running totals only (Docker Hub, conda) → snapshot table instead, like release files.
+`<dir>/src/page.ts`. Running totals only (Docker Hub, conda) → snapshot table instead, like release files.
 
 ## App telemetry (deliberately out of scope)
 
