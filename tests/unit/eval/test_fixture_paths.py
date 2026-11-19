@@ -10,13 +10,13 @@ from gaia.eval.fixture_paths import resolve_repo_fixture
 
 def test_resolves_committed_manifest_in_editable_checkout():
     """The editable-checkout layout still resolves a real committed manifest."""
-    path = resolve_repo_fixture("email", "drafting_gate_thresholds.json")
+    path = resolve_repo_fixture("email", "fake_gmail.py")
     assert path.is_file()
     assert path.parts[-4:] == (
         "tests",
         "fixtures",
         "email",
-        "drafting_gate_thresholds.json",
+        "fake_gmail.py",
     )
 
 

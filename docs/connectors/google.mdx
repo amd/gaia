@@ -224,6 +224,22 @@ completes.
   setup](/guides/email#setup) for the exact commands.
 </Note>
 
+### Remote and headless sign-in (SSH)
+
+When GAIA runs on a remote workstation, virtual machine, or headless server over SSH, a local browser cannot open automatically.
+
+To authorize from your local desktop browser:
+
+1. Run connect with an explicit callback port:
+   ```bash
+   gaia connectors connect google --callback-port 8085
+   ```
+2. Forward the chosen callback port from your local machine:
+   ```bash
+   ssh -L 8085:127.0.0.1:8085 <user>@<remote-host>
+   ```
+3. Open the printed authorization URL in your local browser. Once consent is granted, Google redirects to `http://127.0.0.1:8085/callback`, which forwards across the SSH tunnel to GAIA's listener.
+
 <Note>
   **`gaia connectors list` will still say `not configured` after the `configure`
   step — that is expected, not a failure.** For an OAuth connector, "configured"
@@ -389,7 +405,10 @@ and reconnect from the UI to reset.
 ## More than one Google account
 
 You can connect several Google accounts at once, for example a personal
-Gmail and a work one:
+Gmail and a work one. In the Agent UI, open Settings → Connectors → Google
+and choose **Add another Google account**. With two or more, the card lists
+each account with its own state, **Make default** and **Disconnect**, and an
+account whose sign-in expired shows **Reconnect**. From the CLI:
 
 ```bash
 gaia connectors connect google --add      # Google asks which account
@@ -412,8 +431,9 @@ Two places — both work:
 
 - **From GAIA**: Settings → Connectors → Google → **Disconnect**.
   With one account, removes its refresh token from the keyring; the next API
-  call errors with `NOT_CONNECTED`. With several, choose which one to remove,
-  or remove them all.
+  call errors with `NOT_CONNECTED`. With several, each account has its own
+  **Disconnect** and the others keep working. If a **Disconnect** would remove
+  several accounts, GAIA lists them and asks first.
 - **From Google**: Follow Google's
   [instructions for removing an app's access](https://support.google.com/accounts/answer/13533235)
   for your OAuth client. Useful if you've lost the laptop the keyring

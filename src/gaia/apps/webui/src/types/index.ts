@@ -27,7 +27,7 @@ export interface Session {
     agent_type?: string;
     /** Device used for this session (cpu / gpu / npu). */
     device?: string;
-    /** Mail provider for email-triage sessions ("google" | "microsoft"). */
+    /** Mailbox the session's mail tools read ("google" | "microsoft"). */
     mail_provider?: string | null;
     /** Whether chat leaves this machine; null/absent when the backend can't tell. */
     inference_remote?: boolean | null;
@@ -188,7 +188,10 @@ export interface ConnectorRow {
      * apply.
      */
     enabled: boolean;
+    /** The default account's address. */
     account_id: string | null;
+    /** Every signed-in account of an OAuth connector, oldest first; absent for MCP servers. */
+    accounts?: ConnectorAccount[];
     scopes: string[];
     /**
      * Per-agent MCP-tool-visibility activation snapshot (issue #1005).
@@ -238,6 +241,14 @@ export interface ConnectorRow {
         client_id: string | null;
         has_secret: boolean;
     } | null;
+}
+
+/** One signed-in account of an OAuth connector. `account_id` is the provider's stable id. */
+export interface ConnectorAccount {
+    account_id: string;
+    email: string;
+    status: 'ok' | 'reauth_required' | 'error';
+    is_default: boolean;
 }
 
 /** A catalog connector whose live state the backend failed to read; its summary raised. */

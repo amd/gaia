@@ -103,21 +103,12 @@ def test_a_relayed_flagship_follow_up_gets_the_earlier_turns(
     assert captured["history_pairs"] == prior
 
 
-def test_email_still_gets_its_transcript(monkeypatch, sidecar_flagship_registry):
-    prior = [("Any mail from Ana?", "Two messages.")]
-    captured = _relay_one_turn(
-        monkeypatch, sidecar_flagship_registry, "email", prior, "Summarise them."
-    )
-
-    assert captured["history_pairs"] == prior
-
-
 def test_a_relayed_turn_is_measured_for_under_the_hood(
     monkeypatch, sidecar_flagship_registry
 ):
     """The sidecar's timings on ``final`` reach the Context panel's turn record."""
-    from gaia.ui.email_sidecar.profiles import profile_for
-    from gaia.ui.email_sidecar.relay import _dispatch_one
+    from gaia.ui.sidecar.profiles import profile_for
+    from gaia.ui.sidecar.relay import _dispatch_one
     from gaia.ui.turn_insights import turn_record
 
     stats = {
@@ -174,8 +165,8 @@ def test_a_relayed_turn_is_measured_for_under_the_hood(
 
 def _relay_final(monkeypatch, registry, final):
     """Drive one relayed turn whose sidecar ends on ``final``; return the session's turns."""
-    from gaia.ui.email_sidecar.profiles import profile_for
-    from gaia.ui.email_sidecar.relay import _dispatch_one
+    from gaia.ui.sidecar.profiles import profile_for
+    from gaia.ui.sidecar.relay import _dispatch_one
 
     def _fake_dispatch(sse_handler, request, history_pairs, model_id, agent, **kw):
         _dispatch_one(sse_handler, final, profile_for("gaia"))
@@ -275,7 +266,7 @@ def test_a_non_finite_number_never_loses_the_answer(
     monkeypatch, sidecar_flagship_registry, wire, caplog
 ):
     """json.loads accepts Infinity/NaN; int(inf) used to escape and drop the answer."""
-    caplog.set_level("WARNING", logger="gaia.ui.email_sidecar.relay")
+    caplog.set_level("WARNING", logger="gaia.ui.sidecar.relay")
     turns, messages = _relay_final(
         monkeypatch,
         sidecar_flagship_registry,
@@ -298,7 +289,7 @@ def test_a_non_finite_number_never_loses_the_answer(
 def test_an_oversized_record_is_not_stored(
     monkeypatch, sidecar_flagship_registry, performance, caplog
 ):
-    caplog.set_level("WARNING", logger="gaia.ui.email_sidecar.relay")
+    caplog.set_level("WARNING", logger="gaia.ui.sidecar.relay")
     turns, messages = _relay_final(
         monkeypatch,
         sidecar_flagship_registry,

@@ -193,6 +193,7 @@ class TestBuildPlan:
             gaia / "core",
             gaia / "app-core",
             gaia / "traces",
+            gaia / "email",
             gaia / "host",
         ]
         assert plan.stop_daemon
@@ -1731,6 +1732,17 @@ class TestInstallerLeftovers:
         assert not (gaia / "host").exists()
         assert not (gaia / "traces").exists()
         assert (gaia / "mcp_servers.json").exists()
+
+    def test_purge_removes_the_removed_email_agents_data(self, installer_home):
+        old = installer_home / ".gaia" / "email"
+        old.mkdir()
+        (old / "state.db").write_text("jobs")
+        (old / "memory.db").write_text("memory")
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=_Capture())
+
+        assert exit_code == uc.EXIT_OK
+        assert not old.exists()
 
     def test_dry_run_lists_leftovers_and_changes_nothing(self, installer_home):
         zshrc = installer_home / ".zshrc"

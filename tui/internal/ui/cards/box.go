@@ -135,64 +135,6 @@ func (b *box) top() string {
 	return "┌─ " + title + " " + strings.Repeat("─", fill) + "┐"
 }
 
-// row renders a numbered card row: index, sender column, subject column.
-// The sender column is sized off the available width so an 80-column terminal
-// still shows a usable amount of both.
-func (b *box) row(index int, sender, subject string) {
-	b.rowWithPrefix(index, "", sender, subject)
-}
-
-// rowWithPrefix is like row, but reserves a FIXED-width prefix (e.g. a
-// kind→verb label, #2743) ahead of the sender column. The prefix's own
-// width comes out of the row's available space BEFORE the sender/subject
-// split is computed, so a verb label never eats into the sender's own
-// truncation budget the way concatenating it into the sender string would
-// — a fixed prefix keeps every row's sender column the same width
-// regardless of which verb (or none) precedes it. Empty prefix behaves
-// exactly like row.
-func (b *box) rowWithPrefix(index int, prefix, sender, subject string) {
-	// Clean before measuring, not just before printing: a tab in a subject line
-	// has no width here but does on screen, which would misalign the columns.
-	prefix = clean(prefix)
-	sender, subject = clean(sender), clean(subject)
-	lead := "" // separates the prefix from the sender column when present
-	if prefix != "" {
-		lead = " "
-	}
-	avail := b.inner() - 5 - visualLen(prefix) - visualLen(lead) // " NN  " + prefix + lead
-	if avail < 4 {
-		b.addWrapped("  ", strings.TrimSpace(prefix+" "+sender+" — "+subject))
-		return
-	}
-	senderW := avail * 2 / 5
-	if senderW > 24 {
-		senderW = 24
-	}
-	if senderW < 8 {
-		senderW = 8
-	}
-	if senderW > avail-4 {
-		senderW = avail - 4
-	}
-	subjectW := avail - senderW - 1
-	num := padLeft(itoa(index), 2)
-	b.add(" " + num + "  " + prefix + lead +
-		padTo(truncTo(sender, senderW), senderW) + " " +
-		truncTo(subject, subjectW))
-}
-
-// sectionHeader draws "  URGENT" on the left with a count flush right. The
-// label is a word, never a colour — R2 (no colour-only signals).
-func (b *box) sectionHeader(label, count string) {
-	left := "  " + label
-	gap := b.inner() - visualLen(left) - visualLen(count) - 2
-	if gap < 1 {
-		b.add(truncTo(left+" "+count, b.inner()))
-		return
-	}
-	b.add(left + strings.Repeat(" ", gap) + count + "  ")
-}
-
 // ---------------------------------------------------------------------------
 // width-safe text helpers
 // ---------------------------------------------------------------------------
@@ -218,14 +160,6 @@ func padTo(s string, w int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", n)
-}
-
-func padLeft(s string, w int) string {
-	n := w - visualLen(s)
-	if n <= 0 {
-		return s
-	}
-	return strings.Repeat(" ", n) + s
 }
 
 // wrap breaks s on spaces to fit w columns, hard-splitting any single word that

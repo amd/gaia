@@ -25,7 +25,6 @@ from .. import answer_retry, followups
 from .. import permissions as session_permissions
 from .. import session_environment
 from .._chat_helpers import (
-    _SIDECAR_AGENT_TYPES,
     _agent_type_unknown,
     evict_session_agent,
     forget_relayed_context,
@@ -41,7 +40,6 @@ from ..database import (
     resolved_default_model,
 )
 from ..dependencies import get_db
-from ..email_sidecar.profiles import profile_for
 from ..models import (
     AttachDocumentRequest,
     CreateSessionRequest,
@@ -187,14 +185,9 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     registry = get_agent_registry()
     if not _agent_type_unknown(agent_type, registry):
         return
-    # Every id _agent_type_unknown accepts, legacy aliases aside. Only the
-    # ALWAYS-relay sidecars are added unconditionally: since #4161 the others
-    # must resolve in the registry like any agent, so listing every sidecar id
-    # here told the user 'gaia' was both unknown and registered.
-    valid_ids = sorted(
-        {reg.id for reg in registry.list()}
-        | {aid for aid in _SIDECAR_AGENT_TYPES if profile_for(aid).always_relay}
-    )
+    # Every id _agent_type_unknown accepts, legacy aliases aside. Sidecars
+    # must resolve in the registry like any agent.
+    valid_ids = sorted(reg.id for reg in registry.list())
     load_error = registry.get_load_error(agent_type)
     reason = f" It failed to load: {load_error}." if load_error else ""
     # The app lists only registered agents, so an unknown non-gaia id comes
@@ -447,9 +440,9 @@ def _end_sidecar_session(session_id: str, agent_type: str) -> None:
     """
     from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 
-    from ..email_sidecar import daemon_client
-    from ..email_sidecar.profiles import end_session_supported
-    from ..email_sidecar.proxy import SidecarTimeoutError
+    from ..sidecar import daemon_client
+    from ..sidecar.profiles import end_session_supported, profile_for
+    from ..sidecar.proxy import SidecarTimeoutError
 
     profile = profile_for(agent_type)
     if profile is None or profile.min_end_session_api_version is None:

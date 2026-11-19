@@ -44,7 +44,7 @@ gaia-cli
 
 <Warning>
   This binary boots straight into the flagship, and it does not install, uninstall,
-  search, or vote on agents — that stays the Python CLI's job (`gaia hub install email` for the email agent).
+  search, or vote on agents — that stays the Python CLI's job (`gaia init` installs the flagship).
   An earlier version of the TUI opened on an agent browser that did all of that,
   with the flagship listed as "Coming Soon." That screen, and the `list` / `install` /
   `uninstall` / `hub` subcommands that drove it, are gone for good.
@@ -1056,24 +1056,18 @@ session on its current model. Use `/provider` to pick a model on this PC or a
 cloud provider that Lemonade offers, or run the Python agent for Claude. The
 developer manual has the [full comparison](/reference/tui-dev#which-agent-program-runs).
 
-## Running another agent
+## Running an agent by id
 
-The flagship is the default, but `gaia-cli` can also drive `email` by id — it keeps
-its own five-row readiness gate:
-
-```bash
-gaia-cli run email
-gaia-cli run email --query "triage my inbox"   # one-shot: answer on stdout
-gaia-cli chat --agent email                    # same thing, via `chat`
-```
-
-Installing or removing it is the Python CLI's job:
+The flagship is the default, and `gaia-cli` can also drive an agent by its id:
 
 ```bash
-gaia hub list
-gaia hub install email
-gaia hub uninstall email
+gaia-cli run gaia
+gaia-cli run gaia --query "summarize my inbox"  # one-shot: answer on stdout
+gaia-cli chat --agent gaia                     # same thing, via `chat`
 ```
+
+Installing or removing an agent is the Python CLI's job (`gaia init` for the
+flagship, `gaia hub` for scripted installs).
 
 ## Colours (light vs dark terminals)
 

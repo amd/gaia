@@ -50,7 +50,7 @@ def media_dir(kind: str) -> Path:
     """Where the generation tools save *kind* — the same folders they write to."""
     base = Path(_config.GAIA_CONFIG_DIR)
     if kind == "image":
-        return base / "cache" / "sd" / "images"
+        return base / _config.GENERATED_IMAGES_SUBDIR
     if kind == "audio":
         return base / "cache" / "audio" / "generations"
     raise MediaNotServable(f"unknown media kind {kind!r}")
