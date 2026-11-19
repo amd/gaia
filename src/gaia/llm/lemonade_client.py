@@ -7932,9 +7932,26 @@ class LemonadeClient:
             payload = {"model": embedding_model, "input": input_texts}
 
             url = f"{self.base_url}/embeddings"
-            response = self._send_request("POST", url, data=payload, timeout=timeout)
-
-            return response
+            try:
+                return self._send_request("POST", url, data=payload, timeout=timeout)
+            except Exception as e:
+                if embedding_model not in EMBEDDER_MODELS or not self._is_model_error(
+                    e
+                ):
+                    raise
+                # Another GAIA process reloads the embedder around an indexing
+                # job; a request landing in that gap finds no model loaded.
+                self.log.warning(
+                    f"Embedding model '{embedding_model}' was not loaded when the "
+                    f"request arrived ({e}); loading it and sending the request "
+                    "once more."
+                )
+            active_model = self.model
+            try:
+                self.load_model(embedding_model, prompt=False)
+            finally:
+                self.model = active_model
+            return self._send_request("POST", url, data=payload, timeout=timeout)
 
         except Exception as e:
             self.log.error(f"Error generating embeddings: {str(e)}")
