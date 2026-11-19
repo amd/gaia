@@ -37,6 +37,12 @@ async function withArabicEnvironment(page: Page): Promise<void> {
     );
 }
 
+/** The model server is reported up but still can't embed, so the auto-retry leaves the row waiting. */
+async function failReindex(page: Page): Promise<void> {
+    await page.route('**/api/documents/*/reindex', (route) =>
+        route.fulfill({ status: 500, json: { detail: 'Reindex failed; see server logs for details' } }));
+}
+
 let unhandled: string[] = [];
 
 /** A 501 from mockApi that reached the screen; the screen shows a fixture gap, not the app. */
@@ -1881,6 +1887,7 @@ for (const locale of ['en', 'ar']) {
     // A down model server was blamed on the file, with the raw connection error.
     test(`a document that failed because the model server was down (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
+            await failReindex(p);
             await p.route('**/api/documents', (route) => route.fulfill({ json: {
                 documents: [
                     { id: 'd1', filename: 'third.md', filepath: 'C:/third.md', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'model_server_down', last_error: "RAG indexing failed for third.md: Lemonade Server is not reachable: HTTPConnectionPool(host='127.0.0.1', port=59999): Max retries exceeded", indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 },
@@ -1892,6 +1899,7 @@ for (const locale of ['en', 'ar']) {
         const row = page.locator('.doc-failure');
         await expect(row).toBeVisible();
         await expect(row).not.toContainText('HTTPConnectionPool');
+        await expect(row.locator('.doc-status-waiting')).toContainText(locale === 'ar' ? 'قيد الانتظار' : 'Waiting');
         if (locale === 'ar') expect(await untranslated(page, '.doc-failure', 'bdi')).toEqual([]);
         // The count above the list agrees with the row: the file isn't unreadable.
         const stats = page.locator('.doc-stats');
@@ -1910,6 +1918,7 @@ for (const locale of ['en', 'ar']) {
             { id: 'd3', filename: 'garden-notes.txt', filepath: 'C:/garden-notes.txt', file_size: 7270, chunk_count: 7, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
         ];
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await failReindex(p);
             await p.route((url) => url.pathname === '/api/documents', (route) =>
                 route.fulfill({ json: { documents: docs, total: docs.length, total_size_bytes: 9318, total_chunks: 7 } }));
             const sessions = SESSIONS.map((s) => (s.id === ANSWER_SESSION ? { ...s, document_ids: docs.map((d) => d.id) } : s));
