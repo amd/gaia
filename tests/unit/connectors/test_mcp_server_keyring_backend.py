@@ -42,6 +42,9 @@ class PlaintextKeyring(keyring.backend.KeyringBackend):
     """Named like keyrings.alt's plaintext file backend; must never be touched."""
 
     priority = 1
+    # Defining a backend registers it globally; keep keyring's chainer, which
+    # other tests on this worker may build, from discovering this one.
+    viable = False
 
     def get_password(self, service, username):
         raise AssertionError("must not read from a plaintext backend")
