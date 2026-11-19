@@ -251,12 +251,13 @@ To authorize from your local desktop browser:
 ## Step 6 — Grant scopes to specific agents
 
 Each agent must be granted the specific scopes it needs — a connection
-alone is not enough. In the Agent UI this happens **during connect**: the
-Google tile's connect panel shows **"Grant access to these agents when
-you connect"** with a default-on checkbox per installed agent that
-declares Google access, and checked agents receive their declared scopes
-the moment the OAuth flow completes. Uncheck an agent to withhold its
-grant, and adjust or revoke any grant later under the tile's
+alone is not enough. In the Agent UI this happens **during connect**:
+every installed agent that declares Google access receives its declared
+scopes the moment the OAuth flow completes. When more than one such agent
+is installed, the connect panel shows **"Grant access to these agents when
+you connect"** with a default-on checkbox per agent; uncheck one to
+withhold its grant. With GAIA the only agent, there is nothing to choose and
+the list is hidden. Adjust or revoke any grant later under the tile's
 **Per-agent grants** section.
 
 On the CLI, lead with `--grant-agent` — GAIA reads the scopes the agent

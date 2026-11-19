@@ -33,10 +33,12 @@ describe('sidebar title direction', () => {
         expect(rule(sidebarCss, '.sb-row-main:dir(ltr) .sb-row-title')).toMatch(/text-align:\s*left/);
     });
 
-    it('fills the row and cuts a long title with an ellipsis, not a fade fixed to one side', () => {
+    it('fills the row and fades a long title at its own end, never at a side fixed for every title', () => {
         const base = rule(sidebarCss, '.sb-row-title');
-        expect(base).toMatch(/text-overflow:\s*ellipsis/);
+        expect(base).not.toMatch(/text-overflow:\s*ellipsis/);
+        expect(base).toMatch(/animation:\s*fade-cut-inline/);
         expect(base).toMatch(/flex:\s*1/);
+        // A mask written on the title itself would sit on one side whatever the title's direction.
         expect(base).not.toMatch(/mask-image/);
     });
 });

@@ -54,7 +54,9 @@
 
 .element-chip-label {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
     color: var(--text-primary);
     font-family: var(--font-mono);
