@@ -109,7 +109,9 @@ AGENT_ID = "gaia"
 #: ``turns``: the turn's first call is measured before the answer streams.
 #: 2.29 added ``final.route``: the model a ``hybrid`` session's turn ran on.
 #: 2.30 added ``DELETE /sessions/{id}``: end a session and stop its MCP servers.
-API_VERSION = "2.30"
+#: 2.31 added ``session_created`` on ``final``/``error``: the sidecar rebuilt
+#: this turn's agent (eviction, restart, or first use).
+API_VERSION = "2.31"
 
 #: How long the stream allows the turn's context measurement before naming the
 #: failure on ``final``, and how long the loop's own fallback measurement waits.
@@ -1804,6 +1806,10 @@ async def query(request: QueryRequest):
     # without also revisiting the reasoning fails a test instead of shipping.
     handler.full_access = False
     session = None
+    #: Whether this turn's session handle was just built fresh (eviction,
+    #: restart, or first use) rather than found live. Carried on ``final``
+    #: so the client drops any state it kept past the old agent's lifetime.
+    session_created = False
     #: Set only on the one-shot path. A session agent belongs to the registry
     #: and must never be closed here.
     one_shot_agent: Optional[Any] = None
@@ -1931,6 +1937,10 @@ async def query(request: QueryRequest):
             # fresh per turn, so without this both reset at every turn boundary
             # and the user is re-asked for a call they already approved.
             session.permissions.attach(handler)
+            if session.freshly_built:
+                # Consume once, same reason as reclaimed_after_eviction below.
+                session.freshly_built = False
+                session_created = True
             if session.reclaimed_after_eviction:
                 # Consume once: reset before the warning reaches the caller so
                 # a later turn on this same still-live session isn't re-warned.
@@ -2171,6 +2181,10 @@ async def query(request: QueryRequest):
 
     async def _with_context(final: Dict[str, Any]) -> Dict[str, Any]:
         """``final`` carrying the turn's context measurement (>= 2.21), timings and route."""
+        if session_created:
+            # On every terminal type, not just a successful final: the agent
+            # was built fresh for this turn regardless of how the turn ended.
+            final = {**final, "session_created": True}
         if final.get("type") != "final":
             return final
         if run.result is None and thread.is_alive() and run.received_turns is not None:

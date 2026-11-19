@@ -87,6 +87,91 @@ def test_a_final_without_usage_still_answers():
     assert _drain(handler) == [{"type": "answer", "content": "hi"}]
 
 
+# ── session_created drops stale approved paths (#8083) ─────────────────────
+#
+# The sidecar flags a terminal event ``session_created: true`` whenever it had
+# to build a fresh agent for this session_id — eviction, a restart that lost
+# all memory of the id, or first use. The relay must drop the chat's own
+# record of paths approved at a prompt for the agent instance that no longer
+# exists, or the session panel keeps listing a withheld file as approved —
+# but only what predates this turn: a path THIS turn's own prompt approved,
+# before the terminal event arrives, must survive (#8398 review finding).
+
+
+def test_session_created_final_drops_only_the_given_snapshot(monkeypatch):
+    dropped = []
+    monkeypatch.setattr(
+        "gaia.ui.session_environment.forget_approved_before",
+        lambda session_id, before: dropped.append((session_id, before)),
+    )
+    handler = SSEOutputHandler()
+    final = {"type": "final", "answer": "done", "session_created": True}
+    relay._dispatch_one(
+        handler, final, GAIA_PROFILE, session_id="chat-1", approved_before=["/old"]
+    )
+    assert dropped == [("chat-1", ["/old"])]
+
+
+def test_a_final_with_no_session_created_leaves_approved_paths_alone(monkeypatch):
+    dropped = []
+    monkeypatch.setattr(
+        "gaia.ui.session_environment.forget_approved_before",
+        lambda session_id, before: dropped.append((session_id, before)),
+    )
+    handler = SSEOutputHandler()
+    relay._dispatch_one(
+        handler,
+        {"type": "final", "answer": "done"},
+        GAIA_PROFILE,
+        session_id="chat-1",
+        approved_before=["/old"],
+    )
+    assert dropped == []
+
+
+def test_session_created_on_an_error_terminal_also_drops_stale_paths(monkeypatch):
+    """The agent was still built fresh this turn, whether or not it answered."""
+    dropped = []
+    monkeypatch.setattr(
+        "gaia.ui.session_environment.forget_approved_before",
+        lambda session_id, before: dropped.append((session_id, before)),
+    )
+    handler = SSEOutputHandler()
+    error = {"type": "error", "detail": "boom", "session_created": True}
+    relay._dispatch_one(
+        handler, error, GAIA_PROFILE, session_id="chat-1", approved_before=["/old"]
+    )
+    assert dropped == [("chat-1", ["/old"])]
+
+
+def test_a_mid_turn_approval_survives_its_own_turns_session_created():
+    """The exact regression the #8398 review caught: an approval granted
+    during a freshly-built turn must not be erased by that same turn's own
+    `session_created` terminal event — only what predates the turn should go.
+    """
+    from gaia.ui import session_environment
+
+    session_id = "chat-mid-turn-survival"
+    session_environment.forget_session(session_id)  # clean slate
+    try:
+        session_environment.note_approved_path(session_id, "/old/stale.txt")
+        # Snapshot taken at the turn's start, as relay_query does.
+        before = session_environment.approved_paths(session_id)
+        # This turn's own prompt approves a new path before the turn ends.
+        session_environment.note_approved_path(session_id, "/new/this-turn.txt")
+
+        handler = SSEOutputHandler()
+        final = {"type": "final", "answer": "done", "session_created": True}
+        relay._dispatch_one(
+            handler, final, GAIA_PROFILE, session_id=session_id, approved_before=before
+        )
+
+        remaining = session_environment.approved_paths(session_id)
+        assert remaining == ["/new/this-turn.txt"]
+    finally:
+        session_environment.forget_session(session_id)
+
+
 def test_relayed_usage_becomes_the_messages_token_counts():
     answer = {"type": "answer", "content": "x", "tokens": 812, "input_tokens": 15000}
     stats = helpers._turn_inference_stats(

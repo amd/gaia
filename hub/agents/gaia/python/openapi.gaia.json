@@ -668,7 +668,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.30"
+    "version": "2.31"
   },
   "openapi": "3.1.0",
   "paths": {

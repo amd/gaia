@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **The session panel no longer keeps listing a file as approved after its
+  agent is gone (contract 2.31).** A chat's "Files GAIA can reach" could
+  keep showing a file as approved after the agent that held that approval —
+  evicted, or lost to a sidecar restart — no longer existed. `final` and
+  `error` now carry `session_created: true` when the sidecar had to rebuild
+  the turn's agent, so a client can drop exactly the approvals that predate
+  this turn and keep any the turn's own prompt just granted.
 - **Every chat on a PC embeds with one embedder, the GPU one.** The embedder
   was chosen per session, so a chat on the other device could clear all of
   memory's vectors. It is now one per PC, on an NPU PC too: FastFlowLM's NPU
