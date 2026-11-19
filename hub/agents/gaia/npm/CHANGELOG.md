@@ -8,6 +8,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
+### Changed
+
+- **A command or snippet that starts a never-ending server is refused before it
+  runs.** `run_shell_command`, `run_python` and `execute_python_file` used to
+  wait on it until the turn timed out; they now return an error that says so and
+  how to serve the folder instead. Code that only writes a server to a file still
+  runs. Each live-browser result now starts with where it ran, such as
+  `(headless browser)`.
+- **A chat in GAIA desktop can drive the browser pane beside it.** A new bundled
+  skill, `browser-pane`, adds nine tools that take a picture of the page, read
+  its console and network logs, press keys, answer page boxes, change screen
+  size, switch tabs, run several steps at once, run a short script on a
+  localhost page, and start a project's dev server on 127.0.0.1
+  (`browser-pane/dev_server`). The skill is offered only in a chat open in GAIA
+  desktop with the pane, and its tools join the list only once it loads, so the
+  registered tool count stays 105. `browser-pane/browser_eval` asks every time
+  and shows the whole script; the others ask before a site not yet approved, a
+  control that may not be undoable, or starting a server. Full access does not
+  skip the script or a new server: a person still approves them, and a run with
+  nobody to ask refuses them.
+
 ### Fixed
 
 - A reply that goes quiet partway through is requested again, up to twice,

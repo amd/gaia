@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pane fixture sign in</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>Sign in</h1>
+  <form onsubmit="event.preventDefault(); document.getElementById('status').textContent = 'Signed in.';">
+    <p><label for="user">Username</label> <input id="user" name="user" autocomplete="username"></p>
+    <p><label for="password">Password</label> <input id="password" name="password" type="password" autocomplete="current-password"></p>
+    <p><button type="submit">Sign in</button></p>
+  </form>
+  <p id="status"></p>
+</body>
+</html>

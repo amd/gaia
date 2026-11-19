@@ -149,6 +149,7 @@ from gaia.agents.base.tool_grants import (
     PATH_TOOLS,
     RESOLVED_PATH_ARG,
     SCRATCH_ARG,
+    SITE_ARG,
     command_reaches_folder,
     is_inside_folder,
 )
@@ -3421,6 +3422,10 @@ class Agent(abc.ABC):
     #: a scaffolded agent composing that mixin is gated by construction rather
     #: than by remembering to copy an override.
     CONFIRMATION_HOOKS: ClassVar[tuple] = ()
+
+    #: Methods a mixin runs when each turn ends, whatever ended it. Unioned
+    #: over the MRO like ``CONFIRMATION_HOOKS``.
+    TURN_END_HOOKS: ClassVar[tuple] = ()
 
     # ``get_*_system_prompt`` fragments whose text differs between sessions or
     # changes during one. They ride at the start of the first user message
@@ -8121,6 +8126,23 @@ Do NOT wrap conversational replies in JSON.
         return holder.get("result")
 
     @classmethod
+    def turn_end_hooks(cls) -> tuple:
+        """Every ``TURN_END_HOOKS`` entry declared across this class's MRO."""
+        seen: list = []
+        for klass in cls.__mro__:
+            for name in getattr(klass, "TURN_END_HOOKS", ()) or ():
+                if name not in seen:
+                    seen.append(name)
+        return tuple(seen)
+
+    def _run_turn_end_hooks(self) -> None:
+        for name in self.turn_end_hooks():
+            try:
+                getattr(self, name)()
+            except Exception as e:  # noqa: BLE001 - cleanup must not fail a turn
+                logger.warning("turn-end hook %s failed: %s", name, e)
+
+    @classmethod
     def confirmation_hooks(cls) -> tuple:
         """Every ``CONFIRMATION_HOOKS`` entry declared across this class's MRO.
 
@@ -8878,6 +8900,7 @@ Do NOT wrap conversational replies in JSON.
                 NEEDS_PERSON_ARG,
                 EXACT_TEXT_ARG,
                 RESOLVED_PATH_ARG,
+                SITE_ARG,
             )
         )
         if reserved:
@@ -12046,6 +12069,7 @@ Do NOT wrap conversational replies in JSON.
             # Spans a mixin parked for a turn that never opened must not
             # backdate the next one.
             self._pre_turn_spans = None
+            self._run_turn_end_hooks()
 
     def _flush_post_turn_record(self) -> None:
         """Write the post-answer spans and stop routing waits to this turn."""
