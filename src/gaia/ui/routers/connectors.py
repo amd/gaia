@@ -1364,6 +1364,20 @@ async def delete_activation(connector_id: str, agent_id: str) -> Response:
 # ─────────────────────────────────────────────────────────────────
 
 
+def _require_oauth_provider(provider: str) -> None:
+    """404 for a name that isn't an OAuth connector, before the keyring is touched."""
+    from gaia.connectors.providers import _registry as provider_registry
+
+    known = {s.id for s in REGISTRY.all() if s.type == "oauth_pkce"}
+    known |= set(provider_registry)
+    if provider not in known:
+        shown = provider if len(provider) <= 80 else provider[:80] + "…"
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown OAuth provider {shown!r}. Known: {sorted(known)}",
+        )
+
+
 @forwarded_router.post(
     "/{provider}", status_code=201, dependencies=[Depends(_require_ui_header)]
 )
@@ -1384,6 +1398,7 @@ async def forward_connection(
     requirement for ``provider`` is rejected with 400 ``agent_declares_no_scopes``
     rather than silently granting it zero required scopes.
     """
+    _require_oauth_provider(provider)
     # A host that forwards mail only must keep working without calendar scope.
     grant_map = _resolve_grant_scopes(
         request, provider, body.grant_agents, enforced_only=True
@@ -1453,6 +1468,7 @@ async def revoke_forwarded_connection(provider: str) -> Response:
     from gaia.connectors.store import clear_provider_credentials
     from gaia.connectors.tokens import _cache as _token_cache
 
+    _require_oauth_provider(provider)
     # #2591: call the async core directly — this handler is already on the
     # event loop, and ``revoke_connection``'s sync wrapper would raise
     # rather than let a nested loop deadlock.
