@@ -2106,6 +2106,56 @@ default `~/.gaia/config.json`.
 
 ---
 
+## Project Trust
+
+Manage whether GAIA is allowed to read project guidance (`CLAUDE.md`, `AGENTS.md` and `.claude/skills`) into the model's prompt. Answers are saved in `~/.gaia/project_trust.json`.
+
+```bash
+gaia project trust <subcommand> [OPTIONS]
+```
+
+_Alias:_ `gaia trust <subcommand> [OPTIONS]` — `gaia trust list`, `gaia trust add`, `gaia trust decline` and `gaia trust forget` behave exactly like their `gaia project trust` forms.
+
+Only you can trust a folder. The agent cannot run `gaia trust` or `gaia project trust` from its tools, with or without your approval, and a `trusted` answer saved by an agent, or by a process it started, is refused.
+
+**Subcommands:**
+
+| Subcommand | Description |
+|-----------|-------------|
+| `list` | List saved folder trust decisions with timestamps (`--json` for machine-readable output; marks missing folders) |
+| `add [folder]` | Trust a folder or repository root ahead of time (defaults to the current working directory / enclosing project) |
+| `decline [folder]` | Decline a folder ahead of time (defaults to the current working directory / enclosing project) |
+| `forget [folder]` | Remove a saved answer so GAIA asks again; `--missing` to prune gone folders, or `--all` (`-y` / `--yes` to skip prompt) to clear all saved answers |
+
+**Examples:**
+
+<CodeGroup>
+```bash List saved trust answers
+gaia project trust list
+```
+
+```bash Output JSON for scripts
+gaia project trust list --json
+```
+
+```bash Pre-approve current repository for unattended runs
+gaia project trust add
+```
+
+```bash Never load a folder's guidance
+gaia project trust decline /path/to/repo
+```
+
+```bash Forget an answer or clear missing folders
+gaia project trust forget /path/to/repo
+gaia project trust forget --missing
+```
+</CodeGroup>
+
+See the [Project Map guide](/guides/project-map#trusting-a-folder) for how trust decisions gate prompt composition.
+
+---
+
 ## Model Management
 
 ### Download Command
@@ -4365,8 +4415,8 @@ API keys and tokens in GAIA's state files (`lemonade/state.json`, `host/instance
 Most commands support these options. They come from a shared parent parser, so
 despite the name they are **not** accepted by `gaia agent`, `gaia cache`,
 `gaia config`, `gaia connectors`, `gaia daemon`, `gaia diagnostics`, `gaia engineering`,
-`gaia gateway`, `gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory`, `gaia model` or
-`gaia skill` — passing one there fails with `unrecognized arguments`.
+`gaia gateway`, `gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory`, `gaia model`,
+`gaia project`, `gaia skill` or `gaia trust` — passing one there fails with `unrecognized arguments`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|

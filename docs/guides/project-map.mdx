@@ -231,8 +231,9 @@ session there.
 - **Don't trust:** the folder is treated as `off`: its files stay out of the
   prompt, and GAIA does not ask again.
 - **Nobody to ask** (`gaia -p`, a pipe, a script): an unanswered folder is not
-  loaded and nothing waits. `--full-access`, and Full access in the apps, count
-  as trusting every folder without asking.
+  loaded and nothing waits. A one-line note on stderr names the folder; run
+  `gaia project trust add` there once to load it in later runs. `--full-access`, and
+  Full access in the apps, count as trusting every folder without asking.
 - **`project_context full`** is your own choice, so it never asks, and
   **`off`** never loads. Only `auto` consults the saved answers.
 
@@ -244,8 +245,13 @@ and a declined one stays off. Working in a subfolder of a repository uses the
 repository's answer. A moved or renamed folder, or a second clone, is a new path,
 so GAIA asks about it again.
 
-A folder with none of these files is never asked about until one appears. To
-forget an answer, delete its entry from `project_trust.json`, or the whole file.
+A folder with none of these files is never asked about until one appears.
+
+Use `gaia project trust` (or `gaia trust`) to inspect and manage saved answers:
+
+- **List answers:** `gaia project trust list` (or `--json` for scripts) shows every saved folder, its decision and timestamp, and flags folders no longer on disk.
+- **Trust or decline ahead of time:** `gaia project trust add [folder]` or `gaia project trust decline [folder]` records an answer in advance (defaulting to the enclosing repository), allowing headless runs (`gaia -p`) to load trusted guidance without `--full-access`. Only you can trust a folder: the agent cannot run these commands, and a `trusted` answer it tries to save is refused.
+- **Forget answers:** `gaia project trust forget [folder]` clears an entry so GAIA asks again next time. Use `--missing` to prune deleted folders, or `--all` (`-y` to skip confirmation) to clear the entire store.
 
 ## Caching
 
