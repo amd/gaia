@@ -540,8 +540,8 @@ run, then delete again.
 
 **That bypass stops the prompts; it does not open the shell.** The stdio
 transport's `--full-access` does both — it runs gated tools unasked *and*
-lifts the shell tool's guardrails (redirection and the other shell-only
-operators, the read-only binary allowlist, the rate limit). That second half is
+lifts every guardrail: any command runs whole in the platform shell, and the
+file tools read and write any path, credential files included. That second half is
 arbitrary code execution, appropriate for one local parent on a private pipe and
 not for a bound socket, so it stays on stdio: HTTP sessions never lift the shell
 gates, and the request body rejects unknown fields so a client cannot ask. See
@@ -603,7 +603,8 @@ starts.
 sidecar starts in — absolute folders joined with `;` on Windows and `:` elsewhere.
 The scope becomes the overlap with the default; an entry outside it is ignored
 with a warning and never widens it. Out-of-scope paths are refused without a
-prompt in every mode, including full access; full access can grant a path outside
+prompt in every mode except the stdio transport's `--full-access`, which
+reaches every path; an HTTP session's full access can grant a path outside
 the conversation's scope without that extra prompt, but still cannot widen this
 environment-level restriction. The scratch directory stays writable. An empty,
 relative or missing entry stops the sidecar at startup. It confines the agent's

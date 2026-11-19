@@ -4,7 +4,8 @@
 
 The agent may not promote, install or trust a skill: every spelling of
 ``gaia skill`` through the shell tool is refused outright, with no approval
-prompt, whoever is watching and whatever mode the session is in. GAIA's other
+prompt, whoever is watching. Full access is the one exception: the user has
+let the agent run any command, and could already rewrite the trust store. GAIA's other
 ``gaia`` commands are unchanged. A pre-approved run that refuses a command
 reading files inside the allowed folders still offers ``run_python``; one that
 reaches outside them, or changes files, does not. Classification only: every
@@ -97,7 +98,7 @@ MARKER_TAMPERING = [
 
 @pytest.mark.parametrize("command", MARKER_TAMPERING)
 def test_clearing_the_agent_marker_is_refused(layout, command):
-    agent = _agent(layout, full_access=True)
+    agent = _agent(layout)
 
     refused = _refusal(agent, command)
 
@@ -222,7 +223,12 @@ def _refusal(agent, command):
 
 
 @pytest.mark.parametrize("command", SKILL_SPELLINGS)
-@pytest.mark.parametrize("mode", ["interactive", "unattended", "full_access"])
+def test_full_access_runs_gaia_skill(layout, command):
+    assert _refusal(_agent(layout, full_access=True), command) is None
+
+
+@pytest.mark.parametrize("command", SKILL_SPELLINGS)
+@pytest.mark.parametrize("mode", ["interactive", "unattended"])
 def test_every_spelling_of_gaia_skill_is_refused_before_any_prompt(
     layout, command, mode
 ):
@@ -476,7 +482,7 @@ PYTHON_MARKER_TAMPERING = [
 
 @pytest.mark.parametrize("code", PYTHON_MARKER_TAMPERING)
 def test_python_that_clears_the_agent_marker_is_refused(layout, code):
-    agent = _agent(layout, full_access=True)
+    agent = _agent(layout)
 
     result = agent._execute_tool("run_python", {"code": code})
 
@@ -486,7 +492,13 @@ def test_python_that_clears_the_agent_marker_is_refused(layout, code):
 
 
 @pytest.mark.parametrize("code", PYTHON_SKILL_LAUNCHES)
-@pytest.mark.parametrize("mode", ["interactive", "unattended", "full_access"])
+def test_full_access_lets_python_launch_gaia_skill(layout, code):
+    agent = _agent(layout, full_access=True)
+    assert agent._policy_refusal("run_python", {"code": code}) is None
+
+
+@pytest.mark.parametrize("code", PYTHON_SKILL_LAUNCHES)
+@pytest.mark.parametrize("mode", ["interactive", "unattended"])
 def test_python_that_launches_gaia_skill_is_refused_before_any_prompt(
     layout, code, mode
 ):

@@ -36,6 +36,12 @@ is_allowed, reason = session.validate_write("/home/user/documents/out.md")
 # rest of the system temp dir stays denied, and those denials name the scratch
 # directory. Secret and blocked-file checks still apply inside it.
 session.set_scratch_dir(tempfile.mkdtemp(prefix="gaia-scratch-"))
+
+# Full access: a live check, read before every decision. While it answers True
+# every path is allowed — no scope, secret, blocked-folder, GAIA_ALLOWED_PATHS,
+# withheld-folder, size or overwrite check. Agents wire it to their console's
+# `full_access`, so turning full access off restores every check at once.
+session.set_full_access(lambda: console.full_access)
 ```
 
 Every agent tool that takes a path checks it with `validate_read` or
@@ -98,7 +104,8 @@ v.is_path_allowed("/home/user/evals/answers.json")   # False, and never prompts
   documents whose default scope shares nothing with the list is scoped to the
   listed folders instead, minus any too broad to grant.
 - Later grants are held to it too: `add_allowed_path`, approval prompts (including
-  an approve-everything harness or full access), and persisted CLI grants.
+  an approve-everything harness), and persisted CLI grants. Full access is the one
+  exception: it reaches every path, this list included.
 - The scratch directory set by `set_scratch_dir` stays allowed even when it sits
   outside the list, so `run_python` helper scripts keep working.
 - `ChatAgent` (and so `GaiaAgent`) narrows its `allowed_paths` once at

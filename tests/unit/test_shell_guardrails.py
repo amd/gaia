@@ -53,7 +53,6 @@ from gaia.agents.tools import shell_tools
 from gaia.agents.tools.shell_tools import (
     ALLOWED_COMMANDS,
     DANGEROUS_SHELL_OPERATORS,
-    DEVELOPER_COMMANDS,
     TIER_CONFIRM,
     TIER_CONFIRM_ONCE,
     TIER_REFUSE,
@@ -804,20 +803,20 @@ class TestPowerShellRunsAFileInsteadOfACmdlet:
 
 
 # ---------------------------------------------------------------------------
-# Full access: shell gates (#3373, #3374)
+# Full access: no shell gates at all
 #
 # The switch is the sidecar's full access (TUI /full-access, formerly
-# --bypass-permissions / /bypass), which already turned confirmation prompts
-# off; these tests cover the shell gates it now lifts with them.
+# --bypass-permissions / /bypass). Under it nothing on the line is judged:
+# it runs whole through the platform shell.
 #
 # Every case asserts BOTH states. The default tier is what ships; the
 # full-access tier is what the user turned on deliberately. A test that only
-# covered the full-access side could not catch a new binary leaking into the
+# covered the full-access side could not catch a binary leaking into the
 # default set.
 # ---------------------------------------------------------------------------
 
-#: The developer set's headline entries, named individually so a future edit
-#: cannot quietly move one into ALLOWED_COMMANDS unnoticed (#3374).
+#: Build and scripting binaries, named individually so a future edit cannot
+#: quietly move one into the default no-prompt set.
 DEVELOPER_BINARY_SAMPLES = [
     "python",
     "python3",
@@ -840,21 +839,13 @@ DEVELOPER_BINARY_SAMPLES = [
 ]
 
 
-class TestDeveloperSetIsSeparate:
+class TestDefaultTierStaysReadOnly:
     def test_allowed_commands_carries_no_developer_binary(self):
-        # #2768 hardens ALLOWED_COMMANDS as a read-only tier; the developer set
-        # must stay beside it, never merged into it.
-        assert ALLOWED_COMMANDS.isdisjoint(DEVELOPER_COMMANDS)
+        # #2768 hardens ALLOWED_COMMANDS as a read-only tier.
+        assert ALLOWED_COMMANDS.isdisjoint(DEVELOPER_BINARY_SAMPLES)
 
-    def test_rm_is_in_neither_set(self):
-        # Deliberate: not a security boundary (python can delete), an accident
-        # tripwire. Adding it later is cheaper than taking it back.
+    def test_rm_is_not_in_the_default_tier(self):
         assert "rm" not in ALLOWED_COMMANDS
-        assert "rm" not in DEVELOPER_COMMANDS
-
-    @pytest.mark.parametrize("binary", DEVELOPER_BINARY_SAMPLES)
-    def test_developer_binary_declared(self, binary):
-        assert binary in DEVELOPER_COMMANDS
 
 
 class TestDeveloperBinariesRefusedByDefault:
@@ -886,15 +877,22 @@ class TestDeveloperBinariesRefusedByDefault:
         assert check("gh pr merge 1", bypass=False)["tier"] == TIER_REFUSE
 
 
-class TestBypassIsStillASet:
-    @pytest.mark.parametrize("command", ["rm -rf /tmp/foo", "evil_binary --flag"])
-    def test_refused_in_both_modes(self, command):
+class TestFullAccessRunsAnyBinary:
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "rm -rf /tmp/foo",
+            "evil_binary --flag",
+            "apt-get install -y nginx",
+            "openssl genrsa -out key.pem 2048",
+            "perl -e 'print 1'",
+            "./local-binary --run",
+            "sudo systemctl restart nginx",
+        ],
+    )
+    def test_refused_by_default_and_unchecked_under_full_access(self, command):
         assert check(command, bypass=False) is not None
-        assert check(command, bypass=True) is not None
-
-    def test_bypass_refusal_names_the_developer_set(self):
-        result = check("rm -rf /tmp/foo", bypass=True)
-        assert "developer command set" in result["error"]
+        assert check(command, bypass=True) is None
 
     def test_read_only_commands_still_allowed_under_bypass(self):
         assert check("ls -la", bypass=True) is None
@@ -970,15 +968,12 @@ class TestPerSegmentWalkSurvivesBypass:
         assert result is not None
         assert "rm" in result["error"]
 
-    def test_denied_binary_in_segment_two_refuses_the_whole_command_under_bypass(self):
-        result = check("ls && rm -rf /tmp/foo", bypass=True)
-        assert result is not None
-        assert "rm" in result["error"]
+    def test_full_access_runs_the_whole_chain(self):
+        assert check("ls && rm -rf /tmp/foo", bypass=True) is None
+        assert check("ls | rm -rf /tmp/foo", bypass=True) is None
 
-    def test_denied_binary_in_pipe_segment_two_refused_in_both_modes(self):
-        # No operator involved, so both modes reach the per-segment walk.
+    def test_denied_binary_in_pipe_segment_two_refused_by_default(self):
         assert check("ls | rm -rf /tmp/foo", bypass=False) is not None
-        assert check("ls | rm -rf /tmp/foo", bypass=True) is not None
 
     def test_every_segment_is_recorded_under_bypass(self):
         segments = segments_for("cd . && ls | head -3", bypass=True)
@@ -991,14 +986,11 @@ class TestPerSegmentWalkSurvivesBypass:
 
 class TestNewlineSeparatesSegmentsUnderBypass:
     """A newline reaches the shell as a command separator, so the segment walk
-    has to treat it as one. While it did not, `ls\\nrm -rf /tmp/x` was walked as
-    a single `ls` — the refused binary never checked, and the audit record
-    showing one invocation where two ran."""
+    has to treat it as one, or the audit record shows one invocation where two
+    ran."""
 
-    def test_newline_does_not_smuggle_a_refused_binary(self):
-        result = check("ls\nrm -rf /tmp/x", bypass=True)
-        assert result is not None
-        assert "rm" in result["error"]
+    def test_a_multi_line_script_runs_under_full_access(self):
+        assert check("ls\nrm -rf /tmp/x", bypass=True) is None
 
     def test_each_line_is_recorded_as_its_own_segment(self):
         segments = segments_for("ls\necho hi", bypass=True)
@@ -1016,9 +1008,8 @@ class TestNewlineSeparatesSegmentsUnderBypass:
     def test_newline_fused_to_another_operator_still_separates(self, command):
         # shlex emits a run of adjacent punctuation as ONE token, so these
         # arrive as ';\n', '&&\n', '|\n', '\n;' rather than two tokens.
-        result = check(command, bypass=True)
-        assert result is not None
-        assert "rm" in result["error"]
+        segments = segments_for(command, bypass=True)
+        assert [seg[0] for seg in segments] == ["ls", "rm"]
 
     def test_blank_lines_do_not_create_empty_segments(self):
         segments = segments_for("ls\n\n\necho hi\n", bypass=True)
@@ -1058,10 +1049,9 @@ class TestHeredocUnderBypass:
         assert len(steps) == 1
 
     def test_body_text_is_not_walked_as_the_binary_it_names(self):
-        # 'rm' is deliberately excluded from the developer set (#3374); if the
-        # body were tokenised as commands, this would be refused for it.
+        # The audit record lists the commands that run, not the body's text.
         command = "python3 - <<'EOF'\nprint('rm -rf /tmp/x')\nEOF"
-        assert check(command, bypass=True) is None
+        assert [seg[0] for seg in segments_for(command, bypass=True)] == ["python3"]
 
     def test_the_executed_step_still_carries_the_real_body(self):
         # The gates may not see the body, but the shell that actually runs
@@ -1075,15 +1065,20 @@ class TestHeredocUnderBypass:
         command = "python3 - <<'EOF'\nprint(1 + 1)\nEOF"
         assert check(command, bypass=False) is not None
 
-    def test_an_unterminated_heredoc_is_refused_not_silently_passed(self):
+    def test_an_unterminated_heredoc_is_refused_by_default(self):
         # No closing delimiter: the gates cannot know where the body ends, so
         # they must see the text and refuse it rather than guess.
         command = "python3 - <<'EOF'\nprint(1 + 1)"
-        assert check(command, bypass=True) is not None
+        assert check(command, bypass=False) is not None
+
+    def test_an_unterminated_heredoc_runs_under_full_access(self):
+        # The shell decides what it means; the audit record keeps the line.
+        command = "python3 - <<'EOF'\nprint(1 + 1)"
+        assert check(command, bypass=True) is None
 
 
 class TestHeredocCannotHideARefusedCommand:
-    """The developer-set refusal must hold for every line sh executes.
+    """The default tier's refusal must hold for every line sh executes.
 
     The body stripper used to open a heredoc wherever a ``<<`` token appeared,
     including where sh reads it as data — so lines sh runs as commands were
@@ -1122,7 +1117,7 @@ class TestHeredocCannotHideARefusedCommand:
 
     @pytest.mark.parametrize("command", HIDING_SHAPES)
     def test_a_refused_binary_around_heredoc_syntax_is_still_refused(self, command):
-        assert check(command, bypass=True) is not None
+        assert check(command, bypass=False) is not None
 
     @pytest.mark.parametrize("command", HIDING_SHAPES)
     def test_the_executed_line_stays_in_the_walk(self, command):
@@ -1229,7 +1224,7 @@ class TestHeredocCannotHideARefusedCommand:
     @pytest.mark.parametrize("command", UNREADABLE_SHAPES)
     def test_an_unreadable_expansion_or_continuation_is_still_walked(self, command):
         assert "rm -rf x" in _strip_heredoc_bodies(command)
-        assert check(command, bypass=True) is not None
+        assert check(command, bypass=False) is not None
 
     #: Real-world heredocs main runs under full access; none may regress.
     MAIN_ALLOWS_UNDER_FULL_ACCESS = [
@@ -1531,7 +1526,7 @@ class TestExecutorUnderBypass:
         assert records[0]["segments"] == [["cd", "."], ["echo", "audited"]]
         assert records[0]["mode"] == "bypass"
 
-    def test_a_refused_binary_is_never_executed_or_audited(
+    def test_a_refused_binary_is_never_executed_or_audited_by_default(
         self, shell_tool, tmp_path, monkeypatch
     ):
         records = []
@@ -1539,69 +1534,53 @@ class TestExecutorUnderBypass:
             "gaia.security.audit_shell_command",
             lambda **kw: records.append(kw),
         )
-        run = shell_tool(bypass=True)
+        run = shell_tool(bypass=False)
+        (tmp_path / "keep.txt").write_text("x", encoding="utf-8")
 
-        result = run("echo hi && rm -rf nope", working_directory=str(tmp_path))
+        result = run(
+            "echo hi > out.txt && rm keep.txt", working_directory=str(tmp_path)
+        )
 
         assert result["status"] == "error"
         assert records == [], "a refused command must not reach the audit trail"
+        assert (tmp_path / "keep.txt").exists()
 
 
 # ---------------------------------------------------------------------------
 # Redirection on the skill-granted path
 #
-# A lone granted CLI is handed argv, never a shell. A `>` would arrive as one
-# more literal argument, so the command would appear to succeed while writing
-# nothing. That is the one outcome worse than a refusal.
+# A lone granted CLI is handed argv, never a shell, so a redirect can only run
+# as a one-time approval of the whole line. Under full access the line goes to
+# a real shell, which performs the redirect.
 # ---------------------------------------------------------------------------
 
 
-def check_granted(command: str, *, bypass: bool = True, binaries=("gh",)):
+def check_granted(command: str, *, bypass: bool = False, binaries=("gh",)):
     error, _segments = _GrantedShell(bypass, *binaries)._validate_shell_command(command)
     return error
 
 
 class TestRedirectionOnTheGrantedPath:
-    def test_a_redirect_is_refused_rather_than_passed_as_text(self):
-        error = check_granted("gh issue list > out.txt")
-        assert error is not None
-        assert "Redirection" in error["error"]
-        assert "gh" in error["error"]
-
-    def test_the_refusal_names_a_way_to_get_the_file_written(self):
-        assert "file tools" in check_granted("gh issue list > out.txt")["hint"]
-
-    def test_append_and_input_redirection_are_refused_too(self):
-        assert check_granted("gh issue list >> out.txt") is not None
-        assert check_granted("gh api graphql < query.txt") is not None
-
     def test_the_same_command_without_a_redirect_still_runs(self):
         assert check_granted("gh issue list --state open") is None
 
     def test_a_quoted_angle_bracket_is_data_not_a_redirect(self):
-        # Tokenisation drops the quotes, so only a quote-aware scan of the raw
-        # text can tell a search operand from a redirect.
         assert check_granted('gh issue list --search "updated:>2026-01-01"') is None
 
-    def test_a_chained_command_keeps_its_shell_and_so_its_redirect(self):
-        # More than one segment is not the argv-only path: a real shell performs
-        # the redirect, so there is nothing to refuse.
-        assert check_granted("gh issue list > out.txt && echo done") is None
-
-    def test_the_refusal_is_scoped_to_granted_binaries(self):
-        # Same text, no grant: the ordinary bypass path, where a shell redirects.
-        assert check("gh issue list > out.txt", bypass=True) is None
+    def test_full_access_runs_the_redirect_through_a_shell(self):
+        assert check_granted("gh issue list > out.txt", bypass=True) is None
         assert check("make build > out.txt", bypass=True) is None
 
     def test_without_bypass_the_line_is_asked_about_once(self):
         # By default an operator line runs only as the shell reads it, after a
-        # one-time yes — so the argv-only refusal above does not apply.
-        error = check_granted("gh issue list > out.txt", bypass=False)
-        assert error is not None
-        assert error["tier"] == TIER_CONFIRM_ONCE
+        # one-time yes.
+        for command in ("gh issue list > out.txt", "gh api graphql < query.txt"):
+            error = check_granted(command)
+            assert error is not None
+            assert error["tier"] == TIER_CONFIRM_ONCE
 
     def test_the_pre_flight_and_the_executor_share_one_answer(self):
-        # Extracted precisely so the refusal above and the executor's `use_shell`
+        # Extracted precisely so the pre-flight and the executor's `use_shell`
         # cannot disagree about which commands run argv-only.
         granted = frozenset({"gh"})
         assert _is_lone_granted_segment([["gh", "issue", "list"]], granted)
@@ -1610,25 +1589,6 @@ class TestRedirectionOnTheGrantedPath:
         )
         assert not _is_lone_granted_segment([["make", "build"]], granted)
         assert not _is_lone_granted_segment([["gh", "issue", "list"]], frozenset())
-
-
-class TestGrantedRedirectNeverReachesAProcess:
-    def test_the_tool_refuses_and_audits_nothing(
-        self, shell_tool, tmp_path, monkeypatch
-    ):
-        records = []
-        monkeypatch.setattr(
-            "gaia.security.audit_shell_command",
-            lambda **kw: records.append(kw),
-        )
-        run = shell_tool(bypass=True, granted=("gh",))
-
-        result = run("gh issue list > out.txt", working_directory=str(tmp_path))
-
-        assert result["status"] == "error"
-        assert "Redirection" in result["error"]
-        assert records == [], "a refused command must not reach the audit trail"
-        assert not (tmp_path / "out.txt").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1740,7 +1700,7 @@ class TestMultiLineCommandsAreJudgedNotRefusedOnSight:
             )
             assert error is not None and error["tier"] == TIER_REFUSE, error
             assert "rm -rf x" in error["error"]
-        assert refusal(command, full_access=True) is not None
+        assert refusal(command, full_access=True) is None
 
     @pytest.mark.parametrize(
         "command", ["echo hi\recho there", "git commit -m wip\u2028echo x"]
@@ -1837,7 +1797,7 @@ class TestASpellingDoesNotChangeTheTier:
         # An encoded script is refused by any spelling; the rest are asked once.
         encoded = "-enc" in command.lower()
         assert error["tier"] == (TIER_REFUSE if encoded else TIER_CONFIRM_ONCE), error
-        assert refusal(command, full_access=True) is not None
+        assert refusal(command, full_access=True) is None
 
     @pytest.mark.parametrize(
         "command",
@@ -1926,12 +1886,10 @@ class TestBlanketApproval:
         assert refusal("date /T", auto_approve=True) is None
 
     def test_full_access_is_a_person_deciding(self, env_pre_approves):
-        # `cp`, not `rm`: full access swaps the read-only policy for
-        # DEVELOPER_COMMANDS (#3374), which leaves `rm` out on purpose.
         assert refusal("cp a.txt b.txt", full_access=True) is None
 
-    def test_full_access_still_will_not_run_rm(self, env_pre_approves):
-        assert refusal("rm notes.txt", full_access=True) is not None
+    def test_full_access_runs_rm(self, env_pre_approves):
+        assert refusal("rm notes.txt", full_access=True) is None
 
     def test_the_execution_path_refuses_too(self, env_pre_approves, tmp_path):
         """Defence in depth: a direct tool call never skips the same rule."""

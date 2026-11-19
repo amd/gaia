@@ -843,9 +843,9 @@ don't cover that also deletes or discards work (`git push --force`, `git reset
 --hard`, `git clean`, `rm` outside the project), a granted CLI's actions that
 end someone else's work (`gh issue close`, `gh pr merge`), and folders no
 approval can open (credential folders, the system temp folder, a whole drive or
-your home folder), and reading credential files (`.env`, private keys, `.npmrc`) even
-under full access. The agent
-says what it would have run, so you can run it yourself.
+your home folder), and reading credential files (`.env`, private keys, `.npmrc`).
+The agent says what it would have run, so you can run it yourself. Full access
+lifts every one of these.
 
 | Key | What it does |
 |---|---|
@@ -878,11 +878,18 @@ reaches it in a session, GAIA explains what it does and stays in `ask`; type
 straight to it. Turning it off is never gated. While it is on, a banner says so
 on every frame.
 
+Full access means the agent can run any command — each line goes whole to
+bash, or `cmd.exe` on Windows — and read or change any file, system folders
+and credential files included. Turn it on only on a machine or container you
+are willing to let the agent change. Commands are still audit-logged and
+stopped at their timeout.
+
 Commands GAIA's checks don't cover — printing a credential (`gh auth token`), a
 `git` option that hides a script — ask once in `ask` and `accept edits`, showing
 the exact line, and no `a` answer covers them. An encoded PowerShell command, or
 one that deletes or discards work on such a line, stays refused. Only full
-access lifts the shell guardrails; see [Full access](/reference/cli#full-access).
+access lifts them: under it any command runs and any file can be read or
+written; see [Full access](/reference/cli#full-access).
 
 A session launched with `--use-claude` skips first-boot setup entirely and does not
 start the local server — that flag exists to avoid the local backend, so running an
@@ -994,8 +1001,8 @@ the part that matters. An "always allow" answer, where offered, is scoped to
 that specific call — approving `gh issue list` once does not hand over your
 shell for the session.
 
-`--full-access` runs every tool without asking, and the TUI shows a
-persistent warning the whole time it is on. `/full-access off` turns it off
+`--full-access` runs every tool without asking, any command and any file,
+and the TUI shows a persistent warning the whole time it is on. `/full-access off` turns it off
 mid-session.
 
 ## Reopening a session

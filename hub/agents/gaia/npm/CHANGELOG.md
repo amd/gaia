@@ -8,6 +8,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
+- **Full access now means full access.** With `--full-access` the agent can
+  run any command and change any file. Each shell line runs whole in bash
+  (`cmd.exe` on Windows), so `rm`, `sudo`, package managers, local binaries,
+  redirections, loops and heredocs all work, and the file and Python tools
+  reach system folders and credential files. Before, the shell ran only a fixed
+  developer set of programs and refused system folders, credential files and
+  installs outside the project even with full access on. Use it only on a
+  machine or container you are willing to let the agent change. Commands are
+  still audit-logged and stopped at their timeout; HTTP sessions are unchanged.
 - **`gaia -p --time-limit` uses the time it is given.** One slow step made the
   agent stop with minutes left, so a found answer often never reached the
   requested file. It now stops two typical steps short of the limit, is always

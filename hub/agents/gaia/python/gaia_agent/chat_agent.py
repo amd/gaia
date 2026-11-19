@@ -535,11 +535,14 @@ def _python_run_result(
     return result
 
 
-def _guarded_folders() -> str:
-    """The credential folders a script may not open files in, for its environment."""
+def _guarded_folders(full_access: bool = False) -> str:
+    """The credential folders a script may not open files in, for its environment.
+
+    Empty under full access, where scripts may open any file.
+    """
     from gaia.security import SECRET_DIRECTORIES
 
-    return os.pathsep.join(sorted(SECRET_DIRECTORIES))
+    return "" if full_access else os.pathsep.join(sorted(SECRET_DIRECTORIES))
 
 
 def _record_folder_changes(watch) -> Optional[str]:
@@ -553,7 +556,7 @@ def _record_folder_changes(watch) -> Optional[str]:
 
 
 def _python_script_run_context(
-    script: Path, project_dir: os.PathLike | str | None
+    script: Path, project_dir: os.PathLike | str | None, full_access: bool = False
 ) -> tuple[Path, Dict[str, str]]:
     """Working directory and environment for running *script* as a subprocess.
 
@@ -568,7 +571,7 @@ def _python_script_run_context(
     env = child_env(relaunch_self=True)
     # The tools decode the output as UTF-8; the locale codec can't print a ✓.
     env["PYTHONIOENCODING"] = "utf-8"
-    env[GUARDED_FOLDERS_ENV] = _guarded_folders()
+    env[GUARDED_FOLDERS_ENV] = _guarded_folders(full_access)
     # Files it writes with a bare open() are UTF-8, like the file tools write.
     env["PYTHONUTF8"] = "1"
     # A timed-out run still returns what it printed before the kill.
@@ -2908,7 +2911,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 run_dir = p.resolve().parent
                 try:
                     project = self._script_project_root()
-                    run_dir, env = _python_script_run_context(p, project)
+                    run_dir, env = _python_script_run_context(
+                        p, project, self._full_access_on()
+                    )
                     if not run_dir.is_dir():
                         # The project folder went away; the script's own
                         # folder exists, since the script was just read.
@@ -2947,6 +2952,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             should_stop=lambda: stop_requested(self),
                             watch=watch,
                             ignore=[p.resolve()],
+                            agent_child=not self._full_access_on(),
                         )
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
@@ -3128,7 +3134,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     }
                 env = child_env(relaunch_self=True)
                 env["PYTHONIOENCODING"] = "utf-8"
-                env[GUARDED_FOLDERS_ENV] = _guarded_folders()
+                env[GUARDED_FOLDERS_ENV] = _guarded_folders(self._full_access_on())
                 env["PYTHONUTF8"] = "1"
                 env.setdefault("PYTHONUNBUFFERED", "1")
                 if project:
@@ -3172,6 +3178,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             should_stop=lambda: stop_requested(self),
                             watch=watch,
                             ignore=[snippet],
+                            agent_child=not self._full_access_on(),
                         )
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote

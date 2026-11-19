@@ -113,7 +113,8 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
                     </button>
                 ))}
                 {confirming && (
-                    <div className="popover-message" role="alert">
+                    // The menu scrolls when short on room; bring the warning and its button into view.
+                    <div className="popover-message" role="alert" ref={(el) => el?.scrollIntoView?.({ block: 'nearest' })}>
                         {t('env.fullAccessWarn')}{' '}
                         <button type="button" className="link-btn" onClick={() => apply('full_access')}>{t('env.turnOn')}</button>
                     </div>

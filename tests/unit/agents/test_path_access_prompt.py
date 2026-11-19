@@ -629,14 +629,13 @@ def test_a_path_is_declined_unasked_only_when_nobody_can_answer(
     assert agent._path_access_declined(layout["other"]) is declined
 
 
-def test_full_access_on_a_background_run_is_offered_the_folder(layout, home):
+def test_full_access_on_a_background_run_reaches_the_home_folder(layout, home):
     console = SSEOutputHandler(background_mode=True)
     console.full_access = True
     agent = _BrowseAgent(layout["scope"], console)
 
-    refused = _browse(agent, home)
-
-    assert _named(refused, home, "Movies")
+    assert "Access denied" not in _browse(agent, home)
+    assert "too broad" not in _browse(agent, home)
     assert "Access denied" not in _browse(agent, home / "Movies")
 
 

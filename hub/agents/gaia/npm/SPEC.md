@@ -747,7 +747,8 @@ files; a `.env` file cannot set that switch itself.
 environment the sidecar starts in — absolute folders joined with `;` on
 Windows and `:` elsewhere. The scope becomes the overlap with the agent's own scope;
 an entry outside it is ignored with a warning and never widens it. Out-of-scope
-paths are refused without a prompt in every mode, including full access. The
+paths are refused without a prompt in every mode except the stdio
+transport's `--full-access`, which reaches every path. The
 scratch directory stays writable. An empty, relative or missing entry stops
 the sidecar at startup, before it binds a port. It confines the agent's tools
 — every file tool, search, index and shell path check — not code they run: a
@@ -825,37 +826,29 @@ keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model
 remotely, so a local server URL alone does not establish local inference.
 
-`--full-access` turns off more than the prompt. It also lifts the shell
-tool's own guardrails for the session: the shell-only operators — redirection
-(`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`) and the
-newline — parse and run, chaining (`&&`, `||`, `;`, `|`) already ran by
-default, the read-only binary allowlist is replaced by a developer set
-(`node`, `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`,
-`timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`/`git`,
-which already had their own paths), and the shell rate limit is dropped. `git`
-being in that set means the policy that holds `git push`, `git reset` and
-`git rebase` also stops applying under bypass. Without bypass those commands ask
-the user once, and are refused only on a run nobody can answer; the destructive
-forms (`git push --force`, `git reset --hard`) are refused with no prompt. That is
-arbitrary code execution in the working directory, which is why it exists only
-on this transport: one local parent process on a private pipe. It is **not**
-reachable over HTTP, and the request body cannot ask for it —
+`--full-access` turns off more than the prompt: it means the agent can run any
+command and change any file. Each shell line runs whole, as typed, in bash
+(`/bin/sh` where bash is missing; `cmd.exe` on Windows), so any program — `rm`,
+`sudo`, a package manager, a local `./binary` — and any shell syntax runs, with
+no rate limit. The file, search and Python tools reach every path, including
+system folders, credential folders and credential files, and nothing in tool
+output is masked. `GAIA_ALLOWED_PATHS`, a folder removed from the chat, installs
+outside the project and the `gaia skill` commands that change which skills are
+trusted are no longer refused either. Use it only on a machine or container you
+are willing to let the agent change. That is arbitrary code execution, which is
+why it exists only on this transport: one local parent process on a private
+pipe. It is **not** reachable over HTTP, and the request body cannot ask for it —
 `POST /v1/gaia/sessions/{id}/bypass` stops an HTTP session's approval prompts
-but never lifts these shell gates. A command those gates hold is never run
-unasked there: on a run someone can answer it still emits `needs_confirmation`
-and waits for `/tool_decision`, and on a run nobody can answer it is refused.
-`rm` is excluded
-from the developer set — not a boundary, since anything in the set can delete a
-file, but a tripwire against an accidental recursive delete. Redirection has one
-exception: a command that is nothing but a skill-granted CLI runs argv-only
-rather than through a shell, so a `>` there is refused with an explanation
-instead of reaching the binary as a literal argument.
+but never lifts these gates. A command they hold is never run unasked there: on
+a run someone can answer it still emits `needs_confirmation` and waits for
+`/tool_decision`, and on a run nobody can answer it is refused.
 
-Every shell command run under bypass is recorded with its full arguments and its
-per-segment breakdown in `~/.gaia/cache/file_audit.log` — skipping the prompt
-does not skip the record. Treat that file as sensitive; arguments are verbatim.
-The host can toggle bypass mid-session over `gaia_control`, and the shell gates
-follow on the very next command.
+Every shell command run under full access is recorded with the whole line and,
+where it parses, its per-command breakdown in `~/.gaia/cache/file_audit.log`, and
+each is stopped at its timeout — skipping the checks does not skip the record.
+Treat that file as sensitive; arguments are verbatim. The host can toggle full
+access mid-session over `gaia_control`, and every gate follows on the very next
+call.
 
 `--use-claude` is the one with a reach beyond the machine, and it cannot be
 turned on for what this package delivers: the terminal UI **refuses** the launch

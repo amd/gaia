@@ -3225,6 +3225,12 @@ def _split_cause_and_advice(message: str) -> Tuple[str, Optional[str]]:
     return text[: match.start()], text[match.end() :].strip() or None
 
 
+def _full_access_on(host: Any) -> bool:
+    """Whether *host*'s console has full access on, read live."""
+    # ``is True``: a stand-in console (a mock) must not read as consent.
+    return getattr(getattr(host, "console", None), "full_access", False) is True
+
+
 #: The shape of every ``ArtifactStore`` handle (uuid4 hex or a sha256 prefix).
 _OUTPUT_HANDLE_RE = re.compile(r"output_[0-9a-f]{32}")
 
@@ -4705,6 +4711,11 @@ Do NOT wrap conversational replies in JSON.
             validator.set_access_prompt(
                 self._confirm_path_access, declines=self._path_access_declined
             )
+            validator.set_full_access(self._full_access_on)
+
+    def _full_access_on(self) -> bool:
+        """Whether the user turned on full access for this session, read live."""
+        return _full_access_on(self)
 
     def _path_access_grants_unasked(self) -> bool:
         """True when Full access grants an out-of-scope path without asking."""
@@ -8335,7 +8346,8 @@ Do NOT wrap conversational replies in JSON.
             )
             if refusal is not None:
                 return refusal
-        if tool_name in PYTHON_TOOLS:
+        # Full access is the user's own reach: Python may run anything there.
+        if tool_name in PYTHON_TOOLS and not _full_access_on(self):
             folders = self._python_call_folders()
             refusal = (
                 python_human_only_refusal(tool_name, tool_args, folders)
@@ -8393,6 +8405,15 @@ Do NOT wrap conversational replies in JSON.
             return None, False
         denial, effect = conflict
         command = render_call(tool_name, tool_args)
+        if denial.refused and _full_access_on(self):
+            # Full access lifts every check, so another tool's refusal can't
+            # stand in for one this call would never get.
+            logger.info(
+                "Full access: running %s although `%s` was refused earlier",
+                tool_name,
+                denial.rendered,
+            )
+            return None, False
         if denial.refused:
             # No person said no, so no person is asked to lift it.
             logger.info(
@@ -9367,10 +9388,12 @@ Do NOT wrap conversational replies in JSON.
             with skill_scope as skill_call:
                 body = skill_call.wrap(tool) if skill_call is not None else tool
                 result = self._call_tool_bounded(body, tool_args, tool_name)
-            if tool_name in OUTPUT_TOOLS:
+            # Full access reads credentials on purpose; masking would undo it.
+            masks = not _full_access_on(self)
+            if masks and tool_name in OUTPUT_TOOLS:
                 # Output goes into the prompt; tokens and credential-file lines must not.
                 result = redact_tool_output(result)
-            elif tool_name in FILE_CONTENT_TOOLS:
+            elif masks and tool_name in FILE_CONTENT_TOOLS:
                 # Masks only what the model sees; edits refuse to write the marker back.
                 result = redact_file_content(result)
             logger.debug(f"Tool execution result: {result}")

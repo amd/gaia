@@ -95,7 +95,15 @@ def _call(agent, name, **args):
 
 
 class TestRemovedFolder:
-    @pytest.mark.parametrize("full_access", [False, True])
+    def test_full_access_reaches_it(self, layout):
+        agent = _Agent(layout["scope"], _Console(full_access=True))
+        agent.path_validator.withhold_path(str(layout["project"]))
+
+        read = _call(agent, "read_file", file_path=str(layout["file"]))
+
+        assert read["status"] == "success", read
+
+    @pytest.mark.parametrize("full_access", [False])
     def test_every_file_tool_refuses_it(self, layout, full_access):
         console = _Console(full_access=full_access)
         agent = _Agent(layout["scope"], console)

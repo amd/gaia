@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: MIT
 """Shell control flow is named as such, not reported as a missing file.
 
-Commands run directly rather than through a shell, so `for` is not a binary
-that happens to be absent — it can never run. Reporting it as ``[Errno 2] No
-such file or directory: 'for'`` sends the agent looking for a PATH problem that
-does not exist, which is what it did in a measured benchmark run.
+Outside full access commands run directly rather than through a shell, so
+`for` is not a binary that happens to be absent — it can never run. Reporting
+it as ``[Errno 2] No such file or directory: 'for'`` sends the agent looking
+for a PATH problem that does not exist. Under full access the line goes to a
+real shell, so the loop runs.
 """
+
+import os
 
 import pytest
 
@@ -14,16 +17,20 @@ from gaia.agents.base.tools import get_tool_metadata
 from gaia.agents.tools.shell_tools import ShellToolsMixin
 
 
-class _FullAccessHost(ShellToolsMixin):
-    """Full access, so nothing else can be what refuses the command."""
-
-    class console:
-        full_access = True
+def _host(full_access):
+    class _Console:
         auto_approve_gated_tools = True
 
+    _Console.full_access = full_access
 
-def _run(command, cwd):
-    host = _FullAccessHost()
+    class _Host(ShellToolsMixin):
+        console = _Console
+
+    return _Host()
+
+
+def _run(command, cwd, full_access=False):
+    host = _host(full_access)
     host.register_shell_tools()
     return get_tool_metadata("run_shell_command")["function"](
         command=command, working_directory=str(cwd), timeout=30
@@ -65,6 +72,14 @@ def test_a_binary_whose_name_starts_like_a_keyword_still_runs(tmp_path):
 
     assert result["status"] == "success", result
     assert "keep.txt" in result["stdout"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="cmd.exe has no sh loop syntax")
+def test_full_access_runs_a_loop_through_the_shell(tmp_path):
+    result = _run("for f in a b; do echo $f; done", tmp_path, full_access=True)
+
+    assert result["status"] == "success", result
+    assert result["stdout"].split() == ["a", "b"]
 
 
 def test_a_case_statement_is_refused_clearly_by_the_separator_check(tmp_path):

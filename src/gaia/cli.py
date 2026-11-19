@@ -1333,9 +1333,11 @@ def build_parser():
         "--full-access",
         dest="print_full_access",
         action="store_true",
-        help="With -p: full access, as the TUI's /full-access: lifts the shell "
-        "guardrails (test runners, build tools run) and grants paths outside the "
-        "current folder without asking. Implies --dangerously-skip-permissions",
+        help="With -p: full access, as the TUI's /full-access: every shell line "
+        "runs whole in bash (cmd.exe on Windows) unchecked, and the file tools "
+        "read and write any path, system folders and credential files "
+        "included. Only for a machine or container you let the agent change. "
+        "Implies --dangerously-skip-permissions",
     )
     parser.add_argument(
         "--disallowed-tools",

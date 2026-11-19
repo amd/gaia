@@ -86,7 +86,14 @@ def test_spacing_around_a_pipe_does_not_change_the_verdict(
     assert _error_text(tight_error) == _error_text(loose_error)
 
 
-@pytest.mark.parametrize("full_access", [False, True])
+@pytest.mark.parametrize("command", ["ls .|rm x", "ls . | rm x"])
+def test_full_access_runs_a_pipe_into_any_command(dialect, command):
+    error, _segments = _validate(command, True)
+
+    assert error is None
+
+
+@pytest.mark.parametrize("full_access", [False])
 @pytest.mark.parametrize("command", ["ls .|rm x", "ls . | rm x"])
 def test_a_pipe_into_a_disallowed_command_is_refused(dialect, full_access, command):
     error, segments = _validate(command, full_access)
@@ -143,7 +150,7 @@ def test_single_quotes_protect_a_pipe_in_sh(monkeypatch):
     assert segments == [["grep", "a|b", "notes.txt"]]
 
 
-@pytest.mark.parametrize("full_access", [False, True])
+@pytest.mark.parametrize("full_access", [False])
 @pytest.mark.parametrize(
     "command",
     [

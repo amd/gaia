@@ -552,8 +552,8 @@ def _run_turn(
     if full_access:
         log.warning("Full access ENABLED at launch (gaia -p): shell gates off")
         print(
-            "⚠️  gaia -p: full access is on — shell guardrails off, paths outside "
-            "the current folder granted without asking.",
+            "⚠️  gaia -p: full access is on — any command runs and any file can "
+            "be read or changed, without asking.",
             file=sys.stderr,
         )
     agent._ensure_tool_loader_reset()  # pylint: disable=protected-access

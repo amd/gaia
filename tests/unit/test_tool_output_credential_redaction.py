@@ -281,7 +281,6 @@ def test_real_git_remote_v_runs_with_the_token_masked(tmp_path, monkeypatch):
     try:
         with patch("gaia.agents.base.agent.AgentSDK"):
             agent = _ShellAgent(silent_mode=True, skip_lemonade=True)
-        agent.console.full_access = True
         agent.console.auto_approve_gated_tools = True
         result = agent._execute_tool(
             "run_shell_command",

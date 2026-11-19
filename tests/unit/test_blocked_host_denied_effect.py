@@ -6,8 +6,9 @@ When ``fetch_page`` refuses a cloud-metadata or link-local address, the
 refusal is recorded as a NETWORK effect. A private LAN address it refuses is
 not carried over: the shell may still reach a NAS or a dev box. A shell ``curl``/``wget``/
 ``Invoke-WebRequest`` or a Python ``urllib`` call to that address — in any
-spelling of it — is then refused, even under full access. No request is made
-here: the web client and the shell/Python tools are doubles.
+spelling of it — is then refused, on a pre-approved run too. Full access lifts
+it: the user has let the agent run any command. No request is made here: the
+web client and the shell/Python tools are doubles.
 """
 
 from __future__ import annotations
@@ -225,11 +226,11 @@ def web_agent(tmp_path, monkeypatch):
     saved = dict(_TOOL_REGISTRY)
     _WebAgent.ran = []
 
-    def build(host=METADATA, address=METADATA):
+    def build(host=METADATA, address=METADATA, full_access=False):
         with patch("gaia.agents.base.agent.AgentSDK"):
             agent = _WebAgent(silent_mode=True, skip_lemonade=True)
-        # Full access: every gate open, nobody asked.
-        agent.console.full_access = True
+        # Pre-approved, so nobody is asked; full access only where a test says.
+        agent.console.full_access = full_access
         agent.console.auto_approve_gated_tools = True
         agent._web_client = _BlockingWebClient(host, address)
         agent._denied_effects = DeniedEffects(str(tmp_path))
@@ -256,7 +257,7 @@ def web_agent(tmp_path, monkeypatch):
         ),
     ],
 )
-def test_full_access_cannot_reach_a_host_fetch_page_blocked(web_agent, tool_name, args):
+def test_a_tool_cannot_reach_a_host_fetch_page_blocked(web_agent, tool_name, args):
     agent = web_agent()
 
     blocked = agent._execute_tool("fetch_page", {"url": f"http://{METADATA}/"})
@@ -266,6 +267,18 @@ def test_full_access_cannot_reach_a_host_fetch_page_blocked(web_agent, tool_name
     assert rerouted["executed"] is False, rerouted
     assert rerouted["status"] == "denied"
     assert agent.ran == []
+
+
+def test_full_access_reaches_a_host_fetch_page_blocked(web_agent):
+    agent = web_agent(full_access=True)
+
+    agent._execute_tool("fetch_page", {"url": f"http://{METADATA}/"})
+    result = agent._execute_tool(
+        "run_shell_command", {"command": "curl http://2852039166/latest/"}
+    )
+
+    assert result["status"] == "success", result
+    assert agent.ran == ["curl http://2852039166/latest/"]
 
 
 def test_an_unrelated_call_still_runs_after_a_block(web_agent):
