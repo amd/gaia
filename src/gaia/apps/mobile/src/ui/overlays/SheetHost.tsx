@@ -108,7 +108,7 @@ function ActiveSheet({ entry }: { entry: SheetEntry }) {
                 <Row gap="sm" justify="between">
                     <View style={{ flex: 1, minWidth: 0, paddingHorizontal: space.lg, paddingVertical: space.sm }}>
                         {entry.title ? (
-                            <Text role="title" weight="semibold" numberOfLines={2} accessibilityRole="header">
+                            <Text role="title" weight="semibold" accessibilityRole="header">
                                 {entry.title}
                             </Text>
                         ) : null}

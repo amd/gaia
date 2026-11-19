@@ -22,12 +22,17 @@ export interface ButtonProps {
     busy?: boolean;
     disabled?: boolean;
     full?: boolean;
+    /** False keeps the button at its own width; set it beside a text that should wrap first. */
+    shrink?: boolean;
     /** Pad a multi-line label, for a tall answer button; any label too wide for its row wraps rather than run off the screen. */
     wrap?: boolean;
     /** What a screen reader says instead of the visible label. */
     accessibilityLabel?: string;
     testID?: string;
 }
+
+/** A shrinking button keeps its icon and a short word. */
+export const BUTTON_MIN_WIDTH = 88;
 
 export function Button({
     label,
@@ -39,6 +44,7 @@ export function Button({
     busy,
     disabled,
     full,
+    shrink = true,
     wrap,
     accessibilityLabel,
     testID,
@@ -54,7 +60,7 @@ export function Button({
     const pressedBg = { primary: colors.accentSolid, secondary: colors.bgActive, ghost: colors.bgTertiary, danger: colors.dangerDim };
     const v = look[variant];
     return (
-        <View style={full ? { alignSelf: 'stretch' } : { alignSelf: 'flex-start', flexShrink: 1, maxWidth: '100%' }}>
+        <View style={full ? { alignSelf: 'stretch' } : shrink ? { alignSelf: 'flex-start', flexShrink: 1, minWidth: BUTTON_MIN_WIDTH, maxWidth: '100%' } : { alignSelf: 'flex-start', flexShrink: 0 }}>
             <Pressable
                 onPress={busy ? undefined : onPress}
                 disabled={disabled}
