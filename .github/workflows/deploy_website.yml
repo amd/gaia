@@ -39,6 +39,9 @@ on:
       # an agent change can never land without the site rebuilding.
       - 'hub/agents/**/gaia-agent.yaml'
       - '.github/workflows/deploy_website.yml'
+  # Daily, so the homepage's download counts don't freeze between pushes.
+  schedule:
+    - cron: '41 4 * * *'
   workflow_dispatch:
 
 concurrency:
