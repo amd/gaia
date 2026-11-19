@@ -26,6 +26,7 @@ SKILL_DIRS = sorted(
 QUERIES: dict[str, list[str]] = {
     "analyze-recording": ["youtube video", "podcast chapters"],
     "automations": ["remind me at 5pm", "alert me if main breaks"],
+    "browser-pane": ["screenshot the browser", "browser console logs"],
     "calculators": ["tip calculator", "mortgage payment"],
     "calendar": ["what is on my calendar", "schedule a meeting"],
     "check-in": ["check in", "what was I working on"],
@@ -43,7 +44,8 @@ QUERIES: dict[str, list[str]] = {
     "music-gen": ["music", "sound effects"],
     "price-watch": ["track price", "price drop"],
     "recommendations": ["what to watch", "book recommendations"],
-    "report-from-sources": ["turn my spreadsheets into a report", "one-pager"],
+    "office-docs": ["excel workbook", "word document"],
+    "report-from-sources": ["report from my source files", "newest copy of each dataset"],
     "research-report": ["research report with sources", "literature scan"],
     "rss-digest": ["summarizing RSS feeds", "atom feed"],
     "send-email": ["send an email", "draft an email"],

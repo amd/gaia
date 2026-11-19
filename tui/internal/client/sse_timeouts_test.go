@@ -25,7 +25,7 @@ func timeoutClient(t *testing.T, opts SSEOptions) *SSEClient {
 		},
 		Logf: t.Logf,
 	})
-	c := NewSSEClient("email", dc, opts)
+	c := NewSSEClient("notes", dc, opts)
 	t.Cleanup(func() { c.Close() })
 	return c
 }
@@ -38,7 +38,7 @@ func TestRelayTimeoutReportReachesTheUserInsteadOfAHeaderTimeout(t *testing.T) {
 	f.statusExtra = `,"agent_read_timeout_s":0.4`
 	f.queryDelay = 400*time.Millisecond + 50*time.Millisecond
 	f.queryStatus = http.StatusBadGateway
-	f.queryBody = `{"detail":"sidecar for agent 'email' did not answer (ReadTimeout). Re-ensure it and retry."}`
+	f.queryBody = `{"detail":"sidecar for agent 'notes' did not answer (ReadTimeout). Re-ensure it and retry."}`
 
 	c := timeoutClient(t, SSEOptions{})
 

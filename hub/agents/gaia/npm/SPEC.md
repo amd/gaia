@@ -71,8 +71,8 @@ both components. That stopped being true once the TUI became the published
 versions. A shared base URL cannot express that, so `2.x` is rejected at load with
 an error naming the schema — never read as `3.x` with a missing field.
 
-The email agent's lock is `schemaVersion` `1.0`, a flat `binaries` map, because it
-delivers one binary from one lane. A `1.x`-shaped lock is likewise rejected.
+A `1.x`-shaped lock (a flat `binaries` map, one binary from one lane) is likewise
+rejected.
 
 ### 2.2 Where each component comes from
 
@@ -261,7 +261,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.29"`                  |
+| Contract version   | `API_VERSION = "2.30"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -283,6 +283,7 @@ the header.
 | `GET`  | `/v1/gaia/sessions/{session_id}/grants` | The session's "always" answers, `{ key, label }` each (≥ 2.26) |
 | `DELETE` | `/v1/gaia/sessions/{session_id}/grants` | Revoke one (`?key=`) or all of them (≥ 2.26) |
 | `GET`  | `/v1/gaia/sessions/{session_id}/tools` | The tools the session's agent can call now, `{ name, description, category }` each; an unknown session is a `404` (≥ 2.27) |
+| `DELETE` | `/v1/gaia/sessions/{session_id}` | End the session: close its agent and stop the MCP servers it started. An unknown session is a `404`; one running a turn is a `409` (≥ 2.30) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 #### `/query` request body
@@ -291,8 +292,7 @@ The full, machine-readable contract — every field, type, and which are
 required — is the committed
 [`openapi.gaia.json`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/openapi.gaia.json),
 regenerated from the live routes by `python -m gaia_agent.export_openapi` and
-checked for drift in CI — the same pattern as the email agent's own
-`openapi.email.json`. Required: **`query`**, **`run_id`**,
+checked for drift in CI. Required: **`query`**, **`run_id`**,
 **`context`** — `additionalProperties: false`, so an unrecognized field or a
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
@@ -321,7 +321,7 @@ attached to the conversation. Send the whole set on every turn. Before the turn
 runs, the agent indexes the ones it has not indexed yet, so a file attached
 mid-conversation is read on the next turn, and drops from the session's index
 any file an earlier turn sent that this one leaves out, so a detached or deleted
-file is no longer searched. Send an empty list when none are attached. A conversation searches at most 100 documents or 10,000 passages at once: past that the rest are granted but not loaded, the `index_documents` step says how many and which limit was reached, and the agent loads one when asked about it by name. Each path is granted as that exact
+file is no longer searched. Its grant goes with it, so it can no longer be read either, unless a folder the caller granted holds it. Send an empty list when none are attached. A conversation searches at most 100 documents or 10,000 passages at once: past that the rest are granted but not loaded, the `index_documents` step says how many and which limit was reached, and the agent loads one when asked about it by name. Each path is granted as that exact
 file, never its folder. A relative path is a `422`. A missing file, a folder, or
 a secret the path policy refuses is reported as not indexed in the turn's
 `index_documents` step, and the turn still runs. Pre-2.16 binaries `422` the
@@ -590,6 +590,12 @@ naming the allowed characters, on `/query`, `/sessions/{session_id}/bypass` and
 Omitting it is a valid, explicit one-shot: nothing persists past that single
 turn, and the agent is not told otherwise.
 
+A retained session rebuilds its agent at the start of its next turn when the
+Lemonade Server or the embedder chosen in Settings changed, or an MCP connector
+was turned on or off or (de)activated for GAIA, since it was built. The rebuilt
+agent keeps the conversation, loaded skills, the internet switch, the memory
+mode, granted folders and documents, and the working folder.
+
 Internal explicit deletion follows the same idle-only rule as eviction: it returns
 `False` for an absent or busy session and preserves a running agent. Successful
 deletion claims the turn lock before removal and closes outside the registry lock.
@@ -607,6 +613,15 @@ collapses the rest to a one-line menu entry (re-activated by calling
 `load_skill` again). `GAIA_DYNAMIC_SKILLS=0` disables the selection;
 `GAIA_DYNAMIC_SKILLS_TAU=<float>` overrides its threshold; an embedder outage
 disables it for the session and every body renders.
+
+A query that starts with `/<skill-name>`, where the name is an installed skill,
+runs on that skill, as in Claude Code: the agent loads it exactly as
+`load_skill` would (same gates, same refusals), keeps its body in the prompt for
+the turn, and sends the model the rest of the line as the request. Host notes in
+front of the line (one `[…]` line each, then a blank line) are kept. Anything
+else, such as `/tmp/notes.txt`, is sent unchanged. A load that is refused is
+reported to the user with its fix, and the request is not attempted. This holds
+on `/v1/gaia/query`, over stdio and in `process_query`.
 
 A retained session also carries a **project map** — up to 600 prompt tokens of
 directory shape, entry points, installed commands and platform quirks, present
@@ -802,6 +817,9 @@ changed since its preview is refused, and each preview covers one add — to
 `~/.gaia/skills` at the `experimental` tier and recomposes the prompt so
 the session can use them. Skills that ship code are refused unless the line
 carries `--allow-code`. Each command ends in exactly one `final` or `error` event.
+Bare `/skills`, a successful add and the model-state status ping each carry
+`skills: [{name, description}]`, the installed skills the TUI's `/` palette
+offers as `/<skill-name>`; an agent without the skill library sends `[]`.
 The TUI's `/provider` panel configures credentials directly with local Lemonade;
 keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model
@@ -884,6 +902,18 @@ demonstrably saw.
 
 Clients that predate 2.15 get a `404` on the path itself. Probe `/version`
 before sending rather than reading a 404 as "the run ended".
+
+### 5.7 Mail
+
+Mail goes through the same `/query` route; there is no mail-specific endpoint
+and no separate email sidecar. The agent's eight mail tools are read-only
+(list, search, read, thread, folders, waiting-on-you, mailbox state) and need
+the Google or Microsoft connector connected and granted to the agent. Drafting
+and sending come from the bundled `send-email` skill, whose tools join the
+list as `send-email/<tool>` once it loads; each send, and each change to a
+saved draft, raises a `needs_confirmation` first. A model on the `compact`
+feature tier (Gemma 4 E4B) is offered neither. Setup:
+[Email guide](https://amd-gaia.ai/docs/guides/email).
 
 ## 6. Process ownership
 

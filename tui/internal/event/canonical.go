@@ -78,6 +78,15 @@ type CanonicalStatusEvent struct {
 	// HistoryCut is set when older turns just left the model's view; Message
 	// then carries the line to keep in the transcript.
 	HistoryCut *HistoryCut `json:"history_cut,omitempty"`
+	// Skills are the installed skills the user can run by typing /<name>. Sent
+	// with the model ping and after /skills; nil means "not reported".
+	Skills []SkillCommand `json:"skills,omitempty"`
+}
+
+// SkillCommand is one installed skill as the "/" palette lists it.
+type SkillCommand struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 // HistoryCut sizes the turns no longer replayed to the model.
@@ -107,8 +116,8 @@ type CanonicalToolCallEvent struct {
 
 // CanonicalToolResultEvent — a tool's structured result.
 //
-// Render is the sidecar's declared card key (e.g. "email_pre_scan", or one of the
-// generic primitives "table" / "key_value" / "list" / "image" / "audio" / "media" / "diff"). Data is
+// Render is the sidecar's declared card key: one of the generic primitives
+// "table" / "key_value" / "list" / "image" / "audio" / "media" / "diff". Data is
 // the render-specific payload. An unknown Render must degrade to a generic result
 // card — never to a blank.
 //

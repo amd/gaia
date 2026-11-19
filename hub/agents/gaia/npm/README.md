@@ -44,7 +44,7 @@ however you arrive at the terminal UI, it behaves identically.
 - **On Linux x64, glibc 2.34 or newer** for the agent sidecar (Ubuntu 22.04,
   Debian 12 and RHEL 9 or later). An older distro cannot start the agent. Check
   with `ldd --version`.
-- The `gaia` Python CLI **0.26.0 or newer** on `PATH` for the daemon the terminal
+- The `gaia` Python CLI **0.27.0 or newer** on `PATH` for the daemon the terminal
   UI starts. An earlier core cannot run this agent, so the UI comes up with
   nothing behind it. Install it with
   `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
@@ -69,6 +69,22 @@ agent behind it.
 
 `npx @amd-gaia/gaia version` prints this matrix, plus the version and source URL of
 each binary, for the release you have installed.
+
+## Email
+
+The agent reads Gmail or Outlook once you connect the Google or Microsoft
+connector and grant it to the agent. Eight **read-only** tools list, search and
+open mail, follow a thread, list folders and find the threads waiting on your
+reply; the bundled `inbox-triage` skill does the triage judgment on top of them.
+The bundled `send-email` skill drafts, replies, forwards and sends, and asks
+before anything leaves the mailbox. The agent never archives, labels or deletes
+received mail, and every email body is read by the local model. Gemma 4 E4B
+(GPU or NPU) is not offered the mail tools; a larger model is. Setup and the
+full tool list:
+[Email guide](https://amd-gaia.ai/docs/guides/email).
+
+There is no separate email agent: the standalone `@amd-gaia/agent-email` package
+was removed, and mail is this agent's job.
 
 ## Commands
 
@@ -200,7 +216,7 @@ and eviction behavior.
 2.16): the absolute paths, the whole set on every turn, an empty list when none
 are left. The agent indexes any it has not read yet before answering (up to 100
 documents or 10,000 passages; it loads any other by name when asked about it),
-stops searching any you left out, and can read those exact files and nothing
+stops searching and can no longer read any you left out, and can read those exact files and nothing
 else beside them. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Private chat, or memory off? Send `memory` every turn** (contract ≥ 2.18):

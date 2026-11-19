@@ -416,34 +416,6 @@ class TestInitProfiles(unittest.TestCase):
             for key in required_keys:
                 self.assertIn(key, profile, f"Profile '{name}' missing key '{key}'")
 
-    def test_email_profile_defined(self):
-        """`gaia init --profile email` downloads the email triage model."""
-        from gaia.installer.init_command import INIT_PROFILES
-
-        self.assertIn("email", INIT_PROFILES)
-        email = INIT_PROFILES["email"]
-        self.assertEqual(email["agent"], "email")
-        self.assertIn("Gemma-4-E4B-it-GGUF", email["models"])
-
-    def test_email_min_version_locksteps_with_core(self):
-        """The email agent's runtime minimum must match GAIA's floor —
-        readiness (/v1/email/init) and the installer must agree on what
-        'compatible' means."""
-        from gaia.version import LEMONADE_MIN_VERSION
-
-        try:
-            from gaia_agent_email.version import MIN_LEMONADE_VERSION
-        except ImportError:
-            self.skipTest("gaia_agent_email (standalone email wheel) not installed")
-        self.assertEqual(LEMONADE_MIN_VERSION, MIN_LEMONADE_VERSION)
-
-    def test_email_profile_is_a_cli_choice(self):
-        """The init subparser must accept --profile email (argparse choices)."""
-        from gaia.cli import build_parser
-
-        ns = build_parser().parse_args(["init", "--profile", "email"])
-        self.assertEqual(ns.profile, "email")
-
 
 class TestRemoteAutoDetection(unittest.TestCase):
     """Test auto-detection of remote mode from LEMONADE_BASE_URL."""
@@ -907,10 +879,10 @@ class TestDownloadModels(unittest.TestCase):
     def test_npu_profile_pulls_builtin_model_without_recipe(self):
         """NPU/FLM models are built-in; pulling with a recipe 400s (#1655).
 
-        The npu profile must download both the FLM chat model and the FLM-native
-        embedder (#1744) via ensure_model_downloaded (pull by name), never
-        pull_model(recipe=...), which Lemonade rejects unless the name carries a
-        ``user.`` prefix.
+        The npu profile downloads the FLM chat model and the GPU embedder (the
+        FLM one's search isn't proven) via ensure_model_downloaded (pull by
+        name), never pull_model(recipe=...), which Lemonade rejects for a
+        built-in model.
         """
         from gaia.installer.init_command import InitCommand
 
@@ -927,7 +899,9 @@ class TestDownloadModels(unittest.TestCase):
             pulled = {
                 c.args[0] for c in mock_client.ensure_model_downloaded.call_args_list
             }
-            self.assertEqual(pulled, {"gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"})
+            self.assertEqual(
+                pulled, {"gemma4-it-e4b-FLM", "user.embeddinggemma-300m-GGUF"}
+            )
             # Regression guard: no recipe-bearing pull_model call.
             mock_client.pull_model.assert_not_called()
 
@@ -2863,7 +2837,9 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
         self.assertIn("gaia", HUB_INSTALL_AGENTS)
         # The NPU profile keeps its own FLM models and device keys.
         npu = INIT_PROFILES["npu"]
-        self.assertEqual(npu["models"], ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"])
+        self.assertEqual(
+            npu["models"], ["gemma4-it-e4b-FLM", "user.embeddinggemma-300m-GGUF"]
+        )
         self.assertEqual(npu["backend"], "flm:npu")
         # The flagship runs in the daemon / Agent UI, which [ui] installs.
         self.assertEqual(npu["pip_extras"], INIT_PROFILES["gaia"]["pip_extras"])
@@ -3336,7 +3312,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
     def test_profiles_without_an_agent_say_so_plainly(self):
         """A profile that installs no agent completes, but names the gap and
         the supported fix instead of a git source install."""
-        for profile in ("chat", "sd", "rag", "vlm", "minimal", "email", "all"):
+        for profile in ("chat", "sd", "rag", "vlm", "minimal", "all"):
             for rich in (True, False):
                 with self.subTest(profile=profile, rich=rich):
                     cmd = self._make_cmd(profile, agent_available=False)

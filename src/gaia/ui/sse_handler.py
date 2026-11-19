@@ -947,6 +947,9 @@ class SSEOutputHandler(OutputHandler):
         # A "denied" call nobody answered is not one the user declined.
         if isinstance(data, dict) and data.get("timed_out") is True:
             event["timed_out"] = True
+        # Nor is one GAIA's own rule stopped.
+        if isinstance(data, dict) and data.get("denied_by") == "policy":
+            event["denied_by"] = "policy"
         # Nor is one GAIA turned down itself without showing a prompt.
         if isinstance(data, dict) and data.get("declined_by") == "agent":
             event["declined_by"] = "agent"
@@ -1194,13 +1197,8 @@ class SSEOutputHandler(OutputHandler):
     # === Structured-render map (#2109) ===
 
     # Mapping from tool name to the card "kind" the frontend's render-card
-    # registry draws (spec §4.2). Shared with the sidecar's own canonical
-    # translator (``gaia_agent_email/sse_translation.py`` duplicates this map
-    # to stay dependency-light) — a test in that package
-    # (``test_render_tool_to_lang_maps_stay_in_sync``) pins the two dicts
-    # equal so the duplication can't silently drift.
+    # registry draws (spec §4.2).
     _RENDER_TOOL_TO_LANG: ClassVar[Dict[str, str]] = {
-        "pre_scan_inbox": "email_pre_scan",
         # #2765: a generic ``table`` card (no new client code) so the thread
         # view renders straight from tool data instead of model prose.
         "get_thread": "table",
@@ -2471,7 +2469,7 @@ class SSEOutputHandler(OutputHandler):
         for the whole blocking ``read()``, and ``close()`` waits on that same
         lock — so a cross-thread ``close()`` blocks until the read returns on
         its own (proven by the real-socket test in
-        ``tests/unit/test_email_sidecar_proxy.py``). ``shutdown()`` bypasses
+        ``tests/unit/test_sidecar_proxy.py``). ``shutdown()`` bypasses
         the file-object layer entirely and wakes the parked ``recv``
         immediately; the relay's stream generator then closes the response
         itself on the way out. ``resp.close()`` remains only as the fallback
@@ -2630,8 +2628,8 @@ class SSEOutputHandler(OutputHandler):
     def resolve_user_input(self, request_id: str, response: str) -> bool:
         """Unblock a pending ``request_user_input_blocking()`` call.
 
-        Called by ``POST /api/chat/user-input`` and by the email sidecar's
-        ``POST /v1/email/query/{run_id}/respond``.  Returns ``False`` if no
+        Called by ``POST /api/chat/user-input`` and by a sidecar's
+        ``POST /v1/<agent>/query/{run_id}/respond``.  Returns ``False`` if no
         request with that ID is pending, so the caller can answer 409 rather
         than report an accepted answer nothing will read.
         """
@@ -2949,6 +2947,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         lines = stdout.strip().split("\n") if stdout.strip() else []
         if rc != 0 and data.get("expected_exit"):
             return f"{data['expected_exit']} (exit {rc})"
+        if rc != 0 and isinstance(data.get("exit_code_meaning"), str):
+            # winget reports failure as a bare number and prints to stdout.
+            return f"{data['exit_code_meaning']} (exit {rc})"
         if rc != 0:
             stderr = data.get("stderr", "")
             return f"Command failed (exit {rc})" + (

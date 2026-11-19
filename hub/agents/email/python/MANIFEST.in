@@ -1,3 +1,0 @@
-# Both required at build time by _build_hooks.py's build_py (see pyproject.toml [tool.setuptools.cmdclass]).
-include _build_hooks.py
-include gaia-agent.yaml

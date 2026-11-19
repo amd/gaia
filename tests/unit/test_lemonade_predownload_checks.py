@@ -77,7 +77,14 @@ class TestGetModelInfo:
             "id": "Gemma-4-12B-it-GGUF",
             "size_gb": 7.29,
             "downloaded": False,
+            "listed": True,
         }
+
+    def test_a_model_the_catalog_does_not_know_is_not_listed(self, server, client):
+        info = client.get_model_info("Gemma-4-E4B-typo")
+
+        assert info["listed"] is False
+        assert info["downloaded"] is False
 
     def test_downloaded_model_reads_size_field(self, server, client):
         assert client.get_model_info("Gemma-4-E4B-it-GGUF")["size_gb"] == 5.56

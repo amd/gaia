@@ -173,9 +173,9 @@ class SDToolsMixin:
             self.sd_output_dir = Path(output_dir)
         else:
             # Read at call time; a cwd-relative default scattered images per launch dir.
-            from gaia.config import GAIA_CONFIG_DIR
+            from gaia.config import generated_images_dir
 
-            self.sd_output_dir = GAIA_CONFIG_DIR / "cache" / "sd" / "images"
+            self.sd_output_dir = generated_images_dir()
         self.sd_output_dir.mkdir(parents=True, exist_ok=True)
 
         self.sd_default_model = default_model

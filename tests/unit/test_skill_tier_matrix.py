@@ -87,6 +87,8 @@ def _agent(manager: SkillManager, features):
         _pin_skill_body = Agent._pin_skill_body
         _lists_project_skills = Agent._lists_project_skills
         _catalog_skills = Agent._catalog_skills
+        _installed_skills = Agent._installed_skills
+        _installed_skills_listed = None
         load_skill = Agent.load_skill
         unload_skill = Agent.unload_skill
         get_skills_system_prompt = Agent.get_skills_system_prompt

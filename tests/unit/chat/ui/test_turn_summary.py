@@ -122,6 +122,32 @@ def test_document_passages_are_named_by_the_attached_file_not_the_upload_id():
 
 
 @pytest.mark.parametrize(
+    "display_names",
+    [
+        {},
+        {"0123456789ab_Q3%20plan.pdf": "Q3 plan.pdf"},
+    ],
+)
+def test_a_duplicate_spaced_upload_is_named_without_its_id_prefix(display_names):
+    ledger = TurnLedger()
+    upload = "C:/Users/me/.gaia/chat/uploads/0123456789ab_Q3 plan.pdf"
+    _call(
+        ledger,
+        "query_specific_file",
+        {"file_path": upload},
+        json.dumps(
+            {
+                "status": "success",
+                "chunks": [{"source_file": upload, "page": 1, "content": "a"}],
+            }
+        ),
+    )
+    docs = ledger.summary(location=LOCAL, display_names=display_names)["documents"]
+    assert docs[0]["name"] == "Q3 plan.pdf"
+    assert docs[0]["path"] == upload
+
+
+@pytest.mark.parametrize(
     "url",
     [
         "javascript://example.com/%0aalert(1)",

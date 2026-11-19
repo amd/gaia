@@ -571,3 +571,144 @@ def test_a_search_with_an_option_this_check_does_not_know_is_refused(home, comma
 def test_an_unknown_option_on_a_plain_command_runs(home):
     assert _refusal("grep --frobnicate TOKEN env.txt", home / "proj", home) is None
     assert _refusal("rg --frobnicate TOKEN env.txt", home / "proj", home) is None
+
+
+# ------------------------------- a hard link is a second name for the file
+
+
+def _key_and_clean_folder(home, monkeypatch):
+    """A key in a credential folder, and a folder with no credential file in it."""
+    from gaia import security
+
+    ssh = home / ".ssh"
+    ssh.mkdir()
+    (ssh / "id_rsa").write_text("PRIVATE KEY\n")
+    monkeypatch.setattr(security, "SECRET_DIRECTORIES", {str(ssh)})
+    security._secret_links_cache.update(key=None)
+    clean = home / "clean"
+    clean.mkdir()
+    (clean / "a.txt").write_text("TODO\n")
+    return ssh / "id_rsa", clean
+
+
+def _hard_link(source, name):
+    try:
+        os.link(source, name)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create a hard link here: {exc}")
+
+
+@pytest.fixture
+def linked_key(home, monkeypatch):
+    """``clean/notes.txt`` is a hard link to a key in a credential folder."""
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    _hard_link(key, clean / "notes.txt")
+    return clean
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cat notes.txt", "grep -n KEY notes.txt", "grep -rn KEY .", "git grep -n KEY"],
+)
+def test_a_hard_link_to_a_credential_file_is_refused(home, linked_key, command):
+    refusal = _refusal(command, linked_key, home)
+
+    assert refusal is not None, command
+    assert refusal["executed"] is False
+    assert "notes.txt" in refusal["error"]
+
+
+@WINDOWS_ONLY
+def test_findstr_over_a_hard_link_to_a_credential_file_is_refused(
+    home, linked_key, monkeypatch
+):
+    monkeypatch.setattr(shell_tools, "_greps_expand_arguments", lambda: True)
+    refusal = _refusal("findstr /s /n KEY *", linked_key, home)
+
+    assert refusal is not None and refusal["executed"] is False
+
+
+def test_a_hard_link_made_after_a_search_is_still_caught(home, monkeypatch):
+    """The credential folder is listed fresh per search, not from a cache."""
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    assert _refusal("grep -rn KEY .", clean, home) is None
+
+    _hard_link(key, clean / "notes.txt")
+
+    refusal = _refusal("grep -rn KEY .", clean, home)
+    assert refusal is not None and refusal["executed"] is False
+
+
+def test_an_ordinary_hard_link_does_not_block_a_search(home, monkeypatch):
+    _key, clean = _key_and_clean_folder(home, monkeypatch)
+    _hard_link(clean / "a.txt", clean / "b.txt")
+
+    assert _refusal("grep -rn TODO .", clean, home) is None
+    assert _refusal("cat b.txt", clean, home) is None
+
+
+@WINDOWS_ONLY
+def test_findstr_over_an_ordinary_hard_link_runs(home, monkeypatch):
+    _key, clean = _key_and_clean_folder(home, monkeypatch)
+    _hard_link(clean / "a.txt", clean / "b.txt")
+    monkeypatch.setattr(shell_tools, "_greps_expand_arguments", lambda: True)
+
+    assert _refusal("findstr /s /n TODO *", clean, home) is None
+
+
+def test_a_symlink_to_a_hard_linked_credential_file_is_refused(home, monkeypatch):
+    """A link in the searched folder, to a hard link outside it, still refuses."""
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    hidden = home / "elsewhere"
+    hidden.mkdir()
+    _hard_link(key, hidden / "copy.txt")
+    try:
+        os.symlink(hidden / "copy.txt", clean / "notes.txt")
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create a symlink here: {exc}")
+
+    for command in ("cat *", "grep -Rn KEY ."):
+        refusal = _refusal(command, clean, home)
+        assert refusal is not None and refusal["executed"] is False, command
+
+
+def test_a_link_is_sized_by_the_file_it_reads(home, monkeypatch):
+    """The size filter follows the link: a symlink's own size is not the key's."""
+    from gaia import security
+
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    hidden = home / "elsewhere"
+    hidden.mkdir()
+    _hard_link(key, hidden / "copy.txt")
+    target = os.stat(hidden / "copy.txt")
+
+    class _LinkEntry:
+        path = str(hidden / "copy.txt")
+
+        def stat(self, follow_symlinks=True):
+            if follow_symlinks:
+                return target
+            return os.stat_result((0o120777, 0, 0, 1, 0, 0, 3, 0, 0, 0))
+
+    assert shell_tools._shares_secret(_LinkEntry(), security.linked_secret_files())
+
+
+def test_linking_a_key_then_searching_in_one_command_is_refused(home, monkeypatch):
+    """The link does not exist yet when the line is checked; naming the key refuses."""
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+
+    for command in (f"ln {key} notes.txt && grep -rn KEY .", f"ln {key} notes.txt"):
+        refusal = _refusal(command, clean, home)
+        assert refusal is not None and refusal["executed"] is False, command
+    assert not (clean / "notes.txt").exists()
+
+
+def test_a_hard_link_the_same_size_as_a_key_is_not_a_key(home, monkeypatch):
+    """Matching size only narrows the lookup; the file itself must be the key."""
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    _hard_link(key, home / "elsewhere.txt")  # the key now has a second name
+    (clean / "same.txt").write_bytes(b"x" * key.stat().st_size)
+    _hard_link(clean / "same.txt", clean / "same2.txt")
+
+    assert _refusal("grep -rn x .", clean, home) is None
+    assert _refusal("cat same2.txt", clean, home) is None

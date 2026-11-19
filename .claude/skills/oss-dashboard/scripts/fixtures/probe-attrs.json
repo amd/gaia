@@ -1,0 +1,169 @@
+{
+  "repo": "python-attrs/attrs",
+  "name": "attrs",
+  "default_branch": "main",
+  "private": false,
+  "stars": 5862,
+  "forks": 521,
+  "open_issues_and_prs": 178,
+  "permission": {
+    "admin": false,
+    "maintain": false,
+    "push": false,
+    "triage": false,
+    "pull": true
+  },
+  "warnings": [
+    "Stargazer list refused (HTTP 404): this token's owner lacks access. The deployed GITHUB_TOKEN must belong to a maintainer, or star history fails.",
+    "Traffic API refused (HTTP 403): the deployed token needs push access (fine-grained: the \"Administration\" repository permission, read) for the Traffic card; scaffold sets TRAFFIC = false.",
+    "Packages were taken from root manifests (package.json, pyproject.toml/setup.py, Cargo.toml); workspace members are listed as candidates. Add any others to PACKAGES in src/config.ts.",
+    "Scheduled workflows count toward the default branch's pass rate: CodeQL. List housekeeping ones (stale, lock, reports, sweeps meant to fail) in CI_EXCLUDE_WORKFLOWS."
+  ],
+  "commits": 1852,
+  "code_stats_available": true,
+  "stargazer_access": false,
+  "actions_access": true,
+  "traffic_access": false,
+  "issues_and_prs": 1647,
+  "runs_yesterday": 4,
+  "events_on_default_branch": {
+    "push": 16,
+    "schedule": 4,
+    "merge_group": 2,
+    "dynamic": 17
+  },
+  "events_on_default_branch_exact": true,
+  "pull_request_runs_30d": 106,
+  "workflows": [
+    {
+      "name": "Build docset",
+      "path": ".github/workflows/build-docset.yml",
+      "file": "build-docset.yml",
+      "state": "active"
+    },
+    {
+      "name": "CI",
+      "path": ".github/workflows/ci.yml",
+      "file": "ci.yml",
+      "state": "active"
+    },
+    {
+      "name": "CodeQL",
+      "path": ".github/workflows/codeql-analysis.yml",
+      "file": "codeql-analysis.yml",
+      "state": "active"
+    },
+    {
+      "name": "CodSpeed Benchmarks",
+      "path": ".github/workflows/codspeed.yml",
+      "file": "codspeed.yml",
+      "state": "active"
+    },
+    {
+      "name": "Build & upload PyPI package",
+      "path": ".github/workflows/pypi-package.yml",
+      "file": "pypi-package.yml",
+      "state": "active"
+    },
+    {
+      "name": "verify-lockfile",
+      "path": ".github/workflows/verify-lockfile.yml",
+      "file": "verify-lockfile.yml",
+      "state": "active"
+    },
+    {
+      "name": "Zizmor \ud83c\udf08",
+      "path": ".github/workflows/zizmor.yml",
+      "file": "zizmor.yml",
+      "state": "active"
+    }
+  ],
+  "test_workflow_candidates": [
+    {
+      "name": "CI",
+      "file": "ci.yml",
+      "framework": "pytest",
+      "push_runs": 120,
+      "merge_group_runs": 31
+    },
+    {
+      "name": "CodSpeed Benchmarks",
+      "file": "codspeed.yml",
+      "framework": "pytest",
+      "push_runs": 48,
+      "merge_group_runs": 0
+    },
+    {
+      "name": "Build docset",
+      "file": "build-docset.yml",
+      "framework": "pytest",
+      "push_runs": 0,
+      "merge_group_runs": 0
+    }
+  ],
+  "test_workflow": "CI",
+  "test_framework": "pytest",
+  "test_frameworks_in_workflow": [],
+  "test_log_countable": null,
+  "eval_workflow_candidates": [
+    "codspeed.yml"
+  ],
+  "releases_total": 27,
+  "releases_complete": true,
+  "tags": [
+    "26.1.0",
+    "25.4.0",
+    "25.3.0",
+    "25.2.0",
+    "25.1.0",
+    "24.3.0",
+    "24.2.0",
+    "24.1.0",
+    "23.2.0",
+    "23.1.0",
+    "22.2.0",
+    "22.1.0",
+    "21.4.0",
+    "21.3.0",
+    "21.2.0",
+    "21.1.0",
+    "20.3.0",
+    "20.2.0",
+    "20.1.0",
+    "19.3.0",
+    "19.2.0",
+    "19.1.0",
+    "18.2.0",
+    "18.1.0",
+    "17.4.0",
+    "17.3.0.post2",
+    "17.3.0.post1"
+  ],
+  "asset_names": [],
+  "asset_downloads": 0,
+  "packages": {
+    "npm": [],
+    "pypi": [
+      "attrs"
+    ],
+    "crates": []
+  },
+  "package_candidates": {
+    "npm": [],
+    "crates": []
+  },
+  "channels": {
+    "homebrew": [],
+    "homebrewCasks": [],
+    "docker": [],
+    "rubygems": [],
+    "nuget": [],
+    "conda": [
+      "conda-forge/attrs"
+    ],
+    "packagist": []
+  },
+  "scheduled_workflows": [
+    "CodeQL"
+  ]
+}

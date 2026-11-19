@@ -58,6 +58,7 @@ jobs:
     outputs:
       tui_version: ${{ steps.v.outputs.tui_version }}
       dry_run: ${{ steps.v.outputs.dry_run }}
+      release_exists: ${{ steps.release.outputs.exists }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -131,6 +132,36 @@ jobs:
           echo "tui_version=${TUI_V}"  >> "$GITHUB_OUTPUT"
           echo "core release : ${CORE}  (min_gaia_version gate only)"
           echo "terminal-hub : ${TUI_V} -> agents/terminal-hub/${TUI_V}/ (raw binaries)"
+
+      # A dispatch can run before the final tag exists (the release skill does
+      # this to publish terminal-hub first), so the Windows setup has no
+      # desktop app release to embed yet. Look once, never wait.
+      - name: Check for the GitHub release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.v.outputs.tui_version }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "✓ release ${TAG} exists"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No release ${TAG} yet; the Windows setup will be skipped."
+          fi
+
+      - name: Note the skipped Windows setup
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          steps.release.outputs.exists != 'true'
+        run: |
+          echo "Skipped the Windows setup: there is no GitHub release v${{ steps.v.outputs.tui_version }} yet." >> "$GITHUB_STEP_SUMMARY"
 
       # A manifest can agree with the tag and STILL be a lie: the terminal hub
       # needs daemon host API v1.1, which released 0.22.0 does not serve.
@@ -306,13 +337,14 @@ jobs:
   # ── Fallback: the one Windows setup, by hand ────────────────────────────────
   # Dispatch only; on a tag publish.yml builds it. It embeds the desktop app
   # setup from the published v<version> release, so a dispatch before that
-  # release exists fails here, loudly -- there is no desktop app setup to embed.
+  # release exists skips it: there is no desktop app setup to embed.
   windows-setup:
     name: Windows setup
     needs: [version, tui]
     if: >-
       !cancelled() &&
       github.event_name == 'workflow_dispatch' &&
+      needs.version.outputs.release_exists == 'true' &&
       needs.tui.outputs.binaries_ok == 'true'
     permissions:
       contents: read
@@ -411,9 +443,9 @@ jobs:
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
         run: |
           set -euo pipefail
-          # Explicit =<platform-key> on every artifact: the publisher's
-          # inference only special-cases email-agent-* filenames.
-          python hub/agents/email/python/packaging/publish_to_r2.py \
+          # Explicit =<platform-key> on every artifact: the publisher infers
+          # one only from <product>-agent-<platform> filenames.
+          python hub/components/terminal-hub/publish_to_r2.py \
             --base-url "${GAIA_HUB_PUBLISH_URL}" \
             --manifest "${TERMINAL_HUB_MANIFEST}" \
             --artifact "bin/gaia-linux-x64=linux-x64" \
@@ -428,7 +460,8 @@ jobs:
           cat published.json
 
   # No environment, so no approval prompt: this only says why the release is
-  # missing its Windows setup.
+  # missing its Windows setup. It waits for the release to exist because a
+  # dispatch before the release skips the setup on purpose.
   windows-setup-missing:
     name: Windows setup not attached
     needs: [version, windows-setup]
@@ -436,6 +469,7 @@ jobs:
       !cancelled() &&
       github.event_name == 'workflow_dispatch' &&
       needs.version.result == 'success' &&
+      needs.version.outputs.release_exists == 'true' &&
       needs.windows-setup.outputs.ok != 'true'
     runs-on: ubuntu-latest
     steps:

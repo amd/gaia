@@ -1231,8 +1231,9 @@ describe('Chat App Integration', () => {
       expect(chatCss).toContain('.drag-active');
     });
 
-    it('should have chat title overflow handling', () => {
-      expect(chatCss).toContain('text-overflow: ellipsis');
+    it('fades a long chat title at its end instead of cutting it with "…"', () => {
+      expect(chatCss).not.toContain('text-overflow: ellipsis');
+      expect(chatCss).toContain('animation: fade-cut-inline');
     });
 
     it('should use the native browser caret instead of a custom block cursor', () => {

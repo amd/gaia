@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pane fixture app state</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>Shop</h1>
+  <p>Your cart is ready.</p>
+  <button id="add" type="button">Add a widget</button>
+  <script>
+    // Kept in JS and storage only: nothing on the page shows it.
+    window.app = { cart: [{ sku: "W-1", qty: 2 }], user: { plan: "pro" } };
+    localStorage.setItem("cartId", "c-4821");
+    localStorage.setItem("theme", "dark");
+    document.getElementById("add").addEventListener("click", () => {
+      window.app.cart[0].qty += 1;
+      localStorage.setItem("lastAdded", "W-1");
+    });
+  </script>
+</body>
+</html>

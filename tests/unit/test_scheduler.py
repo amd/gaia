@@ -294,6 +294,24 @@ class TestSchedulerExecution:
         assert contents[-2:] == ["Summarize", "ran: Summarize"]
 
     @pytest.mark.asyncio
+    async def test_a_failed_run_is_saved_failed(self, fake_db):
+        """The UIs show a failure off the saved flag, not the reply's text."""
+
+        async def model_gave_up(prompt):
+            raise RuntimeError("The model stopped responding at step 3")
+
+        sched = Scheduler(db=fake_db, executor=model_gave_up)
+        await sched.start()
+        await sched.create_task("digest", "every 1h", "Summarize")
+        task = sched._tasks["digest"]
+
+        await sched._execute_task(task)
+        await sched.shutdown()
+
+        reply = fake_db.get_messages(task.session_id)[-1]
+        assert reply["role"] == "assistant" and reply["failed"]
+
+    @pytest.mark.asyncio
     async def test_results_stored(self, fake_db):
         """Execution results should be stored in schedule_results."""
 
