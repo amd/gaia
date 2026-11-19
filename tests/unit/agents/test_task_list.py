@@ -370,8 +370,8 @@ class TestEventContract:
         assert call["args"] == {"file_path": "a.txt"}
 
     def test_the_agent_ui_relay_maps_it_back(self):
-        from gaia.ui.email_sidecar import relay as relay_module
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay as relay_module
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
         emitted = []
         handler = SimpleNamespace(

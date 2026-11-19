@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Answering a relayed flagship's mid-run question from the Agent UI.
 
-The Agent UI relays the answer with the spec §5.1 body ``{request_id, value}``
-— the same one the email sidecar takes. The flagship only took ``response``,
+The Agent UI relays the answer with the spec §5.1 body ``{request_id, value}``.
+The flagship only took ``response``,
 so every answer 422'd and the run sat on the question until it timed out.
 These drive the real Agent UI relay and proxy against the real flagship app
 over HTTP, because a stubbed proxy cannot catch a field-name mismatch.
@@ -17,9 +17,9 @@ import uuid
 
 import pytest
 
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
-from gaia.ui.email_sidecar.proxy import SidecarProxy
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import GAIA_PROFILE
+from gaia.ui.sidecar.proxy import SidecarProxy
 from gaia.ui.sse_handler import SSEOutputHandler
 
 pytestmark = pytest.mark.allow_network
@@ -142,13 +142,10 @@ def test_the_ui_answer_reaches_the_flagship_question(live_gaia_sidecar):
     assert answers and answers[-1]["content"] == "picked=blue"
 
 
-def test_both_relayed_agents_take_the_same_answer_body():
-    """One relay body for both sidecars: the spec §5.1 ``value``."""
+def test_the_flagship_takes_the_relay_answer_body():
+    """The relay posts the spec §5.1 ``value``; the flagship reads it as the answer."""
     pytest.importorskip("gaia_agent")
-    pytest.importorskip("gaia_agent_email")
-    from gaia_agent.server import QueryRespondRequest as GaiaRespond
-    from gaia_agent_email.query_routes import QueryRespondRequest as EmailRespond
+    from gaia_agent.server import QueryRespondRequest
 
     body = {"request_id": "q-1", "value": "blue"}
-    assert GaiaRespond(**body).answer == "blue"
-    assert EmailRespond(**body).value == "blue"
+    assert QueryRespondRequest(**body).answer == "blue"

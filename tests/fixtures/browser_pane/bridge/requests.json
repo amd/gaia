@@ -1,0 +1,205 @@
+{
+  "_doc": "One valid body per op, exactly as PaneDriver sends it. bridge-server.cjs must parse each; the Python tests assert PaneDriver's bodies have these keys. Every op but hello and attach carries sessionId.",
+  "hello": {},
+  "attach": {
+    "sessionId": "chat-1"
+  },
+  "tabs_list": {
+    "sessionId": "chat-1",
+    "op": "list"
+  },
+  "tabs_open": {
+    "sessionId": "chat-1",
+    "op": "open",
+    "url": "https://example.com/",
+    "allowedOrigins": [
+      "https://example.com"
+    ]
+  },
+  "tabs_select": {
+    "sessionId": "chat-1",
+    "op": "select",
+    "tabId": "tab-2"
+  },
+  "navigate": {
+    "sessionId": "chat-1",
+    "tabId": "tab-1",
+    "to": "http://127.0.0.1:5000/form.html",
+    "allowedOrigins": []
+  },
+  "navigate_back": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "to": "back",
+    "allowedOrigins": []
+  },
+  "evaluate": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "script": "(args) => document.title",
+    "args": {
+      "gen": 1
+    },
+    "frames": "all",
+    "allowedOrigins": []
+  },
+  "origin": {
+    "sessionId": "chat-1",
+    "tabId": null
+  },
+  "screenshot": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "clip": null,
+    "maxWidth": 1280,
+    "allowedOrigins": []
+  },
+  "screenshot_ref": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "clip": {
+      "frameId": null,
+      "selector": "[data-gaia-ref=\"g1e2\"]"
+    },
+    "maxWidth": 1280,
+    "allowedOrigins": []
+  },
+  "logs": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "kind": "console",
+    "afterSeq": 0,
+    "errorsOnly": true,
+    "pattern": null,
+    "limit": 50,
+    "allowedOrigins": []
+  },
+  "act_click": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "action": {
+      "kind": "click"
+    },
+    "target": {
+      "frameId": null,
+      "selector": "[data-gaia-ref=\"g1e2\"]"
+    },
+    "allowedOrigins": []
+  },
+  "act_fill": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "action": {
+      "kind": "fill",
+      "text": "Ada Lovelace",
+      "pressEnter": false
+    },
+    "target": {
+      "frameId": null,
+      "selector": "[data-gaia-ref=\"g1e2\"]"
+    },
+    "allowedOrigins": []
+  },
+  "act_press": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "action": {
+      "kind": "press",
+      "key": "Escape"
+    },
+    "target": null,
+    "allowedOrigins": []
+  },
+  "viewport": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "size": {
+      "width": 390,
+      "height": 844,
+      "mobile": true
+    },
+    "colorScheme": "dark"
+  },
+  "devServers_list": {
+    "sessionId": "chat-1",
+    "op": "list"
+  },
+  "devServers_ensure": {
+    "sessionId": "chat-1",
+    "op": "ensure",
+    "key": "0123456789abcdef",
+    "spec": {
+      "name": "web",
+      "argv": [
+        "node",
+        "server.js"
+      ],
+      "cwd": "/Users/ada/projects/site",
+      "port": 4173,
+      "env": {
+        "NODE_ENV": "development"
+      },
+      "url": "http://localhost:4173/",
+      "readyTimeoutMs": 60000
+    },
+    "searchPath": "/opt/homebrew/bin:/usr/bin:/bin"
+  },
+  "devServers_stop": {
+    "sessionId": "chat-1",
+    "op": "stop",
+    "key": "0123456789abcdef"
+  },
+  "devServers_logs": {
+    "sessionId": "chat-1",
+    "op": "logs",
+    "key": "0123456789abcdef",
+    "errorsOnly": true,
+    "pattern": null,
+    "limit": 50
+  },
+  "act_click_frame": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "action": {
+      "kind": "click"
+    },
+    "target": {
+      "frameId": "7:3",
+      "selector": "[data-gaia-ref=\"g1e2\"]"
+    },
+    "allowedOrigins": []
+  },
+  "screenshot_frame_ref": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "clip": {
+      "frameId": "7:3",
+      "selector": "[data-gaia-ref=\"g1e2\"]"
+    },
+    "maxWidth": 1280,
+    "allowedOrigins": []
+  },
+  "dialog_get": {
+    "sessionId": "chat-1",
+    "op": "get",
+    "tabId": null
+  },
+  "dialog_answer": {
+    "sessionId": "chat-1",
+    "op": "answer",
+    "tabId": null,
+    "accept": true,
+    "text": "Ada",
+    "allowedOrigins": []
+  },
+  "dialog_release": {
+    "sessionId": "chat-1",
+    "op": "release"
+  },
+  "script": {
+    "sessionId": "chat-1",
+    "tabId": null,
+    "expression": "localStorage.getItem('cartId')",
+    "allowedOrigins": []
+  }
+}

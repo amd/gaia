@@ -22,6 +22,7 @@ import { announceUndo, useUndoEvents } from '../../utils/undoEvents';
 import { untrackedWarning } from '../../utils/untrackedWork';
 import { DiffCard } from '../render/DiffCard';
 import { PanelSection } from './PanelSection';
+import { useSessionPanelStore } from '../../stores/sessionPanelStore';
 import type { ChatFileChange, GitRepo, SessionChanges, SessionGit } from '../../types/sessionPanel';
 import { ref, type MessageKey, type Param } from '../../i18n/registry';
 import { tEn, useT, type Translate } from '../../i18n/useT';
@@ -74,7 +75,9 @@ export function ChangesSection({ sessionId, busy, onJumpToMessage }: ChangesSect
         Promise.resolve()
             .then(() => api.getSessionChanges(sessionId))
             .then((res) => {
-                setChanges(expectShape(res, (r) => Array.isArray(r.files), "list of this chat's changes"));
+                const loaded = expectShape(res, (r) => Array.isArray(r.files), "list of this chat's changes");
+                setChanges(loaded);
+                useSessionPanelStore.getState().setSignals(sessionId, { changedFiles: loaded.files.length });
                 setError(null);
             })
             .catch((err) => {
@@ -168,7 +171,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
                     return (
                         <li key={f.path} className="sp-change">
                             <div className="sp-item-text">
-                                <span className="sp-item-name" dir="auto" title={f.path}>{baseName(f.path)}</span>
+                                <span className="sp-item-name" dir="ltr" title={f.path}>{baseName(f.path)}</span>
                                 <span className="sp-meta">
                                     {t(CHANGE_LABEL[f.change])}
                                     {f.additions != null && <> · <span className="sp-add">+{f.additions}</span> <span className="sp-del">−{f.deletions}</span></>}
@@ -195,7 +198,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
             </ul>
             {changes.incomplete && (
                 <p className="sp-warn-text" role="note">
-                    <AlertTriangle size={11} aria-hidden="true" /> {untrackedWarning(changes.untracked, { inChat: true, undo: 'Undo all' })}
+                    <AlertTriangle size={11} aria-hidden="true" /> {untrackedWarning(changes.untracked, { inChat: true }, t)}
                 </p>
             )}
             <div className="sp-actions-row">
@@ -268,7 +271,7 @@ function ChatChangesReview({ changes, onClose }: { changes: SessionChanges; onCl
                         <section key={file.path} className="changes-review-file">
                             <DiffCard
                                 data={{
-                                    title: file.path,
+                                    path: file.path,
                                     badge: CHANGE_BADGE[file.change],
                                     note: note(file),
                                     unified: file.binary || file.too_large ? '' : file.unified,

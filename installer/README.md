@@ -38,13 +38,13 @@ The Agent UI's own electron-builder installer (`nsis/installer.nsh` is its
 include) still builds every release: the Windows setup embeds it unchanged as
 its desktop app component, and electron-updater re-runs it to update the app.
 
-`nsis/gaia.nsi` is the developer shareable build. It puts its own `gaia-tui`
+`nsis/gaia.nsi` is the developer shareable build. It puts its own `gaia-cli`
 on PATH under its own "GAIA" Installed-apps entry, so the GAIA setup refuses to
 install beside it rather than leave two of each.
 
 `debian/`, `macos/` and `linux/` back the Agent UI's Electron packaging.
 `tui/` is a separate, self-contained set of installers for the Go terminal
-hub (`gaia-tui`) and the flagship agent sidecar it bundles — see its own
+hub (`gaia-cli`) and the flagship agent sidecar it bundles — see its own
 README for the per-platform builders and payload-staging steps.
 
 ## `scripts/` — bootstrap and build scripts
@@ -57,17 +57,17 @@ README for the per-platform builders and payload-staging steps.
 | `build-ui-installer.ps1` / `.sh` | Build the Electron Agent UI installer locally |
 | `start-agent-ui.ps1` / `.sh` | Launch the Agent UI (backend + frontend) during development |
 | `fetch_lemonade_embeddable.py` | Download the pinned embeddable Lemonade archive for the desktop app's `extraResources`, verified against `EMBEDDABLE_SHA256`, so first-run setup can unpack it instead of downloading it |
-| `start-lemonade.ps1` | Launch a local Lemonade Server for development and CI (Windows). On Linux, build the argv with `gaia.llm.lemonade_launcher.build_start_command` — see `test_gaia_cli_linux.yml` |
+| `ensure-lemonade-running.ps1` | Launch Lemonade Server for development and CI (Windows): by default a persistent Scheduled Task that outlives the job; `-JobScoped` for a server owned by the calling step (use this on a dev box). On Linux, build the argv with `gaia.llm.lemonade_launcher.build_start_command` — see `test_gaia_cli_linux.yml` |
 
 ### What the one-line installers download
 
 Both scripts install the frozen `gaia` (`gaia-core-<platform>.tar.gz`, checked
 against the release's `gaia-core-SHA256SUMS.txt`), the terminal binary
-(`gaia-<os>-<arch>`, checked against `gaia-tui-SHA256SUMS.txt`), both from a
+(`gaia-cli-<os>-<arch>`, checked against `gaia-tui-SHA256SUMS.txt`), both from a
 GitHub release, and the GAIA agent (`gaia-agent`). Nothing installs without a
 matching SHA-256, there is no fallback source, and neither installs Python or a
 PyPI package. `gaia` lands in `~/.gaia/core` linked from `~/.gaia/bin` on Linux
-and macOS, and in `~\.gaia\bin` beside `gaia-tui.exe` on Windows.
+and macOS, and in `~\.gaia\bin` beside `gaia-cli.exe` on Windows.
 
 `GAIA_RELEASE_TAG` picks the release, and pins all three to it:
 
@@ -93,7 +93,7 @@ Remove-Item Env:GAIA_RELEASE_TAG   # or the next run pins it too
 ### Building the GAIA terminal installer locally
 
 This is the one you send to a colleague: a single per-user `.exe` that installs
-`gaia-tui` and the GAIA agent on a machine with no Python, no Go and no clone.
+`gaia-cli` and the GAIA agent on a machine with no Python, no Go and no clone.
 
 **[docs/deployment/shareable-build.mdx](../docs/deployment/shareable-build.mdx)**
 is the guide — build commands, install paths, and how to verify the binary before
@@ -119,7 +119,7 @@ first; without it the app says it is missing its backend:
 ```bash
 (cd src/gaia/apps/webui && npm ci && npm run build)    # the core serves this UI
 uv venv .venv-freeze --python 3.12
-uv pip install --python .venv-freeze -e ".[ui]" pyinstaller
+uv pip install --python .venv-freeze -e ".[ui,mcp,talk,notify]" pyinstaller
 .venv-freeze/Scripts/python installer/core/freeze.py      # bin/python off Windows
 .venv-freeze/Scripts/python installer/core/smoke_test.py installer/core/dist/gaia/gaia.exe
 rm -rf src/gaia/apps/webui/build/core && mkdir -p src/gaia/apps/webui/build/core

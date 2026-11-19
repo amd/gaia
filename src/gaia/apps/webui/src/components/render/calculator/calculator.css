@@ -33,7 +33,7 @@
     justify-content: space-between;
     gap: 6px 10px;
     font-size: var(--fs-body);
-    font-weight: 600;
+    font-weight: 500;
     white-space: nowrap;
 }
 
@@ -51,7 +51,7 @@
 }
 
 .render-calc__box input {
-    width: 8ch;
+    width: 11ch;
     min-width: 0;
     border: 0;
     background: transparent;
@@ -105,7 +105,7 @@
 .render-calc__result dd {
     margin: 0;
     font-size: var(--fs-body);
-    font-weight: 600;
+    font-weight: 500;
     font-variant-numeric: tabular-nums;
     overflow-wrap: anywhere;
 }

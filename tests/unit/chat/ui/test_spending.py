@@ -93,6 +93,46 @@ def test_a_cloud_turn_is_recorded_at_list_price(db):
     assert report["by_model"][0]["model"] == FLASH
 
 
+def test_the_month_prices_cached_input_as_each_answer_does(db):
+    """The composer's "today" and Settings' month differed ninefold on DeepSeek:
+    one priced cached input at the cached rate, the other at full price."""
+    model = "fireworks.deepseek-v4p1-flash"
+    stats = {"input_tokens": 100_000, "cached_tokens": 90_000, "output_tokens": 2_000}
+    spending.record_turn(db, model, stats)
+    assert spending.month_report(db)["total_usd"] == pytest.approx(
+        price(model, 100_000, 90_000, 2_000), abs=1e-4
+    )
+
+
+@pytest.mark.parametrize("cached", [-5_000, 150_000, True, "90000", None])
+def test_a_cached_count_that_cannot_fit_the_input_is_priced_as_uncached(db, cached):
+    """A bad count from a relay must not lower, or turn negative, the month."""
+    model = "fireworks.deepseek-v4p1-flash"
+    stats = {"input_tokens": 100_000, "cached_tokens": cached, "output_tokens": 2_000}
+    spending.record_turn(db, model, stats)
+    assert spending.month_report(db)["total_usd"] == pytest.approx(
+        price(model, 100_000, 0, 2_000), abs=1e-4
+    )
+
+
+def test_all_input_cached_is_priced_at_the_cached_rate(db):
+    model = "fireworks.deepseek-v4p1-flash"
+    stats = {"input_tokens": 100_000, "cached_tokens": 100_000, "output_tokens": 0}
+    spending.record_turn(db, model, stats)
+    assert spending.month_report(db)["total_usd"] == pytest.approx(
+        price(model, 100_000, 100_000, 0), abs=1e-6
+    )
+
+
+def test_the_turn_stats_keep_the_cached_tokens_the_month_is_priced_on():
+    from gaia.ui._chat_helpers import _turn_inference_stats
+
+    stats = _turn_inference_stats(
+        None, {"tokens": 2_000, "input_tokens": 100_000, "cached_tokens": 90_000}
+    )
+    assert stats["cached_tokens"] == 90_000
+
+
 def test_local_turns_cost_nothing_and_are_not_recorded(db):
     _turn(db, model="Gemma-4-E4B-it-GGUF")
     assert spending.month_report(db)["turns"] == 0
@@ -141,7 +181,18 @@ def _estimate(usd):
     return {"kind": "estimate", "usd": usd}
 
 
-def test_chat_and_today_totals_come_from_each_answers_cost(db):
+def _billed(db, usd, at):
+    """A turn in the month's ledger at *at*, as SQLite's UTC time writes it."""
+    db.add_cloud_spend("2026-11", FLASH, "fireworks", 1, 1, usd)
+    db._conn.execute(
+        "UPDATE cloud_spend SET created_at = ? WHERE id = "
+        "(SELECT MAX(id) FROM cloud_spend)",
+        (at,),
+    )
+    db._conn.commit()
+
+
+def test_chat_totals_come_from_each_answers_cost_and_today_from_the_bill(db):
     chat = db.create_session(title="a")["id"]
     other = db.create_session(title="b")["id"]
     first = _answer(db, chat, _estimate(0.01), "2026-11-05T09:00:00+00:00")
@@ -149,11 +200,14 @@ def test_chat_and_today_totals_come_from_each_answers_cost(db):
     _answer(db, other, _estimate(0.5), "2026-11-05T11:00:00+00:00")
     # Yesterday evening locally: in this chat's total, not today's.
     _answer(db, chat, _estimate(1.0), "2026-11-05T07:59:00+00:00")
+    for usd, at in ((0.01, "09:00"), (0.02, "10:00"), (0.5, "11:00"), (1.0, "07:59")):
+        _billed(db, usd, f"2026-11-05 {at}:00")
     report = spending.chat_spend(db, chat, FLASH, SINCE)
     assert report["paid"] is True
     assert report["chat"]["usd"] == pytest.approx(1.03)
     assert report["chat"]["answers"] == 3
     assert report["today"]["usd"] == pytest.approx(0.53)
+    assert report["today"]["answers"] == 3
     assert report["today"]["chats"] == 2
     items = report["chat"]["items"]
     assert [i["usd"] for i in items] == [1.0, 0.01, 0.02]
@@ -194,9 +248,28 @@ def test_old_sqlite_timestamps_are_read_as_utc(db):
     chat = db.create_session(title="a")["id"]
     _answer(db, chat, _estimate(0.04), "2026-11-05 08:30:00")
     _answer(db, chat, _estimate(0.08), "2026-11-05 07:30:00")
+    assert spending.chat_spend(db, chat, FLASH, SINCE)["chat"]["answers"] == 2
+    _billed(db, 0.04, "2026-11-05 08:30:00")
+    _billed(db, 0.08, "2026-11-05 07:30:00")
     assert spending.chat_spend(db, chat, FLASH, SINCE)["today"]["usd"] == pytest.approx(
         0.04
     )
+
+
+def test_today_counts_answers_edited_away_or_retried_as_the_month_does(db):
+    """Settings' month said $0.0055 while the composer's today said $0.0045."""
+    chat = db.create_session(title="a")["id"]
+    kept = _answer(db, chat, _estimate(0.03), "2026-11-05T09:00:00+00:00")
+    replaced = _answer(db, chat, _estimate(0.02), "2026-11-05T09:01:00+00:00")
+    _billed(db, 0.03, "2026-11-05 09:00:00")
+    _billed(db, 0.02, "2026-11-05 09:01:00")
+    db._conn.execute("DELETE FROM messages WHERE id = ?", (replaced,))
+    db._conn.commit()
+    report = spending.chat_spend(db, chat, FLASH, SINCE)
+    month = spending.month_report(db, "2026-11")
+    assert report["today"]["usd"] == pytest.approx(month["total_usd"])
+    assert report["today"]["answers"] == 2
+    assert [i["message_id"] for i in report["chat"]["items"]] == [kept]
 
 
 def test_answers_are_listed_by_time_across_timestamp_formats(db):

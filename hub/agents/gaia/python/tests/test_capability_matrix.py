@@ -76,8 +76,10 @@ _EXPECTED_TOOLS_TOTAL = 106
 # 26 with the ten next most-called tools in the eval baseline, which took core
 # from 41% to 77% of calls.
 # 27 with `forget_everything`, beside `forget` so "forget everything" always reaches it.
-# 28 with `update_tasks`: the task list is kept across the whole turn.
-_EXPECTED_CORE_COUNT = 28
+# 29 with `search_file_content` and `list_files`, which a model otherwise worked
+# around in about a fifth more steps.
+# 30 with `update_tasks`: the task list is kept across the whole turn.
+_EXPECTED_CORE_COUNT = 30
 # 25: the `cli_setup` bundle, `shell_session` (get_shell_state,
 # reset_shell_session), plus `browser_nav` and `browser_use`.
 # 26 with `audio_generation`; 27 with `email_threads`.
@@ -111,14 +113,15 @@ _EXPECTED_REST_OP_NAMES = {
     "sessions/{session_id}/internet",
     "sessions/{session_id}/grants",
     "sessions/{session_id}/tools",
+    "sessions/{session_id}",
     "memory",
     "skills",
 }
 # One per route method: sessions/{session_id}/grants is both GET and DELETE.
-_EXPECTED_REST_FUNCTIONAL_COUNT = 12
+_EXPECTED_REST_FUNCTIONAL_COUNT = 13
 # + the init readiness probe and the three liveness/version probes
 # (/health, /version, /v1/gaia/version).
-_EXPECTED_REST_IN_CONTRACT_COUNT = 16
+_EXPECTED_REST_IN_CONTRACT_COUNT = 17
 
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 

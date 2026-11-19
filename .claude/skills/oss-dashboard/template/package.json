@@ -1,0 +1,26 @@
+{
+  "name": "project-dashboard-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private project dashboard: nightly snapshots of public GitHub, registry and CI data in D1, served by a Cloudflare Worker behind Cloudflare Access.",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev --local --ip 127.0.0.1 --local-upstream localhost:8787",
+    "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy",
+    "migrate:local": "wrangler d1 migrations apply DB --local",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261118.1",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8",
+    "wrangler": "^4.164.0"
+  }
+}

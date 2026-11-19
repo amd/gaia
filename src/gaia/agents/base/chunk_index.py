@@ -46,7 +46,11 @@ MAX_CANDIDATES = 256
 #: Tools whose large text field is command output.
 OUTPUT_TOOLS = frozenset({"run_shell_command", "run_python", "execute_python_file"})
 #: Carried by every condensed result, so the model learns the read from the result.
-FETCH_HINT = "read_tool_output(artifact, entry=n) returns one indexed part verbatim"
+FETCH_HINT = (
+    "read_tool_output(artifact, entry=n) returns one indexed part verbatim; "
+    "entry=n, to_entry=m returns parts n..m in one call; "
+    "pass the artifact as another tool's argument to give it the full text"
+)
 #: Arguments whose value can name a part of the result (a symbol, a pattern).
 NAMING_ARGS = ("pattern", "query", "function_name", "name", "symbol", "section")
 
@@ -978,8 +982,14 @@ def _kind_for(tool_name: str, result: Any, field_name: Optional[str], text: str)
     return sniff_kind(text)
 
 
-def find_body(tool_name: str, result: Any, store) -> Optional[Body]:
-    """The text to index, or ``None`` when the result's bulk is records, not text."""
+def find_body(
+    tool_name: str, result: Any, store, serialize: Callable[[Any], str]
+) -> Optional[Body]:
+    """The text to index, or ``None`` when the result's bulk is records, not text.
+
+    *serialize* is the caller's encoder, so a date or bytes field is measured
+    the way it is shown at every size.
+    """
     if isinstance(result, str):
         return Body(None, result, _kind_for(tool_name, result, None, result))
     if not isinstance(result, dict):
@@ -999,7 +1009,7 @@ def find_body(tool_name: str, result: Any, store) -> Optional[Body]:
     archived = _archived_excerpt(value, store)
     handle, text = archived if archived else (None, value)
     # Text is most of the result; otherwise its bulk is records.
-    if sum(len(v) for _, v in texts) * 2 < _cost(result):
+    if sum(len(v) for _, v in texts) * 2 < len(serialize(result)):
         return None
     return Body(name, text, _kind_for(tool_name, result, name, text), handle)
 
@@ -1037,7 +1047,7 @@ def condense_result(
     An over-target render raises rather than degrading: a budgeting bug here
     would otherwise reach the model as a silently oversized prompt.
     """
-    body = find_body(tool_name, result, store)
+    body = find_body(tool_name, result, store, serialize)
     if body is None:
         return None
     chunks = (

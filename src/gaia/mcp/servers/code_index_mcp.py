@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import sys
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -228,6 +229,12 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = parser.parse_args(argv)
 
     route_logging_to_stderr()
+    try:
+        # The service refuses too; asking here lets the refusal print as one
+        # line instead of a traceback, without catching other ValueErrors.
+        _refuse_home_directory(args.repo.expanduser())
+    except ValueError as exc:
+        sys.exit(f"gaia mcp code-index: {exc}")
     service = CodeIndexService(CodeIndexConfig(repo_path=str(args.repo)))
     logger.info("Serving code index for %s over stdio", service.repo_path)
     create_code_index_mcp(service).run(transport="stdio")

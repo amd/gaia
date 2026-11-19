@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 
 const WEBUI = path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui");
-const { notificationIconPath, appIconPath } = require(path.join(WEBUI, "services", "app-icon.cjs"));
+const { launcherIconPath, notificationIconPath, appIconPath } = require(path.join(WEBUI, "services", "app-icon.cjs"));
 
 const MAX_SIDE = 256;
 const MAX_BYTES = 256 * 1024;
@@ -33,6 +33,21 @@ describe("notification icon", () => {
 
   test("is not the full-size app icon", () => {
     expect(path.resolve(notificationIconPath())).not.toBe(path.resolve(appIconPath("linux")));
+  });
+
+  test("is the robot head, not the whole robot the launcher shows", () => {
+    const head = fs.readFileSync(notificationIconPath());
+    const whole = fs.readFileSync(launcherIconPath());
+    expect(head.equals(whole)).toBe(false);
+  });
+
+  test("the AppImage launcher keeps the whole robot", () => {
+    const launcher = fs.readFileSync(path.join(WEBUI, "services", "appimage-launcher.cjs"), "utf-8");
+    expect(launcher).toMatch(/iconSource = launcherIconPath\(\)/);
+    const { width, height, bytes } = pngSize(launcherIconPath());
+    expect(width).toBe(height);
+    expect(width).toBeLessThanOrEqual(MAX_SIDE);
+    expect(bytes).toBeLessThanOrEqual(MAX_BYTES);
   });
 
   test("ships inside the packaged app", () => {

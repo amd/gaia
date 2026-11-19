@@ -633,6 +633,35 @@ class TestStatus:
 
         assert spawned and "GGML_VK_DISABLE_COOPMAT" not in spawned[0]
 
+    def test_start_on_linux_warns_when_lemond_has_no_ca_file(
+        self, manager, monkeypatch, caplog
+    ):
+        """#7226: still starts, since local models need no HTTPS, but says why
+        cloud models and downloads will fail."""
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(
+            "gaia.llm.npu_linux.raise_memlock_soft_limit", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_tls.ca_store_problem", lambda **_: "no CA file"
+        )
+        monkeypatch.setattr(manager, "is_installed", lambda: True)
+        monkeypatch.setattr(manager, "write_config", lambda: None)
+        monkeypatch.setattr(manager, "_health", lambda *a, **k: {"status": "ok"})
+        spawned = []
+
+        def fake_popen(argv, **kwargs):
+            spawned.append(argv)
+            return SimpleNamespace(pid=4321, poll=lambda: None, returncode=None)
+
+        monkeypatch.setattr("gaia.llm.lemonade_embedded.subprocess.Popen", fake_popen)
+
+        with caplog.at_level("WARNING"):
+            manager.start(port=65530)
+
+        assert spawned
+        assert "no CA file" in caplog.text
+
     def test_start_refuses_to_spawn_a_second_daemon(self, manager, monkeypatch):
         manager._write_state(
             {"pid": 4321, "port": 65535, "api_key": "k", "version": manager.version}

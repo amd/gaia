@@ -108,8 +108,13 @@ def test_history_too_big_beside_the_prompt_is_refit_and_announced(client):
     assert response.status_code == 200
     seen = agents[-1].seen_history
     assert 0 < len(seen) < len(context)
-    assert seen == context[-len(seen) :]
-    assert seen[0]["role"] == "user"
+    # The oldest turn the model still reads says earlier ones were left out.
+    as_sent = context[-len(seen) :]
+    assert seen[1:] == as_sent[1:]
+    assert seen[0] == {
+        "role": "user",
+        "content": f"{history.HIDDEN_TURNS_NOTE}\n\n{as_sent[0]['content']}",
+    }
     assert len(_warnings(response)) == 1
 
 

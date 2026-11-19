@@ -349,7 +349,7 @@ def list_knowledge(
         pattern="^(updated_at|confidence|created_at|category|context|content|use_count)$",
     ),
     order: str = Query("desc", pattern="^(asc|desc)$"),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=2**63 - 1),
     limit: int = Query(50, ge=1, le=200),
     about_user: bool = Query(
         False,
@@ -432,13 +432,13 @@ def _embed_row(store, knowledge_id: str) -> Dict[str, Any]:
     The row stays saved either way; a failure is reported to the caller as
     ``embedded: false`` plus the reason, never swallowed.
     """
-    from gaia.agents.base.memory import EMBEDDING_MODEL
+    from gaia.agents.registry import machine_embedding_model
 
     item = store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    # The stored vectors' embedder, not a hardcoded default (#1744).
-    model = store.get_embedder_id() or EMBEDDING_MODEL
+    # The one every chat on this PC uses; the agent re-stamps the store with it.
+    model = machine_embedding_model()
     try:
         store.store_embedding(knowledge_id, _make_embed_fn(model)(item["content"]))
     except Exception as exc:  # the row is saved; only its vector is missing
@@ -513,11 +513,19 @@ def delete_knowledge(knowledge_id: str) -> Dict:
     item = store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    remove = store.forget if is_about_user(item) else store.delete
-    success = remove(knowledge_id, allow_privileged=True)
-    if not success:
+    if is_about_user(item):
+        # Copies of the same fact go too, or the deleted fact is still recalled.
+        deleted = store.forget_with_copies(knowledge_id, allow_privileged=True)
+    elif store.delete(knowledge_id, allow_privileged=True):
+        deleted = [knowledge_id]
+    else:
+        deleted = []
+    if not deleted:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    return {"status": "deleted", "knowledge_id": knowledge_id}
+    result: Dict[str, Any] = {"status": "deleted", "knowledge_id": knowledge_id}
+    if len(deleted) > 1:
+        result["knowledge_ids"] = deleted
+    return result
 
 
 @router.get("/api/memory/knowledge/{knowledge_id}")
@@ -737,14 +745,12 @@ def rebuild_embeddings() -> Dict:
     Returns ``{backfilled: int, total_without: int}``.
     """
     try:
-        from gaia.agents.base.memory import EMBEDDING_MODEL
+        from gaia.agents.registry import machine_embedding_model
 
         store = _get_store()
-        # Re-embed with the embedder that produced the stored vectors, not a
-        # hardcoded default. On the NPU profile that is the FLM-native embedder;
-        # the GGUF default would mix vector spaces in one table and reload a
-        # Vulkan GGUF embedder that evicts the FLM chat model (#1744).
-        embedder_model = store.get_embedder_id() or EMBEDDING_MODEL
+        # Re-embed with the embedder every chat on this PC uses, which the
+        # agent stamps on its next start anyway; the stamp may be a profile old.
+        embedder_model = machine_embedding_model()
         store.reconcile_embedder(embedder_model)
         result = store.backfill_embeddings(_make_embed_fn(embedder_model))
         return result
@@ -1240,8 +1246,10 @@ def _scan_or_reason(source_key: str, scanner) -> Tuple[List[Dict], Optional[str]
         ``(items, message)``. `message` is a user-facing line to stream when the
         source cannot run or failed, and is None when the scan succeeded.
     """
-    from gaia.agents.base.discovery import unsupported_reason
+    from gaia.agents.base.discovery import covered_by_twin, unsupported_reason
 
+    if covered_by_twin(source_key):
+        return [], None
     reason = unsupported_reason(source_key)
     if reason:
         return [], f"  {reason}"
@@ -1250,6 +1258,22 @@ def _scan_or_reason(source_key: str, scanner) -> Tuple[List[Dict], Optional[str]
     except Exception as e:
         cid = _log_server_error(f"inference scanner '{source_key}' failed", e)
         return [], f"  {source_key} unavailable — see server logs (id={cid})"
+
+
+def _downloaded_on_this_pc(model_id: str) -> bool:
+    """True when Lemonade lists *model_id* as downloaded.
+
+    Raises:
+        LemonadeClientError: the catalog couldn't be read, or wasn't a model list.
+    """
+    from gaia.llm.lemonade_client import LemonadeClient, _model_ids_match
+
+    # list_models raises on anything but {"data": [{...}, ...]}.
+    catalog = LemonadeClient(verbose=False).list_models(show_all=True)
+    return any(
+        _model_ids_match(entry.get("id"), model_id) and entry.get("downloaded") is True
+        for entry in catalog["data"]
+    )
 
 
 @router.get("/api/memory/stream-discovery")
@@ -1268,6 +1292,7 @@ def stream_discovery():
         try:
             from gaia.agents.base.discovery import (
                 SystemDiscovery,
+                covered_by_twin,
                 unsupported_reason,
             )
 
@@ -1293,6 +1318,8 @@ def stream_discovery():
 
             total = 0
             for source_key in _DISCOVERY_SOURCES:
+                if covered_by_twin(source_key):
+                    continue
                 label = _DISCOVERY_SOURCE_LABELS.get(source_key, source_key)
                 yield _sse({"type": "log", "message": f"Scanning {label}..."})
                 reason = unsupported_reason(source_key)
@@ -1376,6 +1403,7 @@ def stream_inference(include_browser: bool = Query(False)):
             from gaia.llm import create_client
             from gaia.llm.lemonade_client import (
                 LemonadeClientError,
+                resolve_chat_model,
                 resolve_default_chat_model,
             )
             from gaia.ui._chat_helpers import _runs_on_this_pc
@@ -1516,11 +1544,31 @@ def stream_inference(include_browser: bool = Query(False)):
             prompt_sections = "\n\n".join(sections)
             prompt = _INFER_PROMPT.format(sections=prompt_sections)
 
-            # The machine's default chat model, so no second model loads. Never
-            # the UI's custom_model: that may be cloud, and this data stays local.
+            # The local model chat runs, so no second model loads; the machine's
+            # default when that pick is a cloud one, since this data stays local.
             model = resolve_default_chat_model()
             try:
+                from gaia.llm.hybrid import HybridConfigError, start_model
+
+                try:
+                    picked = start_model(resolve_chat_model())
+                except HybridConfigError as e:
+                    # The default stays local and on disk; say why the pick wasn't used.
+                    logger.warning(
+                        "Profile inference uses %s: the hybrid setting can't be read (%s)",
+                        model,
+                        e,
+                    )
+                    picked = model
+                if (
+                    picked != model
+                    and _runs_on_this_pc(picked)
+                    and _downloaded_on_this_pc(picked)
+                ):
+                    model = picked
                 local = _runs_on_this_pc(model)
+                # Lemonade downloads a missing model on first use, unasked.
+                downloaded = local and _downloaded_on_this_pc(model)
             except LemonadeClientError as e:
                 cid = _log_server_error("inference locality check failed", e)
                 yield _sse(
@@ -1528,7 +1576,7 @@ def stream_inference(include_browser: bool = Query(False)):
                         "type": "error",
                         "message": (
                             "Profile inference runs only on a local model, and "
-                            f"GAIA couldn't confirm that '{model}' is one: Lemonade's "
+                            f"GAIA couldn't check '{model}' on this PC: Lemonade's "
                             "model list didn't load. Check that Lemonade is running "
                             f"in Settings > Setup, then try again (id={cid})."
                         ),
@@ -1542,9 +1590,23 @@ def stream_inference(include_browser: bool = Query(False)):
                         "type": "error",
                         "message": (
                             f"Profile inference runs only on a local model, but "
-                            f"the default model '{model}' isn't one this PC runs. "
+                            f"the chat model '{model}' isn't one this PC runs. "
                             "Open Settings > Setup, press Run setup again and "
                             "choose a local chat model, then try again."
+                        ),
+                    }
+                )
+                yield _sse({"type": "done", "total": 0})
+                return
+            if not downloaded:
+                yield _sse(
+                    {
+                        "type": "error",
+                        "message": (
+                            "Profile inference runs only on a local model, and "
+                            f"'{model}' isn't downloaded on this PC. Download it "
+                            "under Settings > Model > Manage downloads and disk "
+                            "space, then try again."
                         ),
                     }
                 )
@@ -1796,6 +1858,135 @@ def _get_memory_settings_dict(db: ChatDatabase) -> Dict:
         == "true",
         "system_discovery_consent": json_consent,
     }
+
+
+class EmbedderBody(BaseModel):
+    """``npu`` or ``gpu``; None is the default (the GPU)."""
+
+    device: Optional[Literal["npu", "gpu"]] = None
+
+
+def _embedder_for(device: str) -> Tuple[str, str]:
+    """``(model, recipe)`` of the embedder that runs on *device*."""
+    from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+    config = next(dc for dc in DEFAULT_DEVICE_CONFIGS if dc.device == device)
+    return config.embedding_model, config.recipe
+
+
+_UNPROVEN_REASON = "its search results aren't reliable yet, so GAIA embeds on the GPU"
+
+
+def _embedder_option(device: str) -> Dict[str, Any]:
+    """One device the embedder may run on, and whether this PC can use it now."""
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+    from .providers import ProviderError, device_unavailable_reason, display_name
+
+    model, recipe = _embedder_for(device)
+    proven = device in GaiaConfig.TESTED_EMBEDDING_DEVICES
+    option: Dict[str, Any] = {
+        "device": device,
+        "model": model,
+        "display_name": display_name(model),
+        "proven": proven,
+        "present": None,
+        "available": None,
+        "reason": None,
+        "downloaded": None,
+    }
+    try:
+        option["reason"] = device_unavailable_reason(recipe)
+        option["present"] = option["reason"] is None
+        option["available"] = option["present"]
+        option["downloaded"] = bool(
+            LemonadeClient(verbose=False).get_model_info(model)["downloaded"]
+        )
+    except (ProviderError, LemonadeClientError) as e:
+        # Unknown, not refused: the model server isn't answering yet.
+        option["reason"] = str(e)
+    if not proven:
+        option["available"] = False
+        if option["present"]:
+            option["reason"] = _UNPROVEN_REASON
+    return option
+
+
+def _embedder_view() -> Dict[str, Any]:
+    from gaia.agents.registry import machine_embedding_device
+    from gaia.config import GaiaConfig
+
+    config = GaiaConfig.load()
+    device = machine_embedding_device()
+    return {
+        "device": device,
+        "chosen": config.embedding_device is not None,
+        "default_device": "gpu",
+        "options": [_embedder_option(d) for d in GaiaConfig.EMBEDDING_DEVICE_CHOICES],
+    }
+
+
+@router.get("/api/memory/embedder")
+def get_embedder() -> Dict[str, Any]:
+    """Where every chat embeds documents and memory, and where it could instead."""
+    from gaia.config import GaiaConfigError
+
+    try:
+        return _embedder_view()
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.put("/api/memory/embedder", dependencies=[Depends(_require_ui_header)])
+def set_embedder(body: EmbedderBody) -> Dict[str, Any]:
+    """Run the embedder on *device* for every chat; None is the default (GPU).
+
+    Each chat moves to it on its next turn, and stored memory is re-embedded
+    with it. ``changed`` is False when the embedder stays the same. Refused
+    while a reply runs here: its agent holds the old embedder.
+    """
+    from gaia.agents.registry import machine_embedding_model
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    from .._chat_helpers import _active_sse_handlers, evict_all_session_agents
+    from .providers import ProviderError, device_unavailable_reason
+
+    if _active_sse_handlers:
+        raise HTTPException(
+            status_code=409,
+            detail="A reply is running. Change the embedder once it finishes.",
+        )
+    if (
+        body.device is not None
+        and body.device not in GaiaConfig.TESTED_EMBEDDING_DEVICES
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"GAIA doesn't embed on the {body.device.upper()}: {_UNPROVEN_REASON}.",
+        )
+    if body.device is not None:
+        _, recipe = _embedder_for(body.device)
+        try:
+            reason = device_unavailable_reason(recipe)
+        except ProviderError as e:
+            raise HTTPException(status_code=503, detail=str(e)) from e
+        if reason:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This PC can't run the embedder on the {body.device.upper()}: {reason}",
+            )
+    try:
+        before = machine_embedding_model()
+        GaiaConfig.save_key("embedding_device", body.device or "auto")
+        changed = machine_embedding_model() != before
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    if changed:
+        # This process's agents picked theirs as they were built; GAIA's agent
+        # sidecar rebuilds each session on its next turn.
+        evict_all_session_agents()
+    return {**_embedder_view(), "changed": changed}
 
 
 @router.get("/api/memory/settings")

@@ -133,6 +133,8 @@ class Denial(NamedTuple):
     reason: str
     #: Nobody answered in time: not a refusal, so the call may be offered again.
     timed_out: bool = False
+    #: Nothing could put the call to a person: not a refusal either.
+    unattended: bool = False
 
 
 def user_denial_message(tool_name: str) -> str:
@@ -150,7 +152,9 @@ def timeout_denial_message(tool_name: str, waited: str) -> str:
     return (
         f"Nobody answered the confirmation for '{tool_name}' within {waited}, "
         "so it did not run. The prompt timed out — the user did NOT refuse it. "
-        "Tell the user the approval request expired and ask whether to try again."
+        "Tell the user the approval request expired and ask whether to try again. "
+        "Don't ask again in this request for approval: nobody is there to "
+        "answer."
     )
 
 
@@ -559,7 +563,8 @@ class OutputHandler(ABC):
         *loaded* is every skill now loaded in this chat, in load order. *how*
         is ``"model"`` when the model called ``load_skill``, ``"auto"`` when
         GAIA loaded it because the model called one of its ``loads_with``
-        tools, and ``"loaded"`` when it was already loaded.
+        tools, ``"user"`` when the user typed ``/<name>``, and ``"loaded"``
+        when it was already loaded.
         """
         ...
 
@@ -652,7 +657,9 @@ class OutputHandler(ABC):
         if self.auto_approve_confirmations_enabled():
             self.log_auto_approval(tool_name)
             return True
-        return self.deny_tool_execution(tool_name, unattended_denial_message(tool_name))
+        return self.deny_tool_execution(
+            tool_name, unattended_denial_message(tool_name), unattended=True
+        )
 
     def auto_approve_confirmations_enabled(self) -> bool:
         """True when this handler may approve gated tools without asking."""
@@ -762,10 +769,14 @@ class OutputHandler(ABC):
         )
 
     def deny_tool_execution(
-        self, tool_name: str, reason: str, timed_out: bool = False
+        self,
+        tool_name: str,
+        reason: str,
+        timed_out: bool = False,
+        unattended: bool = False,
     ) -> bool:
         """Record and log a denial, then return False for the caller to return."""
-        self._last_denial = Denial(tool_name, reason, timed_out)
+        self._last_denial = Denial(tool_name, reason, timed_out, unattended)
         logger.warning("Denied confirmation-gated tool '%s': %s", tool_name, reason)
         return False
 
@@ -786,6 +797,11 @@ class OutputHandler(ABC):
         """True when this tool's most recent denial was a prompt nobody answered."""
         recorded = self._last_denial
         return bool(recorded and recorded.tool == tool_name and recorded.timed_out)
+
+    def confirmation_unattended(self, tool_name: str) -> bool:
+        """True when this tool's most recent denial had no person to ask."""
+        recorded = self._last_denial
+        return bool(recorded and recorded.tool == tool_name and recorded.unattended)
 
     def print_policy_alert(
         self,
@@ -1000,7 +1016,7 @@ class TerminalConfirmationMixin:
             if tool_name not in self._notified_denials():
                 self._notified_denials().add(tool_name)
                 self._display("denial notice", self._show_denial_notice, reason)
-            return self.deny_tool_execution(tool_name, reason)
+            return self.deny_tool_execution(tool_name, reason, unattended=True)
 
         # "Always" is offered only when this call has a scope narrow enough to
         # name — never for the bare tool. See tool_grants.
@@ -1017,7 +1033,7 @@ class TerminalConfirmationMixin:
             if not shown:
                 # The user never saw what they would be approving.
                 return self.deny_tool_execution(
-                    tool_name, unaskable_denial_message(tool_name)
+                    tool_name, unaskable_denial_message(tool_name), unattended=True
                 )
             answer = self._read_confirmation_answer(
                 scope is not None, scope.label if scope else ""
@@ -1027,7 +1043,7 @@ class TerminalConfirmationMixin:
 
         if answer is None:
             return self.deny_tool_execution(
-                tool_name, unaskable_denial_message(tool_name)
+                tool_name, unaskable_denial_message(tool_name), unattended=True
             )
         self.note_prompt_answered(tool_name)
 
@@ -2080,6 +2096,11 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                 logger.debug("Pausing file preview failed: %s", e)
 
         self.progress.start(message, show_timer=show_timer)
+
+    def report_phase(self, phase: str, message: str, **counts: int) -> None:
+        """A terminal shows a phase as its spinner line."""
+        if message:
+            self.start_progress(message)
 
     def stop_progress(self) -> None:
         """Stop the progress indicator."""

@@ -4,8 +4,13 @@
 import { useCallback, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { ArrowUp, FileAudio, FileText, FileVideo, Plus, Square, X } from 'lucide-react';
 import type { UseAttachments } from '../hooks/useAttachments';
+import { ElementChips, useElementChipsBlock } from './browser-pane/ElementChip';
 import { useT } from '../i18n/useT';
+import { middleTruncate } from '../utils/format';
 import { isVideoFile } from '../utils/mediaFiles';
+import { isEditLastKey } from '../utils/editLast';
+import { useSkillCommands } from '../hooks/useSkillCommands';
+import { SKILL_MENU_ID, SkillCommandMenu, skillOptionId } from './SkillCommandMenu';
 import type { Attachment } from '../types';
 import './Composer.css';
 
@@ -24,6 +29,8 @@ interface ComposerProps {
     stopping?: boolean;
     /** While streaming, Enter still submits: the message is queued for the next turn. */
     queueWhileStreaming?: boolean;
+    /** GAIA is waiting on a question, and Enter sends the text as its answer. */
+    answering?: boolean;
     /** Blocks typing and sending, with the reason shown as the placeholder. */
     disabledReason?: string | null;
     attachments: UseAttachments;
@@ -34,6 +41,8 @@ interface ComposerProps {
     leftControls?: ReactNode;
     /** Small inline controls before the send button (model). */
     rightControls?: ReactNode;
+    /** Up-arrow in an empty box: open the last sent message for editing. */
+    onEditLast?: () => void;
 }
 
 const MAX_INPUT_HEIGHT = 240;
@@ -42,8 +51,8 @@ const MAX_INPUT_HEIGHT = 240;
 export const MAX_MESSAGE_CHARS = 100_000;
 
 export function Composer({
-    value, onChange, onSubmit, onStop, streaming = false, stopping = false, queueWhileStreaming = false, disabledReason, attachments,
-    placeholder, autoFocus, inputRef, leftControls, rightControls,
+    value, onChange, onSubmit, onStop, streaming = false, stopping = false, queueWhileStreaming = false, answering = false, disabledReason, attachments,
+    placeholder, autoFocus, inputRef, leftControls, rightControls, onEditLast,
 }: ComposerProps) {
     const t = useT();
     const ownRef = useRef<HTMLTextAreaElement | null>(null);
@@ -54,9 +63,17 @@ export function Composer({
     // What is sent: the text plus a link for each attached file.
     const sentLength = attachments.compose(value.trim()).length;
     const tooLong = sentLength > MAX_MESSAGE_CHARS;
-    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong;
+    const chipsBlock = useElementChipsBlock(streaming);
+    // A refused file would silently vanish on send, so it must be removed first.
+    const refusedNames = attachments.attachments.filter((a) => a.error).map((a) => a.name).join(', ');
+    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong && !refusedNames && !chipsBlock;
 
     const shownPlaceholder = disabledReason || placeholder || t('composer.placeholder');
+    const skillMenu = useSkillCommands(disabled ? '' : value);
+    const pickSkill = useCallback((name: string) => {
+        onChange(`/${name} `);
+        textareaRef.current?.focus();
+    }, [onChange, textareaRef]);
 
     // Grow with the text, up to a cap; shrink back when it is cleared.
     // Chrome counts the placeholder in scrollHeight, and a narrow first layout
@@ -81,11 +98,38 @@ export function Composer({
     }, [value, shownPlaceholder, textareaRef]);
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (skillMenu.open && !e.nativeEvent.isComposing) {
+            const { matches, selected } = skillMenu;
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                skillMenu.dismiss();
+                return;
+            }
+            if (matches.length > 0 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                e.preventDefault();
+                const step = e.key === 'ArrowDown' ? 1 : -1;
+                skillMenu.select((selected + step + matches.length) % matches.length);
+                return;
+            }
+            // Tab or Enter fills in the name; Enter on a name typed in full sends it.
+            const name = matches[selected]?.name;
+            const typedInFull = name !== undefined && value.toLowerCase() === `/${name}`;
+            if (name && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !typedInFull))) {
+                e.preventDefault();
+                pickSkill(name);
+                return;
+            }
+        }
+        if (onEditLast && isEditLastKey(e, value)) {
+            e.preventDefault();
+            onEditLast();
+            return;
+        }
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             if (canSend) onSubmit();
         }
-    }, [canSend, onSubmit]);
+    }, [canSend, onSubmit, onEditLast, value, skillMenu, pickSkill]);
 
     const handleDrop = useCallback((e: React.DragEvent) => {
         if (!e.dataTransfer?.files?.length) return;
@@ -100,16 +144,17 @@ export function Composer({
             onDrop={handleDrop}
             onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
         >
+            <ElementChips />
             {attachments.attachments.length > 0 && (
                 <ul className="composer-attachments" aria-label={t('composer.attached')}>
                     {attachments.attachments.map((a) => {
                         const Icon = attachmentIcon(a);
                         return (
-                        <li key={a.id} className={`composer-attachment${a.error ? ' has-error' : ''}${a.isMedia ? ' is-media' : ''}`}>
+                        <li key={a.id} title={a.isImage && a.url ? a.name : undefined} className={`composer-attachment${a.error ? ' has-error' : ''}${a.isMedia ? ' is-media' : ''}${a.isImage && a.url ? ' is-image' : ''}`}>
                             {a.isImage && a.url
                                 ? <img src={a.url} alt="" className="composer-attachment-thumb" />
                                 : <Icon size={14} aria-hidden="true" />}
-                            <span className="composer-attachment-name" title={a.name} dir="auto">{a.name}</span>
+                            <span className="composer-attachment-name" title={a.name} dir="ltr">{middleTruncate(a.name)}</span>
                             {a.uploading && (
                                 <span className="composer-attachment-state">
                                     {a.progress === undefined
@@ -132,6 +177,7 @@ export function Composer({
                     })}
                 </ul>
             )}
+            <SkillCommandMenu menu={skillMenu} onPick={pickSkill} />
             <textarea
                 ref={textareaRef}
                 className="composer-input"
@@ -144,6 +190,10 @@ export function Composer({
                 disabled={disabled}
                 autoFocus={autoFocus}
                 aria-label={t('composer.message')}
+                aria-autocomplete="list"
+                aria-expanded={skillMenu.open && skillMenu.matches.length > 0}
+                aria-controls={skillMenu.open && skillMenu.matches.length > 0 ? SKILL_MENU_ID : undefined}
+                aria-activedescendant={skillMenu.open && skillMenu.matches.length > 0 ? skillOptionId(skillMenu.selected) : undefined}
                 dir="auto"
             />
             {tooLong && (
@@ -151,6 +201,9 @@ export function Composer({
                     {t('composer.tooLong', { sent: sentLength.toLocaleString(), max: MAX_MESSAGE_CHARS.toLocaleString() })}
                     {' '}{t('composer.tooLongHint')}
                 </p>
+            )}
+            {refusedNames && hasContent && (
+                <p className="composer-limit-error" role="alert">{t('composer.removeRefused', { names: refusedNames })}</p>
             )}
             <div className="composer-row">
                 <div className="composer-row-left">
@@ -184,8 +237,8 @@ export function Composer({
                             className="composer-send"
                             onClick={onSubmit}
                             disabled={!canSend}
-                            aria-label={t('composer.queue')}
-                            title={t('composer.queueTitle')}
+                            aria-label={answering ? t('composer.sendAnswer') : t('composer.queue')}
+                            title={answering ? t('composer.sendAnswerTitle') : (chipsBlock ?? t('composer.queueTitle'))}
                         >
                             <ArrowUp size={16} />
                         </button>
@@ -208,7 +261,7 @@ export function Composer({
                             onClick={onSubmit}
                             disabled={!canSend}
                             aria-label={t('composer.send')}
-                            title={t.hint(t('composer.send'), 'Enter')}
+                            title={chipsBlock ?? t.hint(t('composer.send'), 'Enter')}
                         >
                             <ArrowUp size={16} />
                         </button>

@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from gaia.api.flagship import api_unavailable_reason
 from gaia.api.local_http import assert_bind_is_authenticated
 from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
 
@@ -49,6 +50,9 @@ def start_server(
         >>> start_server("localhost", 8080, debug=True, show_prompts=True)
         ✅ GAIA API server started with debug mode enabled
     """
+    reason = api_unavailable_reason()
+    if reason:
+        raise RuntimeError(reason)
     warn_if_unconfirmed_tools_allowed()
     # A LAN-reachable bind with no caller auth puts the agent loop on the
     # network for anyone who can route to the port.

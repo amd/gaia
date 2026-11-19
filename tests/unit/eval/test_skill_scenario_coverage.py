@@ -43,6 +43,14 @@ MIN_SCENARIOS_PER_SKILL = 2
 #: ~4.2 min/scenario, so covering all sixteen at two scenarios each would add
 #: over two hours to a suite already being split for length.
 DEFERRED: dict[str, str] = {
+    "automations": (
+        "Runs later through a delivery channel; its store, runner, CLI and policy "
+        "are unit-tested."
+    ),
+    "browser-pane": (
+        "Needs GAIA desktop's browser pane, which the eval lanes don't run; "
+        "its gating is covered end to end against a recorded pane bridge."
+    ),
     "calculators": (
         "The card does the math in the client; a skill scenario needs a judge "
         "that reads the card payload rather than the short reply."
@@ -65,12 +73,16 @@ DEFERRED: dict[str, str] = {
         "Needs downloaded ACE-Step/ThinkSound models and an audio-quality rubric; "
         "the separate live Lemonade integration test covers the API path."
     ),
+    "log-triage": "Needs an invented multi-file log corpus with a planted incident.",
+    "meeting-actions": "Needs a multi-meeting notes corpus with implicit commitments.",
+    "office-docs": "Needs a rubric that opens the produced .xlsx/.pptx/.docx files.",
     "price-watch": "Requires live web fetch; non-deterministic ground truth.",
     "send-email": (
         "Every send needs a person to approve the exact message; the email eval "
         "lane's fixture mailbox covers its tools once a scenario drives them."
     ),
     "recommendations": "Subjective output; no stable rubric yet.",
+    "report-from-sources": "Needs a mixed-period source corpus and a rubric that opens the saved file.",
     "research-report": "Requires live web search; non-deterministic ground truth.",
     "rss-digest": "Requires live feeds; non-deterministic ground truth.",
     "source-watch": "Requires live web fetch and stored state across runs.",

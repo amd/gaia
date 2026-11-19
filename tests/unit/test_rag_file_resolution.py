@@ -344,6 +344,37 @@ class TestIndexDocumentUnreadImages:
         assert "images" not in result["message"]
 
 
+class TestIndexDocumentVisionModelFailed:
+    """A broken vision model is blamed, not the file (#4741)."""
+
+    def test_the_reply_keeps_the_model_error_and_does_not_blame_the_file(
+        self, tmp_path
+    ):
+        doc = tmp_path / "scan.pdf"
+        doc.write_bytes(b"%PDF-1.4")
+        host = _make_host(_fake_rag(set()))
+        host.indexed_files = set()
+        host.current_session = None
+        error = "Could not read the images in scan.pdf: the vision model v failed"
+
+        def index_file(_rag, _path, **_kwargs):
+            return {
+                "success": False,
+                "file_name": doc.name,
+                "error": error,
+                "error_type": "vision_model_failed",
+            }, None
+
+        with patch("gaia.agents.tools.rag_tools._index_within_budget", index_file):
+            result = _tool("index_document")(file_path=str(doc))
+
+        assert result["status"] == "error"
+        assert result["error"] == error
+        assert result["error_type"] == "vision_model_failed"
+        assert "not the file" in result["hint"]
+        assert "check the file" not in result["hint"]
+
+
 class TestIndexDocumentRereadsUnreadImages:
     """A tracked file whose images went unread is indexed again once they can be read."""
 

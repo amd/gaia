@@ -21,7 +21,7 @@ from gaia.logger import get_logger
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
 from .database import ChatDatabase
-from .email_sidecar.profiles import profile_for
+from .sidecar.profiles import profile_for
 
 logger = get_logger(__name__)
 
@@ -32,6 +32,15 @@ class EnvironmentChangeError(ValueError):
 
 class RelayedSwitchError(RuntimeError):
     """The Internet switch is saved, but the relayed turn running now wasn't told."""
+
+
+def _shorten(path: str) -> str:
+    return path if len(path) <= 120 else path[:120] + "…"
+
+
+def path_error_reason(error: Exception) -> str:
+    """Why a path failed, without the path: POSIX errors repeat it in full."""
+    return getattr(error, "strerror", None) or str(error)
 
 
 def _norm(path: str) -> str:
@@ -45,6 +54,12 @@ def within(child: str, parent: str) -> bool:
 
 def load(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
     return db.get_session_environment(session_id)
+
+
+_NOTE_OPENINGS = (
+    "[This chat is working in the folder ",
+    "[This chat is working in these folders: ",
+)
 
 
 def with_folder_note(message: str, folders: List[str]) -> str:
@@ -63,6 +78,15 @@ def with_folder_note(message: str, folders: List[str]) -> str:
             'When the user says "this folder" or "here", they mean these.]'
         )
     return f"{note}\n\n{message}"
+
+
+def without_folder_note(message: str) -> str:
+    """*message* without the note :func:`with_folder_note` leads it with."""
+    if message.startswith(_NOTE_OPENINGS):
+        _note, sep, rest = message.partition("]\n\n")
+        if sep:
+            return rest
+    return message
 
 
 def apply_to_agent(agent: Any, env: Dict[str, Any]) -> bool:
@@ -115,8 +139,8 @@ def takes_folders(agent_type: Optional[str]) -> bool:
     """
     from gaia.daemon.sidecars.errors import SidecarError
 
-    from .email_sidecar import daemon_client
-    from .email_sidecar.profiles import profile_for, scope_supported
+    from .sidecar import daemon_client
+    from .sidecar.profiles import profile_for, scope_supported
 
     agent_type = agent_type or "chat"
     if not relayed({"agent_type": agent_type}):
@@ -134,7 +158,7 @@ def takes_folders(agent_type: Optional[str]) -> bool:
 
 def folders_refusal(agent_type: Optional[str]) -> str:
     """What to tell the user when *agent_type* can't be given folders."""
-    from .email_sidecar.profiles import profile_for
+    from .sidecar.profiles import profile_for
 
     profile = profile_for(agent_type or "chat")
     if profile is not None and profile.min_scope_api_version is not None:
@@ -226,6 +250,30 @@ def _computed_scope(db: ChatDatabase, session: Dict[str, Any]) -> List[str]:
     return _compute_allowed_paths(rag + library)
 
 
+# Paths approved at a relayed agent's prompt; its sidecar holds the grant itself.
+_approved_paths: Dict[str, List[str]] = {}
+_approved_guard = threading.Lock()
+
+
+def note_approved_path(session_id: str, path: str) -> None:
+    """Record that the user let *session_id*'s relayed agent open *path*."""
+    with _approved_guard:
+        paths = _approved_paths.setdefault(session_id, [])
+        if path not in paths:
+            paths.append(path)
+
+
+def forget_session(session_id: str) -> None:
+    """Drop what *session_id*'s relayed agent was allowed at its prompts."""
+    with _approved_guard:
+        _approved_paths.pop(session_id, None)
+
+
+def _approved(session_id: str) -> List[str]:
+    with _approved_guard:
+        return list(_approved_paths.get(session_id, []))
+
+
 def _env_scope_entries() -> List[Path]:
     """The ``GAIA_ALLOWED_PATHS`` entries, or none when it is unset or invalid."""
     try:
@@ -252,17 +300,21 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
     else:
         # What a new agent's validator would hold, GAIA_ALLOWED_PATHS applied.
         scope = _effective_scope(_computed_scope(db, session) + list(env["folders"]))
+        scope += _approved(session_id)
         scratch = None
 
     added = {_norm(p) for p in env["folders"]}
     managed = _norm(str(_managed_documents_dir()))
-    doc_paths = {
-        _norm(d["filepath"])
+    # A library copy's file name carries an id prefix; the person knows the original.
+    doc_names = {
+        _norm(d["filepath"]): d.get("filename")
         for d in db.get_session_documents(session_id)
         if d.get("filepath")
     }
+    doc_paths = set(doc_names)
     cwd = _norm(os.getcwd())
     from_env = {_norm(str(p)) for p in _env_scope_entries()}
+    approved = {_norm(p) for p in _approved(session_id)}
     entries: Dict[str, Dict[str, Any]] = {}
     for path in scope:
         key = _norm(path)
@@ -280,12 +332,13 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
             source = "working_folder"
         elif key in from_env:
             source = "allowed_paths"
-        elif validator is not None:
+        elif validator is not None or key in approved:
             source = "approved"
         else:
             source = "document"
         entries[key] = {
             "path": str(Path(path)),
+            "name": doc_names.get(key) or None,
             "kind": "file" if Path(path).is_file() else "folder",
             "source": source,
             # An attached document is removed from the chat's documents, which
@@ -295,7 +348,12 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "session_id": session_id,
         "folders": sorted(
-            entries.values(), key=lambda e: (e["kind"] != "folder", e["path"].lower())
+            entries.values(),
+            key=lambda e: (
+                e["kind"] != "folder",
+                (e["name"] or Path(e["path"]).name).lower(),
+                e["path"].lower(),
+            ),
         ),
         "removed": list(env["withheld"]),
         "internet": not env["internet_off"],
@@ -312,9 +370,18 @@ def check_folder(path: str) -> Path:
     """
     from ._chat_helpers import _unsafe_directory_grant_reason
 
-    target = Path(os.path.expanduser(path)).resolve()
-    if not target.is_dir():
-        raise EnvironmentChangeError(f"{target} is not a folder on this PC.")
+    try:
+        target = Path(os.path.expanduser(path)).resolve()
+        is_dir = target.is_dir()
+    except (ValueError, OSError) as e:  # a null byte, or a path too long for the OS
+        raise EnvironmentChangeError(
+            f"{_shorten(path)!r} is not a path this PC can open: "
+            f"{path_error_reason(e)}."
+        ) from e
+    if not is_dir:
+        raise EnvironmentChangeError(
+            f"{_shorten(str(target))} is not a folder on this PC."
+        )
     reason = _unsafe_directory_grant_reason(target)
     if reason:
         raise EnvironmentChangeError(

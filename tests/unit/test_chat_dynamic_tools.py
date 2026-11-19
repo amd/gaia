@@ -192,6 +192,7 @@ class TestOffStates:
         a = _active_agent(tool_loader=None)
         assert a._dynamic_tools_active() is False
         assert a._select_tools_for_turn("q") is None
+        assert a._conversation_request_kwargs() == {}
 
     def test_a_hosted_model_keeps_every_tool_in_full(self):
         a = _active_agent()
@@ -217,6 +218,7 @@ class TestOffStates:
     def test_memory_off_means_every_tool(self):
         a = _active_agent(_memory_store=None)
         assert a._dynamic_tools_active() is False
+        assert a._conversation_request_kwargs() == {}
         assert a._select_tools_for_turn("q") is None
 
     def test_a_dead_embedder_offers_every_tool_and_keeps_them_thin(self):
@@ -233,7 +235,23 @@ class TestOffStates:
         assert a._select_tools_for_turn("q") is None
         # Thinness must not change while a model is loaded.
         assert a._thin_tool_schemas() is True
-        assert a._conversation_request_kwargs() == {}
+        # Every tool, thin, is the list the third slot was primed with.
+        assert a._conversation_request_kwargs() == {"id_slot": FULL_TOOLS_SLOT}
+
+    def test_history_leaves_room_for_the_switch_until_it_happens(self):
+        a = _active_agent()
+        for entry in a._registry.values():
+            entry["parameters"] = {}
+        a._uses_native_tool_calls = lambda: True
+        a._apply_tool_filter(a._select_tools_for_turn("q"))
+        sent = [s["function"]["name"] for s in a._openai_tools]
+        budgeted = [s["function"]["name"] for s in a._history_tool_schemas()]
+        assert sent == ["c1"]
+        assert budgeted == ["c1", "d1", "d2"]
+
+        a.tool_loader.jump("search")
+        a._apply_tool_filter(a.tool_loader.offered(a._registry))
+        assert a._history_tool_schemas() == a._openai_tools
 
 
 # ── _select_tools_for_turn: what moves the session ────────────────────────
@@ -276,9 +294,17 @@ class TestSelectToolsForTurn:
         assert a._select_tools_for_turn("call spare_tool now") == self.NAMES
         assert a._conversation_request_kwargs() == {"id_slot": FULL_TOOLS_SLOT}
 
-    def test_asking_for_the_shell_jumps(self):
+    def test_asking_for_the_shell_jumps_only_when_the_shell_is_off_the_list(self):
         a = _selecting_agent(self.NAMES)
         assert a._select_tools_for_turn("use your shell to run pwd") == self.NAMES
+
+    def test_a_folder_note_is_not_the_users_words(self):
+        from gaia.ui.session_environment import with_folder_note
+
+        a = _selecting_agent(self.NAMES)
+        a._original_user_input = with_folder_note("hello", [r"C:\work\spare_tool"])
+        a._select_tools_for_turn(a._original_user_input)
+        assert a.tool_loader.jumped is False
 
     def test_a_recalled_procedures_tool_jumps(self):
         a = _selecting_agent(self.NAMES)
@@ -294,6 +320,28 @@ class TestSelectToolsForTurn:
     def test_retrieval_jumps(self):
         a = _selecting_agent(self.NAMES, {"spare_tool": 0.9})
         assert a._select_tools_for_turn("anything") == self.NAMES
+
+    def test_a_mail_question_jumps_below_the_retrieval_bar(self):
+        """The reported 0.39 never clears 0.40; the request must carry the jump."""
+        names = [
+            "core_tool",
+            "check_mailbox_access",
+            "list_inbox",
+            "search_email",
+            "read_email",
+        ]
+        a = _selecting_agent(names, {name: 0.39 for name in names[1:]})
+        assert a._select_tools_for_turn("did my landlord email me?") == names
+
+    def test_a_postal_mail_request_stays_on_core_below_the_bar(self):
+        names = ["core_tool", "check_mailbox_access", "list_inbox"]
+        a = _selecting_agent(names, {name: 0.39 for name in names[1:]})
+        assert a._select_tools_for_turn("mail the package") == ["core_tool"]
+
+    def test_a_mail_question_without_mail_tools_stays_on_core(self):
+        """The compact tier withholds mail; there is no tool to request."""
+        a = _selecting_agent(["core_tool", "read_file"], {"read_file": 0.39})
+        assert a._select_tools_for_turn("did my landlord email me?") == ["core_tool"]
 
     def test_the_message_names_tools_by_the_current_turn_only(self):
         a = _selecting_agent(self.NAMES)
@@ -850,3 +898,22 @@ def test_skill_body_filter_runs_before_the_turn_tool_filter(monkeypatch):
         agent._process_query_impl("read me an rss feed")
 
     assert order == ["bodies", "tools"]
+
+
+def test_a_withheld_tool_is_never_found(searching):
+    agent, _ = searching({"analyze_data_file": 0.9, "read_file": 0.5})
+    agent.deny_tools(["analyze_data_file"])
+
+    result = _search(agent)
+
+    assert result["tools"] == ["read_file"]
+    assert "analyze_data_file" not in result.get("docs", "")
+
+
+def test_no_skills_are_found_once_load_skill_is_withheld(searching):
+    agent, _ = searching(
+        {"pdf-tricks": 0.9}, {"pdf-tricks": SimpleNamespace(description="PDFs")}
+    )
+    agent._denied_tool_patterns = ("load_skill",)
+
+    assert _search(agent)["skills"] == []

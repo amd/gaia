@@ -45,6 +45,8 @@ export interface SetupComponent {
     /** null when it can't be known before the download starts. */
     size_gb: number | null;
     source: string;
+    /** It comes with the installer, so nothing is downloaded from `source`. */
+    bundled?: boolean;
     /** null when the plan can't tell yet. */
     installed: boolean | null;
 }
@@ -184,11 +186,15 @@ export interface SetupCheck {
     ready: boolean;
     stage?: 'setup' | 'upgrade' | 'server' | 'load' | string;
     reasons?: string[];
+    /** Setup was seen ready on this PC before, so a `server` stage is an outage, not a first run. */
+    initialized?: boolean;
     models?: Array<{ id: string; role: string; size_gb: number | null; loaded: boolean; error: string | null }>;
     /** True but no setup step, e.g. no GAIA agent build for this PC. */
     warnings?: string[];
     /** The hub has no GAIA agent build for this PC, so chat can't run here. */
     no_agent_build?: boolean;
+    /** The model server answers, but its model list could not be read (a `server` stage). */
+    model_list_unread?: boolean;
     steps: SetupStep[];
     /** The steps for a cloud provider, which downloads only the embedding model. */
     cloud_steps?: SetupStep[];
@@ -311,8 +317,8 @@ export interface SetupPlan {
     catalog?: SetupCatalogEntry[];
     /** Backends Lemonade reports for this PC. */
     backends?: Array<{ recipe: string; backend: string; state: string | null; version?: string | null; default: boolean }>;
-    /** An NPU Lemonade reports, and what stops a model running on it yet. */
-    npu?: SetupNpuStatus;
+    /** An NPU Lemonade reports, and what stops a model running on it yet; null when it couldn't be checked. */
+    npu?: SetupNpuStatus | null;
     /** What setup found across the stack; null where nothing could find out. */
     system?: SetupSystem;
     /** Everything else setup fetches. */

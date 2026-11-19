@@ -109,6 +109,50 @@ at that moment (`list_connections()`, `get_connection()`, or
 `"error": "busy"` and empty `scopes`. Don't base a scope decision on that row;
 ask again shortly.
 
+## Several accounts per connector
+
+A connector can hold several accounts at once, for example two Gmail
+addresses. Each account is told apart by the provider's stable id (Google's
+`sub`, Microsoft's Graph user `id`), not its address, so signing in again as
+the same account updates it in place and a different account is added beside
+it. A sign-in whose reply names no account id is refused and nothing is saved.
+
+The first account connected is the connector's default, and every call that
+names no account uses it. One-account callers need no change.
+
+```python
+import gaia.connectors as conn
+
+# Add another account: the provider shows its account picker.
+info = await conn.start_authorization("google", scopes=SCOPES, add_account=True)
+# Reconnect one account: the provider is told which one (login_hint).
+info = await conn.start_authorization("google", scopes=SCOPES, account="bob@example.com")
+
+for acct in conn.list_accounts("google"):
+    print(acct.account_id, acct.email, acct.status, acct.is_default)
+
+token = await conn.get_access_token(
+    provider="google", scopes=SCOPES, agent_id="my-agent", account="bob@example.com"
+)
+conn.set_default_account("google", "bob@example.com")
+await conn.revoke_connection_async("google", "bob@example.com")  # one account
+await conn.revoke_connection_async("google", all_accounts=True)  # every account
+```
+
+`account` takes a stable id or an address. A value that names no stored
+account, or more than one, raises `UnknownAccountError` (a
+`ConnectorsError`) whose `choices` lists the stored accounts.
+
+An `Account`'s `status` is `ok`, `reauth_required` (the provider refused the
+refresh token, so the user must reconnect that account), or `error` (a sign-in
+stopped before its token was saved; disconnect it and connect again). Only `ok`
+accounts appear in `list_connections()`, one row each, with `account_id` and
+`is_default` added.
+
+Agent grants belong to the connector, not to one account: an agent granted
+Gmail scopes may use any connected Google account. Removing one account keeps
+the grants; removing the last one clears them, as a full disconnect always has.
+
 ## Forwarded connections (no re-auth)
 
 When a host app has **already** authenticated the user (its own OAuth flow),
@@ -132,7 +176,7 @@ summary = conn.import_forwarded_connection(
         "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/calendar.events",
     ],
-    account_email="alice@example.com",   # display-only in v1
+    account_email="alice@example.com",   # which stored account to replace
     grant_agents=["installed:gaia"],        # agents that may use it
 )
 # summary carries metadata only — never the refresh token or client secret.
@@ -142,6 +186,12 @@ If GAIA stops after writing the forwarded client but before writing its matching
 connection, the next locked connection read restores the pre-import pair before
 checking it. The caller can retry the import; GAIA does not treat that temporary
 mismatch as a reason to delete the prior connection.
+
+A forward replaces one stored account and leaves the others alone. With one
+account stored it replaces that account, as it always has. With several, the
+forwarded `account_email` must name one of them, and the forwarded
+`client_id` must be the one the others were signed in with: GAIA keeps one OAuth client per provider, so a forward that would switch
+it is refused rather than leaving the other accounts unable to refresh.
 
 ### REST: `POST /v1/connections/{provider}`
 
@@ -166,10 +216,10 @@ curl -X POST http://localhost:4200/v1/connections/google \
 
 | Method / path | Purpose |
 |---|---|
-| `POST /v1/connections/{provider}` | Persist a forwarded grant (201). No browser step. |
+| `POST /v1/connections/{provider}` | Persist a forwarded grant (201). No browser step. 404 if `provider` isn't an OAuth connector. |
 | `GET /v1/connections` | List connections — **metadata only, secrets omitted**. |
-| `GET /v1/connections/{provider}` | One connection's metadata (404 if absent). |
-| `DELETE /v1/connections/{provider}` | Clears the local token, client, grants, and caches. Never revokes the host app's own OAuth grant — see below. |
+| `GET /v1/connections/{provider}` | The default account's metadata (404 if absent); `?account=<id or address>` picks another. |
+| `DELETE /v1/connections/{provider}` | Clears every account's local token, the client, grants, and caches (404 if `provider` isn't an OAuth connector). Never revokes the host app's own OAuth grant — see below. |
 
 After a successful POST the agent resolves the connection ambiently — the
 triage request carries **no credentials**; `get_access_token` reads the
@@ -192,7 +242,7 @@ it and GAIA need.** GAIA refreshes with the forwarded `refresh_token` and
 **cannot widen scope at refresh time** — a refresh only ever returns the
 scopes the original consent granted. If the forwarded `scopes` don't cover
 what the target agent needs (for the flagship `installed:gaia`:
-`gmail.readonly` and `gmail.compose`; for the Email agent: `gmail.modify` and `gmail.send`), the
+`gmail.readonly` and `gmail.compose`), the
 import **fails loudly** with `ScopeMismatchError` (HTTP 403 +
 `missing_scopes`) rather than silently under-provisioning. Re-consent by the
 host app — with the wider scope set — is the only fix.
@@ -428,6 +478,13 @@ grant exists for (connector_id, agent_id)  AND  is_agent_active(...)
 Activations default to **inactive** when absent — least-privilege opt-in.
 The ledger stores explicit `true`/`false` entries; an unknown pair returns
 `is_agent_active == False`.
+
+The flagship checks activation as `installed:gaia` in every app: the Agent
+UI, the terminal UI and `gaia -p`. Turning a connector on or off, or
+activating or deactivating it, reaches a chat that is already open, in the
+Agent UI or the terminal UI, with its next message: its agent is rebuilt with
+the new tools, keeping the conversation and loaded skills, and the old
+agent's MCP servers stop.
 
 <Warning>
 **OAuth connectors do not accept activations.** Agents reach OAuth providers

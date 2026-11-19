@@ -38,6 +38,14 @@ let override: string | null = null;
 export function setApiBase(url: string): void {
     if (!TRUSTED_API_RE.test(url)) throw new Error(`Refusing API base ${JSON.stringify(url)}: not a loopback /api URL.`);
     override = url;
+    // A reload reads `?api=` again; the port it was loaded with has nothing listening now.
+    if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
+        const page = new URL(window.location.href);
+        if (page.searchParams.get('api') !== url) {
+            page.searchParams.set('api', url);
+            window.history.replaceState(window.history.state, '', page);
+        }
+    }
 }
 
 export function getApiBase(): string {

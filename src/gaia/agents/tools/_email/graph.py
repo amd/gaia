@@ -5,11 +5,6 @@
 The read client lists, searches and reads, under the narrowest scope the
 connection carries. The write client adds drafts and sending, and is built only
 when a write is asked for. Neither organizes or deletes received mail.
-
-This is a lean reimplementation of ``gaia_agent_email.outlook_backend``, not an
-import of it: the flagship must not
-depend on the standalone email package it is meant to replace. The wire
-contract (Graph ``message`` resource) is the shared truth, not the Python.
 """
 
 from __future__ import annotations
@@ -32,6 +27,7 @@ from gaia.agents.tools._email.outgoing import (
     Recipients,
     SourceMessage,
 )
+from gaia.agents.tools._email.scopes import MICROSOFT_CONNECTOR_ID
 
 logger = logging.getLogger(__name__)
 
@@ -251,17 +247,20 @@ class OutlookReadBackend:
         if response.status_code == 401:
             raise MailboxAuthError(
                 "Microsoft Graph rejected the access token (401). The Outlook "
-                "connection has expired or been revoked. Reconnect it with "
-                "`gaia connectors` (or Settings → Connectors in the Agent UI), "
-                f"then retry. (request: {where})"
+                "connection has expired or been revoked and needs reconnecting. "
+                f"(request: {where})",
+                connect=(MICROSOFT_CONNECTOR_ID,),
+                reconnect=(MICROSOFT_CONNECTOR_ID,),
             )
         if response.status_code == 403:
             raise MailboxAuthError(
                 "Microsoft Graph refused the request (403 — insufficient "
                 "permissions). The connected account has not granted "
-                "Mail.ReadWrite to this agent. Reconnect Microsoft with "
-                "`gaia connectors` and approve mail access. "
-                f"(request: {where}; code: {code or 'forbidden'})"
+                "Mail.ReadWrite to this agent, so it needs reconnecting with "
+                "mail access approved. "
+                f"(request: {where}; code: {code or 'forbidden'})",
+                connect=(MICROSOFT_CONNECTOR_ID,),
+                reconnect=(MICROSOFT_CONNECTOR_ID,),
             )
         if response.status_code == 404:
             raise MailboxError(
@@ -280,7 +279,7 @@ class OutlookReadBackend:
             f"Microsoft Graph request failed: {where} returned "
             f"{response.status_code}" + (f" ({code})" if code else "") + ". "
             "Retry; if it persists, check Microsoft 365 service status and "
-            "reconnect with `gaia connectors`."
+            "reconnect Microsoft under Settings > Connectors."
         )
 
     def _get(self, path: str, *, params: Optional[dict] = None) -> Any:
@@ -309,8 +308,9 @@ class OutlookReadBackend:
             raise MailboxError(
                 "Microsoft Graph returned no address for the connected account "
                 "(both `mail` and `userPrincipalName` were empty). The "
-                "connection is in an unusable state — reconnect Microsoft with "
-                "`gaia connectors`."
+                "connection is in an unusable state and needs reconnecting.",
+                connect=(MICROSOFT_CONNECTOR_ID,),
+                reconnect=(MICROSOFT_CONNECTOR_ID,),
             )
         return address
 

@@ -6,6 +6,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -85,7 +86,11 @@ func (m ChatModel) switchRelayedModel(sw client.TurnModelSwitcher, target string
 // checkRelayedSwitch returns Lemonade's id for target, or why it cannot be
 // switched to.
 func checkRelayedSwitch(ctx context.Context, sw client.TurnModelSwitcher, base, provider, target string) (string, error) {
-	if lemonade.LocalOnly() && (provider != "local" || client.IsClaudeModelID(target)) {
+	if lemonade.IsHybridID(target) {
+		if err := lemonade.HybridLocalOnlyRefusal(); err != nil {
+			return "", err
+		}
+	} else if lemonade.LocalOnly() && (provider != "local" || client.IsClaudeModelID(target)) {
 		return "", errors.New("Local only is on, so cloud models are off. " + lemonade.LocalOnlyHint)
 	}
 	if client.IsClaudeModelID(target) {
@@ -93,6 +98,9 @@ func checkRelayedSwitch(ctx context.Context, sw client.TurnModelSwitcher, base, 
 	}
 	if err := sw.CheckModelSwitch(ctx); err != nil {
 		return "", err
+	}
+	if lemonade.IsHybridID(target) {
+		return checkHybridSwitch(ctx, sw, base)
 	}
 	models, err := lemonade.New(base).Models(ctx, provider)
 	if err != nil {
@@ -118,12 +126,18 @@ func checkRelayedSwitch(ctx context.Context, sw client.TurnModelSwitcher, base, 
 		" does not list it — the key may be missing or the provider is not connected")
 }
 
+// sameModelID reports whether two ids name one model: the agent and Lemonade
+// answer with their own spelling of a local id (its case, a "user." prefix).
+func sameModelID(a, b string) bool {
+	return a != "" && (strings.EqualFold(a, b) || lemonade.SameLocalID(a, b))
+}
+
 // handleRelayedSwitch applies a checked switch, or says why it was not made.
 // The opening restore or gate pick reports through the startup path, so a
 // failure there opens the picker the same way it does on the direct route.
 func (m ChatModel) handleRelayedSwitch(msg relayedSwitchMsg) (tea.Model, tea.Cmd) {
 	m.relayedSwitching = false
-	startup := m.startup.inFlight && strings.EqualFold(msg.target, m.startup.model)
+	startup := m.startup.inFlight && sameModelID(msg.target, m.startup.model)
 	if startup {
 		m.startup.inFlight = false
 	}
@@ -194,4 +208,25 @@ func (m *ChatModel) revertRelayedSwitch(err error) bool {
 		prev.modelID, prev.modelDisplay, prev.modelBackend, prev.modelRemote
 	m.relayedPending = nil
 	return true
+}
+
+// checkHybridSwitch checks every concrete model hybrid routes to, naming the
+// one that is missing and the key that picks another.
+func checkHybridSwitch(ctx context.Context, sw client.TurnModelSwitcher, base string) (string, error) {
+	models, err := lemonade.ReadHybridModels()
+	if err != nil {
+		return "", err
+	}
+	for _, r := range models.Roles() {
+		provider := "local"
+		if lemonade.IsCloudID(r.Model) {
+			provider = strings.SplitN(r.Model, ".", 2)[0]
+		}
+		if _, err := checkRelayedSwitch(ctx, sw, base, provider, r.Model); err != nil {
+			return "", fmt.Errorf("hybrid's %s model %s can't be used: %s. Choose another with "+
+				"`gaia config set %s <id>` — `gaia gateway models` lists the gateway's",
+				r.Role, r.Model, strings.TrimSuffix(err.Error(), "."), r.Key)
+		}
+	}
+	return lemonade.HybridModelID, nil
 }

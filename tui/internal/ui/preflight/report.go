@@ -3,9 +3,7 @@
 //
 // It answers four generic preconditions — the daemon is up and speaks our
 // contract, the agent's sidecar is running, the local model server is reachable
-// at a compatible version, and the model is downloaded — plus any number of
-// per-agent extra checks (for email: a mailbox that is connected, granted send,
-// AND proven readable). Every answer is machine-readable already; this package
+// at a compatible version, and the model is downloaded. Every answer is machine-readable already; this package
 // turns those answers into one row per precondition with a state, a human line,
 // and a remedy that names a real command.
 //
@@ -18,10 +16,8 @@
 //     {cause, remedy, where-to-look}, specific causes before generic ones.
 //   - `configured` is not `working`. A row that can only read a service's own
 //     record of itself has not verified anything the user will feel. Where the
-//     record can disagree with reality — a stored OAuth connection reports
-//     `connected: true` long after its credentials stop working — the row makes
-//     the smallest real call instead, and reports `unknown` when even that
-//     cannot answer. See MailboxCheck.
+//     record can disagree with reality, the row makes the smallest real call
+//     instead, and reports `unknown` when even that cannot answer.
 //
 // # What an indeterminate row does, and why that is not the gate going soft
 //
@@ -34,8 +30,7 @@
 //     (StateFailed and not Optional); for an unknown row, its Disposition.
 //
 // So an unknown row renders `[?]` and keeps Ready() false either way. Most of
-// them — an unadvertised Lemonade version, two mailboxes linked so neither
-// can be probed — are Disposition Notify: named on screen while the agent
+// them — an unadvertised Lemonade version, for one — are Disposition Notify: named on screen while the agent
 // starts, launch not stopped. The alternative — demanding a keypress every
 // time — was rejected deliberately for these: the condition is one the user
 // cannot fix (their Lemonade build simply does not report a version), so the
@@ -50,10 +45,7 @@
 // holds for a person rather than proceeding silently. See internal/ui/status
 // for how a Halt row reaches the rest of the app.
 //
-// A row that is genuinely broken (StateFailed) still blocks via Report.Blocked
-// unless it is one the agent itself can repair once the conversation starts
-// (Report.OfferableDespiteFailure) — that one keystroke opens the door to the
-// repair instead of a second gate in front of it.
+// A row that is genuinely broken (StateFailed) still blocks via Report.Blocked.
 package preflight
 
 import (
@@ -127,8 +119,6 @@ const (
 	FixStartSidecar
 	// FixPullModel — POST /v1/<agent>/init and stream provisioning progress.
 	FixPullModel
-	// FixConnectMailbox — hand off to the connector flow (Stage 4).
-	FixConnectMailbox
 	// FixRunSetup — run `gaia init` for the flagship profile and stream it.
 	FixRunSetup
 	// FixRestartSidecar — stop the sidecar running in the wrong mode, then
@@ -157,8 +147,6 @@ func (k FixKind) Label() string {
 		return "start the agent"
 	case FixPullModel:
 		return "download it now"
-	case FixConnectMailbox:
-		return "connect a mailbox"
 	case FixRunSetup, FixInstallServer:
 		return "set it up now"
 	case FixRestartSidecar:
@@ -245,15 +233,13 @@ type Row struct {
 	// AutoFix marks a Fix the screen applies once on its own, without a
 	// keypress: starting a local daemon or agent that is simply not running.
 	AutoFix bool
-	// Provider is the mailbox provider a FixConnectMailbox targets.
+	// Provider is the cloud provider a FixConnectProvider targets.
 	Provider string
 	// Optional marks a row that gates a CAPABILITY rather than the launch: the
 	// agent starts and answers without it, and only the asks that need it fail.
 	// It is probed like any other, renders [!] when it fails, keeps Ready()
 	// false, is what FirstAttention puts the cursor on, and carries a remedy —
-	// it just does not refuse the run. The mailbox is one: email triage
-	// classifies the payload carried in the request and never reads a mailbox,
-	// so a missing mailbox must not refuse a triage query.
+	// it just does not refuse the run.
 	Optional bool
 	// Raw is the probe's raw answer (JSON body or error text), shown by `d`.
 	Raw string
@@ -312,8 +298,7 @@ func (r Row) Outcome() status.Outcome {
 // Stable row keys. KeyDaemon/KeySidecar are the daemon runner's; KeyBinary is
 // the local runner's. KeyClaudeCredential is asked by the local runner only in
 // Claude mode. KeyLemonade and KeyModel are asked by both, over
-// different probes. KeyMailbox is email-specific and arrives through
-// Config.Extras.
+// different probes.
 const (
 	KeyDaemon           = "daemon"
 	KeySidecar          = "sidecar"
@@ -321,7 +306,6 @@ const (
 	KeyClaudeCredential = "claude-credential"
 	KeyLemonade         = "lemonade"
 	KeyModel            = "model"
-	KeyMailbox          = "mailbox"
 	KeyChat             = "chat"
 )
 
@@ -367,8 +351,7 @@ func (r Report) Ready() bool {
 // what could not be verified — or what failed without stopping the launch.
 //
 // Optional rows are excluded (see Row.Optional). They are still failures and
-// still say so; they are just failures of a capability the ask may not need, and
-// refusing every launch over one would make a mailbox-free triage impossible.
+// still say so; they are just failures of a capability the ask may not need.
 func (r Report) Blocked() bool {
 	for _, row := range r.Rows {
 		if row.State == StateFailed && !row.Optional {
@@ -380,8 +363,8 @@ func (r Report) Blocked() bool {
 
 // HasOneKeyFix reports whether a row that still needs attention offers a fix the
 // user can apply from here. Such a row holds the screen even when nothing
-// blocks: auto-proceeding past a mailbox that is not connected would take the
-// `f` that connects it away with the screen it was on.
+// blocks: auto-proceeding past it would take the `f` that fixes it away with
+// the screen it was on.
 func (r Report) HasOneKeyFix() bool {
 	for _, row := range r.Rows {
 		if row.NeedsAttention() && row.Fix != FixNone {
@@ -389,30 +372,6 @@ func (r Report) HasOneKeyFix() bool {
 		}
 	}
 	return false
-}
-
-// agentRepairable names preconditions the agent itself can fix once the
-// conversation starts. Central map rather than a per-row flag so a newly added
-// mailbox state cannot forget to set it.
-var agentRepairable = map[string]bool{KeyMailbox: true}
-
-// OfferableDespiteFailure reports whether the user may CHOOSE to launch over the
-// failures found — true when every failed row is one the agent repairs in the
-// conversation. Deliberately separate from Blocked: a launch is never automatic
-// over a proven failure, but refusing the choice would hide the mailbox
-// onboarding behind the gate that detects it.
-func (r Report) OfferableDespiteFailure() bool {
-	failed := false
-	for _, row := range r.Rows {
-		if row.State != StateFailed {
-			continue
-		}
-		if !agentRepairable[row.Key] {
-			return false
-		}
-		failed = true
-	}
-	return failed
 }
 
 // needsHalt is shared by HasHalt and HaltingRows so the two can never

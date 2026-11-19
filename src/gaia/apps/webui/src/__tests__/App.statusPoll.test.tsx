@@ -11,11 +11,16 @@ import { act, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../services/api');
+vi.mock('../stores/backendStore', async (orig) => ({
+    ...(await orig<typeof import('../stores/backendStore')>()),
+    resyncBackend: vi.fn(),
+}));
 
 import App from '../App';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { useModelStore } from '../stores/modelStore';
+import { resyncBackend } from '../stores/backendStore';
 import type { Session, SetupCheck, SystemStatus } from '../types';
 
 const mocked = vi.mocked(api);
@@ -79,7 +84,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], pendingPrompt: null,
         draftPermissionMode: 'ask', defaultPermissionMode: 'ask', showMemoryDashboard: false, showSchedules: false, settingsSection: null,
-        draftDocumentIds: [],
+        draftDocumentIds: [], systemStatus: null,
     });
 });
 
@@ -137,8 +142,8 @@ describe('system status poll', () => {
         mocked.getSystemStatus.mockResolvedValue(BUSY as never);
         render(<App />);
         await advance(120_000);
-        expect(document.body.textContent).toMatch(/not answering/i);
-        expect(document.body.textContent).not.toMatch(/isn't running/i);
+        expect(document.body.textContent).toMatch(/isn't answering/i);
+        expect(document.body.textContent).toMatch(/may be busy/i);
     });
 
     it('calls a backend that keeps missing answers slow, never lost', async () => {
@@ -223,7 +228,22 @@ describe('system status poll', () => {
         mocked.getSystemStatus.mockResolvedValue({ lemonade_running: false, lemonade_error: null, start_command: 'lemond --start' } as never);
         render(<App />);
         await advance(20_000);
-        expect(document.body.textContent).toMatch(/model server isn't running/i);
+        expect(document.body.textContent).toMatch(/model server isn't answering/i);
         expect(document.body.textContent).toContain('lemond --start');
+    });
+
+    it('asks the desktop app where the backend is when the status check cannot connect', async () => {
+        fakeTimers();
+        mocked.getSystemStatus.mockRejectedValue(new TypeError('Failed to fetch'));
+        render(<App />);
+        await advance(1_000);
+        expect(resyncBackend).toHaveBeenCalled();
+    });
+
+    it('does not ask again while the backend answers', async () => {
+        fakeTimers();
+        render(<App />);
+        await advance(30_000);
+        expect(resyncBackend).not.toHaveBeenCalled();
     });
 });

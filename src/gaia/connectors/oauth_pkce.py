@@ -20,7 +20,6 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from gaia.connectors._refresh_lock import locked_write
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -28,12 +27,10 @@ from gaia.connectors.errors import (
 )
 from gaia.connectors.flow import (
     complete_authorization,
-    revoke_provider_token,
     start_authorization,
 )
 from gaia.connectors.handler import register_handler
 from gaia.connectors.spec import ConnectorSpec
-from gaia.connectors.store import DEFAULT_ACCOUNT, delete_connection
 from gaia.connectors.tokens import get_or_refresh
 
 logger = logging.getLogger(__name__)
@@ -106,10 +103,15 @@ class OAuthPkceHandler:
 
         ``spec.oauth_provider_ref`` identifies the ``OAuthProvider`` in the
         provider registry (e.g. ``"google"``). Falls back to ``spec.id``.
+        ``account_id`` (stable id or address) picks the account; ``None`` is
+        the connector's default account.
         """
+        from gaia.connectors.accounts import resolve_slot
+
         provider_id = spec.oauth_provider_ref or spec.id
-        account_email = account_id or DEFAULT_ACCOUNT
-        token_str = await get_or_refresh(provider_id, account_email=account_email)
+        token_str = await get_or_refresh(
+            provider_id, slot=resolve_slot(provider_id, account_id)
+        )
         return {
             "access_token": token_str,
             "scopes": list(required_scopes or spec.default_scopes),
@@ -229,7 +231,12 @@ class OAuthPkceHandler:
 
         # Start a new PKCE flow; caller will open the URL.
         return await start_authorization(
-            provider_id, scopes=scopes, grant_agents=grant_agents
+            provider_id,
+            scopes=scopes,
+            grant_agents=grant_agents,
+            add_account=bool(config.get("add_account")),
+            account=config.get("account") or None,
+            callback_port=config.get("callback_port"),
         )
 
     async def disconnect(
@@ -239,12 +246,15 @@ class OAuthPkceHandler:
         account_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Revoke the provider-side OAuth grant (when the provider supports
-        it), then remove stored tokens AND per-agent grants. Keyring
-        deletion is the source of truth for "is this configured" — once the
-        blob is gone, ``store.peek_connection`` returns ``None`` and the
-        catalog UI shows "not configured". Grant cleanup prevents silent
-        inheritance: if the same ``connector_id`` is reconnected later, the
-        new tokens must NOT carry the prior user's agent consents.
+        it), then remove the stored token. ``account_id`` (stable id or
+        address) disconnects that one account; ``None`` disconnects every
+        account of the connector.
+
+        Per-agent grants are per connector, not per account, so they are
+        wiped only when the last account goes: disconnecting one Gmail must
+        not take mail access away from the other. Wiping them then prevents
+        silent inheritance: a later reconnect must NOT carry the prior
+        user's agent consents.
 
         Local state is ALWAYS cleared, even when the provider-side revoke
         fails or isn't supported — that is the user's unambiguous intent in
@@ -253,35 +263,32 @@ class OAuthPkceHandler:
         what the provider confirmed, so the CLI/UI can say so honestly
         instead of implying GAIA's app access was actually revoked.
         """
+        from gaia.connectors.api import revoke_connection_async
+
         provider_id = spec.oauth_provider_ref or spec.id
-        account_email = account_id or DEFAULT_ACCOUNT
-
-        revoke_result = await revoke_provider_token(
-            provider_id, account_email=account_email
+        revoke_result = await revoke_connection_async(
+            provider_id, account_id, all_accounts=account_id is None
         )
 
-        await locked_write(
-            provider_id, delete_connection, provider_id, account_email=account_email
-        )
+        if revoke_result["remaining_accounts"] == 0:
+            # Local import keeps the module-level dependency graph unchanged.
+            from gaia.connectors.activations import revoke_all_activations_for
+            from gaia.connectors.grants import revoke_all_grants_for
 
-        # Wipe per-agent grants for this connector_id. Local import keeps
-        # the module-level dependency graph identical to before.
-        from gaia.connectors.activations import revoke_all_activations_for
-        from gaia.connectors.grants import revoke_all_grants_for
-
-        revoke_all_grants_for(spec.id)
-        # Defensive sweep: OAuth connectors never accept activation writes
-        # (rejected at the api layer — see ``_require_mcp_server_for_activation``),
-        # so this is a no-op today. Kept as a belt-and-braces guard against
-        # ledger entries that pre-date the type check or are written via
-        # future migration paths — re-adding the same connector_id must
-        # never silently inherit prior state.
-        revoke_all_activations_for(spec.id)
+            revoke_all_grants_for(spec.id)
+            # Defensive sweep: OAuth connectors never accept activation writes
+            # (rejected at the api layer — see
+            # ``_require_mcp_server_for_activation``), so this is a no-op
+            # today. Kept so re-adding the same connector_id never silently
+            # inherits prior state.
+            revoke_all_activations_for(spec.id)
 
         logger.info(
-            "oauth_pkce: disconnected connector_id=%s revoke_supported=%s "
-            "revoked_remotely=%s",
+            "oauth_pkce: disconnected connector_id=%s accounts=%s remaining=%d "
+            "revoke_supported=%s revoked_remotely=%s",
             spec.id,
+            "all" if account_id is None else "one",
+            revoke_result["remaining_accounts"],
             revoke_result["revoke_supported"],
             revoke_result["revoked_remotely"],
         )
@@ -294,9 +301,11 @@ class OAuthPkceHandler:
         Returns ``{"ok": True, "detail": "token_valid"}`` on success, or
         ``{"ok": False, "detail": "<error message>"}`` on failure.
         """
+        from gaia.connectors.accounts import default_slot
+
         provider_id = spec.oauth_provider_ref or spec.id
         try:
-            await get_or_refresh(provider_id)
+            await get_or_refresh(provider_id, slot=default_slot(provider_id))
             return {"ok": True, "detail": "token_valid"}
         except AuthRequiredError as e:
             return {"ok": False, "detail": str(e)}

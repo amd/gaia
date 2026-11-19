@@ -254,6 +254,7 @@ def set_loop_state(
     state: str,          # "idle" | "scheduled" | "paused"
     reason: str = "",
     wake_in_seconds: int = 0,   # required when state="scheduled"
+    goal_outcome: str = "",     # "done" | "failed" | "" (not finished)
 ) -> str:
     """Signal the autonomous loop what to do next.
 
@@ -268,6 +269,9 @@ def set_loop_state(
         reason: Human-readable explanation (shown in activity log).
         wake_in_seconds: Seconds until next wake-up (only for "scheduled").
                          Minimum: 30. Maximum: 86400 (24 hours).
+        goal_outcome: "done" when the goal worked on is achieved, "failed"
+                      when it cannot be done (reason says why), or empty to
+                      try it again later.
     """
 ```
 
@@ -275,6 +279,28 @@ def set_loop_state(
 - `wake_in_seconds` floor: 30 seconds (prevents infinite loops)
 - `wake_in_seconds` ceiling: 86400 seconds (prevents absurdly far scheduling)
 - If `wake_in_seconds` is below floor, clamp to 30 and log a warning
+- An unknown `goal_outcome` is refused, and the relay reads it as empty
+
+**How a goal run ends (#7995).** A tick works on the first actionable goal.
+`goal_outcome="done"` completes it and `"failed"` fails it, with `reason` as
+its note. A run that stops with state `"scheduled"` holds the goal until
+its wake time without counting a try; the 10th such run in a row fails it
+with "Stalled: checked back 10 times in a row without finishing" and the last
+reason, and a run that stops any other way ends the streak (#8171). Any other
+run that reports neither,
+including one that hits the tick timeout, is counted: the goal waits 5 minutes,
+then 10, before it is run again (`GoalStore.retry_at`), and the third such
+run fails it with "Stopped after 3 tries without finishing" and the last
+run's reason or answer. A goal that can't be done therefore stops instead of
+being re-run every tick. Queuing a goal again from any other status starts a
+fresh count of both tries and check-backs, so a user who fixes the blocker
+gets the full three tries and ten check-backs.
+
+**Spending.** A goal run on a cloud model is added to the month's cloud
+spending like a chat turn, including a run that failed after the model
+answered. Once the monthly limit is reached, no goal run starts: the goal
+stays queued with the limit message as its note, and runs again once the
+limit is raised or more is allowed for the month.
 
 ### 5.3 `request_user_input` Tool
 
@@ -286,7 +312,7 @@ def request_user_input(
     self,
     message: str,
     choices: Optional[List[str]] = None,      # show buttons instead of text field
-    default_if_no_response: Optional[str] = None,  # returned on timeout
+    default_if_no_response: Optional[str] = None,  # named on timeout, never returned
     timeout_seconds: int = 300,
     continue_if_no_response: bool = True,
 ) -> str:
@@ -295,34 +321,34 @@ def request_user_input(
     Args:
         message: The question to present to the user.
         choices: Optional list of choices (renders as buttons in the UI).
-        default_if_no_response: Value to use if no response received before
-            timeout. If not set and continue_if_no_response=True, returns
-            the sentinel string "__NO_RESPONSE__". Callers must check for
-            this value and handle it explicitly — never proceed blindly.
+        default_if_no_response: The choice the agent would pick if nobody
+            answers. It is never returned as the user's answer: on a timeout
+            the result starts with "__NO_RESPONSE__" and names this default.
         timeout_seconds: How long to wait (10 to 600, default 300).
         continue_if_no_response: If True, continue working after timeout.
             If False, the loop pauses until user re-engages.
 
     Returns:
-        User's response string, chosen option, or "__NO_RESPONSE__" if
-        timed out and no default was provided. ALWAYS check the return value.
+        User's response string or chosen option, or text starting with
+        "__NO_RESPONSE__" when they did not answer. ALWAYS check the return value.
     """
 ```
 
 **Return value contract:**
 - User responded: returns their text or chosen option
-- Timeout + `default_if_no_response` set: returns the default
-- Timeout + no default + `continue_if_no_response=True`: returns `"__NO_RESPONSE__"`
+- Timeout, with or without `default_if_no_response`: returns text starting with `"__NO_RESPONSE__"` that says the user did not answer and names the default, if one was set. Silence is never returned as an answer.
+- After an unanswered question, every approval-gated call that is not a known read needs a person's approval for the rest of the turn, even with Full access on. A later real answer lifts the hold.
 - Never returns empty string `""` — this prevents silent blind-proceed bugs
 
 **Callers must handle `"__NO_RESPONSE__"` explicitly:**
 ```python
 response = self.request_user_input("Which folder?", default_if_no_response="~/Documents")
-# response is always a real value here — default used on timeout
+if response.startswith("__NO_RESPONSE__"):
+    ...  # the default is an assumption to state, not the user's choice
 ```
 ```python
 response = self.request_user_input("Confirm deletion?", continue_if_no_response=True)
-if response == "__NO_RESPONSE__":
+if response.startswith("__NO_RESPONSE__"):
     self.set_loop_state("idle", reason="Awaiting user confirmation before delete")
     return  # do NOT proceed
 ```
@@ -830,13 +856,13 @@ acting on its own initiative.
 │   ── or ──                                         │
 │  [___________________________]  [ Send ]            │
 │                                                     │
-│  ⏱ 4:32 remaining · will use default if no reply  │
+│  ⏱ 4:32 remaining                                  │
 └─────────────────────────────────────────────────────┘
 ```
 
 - `choices` renders as buttons (fast selection, no typing needed)
 - Timer countdown from `timeout_seconds`
-- "will use default if no reply" only shown when `default_if_no_response` set
+- No "will use default" note: an unanswered question is reported to the agent as unanswered, not answered with the default
 - Multiple cards stack if agent asks several questions in sequence
 - Each resolves independently; resolved cards collapse with the user's answer
 

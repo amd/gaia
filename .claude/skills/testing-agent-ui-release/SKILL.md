@@ -282,7 +282,7 @@ findings into issues:
 
 **Check for auto-fix PRs first.** Filing with the `bug` label starts the repo's auto-fix
 workflow, which opens a draft PR per issue on an `autofix/issue-<N>` branch within
-minutes: `gh pr list -R amd/gaia --search "autofix/issue-<N> in:head"`. Before starting
+minutes: `gh pr list -R amd/gaia --head autofix/issue-<N>`. Before starting
 fixes, decide per issue: leave it to the auto-fix draft and retest that branch, or fix it
 yourself and comment on the draft with your retested branch. Never open a second PR
 without saying so on the first.

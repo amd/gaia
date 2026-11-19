@@ -1,4 +1,18 @@
 {
+  "AccountUpdateRequest": {
+    "description": "Body for ``PATCH /api/connectors/{id}/accounts/{account_id}``. Only\n``true`` is accepted: to change the default, make another account it.",
+    "properties": {
+      "is_default": {
+        "title": "Is Default",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "is_default"
+    ],
+    "title": "AccountUpdateRequest",
+    "type": "object"
+  },
   "ActivationRequest": {
     "description": "Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.\n\nValid only for ``mcp_server`` connectors — see ``_require_mcp_server``.\n\n``scopes`` is optional: when present and no grant exists for the pair,\nit is used to auto-create the grant (one-click convenience). When the\npair already has a grant the body is ignored — see issue #1005.",
     "properties": {
@@ -271,6 +285,17 @@
         "title": "Active",
         "type": "boolean"
       },
+      "autoDeclined": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Autodeclined"
+      },
       "commandOutput": {
         "anyOf": [
           {
@@ -312,6 +337,17 @@
         ],
         "title": "Decision"
       },
+      "declined": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Declined"
+      },
       "detail": {
         "anyOf": [
           {
@@ -336,6 +372,17 @@
       "id": {
         "title": "Id",
         "type": "integer"
+      },
+      "kept": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Kept"
       },
       "label": {
         "title": "Label",
@@ -406,6 +453,17 @@
         ],
         "title": "Narration"
       },
+      "needsModel": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Needsmodel"
+      },
       "planNarrations": {
         "anyOf": [
           {
@@ -467,6 +525,17 @@
         ],
         "title": "Receiptid"
       },
+      "refused": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Refused"
+      },
       "render": {
         "anyOf": [
           {
@@ -514,6 +583,17 @@
         ],
         "title": "Success"
       },
+      "timedOut": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Timedout"
+      },
       "timestamp": {
         "default": 0,
         "title": "Timestamp",
@@ -559,6 +639,22 @@
   },
   "AuthorizeRequest": {
     "properties": {
+      "account": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Account"
+      },
+      "add_account": {
+        "default": false,
+        "title": "Add Account",
+        "type": "boolean"
+      },
       "grant_agents": {
         "items": {
           "type": "string"
@@ -637,6 +733,17 @@
         },
         "title": "Entries",
         "type": "array"
+      },
+      "folder_refusal": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Folder Refusal"
       },
       "parent_path": {
         "anyOf": [
@@ -748,6 +855,21 @@
         "title": "Message",
         "type": "string"
       },
+      "page_elements": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/components/schemas/PageElement"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Page Elements"
+      },
       "session_id": {
         "title": "Session Id",
         "type": "string"
@@ -841,6 +963,32 @@
       "message"
     ],
     "title": "CommitRequest",
+    "type": "object"
+  },
+  "Component": {
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "maxLength": 120,
+        "minLength": 1,
+        "title": "Name",
+        "type": "string"
+      },
+      "source": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SourceLoc"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "title": "Component",
     "type": "object"
   },
   "ConfigureRequest": {
@@ -1180,6 +1328,52 @@
     "title": "DeviceUsage",
     "type": "object"
   },
+  "DiscordConnectRequest": {
+    "properties": {
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "token": {
+        "title": "Token",
+        "type": "string"
+      }
+    },
+    "required": [
+      "token"
+    ],
+    "title": "DiscordConnectRequest",
+    "type": "object"
+  },
+  "DiscordStartRequest": {
+    "properties": {
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "take_over": {
+        "default": false,
+        "title": "Take Over",
+        "type": "boolean"
+      }
+    },
+    "title": "DiscordStartRequest",
+    "type": "object"
+  },
   "DiscoveryCommit": {
     "properties": {
       "items": {
@@ -1261,6 +1455,19 @@
       "content"
     ],
     "title": "DiscoveryCommitItem",
+    "type": "object"
+  },
+  "DismissDownloadRequest": {
+    "properties": {
+      "model_name": {
+        "title": "Model Name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_name"
+    ],
+    "title": "DismissDownloadRequest",
     "type": "object"
   },
   "DocumentListResponse": {
@@ -1455,6 +1662,61 @@
       "model_name"
     ],
     "title": "DownloadProgress",
+    "type": "object"
+  },
+  "EditScheduleRequest": {
+    "description": "Request to change when a scheduled task runs and what it asks.",
+    "properties": {
+      "interval": {
+        "description": "New schedule, in the words the create form accepts",
+        "title": "Interval",
+        "type": "string"
+      },
+      "prompt": {
+        "description": "New prompt to execute on each run",
+        "title": "Prompt",
+        "type": "string"
+      },
+      "timezone": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "IANA time zone the schedule's times are in. Defaults to the server machine's zone.",
+        "title": "Timezone"
+      }
+    },
+    "required": [
+      "interval",
+      "prompt"
+    ],
+    "title": "EditScheduleRequest",
+    "type": "object"
+  },
+  "EmbedderBody": {
+    "description": "``npu`` or ``gpu``; None is the default (the GPU).",
+    "properties": {
+      "device": {
+        "anyOf": [
+          {
+            "enum": [
+              "npu",
+              "gpu"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Device"
+      }
+    },
+    "title": "EmbedderBody",
     "type": "object"
   },
   "EvalMailboxRequest": {
@@ -1868,7 +2130,7 @@
     "type": "object"
   },
   "ForwardConnectionRequest": {
-    "description": "Body for ``POST /v1/connections/{provider}`` (#1292).\n\nA host app forwards the OAuth client it authenticated the user under\n(``client_id`` + ``client_secret``) plus the user's ``refresh_token``.\nGAIA persists both and refreshes AS THE HOST APP'S CLIENT — no second\nOAuth, no consent step.\n\n``refresh_token`` / ``client_secret`` are secret INPUTS — they are never\nechoed back in any response. ``account_email`` is display-only in v1\n(the keyring slot is single-account per provider). ``grant_agents`` is\nthe list of namespaced agent ids (e.g. ``installed:email``) to grant the\nforwarded scopes so they can resolve the connection ambiently.",
+    "description": "Body for ``POST /v1/connections/{provider}`` (#1292).\n\nA host app forwards the OAuth client it authenticated the user under\n(``client_id`` + ``client_secret``) plus the user's ``refresh_token``.\nGAIA persists both and refreshes AS THE HOST APP'S CLIENT — no second\nOAuth, no consent step.\n\n``refresh_token`` / ``client_secret`` are secret INPUTS — they are never\nechoed back in any response. ``account_email`` picks which stored account\nthe forward replaces (the one with that address); with other accounts\nstored and no match, the forward is refused. ``grant_agents`` is\nthe list of namespaced agent ids (e.g. ``installed:email``) to grant the\nforwarded scopes so they can resolve the connection ambiently.",
     "properties": {
       "account_email": {
         "default": "",
@@ -2084,6 +2346,11 @@
         "default": 0,
         "title": "Skipped",
         "type": "integer"
+      },
+      "skipped_images": {
+        "default": 0,
+        "title": "Skipped Images",
+        "type": "integer"
       }
     },
     "title": "IndexFolderResponse",
@@ -2220,6 +2487,16 @@
         ],
         "title": "Retried"
       },
+      "route": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/TurnRouteResponse"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "seconds": {
         "anyOf": [
           {
@@ -2266,6 +2543,17 @@
       "status": {
         "title": "Status",
         "type": "string"
+      },
+      "step": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Step"
       }
     },
     "required": [
@@ -2972,6 +3260,11 @@
         "title": "Created At",
         "type": "string"
       },
+      "failed": {
+        "default": false,
+        "title": "Failed",
+        "type": "boolean"
+      },
       "id": {
         "title": "Id",
         "type": "integer"
@@ -2989,6 +3282,20 @@
           }
         ],
         "title": "Library Notices"
+      },
+      "page_elements": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/components/schemas/PageElement"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Page Elements"
       },
       "rag_sources": {
         "anyOf": [
@@ -3200,6 +3507,11 @@
   "ModelStatus": {
     "description": "Status of a custom model on the Lemonade server.",
     "properties": {
+      "checked": {
+        "default": false,
+        "title": "Checked",
+        "type": "boolean"
+      },
       "downloaded": {
         "default": false,
         "title": "Downloaded",
@@ -3306,6 +3618,122 @@
       "path"
     ],
     "title": "OpenFileRequest",
+    "type": "object"
+  },
+  "PageElement": {
+    "additionalProperties": false,
+    "description": "One composer chip as the renderer sends it. A toggle that is off sends null.",
+    "properties": {
+      "component": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Component"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "cropUrl": {
+        "anyOf": [
+          {
+            "pattern": "^/api/files/uploads/[^/\\\\\\s)]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cropurl"
+      },
+      "label": {
+        "maxLength": 120,
+        "title": "Label",
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 200,
+        "title": "Name",
+        "type": "string"
+      },
+      "outerHTML": {
+        "anyOf": [
+          {
+            "maxLength": 1536,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Outerhtml"
+      },
+      "rect": {
+        "$ref": "#/components/schemas/PickedRect"
+      },
+      "ref": {
+        "pattern": "^p\\d{1,6}$",
+        "title": "Ref",
+        "type": "string"
+      },
+      "role": {
+        "maxLength": 40,
+        "title": "Role",
+        "type": "string"
+      },
+      "selector": {
+        "maxLength": 500,
+        "title": "Selector",
+        "type": "string"
+      },
+      "styles": {
+        "anyOf": [
+          {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Styles"
+      },
+      "tag": {
+        "pattern": "^[a-z][a-z0-9-]{0,39}$",
+        "title": "Tag",
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 300,
+        "title": "Text",
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 300,
+        "title": "Title",
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 2000,
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ref",
+      "url",
+      "title",
+      "tag",
+      "label",
+      "selector",
+      "role",
+      "name",
+      "text",
+      "rect"
+    ],
+    "title": "PageElement",
     "type": "object"
   },
   "ParseScheduleRequest": {
@@ -3452,12 +3880,68 @@
     "title": "PermissionModeRequest",
     "type": "object"
   },
+  "PickedRect": {
+    "additionalProperties": false,
+    "properties": {
+      "height": {
+        "minimum": 0.0,
+        "title": "Height",
+        "type": "number"
+      },
+      "width": {
+        "minimum": 0.0,
+        "title": "Width",
+        "type": "number"
+      },
+      "x": {
+        "title": "X",
+        "type": "number"
+      },
+      "y": {
+        "title": "Y",
+        "type": "number"
+      }
+    },
+    "required": [
+      "x",
+      "y",
+      "width",
+      "height"
+    ],
+    "title": "PickedRect",
+    "type": "object"
+  },
   "PolicyNotice": {
     "description": "Structured Local only notice translated by the Agent UI.",
     "properties": {
+      "cause": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cause"
+      },
       "code": {
         "title": "Code",
         "type": "string"
+      },
+      "models": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Models"
       },
       "reason": {
         "anyOf": [
@@ -4617,6 +5101,7 @@
       "custom_model": {
         "anyOf": [
           {
+            "maxLength": 256,
             "type": "string"
           },
           {
@@ -4703,6 +5188,61 @@
     "title": "SetupRunRequest",
     "type": "object"
   },
+  "SkillLinkAddRequest": {
+    "properties": {
+      "allow_code": {
+        "default": false,
+        "title": "Allow Code",
+        "type": "boolean"
+      },
+      "force": {
+        "default": false,
+        "title": "Force",
+        "type": "boolean"
+      },
+      "names": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Names"
+      },
+      "pin": {
+        "title": "Pin",
+        "type": "string"
+      },
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url",
+      "pin"
+    ],
+    "title": "SkillLinkAddRequest",
+    "type": "object"
+  },
+  "SkillLinkRequest": {
+    "properties": {
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "title": "SkillLinkRequest",
+    "type": "object"
+  },
   "SkipModelRequest": {
     "properties": {
       "model_id": {
@@ -4759,6 +5299,27 @@
       "score"
     ],
     "title": "SourceInfo",
+    "type": "object"
+  },
+  "SourceLoc": {
+    "additionalProperties": false,
+    "properties": {
+      "file": {
+        "maxLength": 300,
+        "title": "File",
+        "type": "string"
+      },
+      "line": {
+        "minimum": 0.0,
+        "title": "Line",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "file",
+      "line"
+    ],
+    "title": "SourceLoc",
     "type": "object"
   },
   "SpeakRequest": {
@@ -5374,6 +5935,35 @@
       "approved"
     ],
     "title": "ToolConfirmRequest",
+    "type": "object"
+  },
+  "TurnRouteResponse": {
+    "description": "The model a ``hybrid`` turn was routed to, and why.",
+    "properties": {
+      "degraded": {
+        "default": false,
+        "title": "Degraded",
+        "type": "boolean"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      },
+      "notice": {
+        "default": "",
+        "title": "Notice",
+        "type": "string"
+      },
+      "reason": {
+        "default": "",
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model"
+    ],
+    "title": "TurnRouteResponse",
     "type": "object"
   },
   "TurnSummaryCost": {

@@ -272,6 +272,35 @@ func noFitAsk(need, have float64) string {
 	return fmt.Sprintf("Needs about %s; this PC has %s.", formatGBShort(need), formatGBShort(have))
 }
 
+// cantRunLine is the warning under a model this PC can't run. The server's
+// sentence says which case it is (no NPU, one not set up, or no runtime for
+// its recipe), and all of them block. The reason is capitalised and its final
+// full stop is removed, including one inside a closing parenthesis, so it
+// reads as its own clause without doubling the stop when ours is appended.
+func cantRunLine(reason *string) string {
+	if reason == nil {
+		return "This model can't be used on this PC."
+	}
+	r := strings.TrimSpace(*reason)
+	r = strings.TrimRight(r, ".")
+	if strings.HasSuffix(r, ".)") {
+		r = strings.TrimSuffix(r, ".)") + ")"
+	}
+	if r == "" {
+		return "This model can't be used on this PC."
+	}
+	r = strings.ToUpper(r[:1]) + r[1:]
+	return "This model can't be used on this PC: " + r + "."
+}
+
+// npuBlockedPurpose is the job caption for a model the NPU can't run yet: it
+// must not read as a working chat option.
+const npuBlockedPurpose = "Requires a Ryzen AI NPU that is ready on this PC."
+
+// backendBlockedPurpose is the job caption for a model no runtime on this PC
+// can run.
+const backendBlockedPurpose = "Needs a model runtime this PC can't run."
+
 // purposeLine says what a model is for in the job it is listed under.
 func purposeLine(e rowEntry, job string) string {
 	switch {
@@ -281,6 +310,10 @@ func purposeLine(e rowEntry, job string) string {
 		return "Lets GAIA search your files and remember things."
 	case job == jobVision:
 		return "Reads images and screenshots."
+	case e.cantRunHere() && *e.fitCode == "backend":
+		return backendBlockedPurpose
+	case e.cantRunHere():
+		return npuBlockedPurpose
 	case e.npu:
 		return "Answers your chats. Runs on the NPU."
 	case e.readsImages:

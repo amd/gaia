@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
+from gaia.agents.base.memory_privacy import memory_writes_refused
 from gaia.agents.base.skill_synthesis import (
     MIN_OUTCOMES_TO_RETIRE,
     DistilledProcedure,
@@ -400,7 +401,7 @@ class ProceduralMemoryMixin:
 
         # Stamp last_used_at so `gaia memory status` can report reuse. Telemetry
         # only — a write hiccup must not crash the turn or drop the recall.
-        if recalled_ids:
+        if recalled_ids and not memory_writes_refused(self):
             try:
                 store.touch_skills(recalled_ids)
             except Exception as e:
@@ -585,14 +586,16 @@ class ProceduralMemoryMixin:
         other tool, and a turn nobody was asked about, count nothing. Once a
         procedure has ``MIN_OUTCOMES_TO_RETIRE`` outcomes since it was learned,
         a failure that leaves it below the success rate it was learned at
-        disables it.
+        disables it. That rate is judged per session: each session it was
+        learned from is one success, each outcome one attempt. Outcomes counted
+        before approvals were (``unscored_outcomes``) are left out of both.
 
         Consumes the turn's decisions, so a turn is counted once.
         """
         decisions = getattr(self, "_turn_person_decisions", None)
         self._turn_person_decisions = None
         store = getattr(self, "_memory_store", None)
-        if not decisions or store is None or getattr(self, "_incognito", False):
+        if not decisions or store is None or memory_writes_refused(self):
             return
         in_context = set(getattr(self, "_recalled_skill_ids", None) or [])
         by_outcome: Dict[bool, List[str]] = {True: [], False: []}
@@ -623,13 +626,21 @@ class ProceduralMemoryMixin:
         )
         logger.info("[MemoryMixin] procedure outcome: failure for %s", sorted(failed))
         bar = load_synthesis_config(_load_memory_settings()).min_success_rate
-        for skill_id, (successes, attempts, outcomes) in failed.items():
-            if outcomes < MIN_OUTCOMES_TO_RETIRE or successes / attempts >= bar:
+        for skill_id, record in failed.items():
+            # An RC row's earlier outcomes have no approval count, so only the
+            # ones scored since are judged.
+            if record.scored_outcomes < MIN_OUTCOMES_TO_RETIRE:
+                continue
+            # Sessions and turns, not birth tool calls: 15 calls from three
+            # sessions must not outweigh three declines.
+            successes = record.learned_from + record.outcome_successes
+            attempts = record.learned_from + record.scored_outcomes
+            if successes / attempts >= bar:
                 continue
             if store.disable_skill(skill_id):
                 logger.warning(
                     "[MemoryMixin] procedure %s disabled: its record fell to "
-                    "%d/%d, below the %.0f%% it was learned at, after people "
+                    "%d/%d runs, below the %.0f%% it was learned at, after people "
                     "declined its steps. It is no longer recalled; a new run "
                     "of the same goal can learn a replacement",
                     skill_id,
@@ -852,6 +863,10 @@ class ProceduralMemoryMixin:
         pending, consumed_now = self._mark_unclusterable_episodes(
             store, pending, erase_count
         )
+        pending, declined_ids = self._mark_declined_episodes(
+            store, pending, erase_count
+        )
+        consumed_now.update(declined_ids)
 
         # CLUSTER — embedder failure RE-RAISES here (fail-loud), except a goal
         # the embedder refuses as too long, which only that session pays for.
@@ -1012,6 +1027,38 @@ class ProceduralMemoryMixin:
                 unusable[0].get("detail"),
             )
         return [s for s in window if s["session_id"] not in marks], set(marks)
+
+    @staticmethod
+    def _mark_declined_episodes(
+        store, pending: List[Dict], erase_count: Optional[int] = None
+    ) -> Tuple[List[Dict], Set[str]]:
+        """Consume the episodes where a step was declined, so none is learned from.
+
+        A declined call never ran, so it is in neither count and the rest of the
+        session looks like a clean success. Clustered, such a session teaches
+        the steps the person refused and supersedes the procedure they were
+        refusing — resetting the record that would have retired it.
+
+        Returns:
+            ``(still_pending, consumed_ids)``.
+        """
+        declined = [s for s in pending if int(s.get("declined_count") or 0) > 0]
+        if not declined:
+            return pending, set()
+
+        ids = [s["session_id"] for s in declined]
+        store.mark_sessions_synthesized(
+            ids,
+            "unusable",
+            detail="a step was declined, so the run is not a success to learn from",
+            erase_count=erase_count,
+        )
+        logger.info(
+            "[MemoryMixin] skill synthesis: %d episode(s) not learned from — a "
+            "step in each was declined",
+            len(ids),
+        )
+        return [s for s in pending if s["session_id"] not in set(ids)], set(ids)
 
     @staticmethod
     def _mark_unclusterable_episodes(

@@ -47,6 +47,12 @@ export interface UpdateState {
     previousVersion?: string | null;
     /** The app opened but its backend never came up. */
     startFailed?: boolean;
+    /** An older version setup last finished on, and when (ISO), or null. */
+    lastWorking?: { version: string; at: string } | null;
+    /** This build can't install updates itself (macOS): offer `downloadUrl` instead. */
+    manualInstall?: boolean;
+    /** The release page of the offered update, or null. */
+    downloadUrl?: string | null;
     /** The renderer couldn't read the status at all; the cause is in the log. */
     readFailed?: boolean;
 }
@@ -68,6 +74,8 @@ export interface GaiaUpdaterBridge {
     listReleases: () => Promise<ReleaseInfo[] | { error: string }>;
     installVersion: (tag: string) => Promise<UpdateState>;
     revertUpdate: () => Promise<UpdateState>;
+    markSetupWorked: () => Promise<UpdateState>;
+    revertToLastWorking: () => Promise<UpdateState>;
     resumeUpdates: () => Promise<UpdateState>;
     setAutoUpdate: (enabled: boolean) => Promise<UpdateState>;
     setIncludePrereleases: (enabled: boolean) => Promise<UpdateState>;

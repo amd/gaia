@@ -101,6 +101,131 @@ describe('citations in an answer', () => {
     });
 });
 
+describe('citations to dropped files and same-named files', () => {
+    const at = (id: string, filename: string, filepath: string): Document => ({ ...doc(id, filename), filepath });
+    const UPLOADS = 'C:\\Users\\me\\.gaia\\documents';
+
+    it('a full path to a dropped file, stored with an id in front, cites it', () => {
+        useChatStore.setState({ documents: [at('up', 'report.pdf', `${UPLOADS}\\a1b2c3d4e5f6_report.pdf`)] });
+        const found = links(`According to ${UPLOADS}\\a1b2c3d4e5f6_report.pdf (page 3):`);
+        expect(found.map(({ kind, id, page }) => [kind, id, page])).toEqual([['doc', 'up', 3], ['page', 'up', 3]]);
+        expect(found[0].text).toBe('report.pdf');
+    });
+
+    it('the stored name of a dropped file on its own cites it', () => {
+        useChatStore.setState({ documents: [at('up', 'notes.md', `${UPLOADS}\\0123456789ab_notes.md`)] });
+        expect(links('See `0123456789ab_notes.md`, page 1.').map(({ kind, id }) => [kind, id])).toEqual([
+            ['doc', 'up'], ['page', 'up'],
+        ]);
+    });
+
+    it('a Linux path to a dropped file cites it', () => {
+        useChatStore.setState({ documents: [at('up', 'report.pdf', '/home/me/.gaia/documents/a1b2c3d4e5f6_report.pdf')] });
+        const found = links('According to /home/me/.gaia/documents/a1b2c3d4e5f6_report.pdf, page 2:');
+        expect(found.map(({ kind, id, page }) => [kind, id, page])).toEqual([['doc', 'up', 2], ['page', 'up', 2]]);
+    });
+
+    const TWINS = [
+        at('a23', 'report.pdf', 'C:\\work\\2023\\report.pdf'),
+        at('a24', 'report.pdf', 'C:\\work\\2024\\report.pdf'),
+        at('annual', 'annual_report.pdf', 'C:\\work\\annual_report.pdf'),
+    ];
+
+    it('each of two same-named files opens itself, labelled with its folder', () => {
+        useChatStore.setState({ documents: TWINS });
+        const found = links('C:\\work\\2023\\report.pdf says 5; C:\\work\\2024\\report.pdf says 7.');
+        expect(found.map(({ id, text }) => [id, text])).toEqual([['a23', '2023/report.pdf'], ['a24', '2024/report.pdf']]);
+    });
+
+    it('a same-named file under a folder with a space opens itself', () => {
+        useChatStore.setState({ documents: [
+            at('js23', 'plan.pdf', 'C:\\Users\\John Smith\\2023\\plan.pdf'),
+            at('js24', 'plan.pdf', 'C:\\Users\\John Smith\\2024\\plan.pdf'),
+        ] });
+        const found = links('See C:\\Users\\John Smith\\2024\\plan.pdf, page 4.');
+        expect(found.map(({ kind, id }) => [kind, id])).toEqual([['doc', 'js24'], ['page', 'js24']]);
+        expect(found[0].text).toBe('2024/plan.pdf');
+    });
+
+    describe('paths with spaces in their folders', () => {
+        const SPACED = [
+            at('only', 'summary.pdf', 'C:\\Users\\John Smith\\2023\\summary.pdf'),
+            at('js23', 'plan.pdf', 'C:\\Users\\John Smith\\2023\\plan.pdf'),
+            at('js24', 'plan.pdf', 'C:\\Users\\John Smith\\2024\\plan.pdf'),
+            at('od', 'budget.xlsx', 'C:\\Users\\me\\OneDrive - AMD\\Finance\\budget.xlsx'),
+            at('wide', 'q.md', 'C:\\A  B\\c   d\\q.md'),
+        ];
+        beforeEach(() => useChatStore.setState({ documents: SPACED }));
+
+        /** The rendered text, with each link's label standing in for what it covers. */
+        function shown(markdown: string) {
+            const { container } = render(<RenderedContent content={markdown} />);
+            return stripIsolates(container.textContent ?? '');
+        }
+
+        it('a file no other document shares a name with links the whole path', () => {
+            const text = 'See C:\\Users\\John Smith\\2023\\summary.pdf, page 4.';
+            expect(links(text).map(({ kind, id, page }) => [kind, id, page])).toEqual([['doc', 'only', 4], ['page', 'only', 4]]);
+            expect(shown(text)).toBe('See summary.pdf, page 4.');
+        });
+
+        it.each([
+            ['a period', 'Per C:\\Users\\me\\OneDrive - AMD\\Finance\\budget.xlsx.', 'Per budget.xlsx.'],
+            ['a comma', 'Per C:\\Users\\me\\OneDrive - AMD\\Finance\\budget.xlsx, the total is 9.', 'Per budget.xlsx, the total is 9.'],
+            ['a closing paren', 'Totals (C:\\Users\\me\\OneDrive - AMD\\Finance\\budget.xlsx) match.', 'Totals (budget.xlsx) match.'],
+            ['a semicolon', 'Per C:\\Users\\me\\OneDrive - AMD\\Finance\\budget.xlsx; done', 'Per budget.xlsx; done'],
+        ])('an OneDrive - AMD path followed by %s links only the path', (_, text, expected) => {
+            expect(links(text).map(({ id }) => id)).toEqual(['od']);
+            expect(shown(text)).toBe(expected);
+        });
+
+        it('several spaces in a row inside a folder name', () => {
+            const text = 'Per C:\\A  B\\c   d\\q.md, ok';
+            expect(links(text).map(({ id }) => id)).toEqual(['wide']);
+            expect(shown(text)).toBe('Per q.md, ok');
+        });
+
+        it('two spaced paths in one sentence each link to their own file', () => {
+            const text = 'Compare C:\\Users\\John Smith\\2023\\plan.pdf and C:\\Users\\John Smith\\2024\\plan.pdf for totals.';
+            expect(links(text).map(({ id }) => id)).toEqual(['js23', 'js24']);
+            expect(shown(text)).toBe('Compare 2023/plan.pdf and 2024/plan.pdf for totals.');
+        });
+
+        it('a spaced path not in the library does not swallow the cited path after it', () => {
+            const text = 'in C:\\Docs\\a b.pdf and C:\\Users\\John Smith\\2024\\plan.pdf';
+            expect(links(text).map(({ id }) => id)).toEqual(['js24']);
+            expect(shown(text)).toContain('a b.pdf and 2024/plan.pdf');
+        });
+
+        it('forward slashes and different case still find the stored path', () => {
+            expect(links('See c:/users/john smith/2023/summary.pdf now').map(({ id }) => id)).toEqual(['only']);
+        });
+
+        it('prose around a bare name is not pulled into the link', () => {
+            const text = 'see the notes in my folder and then summary.pdf, page 2.';
+            expect(links(text).map(({ kind, id }) => [kind, id])).toEqual([['doc', 'only'], ['page', 'only']]);
+            expect(shown(text)).toBe(text);
+        });
+
+        it('a folder named in prose before a bare name does not join it into a path', () => {
+            const text = 'My John Smith folder has summary.pdf in it.';
+            expect(links(text).map(({ id, text: label }) => [id, label])).toEqual([['only', 'summary.pdf']]);
+            expect(shown(text)).toBe(text);
+        });
+
+        it('a partial path that only ends like a stored one links nothing extra', () => {
+            const text = 'See D:\\Other Place\\2023\\plan.pdf instead.';
+            expect(links(text)).toEqual([]);
+        });
+    });
+
+    it('a bare name two files share links neither, rather than the wrong one', () => {
+        useChatStore.setState({ documents: TWINS });
+        expect(links('According to report.pdf, page 2.')).toEqual([]);
+        expect(links('According to annual_report.pdf, page 2.').map(({ id }) => id)).toEqual(['annual', 'annual']);
+    });
+});
+
 describe('page references', () => {
     const pages = (text: string) => findPages(text).map((p) => p.page);
     it.each([
