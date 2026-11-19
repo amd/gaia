@@ -86,6 +86,10 @@
     {"request": "What does an HTTP 502 error usually mean?", "expected": [], "acceptable": []},
     {"request": "Any tips for running shorter meetings?", "expected": [], "acceptable": []},
     {"request": "What's the difference between a memo and a report?", "expected": [], "acceptable": []},
-    {"request": "What's a good way to remember friends' birthdays without an app?", "expected": [], "acceptable": []}
+    {"request": "What's a good way to remember friends' birthdays without an app?", "expected": [], "acceptable": []},
+    {"request": "What is RSS and how do RSS feeds work?", "expected": [], "acceptable": []},
+    {"request": "How does image generation with diffusion models work, conceptually?", "expected": [], "acceptable": []},
+    {"request": "What does a source watch mean in a newsroom?", "expected": [], "acceptable": []},
+    {"request": "Explain how GitHub issue triage works", "expected": [], "acceptable": []}
   ]
 }

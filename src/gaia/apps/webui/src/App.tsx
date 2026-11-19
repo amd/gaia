@@ -28,6 +28,7 @@ import { useScheduleStore } from './stores/scheduleStore';
 import { useGoalHealthStore } from './stores/goalHealthStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
+import { useRetryServerWaitingDocs } from './hooks/useRetryServerWaitingDocs';
 import { useWindowTitle } from './hooks/useWindowTitle';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { startActiveRunsPoll } from './services/activeRuns';
@@ -453,6 +454,7 @@ function App() {
     useEffect(() => startQueueDispatcher(), []);
 
     useChatAlerts();
+    useRetryServerWaitingDocs();
 
     // Open a chat named in the URL (?session= or #hash), on load and on back/forward.
     const urlResolved = useRef(false);

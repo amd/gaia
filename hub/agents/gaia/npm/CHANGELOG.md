@@ -21,6 +21,50 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   or put caveats inside one.
 ### Changed
 
+- **Office files are checked before they are handed over.** The bundled
+  `office-docs` skill ships two tools that never write the file.
+  `verify_workbook` recalculates a copy of an .xlsx (with LibreOffice when
+  installed) and names every cell with `#REF!`, `#VALUE!`, `#DIV/0!`,
+  `#NAME?`, a circular reference, a SUM/SUMIFS over text, or a criterion that
+  matches no row. A workbook with errors returns `status: errors_found`, and
+  one with typed totals and no formulas returns `no_formulas`. Without
+  LibreOffice nothing is computed: findings that depend on a value are
+  warnings, and the result tells the agent to compute the figures it reports
+  with pandas and to say the formulas were not recalculated. `verify_document`
+  confirms a .docx or .pptx is a real Word or PowerPoint file and counts its
+  headings, tables, pictures, slides and charts. Text saved under a .docx name
+  is an error that says how to build a real one. The skill also teaches real
+  headings and tables in Word files and native charts.
+- **The skill suggestion now tells the model which skill to load.** Local models
+  ignored the old "skills that may fit this request" line: over 56 tasks one
+  called `load_skill` on 3. The line now reads "Call load_skill('pdf') before
+  you start: it covers this kind of request. Also consider: office-docs." It is
+  still one line in the user's message, with the skills in the same order.
+- **A skill that clearly fits the request can load before the turn (opt-in).**
+  With `GAIA_SKILL_AUTOLOAD=1` or `skill_autoload=True`, the best match loads
+  first when it scores at least 0.55 and is 0.03 ahead of every skill it does
+  not pair with. The request then opens with "Loaded report-from-sources
+  because it matches this request". Weaker matches are suggested as before.
+  - Skills that pair with the best match no longer block it, and the best of
+    them that also scores 0.55 loads with it. Two skills per turn at most.
+  - Only trusted skills load this way: ones that ship with the agent, and hub
+    installs at the `community` tier or above. A captured skill, your own
+    skill and anything from a `.claude` folder stay suggestions.
+  - A skill that grants a command-line program stays a suggestion in Ask mode.
+    Under full access it loads, with a warning naming the program. Switch full
+    access off and the skill is unloaded at the next turn.
+  - The skill bodies in the prompt, plus the new one, must fit in 18% of the
+    model's context window (about 5,900 tokens of the default 32,768).
+  - A skill unloaded earlier in the session is not auto-loaded again.
+  - `GAIA_SKILL_AUTOLOAD_TAU` and `GAIA_SKILL_AUTOLOAD_MARGIN` (or
+    `skill_autoload_threshold` and `skill_autoload_margin`) set the 0.55 and
+    0.03.
+  - If you turn it on where it cannot run (catalogue or suggestions off, fast
+    mode, memory off, or an embedder other than `embeddinggemma-300m`), one
+    warning says it is inactive and why.
+
+  Off by default: 0.55 and 0.03 have not been re-measured on the current
+  labelled requests.
 - **Start a message with `/` and a skill's name to run that skill**, as in
   Claude Code: `/pdf turn notes.md into a report`. The agent loads the skill
   with the same checks as `load_skill` and follows it for the rest of the line.
