@@ -3027,6 +3027,34 @@ def _skill_tool_names(skill: Any) -> List[str]:
     ]
 
 
+def _skill_tool_report(agent: Any, skill: Any) -> Dict[str, List[str]]:
+    """Which of *skill*'s tools the model can call now, and which it cannot.
+
+    ``available`` are registered, permitted and on the tool list.
+    ``unregistered`` do not exist in this agent, ``blocked`` are turned off by
+    a tool restriction, and ``unlisted`` are registered but missing from the
+    list being sent.
+    """
+    # getattr: test stubs copy load_skill onto a plain class.
+    listed = getattr(agent, "_active_tool_filter", None)
+    report: Dict[str, List[str]] = {
+        "available": [],
+        "unregistered": [],
+        "blocked": [],
+        "unlisted": [],
+    }
+    for name in dict.fromkeys(_skill_tool_names(skill)):
+        if name not in agent._tools_registry:
+            report["unregistered"].append(name)
+        elif not _tool_permitted(agent, name):
+            report["blocked"].append(name)
+        elif listed is not None and name not in listed:
+            report["unlisted"].append(name)
+        else:
+            report["available"].append(name)
+    return report
+
+
 def _offer_skill_tools(agent: Any, skill: Any) -> None:
     """Add *skill*'s tools to the turn's tool subset so the next step can call them.
 
@@ -5366,6 +5394,11 @@ Do NOT wrap conversational replies in JSON.
         # Optional[List[str]] — pylint's None-inference is wrong here.
         # pylint: disable-next=assignment-from-none
         new_filter = self._select_tools_for_turn(user_input)
+        if new_filter is not None:
+            # A loaded skill's tools stay listed whatever this turn selected.
+            missing = [t for t in self._pinned_skill_tools() if t not in new_filter]
+            if missing:
+                new_filter = [*new_filter, *missing]
         if new_filter != self._active_tool_filter:
             self._apply_tool_filter(new_filter)
 
@@ -5808,6 +5841,28 @@ Do NOT wrap conversational replies in JSON.
                     tools.append(name)
         return tools
 
+    def _pinned_skill_tools(self) -> List[str]:
+        """Tools every loaded skill needs or brings, registered here, in load order.
+
+        Unlike :meth:`_loaded_skill_tools` a skill counts whether or not its
+        body renders this turn: its instructions name these tools, and a
+        tool off the list cannot be called.
+        """
+        skills = getattr(self, "_loaded_skills", None)
+        if not skills:
+            return []
+        grant_holders = self.granted_binaries.holders()
+        names: List[str] = []
+        for skill in skills.values():
+            names.extend(_skill_tool_names(skill))
+            if skill.name in grant_holders:
+                names.append(self._SKILL_SHELL_TOOL)
+        return [name for name in dict.fromkeys(names) if name in self._tools_registry]
+
+    def skill_tool_report(self, skill: "Skill") -> Dict[str, List[str]]:
+        """What ``load_skill`` reports about *skill*'s tools."""
+        return _skill_tool_report(self, skill)
+
     @property
     def granted_binaries(self) -> "BinaryGrants":
         """CLIs this **instance's** loaded skills may run (``shell:execute:gh``).
@@ -5968,15 +6023,20 @@ Do NOT wrap conversational replies in JSON.
         # tools_required names registry tools the skill CONSUMES. A name that is
         # valid but not active in this agent is scoping, not a defect — log it so
         # a skill that quietly can't run its recipe is diagnosable.
+        report = _skill_tool_report(self, skill)
         inactive = [
-            t for t in skill.gaia.tools_required if t not in self._tools_registry
+            t for t in skill.gaia.tools_required if t not in report["available"]
         ]
         if inactive:
-            logger.info(
-                "Skill '%s' expects tool(s) %s, which this agent does not have "
-                "registered — its instructions may not be fully executable here.",
+            logger.warning(
+                "Skill '%s' expects tool(s) %s, which the model cannot call "
+                "here (not registered: %s; turned off: %s; not on the tool "
+                "list: %s) — the steps that use them cannot run.",
                 skill.name,
                 ", ".join(inactive),
+                ", ".join(report["unregistered"]) or "none",
+                ", ".join(report["blocked"]) or "none",
+                ", ".join(report["unlisted"]) or "none",
             )
 
         logger.info(

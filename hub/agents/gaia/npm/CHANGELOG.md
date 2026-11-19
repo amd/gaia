@@ -21,6 +21,14 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
   or put caveats inside one.
 ### Changed
 
+- **A loaded skill's tools stay on the tool list, and `load_skill` says
+  which ones.** A skill loaded by a skill set, or by any agent that picks
+  its own tools each turn, could name tools the model was never sent. Every
+  loaded skill's tools are now listed each turn, whether or not its
+  instructions are showing. The `load_skill` result lists the tools now
+  callable (`tools_available`) and names any that are turned off
+  (`unavailable_tools`) instead of reporting plain success, and the log
+  records tools added mid-turn (`TOOL_LOADER ... "event": "admit"`).
 - **Declining one tool call no longer ends the task.** A declined call told the
   model not to get the same result "another way" and to stop, so one refused
   script closed every other route to the work. The no now covers that action
