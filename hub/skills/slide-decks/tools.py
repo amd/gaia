@@ -950,29 +950,13 @@ def build_deck(
 ) -> dict:
     """Build a .pptx from a JSON slide outline and check it; never hand-write python-pptx.
 
-    The outline is {"slides": [...]}; every slide has a "type", a "title" and:
-    - bullets: "bullets" (a nested list is a sub-level).
-    - chart: "chart_type" (column, bar, line, area, pie, scatter, combo, auto)
-      and its values as "rows" (header row, then one row per label:
-      [["Quarter", "West", "East"], ["Q1", 4.1, 3.9]]), or "categories" +
-      "series" {name: values}, or "data_path" (.csv/.xlsx) with "range"
-      "A1:D8" and optional "sheet"; plus "y_title" and "source".
-    - table: "columns" + "rows", or "data_path" + "range". kpi: "metrics"
-      [{label, value, delta}].
-    - diagram: "diagram" (process, cycle, pyramid, matrix, boxes, stack,
-      flow, tree) and "items" [{title, text, bullets}]. A process also takes
-      "axis" (one label on an arrow) and "dimensions" [{label, values: [one
-      per step]}], drawn as rows under the steps.
-    - title (cover), section, two_column (left, right), quote, image
-      (path), timeline (milestones [{date, title}]).
-    Numbers that form a series or a comparison go in a chart, not bullets.
-    Any outline with a slide is built: read the result's `warnings` for what
-    was drawn differently and the call that fixes it, `path` for the file.
+    The outline is {"slides": [...]}; each slide has a "type", a "title" and
+    the fields in the skill's references/outline-json.md. Chart and table
+    values go in "rows" (header row first) or "data_path" + "range" for a
+    .csv/.xlsx. `path` is the file; `warnings` give each fix.
 
     Example: build_deck(outline={"slides": [{"type": "chart", "title":
-    "West drove the growth", "rows": [["Quarter", "West", "East"], ["Q1",
-    4.1, 3.9], ["Q2", 5.6, 4.1]], "source": "sales.xlsx"}]},
-    expect={"min_charts": 1})
+    "West grew", "rows": [["Q", "West"], ["Q1", 4.1]]}]})
 
     Args:
         outline: The slide outline object, or its JSON text.
@@ -983,9 +967,8 @@ def build_deck(
         prefs: Optional style the user asked for in this request (density, colors...).
         expected_slides: The slide count the user asked for, cover included;
             a different count is built and reported in `warnings`. 0 skips it.
-        expect: What the request asks the deck to hold, e.g. {"min_charts":
-            4, "min_tables": 1, "slides": 12}. Pass it whenever the user asks
-            for charts or tables: a deck short of it fails its check.
+        expect: Counts the request asks for, e.g. {"min_charts": 2,
+            "min_tables": 1, "slides": 8}; a deck short of it fails.
     """
     return _build_from(
         outline, output_path, theme, template_path, prefs, None, expected_slides, expect
@@ -1120,32 +1103,12 @@ def build_deck_from_markdown(
     """Build and check a .pptx from Markdown: the easiest way to make a deck.
 
     Each '## Title' line starts a slide and '-' lines are its bullets; an
-    optional '# Title' line first is a cover slide (it is slide 1).
-    Numbers that form a series or a comparison go in a native chart, written
-    as a fenced block of CSV under the slide's title:
+    optional '# Title' first is a cover (slide 1). A ```chart column block
+    of CSV, or 'data:' + 'range:' for a file, is a native chart; ```table
+    and ```kpi work alike. Diagrams and other lines are in the skill's
+    references/markdown-format.md. `warnings` give each fix.
 
-        ```chart column
-        y_title: Revenue ($M)
-        source: sales.xlsx, 2026
-        Quarter,West,East
-        Q1,4.1,3.9
-        Q2,5.6,4.1
-        ```
-
-    The block's first line names the type (column, bar, line, area, pie,
-    scatter, combo, auto); instead of CSV lines it may read a file with
-    'data: C:/path/file.xlsx' and 'range: A1:D8' (also 'sheet:'). ```table
-    takes the same CSV or file; ```kpi takes 'label,value,delta' rows.
-    Three or more '### ' headings on a slide are boxes; 'Diagram: process'
-    draws them as steps, each with its own lines beneath. Under a process,
-    'Axis: <label>' draws one arrow along the steps and each 'Dimension:
-    <label> | <value for step 1> | <value for step 2> | ...' line draws a
-    labelled row with one cell per step. Any Markdown with a slide is
-    built: read the result's `warnings` for what was drawn differently and
-    the call that fixes it, `path` for the file.
-
-    Example (one slide): build_deck_from_markdown(markdown="## Sales grew
-    7% in Q3\\n- North up 12%\\n- South flat")
+    Example: build_deck_from_markdown(markdown="## Sales grew 7%\\n- North up 12%")
 
     Args:
         markdown: The deck as Markdown.
@@ -1156,9 +1119,8 @@ def build_deck_from_markdown(
         required_items: Facts the request needs visible on the slides; checked.
         expected_slides: The slide count the user asked for, cover included;
             a different count is built and reported in `warnings`. 0 skips it.
-        expect: What the request asks the deck to hold, e.g. {"min_charts":
-            4, "min_tables": 1, "slides": 12}. Pass it whenever the user asks
-            for charts or tables: a deck short of it fails its check.
+        expect: Counts the request asks for, e.g. {"min_charts": 2,
+            "min_tables": 1, "slides": 8}; a deck short of it fails.
     """
     markdown = str(markdown or "")
     if "\n" not in markdown and "\\n" in markdown:
@@ -1188,16 +1150,13 @@ def verify_deck(
     required_items: Optional[list] = None,
     expect: Optional[dict] = None,
 ) -> dict:
-    """Check a saved .pptx: slide count, required items, charts and tables asked for, overflow, overlaps, fonts, sources, notes.
+    """Check a saved .pptx: slide count, required items, charts and tables, overflow, fonts, sources, notes.
 
-    Works on any deck; renders with LibreOffice when it is installed. A
-    build already runs this check, so call it after add_slide or
+    A build already runs this check; call it after add_slide or
     update_slide, or for a deck you did not build. Pass `expect` when the
-    request asks for charts or tables: the check then fails a deck that has
-    too few, and `counts` says how many it has. Without it, a text slide
-    that is plainly numbers is a warning with the call that draws the chart.
+    request asks for charts or tables. Renders with LibreOffice if installed.
 
-    Example: verify_deck(path="C:/Users/me/Documents/review.pptx",
+    Example: verify_deck(path="C:/Users/me/review.pptx",
     expect={"min_charts": 2})
 
     Args:
@@ -1214,10 +1173,7 @@ def verify_deck(
             "min_tables": n, "slides": n}; native charts and tables only.
 
     Returns:
-        {"status": "pass"|"fail", "issues": [{slide, check, severity, fix}],
-        "counts": {slides, charts, tables}, "slides_overview", ...}. Each
-        issue's `fix` says what to change; slide numbers start at 1 and the
-        cover counts.
+        {"status", "issues": [{slide, check, fix}], "counts"}.
     """
     try:
         deck = _built_deck(path, "path")
@@ -1423,15 +1379,13 @@ def update_slide(
 ) -> dict:
     """Replace slide number `index` of an existing deck with a new slide.
 
-    Slides are numbered from 1 and the cover is slide 1, so the first slide
-    after a cover is index=2: use the numbers in a build's `slides_built` or
-    a check's `slides_overview`. The result's `replaced` names the slide
-    that was there. The whole slide is replaced, so send every field it
-    needs, with its "type".
+    Slides are numbered from 1 and the cover is slide 1: use the numbers in
+    a build's `slides_built`. The whole slide is replaced, so send every
+    field it needs, with its "type"; `replaced` names the old slide.
 
     Example: update_slide(deck_path="C:/Users/me/Documents/review.pptx",
-    index=2, slide={"type": "chart", "title": "Costs fell 4%", "rows":
-    [["Month", "Cost"], ["Jan", 5.2], ["Feb", 5.0]], "source": "ledger.xlsx"})
+    index=2, slide={"type": "bullets", "title": "Costs fell 4%",
+    "bullets": ["Energy down 9%"]})
 
     Args:
         deck_path: Absolute path of the .pptx to change.

@@ -566,7 +566,11 @@ def test_the_tool_descriptions_state_the_numbering_and_the_chart_data(fns):
         doc = inspect.getdoc(fns[name])
         assert "expect" in doc and "min_charts" in doc
         assert "data" in doc and "range" in doc
-        assert "Dimension" in doc or "dimensions" in doc
+    # Diagram rows and the full field list live in the references, off the schema budget.
+    assert "references/outline-json.md" in inspect.getdoc(fns["build_deck"])
+    assert "references/markdown-format.md" in inspect.getdoc(
+        fns["build_deck_from_markdown"]
+    )
     assert '"rows"' in inspect.getdoc(fns["build_deck"])
     assert "```chart" in inspect.getdoc(fns["build_deck_from_markdown"])
     assert "expect" in inspect.getdoc(fns["verify_deck"])

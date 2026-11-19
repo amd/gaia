@@ -79,3 +79,5 @@ Slides are numbered from 1 and the cover is slide 1. Every edit returns
 `build_deck_from_markdown` or `verify_deck` fails a deck with fewer native
 charts or tables, and each issue gives the call that adds one. `counts` in
 the check says how many the deck has.
+Without `expect`, a text slide that is plainly numbers is a warning carrying
+the `update_slide` call that draws the chart.
