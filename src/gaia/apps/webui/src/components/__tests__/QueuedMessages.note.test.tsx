@@ -57,4 +57,19 @@ describe('the queued-message strip in Arabic (#7629)', () => {
         expect(screen.getByRole('button', { name: /أضفها إلى هذا الرد/ })).toBeTruthy();
         expect(screen.getByText('And what if the rate were 5%?').getAttribute('dir')).toBe('auto');
     });
+
+    it('translates the refused and not-sent states too', () => {
+        useChatStore.setState({ locale: 'ar' });
+        render(<QueuedMessages items={[
+            { id: 5, text: 'refused one', state: 'queued', refused: true },
+            { id: 6, text: 'failed one', state: 'failed', error: 'boom' },
+            { id: 7, text: 'failed bare', state: 'failed' },
+        ]} onRemove={() => {}} onRetry={() => {}} replying />);
+        const states = [...document.querySelectorAll('.queued-message-state')].map((el) => el.textContent ?? '');
+        expect(states[0]).toContain('تعذّرت الإضافة إلى هذا الرد');
+        expect(states[1]).toContain('لم تُرسل.');
+        expect(states[1]).toContain('boom');
+        expect(states[2]).toContain('لم تُرسل.');
+        expect(screen.getAllByRole('button', { name: /أعد الإرسال/ })).toHaveLength(2);
+    });
 });
