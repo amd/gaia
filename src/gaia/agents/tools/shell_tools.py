@@ -5195,6 +5195,10 @@ def _segment_env(assignments: Dict[str, str], marked: bool = True) -> Dict[str, 
     return env
 
 
+class _UnrunnableLines(Exception):
+    """A step of several lines cmd.exe cannot run; it was never started."""
+
+
 class _CommandCancelled(Exception):
     """Stop landed while the step was running; it was killed part-way.
 
@@ -5995,7 +5999,12 @@ def _run_step(
                     lifted, direct = _cmd_lines(step.text)
                 except ValueError:
                     lifted = ""
-                exec_cmd, direct = (lifted, True) if direct else _cmd_lines(exec_cmd)
+                try:
+                    exec_cmd, direct = (
+                        (lifted, True) if direct else _cmd_lines(exec_cmd)
+                    )
+                except ValueError as exc:
+                    raise _UnrunnableLines(str(exc)) from exc
 
     if len(segments) > 1 and not use_shell:
         return _run_pipeline(
@@ -8529,14 +8538,13 @@ class ShellToolsMixin:
             # to send "60". None still means "use the class default".
             timeout: int = None,
         ) -> Dict[str, Any]:
-            """Execute a shell command. Leave timeout unset — it defaults by class: 900s tests, 1800s builds/installs, 300s git/network, 600s scripts, 30s the rest.
+            """Run a shell command. Leave timeout unset — it defaults by class: 900s tests, 1800s builds/installs, 300s git/network, 600s scripts, 30s the rest.
 
-            Chain on one line: 'a && b', 'a || b', 'a; b', 'a | b',
-            'cd <dir> && b'. One approval covers the line; every part is
-            allowlist-checked. '2>&1' keeps stderr, '2>/dev/null' drops it,
-            'VAR=x cmd' scopes a variable. Other redirections and
-            ` $() & newline are refused. Under full access none of this
-            applies: any program and any shell syntax runs.
+            Chain on one line: 'a && b', 'a || b', 'a; b', 'a | b'. One
+            approval covers the line; each part is allowlist-checked. '2>&1'
+            keeps stderr, '2>/dev/null' drops it, 'VAR=x cmd' scopes a
+            variable. Other redirections and ` $() & newline are refused.
+            Full access lifts these.
 
             Args:
                 command: Shell command to execute
@@ -8872,6 +8880,18 @@ class ShellToolsMixin:
                                 stderr,
                             ),
                         )
+                    except _UnrunnableLines as exc:
+                        return {
+                            **({} if ran else NOT_EXECUTED),
+                            "status": "error",
+                            "error": str(exc),
+                            "command": command,
+                            "stdout": _truncate("".join(stdout_parts), "stdout"),
+                            "stderr": _truncate("".join(stderr_parts), "stderr"),
+                            "has_errors": True,
+                            "cwd": cwd,
+                            "steps": ran,
+                        }
                     except _CommandCancelled as exc:
                         stdout_parts.append(exc.stdout)
                         stderr_parts.append(exc.stderr)

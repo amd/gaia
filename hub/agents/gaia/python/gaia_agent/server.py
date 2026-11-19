@@ -2465,6 +2465,19 @@ async def set_bypass(session_id: str, body: BypassRequest):
     against a typo'd session id.
     """
     _require_valid_session_id(session_id)
+    auth = caller_auth.get_config()
+    if body.enabled and auth is not None and not auth.token:
+        # Full access is an unrestricted shell: never hand it to a caller this
+        # server cannot tell apart from any other local process.
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Full access needs caller authentication, and this sidecar was "
+                "started without a token. Start it through the GAIA daemon or "
+                f"the Agent UI, or set {caller_auth.TOKEN_FILE_ENV_VAR} (or "
+                f"{caller_auth.TOKEN_ENV_VAR}) before starting it."
+            ),
+        )
     session = session_registry.get(session_id)
     if session is None:
         raise HTTPException(

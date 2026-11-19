@@ -17,7 +17,8 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   `rm` included, any shell syntax (loops, conditions, several lines), any
   folder. `POST /v1/gaia/sessions/{id}/bypass` gives an HTTP session the same
   full access, so an Agent UI chat's Full access no longer asks before a gated
-  shell command. A call you declined stays declined, and calendar changes and
+  shell command; a sidecar started without a caller-auth token refuses to turn
+  it on (`403`). A call you declined stays declined, and calendar changes and
   outgoing mail still wait for you. The other modes are unchanged.
 - **Every chat on a PC embeds with one embedder, the GPU one.** The embedder
   was chosen per session, so a chat on the other device could clear all of

@@ -339,6 +339,19 @@ def test_python_code_of_several_lines_runs_on_windows(shell, folders):
     assert result["stdout"].strip() == "42"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="cmd.exe stops at the first line")
+def test_lines_cmd_cannot_carry_are_reported_as_not_run(shell, folders):
+    host, tools = shell(True)
+    command = f'{PYTHON} -c "\nprint(1)\n" > out.txt'
+
+    result = tools["run_shell_command"](command, working_directory=str(folders.project))
+
+    assert result["status"] == "error", result
+    assert "cannot pass a line break" in result["error"]
+    assert result["executed"] is False, result
+    assert not (folders.project / "out.txt").exists()
+
+
 def test_several_lines_run_on_posix_too(shell, folders):
     if os.name == "nt":
         pytest.skip("covered by the Windows tests above")

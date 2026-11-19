@@ -747,11 +747,13 @@ files; a `.env` file cannot set that switch itself.
 environment the sidecar starts in — absolute folders joined with `;` on
 Windows and `:` elsewhere. The scope becomes the overlap with the agent's own scope;
 an entry outside it is ignored with a warning and never widens it. Out-of-scope
-paths are refused without a prompt in every mode, including full access. The
+paths are refused without a prompt in every mode, including full access, for
+the file tools. The
 scratch directory stays writable. An empty, relative or missing entry stops
 the sidecar at startup, before it binds a port. It confines the agent's tools
-— every file tool, search, index and shell path check — not code they run: a
-`run_python` script or shell command can still read anything the OS user can,
+— every file tool, search, index, and the shell path check outside full access
+— not code they run: under full access the shell and Python tools run in any
+folder, and a `run_python` script or shell command can always read anything the OS user can,
 so isolating a run from files it must not see needs a separate OS user,
 container or VM.
 
@@ -842,7 +844,7 @@ ask the user once, or are refused on a run nobody can answer.
 That is arbitrary code execution with the user's account.
 `POST /v1/gaia/sessions/{id}/bypass` turns the same mode on for an HTTP
 session, so guard that route: it is behind the caller-auth token like the rest
-of the API. A request with no `session_id` has no mode and never gets it, and
+of the API, and a sidecar started without a token refuses to turn it on (`403`). A request with no `session_id` has no mode and never gets it, and
 the query body cannot ask for it.
 
 Every shell command run under bypass is recorded with its full arguments and its

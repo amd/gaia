@@ -43,6 +43,8 @@ from gaia_agent import server as server_mod  # noqa: E402
 from gaia_agent import session_registry as sr  # noqa: E402
 
 _BASE_URL = "http://127.0.0.1:8141"
+_TOKEN = "test-caller-token"
+_AUTH = {"Authorization": f"Bearer {_TOKEN}"}
 
 
 class _ScriptedAgent:
@@ -139,7 +141,8 @@ def built(monkeypatch):
     """
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
-    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    # Full access over HTTP needs caller auth, as the shipped sidecar has.
+    monkeypatch.setenv(caller_auth.TOKEN_ENV_VAR, _TOKEN)
 
     agents: list[_ScriptedAgent] = []
 
@@ -154,7 +157,7 @@ def built(monkeypatch):
     sr.registry.clear()
     server_mod._registry = server_mod._RunRegistry()
 
-    client = TestClient(server_mod.build_app(), base_url=_BASE_URL)
+    client = TestClient(server_mod.build_app(), base_url=_BASE_URL, headers=_AUTH)
     try:
         yield client, agents
     finally:
@@ -1186,6 +1189,28 @@ def test_a_decision_for_an_unknown_run_is_a_404(built):
 # ---------------------------------------------------------------------------
 # Bypass
 # ---------------------------------------------------------------------------
+
+
+def test_full_access_is_refused_on_a_sidecar_without_caller_auth(built, monkeypatch):
+    """Without a token any local process could turn on an unrestricted shell.
+
+    Turning it off still works, and the session stays in ask.
+    """
+    client, agents = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1"))
+    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR)
+    caller_auth.reset()
+    open_client = TestClient(server_mod.build_app(), base_url=_BASE_URL)
+
+    on = open_client.post("/v1/gaia/sessions/s-1/bypass", json={"enabled": True})
+    off = open_client.post("/v1/gaia/sessions/s-1/bypass", json={"enabled": False})
+
+    assert on.status_code == 403, on.text
+    assert caller_auth.TOKEN_FILE_ENV_VAR in on.json()["detail"]
+    assert off.status_code == 200, off.text
+    assert sr.registry.get("s-1").permissions.full_access is False
+    open_client.post("/v1/gaia/query", json=_body(session_id="s-1"))
+    assert agents[0].console.full_access is False
 
 
 def test_full_access_applies_to_the_session_and_survives_the_turn(built):

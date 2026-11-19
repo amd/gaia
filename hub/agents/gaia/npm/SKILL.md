@@ -543,7 +543,8 @@ is the same mode as the stdio transport's `--full-access`. Gated tools run
 unasked, `run_shell_command` runs any command (a delete, `git add`, a program
 by its full path, redirection, loops), and `run_python` runs its code
 unchecked. That is arbitrary code execution with the user's account, so turn it
-on only when the person asked for it. The query body rejects unknown fields, so
+on only when the person asked for it. A sidecar started without a caller-auth
+token refuses to turn it on (**403**). The query body rejects unknown fields, so
 a client cannot ask for it there. See SPEC §5.5.
 
 With bypass off, a shell command past the gates (a delete, `git add`) emits
