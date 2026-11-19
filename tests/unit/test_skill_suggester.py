@@ -746,11 +746,11 @@ def _real_embedder():
 
 #: What the suggestion defaults must reach on the held-out half, a little
 #: under what they measured so an embedder build that rounds differently does
-#: not fail it. Measured with embeddinggemma-300m, 27 hub skills:
+#: not fail it. Measured with embeddinggemma-300m, 28 hub skills:
 #:
 #:     half      requests negatives precision recall negatives-suggested
-#:     tuning         106        33      0.88   0.82   6
-#:     held-out       118        29      0.77   0.78   11
+#:     tuning         114        33      0.85   0.83   6
+#:     held-out       120        29      0.77   0.78   11
 #:
 #: A suggestion is one line the model may ignore, so recall is what it is for;
 #: the negatives suggested are near misses ("what is a pivot table?").
@@ -788,15 +788,15 @@ SWEEP_MARGINS = (0.00, 0.03, 0.05, 0.08)
 
 #: What the auto-load defaults (floor 0.40, lead 0.03) must reach on the
 #: held-out half, a little under what they measured. Measured with
-#: embeddinggemma-300m, 27 hub skills:
+#: embeddinggemma-300m, 28 hub skills:
 #:
 #:     half      requests negatives precision recall loads wrong on-negatives
-#:     tuning         106        33      0.92   0.74   67    5  4
-#:     held-out       118        29      0.93   0.58   62    4  4
+#:     tuning         114        33      0.90   0.73   74    7  4
+#:     held-out       120        29      0.92   0.59   65    5  4
 #:
 #: The floor and lead this replaced (0.55, 0.03, name-and-description text
-#: with no prompt) measured precision 0.91, recall 0.11 (12 loads) on the same
-#: held-out half.
+#: with no prompt) measured precision 0.91, recall 0.11 (12 loads) on the
+#: held-out half as it stood before office-docs joined (118 requests).
 #: A wrong load costs context, not correctness (two skills a turn at most,
 #: under the host's share-of-context cap), so a few loads on requests that
 #: need no skill are accepted. They are questions about a skill's topic:

@@ -666,14 +666,14 @@ on 0 of 24 tasks. Loading a very strong match for the model is opt-in (see
   At most three are suggested by score. A suggested skill's unloaded
   `pairs_with` companions follow it only when they score at least **0.40**
   themselves: pairing is mutual, so one skill can pair with five others.
-- **Calibration.** 224 invented requests over the 27 hub skills
+- **Calibration.** 234 invented requests over the 28 hub skills
   (`tests/fixtures/skills/skill_suggestion_cases.json`), 62 of which should
   get no suggestion: small talk, general and coding questions, questions about
   pasted text, and near misses such as *"what is a pivot table?"*. A hash of
   each request puts it in a tuning half or a held-out half; the defaults were
   chosen on the tuning half. With `embeddinggemma-300m`, on the held-out half
-  (118 requests, 29 negatives): precision 0.77, recall 0.78, and 11 of the 29
-  negatives got a suggestion. On the tuning half: 0.88, 0.82 and 6 of 33.
+  (120 requests, 29 negatives): precision 0.77, recall 0.78, and 11 of the 29
+  negatives got a suggestion. On the tuning half: 0.85, 0.83 and 6 of 33.
   Near misses score as high as real requests, so no threshold removes them
   without losing recall. Every hub skill needs labelled requests in both
   halves; a test names any that has none. The scores depend on the embedding
@@ -719,12 +719,13 @@ they are without it.
 - **Settings.** `skill_autoload_threshold` (`GAIA_SKILL_AUTOLOAD_TAU`) sets the
   floor and `skill_autoload_margin` (`GAIA_SKILL_AUTOLOAD_MARGIN`) the lead.
   The env values win, and one that is not a number stops startup.
-- **Calibration.** On the held-out half of the labelled set (118 requests, 29
-  of them needing no skill), `embeddinggemma-300m` at 0.40 and 0.03 loaded 62
-  skills, 4 of them outside the request's labels: precision 0.93, recall 0.58.
-  On the tuning half: 67 loads, 5 wrong, precision 0.92, recall 0.74. The
+- **Calibration.** On the held-out half of the labelled set (120 requests, 29
+  of them needing no skill), `embeddinggemma-300m` at 0.40 and 0.03 loaded 65
+  skills, 5 of them outside the request's labels: precision 0.92, recall 0.59.
+  On the tuning half: 74 loads, 7 wrong, precision 0.90, recall 0.73. The
   earlier defaults (0.55 and 0.03, with the skill's name in the text and no
-  prompts) loaded 12 on the held-out half, for recall 0.11. All 4 wrong loads
+  prompts) loaded 12 on the held-out half before `office-docs` joined it, for
+  recall 0.11. 4 of the 5 wrong loads
   were on requests that need no skill: questions *about* a skill's topic, such
   as "What is RSS and how do RSS feeds work?", score as high as real requests.
   A wrong load costs context, not correctness, which is why a few are
