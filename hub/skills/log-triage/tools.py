@@ -3015,7 +3015,8 @@ def resolve_inputs(
 
 
 def _is_own_output(path: Path) -> bool:
-    if path.suffix.lower() not in (".json", ".csv"):
+    """True for a file an earlier call wrote: each starts with OUTPUT_MARKER."""
+    if path.suffix.lower() not in (".json", ".csv", ".txt"):
         return False
     try:
         with skill_context.open_read(path, "rb") as f:
@@ -3620,8 +3621,9 @@ class TriageResult:
         else:
             view["sample"] = flagged[:OUT_ENTITIES]
             view["full_list"] = (
-                f"{len(flagged)} entities: call again with output_path='<folder>/"
-                "anomalous_entities.csv' (or .txt) to write all of them."
+                f"{len(flagged)} entities, only a sample is shown here. Pass "
+                "output_path='<folder>/anomalous_entities.csv' (or .txt) to write "
+                "all of them; that call reads the logs again."
             )
         return view
 
@@ -3690,12 +3692,14 @@ class TriageResult:
         """Write full detail (``.json``) or the entity list (``.csv`` / ``.txt``)."""
         if path.suffix.lower() == ".txt":
             with skill_context.open_write(path, "x") as f:
+                # The marker line lets a later run skip this file as a log.
+                f.write(f"# {OUTPUT_MARKER} anomalous entities, one per line\n")
                 for e in sorted(self.entities["flagged"]):
                     f.write(e + "\n")
             return {
                 "path": str(path),
                 "rows": len(self.entities["flagged"]),
-                "kind": "entity list (one per line)",
+                "kind": "entity list (one per line after a '#' comment line)",
             }
         if path.suffix.lower() == ".csv":
             with skill_context.open_write(path, "x", newline="") as f:
@@ -3759,6 +3763,22 @@ def _output_refusal(out: Path, inputs: Sequence[Path]) -> Optional[str]:
             f"anomalous-entity list); got '{out.name}'."
         )
     return None
+
+
+def _not_written(compact: Dict[str, Any], reason: str) -> Dict[str, Any]:
+    """The analysis stands, but the file the caller asked for does not exist."""
+    return {
+        "status": "partial",
+        "error": f"output_path was not written: {reason}",
+        "fix": (
+            "The analysis in this result is complete; only the file is missing. "
+            "Call again with an output_path that does not exist yet, ends in "
+            ".json, .csv or .txt and lies in a folder you may write. Until then "
+            "tell the user the file was not written."
+        ),
+        **{k: v for k, v in compact.items() if k != "status"},
+        "output": {"written": False, "error": reason},
+    }
 
 
 @tool(timeout=DEFAULT_TIME_BUDGET_S + 120, display_label="Triaging logs")
@@ -3828,24 +3848,18 @@ def triage_logs(
         out = Path(os.path.expanduser(output_path.strip().strip('"')))
         refusal = _output_refusal(out, [Path(f.path) for f in result.an.files])
         if refusal:
-            compact["output"] = {"written": False, "error": refusal}
-        else:
-            try:
-                compact["output"] = {"written": True, **result.write(out)}
-            except SkillPermissionError as exc:
-                compact["output"] = {"written": False, "error": str(exc)}
-            except FileExistsError:
-                compact["output"] = {
-                    "written": False,
-                    "error": (
-                        f"'{out}' already exists: triage_logs never overwrites a "
-                        "file. Pick a new name."
-                    ),
-                }
-            except OSError as exc:
-                log.error("triage_logs could not write %s: %s", out, exc)
-                compact["output"] = {
-                    "written": False,
-                    "error": f"could not write {out}: {exc}",
-                }
+            return _not_written(compact, refusal)
+        try:
+            compact["output"] = {"written": True, **result.write(out)}
+        except SkillPermissionError as exc:
+            return _not_written(compact, str(exc))
+        except FileExistsError:
+            return _not_written(
+                compact,
+                f"'{out}' already exists: triage_logs never overwrites a file. "
+                "Pick a new name.",
+            )
+        except OSError as exc:
+            log.error("triage_logs could not write %s: %s", out, exc)
+            return _not_written(compact, f"could not write {out}: {exc}")
     return compact

@@ -1024,6 +1024,43 @@ def test_tool_writes_json_and_csv_beside_the_logs_and_never_overwrites(tmp_path)
     assert (tmp_path / "a.log").read_bytes() == before
 
 
+def test_its_own_txt_list_is_not_read_back_as_a_log(tmp_path):
+    t = T0 + 3 * 3600
+    extra = [
+        (t + k, f"{_iso(t + k)} app-01 FATAL raid array degraded on sess-{k:03d}a")
+        for k in range(30)
+    ]
+    _steady(tmp_path / "a.log", extra=extra)
+    first = _call(paths=[str(tmp_path)], output_path=str(tmp_path / "bad.txt"))
+    assert first["output"]["written"] and first["output"]["rows"] == 30
+    second = _call(paths=[str(tmp_path)])
+    assert [f["file"] for f in second["coverage"]["files"]] == ["a.log"]
+    assert second["coverage"]["hosts"] == first["coverage"]["hosts"]
+    assert second["coverage"]["entries"] == first["coverage"]["entries"]
+    skipped = {Path(s["file"]).name: s["reason"] for s in second["coverage"]["skipped"]}
+    assert skipped == {"bad.txt": "an earlier triage_logs output"}
+
+
+def test_a_users_own_txt_list_is_still_read(tmp_path):
+    _write(
+        tmp_path / "notes.txt", [f"{_iso(T0 + i)} h-1 INFO ok {i}" for i in range(5)]
+    )
+    out = _call(paths=[str(tmp_path)])
+    assert [f["file"] for f in out["coverage"]["files"]] == ["notes.txt"]
+
+
+def _assert_not_written(out, needle):
+    """The failure is at the top level, not only nested under ``output``."""
+    assert out["status"] == "partial"
+    assert out["error"].startswith("output_path was not written: ")
+    assert needle in out["error"] and "Call again" in out["fix"]
+    assert out["output"] == {
+        "written": False,
+        "error": out["error"].split(": ", 1)[1],
+    }
+    assert out["coverage"]["entries"], "the analysis itself is still returned"
+
+
 @pytest.mark.parametrize("name", ["triage.json", "bad.csv", "ids.txt"])
 def test_a_file_created_after_the_check_is_still_not_overwritten(
     tmp_path, monkeypatch, name
@@ -1040,9 +1077,7 @@ def test_a_file_created_after_the_check_is_still_not_overwritten(
 
     monkeypatch.setattr(lt, "_output_refusal", check_then_race)
     out = _call(paths=[str(tmp_path / "a.log")], output_path=str(target))
-    assert out["status"] == "success"
-    assert not out["output"]["written"]
-    assert "never overwrites" in out["output"]["error"]
+    _assert_not_written(out, "never overwrites")
     assert target.read_text(encoding="utf-8") == "someone else's file\n"
 
 
@@ -1053,8 +1088,14 @@ def test_a_file_created_after_the_check_is_still_not_overwritten(
 def test_tool_refuses_bad_output_paths(tmp_path, name, needle):
     _steady(tmp_path / "a.log", hours=1)
     out = _call(paths=[str(tmp_path)], output_path=str(tmp_path / name))
-    assert out["status"] == "success"
-    assert not out["output"]["written"] and needle in out["output"]["error"]
+    _assert_not_written(out, needle)
+
+
+def test_a_written_output_keeps_status_success(tmp_path):
+    _steady(tmp_path / "a.log", hours=1)
+    out = _call(paths=[str(tmp_path)], output_path=str(tmp_path / "t.json"))
+    assert out["status"] == "success" and out["output"]["written"]
+    assert "error" not in out and "fix" not in out
 
 
 def test_tool_reads_and_writes_only_inside_the_agents_folders(tmp_path):
@@ -1068,7 +1109,7 @@ def test_tool_reads_and_writes_only_inside_the_agents_folders(tmp_path):
         out = _call(paths=[str(logs), str(other)], output_path=str(other / "t.json"))
         assert [f["file"] for f in out["coverage"]["files"]] == ["a.log"]
         assert any(Path(s["file"]).name == "other" for s in out["coverage"]["skipped"])
-        assert not out["output"]["written"]
+        assert out["status"] == "partial" and not out["output"]["written"]
         assert not (other / "t.json").exists()
         refused = _call(paths=[str(other / "b.log")])
         assert refused["status"] == "error"

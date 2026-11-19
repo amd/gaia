@@ -74,10 +74,11 @@ incident.
   `line_samples`. If its lines truly carry no timestamp, say that the file
   was counted but not ranked by time.
 - **Deliver lists from `triage_logs` output; do not rebuild them by hand.**
-  A list of failed requests, sessions or jobs is `entities.list`. For
-  more than 150 ids call again with
-  `output_path="<folder>/anomalous_entities.csv"` and give the user that file.
-  Say how many were flagged out of `total`.
+  A list of failed requests, sessions or jobs is `entities.list`. When the
+  user wants a list file, pass `output_path` on the first call (a new `.csv`
+  or `.txt`, outside the log folder or under a name of its own), so the logs
+  are read once. `status: partial` means the file was not written: say so,
+  with the `error`. Say how many were flagged out of `total`.
 - **Baseline is not the incident, unless it is the whole log.** Report
   `baseline` templates once as background, never in an anomaly total. Steady
   ERROR or FATAL templates in `persistent_errors` are either routine or an

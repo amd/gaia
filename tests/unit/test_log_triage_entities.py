@@ -231,9 +231,9 @@ def test_the_list_is_written_when_output_path_is_given(tmp_path):
     path, truth = session_tokens(tmp_path, random.Random(3))
     out = lt.triage_logs(paths=[str(path)], output_path=str(tmp_path / "bad.txt"))
     assert out["output"]["written"], out["output"]
-    assert set((tmp_path / "bad.txt").read_text(encoding="utf-8").split()) == set(
-        out["entities"]["list"]
-    )
+    marker, *ids = (tmp_path / "bad.txt").read_text(encoding="utf-8").splitlines()
+    assert marker.startswith("# " + lt.OUTPUT_MARKER)
+    assert ids == out["entities"]["list"]
     out = lt.triage_logs(paths=[str(path)], output_path=str(tmp_path / "bad.csv"))
     header = (tmp_path / "bad.csv").read_text(encoding="utf-8").splitlines()[0]
     assert header.startswith("entity,kind,templates")
