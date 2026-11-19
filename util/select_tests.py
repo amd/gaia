@@ -21,9 +21,11 @@ For a change that passes the allowlist, two sources say which tests it reaches:
 
 **The coverage map** (``build-map``), from a full run with per-test coverage
 contexts on main. It lists, for each source file, the test files that executed
-it. This is what makes the selection tight: most of ``src/gaia`` imports most of
-the rest inside function bodies, so static reading alone would run nearly
-everything for nearly any change.
+it, except lines that more than ``FULL_FRACTION`` of the suite runs in the
+setup or teardown phase (an autouse fixture's work), which say nothing about
+what a test uses. This is what makes the selection tight: most of
+``src/gaia`` imports most of the rest inside function bodies, so static reading
+alone would run nearly everything for nearly any change.
 
 **Static rules**, added on top for what coverage can't see:
 
@@ -843,25 +845,47 @@ def load_map(path: Path) -> Tuple[Dict[str, Set[str]], bool]:
     return files, stale
 
 
+_SETUP_PHASES = ("setup", "teardown")
+
+
+def _split_context(context: str) -> Tuple[str, str]:
+    """A pytest-cov context ``<nodeid>|<phase>`` as (test file, phase)."""
+    nodeid, _, phase = context.partition("|")
+    return nodeid.split("::", 1)[0].replace("\\", "/"), phase
+
+
 def build_map(coverage_file: Path, repo: Path = REPO_ROOT) -> dict:
     from coverage import CoverageData
 
     data = CoverageData(basename=str(coverage_file))
     data.read()
-    tests: Dict[str, int] = {}
-    files: Dict[str, Set[int]] = {}
+    lines: Dict[str, List[Set[str]]] = {}
+    suite: Set[str] = set()
     for measured in data.measured_files():
         try:
             rel = Path(measured).resolve().relative_to(repo.resolve()).as_posix()
         except ValueError:
             continue
-        hit: Set[int] = set()
-        for contexts in (data.contexts_by_lineno(measured) or {}).values():
+        lines[rel] = list((data.contexts_by_lineno(measured) or {}).values())
+        for contexts in lines[rel]:
             for context in contexts:
-                test = context.split("::", 1)[0]
+                test, _ = _split_context(context)
+                if test.endswith(".py"):
+                    suite.add(test)
+    tests: Dict[str, int] = {}
+    files: Dict[str, Set[int]] = {}
+    for rel, per_line in lines.items():
+        hit: Set[int] = set()
+        for contexts in per_line:
+            split = [_split_context(c) for c in contexts]
+            fixture_files = {t for t, phase in split if phase in _SETUP_PHASES}
+            shared = len(fixture_files) > FULL_FRACTION * len(suite)
+            for test, phase in split:
                 if not test.endswith(".py"):
                     continue
-                hit.add(tests.setdefault(test.replace("\\", "/"), len(tests)))
+                if shared and phase in _SETUP_PHASES:
+                    continue
+                hit.add(tests.setdefault(test, len(tests)))
         if hit:
             files[rel] = hit
     names = sorted(tests, key=tests.get)

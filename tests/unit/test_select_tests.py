@@ -416,6 +416,30 @@ def test_a_mapped_test_that_reaches_nothing_stays_out(graph):
     assert "tests/unit/test_daemon_start.py" not in hit
 
 
+def test_build_map_ignores_suite_wide_fixture_setup(tmp_path):
+    from coverage import CoverageData
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    mod = repo / "src" / "mod.py"
+    mod.write_text("\n" * 5, encoding="utf-8")
+    suite = [f"tests/unit/test_{n}.py" for n in "abcde"]
+
+    cov = CoverageData(basename=str(tmp_path / ".coverage"))
+    for test in suite:
+        cov.set_context(f"{test}::test_x|setup")
+        cov.add_lines({str(mod): [1]})  # autouse fixture: runs for every test
+    cov.set_context(f"{suite[0]}::test_x|run")
+    cov.add_lines({str(mod): [2]})
+    cov.set_context(f"{suite[1]}::test_x|setup")
+    cov.add_lines({str(mod): [3]})  # a fixture only some tests request
+    cov.write()
+
+    built = st.build_map(tmp_path / ".coverage", repo=repo)
+    reached = {built["tests"][i] for i in built["files"]["src/mod.py"]}
+    assert reached == {suite[0], suite[1]}
+
+
 @pytest.mark.parametrize("days, stale", [(0, False), (3, False), (4, True)])
 def test_load_map_flags_a_map_the_nightly_stopped_refreshing(tmp_path, days, stale):
     import json
