@@ -18,8 +18,8 @@ service token from CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET (preferred:
 flags end up in shell history), or --client-id and --client-secret. A local
 `wrangler dev` with ADMIN_DEV_NO_AUTH=1 needs none.
 
-GitHub auth: GITHUB_TOKEN, else `gh auth token`. Search allows 30 queries a
-minute, so a full run takes a minute or two.
+GitHub auth: GITHUB_TOKEN (`GITHUB_TOKEN="$(gh auth token)"` reuses a logged-in
+GitHub CLI). Search allows 30 queries a minute, so a full run takes a minute or two.
 """
 
 from __future__ import annotations
@@ -28,8 +28,6 @@ import argparse
 import http.client
 import json
 import os
-import shutil
-import subprocess
 import sys
 import time
 import urllib.error
@@ -38,18 +36,7 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Callable
 
-GH = shutil.which("gh") or (
-    r"C:\Program Files\GitHub CLI\gh.exe"
-    if os.path.exists(r"C:\Program Files\GitHub CLI\gh.exe")
-    else None
-)
-TOKEN = os.environ.get("GITHUB_TOKEN") or (
-    subprocess.run(
-        [GH, "auth", "token"], capture_output=True, text=True, timeout=30
-    ).stdout.strip()
-    if GH
-    else ""
-)
+TOKEN = os.environ.get("GITHUB_TOKEN", "")
 MAX_RUNS_PER_QUERY = 1000
 MIN_WINDOW_S = 60
 
@@ -234,7 +221,7 @@ def main() -> int:
     dh = access_headers(a.client_id, a.client_secret)
 
     def dash(path: str) -> dict:
-        return fetch(base + path, dh)[0]  # type: ignore[return-value]
+        return fetch(base + path, dh)[0]
 
     meta, _ = gh(f"/repos/{a.repo}")
     r = a.repo

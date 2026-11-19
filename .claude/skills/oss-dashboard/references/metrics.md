@@ -9,7 +9,7 @@ quarter of the project's own data.
 1. Run the dashboard on real data first (`full=1`), at 90d and 1y.
 2. For each growth metric, read the project's own median over the last 3-6 months.
 3. Set `good` a little above that median and `warn` around 60% of it. Write them into `TARGETS` in
-   `src/config.ts`.
+   `<dir>/src/config.ts`.
 4. Put famous peers in `BENCHMARKS` (with the month you looked them up) as context. Never use a peer's numbers
    as the target: in the original build, targets copied from a 250k-star project turned every card red and the
    maintainer asked for "more realistic" ones the same day.
@@ -67,7 +67,7 @@ self-merged produced a meaningless "10.7× slower" in the original build.
 | Tests | Count in the latest default-branch run of the test workflow | none failing and not shrinking / shrank / failing | — |
 
 Issue- and comment-triggered automation and manual dispatches are not build health; neither is a workflow meant
-to fail (a backlog sweep) — list those in `CI_EXCLUDE_WORKFLOWS` in `src/config.ts`.
+to fail (a backlog sweep) — list those in `CI_EXCLUDE_WORKFLOWS` in `<dir>/src/config.ts`.
 
 ## Evals
 

@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):  # noqa: D401 - urllib hook
+    def redirect_request(self, *args, **kwargs):
         return None
 
 
