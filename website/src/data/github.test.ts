@@ -5,6 +5,11 @@
 // hit the network so only their pagination/error-shape behavior is covered
 // here, with fetch stubbed.
 
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -20,6 +25,10 @@ import {
   sumAssetDownloads,
   type GithubRelease,
 } from './github';
+
+const FIXTURE = fileURLToPath(
+  new URL('../../../tests/fixtures/github/releases.json', import.meta.url),
+);
 
 describe('isMainReleaseTag', () => {
   it('matches a plain semver tag', () => {
@@ -137,7 +146,7 @@ describe('getReleaseStats — pagination and error handling', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('names the secondary rate limit on a 403 when a token is set', async () => {
+  it('names the API rate limit or exhausted quota on a 403 when a token is set', async () => {
     vi.resetModules();
     vi.stubEnv('GITHUB_TOKEN', 'test-token');
     vi.stubEnv('GITHUB_FETCH_RETRIES', '0');
@@ -148,9 +157,97 @@ describe('getReleaseStats — pagination and error handling', () => {
 
     const mod = await import('./github');
     await expect(mod.getReleaseStats()).rejects.toThrow(
-      /\[github\].*releases.*HTTP 403 after 1 attempt.*secondary rate limit/s,
+      /\[github\].*releases.*HTTP 403 after 1 attempt.*hourly quota/s,
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('checked-in GitHub fixture', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('serves repo stats, the stable release and the candidate without fetching', async () => {
+    vi.stubEnv('GAIA_GITHUB_FIXTURE', FIXTURE);
+    const fetchMock = vi.fn(() => {
+      throw new Error('fetch should not run with a fixture');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    expect(await mod.getRepoStats()).toEqual({ stars: 1626, forks: 237 });
+
+    const stable = await mod.getStableRelease();
+    expect(stable.tag).toBe('v0.26.0');
+    expect(stable.assets.length).toBeGreaterThan(0);
+
+    const candidate = await mod.getReleaseCandidate();
+    expect(candidate?.tag).toBe('v0.26.1-rc2');
+    expect(candidate?.downloads.length).toBeGreaterThan(0);
+
+    const stats = await mod.getReleaseStats();
+    expect(stats.releases.map((r) => [r.tag, r.kind])).toEqual([
+      ['v0.26.1-rc2', 'rc'],
+      ['v0.26.0', 'stable'],
+    ]);
+    expect(stats.totalReleaseCount).toBe(1);
+    expect(stats.totalDownloadCount).toBeGreaterThan(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fails loudly on a missing fixture instead of falling back to the network', async () => {
+    vi.stubEnv('GAIA_GITHUB_FIXTURE', join(tmpdir(), 'gaia-no-such-fixture.json'));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getReleaseStats()).rejects.toThrow(
+      /Failed to read GAIA_GITHUB_FIXTURE/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fails loudly on a malformed fixture', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gaia-fixture-'));
+    const path = join(dir, 'bad.json');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        repo: { stargazers_count: 1, forks_count: 2 },
+        releases: [{ tag_name: 'v0.26.0' }],
+      }),
+    );
+    vi.stubEnv('GAIA_GITHUB_FIXTURE', path);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getRepoStats()).rejects.toThrow(/malformed release or asset/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('applies the same release transformations as a live API response', async () => {
+    const payload = JSON.parse(readFileSync(FIXTURE, 'utf8')) as {
+      releases: GithubRelease[];
+    };
+
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(payload.releases)));
+    const live = await import('./github');
+    const liveStats = await live.getReleaseStats();
+    const liveStable = await live.getStableRelease();
+    const liveCandidate = await live.getReleaseCandidate();
+
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    vi.stubEnv('GAIA_GITHUB_FIXTURE', FIXTURE);
+    const fixture = await import('./github');
+
+    expect(await fixture.getReleaseStats()).toEqual(liveStats);
+    expect(await fixture.getStableRelease()).toEqual(liveStable);
+    expect(await fixture.getReleaseCandidate()).toEqual(liveCandidate);
   });
 });
 
@@ -490,7 +587,7 @@ describe('githubFetch retries', () => {
 
     const mod = await import('./github');
     await expect(mod.getReleaseStats()).rejects.toThrow(
-      /HTTP 403 after 3 attempt.*secondary rate limit/s,
+      /HTTP 403 after 3 attempt.*hourly quota/s,
     );
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
@@ -503,6 +600,30 @@ describe('githubFetch retries', () => {
     const mod = await import('./github');
     await expect(mod.getReleaseStats()).rejects.toThrow(/HTTP 403.*set GITHUB_TOKEN/s);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a non-integer GITHUB_FETCH_RETRIES instead of treating it as zero', async () => {
+    vi.stubEnv('GITHUB_FETCH_RETRIES', 'not-a-number');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getReleaseStats()).rejects.toThrow(
+      /GITHUB_FETCH_RETRIES must be an integer, got "not-a-number"/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an out-of-range GITHUB_FETCH_RETRIES', async () => {
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '9');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getReleaseStats()).rejects.toThrow(
+      /GITHUB_FETCH_RETRIES must be from 0 to 5, got 9/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('does not retry a 500 even with retries enabled', async () => {

@@ -687,7 +687,7 @@ describe('Downloads.astro against an incomplete release', () => {
     vi.stubEnv('GITHUB_FETCH_RETRIES', '0');
     stubReleases(() => new Response('rate limited', { status: 403 }));
     await expect(renderHtml()).rejects.toThrow(
-      /\[github\].*releases.*HTTP 403.*secondary rate limit/s,
+      /\[github\].*releases.*HTTP 403.*hourly quota/s,
     );
   });
 });

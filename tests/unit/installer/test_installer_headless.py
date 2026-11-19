@@ -28,6 +28,7 @@ REPO = Path(__file__).resolve().parents[3]
 HEADLESS = REPO / "installer" / "headless"
 WORKFLOW = REPO / ".github" / "workflows" / "test_installers_headless.yml"
 THRESHOLDS = REPO / "installer" / "install_time_thresholds.json"
+FIXTURE = REPO / "tests" / "fixtures" / "github" / "releases.json"
 
 
 def _load(name: str):
@@ -281,7 +282,7 @@ class TestResolveReleaseRetries:
         assert "HTTP 403" in message
         assert "3 attempt" in message
         assert "GITHUB_FETCH_RETRIES=2" in message
-        assert "secondary rate limit" in message
+        assert "hourly quota" in message
         assert isinstance(caught.value.__cause__, urllib.error.HTTPError)
         assert len(self.requests) == 3
         assert self.sleeps == [0.0, 0.0]
@@ -306,6 +307,12 @@ class TestResolveReleaseRetries:
         assert caught.value is error
         assert len(self.requests) == 1
         assert self.sleeps == []
+
+    @pytest.mark.parametrize("value", ["not-a-number", "3.5", "-1", "6"])
+    def test_invalid_retry_limit_is_rejected(self, monkeypatch, value):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", value)
+        with pytest.raises(SystemExit, match="GITHUB_FETCH_RETRIES"):
+            resolve._retry_limit()
 
     def test_a_wait_that_lands_exactly_on_the_budget_is_allowed(self, monkeypatch):
         monkeypatch.setenv("GITHUB_FETCH_RETRIES", "1")
@@ -367,6 +374,109 @@ class TestResolveReleaseRetries:
         assert resolve._retry_delay(_http_error(403), 1) == 0.5
         assert resolve._retry_delay(_http_error(403), 3) == 2.0
         assert resolve._retry_delay(_http_error(403, {"Retry-After": "600"}), 1) == 30.0
+
+
+# ── checked-in release fixture ────────────────────────────────────────────────
+
+
+class TestResolveReleaseFixture:
+    @pytest.fixture(autouse=True)
+    def _fixture(self, monkeypatch):
+        for name in (
+            "GITHUB_FETCH_RETRIES",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GITHUB_OUTPUT",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("GAIA_GITHUB_FIXTURE", str(FIXTURE))
+
+        def no_network(*args, **kwargs):
+            raise AssertionError("fixture reads must not call the network")
+
+        monkeypatch.setattr(resolve.urllib.request, "urlopen", no_network)
+
+    def test_list_releases_comes_from_the_fixture(self):
+        releases = resolve.list_releases()
+        assert [release["tag_name"] for release in releases] == [
+            "v0.26.1-rc2",
+            "v0.26.0",
+        ]
+
+    def test_pick_default_and_previous_stable_use_the_fixture(self):
+        releases = resolve.list_releases()
+        tag = resolve.pick_default(releases)
+        assert tag == "v0.26.1-rc2"
+        assert resolve.previous_stable(releases, tag)["tag_name"] == "v0.26.0"
+
+    def test_release_assets_come_from_the_fixture(self):
+        assets = resolve.release_assets("v0.26.1-rc2")
+        assert assets is not None
+        assert "gaia-0.26.1-rc.2-win-x64-setup.exe" in assets
+        assert resolve.release_assets("v9.9.9") is None
+
+    def test_main_writes_the_fixture_release_without_network(self, tmp_path):
+        out = tmp_path / "release.json"
+        assert resolve.main(["--out", str(out)]) == 0
+        info = json.loads(out.read_text(encoding="utf-8"))
+        assert info["tag"] == "v0.26.1-rc2"
+        assert info["prev_tag"] == "v0.26.0"
+        assert info["missing"] == {}
+        assert info["urls"]
+        for name, url in info["urls"].items():
+            assert url == (
+                f"https://github.com/amd/gaia/releases/download/{info['tag']}/{name}"
+            )
+        assert info["prev_urls"]
+        for name, url in info["prev_urls"].items():
+            assert url == (
+                "https://github.com/amd/gaia/releases/download/"
+                f"{info['prev_tag']}/{name}"
+            )
+
+    def test_fixture_matches_the_live_transformations(self, monkeypatch):
+        data = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        by_tag = {release["tag_name"]: release for release in data["releases"]}
+
+        def fake_get(url):
+            if "/tags/" in url:
+                return by_tag[url.rsplit("/", 1)[-1]]
+            return data["releases"]
+
+        monkeypatch.delenv("GAIA_GITHUB_FIXTURE", raising=False)
+        monkeypatch.setattr(resolve, "_get", fake_get)
+        live_releases = resolve.list_releases()
+        live_tag = resolve.pick_default(live_releases)
+        live_assets = resolve.release_assets(live_tag)
+
+        monkeypatch.setenv("GAIA_GITHUB_FIXTURE", str(FIXTURE))
+        fixture_releases = resolve.list_releases()
+        fixture_tag = resolve.pick_default(fixture_releases)
+        fixture_assets = resolve.release_assets(fixture_tag)
+
+        assert fixture_releases == live_releases
+        assert fixture_tag == live_tag
+        assert fixture_assets == live_assets
+
+    def test_main_rejects_invalid_retries_even_with_a_fixture(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "not-a-number")
+        with pytest.raises(SystemExit, match="must be an integer"):
+            resolve.main(["--out", str(tmp_path / "release.json")])
+
+    def test_a_missing_fixture_fails_loudly(self, monkeypatch, tmp_path):
+        missing = tmp_path / "missing.json"
+        monkeypatch.setenv("GAIA_GITHUB_FIXTURE", str(missing))
+        with pytest.raises(SystemExit, match="could not read GAIA_GITHUB_FIXTURE"):
+            resolve.list_releases()
+
+    def test_a_malformed_fixture_fails_loudly(self, monkeypatch, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text(json.dumps({"releases": [{"assets": []}]}), encoding="utf-8")
+        monkeypatch.setenv("GAIA_GITHUB_FIXTURE", str(bad))
+        with pytest.raises(SystemExit, match="without a string tag_name"):
+            resolve.list_releases()
 
 
 # ── phase records and the gate ───────────────────────────────────────────────
@@ -948,12 +1058,17 @@ class TestWorkflow:
         wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         assert "branches" not in wf[True]["pull_request"]
 
-    def test_resolve_step_passes_both_tokens_and_bounded_retries(self):
+    def test_resolve_step_passes_tokens_retries_and_the_pr_fixture(self):
         wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         step = next(s for s in wf["jobs"]["resolve"]["steps"] if s.get("id") == "r")
         assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
         assert step["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
-        assert step["env"]["GITHUB_FETCH_RETRIES"] == "3"
+        retries = step["env"]["GITHUB_FETCH_RETRIES"]
+        assert "github.event_name != 'pull_request'" in retries
+        assert "'3'" in retries
+        fixture = step["env"]["GAIA_GITHUB_FIXTURE"]
+        assert "github.event_name == 'pull_request'" in fixture
+        assert "tests/fixtures/github/releases.json" in fixture
 
 
 class TestScriptsRefuseOutsideCi:
