@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import committedMeta from '../gaiaEyesSheet.ts?raw';
+import eyesCss from '../GaiaEyes.css?raw';
 import { EYES_ANIMATIONS, EYES_CELL, EYES_SHEET_HEIGHT, EYES_SHEET_WIDTH, EYES_VARIANTS } from '../gaiaEyesSheet';
 import { MATCHED_MOODS } from '../../utils/gaiaEyes';
 import { REGENERATE_HINT, SHEET_PATH, buildSheet, decodePng, encodePng, metaSource } from '../../../scripts/gen-gaia-eyes.mjs';
@@ -70,6 +71,10 @@ describe("GAIA's eye sprite sheet", () => {
         for (const state of ['think', 'read', 'tool'] as const) {
             expect(EYES_VARIANTS[state].length, state).toBeGreaterThan(1);
         }
+    });
+
+    it('mirrors the eyes in right-to-left layouts, so they read the way the text runs', () => {
+        expect(eyesCss).toMatch(/:root\[dir="rtl"\] \.gaia-eyes\s*\{[^}]*transform:\s*scaleX\(-1\)/);
     });
 
     it('can reach every mood it draws from a message', () => {

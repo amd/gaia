@@ -1646,6 +1646,9 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
         expect(await eyes.evaluate((el) => getComputedStyle(el).maskImage)).toContain('url(');
         if (locale === 'ar') expect(eyesBox.x).toBeGreaterThanOrEqual(textBox.x + textBox.width);
         else expect(eyesBox.x + eyesBox.width).toBeLessThanOrEqual(textBox.x);
+        // In Arabic the eyes are mirrored, so they scan a line from right to left.
+        expect(await eyes.evaluate((el) => getComputedStyle(el).transform))
+            .toBe(locale === 'ar' ? 'matrix(-1, 0, 0, 1, 0, 0)' : 'none');
         await shot(page, `live-status-${locale}`);
         expect(await audit(page)).toEqual([]);
     });

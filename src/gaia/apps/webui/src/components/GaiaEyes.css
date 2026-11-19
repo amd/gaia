@@ -17,7 +17,9 @@
     image-rendering: pixelated;
 }
 
-/* The eyes read and glance in the direction the text runs. */
+/* Right-to-left layouts mirror the eyes: they read, glance and write the way the
+   text runs, and the question mark becomes the Arabic one. Nothing on the sheet
+   is a letter, so every state survives the flip. */
 :root[dir="rtl"] .gaia-eyes {
     transform: scaleX(-1);
 }
