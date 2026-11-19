@@ -17,7 +17,7 @@ each, with planted ground truth:
 
 Scored: newest-file choice and older-copy flags (precision/recall), exact
 values and period labels of the requested periods, ambiguity and not-found
-reports (precision/recall), and chart round-trip equality for .xlsx and .pptx.
+reports (precision/recall), and chart round-trip equality for .xlsx.
 """
 
 from __future__ import annotations
@@ -31,13 +31,11 @@ import pytest
 
 pytest.importorskip("openpyxl")
 pytest.importorskip("docx")
-pytest.importorskip("pptx")
 
 _SKILL = Path(__file__).resolve().parents[2] / "hub" / "skills" / "report-from-sources"
 if str(_SKILL) not in sys.path:
     sys.path.insert(0, str(_SKILL))
 
-from report_from_sources_lib.pptx_chart import add_native_chart  # noqa: E402
 from report_from_sources_lib.series import (  # noqa: E402
     SeriesLookupError,
     extract_series,
@@ -65,7 +63,6 @@ MINIMUM = {
     "not_found_precision": 1.0,
     "not_found_recall": 1.0,
     "xlsx_chart_round_trip": 1.0,
-    "pptx_chart_round_trip": 1.0,
 }
 
 
@@ -160,20 +157,9 @@ def scores(tmp_path_factory) -> Dict[str, float]:
                     ci["categories"],
                     ci["series"],
                     title=lk.labels[0],
-                    source_note=ci["source_note"],
+                    source_note=ci["source"],
                 )
                 c["xlsx_ok"] += xlsx["verified"] and xlsx["read_back"] == ci["series"]
-                deck = add_native_chart(
-                    root / f"{sc.name}_{seed}.pptx",
-                    "new",
-                    "line",
-                    ci["categories"],
-                    ci["series"],
-                    lk.labels[0],
-                    "",
-                    ci["source_note"],
-                )
-                c["pptx_ok"] += deck["verified"] and deck["read_back"] == ci["series"]
 
     out = {
         "newest_file_accuracy": _ratio(c["newest_ok"], c["newest_total"]),
@@ -186,7 +172,6 @@ def scores(tmp_path_factory) -> Dict[str, float]:
         "not_found_precision": _ratio(c["nf_tp"], c["nf_tp"] + c["nf_fp"]),
         "not_found_recall": _ratio(c["nf_tp"], c["nf_tp"] + c["nf_fn"]),
         "xlsx_chart_round_trip": _ratio(c["xlsx_ok"], c["chart_total"]),
-        "pptx_chart_round_trip": _ratio(c["pptx_ok"], c["chart_total"]),
     }
     print("\nreport-from-sources scenario scores:")
     for key, value in out.items():

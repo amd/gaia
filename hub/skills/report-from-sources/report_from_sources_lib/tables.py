@@ -5,9 +5,12 @@
 Every reader yields ``(row_number, values)`` with 1-based row numbers as Excel
 shows them, so a value can always be cited back to its cell. Nothing is loaded
 whole: workbooks open read-only, CSV is read line by line, and layout
-detection looks at a bounded sample of the top of each sheet. CSV and JSON
-files open through ``gaia.skills.context.open_read``, which applies the
-agent's allowed folders, so these readers run inside a skill tool call.
+detection looks at a bounded sample of the top of each sheet. Every file
+opens through ``gaia.skills.context.open_read``, which applies the agent's
+allowed folders, so these readers run inside a skill tool call.
+
+Only time series are read: a table needs period labels across a header row or
+down a column. A table by category, or row-level records, is reported as such.
 
 :func:`analyze_layout` decides how a sheet is laid out:
 
@@ -24,7 +27,7 @@ import csv
 import json
 import re
 import zipfile
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
@@ -36,8 +39,10 @@ from .periods import (
     Period,
     clean_label,
     dominant_freq,
+    is_bare_year,
     parse_axis,
     parse_period,
+    parse_yearless,
 )
 
 log = get_logger(__name__)
@@ -212,6 +217,8 @@ class Table:
         self.kind = kind  # "xlsx" | "csv" | "json"
         self.merged: List[Tuple[int, int, int, int]] = []  # r1, c1, r2, c2
         self.read_errors: List[str] = []
+        #: How the file's text was read when that was a choice (CSV conventions).
+        self.format_notes: List[str] = []
         self.truncated_columns = False
 
     def rows(
@@ -301,7 +308,9 @@ def _merged_ranges(
 class _CsvTable(Table):
     def __init__(self, path: Path):
         super().__init__(path, path.name, "csv")
-        self.encoding, self.delimiter = _sniff_delimited(path)
+        self.encoding, self.delimiter, self.decimal_comma, note = _sniff_delimited(path)
+        if note:
+            self.format_notes.append(f"{path.name}: {note}")
 
     def rows(
         self, limit: Optional[int] = None
@@ -327,6 +336,8 @@ class _CsvTable(Table):
                 number += 1
                 if limit is not None and number > limit:
                     return
+                if self.decimal_comma:
+                    values = [_decimal_comma_to_point(v) for v in values]
                 yield number, self._cut([v if v.strip() else None for v in values])
 
 
@@ -334,33 +345,122 @@ def path_str(path: Path) -> str:
     return str(path)
 
 
-def _sniff_delimited(path: Path) -> Tuple[str, str]:
-    """Encoding and delimiter from the first 64 KB."""
-    with open_read(path, "rb") as f:
-        head = f.read(65536)
-    encoding = "utf-8-sig"
+_BOMS = (
+    (b"\xef\xbb\xbf", "utf-8-sig"),
+    (b"\xff\xfe\x00\x00", "utf-32"),
+    (b"\x00\x00\xfe\xff", "utf-32"),
+    (b"\xff\xfe", "utf-16"),
+    (b"\xfe\xff", "utf-16"),
+)
+_NUM_LEAD = r"^[(\-+\u2212\u20ac$\u00a3\u00a5\s]*"
+_NUM_TAIL = r"\s*%?\s*\)?$"
+#: Numbers only a decimal comma explains: "1.234,56", "12,5", "0,125".
+_COMMA_DECIMAL_RE = re.compile(
+    _NUM_LEAD + r"(?:\d{1,3}(?:\.\d{3})+,\d+|0,\d+|\d+,\d{1,2}|\d+,\d{4,})" + _NUM_TAIL
+)
+#: Numbers only a decimal point explains: "1,234.56", "12.5", "0.125".
+_POINT_DECIMAL_RE = re.compile(
+    _NUM_LEAD
+    + r"(?:\d{1,3}(?:,\d{3})+\.\d+|0\.\d+|\d+\.\d{1,2}|\d+\.\d{4,})"
+    + _NUM_TAIL
+)
+#: "1.234" or "1,234": thousands under one convention, a decimal under the other.
+_EITHER_RE = re.compile(_NUM_LEAD + r"[1-9]\d{0,2}[.,]\d{3}" + _NUM_TAIL)
+_COMMA_NUMBER_RE = re.compile(
+    r"^(?P<pre>[(\-+\u2212\u20ac$\u00a3\u00a5\s]*)"
+    r"(?P<int>\d{1,3}(?:[.\u00a0\u202f ]\d{3})+|\d+)"
+    r"(?:,(?P<dec>\d+))?(?P<post>[^\d.,]{0,8})$"
+)
+_DELIMITER_NAMES = {",": "comma", "\t": "tab", ";": "semicolon", "|": "pipe"}
+
+
+def _sniff_encoding(head: bytes) -> str:
+    """The encoding of a delimited file, from its BOM or its byte pattern."""
+    for bom, name in _BOMS:
+        if head.startswith(bom):
+            return name
+    # UTF-16 without a BOM: every other byte of mostly-ASCII text is NUL.
+    sample = head[:4096]
+    if len(sample) >= 8:
+        even = sample[0::2].count(0) / len(sample[0::2])
+        odd = sample[1::2].count(0) / len(sample[1::2])
+        if odd > 0.4 and even < 0.1:
+            return "utf-16-le"
+        if even > 0.4 and odd < 0.1:
+            return "utf-16-be"
     try:
-        text = head.decode(encoding)
+        head.decode("utf-8")
     except UnicodeDecodeError as e:
         # A multi-byte character cut by the 64 KB boundary is not an encoding problem.
-        if e.start >= len(head) - 4:
-            text = head[: e.start].decode(encoding)
-        else:
-            encoding = "cp1252"
-            text = head.decode(encoding, errors="replace")
-    if path.suffix.lower() in (".tsv", ".tab"):
-        return encoding, "\t"
+        if e.start < len(head) - 4:
+            return "cp1252"
+    return "utf-8-sig"
+
+
+def _decimal_comma_to_point(text: str) -> str:
+    """ "1.234,56" -> "1234.56" for a file that writes decimals with a comma."""
+    match = _COMMA_NUMBER_RE.match(text.strip())
+    if not match:
+        return text
+    whole = re.sub(r"[.\u00a0\u202f ]", "", match.group("int"))
+    dec = f".{match.group('dec')}" if match.group("dec") else ""
+    return f"{match.group('pre')}{whole}{dec}{match.group('post')}"
+
+
+def _sniff_delimited(path: Path) -> Tuple[str, str, bool, Optional[str]]:
+    """Encoding, delimiter and decimal convention from the first 64 KB.
+
+    Returns:
+        ``(encoding, delimiter, decimal_comma, note)``; the note says which
+        convention was assumed when the file left a choice.
+    """
+    with open_read(path, "rb") as f:
+        head = f.read(65536)
+    encoding = _sniff_encoding(head)
+    text = head.decode(encoding, errors="replace")
     lines = [ln for ln in text.splitlines()[:50] if ln.strip()]
     best, best_score = ",", -1.0
-    for delim in (",", "\t", ";", "|"):
-        counts = [next(csv.reader([ln], delimiter=delim), []).__len__() for ln in lines]
-        if not counts or max(counts) < 2:
-            continue
-        common = max(set(counts), key=counts.count)
-        score = counts.count(common) / len(counts) * min(common, 50)
-        if score > best_score:
-            best, best_score = delim, score
-    return encoding, best
+    if path.suffix.lower() in (".tsv", ".tab"):
+        best = "\t"
+    else:
+        for delim in (",", "\t", ";", "|"):
+            counts = [
+                next(csv.reader([ln], delimiter=delim), []).__len__() for ln in lines
+            ]
+            if not counts or max(counts) < 2:
+                continue
+            common = max(set(counts), key=counts.count)
+            score = counts.count(common) / len(counts) * min(common, 50)
+            if score > best_score:
+                best, best_score = delim, score
+    cells = [
+        cell.strip()
+        for ln in lines
+        for cell in next(csv.reader([ln], delimiter=best), [])
+    ]
+    comma = sum(1 for c in cells if _COMMA_DECIMAL_RE.match(c))
+    point = sum(1 for c in cells if _POINT_DECIMAL_RE.match(c))
+    either = next((c for c in cells if _EITHER_RE.match(c)), None)
+    decimal_comma = comma > point
+    name = _DELIMITER_NAMES[best]
+    note = None
+    if comma and point:
+        note = (
+            f"{name}-delimited; numbers mix decimal commas and decimal points, read "
+            f"with a decimal {'comma' if decimal_comma else 'point'}. Check the values."
+        )
+    elif decimal_comma:
+        note = (
+            f"{name}-delimited with decimal commas: 1.234,56 was read as 1234.56 "
+            "and 12,5 as 12.5"
+        )
+    elif either and not point and best != ",":
+        note = (
+            f"{name}-delimited; {either!r} could use either decimal convention and "
+            "no value in the file settles it. Read with a decimal point "
+            f"({either} = {read_number(either).value}). Check with the user."
+        )
+    return encoding, best, decimal_comma, note
 
 
 class _JsonTable(Table):
@@ -530,24 +630,29 @@ def open_tables(path: Path) -> Iterator[List[Table]]:
                 "openpyxl is not installed, so .xlsx files cannot be read. Ask the "
                 "user to run `gaia init --profile chat`, which installs it."
             ) from e
-        try:
-            wb = load_workbook(path, read_only=True, data_only=True)
-        except (zipfile.BadZipFile, KeyError, OSError, ValueError) as e:
-            raise DataFileError(
-                f"{path.name} is not a readable .xlsx workbook: {e}"
-            ) from e
-        try:
+        with ExitStack() as stack:
+            try:
+                wb = load_workbook(
+                    stack.enter_context(open_read(path, "rb")),
+                    read_only=True,
+                    data_only=True,
+                )
+                stack.callback(wb.close)
+                zf = stack.enter_context(
+                    zipfile.ZipFile(stack.enter_context(open_read(path, "rb")))
+                )
+            except (zipfile.BadZipFile, KeyError, OSError, ValueError) as e:
+                raise DataFileError(
+                    f"{path.name} is not a readable .xlsx workbook: {e}"
+                ) from e
             tables: List[Table] = []
-            with zipfile.ZipFile(path) as zf:
-                for ws in wb.worksheets:
-                    table = _XlsxTable(path, ws)
-                    member = getattr(ws, "_worksheet_path", None)
-                    if member:
-                        table.merged = _merged_ranges(zf, member.lstrip("/"))
-                    tables.append(table)
+            for ws in wb.worksheets:
+                table = _XlsxTable(path, ws)
+                member = getattr(ws, "_worksheet_path", None)
+                if member:
+                    table.merged = _merged_ranges(zf, member.lstrip("/"))
+                tables.append(table)
             yield tables
-        finally:
-            wb.close()
         return
     if suffix in DELIMITED_SUFFIXES:
         yield [_CsvTable(path)]
@@ -648,6 +753,8 @@ class Layout:
     units_col: Optional[int] = None
     merged_header_cells: int = 0
     axis_notes: List[str] = field(default_factory=list)
+    #: Why a row or column that looks like periods was not read as one.
+    rejected: List[str] = field(default_factory=list)
     freq: Optional[str] = None
     first_data_row: int = 0
     # wide
@@ -655,6 +762,9 @@ class Layout:
     period_cols: Dict[int, Period] = field(default_factory=dict)
     other_period_cols: Dict[int, Period] = field(default_factory=dict)
     header_text: Dict[int, str] = field(default_factory=dict)
+    #: Text above or below a period column that is not the period itself
+    #: ("Actual", "Budget"): what tells two columns of one period apart.
+    banner_text: Dict[int, str] = field(default_factory=dict)
     label_cols: List[int] = field(default_factory=list)
     blank_columns: List[int] = field(default_factory=list)
     # columns / stacked
@@ -697,16 +807,69 @@ def _year_of(value: Any) -> Optional[str]:
     return None
 
 
+#: A column of bare years is a period column only under a header saying so.
+_PERIOD_HEADER_RE = re.compile(
+    r"(?<![a-z])(?:years?|yrs?|fy|fiscal|periods?|dates?|time|as of|vintage)(?![a-z])",
+    re.I,
+)
+YEAR_UNKNOWN_NOTE = (
+    "the header names months or quarters with no year, so periods are labelled "
+    "as written (Jan, Q1); the sheet does not state the year. Take it from the "
+    "title or file name, or ask the user, and say so"
+)
+
+
+def _has_text(value: Any) -> bool:
+    return is_text(value) and not read_number(value).blank
+
+
+def _bare_years_are_data(
+    grid: List[List[Any]], r: int, cols: Sequence[int]
+) -> Optional[str]:
+    """Why the bare years in row *r* are a data row, or None if they head a table.
+
+    "Salaries 1950 2000 2050" under "Category | Jan | Feb | Mar" is a data row.
+    Bare years are a header only when the row's other cells are text or blank
+    and no complete text header row sits above them in the same block.
+    """
+    row = grid[r]
+    years = ", ".join(str(row[c]) for c in list(cols)[:4])
+    if any(
+        read_number(v).value is not None for c, v in enumerate(row) if c not in cols
+    ):
+        return (
+            f"row {r + 1} holds numbers that could be years ({years}) next to "
+            "other numbers, so it was read as data"
+        )
+    first = min(cols)
+    for rr in range(r - 1, -1, -1):
+        above = grid[rr]
+        if not any(v is not None and str(v).strip() for v in above):
+            break  # a blank row ends the block this row belongs to
+        over = [str(above[c]).strip() for c in cols if _has_text(above[c])]
+        # One repeated text is a merged title or banner, not a header.
+        if len(over) * 2 < len(cols) or len(set(over)) < 2:
+            continue
+        if any(_has_text(v) for v in above[:first]):
+            return (
+                f"row {r + 1} holds numbers that could be years ({years}) under "
+                f"the text header in row {rr + 1}, so it was read as data"
+            )
+    return None
+
+
 def _wide_candidate(
-    grid: List[List[Any]], r: int
+    grid: List[List[Any]], r: int, rejected: Optional[List[str]] = None
 ) -> Tuple[Dict[int, Period], List[str], int]:
     """Period columns if row *r* is the period header row.
 
     Returns the period per column, axis notes, and the topmost row (0-based)
-    that contributed a year to a composite "2025" over "Q1" header.
+    that contributed a year to a composite "2025" over "Q1" header. Months or
+    quarters with no year anywhere above them come back with ``year`` 0.
     """
     row = grid[r]
     composed: List[Any] = []
+    yearless: Dict[int, Period] = {}
     top = r
     for c, value in enumerate(row):
         text = clean_label(value) if isinstance(value, str) else value
@@ -724,10 +887,25 @@ def _wide_candidate(
                     top = min(top, rr)
                     break
             composed.append(f"{text} {year}" if year else None)
+            if not year:
+                found = parse_yearless(text)
+                if found is not None:
+                    yearless[c] = found
         else:
             composed.append(value)
+    bare = [c for c, v in enumerate(composed) if is_bare_year(v)]
+    if len(bare) >= 2:
+        why = _bare_years_are_data(grid, r, bare)
+        if why:
+            if rejected is not None:
+                rejected.append(why)
+            for c in bare:
+                composed[c] = None
     periods, notes = parse_axis(composed, bare_year_numbers=True)
-    return {c: p for c, p in enumerate(periods) if p is not None}, notes, top
+    cols = {c: p for c, p in enumerate(periods) if p is not None}
+    if not cols and len(yearless) >= 2:
+        return yearless, notes + [YEAR_UNKNOWN_NOTE], r
+    return cols, notes, top
 
 
 def _numeric_share(values: Sequence[Any]) -> float:
@@ -757,8 +935,9 @@ def analyze_layout(table: Table, grid: Optional[List[List[Any]]] = None) -> Layo
 
     # -- wide: the header row with the most distinct periods ----------------
     wide_best: Tuple[int, int, Dict[int, Period], List[str], int] = (0, -1, {}, [], -1)
+    wide_dated = False
     for r in range(min(len(grid), HEADER_SEARCH_ROWS)):
-        cols, notes, top = _wide_candidate(grid, r)
+        cols, notes, top = _wide_candidate(grid, r, layout.rejected)
         if len(cols) < 2:
             continue
         # The periods must head numbers: something below them parses as a value.
@@ -768,20 +947,34 @@ def analyze_layout(table: Table, grid: Optional[List[List[Any]]] = None) -> Layo
         if _numeric_share(below) < 0.3:
             continue
         distinct = len({p.label for p in cols.values()})
-        if distinct > wide_best[0]:
+        # A header with years beats one that names months only.
+        dated = all(p.year for p in cols.values())
+        if (dated, distinct) > (wide_dated, wide_best[0]):
             wide_best = (distinct, r, cols, notes, top)
+            wide_dated = dated
 
     # -- periods down a column -----------------------------------------------
     col_best: Tuple[int, int, List[Optional[Period]], List[str]] = (0, -1, [], [])
     for c in range(min(width, 60)):
         values = [row[c] if c < len(row) else None for row in grid]
         header_hint = any(
-            isinstance(v, str) and re.search(r"year|yr|fy|period|date|time", v, re.I)
-            for v in values[:10]
+            isinstance(v, str) and _PERIOD_HEADER_RE.search(v) for v in values[:10]
         )
-        periods, notes = parse_axis(values, bare_year_numbers=header_hint or c == 0)
-        hits = [p for p in periods if p is not None]
         filled = [v for v in values if v is not None]
+        # Order ids 2000-2019 are not years: bare years need a header saying so.
+        bare = [v for v in values if is_bare_year(v)]
+        axis = values
+        if bare and not header_hint:
+            axis = [None if is_bare_year(v) else v for v in values]
+            if len(bare) >= 3 and len(bare) >= 0.5 * len(filled):
+                head = next((str(v) for v in values[:10] if _has_text(v)), "no header")
+                layout.rejected.append(
+                    f"column {column_letter(c)} ({head!r}) holds numbers that could "
+                    "be years, but its header does not say so (Year, FY, Period, "
+                    "Date), so it was read as data"
+                )
+        periods, notes = parse_axis(axis, bare_year_numbers=header_hint)
+        hits = [p for p in periods if p is not None]
         if len(hits) < 3 or len(hits) < 0.5 * len(filled):
             continue
         distinct = len({p.label for p in hits})
@@ -790,6 +983,8 @@ def analyze_layout(table: Table, grid: Optional[List[List[Any]]] = None) -> Layo
 
     if wide_best[0] < 2 and col_best[0] < 3:
         layout.reason = "no period labels found in a header row or a column"
+        if layout.rejected:
+            layout.reason += "; " + "; ".join(dict.fromkeys(layout.rejected[:2]))
         _collect_notes(layout, raw, 0, len(raw))
         return layout
     if wide_best[0] >= col_best[0]:
@@ -820,6 +1015,31 @@ def _finish_wide(layout: Layout, grid, raw, best, width) -> None:
         else:
             break
     layout.header_rows = list(range(header_top + 1, r + 2))
+    data_start = r + 1
+    banner_rows = list(range(header_top, top))
+    labels = [p.label for p in layout.period_cols.values()]
+    if len(set(labels)) < len(labels) and r + 1 < len(grid):
+        # One period over several columns: a row of text under it names them
+        # ("2024 | 2024" over "Actual | Budget").
+        cells = [grid[r + 1][c] for c in layout.period_cols if c < len(grid[r + 1])]
+        named = [
+            v
+            for v in cells
+            if _has_text(v) and not _UNITS_CELL_RE.match(clean_label(v))
+        ]
+        if len(named) * 2 >= len(cells) and not any(
+            read_number(v).value is not None for v in cells
+        ):
+            banner_rows.append(r + 1)
+            layout.header_rows.append(r + 2)
+            data_start = r + 2
+    for c in layout.period_cols:
+        seen: List[str] = []
+        for rr in banner_rows:
+            v = grid[rr][c] if c < len(grid[rr]) else None
+            if _has_text(v) and str(v).strip() not in seen:
+                seen.append(str(v).strip())
+        layout.banner_text[c] = " ".join(seen)
     for c in layout.period_cols:
         parts: List[str] = []
         for rr in range(header_top, r + 1):
@@ -828,9 +1048,8 @@ def _finish_wide(layout: Layout, grid, raw, best, width) -> None:
                 parts.append(str(v).strip())
         layout.header_text[c] = " ".join(parts)
 
-    data_start = r + 1
     # Units row: just under (or over) the period row, text in the period columns.
-    for rr in list(range(r + 1, min(len(grid), r + 4))) + list(
+    for rr in list(range(data_start, min(len(grid), data_start + 3))) + list(
         range(header_top - 1, max(-1, header_top - 3), -1)
     ):
         cells = [grid[rr][c] for c in layout.period_cols if c < len(grid[rr])]
@@ -862,7 +1081,7 @@ def _finish_wide(layout: Layout, grid, raw, best, width) -> None:
                     )
                     or None
                 )
-            if rr >= r + 1:
+            if rr >= data_start:
                 data_start = rr + 1
             break
     layout.first_data_row = data_start + 1

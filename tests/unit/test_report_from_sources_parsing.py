@@ -692,3 +692,416 @@ def test_large_long_csv_streams(tmp_path):
         ((24_997 + k) * 7 + 7) % 1000 / 10 for k in range(3)
     ]
     assert time.monotonic() - t0 < 120
+
+
+# --------------------------------------------------------------------------- #
+# Headers that are not periods, and periods that are not unique
+# --------------------------------------------------------------------------- #
+
+BUDGET = [
+    ["Category", "Jan", "Feb", "Mar", "Apr"],
+    ["Rent", 1200, 1200, 1250, 1250],
+    ["Salaries", 1950, 2000, 2050, 2100],
+]
+
+
+def test_a_year_like_data_row_is_not_taken_as_the_header(tmp_path):
+    path = _sheet(tmp_path, BUDGET)
+    result = S.extract_series(path, ["Salaries", "Rent"])
+    assert result["periods"] == ["Jan", "Feb", "Mar", "Apr"]
+    assert [e["values"] for e in result["series"]] == [
+        [1950, 2000, 2050, 2100],
+        [1200, 1200, 1250, 1250],
+    ]
+    # Month names alone are periods, and the result says the year is not stated.
+    assert any("does not state the year" in n for n in result["notes"])
+
+
+def test_a_year_like_data_row_in_a_csv_is_not_the_header(tmp_path):
+    path = tmp_path / "budget.csv"
+    path.write_text(
+        "Category,Jan 2025,Feb 2025\nSalaries,1950,2000\nBonus,2010,2020\n",
+        encoding="utf-8",
+    )
+    result = S.extract_series(path, ["Salaries", "Bonus"], periods="all")
+    assert result["periods"] == ["2025-01", "2025-02"]
+    assert [e["values"] for e in result["series"]] == [[1950, 2000], [2010, 2020]]
+
+
+def test_year_numbers_beside_other_numbers_are_data(tmp_path):
+    path = _sheet(tmp_path, [["Site", "A", "B", "C"], ["North", 1990, 2005, 31.5]])
+    lay = _layout(path)
+    assert lay.kind == "unknown" and "read as data" in lay.reason
+
+
+@pytest.mark.parametrize(
+    "above",
+    [
+        [],  # nothing above
+        [["Sales report", None, None]],  # a title
+        [["Sales report", "Sales report", "Sales report"]],  # a merged title
+        [[None, "Actual", "Forecast"]],  # a banner over the years
+    ],
+)
+def test_bare_years_still_head_a_table(tmp_path, above):
+    path = _sheet(tmp_path, above + [["Item", 2024, 2025], ["Revenue", 10, 12]])
+    result = S.extract_series(path, ["Revenue"], periods="all")
+    assert result["periods"] == ["2024", "2025"]
+    assert result["series"][0]["values"] == [10, 12]
+
+
+def test_order_ids_are_not_annual_periods(tmp_path):
+    rows = [["order_id", "amount"]] + [[2000 + i, 10 * i] for i in range(20)]
+    path = _sheet(tmp_path, rows)
+    with pytest.raises(S.SeriesLookupError, match="time series only") as err:
+        S.extract_series(path, ["amount"])
+    assert "header does not say so" in str(err.value)
+    # The same numbers under a header that says "year" are periods.
+    rows[0][0] = "Fiscal year"
+    named = _sheet(tmp_path, rows, name="years.xlsx")
+    assert S.extract_series(named, ["amount"], periods="last 2")["periods"] == [
+        "2018",
+        "2019",
+    ]
+
+
+def test_two_labels_for_one_row_both_return_its_values(tmp_path):
+    path = _sheet(
+        tmp_path,
+        [["Item", "2025Q4", "2026Q1"], ["Total revenue", 1.5, 2.5], ["Costs", 1, 1]],
+    )
+    result = S.extract_series(path, ["Total revenue", "total revenues"])
+    assert [e["matched_label"] for e in result["series"]] == ["Total revenue"] * 2
+    assert [e["values"] for e in result["series"]] == [[1.5, 2.5], [1.5, 2.5]]
+    assert len(result["chart_input"]["series"]) == 2
+
+
+BANNER_OVER = [
+    [None, "Actual", "Actual", "Budget"],
+    ["Item", 2023, 2024, 2024],
+    ["Revenue", 90, 110, 120],
+]
+BANNER_UNDER = [
+    ["Item", 2023, 2024, 2024],
+    [None, "Actual", "Actual", "Budget"],
+    ["Revenue", 90, 110, 120],
+]
+
+
+@pytest.mark.parametrize("rows", [BANNER_OVER, BANNER_UNDER])
+def test_one_period_over_two_columns_is_ambiguous_not_mixed(tmp_path, rows):
+    path = _sheet(tmp_path, rows)
+    with pytest.raises(S.SeriesLookupError, match="more than one column for 2024") as e:
+        S.extract_series(path, ["Revenue"])
+    assert e.value.payload["status"] == "ambiguous"
+    assert e.value.payload["choices"] == ["Actual", "Budget"]
+    assert "filters='header=Actual'" in str(e.value)
+    actual = S.extract_series(path, ["Revenue"], filters="header=Actual")
+    assert actual["periods"] == ["2023", "2024"]
+    assert actual["series"][0]["values"] == [90, 110]
+    budget = S.extract_series(path, ["Revenue"], filters="scenario=budget")
+    assert budget["periods"] == ["2024"] and budget["series"][0]["values"] == [120]
+    by_letter = S.extract_series(path, ["Revenue"], filters="column=D")
+    assert by_letter["series"][0]["cells"] == ["D3"]
+    with pytest.raises(S.SeriesLookupError, match="'Actual', 'Budget'"):
+        S.extract_series(path, ["Revenue"], filters="header=Forecast")
+
+
+def test_duplicate_period_columns_with_no_header_ask_for_a_column(tmp_path):
+    path = _sheet(tmp_path, [["Item", "2023", "2024", "2024"], ["Revenue", 9, 11, 12]])
+    with pytest.raises(S.SeriesLookupError, match="filters='column=C'") as e:
+        S.extract_series(path, ["Revenue"])
+    assert e.value.payload["status"] == "ambiguous"
+
+
+def test_filters_on_a_plain_wide_sheet_are_reported_as_ignored(tmp_path):
+    path = _sheet(tmp_path, [["Item", "2024", "2025"], ["Revenue", 110, 120]])
+    result = S.extract_series(path, ["Revenue"], filters="region=East")
+    assert any("filters do not apply" in n for n in result["notes"])
+
+
+# --------------------------------------------------------------------------- #
+# Formulas with no stored result
+# --------------------------------------------------------------------------- #
+
+
+def test_a_formula_row_never_calculated_is_named_not_reported_missing(tmp_path):
+    # openpyxl writes formulas without results; Excel has never opened this file.
+    path = _sheet(
+        tmp_path,
+        [
+            ["Item", "2024", "2025"],
+            ["North", 10, 12],
+            ["South", 5, 6],
+            ["Total", "=B2+B3", "=C2+C3"],
+        ],
+    )
+    with pytest.raises(S.SeriesLookupError, match="never been calculated") as e:
+        S.extract_series(path, ["Total"])
+    problem = e.value.payload["problems"][0]
+    assert problem["status"] == "formulas_not_calculated" and problem["cell"] == "A4"
+    assert "Excel or LibreOffice" in str(e.value) and "Nearest" not in str(e.value)
+    # The input rows are still readable, and a label that is really absent still says so.
+    assert S.extract_series(path, ["North"])["series"][0]["values"] == [10, 12]
+    with pytest.raises(S.SeriesLookupError, match="is not in t.xlsx"):
+        S.extract_series(path, ["Headcount"])
+
+
+def test_a_close_label_never_stands_in_for_an_uncalculated_row(tmp_path):
+    path = _sheet(
+        tmp_path,
+        [
+            ["Item", "2024", "2025"],
+            ["Total costs", 10, 12],
+            ["Total", "=B2*2", "=C2*2"],
+        ],
+    )
+    with pytest.raises(S.SeriesLookupError, match="never been calculated"):
+        S.extract_series(path, ["Total"])
+
+
+def test_a_formula_column_never_calculated_is_named(tmp_path):
+    path = _sheet(
+        tmp_path,
+        [
+            ["Month", "Sales", "Costs", "Margin"],
+            ["Jan 2026", 10, 4, "=B2-C2"],
+            ["Feb 2026", 12, 5, "=B3-C3"],
+            ["Mar 2026", 15, 6, "=B4-C4"],
+        ],
+    )
+    with pytest.raises(S.SeriesLookupError, match="never been calculated"):
+        S.extract_series(path, ["Margin"])
+
+
+def test_a_sheet_of_uncalculated_formulas_says_so(tmp_path):
+    path = _sheet(
+        tmp_path,
+        [["Item", "2024", "2025"], ["Total", "=1+1", "=2+2"], ["Net", "=B2", "=C2"]],
+    )
+    with pytest.raises(S.SeriesLookupError, match="never been calculated"):
+        S.extract_series(path, ["Total"])
+
+
+# --------------------------------------------------------------------------- #
+# CSV conventions
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-16-be"])
+def test_utf16_csv_is_read(tmp_path, encoding):
+    # Excel's "Unicode Text" export: UTF-16, tab-separated.
+    path = tmp_path / "export.csv"
+    text = "Month\tSales\r\nJan 2026\t10\r\nFeb 2026\t12\r\nMar 2026\t15\r\n"
+    path.write_bytes(text.encode(encoding))
+    result = S.extract_series(path, ["Sales"])
+    assert result["periods"] == ["2026-01", "2026-02", "2026-03"]
+    assert result["series"][0]["values"] == [10, 12, 15]
+
+
+def test_semicolon_csv_with_decimal_commas(tmp_path):
+    path = tmp_path / "eu.csv"
+    path.write_bytes(
+        (
+            "Monat;Umsatz;Kosten\r\nJan 2026;1.234,56;-12,5\r\n"
+            "Feb 2026;1.300,00;13,25\r\nMar 2026;1.234;14\r\n"
+        ).encode("cp1252")
+    )
+    result = S.extract_series(path, ["Umsatz", "Kosten"])
+    # "1.234" in a decimal-comma file is one thousand two hundred and thirty-four.
+    assert result["series"][0]["values"] == [1234.56, 1300.0, 1234]
+    assert result["series"][1]["values"] == [-12.5, 13.25, 14]
+    assert any("decimal commas" in n and "semicolon" in n for n in result["notes"])
+    sheet = S.inventory_folder(tmp_path)["data_files"][0]["sheets"][0]
+    assert "decimal commas" in sheet["read_as"][0]
+
+
+def test_a_decimal_point_csv_is_left_alone(tmp_path):
+    path = tmp_path / "us.csv"
+    path.write_text(
+        'month,sales\n2026-01,"1,234.50"\n2026-02,12.5\n2026-03,1.234\n',
+        encoding="utf-8",
+    )
+    result = S.extract_series(path, ["sales"])
+    assert result["series"][0]["values"] == [1234.5, 12.5, 1.234]
+    assert "notes" not in result
+
+
+def test_a_csv_that_does_not_settle_the_decimal_convention_says_so(tmp_path):
+    path = tmp_path / "either.csv"
+    path.write_text(
+        "month;sales\n2026-01;1.234\n2026-02;2.500\n2026-03;3.125\n", encoding="utf-8"
+    )
+    result = S.extract_series(path, ["sales"])
+    assert result["series"][0]["values"] == [1.234, 2.5, 3.125]
+    assert any("either decimal convention" in n for n in result["notes"])
+
+
+@pytest.mark.parametrize(
+    "text,plain",
+    [
+        ("1.234,56", "1234.56"),
+        ("-12,5", "-12.5"),
+        ("(1.000)", "(1000)"),
+        ("12,5%", "12.5%"),
+        ("1 234,5", "1234.5"),
+        ("31.12.2025", "31.12.2025"),  # a date
+        ("Q1", "Q1"),
+        ("2026", "2026"),
+    ],
+)
+def test_decimal_comma_numbers_are_rewritten_and_nothing_else(text, plain):
+    assert T._decimal_comma_to_point(text) == plain
+
+
+# --------------------------------------------------------------------------- #
+# Time series only
+# --------------------------------------------------------------------------- #
+
+
+def test_a_table_by_category_says_what_to_use_instead(tmp_path):
+    path = tmp_path / "regions.csv"
+    path.write_text("Region,Revenue\nEast,10\nWest,12\nNorth,9\n", encoding="utf-8")
+    with pytest.raises(S.SeriesLookupError, match="time series only") as e:
+        S.extract_series(path, ["Revenue"])
+    assert "run_python" in str(e.value) and "data-explore" in str(e.value)
+
+
+def test_row_level_records_say_what_to_use_instead(tmp_path):
+    path = tmp_path / "orders.csv"
+    rows = "".join(f"2026-01-{d:02d},{d}\n2026-01-{d:02d},{d * 2}\n" for d in (1, 2, 3))
+    path.write_text("date,amount\n" + rows, encoding="utf-8")
+    with pytest.raises(S.SeriesLookupError, match="single records") as e:
+        S.extract_series(path, ["amount"])
+    assert e.value.payload["status"] == "duplicate_periods"
+    assert "run_python" in str(e.value) and "time series only" in str(e.value)
+
+
+# --------------------------------------------------------------------------- #
+# Periods returned
+# --------------------------------------------------------------------------- #
+
+
+def test_default_is_the_last_twelve_periods_and_says_how_many_exist(tmp_path):
+    quarters = [f"{y}Q{q}" for y in range(2016, 2026) for q in range(1, 5)]
+    path = _sheet(tmp_path, [["Item"] + quarters, ["Revenue"] + list(range(40))])
+    result = S.extract_series(path, ["Revenue"])
+    assert result["periods"] == quarters[-12:]
+    assert result["periods_available"] == {
+        "count": 40,
+        "first": "2016Q1",
+        "last": "2025Q4",
+    }
+    assert S.extract_series(path, ["Revenue"], periods="all")["periods"] == quarters
+
+
+def test_chart_input_uses_the_field_names_a_chart_slide_takes(tmp_path):
+    path = _sheet(tmp_path, [["Item", "2024", "2025"], ["Revenue", 10, 12]])
+    result = S.extract_series(path, ["Revenue"], periods="all")
+    assert result["chart_input"] == {
+        "categories": ["2024", "2025"],
+        "series": {"Revenue": [10, 12]},
+        "source": result["provenance"],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Inventory size and order
+# --------------------------------------------------------------------------- #
+
+_WORDS_A = ["alpha", "bravo", "cedar", "delta", "ember"]
+_WORDS_B = ["north", "south", "east", "west", "metro"]
+
+
+def _size(result):
+    # As the agent measures a tool result before cutting one.
+    return len(json.dumps(result, ensure_ascii=False))
+
+
+def test_inventory_of_300_csvs_fits_the_budget_and_names_every_newest_copy(tmp_path):
+    names = [
+        f"{a}_{b}_{c}" for a in _WORDS_A for b in _WORDS_B for c in ("x", "y", "z", "w")
+    ]
+    for name in names:
+        for year in (2023, 2024, 2025):
+            rows = "".join(f"{year}-{m:02d},{m}\n" for m in range(1, 13))
+            (tmp_path / f"{name}_{year}.csv").write_text(
+                "month,units\n" + rows, encoding="utf-8"
+            )
+    inv = S.inventory_folder(tmp_path)
+    assert len(names) * 3 == 300
+    assert _size(inv) <= S.INVENTORY_BUDGET_CHARS
+    newest = {d["newest"]: d for d in inv["datasets"]}
+    assert set(newest) == {f"{name}_2025.csv" for name in names}
+    assert all(
+        d["data_through"] == "2025-12" and d["copies"] == 3 for d in newest.values()
+    )
+    # Nothing is cut silently, and the notice comes before the lists.
+    keys = list(inv)
+    assert keys.index("truncated") < keys.index("summary") < keys.index("datasets")
+    assert (
+        inv["truncated"]["cut_to_fit"]
+        and "subfolder" in inv["truncated"]["how_to_get_it"]
+    )
+
+
+def test_inventory_drops_series_names_before_anything_else(tmp_path):
+    for i, name in enumerate(_WORDS_A + _WORDS_B):
+        rows = [["Item", "2024Q1", "2024Q2", "2024Q3"]]
+        rows += [
+            [f"{name} measure number {k} of the pack", k, k + 1, k + 2]
+            for k in range(15)
+        ]
+        _sheet(tmp_path, rows, name=f"{name}_pack.xlsx")
+    full = S.inventory_folder(tmp_path, budget=10**9)
+    assert "truncated" not in full and "series" in full["data_files"][0]["sheets"][0]
+    budget = _size(full) - 1000
+    inv = S.inventory_folder(tmp_path, budget=budget)
+    assert _size(inv) <= budget
+    assert inv["truncated"]["cut_to_fit"][-1].startswith("series names")
+    sheet = inv["data_files"][0]["sheets"][0]
+    assert "series" not in sheet and sheet["series_count"] == 15
+    assert sheet["periods"]["last"] == "2024Q3"
+
+
+def test_inventory_leads_with_summary_and_datasets(tmp_path):
+    _sheet(tmp_path, [["Item", "2024", "2025"], ["A", 1, 2]], name="kpi_2025.xlsx")
+    _sheet(tmp_path, [["Item", "2023", "2024"], ["A", 1, 2]], name="kpi_2024.xlsx")
+    inv = S.inventory_folder(tmp_path)
+    assert list(inv)[:5] == ["status", "folder", "summary", "datasets", "data_files"]
+    assert "truncated" not in inv
+    # The file to use is listed before its older copy.
+    assert [f["file"] for f in inv["data_files"]] == ["kpi_2025.xlsx", "kpi_2024.xlsx"]
+    assert inv["datasets"][0]["data_through"] == "2025"
+
+
+def test_inventory_of_one_file_keeps_its_detail(tmp_path):
+    keep = _sheet(tmp_path, [["Item", "2024", "2025"], ["A", 1, 2]], name="a.xlsx")
+    _sheet(tmp_path, [["Item", "2024", "2025"], ["B", 1, 2]], name="b.xlsx")
+    inv = S.inventory_folder(tmp_path, only=[keep])
+    assert [f["file"] for f in inv["data_files"]] == ["a.xlsx"]
+    assert inv["data_files"][0]["sheets"][0]["series"] == ["A"]
+
+
+def test_inventory_stops_walking_a_folder_with_too_many_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(S, "MAX_WALK_FILES", 5)
+    deep = tmp_path / "a" / "b"
+    deep.mkdir(parents=True)
+    for i in range(4):
+        (tmp_path / f"note{i}.log").write_text("x", encoding="utf-8")
+        (deep / f"more{i}.log").write_text("x", encoding="utf-8")
+    # Not recursive: four files, under the cap; unlisted types are only named.
+    inv = S.inventory_folder(tmp_path)
+    assert inv["other_files"] == [f"note{i}.log" for i in range(4)]
+    with pytest.raises(T.DataFileError, match="Narrow the folder"):
+        S.inventory_folder(tmp_path, recursive=True)
+
+
+def test_inventory_reports_a_file_it_may_not_read(tmp_path):
+    _sheet(tmp_path, [["Item", "2024", "2025"], ["A", 1, 2]], name="a.xlsx")
+    _sheet(tmp_path, [["Item", "2024", "2025"], ["B", 1, 2]], name="b.xlsx")
+    inv = S.inventory_folder(tmp_path, may_read=lambda p: p.name != "b.xlsx")
+    assert [f["file"] for f in inv["data_files"]] == ["a.xlsx"]
+    assert inv["not_read"] == [
+        {"file": "b.xlsx", "reason": "outside the folders this agent may read"}
+    ]

@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Native chart writers: .xlsx (the chart_into_workbook tool) and .pptx (library).
+"""The native .xlsx chart writer behind the chart_into_workbook tool.
 
 Every chart is reopened from the saved file and its values compared with the
 input; these tests also prove the comparison catches a chart that drifted.
@@ -22,8 +22,17 @@ if str(_SKILL) not in sys.path:
 
 from report_from_sources_lib import xlsx_chart as X  # noqa: E402
 
+from tests.fixtures.report_from_sources_data import library_call  # noqa: E402
+
 CATS = ["2025Q3", "2025Q4", "2026Q1", "2026Q2"]
 SERIES = {"Net revenue": [10.5, 11.25, None, 12.0], "Costs": [7, 8, 9, 10]}
+
+
+@pytest.fixture(autouse=True)
+def _in_a_skill_call():
+    # The writer opens and saves through gaia.skills.context.
+    with library_call():
+        yield
 
 
 @pytest.mark.parametrize(
@@ -124,55 +133,17 @@ def test_verification_catches_a_changed_value(tmp_path):
     assert not check["verified"] and "Net revenue" in check["mismatches"][0]
 
 
-# --------------------------------------------------------------------------- #
-# PowerPoint library function (consumed by the deck skill)
-# --------------------------------------------------------------------------- #
-
-
-def test_pptx_native_chart_round_trips(tmp_path):
-    pytest.importorskip("pptx")
-    from report_from_sources_lib.pptx_chart import add_native_chart
-
-    deck = tmp_path / "deck.pptx"
-    out = add_native_chart(
-        deck,
-        "new",
-        "line",
-        CATS,
-        SERIES,
-        "Revenue rose",
-        "#,##0.0",
-        "Source: book.xlsx, 2025Q3-2026Q2",
-        y_axis_title="$ millions",
-    )
-    assert out["verified"] and out["slide"] == 1
-    assert out["read_back"] == {k: list(v) for k, v in SERIES.items()}
-    from pptx import Presentation
-
-    prs = Presentation(str(deck))
-    shapes = prs.slides[0].shapes
-    assert sum(1 for s in shapes if s.has_chart) == 1
-    assert any(
-        s.has_text_frame and s.text_frame.text.startswith("Source: book.xlsx")
-        for s in shapes
-    )
-    again = add_native_chart(
-        deck, 1, "column", CATS, {"Costs": SERIES["Costs"]}, "Costs", "", ""
-    )
-    assert again["verified"] and len(Presentation(str(deck)).slides) == 1
-
-
-def test_pptx_in_memory_presentation_is_not_saved(tmp_path):
-    pytest.importorskip("pptx")
-    from pptx import Presentation
-    from report_from_sources_lib.pptx_chart import PptxChartError, add_native_chart
-
-    prs = Presentation()
-    out = add_native_chart(
-        prs, None, "pie", CATS, {"Costs": SERIES["Costs"]}, "Mix", "0", ""
-    )
-    assert out["verified"] and out["file"] is None
-    with pytest.raises(PptxChartError, match="slide 9"):
-        add_native_chart(prs, 9, "line", CATS, SERIES, "", "", "")
-    with pytest.raises(PptxChartError, match="one series"):
-        add_native_chart(prs, None, "pie", CATS, SERIES, "", "", "")
+def test_before_save_runs_once_the_chart_is_valid(tmp_path):
+    """The undo copy is taken just before the save, never for a refused chart."""
+    seen = []
+    with pytest.raises(X.ChartWriteError):
+        X.write_workbook_chart(
+            tmp_path / "x.xlsx",
+            CATS,
+            SERIES,
+            chart_type="pie3d",
+            before_save=seen.append,
+        )
+    assert not seen and not (tmp_path / "x.xlsx").exists()
+    X.write_workbook_chart(tmp_path / "x.xlsx", CATS, SERIES, before_save=seen.append)
+    assert seen == [tmp_path / "x.xlsx"]

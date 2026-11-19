@@ -20,7 +20,12 @@ Path scope: every path goes through the agent's allowed-folders check
 (``gaia.skills.context``), the one ``read_file`` and ``write_file`` use, so a
 folder the user approved this session works and secret files are refused.
 ``folder``, ``file_path`` and ``output_path`` are read-checked before a tool
-runs; ``chart_into_workbook`` write-checks its output itself.
+runs; ``chart_into_workbook`` write-checks its output when it saves, after the
+series lookup, so the user is never asked to replace a file for a call that
+then fails.
+
+The tools read time series only: a table needs period labels. A table by
+category or row-level records gets an error pointing at ``run_python``.
 """
 
 from __future__ import annotations
@@ -52,8 +57,8 @@ class _PathRefused(ValueError):
     pass
 
 
-def _guard(text: str, *, write: bool = False) -> Path:
-    """The resolved path, or :class:`_PathRefused` saying why it may not be used."""
+def _guard(text: str) -> Path:
+    """The resolved path, or :class:`_PathRefused` saying why it may not be read."""
     if not text or not str(text).strip():
         raise _PathRefused("No path given.")
     raw = os.path.expanduser(str(text).strip().strip('"'))
@@ -62,16 +67,16 @@ def _guard(text: str, *, write: bool = False) -> Path:
             f"{text!r} is not an absolute path. Pass the full path, e.g. C:\\Users\\me\\Documents\\data.xlsx."
         )
     try:
-        if write:
-            return skill_context.check_write(raw)
         return skill_context.check_read(raw)
     except SkillPermissionError as e:
         raise _PathRefused(str(e)) from e
 
 
-def _list_readable(folder: Path, recursive: bool) -> List[Path]:
-    """Files in the inventoried folder the agent may read (never asks per file)."""
-    return skill_context.list_readable(folder, recursive=recursive, include_hidden=True)
+def _may_read(path: Path) -> bool:
+    """Whether a file met in the inventoried folder may be read (never asks)."""
+    from gaia.agents.tools.path_access import readable_entry
+
+    return readable_entry(skill_context.current().agent, path)
 
 
 def _error(message: str, **extra: Any) -> Dict[str, Any]:
@@ -88,25 +93,26 @@ def _labels(value: Any) -> List[str]:
 
 @tool(timeout=600, display_label="Inventorying data files")
 def inventory_data_files(folder: str, recursive: bool = False) -> dict:
-    """List the data files in a folder and say which is the newest copy of each dataset. Call this first.
+    """List a folder's time-series data files and name the newest copy of each dataset. Call this first.
 
-    Per spreadsheet, CSV and JSON file: sheets, header rows, units, periods
-    covered and series names. datasets[].note ranks copies of one dataset by
-    vintage; documents come back as narrative_sources to read with read_file.
+    Read summary and datasets: datasets[].newest is the file to use. Per
+    spreadsheet, CSV and JSON file: sheets, units, periods covered and series
+    names. Documents come back as narrative_sources to read with read_file. A
+    large result is cut to fit; truncated says what was cut.
 
     Args:
-        folder: Absolute path of the folder.
+        folder: Absolute path of the folder, or of one data file for its full detail.
         recursive: Also look in subfolders.
     """
     try:
         path = _guard(folder)
+        if path.is_file():
+            return inventory_folder(path.parent, may_read=_may_read, only=[path])
         if not path.is_dir():
             return _error(
                 f"{path} is not a folder. Pass the folder that holds the files."
             )
-        return inventory_folder(
-            path, recursive=bool(recursive), list_files=_list_readable
-        )
+        return inventory_folder(path, recursive=bool(recursive), may_read=_may_read)
     except (_PathRefused, SkillPermissionError) as e:
         return _error(str(e))
     except (DataFileError, OSError) as e:
@@ -122,20 +128,22 @@ def series_from_workbook(
     orientation: str = "auto",
     filters: str = "",
 ) -> dict:
-    """Read named series from a spreadsheet, CSV or JSON file for chosen periods, cited to their cells.
+    """Read named time series from a spreadsheet, CSV or JSON file for chosen periods, cited to their cells.
 
-    Echoes matched_label; an ambiguous label lists candidates, a missing one
-    the nearest. Values come back as stored with their cells, units and a
-    provenance line; chart_input is ready to chart.
+    Time series only: the table needs period labels (years, quarters, months,
+    dates). Echoes matched_label; an ambiguous label lists candidates, a
+    missing one the nearest. Values come back as stored with cells, units and
+    a provenance line; periods_available counts every period with data.
 
     Args:
         file_path: Absolute path of the .xlsx/.xlsm/.csv/.tsv/.json file.
         labels: Series names, e.g. ["Net revenue", "Operating costs"]. Use
             "Section > Label" when the same label sits under two sections.
         sheet: Sheet name; empty searches every sheet.
-        periods: "last 5", "all", "2024Q1:2026Q2", "2023..2025" or "2025Q4, 2026Q1".
+        periods: Default "last 12"; also "all", "2024Q1:2026Q2", "2023..2025" or "2025Q4, 2026Q1".
         orientation: "auto", "periods_in_columns" or "periods_in_rows".
-        filters: For long tables split by other columns: "region=East; channel=Online".
+        filters: "region=East" for a long table split by other columns; "header=Budget"
+            when one period has several columns.
     """
     try:
         path = _guard(file_path)
@@ -175,18 +183,18 @@ def chart_into_workbook(
     filters: str = "",
     orientation: str = "auto",
 ) -> dict:
-    """Chart named series from a source file into an .xlsx as a native Excel chart, checked on reopen.
+    """Chart named time series from a source file into an .xlsx as a native Excel chart, checked on reopen.
 
-    Reads the series as series_from_workbook does, writes a table and chart
-    with a source and period footnote to a new sheet, then reopens the file
-    and confirms the chart's values equal the source.
+    Time series only. Reads the series as series_from_workbook does, writes a
+    table and chart with a source and period footnote to a new sheet, then
+    reopens the file and confirms the chart's values equal the source.
 
     Args:
         output_path: Absolute path of the .xlsx to create, or one to add a sheet to.
         file_path: Absolute path of the source data file.
         labels: Series names to chart, as for series_from_workbook.
         sheet: Source sheet; empty searches every sheet.
-        periods: As for series_from_workbook, e.g. "last 8".
+        periods: As for series_from_workbook; default "last 12".
         chart_type: line, column, bar, stacked_column, stacked_bar, area or combo.
         title: Chart and sheet title.
         y_axis_title: Value axis title, e.g. "$ millions".
@@ -209,8 +217,8 @@ def chart_into_workbook(
             return _error(f"{out.name}: write the chart to an .xlsx file.")
         if not out.parent.is_dir():
             return _error(f"The folder {out.parent} does not exist.")
-        # Write-checked last: it asks before replacing an existing workbook.
-        out = _guard(output_path, write=True)
+        # Read first: the save asks before replacing a workbook, and a call
+        # whose lookup fails must not get that far.
         result = extract_series(
             src,
             _labels(labels),
@@ -239,7 +247,6 @@ def chart_into_workbook(
         )
         from gaia.agents.base.file_snapshots import before_change
 
-        before_change(out, "chart_into_workbook")
         written = write_workbook_chart(
             out,
             result["periods"],
@@ -250,6 +257,7 @@ def chart_into_workbook(
             number_format=number_format,
             source_note=note,
             secondary=secondary,
+            before_save=lambda path: before_change(path, "chart_into_workbook"),
         )
         written["source"] = {
             "provenance": result["provenance"],

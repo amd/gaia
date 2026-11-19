@@ -6,6 +6,9 @@ The chart references the cells the table was written to, so the user can edit
 a number and watch the chart move. After saving, the file is reopened and every
 series the chart points at is read back from its cell range and compared with
 the values that were passed in; any difference is an error, not a warning.
+
+The workbook is read and written through ``gaia.skills.context``, so the
+agent's allowed folders and its ask-before-overwrite apply to the save itself.
 """
 
 from __future__ import annotations
@@ -13,9 +16,10 @@ from __future__ import annotations
 import re
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from gaia.logger import get_logger
+from gaia.skills.context import open_read, open_write
 
 log = get_logger(__name__)
 
@@ -48,7 +52,7 @@ _NON_CHART_DRAWING = re.compile(rb"<(?:\w+:)?(?:sp|pic|grpSp|cxnSp)[\s>]")
 
 def _workbook_parts(path: Path) -> Dict[str, Any]:
     """What an existing workbook holds that a load/save could lose."""
-    with zipfile.ZipFile(path) as zf:
+    with open_read(path, "rb") as f, zipfile.ZipFile(f) as zf:
         names = zf.namelist()
         fragile = sorted(
             {p for name in names for p in _FRAGILE_PARTS if name.startswith(p)}
@@ -116,6 +120,7 @@ def write_workbook_chart(
     source_note: str = "",
     sheet_name: str = "",
     secondary: Sequence[str] = (),
+    before_save: Optional[Callable[[Path], None]] = None,
 ) -> Dict[str, Any]:
     """Add a sheet with the series as a table and a native chart over it.
 
@@ -129,6 +134,8 @@ def write_workbook_chart(
         number_format: Excel format for the cells and value axis; derived
             from the data when empty.
         source_note: Written under the table and in the chart title area.
+        before_save: Called with *output_path* once the workbook is built and
+            about to be written (e.g. to keep a copy for undo).
 
     Returns:
         ``{"status": "success", "sheet", "data_range", "verified": True, ...}``.
@@ -136,6 +143,8 @@ def write_workbook_chart(
     Raises:
         ChartWriteError: bad input, an existing workbook openpyxl would damage,
             or a saved chart whose values differ from *series*.
+        SkillPermissionError: the agent may not write *output_path*, or the
+            user declined to replace it.
     """
     from openpyxl import Workbook, load_workbook
     from openpyxl.chart import AreaChart, BarChart, LineChart, Reference
@@ -176,7 +185,8 @@ def write_workbook_chart(
                 "whole workbook in one run_python script."
             )
         charts_before = parts["charts"]
-        wb = load_workbook(output_path)
+        with open_read(output_path, "rb") as f:
+            wb = load_workbook(f)
         new_file = False
     else:
         wb = Workbook()
@@ -263,8 +273,11 @@ def write_workbook_chart(
         chart += line
     anchor = f"{get_column_letter(len(names) + 3)}{header_row}"
     ws.add_chart(chart, anchor)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(output_path)
+    if before_save is not None:
+        before_save(output_path)
+    # open_write asks before replacing an existing file.
+    with open_write(output_path, "wb") as f:
+        wb.save(f)
 
     check = verify_workbook_chart(output_path, ws.title, categories, series)
     charts_after = _workbook_parts(output_path)["charts"]
@@ -323,7 +336,8 @@ def verify_workbook_chart(
     """
     from openpyxl import load_workbook
 
-    wb = load_workbook(path)
+    with open_read(path, "rb") as f:
+        wb = load_workbook(f)
     ws = wb[sheet]
     charts = list(getattr(ws, "_charts", []))
     mismatches: List[str] = []

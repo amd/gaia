@@ -144,6 +144,9 @@ class Period:
     June 2026 -> 2026.5, 2026 -> 2027.0), so periods of different frequency
     order on one line. ``label`` is canonical: ``2026Q2``, ``2026-06``,
     ``2026``, ``FY2026``, ``FY2026Q1``, ``2026H1``, ``2026-06-30``.
+
+    ``year`` 0 is a month, quarter or half whose year the sheet does not
+    state (a header of "Jan | Feb | Mar"): its label is "Jan", "Q1" or "H1".
     """
 
     freq: str
@@ -153,6 +156,10 @@ class Period:
 
     @property
     def label(self) -> str:
+        if self.year == 0 and self.freq in ("M", "Q", "H"):
+            if self.freq == "M":
+                return calendar.month_abbr[self.sub]
+            return f"{self.freq}{self.sub}"
         if self.freq == "A":
             return f"{self.year}"
         if self.freq == "FY":
@@ -197,6 +204,40 @@ class Period:
 
     def __str__(self) -> str:
         return self.label
+
+
+_YEARLESS = re.compile(
+    rf"^(?:q(?P<q>[1-4])|(?P<q2>[1-4])q|h(?P<h>[12])|(?P<h2>[12])h|{_MONTH_RE})$", re.I
+)
+
+
+def parse_yearless(value: Any) -> Optional[Period]:
+    """A month, quarter or half written without its year ("Jan", "Q3", "H1").
+
+    The period has ``year`` 0; the caller must say the year is not stated.
+    """
+    if not isinstance(value, str):
+        return None
+    match = _YEARLESS.match(clean_label(value))
+    if not match:
+        return None
+    g = match.groupdict()
+    if g["q"] or g["q2"]:
+        return Period("Q", 0, int(g["q"] or g["q2"]))
+    if g["h"] or g["h2"]:
+        return Period("H", 0, int(g["h"] or g["h2"]))
+    return Period("M", 0, _month(g["mon"]))
+
+
+def is_bare_year(value: Any) -> bool:
+    """A number, or digits-only text, that could be a year or just a value."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return float(value).is_integer() and 1900 <= value <= 2100
+    return isinstance(value, str) and bool(
+        re.fullmatch(r"(?:19|20)\d{2}|2100", value.strip())
+    )
 
 
 def _year(text: str) -> int:
@@ -461,7 +502,7 @@ def dominant_freq(periods: Iterable[Optional[Period]]) -> Optional[str]:
 
 
 # --------------------------------------------------------------------------- #
-# Period selection: "last 5", "2024Q1:2026Q2", "2023..2025", "all", a list.
+# Period selection: "last 12", "2024Q1:2026Q2", "2023..2025", "all", a list.
 # --------------------------------------------------------------------------- #
 
 
@@ -490,7 +531,7 @@ class PeriodSpec:
 
 
 def parse_period_spec(spec: Any) -> PeriodSpec:
-    """Read ``periods=``: "all", "last 5", "5", "2024Q1:2026Q2", "2023..2025", a list.
+    """Read ``periods=``: "all", "last 12", "12", "2024Q1:2026Q2", "2023..2025", a list.
 
     Raises:
         PeriodSpecError: naming the accepted forms.
@@ -543,7 +584,7 @@ def parse_period_spec(spec: Any) -> PeriodSpec:
     if single is not None:
         return PeriodSpec("list", items=(single,))
     raise PeriodSpecError(
-        f"Could not read periods={spec!r}. Use 'last 5', 'all', a range such as "
+        f"Could not read periods={spec!r}. Use 'last 12', 'all', a range such as "
         "'2024Q1:2026Q2' or '2023..2025', or a list such as '2025Q4, 2026Q1'."
     )
 

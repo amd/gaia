@@ -1,21 +1,26 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Find named series in a data file and inventory a folder of data files.
+"""Find named time series in a data file and inventory a folder of data files.
 
 :func:`extract_series` answers "give me Net revenue and Operating costs for the
-last 5 quarters from this workbook": it matches each requested label to a row
+last 12 quarters from this workbook": it matches each requested label to a row
 or column (echoing the label it matched, refusing to guess between two close
 ones), reads the values exactly as stored, aligns them on one period axis and
 cites every value's cell.
 
 :func:`inventory_folder` answers "what is in this folder and which file is
 newest": per sheet the layout, header rows, units and period coverage; per
-dataset the files ranked by vintage, with older copies named as such.
+dataset the files ranked by vintage, with older copies named as such. Its
+result is cut to :data:`INVENTORY_BUDGET_CHARS` and says what was cut.
+
+Both read time series only. A table by category or row-level records gets an
+error that says so and points at ``run_python``.
 """
 
 from __future__ import annotations
 
 import difflib
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -24,6 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from gaia.logger import get_logger
+from gaia.skills.context import open_read
 
 from .periods import (
     FREQ_NAMES,
@@ -64,6 +70,17 @@ MAX_SCAN_ROWS = 2_000_000
 MAX_DISTINCT = 20_000
 #: Candidates listed when a label is ambiguous or not found.
 MAX_CANDIDATES = 6
+#: Characters an inventory result may take as JSON. The agent cuts a tool
+#: result at about 20,000 on a small context, dropping list items from the end.
+INVENTORY_BUDGET_CHARS = 18_000
+#: Files one inventory call looks at before it asks for a narrower folder.
+MAX_WALK_FILES = 5_000
+#: What to do with a table these tools do not read.
+NOT_A_TIME_SERIES = (
+    "These tools read time series only (one value per period). For a table by "
+    "category (Region, Revenue) or row-level records, read the file with "
+    "run_python (pandas) or the data-explore skill."
+)
 
 
 class SeriesLookupError(ValueError):
@@ -310,6 +327,11 @@ class TableIndex:
     rows_scanned: int = 0
     truncated: bool = False
     dayfirst: Optional[bool] = None
+    #: Wide sheets: label rows with no number under any period ({row: label}).
+    #: Section headings, or formula rows the file holds no results for.
+    unvalued_rows: Dict[int, str] = field(default_factory=dict)
+    #: Long sheets: headed columns with no value in any row ({column: header}).
+    unvalued_cols: Dict[int, str] = field(default_factory=dict)
 
 
 def _label_of(row: Sequence[Any], cols: Sequence[int]) -> str:
@@ -349,6 +371,8 @@ def index_table(table: Table) -> TableIndex:
             if label and not numbers:
                 if _looks_like_note(label):
                     continue
+                if len(idx.unvalued_rows) < 5000:
+                    idx.unvalued_rows[number] = label
                 section = label
                 continue
             if label and numbers:
@@ -373,6 +397,13 @@ def index_table(table: Table) -> TableIndex:
                 )
         return idx
     # columns / stacked
+    idx.unvalued_cols = {
+        c: header
+        for c, header in layout.column_headers.items()
+        if c not in layout.numeric_cols
+        and c not in layout.dimension_cols
+        and c != layout.units_col
+    }
     for c in layout.numeric_cols:
         header = layout.column_headers.get(c, f"column {column_letter(c)}")
         idx.candidates.append(
@@ -490,22 +521,27 @@ def _period_reader(idx: TableIndex):
     return read
 
 
+def _filter_items(filters: Any) -> List[Tuple[str, str]]:
+    """``"region=East; channel=Online"`` -> [("region", "East"), ...]."""
+    if not filters:
+        return []
+    if isinstance(filters, dict):
+        return [(str(k), str(v)) for k, v in filters.items()]
+    items = []
+    for part in re.split(r"[;\n]", str(filters)):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            items.append((k.strip(), v.strip()))
+        elif part.strip():
+            raise SeriesLookupError(
+                f"filters entry {part.strip()!r} is not 'column=value'."
+            )
+    return items
+
+
 def _parse_filters(filters: Any, idx: TableIndex) -> Dict[int, str]:
     """``"region=East; channel=Online"`` -> {column: normalized value}."""
-    if not filters:
-        return {}
-    if isinstance(filters, dict):
-        items = list(filters.items())
-    else:
-        items = []
-        for part in re.split(r"[;\n]", str(filters)):
-            if "=" in part:
-                k, v = part.split("=", 1)
-                items.append((k.strip(), v.strip()))
-            elif part.strip():
-                raise SeriesLookupError(
-                    f"filters entry {part.strip()!r} is not 'column=value'."
-                )
+    items = _filter_items(filters)
     out: Dict[int, str] = {}
     headers = idx.layout.column_headers
     for key, value in items:
@@ -520,6 +556,103 @@ def _parse_filters(filters: Any, idx: TableIndex) -> Dict[int, str]:
     return out
 
 
+def _period_columns(idx: TableIndex, filters: Any) -> Tuple[Dict[int, Period], str]:
+    """The columns to read from a wide sheet, one per period, and a note.
+
+    A period that heads several columns ("2024" under "Actual" and under
+    "Budget") is never picked silently: ``filters="header=Actual"`` chooses by
+    the text over or under the columns, ``filters="column=D"`` by letter.
+
+    Raises:
+        SeriesLookupError: status ``ambiguous``, listing the choices.
+    """
+    layout = idx.layout
+    sheet = idx.table.name
+    banner = layout.banner_text
+    groups = list(dict.fromkeys(banner[c] for c in sorted(banner) if banner[c]))
+    items = _filter_items(filters)
+
+    def chosen(c: int) -> bool:
+        for key, value in items:
+            if normalize_label(key) == "column":
+                if value.strip().upper() != column_letter(c):
+                    return False
+                continue
+            want = set(_tokens(normalize_label(value)))
+            if not want or not want <= set(_tokens(normalize_label(banner.get(c)))):
+                return False
+        return True
+
+    cols = dict(layout.period_cols)
+    note = ""
+    by_column = any(normalize_label(k) == "column" for k, _ in items)
+    if items and not groups and not by_column:
+        note = (
+            f"filters do not apply to sheet {sheet!r} (periods across the columns, "
+            "no header groups) and were ignored"
+        )
+    elif items:
+        picked = {c: p for c, p in cols.items() if chosen(c)}
+        if not picked:
+            raise SeriesLookupError(
+                f"filters={filters!r} matches no column of sheet {sheet!r}. "
+                + (
+                    "Its column groups: " + ", ".join(repr(g) for g in groups) + "."
+                    if groups
+                    else "Choose a column by letter, e.g. filters='column="
+                    + column_letter(min(cols))
+                    + "'."
+                ),
+                {"status": "ambiguous", "choices": groups},
+            )
+        names = {p.label for p in picked.values()}
+        loose = sorted(
+            c
+            for c, p in cols.items()
+            if c not in picked and not banner.get(c) and p.label not in names
+        )
+        if loose and not by_column:
+            picked.update({c: cols[c] for c in loose})
+            note = (
+                f"sheet {sheet!r}: column(s) {', '.join(column_letter(c) for c in loose)} "
+                "have no header group and were kept"
+            )
+        cols = picked
+    by_label: Dict[str, List[int]] = {}
+    for c in sorted(cols):
+        by_label.setdefault(cols[c].label, []).append(c)
+    clash = {lab: cs for lab, cs in by_label.items() if len(cs) > 1}
+    if not clash:
+        return cols, note
+    described = {
+        lab: [{"column": column_letter(c), "header": banner.get(c) or None} for c in cs]
+        for lab, cs in clash.items()
+    }
+    lab, cs = next(iter(clash.items()))
+    listing = ", ".join(
+        f"{column_letter(c)}" + (f" {banner[c]!r}" if banner.get(c) else "") for c in cs
+    )
+    named = list(dict.fromkeys(banner[c] for c in cs if banner.get(c)))
+    if len(named) == len(cs):
+        how = "Say which to read: repeat the call with " + " or ".join(
+            f"filters='header={g}'" for g in named[:4]
+        )
+    else:
+        how = (
+            "Nothing in the header tells them apart. Repeat the call with "
+            f"filters='column={column_letter(cs[0])}' for the column you mean, or "
+            "ask the user"
+        )
+    raise SeriesLookupError(
+        f"Sheet {sheet!r} has more than one column for {lab} ({listing}). {how}.",
+        {
+            "status": "ambiguous",
+            "ambiguous_periods": described,
+            "choices": named or [column_letter(c) for c in cs],
+        },
+    )
+
+
 def read_values(selected: List[SeriesData], filters: Any = None) -> List[str]:
     """Fill each series' points with one pass per table. Returns notes."""
     notes: List[str] = []
@@ -530,30 +663,27 @@ def read_values(selected: List[SeriesData], filters: Any = None) -> List[str]:
         idx = group[0].index
         layout = idx.layout
         if layout.kind == "wide":
-            wanted = {s.match.candidate.row: s for s in group}
-            dup_labels: Dict[str, List[int]] = {}
-            for c, p in layout.period_cols.items():
-                dup_labels.setdefault(p.label, []).append(c)
-            dups = {lab: cols for lab, cols in dup_labels.items() if len(cols) > 1}
-            for lab, cols in dups.items():
-                notes.append(
-                    f"period {lab} heads several columns ({', '.join(column_letter(c) for c in cols)}); "
-                    f"used the rightmost, column {column_letter(max(cols))}"
-                )
+            # Two labels may name one row: each gets the row's values.
+            wanted: Dict[int, List[SeriesData]] = {}
+            for s in group:
+                wanted.setdefault(s.match.candidate.row, []).append(s)
+            period_cols, note = _period_columns(idx, filters)
+            if note:
+                notes.append(note)
             for number, row in idx.table.rows():
                 if number not in wanted:
                     continue
-                s = wanted[number]
-                for c in sorted(layout.period_cols):
-                    p = layout.period_cols[c]
-                    v = row[c] if c < len(row) else None
-                    s.points[p] = _point(read_number(v), cell_ref(number, c))
-                for c, p in layout.other_period_cols.items():
-                    v = row[c] if c < len(row) else None
-                    s.other_points[p] = _point(read_number(v), cell_ref(number, c))
+                for s in wanted[number]:
+                    for c in sorted(period_cols):
+                        v = row[c] if c < len(row) else None
+                        s.points[period_cols[c]] = _point(
+                            read_number(v), cell_ref(number, c)
+                        )
+                    for c, p in layout.other_period_cols.items():
+                        v = row[c] if c < len(row) else None
+                        s.other_points[p] = _point(read_number(v), cell_ref(number, c))
                 if number >= max(wanted):
-                    if all(x.points for x in group):
-                        break
+                    break
             continue
         flt = _parse_filters(filters, idx)
         read_period = _period_reader(idx)
@@ -628,17 +758,26 @@ def read_values(selected: List[SeriesData], filters: Any = None) -> List[str]:
                     for c, vals in dim_seen.items()
                     if len(vals) > 1
                 }
-                raise SeriesLookupError(
-                    f"{s.match.candidate.label!r} has more than one value for the same period "
-                    f"({'; '.join(s.duplicates[:3])}). The table is split by other columns"
-                    + (f": {dims}" if dims else "")
-                    + ". Repeat the call with filters, e.g. filters='"
-                    + (
-                        f"{next(iter(dims))}={next(iter(dims.values()))[0]}"
-                        if dims
-                        else "column=value"
+                found = (
+                    f"{s.match.candidate.label!r} has more than one value for the "
+                    f"same period ({'; '.join(s.duplicates[:3])}). "
+                )
+                if dims:
+                    name, values = next(iter(dims.items()))
+                    fix = (
+                        f"If another column splits the table ({dims}), repeat the "
+                        f"call with filters, e.g. filters='{name}={values[0]}'. If "
+                        "the rows are single records (orders, transactions), this "
+                        "is not a time series: total them per period with "
+                        "run_python (pandas) or the data-explore skill."
                     )
-                    + "'.",
+                else:
+                    fix = (
+                        "The rows look like single records (orders, transactions), "
+                        "not a time series. " + NOT_A_TIME_SERIES
+                    )
+                raise SeriesLookupError(
+                    found + fix,
                     {"query": s.query, "status": "duplicate_periods", "split_by": dims},
                 )
     return notes
@@ -731,11 +870,30 @@ def extract_series(
             for i in indexes
             if i.layout.kind != "unknown" and _orientation_ok(i, orientation)
         ]
-        if not usable:
+        readable = [i for i in indexes if i.layout.kind != "unknown"]
+        if readable and not usable:
             raise SeriesLookupError(
-                f"No sheet of {path.name} has period labels the tool can read "
+                f"orientation={orientation!r} fits no sheet of {path.name}: "
+                + "; ".join(f"{i.table.name!r} has {i.layout.reason}" for i in readable)
+                + ". Call again with orientation='auto'.",
+                {"sheets": {i.table.name: i.layout.reason for i in indexes}},
+            )
+        if not usable:
+            stale = _uncalculated_sheets(path, indexes)
+            raise SeriesLookupError(
+                f"No sheet of {path.name} has period labels across a header row or "
+                "down a column ("
                 + "; ".join(f"{i.table.name!r}: {i.layout.reason}" for i in indexes)
-                + ". Fall back to reading it with run_python.",
+                + "). "
+                + (
+                    f"Sheet(s) {', '.join(repr(n) for n in stale)} hold formulas "
+                    "that have never been calculated, so there are no values to "
+                    "read: ask the user to open and save the file in Excel or "
+                    "LibreOffice, or compute from the inputs with run_python. "
+                    if stale
+                    else ""
+                )
+                + NOT_A_TIME_SERIES,
                 {"sheets": {i.table.name: i.layout.reason for i in indexes}},
             )
         pool = [c for i in usable for c in i.candidates]
@@ -748,6 +906,31 @@ def extract_series(
                 problems.append(problem)
                 continue
             selected.append(SeriesData(q, match, by_table[match.candidate.table]))
+        loose = [s for s in selected if s.match.how not in ("exact", "exact_path")]
+        if loose or any(p["status"] == "not_found" for p in problems):
+            # The row may exist with formulas the file holds no results for.
+            stale = uncalculated_series(path, usable)
+
+            def stale_hit(query: str, exact: bool) -> Optional[Dict[str, Any]]:
+                hit = resolve_label(query, stale)[0] if stale else None
+                if hit is None or (exact and hit.how not in ("exact", "exact_path")):
+                    return None
+                return {
+                    "query": query,
+                    "status": "formulas_not_calculated",
+                    "label": hit.candidate.label,
+                    "sheet": hit.candidate.table,
+                    "cell": hit.candidate.cell,
+                }
+
+            for i, problem in enumerate(problems):
+                if problem["status"] == "not_found":
+                    problems[i] = stale_hit(problem["query"], False) or problem
+            for entry in loose:
+                found = stale_hit(entry.query, True)
+                if found:
+                    selected.remove(entry)
+                    problems.append(found)
         if problems:
             raise SeriesLookupError(
                 _problem_message(problems, path),
@@ -763,10 +946,123 @@ def extract_series(
         return _assemble(path, selected, spec, notes)
 
 
+def _formula_cells(path: Path, upto: Dict[str, int]) -> Dict[str, Dict[int, set]]:
+    """Per sheet, ``{row: {columns holding a formula}}`` down to ``upto[sheet]``."""
+    from openpyxl import load_workbook
+
+    out: Dict[str, Dict[int, set]] = {}
+    with open_read(path, "rb") as f:
+        wb = load_workbook(f, read_only=True, data_only=False)
+        try:
+            for ws in wb.worksheets:
+                if ws.title not in upto:
+                    continue
+                rows = out.setdefault(ws.title, {})
+                for row in ws.iter_rows(max_row=upto[ws.title]):
+                    number = next(
+                        (c.row for c in row if getattr(c, "row", None) is not None),
+                        None,
+                    )
+                    cols = {
+                        i
+                        for i, c in enumerate(row)
+                        if isinstance(getattr(c, "value", None), str)
+                        and c.value.startswith("=")
+                    }
+                    if number is not None and cols:
+                        rows[number] = cols
+        finally:
+            wb.close()
+    return out
+
+
+def uncalculated_series(path: Path, indexes: Sequence[TableIndex]) -> List[Candidate]:
+    """Rows and columns whose formulas the workbook holds no results for.
+
+    A workbook written by a program and never opened in Excel stores formulas
+    without values, so its total rows read as empty.
+    """
+    upto: Dict[str, int] = {}
+    for idx in indexes:
+        if idx.table.kind != "xlsx":
+            continue
+        if idx.layout.kind == "wide" and idx.unvalued_rows:
+            upto[idx.table.name] = min(max(idx.unvalued_rows), 100_000)
+        elif idx.layout.kind in ("columns", "stacked") and idx.unvalued_cols:
+            upto[idx.table.name] = idx.layout.first_data_row + 50
+    if not upto:
+        return []
+    formulas = _formula_cells(path, upto)
+    out: List[Candidate] = []
+    for idx in indexes:
+        rows = formulas.get(idx.table.name) or {}
+        lay = idx.layout
+        if lay.kind == "wide":
+            for number, label in idx.unvalued_rows.items():
+                if rows.get(number, set()) & set(lay.period_cols):
+                    out.append(
+                        Candidate(
+                            idx.table.name,
+                            label,
+                            "row",
+                            row=number,
+                            col=lay.label_cols[0] if lay.label_cols else 0,
+                        )
+                    )
+        elif lay.kind in ("columns", "stacked"):
+            for c, header in idx.unvalued_cols.items():
+                if any(
+                    c in cols for n, cols in rows.items() if n >= lay.first_data_row
+                ):
+                    out.append(Candidate(idx.table.name, header, "column", col=c))
+    return out
+
+
+def _uncalculated_sheets(path: Path, indexes: Sequence[TableIndex]) -> List[str]:
+    """Sheets with no readable layout whose top rows are formulas without results."""
+    names = [
+        i.table.name
+        for i in indexes
+        if i.table.kind == "xlsx" and i.layout.kind == "unknown"
+    ]
+    if not names:
+        return []
+    formulas = _formula_cells(path, {n: SAMPLE_ROWS for n in names})
+    out = []
+    for idx in indexes:
+        rows = formulas.get(idx.table.name)
+        if not rows or idx.table.name not in names:
+            continue
+        grid = idx.table.sample(SAMPLE_ROWS)
+        empty = sum(
+            1
+            for number, cols in rows.items()
+            for c in cols
+            if number <= len(grid)
+            and (c >= len(grid[number - 1]) or grid[number - 1][c] is None)
+        )
+        if empty:
+            out.append(idx.table.name)
+    return out
+
+
+_NOT_CALCULATED = (
+    "its cells are formulas that have never been calculated, so the file holds "
+    "no values for it. Read the rows it adds up and compute it with run_python, "
+    "or ask the user to open and save the file in Excel or LibreOffice, then "
+    "call again"
+)
+
+
 def _problem_message(problems: List[Dict[str, Any]], path: Path) -> str:
     parts = []
     for p in problems:
-        if p["status"] == "ambiguous":
+        if p["status"] == "formulas_not_calculated":
+            parts.append(
+                f"{p['query']!r} is in {path.name} ({p['sheet']}!{p['cell']}, "
+                f"{p['label']!r}), but {_NOT_CALCULATED}."
+            )
+        elif p["status"] == "ambiguous":
             names = "; ".join(
                 f"{c['label']!r}"
                 + (f" under {c['section']!r}" if c.get("section") else "")
@@ -833,7 +1129,8 @@ def _assemble(
             "file in Excel, or read it with run_python.",
             {"status": "no_values"},
         )
-    chosen, missing = select_periods(sorted(with_data, key=lambda p: p.sort_key), spec)
+    available = sorted(with_data, key=lambda p: p.sort_key)
+    chosen, missing = select_periods(available, spec)
     if spec.kind == "range" or spec.kind == "list":
         # Ranges may include periods that exist but are blank for every series.
         every = {p for series in pts for p in series}
@@ -931,6 +1228,7 @@ def _assemble(
             notes.append(
                 f"sheet {s.index.table.name!r}: only the first {MAX_SCAN_ROWS:,} rows were read"
             )
+        notes.extend(s.index.table.format_notes)
         if s.index.table.read_errors:
             notes.append(
                 f"{s.index.table.name}: "
@@ -955,6 +1253,11 @@ def _assemble(
         "status": "success",
         "file": str(path),
         "periods": [p.label for p in chosen],
+        "periods_available": {
+            "count": len(available),
+            "first": available[0].label,
+            "last": available[-1].label,
+        },
         "frequency": FREQ_NAMES.get(chosen[0].freq, chosen[0].freq),
         "selection": spec.describe(),
         "series": out_series,
@@ -964,12 +1267,13 @@ def _assemble(
             for i in {id(s.index): s.index for s in selected}.values()
         },
     }
+    # The fields a slide-decks chart slide takes: categories, series, source.
     result["chart_input"] = {
         "categories": result["periods"],
         "series": {
             name: e["values"] for name, e in zip(chart_names(out_series), out_series)
         },
-        "source_note": provenance,
+        "source": provenance,
     }
     if trailing:
         result["trailing_periods_without_data"] = trailing[:12]
@@ -1132,6 +1436,7 @@ class SheetSummary:
     rows: int = 0
     truncated: bool = False
     errors: List[str] = field(default_factory=list)
+    format_notes: List[str] = field(default_factory=list)
 
 
 def summarize_table(table: Table) -> SheetSummary:
@@ -1142,6 +1447,7 @@ def summarize_table(table: Table) -> SheetSummary:
         table.name, layout, rows=idx.rows_scanned, truncated=idx.truncated
     )
     summary.errors = list(table.read_errors)
+    summary.format_notes = list(table.format_notes)
     if layout.kind == "wide":
         periods = sorted(set(layout.period_cols.values()), key=lambda p: p.sort_key)
         if periods:
@@ -1213,10 +1519,15 @@ def summarize_table(table: Table) -> SheetSummary:
 def _sheet_dict(s: SheetSummary) -> Dict[str, Any]:
     lay = s.layout
     out: Dict[str, Any] = {"sheet": s.name, "layout": lay.kind, "how_read": lay.reason}
+    if s.format_notes:
+        out["read_as"] = s.format_notes
     if lay.kind == "unknown":
         if lay.title_lines or lay.notes:
             out["text"] = (lay.title_lines + lay.notes)[:5]
         return out
+    groups = list(dict.fromkeys(t for t in lay.banner_text.values() if t))
+    if groups:
+        out["column_groups"] = groups[:12]
     out["header_rows"] = lay.header_rows
     if len(lay.header_rows) > 1:
         out["multi_row_header"] = True
@@ -1273,6 +1584,7 @@ class FileSummary:
     revision: Optional[Tuple[str, int]] = None
     key: str = ""
     asof: Optional[Period] = None
+    _labels: Optional[set] = None
 
     @property
     def coverage_end(self) -> Optional[Period]:
@@ -1301,7 +1613,11 @@ class FileSummary:
         )
 
     def label_set(self) -> set:
-        return {normalize_label(lab) for s in self.sheets for lab in s.labels[:2000]}
+        if self._labels is None:
+            self._labels = {
+                normalize_label(lab) for s in self.sheets for lab in s.labels[:2000]
+            }
+        return self._labels
 
 
 def _same_dataset(a: FileSummary, b: FileSummary) -> bool:
@@ -1334,8 +1650,66 @@ def _rank_reason(newest: FileSummary, other: FileSummary) -> str:
     return "nothing tells them apart; check with the user"
 
 
+def _is_link(entry: Path) -> bool:
+    # A symlink or a Windows junction resolves somewhere else.
+    return os.path.normcase(os.path.realpath(entry)) != os.path.normcase(
+        os.path.abspath(entry)
+    )
+
+
+_INVENTORIED = DATA_SUFFIXES + UNREADABLE_SPREADSHEET_SUFFIXES + NARRATIVE_SUFFIXES
+
+
+def _walk(folder: Path, recursive: bool) -> Tuple[List[Path], List[str]]:
+    """Data files and documents under *folder*, and the names of other files.
+
+    Files are sorted as they are met; linked folders are not entered.
+
+    Raises:
+        DataFileError: more than :data:`MAX_WALK_FILES` files.
+    """
+    kept: List[Path] = []
+    other: List[str] = []
+    seen = 0
+    pending = [folder]
+    while pending:
+        current = pending.pop()
+        for entry in current.iterdir():
+            if entry.is_dir():
+                if recursive and not _is_link(entry):
+                    pending.append(entry)
+                continue
+            if not entry.is_file():
+                continue
+            seen += 1
+            if seen > MAX_WALK_FILES:
+                raise DataFileError(
+                    f"{folder} holds more than {MAX_WALK_FILES:,} files"
+                    + (" with its subfolders" if recursive else "")
+                    + ": too many to inventory in one call. Narrow the folder: "
+                    "pass the subfolder that holds the data files"
+                    + (", or call with recursive=false." if recursive else ".")
+                )
+            name = entry.name
+            if (
+                name.lower().endswith(_INVENTORIED)
+                or name.startswith("~$")
+                or name.startswith(".~lock")
+            ):
+                kept.append(entry)
+            elif len(other) < 50:
+                other.append(name)
+    return sorted(kept, key=lambda p: str(p).lower()), sorted(other, key=str.lower)
+
+
 def inventory_folder(
-    folder: Path, *, recursive: bool = False, max_files: int = 300, list_files=None
+    folder: Path,
+    *,
+    recursive: bool = False,
+    max_files: int = 300,
+    may_read=None,
+    only: Optional[Sequence[Path]] = None,
+    budget: int = INVENTORY_BUDGET_CHARS,
 ) -> Dict[str, Any]:
     """List the data files in *folder* with layout, coverage and vintage ranking.
 
@@ -1343,29 +1717,32 @@ def inventory_folder(
         folder: The directory to inventory.
         recursive: Include subfolders.
         max_files: Stop after this many files and report the rest as not read.
-        list_files: Optional ``callable(folder, recursive) -> [Path]`` naming
-            the files that may be read, e.g. the skill context's
-            ``list_readable``. Any other file in the folder is reported as not
-            read. Defaults to every file.
+        may_read: Optional ``callable(path) -> bool``, e.g. the agent's
+            allowed-folders check. A file it refuses is reported as not read.
+        only: Inventory just these files of *folder* instead of walking it.
+        budget: Most characters the result may take as JSON. Detail beyond it
+            is cut, least useful first, and ``truncated`` says what and how to
+            get it.
+
+    Raises:
+        DataFileError: not a folder, or too many files to walk.
     """
     if not folder.is_dir():
         raise DataFileError(f"{folder} is not a folder.")
-    walker = folder.rglob("*") if recursive else folder.iterdir()
-    paths = sorted((p for p in walker if p.is_file()), key=lambda p: str(p).lower())
-    readable = None
-    if list_files is not None:
-        readable = {os.path.normcase(str(p)) for p in list_files(folder, recursive)}
+    if only is not None:
+        paths, other = sorted(only, key=lambda p: str(p).lower()), []
+    else:
+        paths, other = _walk(folder, recursive)
     files: List[FileSummary] = []
     narrative: List[Dict[str, Any]] = []
     skipped: List[Dict[str, str]] = []
-    other: List[str] = []
     for path in paths:
         name = path.name
         suffix = path.suffix.lower()
         if name.startswith("~$") or name.startswith(".~lock"):
             skipped.append({"file": name, "reason": "an Office lock file, not data"})
             continue
-        if readable is not None and os.path.normcase(str(path)) not in readable:
+        if may_read is not None and not may_read(path):
             skipped.append(
                 {"file": name, "reason": "outside the folders this agent may read"}
             )
@@ -1381,12 +1758,6 @@ def inventory_folder(
             if period:
                 entry["period_in_name"] = period.label
             narrative.append(entry)
-            continue
-        if (
-            suffix not in DATA_SUFFIXES
-            and suffix not in UNREADABLE_SPREADSHEET_SUFFIXES
-        ):
-            other.append(name)
             continue
         if len(files) >= max_files:
             skipped.append(
@@ -1443,6 +1814,8 @@ def inventory_folder(
             "newest": newest.path.name,
             "files": [files[i].path.name for i in ranked],
         }
+        if newest.coverage_end:
+            entry["data_through"] = newest.coverage_end.label
         role[ranked[0]] = "newest" if len(ranked) > 1 else "only version"
         if len(ranked) > 1:
             parts = [
@@ -1450,9 +1823,12 @@ def inventory_folder(
             ]
             for i in ranked[1:]:
                 role[i] = f"older version of {newest.path.name}"
+            for i in ranked[1:4]:
                 parts.append(
                     f"{files[i].path.name} (through {_period_text(files[i].coverage_end)})"
                 )
+            if len(ranked) > 4:
+                parts.append(f"{len(ranked) - 4} more listed in files")
             count = "two" if len(ranked) == 2 else str(len(ranked))
             entry["note"] = (
                 f"{count} versions of the same series: "
@@ -1495,6 +1871,8 @@ def inventory_folder(
         d["role"] = role.get(i, "unread")
         d["sheets"] = [_sheet_dict(s) for s in fs.sheets]
         out_files.append(d)
+    # The files to use come first: a reader that cuts the list loses older copies.
+    out_files.sort(key=lambda d: d["role"].startswith("older version"))
 
     lines = []
     for d in out_files:
@@ -1510,21 +1888,144 @@ def inventory_folder(
             + (f" — {'; '.join(cover[:3])}" if cover else "")
             + (f" — ERROR: {d['error']}" if d.get("error") else "")
         )
+    # What the skill reads first comes first.
     result: Dict[str, Any] = {
         "status": "success",
         "folder": str(folder),
-        "data_files": out_files,
-        "datasets": datasets,
         "summary": lines,
+        "datasets": datasets,
+        "data_files": out_files,
     }
     if narrative:
         result["narrative_sources"] = narrative
     if other:
-        result["other_files"] = other[:50]
+        result["other_files"] = other
     if skipped:
         result["not_read"] = skipped
     if not out_files and not narrative:
         result["message"] = (
             "No data files (.xlsx, .xlsm, .csv, .tsv, .json) or documents in this folder."
         )
-    return result
+    return _fit_inventory(result, budget)
+
+
+def _json_size(value: Any) -> int:
+    # As the agent measures a tool result before it cuts one.
+    return len(json.dumps(value, ensure_ascii=False, default=str))
+
+
+_SHEET_CORE = ("sheet", "layout", "frequency", "units", "periods", "series_count")
+
+
+def _fit_inventory(result: Dict[str, Any], budget: int) -> Dict[str, Any]:
+    """Cut *result* to *budget* characters of JSON, least useful detail first.
+
+    Nothing is cut silently: ``truncated`` lists each cut and how to get the
+    detail back. The newest copy of each dataset is the last thing to go.
+    """
+    if _json_size(result) <= budget:
+        return result
+    files: List[Dict[str, Any]] = result["data_files"]
+    older = [d for d in files if d["role"].startswith("older version")]
+    cut: List[str] = []
+
+    def drop_series(targets: List[Dict[str, Any]]) -> None:
+        for d in targets:
+            for sheet in d.get("sheets", []):
+                sheet.pop("series", None)
+
+    def core_sheets() -> None:
+        for d in files:
+            d["sheets"] = [
+                {k: sheet[k] for k in _SHEET_CORE if k in sheet}
+                for sheet in d.get("sheets", [])
+            ]
+
+    def drop_sheets() -> None:
+        for d in files:
+            d.pop("sheets", None)
+
+    def drop_older_files() -> None:
+        result["data_files"] = [d for d in files if d not in older]
+        result["summary"] = [
+            line for line in result["summary"] if "— older version of " not in line
+        ]
+
+    def drop_files() -> None:
+        result["data_files"] = []
+        result["summary"] = [
+            f"{len(files)} data file(s) in {len(result['datasets'])} dataset(s); "
+            "datasets[].newest names the file to use for each"
+        ]
+
+    def short_notes() -> None:
+        for entry in result["datasets"]:
+            if "note" in entry:
+                entry["note"] = (
+                    f"Use {entry['newest']}; the other "
+                    f"{len(entry['files']) - 1} are older copies, for comparison only."
+                )
+
+    def short_datasets() -> None:
+        for entry in result["datasets"]:
+            entry.pop("note", None)
+            copies = len(entry["files"])
+            if copies > 1:
+                entry["copies"] = copies
+            del entry["files"]
+
+    def cap_lists() -> None:
+        for key, keep in (
+            ("narrative_sources", 40),
+            ("other_files", 10),
+            ("not_read", 20),
+        ):
+            items = result.get(key) or []
+            if len(items) > keep:
+                result[key] = items[:keep]
+                cut.append(f"{len(items) - keep} more entries of {key}")
+
+    steps = [
+        (lambda: drop_series(older), "series names of older copies"),
+        (lambda: drop_series(files), "series names (series_count is kept)"),
+        (core_sheets, "sheet detail other than layout, units and periods"),
+        (drop_sheets, "per-sheet detail"),
+        (cap_lists, ""),
+        (short_notes, "the reason in datasets[].note"),
+        (drop_older_files, "data_files and summary entries of older copies"),
+        (drop_files, "data_files and the per-file summary"),
+        (short_datasets, "datasets[].note and datasets[].files (copies counts them)"),
+    ]
+    for step, what in steps:
+        step()
+        if what:
+            cut.append(what)
+        result["truncated"] = _truncation(cut)
+        if _json_size(result) <= budget:
+            break
+    else:
+        # Still too large: keep the datasets that fit, in order.
+        datasets = result["datasets"]
+        kept = len(datasets)
+        while kept and _json_size(result) > budget:
+            kept = max(0, kept - max(1, kept // 10))
+            result["datasets"] = datasets[:kept]
+            result["truncated"] = _truncation(
+                cut + [f"{len(datasets) - kept} more datasets"]
+            )
+    # The notice goes before the lists, where a reader cannot miss it.
+    head = ("status", "folder", "truncated", "summary", "datasets")
+    return {
+        **{k: result[k] for k in head if k in result},
+        **{k: v for k, v in result.items() if k not in head},
+    }
+
+
+def _truncation(cut: List[str]) -> Dict[str, Any]:
+    return {
+        "cut_to_fit": list(cut),
+        "how_to_get_it": (
+            "Call inventory_data_files again on a subfolder, or with the path of "
+            "one data file for its full detail."
+        ),
+    }
