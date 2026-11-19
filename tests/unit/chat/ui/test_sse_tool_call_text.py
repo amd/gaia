@@ -511,7 +511,7 @@ class TestNativeEnvelopeNeverStreams:
             clean_reply_text(_native_envelope("Reconciling the two files now."))
             == "Reconciling the two files now."
         )
-                quoted = '{"__tool_calls__": is the key the provider uses for native calls.}'
+        quoted = '{"__tool_calls__": is the key the provider uses for native calls.}'
         assert clean_reply_text(quoted) == quoted
 
     def test_clean_reply_text_drops_an_envelope_after_prose(self):
