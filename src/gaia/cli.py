@@ -7972,10 +7972,24 @@ def _hybrid_templates_command(args) -> None:
     except (HybridConfigError, GaiaConfigError) as e:
         print(f"❌ {cli_text(_cli_wording(e))}", file=sys.stderr)
         sys.exit(1)
+    members = [
+        values.get(k) or ""
+        for k in (
+            "hybrid_cheap_model",
+            "hybrid_strong_model",
+            "hybrid_classifier_model",
+        )
+    ]
+    # `gaia gateway use hybrid` checks every member against the gateway's list.
+    pick = (
+        "gaia gateway use hybrid"
+        if all(m.startswith("amd.") for m in members)
+        else "gaia config set default_model hybrid"
+    )
     print(
         f"✅ hybrid now runs on {values['hybrid_cheap_model']} or "
         f"{values['hybrid_strong_model']} (policy {values['hybrid_policy']}). "
-        "Pick it with `gaia gateway use hybrid`."
+        f"Pick it with `{pick}`."
     )
 
 

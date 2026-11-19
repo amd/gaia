@@ -337,12 +337,11 @@ def create_app(
 
     app.include_router(build_setup_router(token))
     # The TUI's hybrid settings; the Agent UI serves the same under /api/hybrid.
-    from gaia.daemon.hybrid_routes import build_hybrid_router, tui_wording
+    from gaia.daemon.hybrid_routes import build_hybrid_router
     from gaia.ui.dependencies import get_db
 
     app.include_router(build_hybrid_router(token))
     app.dependency_overrides[get_db] = hybrid_chat_db
-    app.middleware("http")(tui_wording)
 
     if registry is not None:
         from gaia.daemon.relay import build_relay_router
