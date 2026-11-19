@@ -140,6 +140,18 @@ gaia config set lemonade_idle_timeout_minutes 30
 
 The new value applies within seconds; no restart is needed.
 
+While an app is open, GAIA keeps its models loaded so every message answers
+at once. To have a GAIA that sits unused in the tray give its memory back,
+set how many idle minutes it waits before unloading them:
+
+```bash
+gaia config set model_idle_unload_minutes 15
+```
+
+The app, the server and your chats stay as they are. The next message loads
+the model again, which takes about as long as the first message after a
+start. `0`, the default, keeps models loaded for as long as an app is open.
+
 None of this applies to a Lemonade Server you run yourself and point GAIA at
 with `LEMONADE_BASE_URL`: GAIA never unloads its models or stops it.
 

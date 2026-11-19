@@ -31,6 +31,8 @@ class _World:
         self.now = 1000.0
         self.busy = False
         self.timeout = 15 * 60.0
+        # Rule 3 is off unless a test turns it on.
+        self.model_idle = None
         # GAIA's server is up and serving nothing.
         self.activity = LemonadeActivity(busy=False, marker=("idle",))
         self.owner = mock.Mock()
@@ -81,6 +83,7 @@ class _World:
             ancestors=self.ancestors,
             activity=lambda: self.activity,
             timeout=lambda: self.timeout,
+            model_idle=lambda: self.model_idle,
             identity=self.identity,
             clock=lambda: self.now,
         )
@@ -440,6 +443,137 @@ class TestAncestorPids:
 
         with mock.patch("psutil.Process", side_effect=psutil.NoSuchProcess(9)):
             assert ancestor_pids(9) == []
+
+
+class TestIdleModelsUnloadUnderAnOpenApp:
+    """A GAIA left open in the tray held 4 GB of models for as long as it ran."""
+
+    LIMIT = 15 * 60.0
+
+    def _open_app(self, world):
+        world.model_idle = self.LIMIT
+        clients = world.clients()
+        clients.register("app", [world.spawn(10)])
+        clients.sweep()
+        return clients
+
+    def test_off_by_default_an_open_app_keeps_its_models(self, world):
+        clients = world.clients()
+        clients.register("app", [world.spawn(10)])
+        for _ in range(100):
+            world.now += 600
+            clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+    def test_models_unload_once_unused_for_the_limit(self, world):
+        clients = self._open_app(world)
+        world.now += self.LIMIT - 10
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+        world.now += 20
+        clients.sweep()
+        world.owner.unload_models.assert_called_once()
+        world.owner.stop.assert_not_called()
+        world.stop_agents.assert_not_called()
+
+    def test_it_unloads_once_not_on_every_sweep(self, world):
+        clients = self._open_app(world)
+        for _ in range(10):
+            world.now += self.LIMIT
+            clients.sweep()
+        assert world.owner.unload_models.call_count == 1
+
+    def test_the_unload_itself_is_not_taken_for_a_request(self, world):
+        """Unloading changes what the server reports; that must not re-arm it."""
+        clients = self._open_app(world)
+
+        def unload(still_wanted):
+            wanted = still_wanted()
+            world.activity = LemonadeActivity(busy=False, marker=("nothing loaded",))
+            return wanted
+
+        world.owner.unload_models.side_effect = unload
+        for _ in range(10):
+            world.now += self.LIMIT + 10
+            clients.sweep()
+        assert world.owner.unload_models.call_count == 1
+
+    def test_a_request_restarts_the_clock(self, world):
+        clients = self._open_app(world)
+        world.now += self.LIMIT - 10
+        world.activity = LemonadeActivity(busy=False, marker=("used",))
+        clients.sweep()
+        world.now += 20
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+        world.now += self.LIMIT
+        clients.sweep()
+        world.owner.unload_models.assert_called_once()
+
+    def test_models_used_again_are_unloaded_again_after_another_quiet_spell(
+        self, world
+    ):
+        clients = self._open_app(world)
+        world.now += self.LIMIT + 10
+        clients.sweep()
+        world.activity = LemonadeActivity(busy=False, marker=("reloaded",))
+        clients.sweep()
+        world.now += self.LIMIT + 10
+        clients.sweep()
+        assert world.owner.unload_models.call_count == 2
+
+    def test_a_request_in_flight_keeps_the_models(self, world):
+        clients = self._open_app(world)
+        world.activity = LemonadeActivity(busy=True, marker=("idle",))
+        world.now += 10 * self.LIMIT
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+    def test_an_open_agent_turn_keeps_the_models(self, world):
+        clients = self._open_app(world)
+        world.busy = True
+        world.now += 10 * self.LIMIT
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+    def test_a_request_landing_mid_decision_wins(self, world):
+        clients = self._open_app(world)
+        world.now += self.LIMIT + 10
+
+        def unload(still_wanted):
+            world.activity = LemonadeActivity(busy=False, marker=("just used",))
+            return still_wanted()
+
+        world.owner.unload_models.side_effect = unload
+        clients.sweep()
+        assert world.owner.unload_models.call_count == 1
+        world.now += 30
+        clients.sweep()
+        assert world.owner.unload_models.call_count == 1, "clock did not restart"
+
+    def test_a_refused_unload_is_logged_and_tried_again(self, world, caplog):
+        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+
+        clients = self._open_app(world)
+        world.owner.unload_models.side_effect = EmbeddedLemonadeError("refused")
+        world.now += self.LIMIT + 10
+        with caplog.at_level("ERROR"):
+            clients.sweep()
+        assert "could not unload idle models: refused" in caplog.text
+        world.owner.unload_models.side_effect = None
+        clients.sweep()
+        assert world.owner.unload_models.call_count == 2
+
+    def test_the_setting_is_read_from_config(self, tmp_path, monkeypatch):
+        from gaia.daemon.lemonade_clients import model_idle_unload_seconds
+
+        config = tmp_path / "config.json"
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", config)
+        assert model_idle_unload_seconds() is None
+        config.write_text('{"model_idle_unload_minutes": 20}')
+        assert model_idle_unload_seconds() == 20 * 60.0
 
 
 class TestIdleTimeout:

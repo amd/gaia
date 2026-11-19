@@ -9,7 +9,7 @@ command, and any process whose ``LemonadeClient`` is aimed at it, under any
 every 30 seconds. It ends when they all exit, when the client releases it, or
 when it goes :data:`LEASE_TTL` without a renewal.
 
-The policy, in two rules:
+The policy, in three rules:
 
 1. **An app closes, the models go.** When an app (``kind="app"``: Agent UI or
    TUI) leaves and no other GAIA client remains, every model is unloaded from
@@ -22,6 +22,12 @@ The policy, in two rules:
    (``gaia config``; 0 turns it off), GAIA's server is stopped outright. The
    next client starts it again, and a client that finds it stopped mid-request
    restarts it and sends the request once more.
+
+3. **Open but unused, the models go.** With ``model_idle_unload_minutes`` set
+   (``gaia config``; 0, the default, turns it off), every model is unloaded
+   once the server has served no request for that long, even with an app
+   open: a GAIA left in the tray gives its memory back. The server and the
+   agents keep running, and the next request loads the model again.
 
 Leases are not the only evidence of use. A process too old to lease still sends
 its requests to this server, so both rules also read the server's own
@@ -130,6 +136,19 @@ def idle_timeout_seconds() -> Optional[float]:
     return minutes * 60.0 if minutes > 0 else None
 
 
+def model_idle_unload_seconds() -> Optional[float]:
+    """How long an unused model stays loaded under an open app, or None for ever.
+
+    Raises:
+        GaiaConfigError: ``~/.gaia/config.json`` is unreadable or holds a
+            value that is not a whole number of minutes.
+    """
+    from gaia.config import GaiaConfig
+
+    minutes = GaiaConfig.load().model_idle_unload_minutes
+    return minutes * 60.0 if minutes > 0 else None
+
+
 @dataclass
 class _Client:
     client_id: str
@@ -171,6 +190,8 @@ class LemonadeClients:
             (:meth:`~gaia.daemon.lemonade.EmbeddedLemonadeOwner.activity`);
             None when it is not running. Defaults to the owner's.
         timeout: Returns the idle timeout in seconds, or None when it is off.
+        model_idle: Returns how long unused models stay loaded under an open
+            app, in seconds, or None when they stay for as long as it is open.
         identity: Returns a process's identity, or None when it is gone.
         clock: Monotonic seconds.
     """
@@ -185,6 +206,7 @@ class LemonadeClients:
         ancestors: Callable[[int], List[int]] = ancestor_pids,
         activity: Optional[Callable[[], Optional["LemonadeActivity"]]] = None,
         timeout: Callable[[], Optional[float]] = idle_timeout_seconds,
+        model_idle: Callable[[], Optional[float]] = model_idle_unload_seconds,
         identity: Callable[[int], Optional[ProcessIdentity]] = process_identity,
         clock: Callable[[], float] = time.monotonic,
     ):
@@ -195,6 +217,7 @@ class LemonadeClients:
         self._ancestors = ancestors
         self._activity = activity or owner.activity
         self._timeout = timeout
+        self._model_idle = model_idle
         self._identity = identity
         self._clock = clock
         self._lock = threading.Lock()
@@ -217,6 +240,9 @@ class LemonadeClients:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._timeout_error: Optional[str] = None
+        # The models were unloaded for idleness and nothing has used the
+        # server since.
+        self._idle_unloaded = False
 
     # -- registration ------------------------------------------------------
 
@@ -343,6 +369,7 @@ class LemonadeClients:
             )
         self._after_departure()
         self._check_idle()
+        self._check_models_idle()
 
     def snapshot(self) -> dict:
         """The connected clients and the idle clock, for status routes."""
@@ -403,6 +430,7 @@ class LemonadeClients:
             moved = self._looked and seen is not None and seen.marker != self._marker
             if seen is not None and (seen.busy or moved):
                 self._active_at = now
+                self._idle_unloaded = False
             self._marker = None if seen is None else seen.marker
             self._looked = True
         return seen
@@ -529,6 +557,51 @@ class LemonadeClients:
             return
         if stopped:
             logger.info("lemonade clients: idle timeout stopped GAIA's Lemonade")
+
+    def _check_models_idle(self) -> None:
+        """Rule 3: unload models nobody has used, though an app is still open."""
+        from gaia.config import GaiaConfigError
+        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+
+        with self._lock:
+            if not self._users():
+                return
+        try:
+            limit = self._model_idle()
+        except GaiaConfigError:
+            # _check_idle reports a broken config; this rule stays off with it.
+            return
+        if limit is None or self._busy():
+            return
+        seen = self._observe()
+        if seen is None or seen.busy:
+            return
+        now = self._clock()
+        with self._lock:
+            if self._active_at is None:
+                # First look with this rule on: the clock starts here.
+                self._active_at = now
+            if self._idle_unloaded or now - self._active_at < limit:
+                return
+        try:
+            unloaded = self._owner.unload_models(
+                still_wanted=lambda: not self._busy() and self._still_quiet(seen.marker)
+            )
+        except EmbeddedLemonadeError as e:
+            logger.error("lemonade clients: could not unload idle models: %s", e)
+            return
+        if unloaded:
+            # The unload itself changes what the server reports; take that as
+            # the new baseline so it is not read as someone using the server.
+            self._observe()
+            with self._lock:
+                self._idle_unloaded = True
+            logger.info(
+                "lemonade clients: no request for %g minutes; unloaded every "
+                "model from GAIA's Lemonade Server (the next request loads it "
+                "again)",
+                limit / 60,
+            )
 
     def _unchanged_since(self, generation: int) -> bool:
         """No client registered since *generation*, and none is connected."""
