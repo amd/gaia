@@ -158,6 +158,8 @@ ALLOWED_COMMANDS = {
     "uniq",
     "diff",
     "findstr",  # Windows grep equivalent
+    "type",  # Windows cat equivalent
+    "where",  # Windows which equivalent
     # File information (READ-ONLY)
     "file",
     "stat",
@@ -1096,11 +1098,10 @@ def web_tools_refuse(host: str) -> bool:
     except ValueError:
         ip = _numeric_ipv4(bare) or _address_in_name(bare)
     if ip is None:
-        if where != "this PC":
-            return True
-        ip = ipaddress.IPv4Address("127.0.0.1")
+        # A local name: the fetcher reads this PC and the local network.
+        return False
     try:
-        _assert_ip_allowed(str(ip), hostname)
+        _assert_ip_allowed(str(ip), hostname, allow_local=True)
     except BlockedHostError:
         return True
     return False
@@ -1402,6 +1403,7 @@ SAFE_PS_CMDLET_PREFIXES = (
     "sort-object",
     "measure-object",
     "group-object",
+    "select-string",
     "convertto-",
     "convertfrom-",
     "out-string",
@@ -5391,6 +5393,27 @@ _UNASKED_COMMANDS = frozenset(
         "git",
     }
 )
+#: More of the same, for a session ``GAIA_ALLOWED_PATHS`` does not confine.
+_UNASKED_ANYWHERE_COMMANDS = _UNASKED_COMMANDS | frozenset(
+    {"findstr", "type", "where", "du", "diff", "file", "hostname", "ver"}
+)
+
+#: PowerShell cmdlets that only read a file, a folder or where something is.
+#: ``powershell -Command <one of these> ...`` runs with nobody asked.
+_UNASKED_PS_CMDLETS = frozenset(
+    {
+        "get-item",
+        "get-childitem",
+        "get-content",
+        "get-location",
+        "get-filehash",
+        "get-date",
+        "test-path",
+        "resolve-path",
+        "select-string",
+    }
+)
+_PS_CMDLET_WORD = re.compile(r"[A-Za-z]+-[A-Za-z]+")
 
 #: An option with nothing attached; a value in its own word gets the path check.
 _UNASKED_FLAG = re.compile(r"--?[A-Za-z0-9][A-Za-z0-9-]*")
@@ -5444,37 +5467,56 @@ _ASKING_LONG_OPTIONS = frozenset(
 )
 
 
-def _segment_runs_unasked(segment: list) -> bool:
+def _powershell_only_reads(segment: list) -> bool:
+    """Whether *segment* is ``powershell -Command`` with only file-reading cmdlets."""
+    cmdlets = [w.lower() for w in segment[1:] if _PS_CMDLET_WORD.fullmatch(w)]
+    if not cmdlets or not all(c in _UNASKED_PS_CMDLETS for c in cmdlets):
+        return False
+    # ``Env:`` is a drive that lists every environment variable, keys included.
+    return not any(w.lower().startswith("env:") for w in segment[1:])
+
+
+def _segment_runs_unasked(segment: list, confined: bool = True) -> bool:
     """Whether *segment* is a listed command, by bare name, with plain options.
 
-    A walk (``-r``, ``-R``, ``/s``) reads files nobody named, so it asks, as do
-    a link followed (``-L``), a read that never ends (``tail -f``), a device
-    name, and ``git log --show-signature``, which starts gpg.
+    A device name asks, and so does ``git log --show-signature``, which starts
+    gpg. In a *confined* session (``GAIA_ALLOWED_PATHS``) so do a walk
+    (``-r``, ``-R``, ``/s``), which reads files nobody named, a link followed
+    (``-L``), a climb (``..``) and a read that never ends (``tail -f``).
     """
     name = segment[0].lower()
     if name.endswith(".exe"):
         name = name[:-4]
-    if name not in _UNASKED_COMMANDS:
+    if name == "powershell" and not confined:
+        if not _powershell_only_reads(segment):
+            return False
+    elif name not in (_UNASKED_COMMANDS if confined else _UNASKED_ANYWHERE_COMMANDS):
         return False
-    if _short_flags_hold(segment, "rRL"):
-        return False
-    if name == "grep" and _short_flags_hold(segment, "dD"):
-        return False
-    if name == "tail" and _short_flags_hold(segment, "fF"):
-        return False
+    if confined:
+        if _short_flags_hold(segment, "rRL"):
+            return False
+        if name == "grep" and _short_flags_hold(segment, "dD"):
+            return False
+        if name == "tail" and _short_flags_hold(segment, "fF"):
+            return False
     for word in segment[1:]:
         if word.startswith("-") and not _UNASKED_FLAG.fullmatch(word):
             return False
         # GNU tools accept any unambiguous prefix (``--recurs``, ``--files0``).
+        asking = _ASKING_LONG_OPTIONS if confined else ("--show-signature",)
         if word.startswith("--") and any(
-            option.startswith(word.lower()) for option in _ASKING_LONG_OPTIONS
+            option.startswith(word.lower()) for option in asking
         ):
             return False
         if name == "dir" and word.lower() in _DIR_DISPLAY_SWITCHES:
             continue
-        if _WINDOWS_SWITCH.fullmatch(word) or _SWITCH_WITH_VALUE.match(word):
+        if _SWITCH_WITH_VALUE.match(word):
             return False
-        if _DRIVE_RELATIVE.match(word) or ".." in re.split(r"[\\/]", word):
+        if confined and _WINDOWS_SWITCH.fullmatch(word):
+            return False
+        if _DRIVE_RELATIVE.match(word):
+            return False
+        if confined and ".." in re.split(r"[\\/]", word):
             # ``link/..`` climbs from where the link lands, not from here.
             return False
         if _names_a_device(word):
@@ -5611,6 +5653,11 @@ def _pin_listed_programs(shell_text: str, cwd: str) -> Tuple[str, bool]:
 _GIT_UNASKED_SUBCOMMANDS = frozenset(
     {"log", "branch", "remote", "rev-parse", "shortlog", "rev-list"}
 )
+#: The reads that could start such a program. They run unasked too, in a
+#: repository whose own config names none (``_git_repo_config_is_plain``).
+_GIT_CONFIG_BOUND_READS = frozenset(
+    {"status", "diff", "show", "blame", "ls-files", "ls-tree", "describe"}
+)
 
 #: Repository-local settings that never name a program. A repo whose own
 #: config sets anything else (gpg.program, log.showSignature, core.fsmonitor,
@@ -5715,17 +5762,24 @@ _GIT_DIFF_FLAG = re.compile(
 )
 
 
-def _git_may_run_repo_programs(segment: list, cwd: str) -> bool:
-    """Whether this git call, run in *cwd*, could start a program a repo names."""
+def _git_may_run_repo_programs(segment: list, cwd: str, confined: bool = True) -> bool:
+    """Whether this git call, run in *cwd*, could start a program a repo names.
+
+    In a *confined* session (``GAIA_ALLOWED_PATHS``) ``status`` and anything
+    that renders a diff count as able to, whatever the repository's config.
+    """
     if (_program_behind(segment[0]) or segment[0]).lower() != "git":
         return False
     argv, _ = _git_policy_argv(segment)
-    if not argv or len(argv) < 2 or argv[1] not in _GIT_UNASKED_SUBCOMMANDS:
+    reads = _GIT_UNASKED_SUBCOMMANDS
+    if not confined:
+        reads = reads | _GIT_CONFIG_BOUND_READS
+    if not argv or len(argv) < 2 or argv[1] not in reads:
         return True
     # `git remote show` contacts the remote; only listing stays local.
     if argv[1] == "remote" and any(w not in ("-v", "--verbose") for w in argv[2:]):
         return True
-    if any(_GIT_DIFF_FLAG.match(token) for token in segment[1:]):
+    if confined and any(_GIT_DIFF_FLAG.match(token) for token in segment[1:]):
         return True
     # Only `-C <dir>` may sit before the subcommand; it moves the repo read.
     globals_ = segment[1 : len(segment) - len(argv) + 1]
@@ -6897,21 +6951,47 @@ class ShellToolsMixin:
                     return False
         return True
 
+    def _reads_are_confined(self) -> bool:
+        """Whether a read is held to the allowed folders: ``GAIA_ALLOWED_PATHS``
+        is set, or there is no validator to say what a read may reach."""
+        validator = getattr(self, "path_validator", None)
+        if not callable(getattr(validator, "validate_read", None)):
+            return True
+        return getattr(validator, "env_scope", None) is not None
+
     def _read_only_line_runs_unasked(self, tool_args: Dict[str, Any]) -> bool:
-        """Whether this call only reads, inside the allowed folders, so nobody is asked.
+        """Whether this call only reads, so nobody is asked.
 
         Asking before ``git log`` or ``ls`` teaches people to click Allow without
-        reading. A line qualifies only when every command on it is one of
-        :data:`_UNASKED_COMMANDS` with plain options, passes the read-only
-        allowlist with nothing to confirm, ``cd`` aside, and the folders it
-        reaches pass the same path checks as any run. A line holding anything
-        a shell could read differently from GAIA (quotes, ``^``, ``%``, ``$``,
-        redirects, globs) still asks, as does one whose program a file in its
-        working folder could stand in for, or that names a protected file.
+        reading. A line qualifies when it only reads (:meth:`_line_only_reads`)
+        and the line's verdict finds nothing to ask about or refuse: a
+        credential file, a folder the user removed and a path outside
+        ``GAIA_ALLOWED_PATHS`` are judged there.
         """
         command = tool_args.get("command")
+        working_directory = tool_args.get("working_directory")
+        if not self._line_only_reads(command, working_directory):
+            return False
+        error, _ = self._line_verdict(command, working_directory)
+        return error is None
+
+    def _line_only_reads(self, command: Any, working_directory: Any) -> bool:
+        """Whether every command on this line is a listed read in a plain form.
+
+        Each must be one of :data:`_UNASKED_COMMANDS` with plain options and
+        pass the read-only allowlist with nothing to confirm, ``cd`` aside. A
+        line holding anything a shell could read differently from GAIA (quotes,
+        ``^``, ``%``, ``$``, redirects, globs) does not qualify, nor does one
+        whose program a file in its working folder could stand in for, or a
+        git read in a repository whose config names a program to run.
+
+        Where it reads is not judged here, beyond a file the file tools refuse
+        to read, except in a confined session (:meth:`_reads_are_confined`),
+        which keeps every read inside the allowed folders and off dot-files.
+        """
         if not isinstance(command, str) or not command.strip():
             return False
+        confined = self._reads_are_confined()
         bare = _DISCARDED_STDERR.sub("", command)
         if not _UNASKED_LINE.fullmatch(bare):
             return False
@@ -6922,14 +7002,14 @@ class ShellToolsMixin:
             # Off Windows a backslash is an escape, not a folder separator.
             return False
         lowered = bare.lower()
-        if "powershell" in lowered or "pwsh" in lowered:
+        if "pwsh" in lowered or (confined and "powershell" in lowered):
             return False
         if _path_has_relative_entry():
             return False
         steps, parse_error = _parse_line(command, bypass_gates=False)
         if parse_error is not None or not steps:
             return False
-        located = self._call_cwd(tool_args.get("working_directory"))
+        located = self._call_cwd(working_directory)
         if located is None:
             return False
         cwd = located[0]
@@ -6937,8 +7017,9 @@ class ShellToolsMixin:
             if step.is_cd:
                 target = step.segments[0][-1]
                 parts = re.split(r"[\\/]", target)
-                if len(step.segments[0]) != 2 or any(
-                    part.startswith(".") and part != "." for part in parts
+                if len(step.segments[0]) != 2 or (
+                    confined
+                    and any(part.startswith(".") and part != "." for part in parts)
                 ):
                     return False
                 cwd = os.path.join(cwd, _expand_home(step.cd_target) or "")
@@ -6954,8 +7035,8 @@ class ShellToolsMixin:
             for segment in step.segments:
                 if (
                     not segment
-                    or not _segment_runs_unasked(segment)
-                    or _git_may_run_repo_programs(segment, cwd)
+                    or not _segment_runs_unasked(segment, confined)
+                    or _git_may_run_repo_programs(segment, cwd, confined)
                     or self._validate_command(
                         segment[0].lower(),
                         segment,
@@ -6965,12 +7046,15 @@ class ShellToolsMixin:
                     )
                     is not None
                     or _folder_shadows(cwd, segment[0])
-                    or not self._reaches_only_allowed(segment, cwd)
-                    or self._names_protected_path(segment, cwd)
                 ):
                     return False
-        error, _ = self._line_verdict(command, tool_args.get("working_directory"))
-        return error is None
+                if confined and not self._reaches_only_allowed(segment, cwd):
+                    return False
+                if not confined and not self._reads_may_reach(segment, cwd):
+                    return False
+                if self._names_protected_path(segment, cwd, dot_files=confined):
+                    return False
+        return True
 
     def _reaches_only_allowed(self, segment: list, cwd: str) -> bool:
         """Whether the folder *segment* runs in and every path it names really
@@ -7002,10 +7086,25 @@ class ShellToolsMixin:
                 return False
         return True
 
-    def _names_protected_path(self, segment: list, cwd: str) -> bool:
+    def _reads_may_reach(self, segment: list, cwd: str) -> bool:
+        """Whether a read may reach the folder *segment* runs in and every path
+        it names: none is a secret or in a folder the user removed."""
+        validator = self.path_validator
+        paths = [cwd] + [
+            os.path.join(cwd, word) for word in segment[1:] if not word.startswith("-")
+        ]
+        return all(
+            validator.validate_read(os.path.realpath(path), prompt_user=False)[0]
+            for path in paths
+            if os.path.lexists(path)
+        )
+
+    def _names_protected_path(
+        self, segment: list, cwd: str, dot_files: bool = True
+    ) -> bool:
         """Whether *segment* runs in, or names, a file the file tools refuse to
-        read, or any dot-file (``.env.staging``, ``.git-credentials``), whose
-        names no list can keep up with."""
+        read, or, with *dot_files*, any dot-file (``.env.staging``,
+        ``.git-credentials``), whose names no list can keep up with."""
         validator = getattr(self, "path_validator", None)
         if validator is None:
             return True
@@ -7015,7 +7114,9 @@ class ShellToolsMixin:
             if word.startswith("-"):
                 continue
             parts = re.split(r"[\\/]", word)
-            if any(part.startswith(".") and part != "." for part in parts):
+            if dot_files and any(
+                part.startswith(".") and part != "." for part in parts
+            ):
                 return True
             if validator.is_read_blocked(os.path.join(cwd, word))[0]:
                 return True
@@ -7072,9 +7173,14 @@ class ShellToolsMixin:
         if located is None:
             return error, steps
         cwd, explicit = located
+        reads_anywhere = error is None and self._line_reads_anywhere(
+            command, working_directory
+        )
         outside: list = []
         refusal = None
-        if explicit and not self._path_allowed(cwd, prompt_user=False):
+        if explicit and not self._path_in_reach(
+            cwd, prompt_user=False, reads_anywhere=reads_anywhere
+        ):
             refusal = self._outside_scope(
                 cwd,
                 {
@@ -7093,13 +7199,21 @@ class ShellToolsMixin:
             step_cwd = walk_cwd
             if step.is_cd:
                 walk_cwd, refusal = self._resolve_cd_target(
-                    step.cd_target, walk_cwd, outside
+                    step.cd_target, walk_cwd, outside, reads_anywhere
                 )
                 if refusal is not None:
                     break
             refusal = self._path_traversal_refusal(
-                step, step_cwd, granted, outside, searchable, line=command
-            ) or self._git_path_refusal(step.segments, step_cwd, outside)
+                step,
+                step_cwd,
+                granted,
+                outside,
+                searchable,
+                line=command,
+                reads_anywhere=reads_anywhere,
+            ) or self._git_path_refusal(
+                step.segments, step_cwd, outside, reads_anywhere
+            )
         if refusal is not None:
             return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
         if outside and not (
@@ -7307,6 +7421,25 @@ class ShellToolsMixin:
             return bool(self._is_path_allowed(path))
         return True
 
+    def _line_reads_anywhere(self, command: str, working_directory: Any) -> bool:
+        """Whether this line only reads, so the paths it names may lie outside
+        the session's folders. Never under ``GAIA_ALLOWED_PATHS``."""
+        return not self._reads_are_confined() and self._line_only_reads(
+            command, working_directory
+        )
+
+    def _path_in_reach(
+        self, path: str, prompt_user: bool = True, reads_anywhere: bool = False
+    ) -> bool:
+        """:meth:`_path_allowed`, or, with *reads_anywhere*, any path a read
+        may reach: not a secret, and not in a folder the user removed."""
+        if (
+            reads_anywhere
+            and self.path_validator.validate_read(path, prompt_user=False)[0]
+        ):
+            return True
+        return self._path_allowed(path, prompt_user=prompt_user)
+
     def _outside_scope(
         self, path: str, refusal: Dict[str, Any], outside: Optional[list]
     ) -> Optional[Dict[str, Any]]:
@@ -7335,7 +7468,11 @@ class ShellToolsMixin:
         return None
 
     def _resolve_cd_target(
-        self, target: str, cwd: str, outside: Optional[list] = None
+        self,
+        target: str,
+        cwd: str,
+        outside: Optional[list] = None,
+        reads_anywhere: bool = False,
     ) -> tuple:
         """``(directory, None)`` for ``cd <target>``, or ``(cwd, refusal)``.
 
@@ -7360,7 +7497,9 @@ class ShellToolsMixin:
                 "has_errors": True,
                 "hint": f"Nothing on this line ran. '{target}' is relative to {cwd}.",
             }
-        if not self._path_allowed(resolved, prompt_user=outside is None):
+        if not self._path_in_reach(
+            resolved, prompt_user=outside is None, reads_anywhere=reads_anywhere
+        ):
             refusal = self._outside_scope(
                 resolved,
                 {
@@ -7383,6 +7522,7 @@ class ShellToolsMixin:
         outside: Optional[list] = None,
         searchable: Optional[bool] = None,
         line: Optional[str] = None,
+        reads_anywhere: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Refuse an argument that resolves outside the allowed paths.
 
@@ -7439,7 +7579,13 @@ class ShellToolsMixin:
         for label, arg in candidates:
             for candidate_path in _flag_path_values(arg):
                 refusal = self._path_candidate_refusal(
-                    label, arg, candidate_path, cwd, outside, media_reads
+                    label,
+                    arg,
+                    candidate_path,
+                    cwd,
+                    outside,
+                    media_reads,
+                    reads_anywhere,
                 )
                 if refusal:
                     return refusal
@@ -7474,6 +7620,7 @@ class ShellToolsMixin:
         cwd: str,
         outside: Optional[list] = None,
         media_reads: bool = False,
+        reads_anywhere: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Refuse *candidate_path* (read from *arg*) when it leaves the allowed paths."""
         # A lone '/x' is a Windows switch there (/i, /format:list), not a path.
@@ -7510,7 +7657,7 @@ class ShellToolsMixin:
             return None
         for path in dict.fromkeys((candidate_path, expanded)):
             refusal = self._resolved_path_refusal(
-                label, arg, path, cwd, outside, media_reads
+                label, arg, path, cwd, outside, media_reads, reads_anywhere
             )
             if refusal:
                 return refusal
@@ -7524,6 +7671,7 @@ class ShellToolsMixin:
         cwd: str,
         outside: Optional[list] = None,
         media_reads: bool = False,
+        reads_anywhere: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Refuse *candidate_path* when it resolves outside the allowed paths."""
         try:
@@ -7557,7 +7705,9 @@ class ShellToolsMixin:
         generated = getattr(self.path_validator, "is_generated_image", None)
         if media_reads and callable(generated) and generated(resolved_path):
             return None
-        if not self._path_allowed(resolved_path, prompt_user=outside is None):
+        if not self._path_in_reach(
+            resolved_path, prompt_user=outside is None, reads_anywhere=reads_anywhere
+        ):
             return self._outside_scope(
                 resolved_path,
                 {
@@ -7752,7 +7902,11 @@ class ShellToolsMixin:
         self.shell_command_times.append(time.time())
 
     def _git_path_refusal(
-        self, segments: list, cwd: str, outside: Optional[list] = None
+        self,
+        segments: list,
+        cwd: str,
+        outside: Optional[list] = None,
+        reads_anywhere: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Refuse a git ``-C``/``--git-dir``/``--work-tree`` outside allowed paths.
 
@@ -7766,7 +7920,9 @@ class ShellToolsMixin:
                     self, "_is_path_allowed"
                 ):
                     continue
-                if not self._path_allowed(path, prompt_user=outside is None):
+                if not self._path_in_reach(
+                    path, prompt_user=outside is None, reads_anywhere=reads_anywhere
+                ):
                     refusal = self._outside_scope(
                         path,
                         {
@@ -8667,13 +8823,16 @@ class ShellToolsMixin:
                 # A `cd` step moves the steps after it, so each step's directory
                 # — and what its arguments resolve against — is settled here,
                 # before anything runs.
+                reads_anywhere = not bypass and self._line_reads_anywhere(
+                    command, working_directory
+                )
                 step_cwds: list = []
                 walk_cwd = cwd
                 for step in steps:
                     step_cwds.append(walk_cwd)
                     if step.is_cd:
                         walk_cwd, error = self._resolve_cd_target(
-                            step.cd_target, walk_cwd
+                            step.cd_target, walk_cwd, reads_anywhere=reads_anywhere
                         )
                         if error:
                             return error
@@ -8687,10 +8846,13 @@ class ShellToolsMixin:
                         granted,
                         searchable=search_plan is not None,
                         line=command,
+                        reads_anywhere=reads_anywhere,
                     )
                     if error:
                         return error
-                    error = self._git_path_refusal(step.segments, step_cwd)
+                    error = self._git_path_refusal(
+                        step.segments, step_cwd, reads_anywhere=reads_anywhere
+                    )
                     if error:
                         return error
 

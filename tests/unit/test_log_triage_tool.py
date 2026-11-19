@@ -1354,6 +1354,7 @@ def test_a_written_output_keeps_status_success(tmp_path):
     assert "error" not in out and "fix" not in out
 
 
+@pytest.mark.usefixtures("confined_reads")
 def test_tool_reads_and_writes_only_inside_the_agents_folders(tmp_path):
     logs = tmp_path / "logs"
     other = tmp_path / "other"

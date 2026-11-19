@@ -45,6 +45,7 @@ from gaia.agents.tools.path_access import (
     missing_file_error,
     read_access_error,
     readable_entry,
+    with_outside_note,
 )
 from gaia.agents.tools.protected_folders import (
     ASKING,
@@ -1222,10 +1223,16 @@ class FileSearchToolsMixin:
                 Dictionary with file content and type-specific metadata
             """
             file_path = str(_resolve_target(file_path, None, _workspace_default(self)))
+            return with_outside_note(
+                self, file_path, _read_any(file_path, offset, limit)
+            )
+
+        def _read_any(
+            file_path: str, offset: int, limit: Optional[int]
+        ) -> Dict[str, Any]:
             try:
-                # Enforce the --allowed-paths sandbox on reads. Checked before
-                # the existence probe so paths outside the sandbox can't be used
-                # as a file-existence oracle.
+                # Checked before the existence probe, so a refused path does
+                # not say whether the file is there.
                 denied = self._read_access_error(file_path)
                 if denied:
                     return denied
@@ -1281,15 +1288,30 @@ class FileSearchToolsMixin:
                         line_ranges=False,
                     )
 
-                # Guard against reading very large files into memory
+                # A file over 10 MB is never loaded whole: it is read as its
+                # first page, which says where the next one starts.
                 file_size = os.path.getsize(file_path)
-                if file_size > 10_000_000:  # 10 MB
+                if file_size > 10_000_000:
+                    from gaia.agents.base.artifacts import read_text_page
+
+                    try:
+                        page = read_text_page(
+                            file_path, 0, 8000, encoding=text_encoding(file_path)
+                        )
+                    except UnicodeDecodeError:
+                        return {
+                            "status": "success",
+                            "file_path": file_path,
+                            "file_type": "binary",
+                            "content": f"[Binary file, {file_size} bytes]",
+                            "is_binary": True,
+                            "size_bytes": file_size,
+                        }
+                    reads.note(file_path, seen)
                     return {
-                        "status": "error",
-                        "error": (
-                            f"File too large ({file_size:,} bytes). "
-                            "Use search_file_content for large files."
-                        ),
+                        "status": "success",
+                        "file_path": file_path,
+                        **text_page_notes(page, file_size, line_ranges=False),
                     }
 
                 # Read file content

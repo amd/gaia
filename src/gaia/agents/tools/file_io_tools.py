@@ -21,15 +21,14 @@ from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.document_text import (
     HTML_PAGES,
-    DocumentTooLong,
     cached_document_text,
     document_type,
     index_only_error,
+    partial_document_note,
     read_budget,
     read_document,
     read_html_text,
     text_page_notes,
-    too_long_error,
     with_small_limit_warning,
 )
 from gaia.agents.tools.edit_impact import edit_impact
@@ -49,6 +48,7 @@ from gaia.agents.tools.path_access import (
     read_permission_error,
     read_refusal,
     readable_entry,
+    with_outside_note,
 )
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
 from gaia.agents.tools.workspace_paths import (
@@ -534,10 +534,24 @@ class FileIOToolsMixin:
                 Dictionary with file content and type-specific metadata
             """
             file_path = str(target_of({"file_path": file_path}))
+            return with_outside_note(
+                self,
+                file_path,
+                _read_any(file_path, offset, limit, start_line, end_line, raw),
+            )
+
+        def _read_any(
+            file_path: str,
+            offset: int,
+            limit: Optional[int],
+            start_line: Optional[int],
+            end_line: Optional[int],
+            raw: bool,
+        ) -> Dict[str, Any]:
             path_validator = _require_path_validator(self)
             try:
-                # Scope *and* secrets: being in an allowed directory never made
-                # a private key safe to read into the conversation.
+                # Secrets: no folder makes a private key safe to read into the
+                # conversation.
                 is_allowed, reason = path_validator.validate_read(file_path)
                 if not is_allowed:
                     return read_refusal(reason)
@@ -579,9 +593,11 @@ class FileIOToolsMixin:
                                 "error": "limit must be 1 or more lines.",
                             }
                         end_line = max(start_line or 1, 1) + limit - 1
+                    partial = None
                     try:
                         if is_document:
-                            text = cached_document_text(self, file_path)[0]
+                            text, meta = cached_document_text(self, file_path)
+                            partial = partial_document_note(self, file_path, meta)
                         else:
                             text = read_text(file_path)[0]
                         lines = text.splitlines()
@@ -590,13 +606,13 @@ class FileIOToolsMixin:
                             "status": "error",
                             "error": f"{file_path} is binary: it has no lines to read.",
                         }
-                    except DocumentTooLong as e:
-                        return too_long_error(self, file_path, e)
                     except (ImportError, ValueError) as e:
                         return {"status": "error", "error": str(e)}
                     page = _line_window(lines, start_line, end_line, read_budget(self))
                     if "error" in page:
                         return {"status": "error", **page}
+                    if partial:
+                        page["partial"] = partial
                     reads.note(file_path, seen)
                     return {"status": "success", "file_path": file_path, **page}
 

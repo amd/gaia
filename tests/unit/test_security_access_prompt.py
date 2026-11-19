@@ -223,3 +223,9 @@ def test_a_host_that_cannot_ask_points_at_allowed_paths(layout):
 
     assert not allowed
     assert "allowed_paths list that covers it" in reason
+
+
+@pytest.fixture(autouse=True)
+def _reads_are_confined(confined_reads):
+    """These tests pin the rule a GAIA_ALLOWED_PATHS session keeps: a read is
+    held to the allowed folders, and asked about outside them."""

@@ -693,6 +693,20 @@ def text_window(
     return part
 
 
+def _local_address_warning(reached: Dict[str, str]) -> str:
+    """The line that leads a page fetched from this PC or a private network."""
+    if not reached:
+        return ""
+    named = ", ".join(
+        host if host == address else f"{host} ({address})"
+        for host, address in reached.items()
+    )
+    return (
+        f"[Warning: this came from {named}, an address on this PC or the local "
+        "network, not the public web.]\n"
+    )
+
+
 def _refuse_host_this_turn(host: Any, tool_name: str, tool_args: dict, error) -> None:
     """Refuse a cloud-metadata host the web client blocked to every tool, this turn.
 
@@ -775,7 +789,18 @@ class BrowserToolsMixin:
             """
             if not _ensure_web_client():
                 return "Error: Browser tools not initialized. Web browsing is disabled."
+            from gaia.web.client import take_local_addresses
 
+            take_local_addresses()
+            page = _fetch(url, extract, max_length, offset, find)
+            reached = take_local_addresses()
+            if page.startswith("Error"):
+                return page
+            return _local_address_warning(reached) + page
+
+        def _fetch(
+            url: str, extract: str, max_length: int, offset: int, find: Optional[str]
+        ) -> str:
             # Clamp max_length to prevent extreme values
             max_length = max(512, min(max_length, 20000))
             from gaia.agents.base.artifacts import retain_excerpt

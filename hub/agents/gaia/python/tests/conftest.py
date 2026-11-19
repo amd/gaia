@@ -30,6 +30,16 @@ def _empty_hub_skill_catalog(monkeypatch):
 
 
 @pytest.fixture
+def confined_reads(monkeypatch, tmp_path):
+    """A session ``GAIA_ALLOWED_PATHS`` confines, with the test's own scope kept.
+
+    Only such a session holds a read to the allowed folders. The variable names
+    the whole drive, so each validator's own allowed paths stay the scope.
+    """
+    monkeypatch.setenv("GAIA_ALLOWED_PATHS", tmp_path.anchor)
+
+
+@pytest.fixture
 def user_terminal(monkeypatch):
     """Run the test as the user's terminal, not an agent tool or its child.
 

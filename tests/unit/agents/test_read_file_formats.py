@@ -16,8 +16,6 @@ from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools import document_text
 from gaia.agents.tools.document_text import (
     INDEX_ONLY_DOCUMENTS,
-    OVERVIEW_COLUMNS,
-    OVERVIEW_ROWS,
     other_routes,
     skill_tools_for,
 )
@@ -85,44 +83,63 @@ def long_workbook(tmp_path, monkeypatch):
 # ------------------------------------------------------------ a long workbook
 
 
-def test_a_workbook_too_long_to_read_comes_back_as_its_sheets_and_first_rows(
+def _all_parts(read_file, path):
+    parts, offset = [], 0
+    while offset is not None:
+        part = read_file(str(path), offset=offset)
+        assert part["status"] == "success", part
+        parts.append(part)
+        offset = part["next_offset"]
+    return parts
+
+
+def test_a_workbook_past_the_limit_comes_back_as_its_first_part(
     read_file, long_workbook
 ):
     result = read_file(str(long_workbook))
 
     assert result["status"] == "success", result
+    assert result["content"].startswith("[Sheet: Wide]\ncol0 | col1")
     assert result["sheets"] == 2
     assert result["sheet_sizes"] == [
         {"sheet": "Wide", "rows": 201, "columns": 30},
         {"sheet": "Notes", "rows": 2, "columns": 2},
     ]
-    overview = result["overview"]
-    assert "[Sheet: Wide] 201 rows x 30 columns" in overview
-    assert "[Sheet: Notes] 2 rows x 2 columns" in overview
-    assert "col0 | col1" in overview and "owner | ops" in overview
+    assert "stopped_at" not in result
 
 
-def test_the_overview_is_bounded_in_rows_and_columns(read_file, long_workbook):
-    wide = read_file(str(long_workbook))["overview"].split("\n\n")[0].splitlines()
-
-    assert len(wide) == 1 + OVERVIEW_ROWS
-    assert wide[1].count(" | ") == OVERVIEW_COLUMNS
-    assert wide[1].endswith(f"(+{30 - OVERVIEW_COLUMNS} more columns)")
-
-
-def test_the_overview_says_it_is_not_the_data(read_file, long_workbook):
+def test_the_first_part_says_it_is_not_the_whole_file(read_file, long_workbook):
     result = read_file(str(long_workbook))
 
-    assert "too long to read in full" in result["note"]
-    assert "not the data" in result["note"]
-    # Not the file's text: nothing may take it for a full read of the file.
-    assert "content" not in result and "next_offset" not in result
+    partial = result["partial"]
+    assert "This is not the whole file" in partial
+    assert "the first 2,000 characters" in partial
+    assert "of sheet 'Wide'" in partial
+    assert "totals count only that part" in partial
+    # Never reached: the text stops in the first sheet.
+    assert "owner | ops" not in result["content"]
 
 
-def test_the_overview_says_how_to_read_a_range_when_code_can_run(host, long_workbook):
+def test_the_part_that_was_read_pages_to_its_end_with_correct_totals(
+    read_file, long_workbook
+):
+    parts = _all_parts(read_file, long_workbook)
+
+    text = "".join(part["content"] for part in parts)
+    assert len(parts) > 1
+    assert all(part["total_chars"] == len(text) for part in parts)
+    assert all("partial" in part for part in parts)
+    # The limit, passed by at most the row that crossed it.
+    rows = text.splitlines()
+    assert 2000 < len(text) <= 2000 + len(rows[-1]) + 1
+    row = len(rows) - 1
+    assert f"row {row:,} of sheet 'Wide'" in parts[-1]["partial"]
+
+
+def test_the_note_says_how_to_read_a_range_when_code_can_run(host, long_workbook):
     host._tools_registry = {"read_file": {}, "run_python": {}, "index_document": {}}
 
-    note = host.read_file(str(long_workbook))["note"]
+    note = host.read_file(str(long_workbook))["partial"]
 
     assert "To read a range of rows, use run_python" in note
     assert note.index("run_python") < note.index("index_document")
@@ -131,7 +148,7 @@ def test_the_overview_says_how_to_read_a_range_when_code_can_run(host, long_work
 def test_a_tool_the_agent_lacks_is_not_named(host, long_workbook):
     host._tools_registry = {"read_file": {}}
 
-    note = host.read_file(str(long_workbook))["note"]
+    note = host.read_file(str(long_workbook))["partial"]
 
     assert "run_python" not in note and "index_document" not in note
 
@@ -146,7 +163,7 @@ def test_a_loaded_skills_tool_for_the_file_type_is_named_first(host, long_workbo
         ),
     }
 
-    note = host.read_file(str(long_workbook))["note"]
+    note = host.read_file(str(long_workbook))["partial"]
 
     assert "A loaded skill has a tool for .xlsx files; use it first" in note
     assert (
@@ -156,14 +173,25 @@ def test_a_loaded_skills_tool_for_the_file_type_is_named_first(host, long_workbo
     )
 
 
-def test_line_ranges_on_a_long_workbook_name_the_other_routes(host, long_workbook):
+def test_line_ranges_on_a_long_workbook_read_the_part_and_say_so(host, long_workbook):
     host._tools_registry = {"read_file": {}, "index_document": {}}
 
     result = host.read_file(str(long_workbook), start_line=1, end_line=5)
 
-    assert result["status"] == "error"
-    assert "too long to read in full" in result["error"]
-    assert "index_document" in result["error"]
+    assert result["status"] == "success", result
+    assert result["start_line"] == 1 and result["end_line"] == 5
+    assert "[Sheet: Wide]" in result["content"]
+    assert "This is not the whole file" in result["partial"]
+    assert "index_document" in result["partial"]
+
+
+def test_a_workbook_within_the_limit_has_no_partial_note(read_file, tmp_path):
+    path = _workbook(tmp_path / "small.xlsx", {"Only": [["a", "b"], [1, 2]]})
+
+    result = read_file(str(path))
+
+    assert result["status"] == "success", result
+    assert "partial" not in result and "sheet_sizes" not in result
 
 
 def test_a_long_workbook_is_measured_once(read_file, long_workbook, monkeypatch):

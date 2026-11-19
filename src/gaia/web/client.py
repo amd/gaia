@@ -350,28 +350,73 @@ def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
     )
 
 
-def _loopback_allowed_hosts() -> frozenset:
-    """Hostnames the operator has explicitly opted to allow on loopback.
+def is_local_ip(ip: "ipaddress._BaseAddress") -> bool:
+    """Whether ``ip`` is this PC or a private network, which the web tools read.
 
-    Off by default. ``GAIA_WEB_ALLOWED_HOSTS`` (comma-separated) is a trusted
-    automated-testing affordance — the eval's fixture HTTP server runs on
-    127.0.0.1 and the SSRF guard would otherwise (correctly) refuse it. It only
-    ever permits *loopback* for a host the operator named; every other address
-    that name resolves to still goes through the block list. Nothing about the
-    default production posture changes.
+    A cloud-metadata or link-local address is never one: it stays blocked,
+    with the reserved, multicast and unspecified ranges.
+    """
+    from gaia.agents.base.denied_effects import is_cloud_metadata_host
+
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    if (
+        is_cloud_metadata_host(str(ip))
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_unspecified
+    ):
+        return False
+    if ip.is_loopback:
+        return True
+    if ip.is_reserved:
+        return False
+    return ip.is_private or (ip.version == 4 and ip in CGNAT_NETWORK)
+
+
+#: Per thread: host to address for each local address a fetch was let reach.
+_LOCAL_REACHED = threading.local()
+
+
+def _note_local_address(hostname: str, ip: "ipaddress._BaseAddress") -> None:
+    reached = getattr(_LOCAL_REACHED, "hosts", None)
+    if reached is None:
+        reached = _LOCAL_REACHED.hosts = {}
+    reached[hostname] = str(ip)
+
+
+def take_local_addresses() -> Dict[str, str]:
+    """Host to address for each local or private address this thread's fetches
+    reached since the last call, a redirect's included; the record is cleared.
+
+    A host named in ``GAIA_WEB_ALLOWED_HOSTS`` is never reported.
+    """
+    reached = getattr(_LOCAL_REACHED, "hosts", None) or {}
+    _LOCAL_REACHED.hosts = {}
+    return reached
+
+
+def _loopback_allowed_hosts() -> frozenset:
+    """Hostnames the operator named in ``GAIA_WEB_ALLOWED_HOSTS`` (comma-separated).
+
+    A fetch of loopback through one of them carries no local-address warning:
+    the eval's fixture HTTP server runs on 127.0.0.1 and the operator said so.
     """
     raw = os.environ.get("GAIA_WEB_ALLOWED_HOSTS", "")
     return frozenset(h.strip() for h in raw.split(",") if h.strip())
 
 
-def _assert_ip_allowed(ip_str: str, hostname: str) -> None:
-    """Raise ValueError if ``ip_str`` is a private/reserved address.
+def _assert_ip_allowed(ip_str: str, hostname: str, allow_local: bool = False) -> None:
+    """Raise ValueError if ``ip_str`` is an address that must not be fetched.
 
-    The single authority for "is this IP safe to connect to". Both
+    The single authority for "may this IP be connected to". Both
     ``WebClient.validate_url`` (pre-flight DNS check) and
     ``PinnedIPAdapter`` (the IP it actually connects to) route through this,
-    so a DNS rebind that slips a private IP past the pre-flight lookup is
-    still caught at connect time on the *exact* address being dialed.
+    so a DNS rebind is judged at connect time on the *exact* address being
+    dialed. With *allow_local*, as the web client passes, this PC and private
+    network addresses (:func:`is_local_ip`) are let through; cloud-metadata,
+    link-local and reserved addresses never are.
     """
     try:
         ip = ipaddress.ip_address(ip_str)
@@ -388,13 +433,27 @@ def _assert_ip_allowed(ip_str: str, hostname: str) -> None:
     # metadata endpoint to any allowlisted name.
     if hostname in _loopback_allowed_hosts() and ip.is_loopback:
         return
+    if allow_local and is_local_ip(ip):
+        _note_local_address(hostname, ip)
+        return
     if _is_blocked_ip(ip):
         raise BlockedHostError(
-            f"Blocked: {hostname} resolves to private/reserved IP {ip}. "
-            "Cannot fetch internal network addresses.",
-            hostname,
-            str(ip),
+            _blocked_message(hostname, ip, allow_local), hostname, str(ip)
         )
+
+
+def _blocked_message(
+    hostname: str, ip: "ipaddress._BaseAddress", allow_local: bool
+) -> str:
+    if allow_local:
+        return (
+            f"Blocked: {hostname} resolves to {ip}, a cloud-metadata, link-local "
+            "or reserved address. The web tools do not fetch those."
+        )
+    return (
+        f"Blocked: {hostname} resolves to private/reserved IP {ip}. "
+        "Cannot fetch internal network addresses."
+    )
 
 
 # Tags to remove during text extraction
@@ -503,7 +562,7 @@ class PinnedIPAdapter(HTTPAdapter):
         # rebind could hand validate_url a public IP and hand us a private one.
         # Re-check here so the address actually dialed is always safe; cache
         # only after it passes so a poisoned answer is never reused.
-        _assert_ip_allowed(ip, host)
+        _assert_ip_allowed(ip, host, allow_local=True)
         self._pinned_cache[key] = ip
         return ip
 
@@ -829,13 +888,17 @@ class WebClient:
 
     # -- URL Validation (SSRF Prevention) ------------------------------------
 
-    def validate_url(self, url: str) -> str:
+    def validate_url(self, url: str, allow_local: bool = False) -> str:
         """Validate URL is safe to fetch. Raises ValueError if not.
 
         Checks:
         1. Scheme is http or https only
         2. Port is not in blocked set
         3. Resolved IP is not private/loopback/link-local/reserved
+
+        With *allow_local*, as this client's own fetches pass, an address on
+        this PC or a private network passes check 3 (:func:`is_local_ip`).
+        Other callers use this as their "public web only" check.
         """
         parsed = urlparse(url)
 
@@ -853,12 +916,17 @@ class WebClient:
             raise ValueError(f"Blocked port: {port}")
 
         # Resolve and validate IP
-        self._validate_host_ip(hostname)
+        self._validate_host_ip(hostname, allow_local)
 
         return url
 
-    def _validate_host_ip(self, hostname: str) -> None:
-        """Resolve hostname and check IP is not private/internal."""
+    def _validate_host_ip(self, hostname: str, allow_local: bool = False) -> None:
+        """Resolve hostname and check no address it gives is blocked.
+
+        With *allow_local*, an address on this PC or a private network passes,
+        and is kept for :func:`take_local_addresses`, unless the operator
+        named the host.
+        """
         allowed = hostname in _loopback_allowed_hosts()
         try:
             results = socket.getaddrinfo(hostname, None)
@@ -872,15 +940,16 @@ class WebClient:
             except ValueError:
                 continue
 
-            # Opt-in affordance: loopback ONLY, for a named host (see
-            # ``_assert_ip_allowed`` for why not ``is_private``).
             if allowed and ip.is_loopback:
+                continue
+
+            if allow_local and is_local_ip(ip):
+                _note_local_address(hostname, ip)
                 continue
 
             if _is_blocked_ip(ip):
                 raise BlockedHostError(
-                    f"Blocked: {hostname} resolves to private/reserved IP {ip}. "
-                    "Cannot fetch internal network addresses.",
+                    _blocked_message(hostname, ip, allow_local),
                     hostname,
                     str(ip),
                 )
@@ -962,7 +1031,7 @@ class WebClient:
         100 GB) can't OOM the process by the time a caller touches
         ``response.text``.
         """
-        self.validate_url(url)
+        self.validate_url(url, allow_local=True)
 
         domain = urlparse(url).hostname
         self._rate_limit_wait(domain)
@@ -1031,7 +1100,7 @@ class WebClient:
             # IP), close the current streamed response FIRST so we don't
             # leak the connection / file descriptor on the validation error.
             try:
-                self.validate_url(redirect_url)
+                self.validate_url(redirect_url, allow_local=True)
             except Exception:
                 response.close()
                 raise
@@ -1325,7 +1394,7 @@ class WebClient:
         """
         max_size = max_size or self._max_download_size
 
-        self.validate_url(url)
+        self.validate_url(url, allow_local=True)
         domain = urlparse(url).hostname
         self._rate_limit_wait(domain)
         with _Deadline(self._download_deadline, url, "download") as deadline:
@@ -1354,7 +1423,7 @@ class WebClient:
             if not redirect_url:
                 break
             redirect_url = urljoin(url, redirect_url)
-            self.validate_url(redirect_url)
+            self.validate_url(redirect_url, allow_local=True)
             response.close()
             response = self._send_hop(
                 deadline,

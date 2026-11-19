@@ -500,3 +500,9 @@ class TestOperationKey:
     )
     def test_keys(self, tool_name, args, expected):
         assert MemoryMixin._operation_key(tool_name, args) == expected
+
+
+@pytest.fixture(autouse=True)
+def _reads_are_confined(confined_reads):
+    """These tests pin the rule a GAIA_ALLOWED_PATHS session keeps: a read is
+    held to the allowed folders, and asked about outside them."""

@@ -682,3 +682,9 @@ def test_every_named_folder_is_granted_when_approved(layout, home):
     assert len(named) == 4
     for folder in named:
         assert "Access denied" not in _browse(agent, folder)
+
+
+@pytest.fixture(autouse=True)
+def _reads_are_confined(confined_reads):
+    """These tests pin the rule a GAIA_ALLOWED_PATHS session keeps: a read is
+    held to the allowed folders, and asked about outside them."""

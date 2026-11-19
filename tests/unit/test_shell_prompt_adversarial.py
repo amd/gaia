@@ -542,10 +542,10 @@ def scoped(repo, monkeypatch):
 @pytest.mark.parametrize(
     "command",
     [
-        "cat ../notes.txt",
-        "cat ./../notes.txt",
-        "cat sub/../../notes.txt",
-        "cd .. && cat notes.txt",
+        "cp ../notes.txt copy.txt",
+        "cp ./../notes.txt copy.txt",
+        "cp sub/../../notes.txt copy.txt",
+        "cd .. && cp notes.txt copy.txt",
     ],
 )
 def test_an_outside_path_is_named_on_the_prompt_before_anything_runs(scoped, command):

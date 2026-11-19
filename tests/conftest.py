@@ -302,6 +302,17 @@ def mock_lemonade_client(mocker):
 
 
 @pytest.fixture
+def confined_reads(monkeypatch, tmp_path):
+    """A session ``GAIA_ALLOWED_PATHS`` confines, with the test's own scope kept.
+
+    Only such a session holds a read to the allowed folders and asks before one
+    outside them. The variable names the whole drive, so nothing is narrowed:
+    each validator's own allowed paths stay the scope under test.
+    """
+    monkeypatch.setenv("GAIA_ALLOWED_PATHS", tmp_path.anchor)
+
+
+@pytest.fixture
 def reload_module():
     """Reload a module for this test only, then put its original objects back.
 

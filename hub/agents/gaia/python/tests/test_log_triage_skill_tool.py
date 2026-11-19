@@ -124,6 +124,7 @@ def test_the_entity_list_is_written_through_the_agents_write_scope(agent, worksp
     assert result["next_step"].startswith(f"{target} is the anomalous-entity list")
 
 
+@pytest.mark.usefixtures("confined_reads")
 def test_a_log_outside_the_allowed_folders_is_refused(agent, tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()

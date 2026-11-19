@@ -1842,34 +1842,91 @@ class PathValidator:
         return sorted(found)
 
     def validate_read(self, path: str, prompt_user: bool = True) -> Tuple[bool, str]:
-        """Allowlist + sensitive-file check for a read.
+        """Whether *path* may be read. A read is never asked about.
 
-        An out-of-scope path that does not exist is refused as not found
-        rather than offered for approval (see :meth:`_missing_instead_of_prompt`).
+        Refused: a file that holds secrets (:meth:`is_read_blocked`), GAIA's
+        own settings folder outside the session's folders, a folder the user
+        removed from this chat, and, in a session ``GAIA_ALLOWED_PATHS``
+        confines, a path outside the allowed folders. Anything else is
+        readable wherever it is; :meth:`outside_folders_note` gives the note
+        for a read outside the session's folders.
 
         Args:
             path: File path to validate for reading.
-            prompt_user: Whether to prompt the user when the path is out of scope.
+            prompt_user: Only used in a confined session, where a path inside
+                ``GAIA_ALLOWED_PATHS`` but outside the allowed folders is
+                still offered for approval.
 
         Returns:
             Tuple of (is_allowed, reason). If not allowed, reason explains why.
         """
         if self.withheld_root(path) is not None:
             return (False, self.access_denied_message(path))
-        if not self._in_read_only_scope(path) and not self.is_path_allowed(
-            path, prompt_user=False
-        ):
-            missing = self._missing_instead_of_prompt(path) if prompt_user else ""
-            if missing:
-                return (False, missing)
-            if not prompt_user or not self.is_path_allowed(path, prompt_user=True):
-                return (False, self.access_denied_message(path))
+        if self._env_scope is not None:
+            refusal = self._confined_read_refusal(path, prompt_user)
+        else:
+            refusal = self._gaia_state_read_refusal(path)
+        if refusal:
+            return (False, refusal)
 
         is_blocked, reason = self.is_read_blocked(path)
         if is_blocked:
             return (False, reason)
 
         return (True, "")
+
+    def _confined_read_refusal(self, path: str, prompt_user: bool) -> str:
+        """Why a ``GAIA_ALLOWED_PATHS`` session may not read *path*, or "".
+
+        An out-of-scope path that does not exist is refused as not found
+        rather than offered for approval (see :meth:`_missing_instead_of_prompt`).
+        """
+        if self._in_read_only_scope(path) or self.is_path_allowed(
+            path, prompt_user=False
+        ):
+            return ""
+        missing = self._missing_instead_of_prompt(path) if prompt_user else ""
+        if missing:
+            return missing
+        if prompt_user and self.is_path_allowed(path, prompt_user=True):
+            return ""
+        return self.access_denied_message(path)
+
+    def _gaia_state_read_refusal(self, path: str) -> str:
+        """Why *path* in GAIA's own folder may not be read, or "".
+
+        That folder holds GAIA's settings, keys and other chats' data. A
+        session reads only the parts it was given: its own folders, the
+        transcripts and generated images.
+        """
+        if self._in_read_only_scope(path) or self.is_path_allowed(
+            path, prompt_user=False
+        ):
+            return ""
+        real = Path(_real_path(path))
+        for state_dir in GAIA_STATE_DIRECTORIES | _gaia_state_dirs():
+            if _path_is_within(real, Path(_real_path(state_dir))):
+                return self.access_denied_message(path)
+        return ""
+
+    def outside_folders_note(self, path: str) -> str:
+        """The note for a read of *path* outside this session's folders, or "".
+
+        Args:
+            path: A path :meth:`validate_read` allowed.
+
+        Returns:
+            One sentence for the tool result, or "" when *path* is in an
+            allowed or read-only folder.
+        """
+        if self._in_read_only_scope(path) or self.is_path_allowed(
+            path, prompt_user=False
+        ):
+            return ""
+        return (
+            f"'{path}' is outside this session's folders. Reading it is fine; "
+            "changing a file there asks the user first."
+        )
 
     # ── Write Guardrails ──────────────────────────────────────────────
 

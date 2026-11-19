@@ -131,6 +131,7 @@ def test_declining_the_write_grants_nothing_and_asks_nothing_else(layout):
     assert not agent.path_validator.is_path_allowed(str(target), prompt_user=False)
 
 
+@pytest.mark.usefixtures("confined_reads")
 def test_a_folder_declined_this_turn_refuses_the_write_without_asking(layout):
     """Asking to approve a write the folder denial would block is a dead prompt."""
     console = _RecordingConsole(False)

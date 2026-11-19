@@ -284,8 +284,8 @@ class SDToolsMixin:
             ) -> Dict[str, Any]:
                 """Generate a GLB 3D model from a local image.
 
-                The image must be inside the host's allowed folders and the TRELLIS
-                model must already be downloaded in Lemonade. The output is saved
+                The image is a local file and the TRELLIS model must already be
+                downloaded in Lemonade. The output is saved
                 beside generated images and is never silently downloaded.
                 """
                 from gaia.agents.tools.path_access import read_access_error
@@ -371,7 +371,7 @@ class SDToolsMixin:
                 versions of an image they already have.
 
                 Args:
-                    image_path: Path to a local PNG inside the allowed folders.
+                    image_path: Path to a local PNG.
                     model: Image model; omit for Flux-2-Klein-4B.
                     size: Output size as WIDTHxHEIGHT, e.g. 512x512.
                     n: Number of variations, 1-10.

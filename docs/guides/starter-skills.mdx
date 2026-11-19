@@ -585,8 +585,8 @@ reference of its own.
 - **Provides** — `office-docs/verify_workbook` and
   `office-docs/verify_document`, from the skill's `tools.py`.
 - **Configure** — nothing. Ask for a spreadsheet or a Word report.
-- **Note** — neither tool ever writes the file, and both read only files
-  inside the agent's allowed folders.
+- **Note** — neither tool ever writes the file. Both read any file the agent
+  may read, wherever it is.
 
   `office-docs/verify_workbook` recalculates a copy of the workbook with
   LibreOffice when it is installed and reports formula errors, circular

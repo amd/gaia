@@ -64,8 +64,9 @@ def _outside(tree, form):
     return str(outside)
 
 
+@pytest.mark.usefixtures("confined_reads")
 @pytest.mark.parametrize("form", ["direct", "dotdot", "symlink"])
-def test_list_files_outside_is_refused(tree, chat, form):
+def test_list_files_outside_is_refused_in_a_confined_session(tree, chat, form):
     _, registry = chat
 
     result = registry["list_files"]["function"](path=_outside(tree, form))
@@ -73,6 +74,18 @@ def test_list_files_outside_is_refused(tree, chat, form):
     assert result["status"] == "error"
     assert "not in allowed paths" in result["error"]
     assert "files" not in result
+
+
+@pytest.mark.parametrize("form", ["direct", "dotdot"])
+def test_list_files_outside_lists_without_asking(tree, chat, form):
+    agent, registry = chat
+    agent.path_validator.set_access_prompt(
+        lambda path: pytest.fail(f"a listing asked for access to {path}")
+    )
+
+    result = registry["list_files"]["function"](path=_outside(tree, form))
+
+    assert result["status"] == "success", result
 
 
 def test_list_files_inside_lists(tree, chat):
@@ -126,4 +139,6 @@ def test_is_path_allowed_refuses_a_secret_inside_the_scope(tree):
 
     assert agent._is_path_allowed(str(allowed / "notes.txt"))
     assert not agent._is_path_allowed(str(allowed / ".env"))
-    assert not agent._is_path_allowed(str(Path(allowed).parent / "outside"))
+    # A read is not held to the scope; a secret outside it is still refused.
+    assert agent._is_path_allowed(str(Path(allowed).parent / "outside"))
+    assert not agent._is_path_allowed(str(Path(allowed).parent / "outside" / ".env"))

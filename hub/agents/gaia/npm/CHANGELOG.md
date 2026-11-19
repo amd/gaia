@@ -8,6 +8,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **Reading never asks and is never refused for where the file is.**
+  `read_file`, folder listings, searches, `file_info`, indexing a document and
+  read-only shell commands used to stop and ask for access to a path outside
+  the chat's folders, and were refused when nobody could answer. They now run.
+  `read_file` adds a one-line warning when the file is outside the chat's
+  folders. Read-only commands run unasked wherever they read, and the list is
+  longer: `git status`, `git diff`, `git show`, a recursive `grep`, a dot-file,
+  `type`, `findstr`, `where`, `du`, `diff`, and `powershell -Command` with
+  `Get-Item`, `Get-ChildItem` or `Get-Content`. A PDF, workbook or deck with
+  more than 1,000,000 characters of text comes back as its first part, with a
+  note saying where it stops and how to read the rest, instead of an error or
+  an overview; a text file over the size limit comes back as its first page.
+  `fetch_page` reads an address on this PC or your local network and marks
+  the result as such. Still refused: files that hold credentials (`.env`,
+  private keys, `~/.ssh` and the like), GAIA's own settings folder, a folder
+  or document you removed from the chat, cloud-metadata addresses, and, when
+  `GAIA_ALLOWED_PATHS` is set, anything outside it. Writing outside the
+  chat's folders asks as before.
 - **Every chat on a PC embeds with one embedder, the GPU one.** The embedder
   was chosen per session, so a chat on the other device could clear all of
   memory's vectors. It is now one per PC, on an NPU PC too: FastFlowLM's NPU
@@ -124,9 +142,9 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   new for that call, a `NameError` adds that each call starts fresh, and a
   failed run says how to fix and re-run it without sending the code again.
 - `read_file` reads more without a detour. A .pptx comes back as slide text
-  with speaker notes. A workbook too long to read in full comes back as each
-  sheet's size and first rows, with how to read a range, instead of an error.
-  An .html file comes back as its text (`raw=true` for the markup).
+  with speaker notes. A workbook too long to read in full comes back as its
+  first part and each sheet's size, with how to read a range, instead of an
+  error. An .html file comes back as its text (`raw=true` for the markup).
   `start_line` with `limit` reads that many lines, and a `start_line` of 0 is
   the first line. When a loaded skill has a tool for the file's type, the
   result names it before `index_document`.

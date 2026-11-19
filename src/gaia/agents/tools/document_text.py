@@ -40,8 +40,11 @@ DEFAULT_READ_CHARS = 20000
 #: Past this many reads, a document gets a hint that retrieval is cheaper.
 FULL_READ_MAX_READS = 3
 
-#: Extraction stops here; a longer document is for index_document.
+#: Extraction stops here; a longer document is read up to this point.
 MAX_EXTRACT_CHARS = 1_000_000
+
+#: Metadata key saying where extraction stopped in a document past the limit.
+STOPPED_AT = "stopped_at"
 
 #: A character ``limit`` this small is almost always meant as a line count.
 SMALL_LIMIT_CHARS = 1000
@@ -49,19 +52,9 @@ SMALL_LIMIT_CHARS = 1000
 #: Extracted documents kept per agent, so paging does not re-parse the file.
 _CACHE_ENTRIES = 8
 
-#: What a too-long workbook's overview shows of each sheet, and of how many.
-OVERVIEW_ROWS = 5
-OVERVIEW_COLUMNS = 12
-OVERVIEW_CELL_CHARS = 40
-OVERVIEW_SHEETS = 40
-
 #: Most loaded-skill tools one hint names.
 _MAX_SKILL_TOOLS = 3
 _PATH_PARAMS = ("file_path", "path")
-
-
-class DocumentTooLong(ValueError):
-    """The document's text is past ``MAX_EXTRACT_CHARS``."""
 
 
 def read_budget(host: Any) -> int:
@@ -157,20 +150,22 @@ def index_only_error(path: str, host: Any = None) -> Optional[Dict[str, Any]]:
     }
 
 
-def _too_long(path: str) -> DocumentTooLong:
-    return DocumentTooLong(
-        f"{os.path.basename(path)} has more than {MAX_EXTRACT_CHARS:,} characters "
-        "of text, too long to read in full."
-    )
+def partial_document_note(host: Any, path: str, meta: Mapping) -> Optional[str]:
+    """What is missing from a document read only up to the limit, else ``None``.
 
-
-def too_long_error(host: Any, path: str, error: DocumentTooLong) -> Dict[str, Any]:
-    """A too-long document's error, with the other ways to read it."""
-    return {
-        "status": "error",
-        "file_path": path,
-        "error": f"{error} {other_routes(host, path)}".strip(),
-    }
+    Says where the text stops, that the totals count only that part, and the
+    other ways to read the rest.
+    """
+    stopped = meta.get(STOPPED_AT)
+    if not stopped:
+        return None
+    ranges = document_type(path) == "xlsx"
+    return (
+        f"This is not the whole file: read_file extracts the first "
+        f"{MAX_EXTRACT_CHARS:,} characters of a document, which end at "
+        f"{stopped}. Character and line totals count only that part. "
+        f"{other_routes(host, path, ranges=ranges)}"
+    ).strip()
 
 
 def _pptx_text(path: str) -> Tuple[str, Dict[str, Any]]:
@@ -204,7 +199,8 @@ def _pptx_text(path: str) -> Tuple[str, Dict[str, Any]]:
             "or not a .pptx presentation."
         ) from e
 
-    parts, size, unread = [], 0, 0
+    parts, size, unread, stopped = [], 0, 0, None
+    total = len(deck.slides)
     for number, slide in enumerate(deck.slides, 1):
         text = extract_text_from_slide(slide, number).strip()
         notes = extract_notes_from_slide(slide)
@@ -218,100 +214,18 @@ def _pptx_text(path: str) -> Tuple[str, Dict[str, Any]]:
             part += f"\n[Notes]\n{notes}"
         parts.append(part)
         size += len(part) + 2
-        if size > MAX_EXTRACT_CHARS:
-            raise _too_long(path)
-    meta: Dict[str, Any] = {"slides": len(parts)}
+        if size > MAX_EXTRACT_CHARS and number < total:
+            stopped = f"slide {number} of {total}"
+            break
+    meta: Dict[str, Any] = {"slides": total}
+    if stopped:
+        meta[STOPPED_AT] = stopped
     if unread:
         meta["warning"] = (
             f"{unread} chart(s) or picture(s) are not in this text: it holds "
             "the slides' words, tables and speaker notes only."
         )
     return "\n\n".join(parts), meta
-
-
-def _clip_cell(value: Any) -> str:
-    text = "" if value is None else " ".join(str(value).split())
-    if len(text) > OVERVIEW_CELL_CHARS:
-        return text[: OVERVIEW_CELL_CHARS - 1] + "\u2026"
-    return text
-
-
-def workbook_overview(path: str, max_chars: int) -> Tuple[str, List[Dict[str, Any]]]:
-    """Each sheet's name, size and first rows, in at most about *max_chars*.
-
-    For a workbook too long to read in full: enough to see what is where and
-    ask for the part that matters. Sizes are the ones the file records;
-    ``None`` when it records none.
-    """
-    try:
-        import openpyxl  # pylint: disable=import-outside-toplevel
-    except ImportError as e:
-        raise ImportError(
-            "Reading Excel text requires openpyxl. " + missing_package_hint("openpyxl")
-        ) from e
-    try:
-        book = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    except Exception as e:
-        raise ValueError(
-            f"Could not read Excel file {os.path.basename(path)}: {e}. It may "
-            "be corrupted or not an .xlsx workbook."
-        ) from e
-    try:
-        sheets, parts, size = [], [], 0
-        for index, sheet in enumerate(book.worksheets):
-            rows, columns = sheet.max_row, sheet.max_column
-            sheets.append({"sheet": sheet.title, "rows": rows, "columns": columns})
-            shape = (
-                f"{rows:,} rows x {columns:,} columns"
-                if rows and columns
-                else "size not recorded in the file"
-            )
-            block = [f"[Sheet: {sheet.title}] {shape}"]
-            if index < OVERVIEW_SHEETS and size < max_chars:
-                shown = 0
-                for row in sheet.iter_rows(values_only=True):
-                    cells = [_clip_cell(cell) for cell in row]
-                    while cells and not cells[-1]:
-                        cells.pop()
-                    if not cells:
-                        continue
-                    more = len(cells) - OVERVIEW_COLUMNS
-                    line = " | ".join(cells[:OVERVIEW_COLUMNS])
-                    if more > 0:
-                        line += f" | \u2026 (+{more} more columns)"
-                    block.append(line)
-                    shown += 1
-                    if shown == OVERVIEW_ROWS:
-                        break
-            text = "\n".join(block)
-            parts.append(text)
-            size += len(text) + 2
-        return "\n\n".join(parts), sheets
-    finally:
-        book.close()
-
-
-def _workbook_overview_result(
-    host: Any, path: str, error: DocumentTooLong
-) -> Dict[str, Any]:
-    """What a too-long workbook holds, in place of an error that says only that."""
-    try:
-        overview, sheets = workbook_overview(path, read_budget(host))
-    except (ImportError, ValueError) as e:
-        return {"status": "error", "file_path": path, "error": str(e)}
-    return {
-        "status": "success",
-        "file_path": path,
-        "file_type": "xlsx",
-        # Not "content": this is not the file's text, and no read-back of it.
-        "overview": overview,
-        "sheets": len(sheets),
-        "sheet_sizes": sheets,
-        "note": (
-            f"{error} This is each sheet's size and its first rows, not the "
-            f"data. {other_routes(host, path, ranges=True)}"
-        ).strip(),
-    }
 
 
 def _pdf_text(path: str) -> Tuple[str, Dict[str, Any]]:
@@ -356,21 +270,26 @@ def _read_pdf_pages(path: str) -> Tuple[str, Dict[str, Any]]:
             f"{name} is password-protected. Ask the user for an unlocked copy."
         )
 
-    pages, size, has_text = [], 0, False
+    pages, size, has_text, stopped = [], 0, False, None
+    total = len(reader.pages)
     for number, page in enumerate(reader.pages, 1):
         text = (page.extract_text() or "").strip()
         has_text = has_text or bool(text)
         pages.append(f"[Page {number}]\n{text}")
         size += len(pages[-1]) + 2
-        if size > MAX_EXTRACT_CHARS:
-            raise _too_long(path)
+        if size > MAX_EXTRACT_CHARS and number < total:
+            stopped = f"page {number} of {total}"
+            break
     if not has_text:
         raise ValueError(
             f"{name} has {len(pages)} page(s) but no text layer — it is probably "
             "a scan. index_document can read it with the vision model, if one is "
             "installed."
         )
-    return "\n\n".join(pages), {"pages": len(pages)}
+    meta: Dict[str, Any] = {"pages": total}
+    if stopped:
+        meta[STOPPED_AT] = stopped
+    return "\n\n".join(pages), meta
 
 
 def _xlsx_text(path: str) -> Tuple[str, Dict[str, Any]]:
@@ -398,11 +317,13 @@ def _xlsx_text(path: str) -> Tuple[str, Dict[str, Any]]:
         values.close()
         raise
     try:
-        parts, size, uncomputed = [], 0, 0
+        parts, size, uncomputed, stopped = [], 0, 0, None
         for sheet, source in zip(values.worksheets, formulas.worksheets):
+            if stopped:
+                break
             parts.append(f"[Sheet: {sheet.title}]")
             rows = zip(sheet.iter_rows(values_only=True), source.iter_rows())
-            for row, cells_in in rows:
+            for number, (row, cells_in) in enumerate(rows, 1):
                 for value, cell in zip(row, cells_in):
                     if value is None and getattr(cell, "data_type", None) == "f":
                         uncomputed += 1
@@ -413,8 +334,16 @@ def _xlsx_text(path: str) -> Tuple[str, Dict[str, Any]]:
                     parts.append(" | ".join(cells))
                     size += len(parts[-1]) + 1
                     if size > MAX_EXTRACT_CHARS:
-                        raise _too_long(path)
+                        stopped = f"row {number:,} of sheet '{sheet.title}'"
+                        break
         meta: Dict[str, Any] = {"sheets": len(values.worksheets)}
+        if stopped:
+            meta[STOPPED_AT] = stopped
+            # The sizes the file records, so the unread part can be asked for.
+            meta["sheet_sizes"] = [
+                {"sheet": s.title, "rows": s.max_row, "columns": s.max_column}
+                for s in values.worksheets
+            ]
         if uncomputed:
             # A workbook saved by a script has formulas but no computed values.
             meta["warning"] = (
@@ -436,8 +365,10 @@ def extract_document_text(path: str) -> Tuple[str, Dict[str, Any]]:
 
     Raises:
         ImportError: the format's parser is not installed.
-        ValueError: the file is unreadable, encrypted, has no text, or is too
-            long to read in full.
+        ValueError: the file is unreadable, encrypted or has no text.
+
+    A PDF, workbook or deck past ``MAX_EXTRACT_CHARS`` is read up to there,
+    and its metadata says where the text stops (``STOPPED_AT``).
     """
     kind = document_type(path)
     if kind == "pdf":
@@ -451,10 +382,7 @@ def extract_document_text(path: str) -> Tuple[str, Dict[str, Any]]:
             extract_docx_text,
         )
 
-        text = extract_docx_text(path)
-        if len(text) > MAX_EXTRACT_CHARS:
-            raise _too_long(path)
-        return text, {}
+        return extract_docx_text(path), {}
     raise ValueError(f"Not a .docx, .pdf, .xlsx or .pptx file: {path}")
 
 
@@ -469,16 +397,10 @@ def cached_document_text(host: Any, path: str) -> Tuple[str, Dict[str, Any]]:
         host._document_text_cache = cache
     entry = cache.pop(key, None)
     if entry is None:
-        try:
-            entry = extract_document_text(real)
-        except DocumentTooLong as too_long:
-            # Kept too: finding out again means parsing a million characters.
-            entry = too_long
+        entry = extract_document_text(real)
     cache[key] = entry
     while len(cache) > _CACHE_ENTRIES:
         cache.pop(next(iter(cache)))
-    if isinstance(entry, DocumentTooLong):
-        raise entry
     return entry
 
 
@@ -503,10 +425,6 @@ def read_document(
         }
     try:
         text, meta = cached_document_text(host, path)
-    except DocumentTooLong as e:
-        if kind == "xlsx":
-            return _workbook_overview_result(host, path, e)
-        return too_long_error(host, path, e)
     except (ImportError, ValueError) as e:
         return {"status": "error", "file_path": path, "error": str(e)}
     return _text_part(host, path, kind, text, meta, offset, limit)
@@ -617,8 +535,11 @@ def _text_part(
         "offset": offset,
         "total_chars": total,
         "next_offset": end if end < total else None,
-        **meta,
+        **{k: v for k, v in meta.items() if k != STOPPED_AT},
     }
+    partial = partial_document_note(host, path, meta)
+    if partial:
+        result["partial"] = partial
     if end < total:
         result["note"] = (
             f"Partial: characters {offset:,}-{end:,} of {total:,}. Call read_file "

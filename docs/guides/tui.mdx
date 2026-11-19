@@ -868,7 +868,7 @@ giving up on something you never saw.
 
 | Mode | What asks first |
 |---|---|
-| `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
+| `ask` (default) | Every shell command that is not a plain read, every Python run and file write. Reading a file, listing a folder, searching and read-only commands (`ls`, `cat`, `grep`, `git status`, `git diff`) never ask, wherever the files are |
 | `accept edits` | Shell commands and Python still ask. File edits inside the folder you started GAIA in run without asking. Hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on your `PATH`, and a file that would stand in for a real program on Windows (`git.bat`) still ask. Started from your home folder or a drive root, nothing is auto-accepted |
 | `full access` | Nothing — see below |
 
@@ -977,8 +977,9 @@ RUNS CODE  Run this command?
 ```
 
 The first line is a risk badge — `READ`, `WRITE`, `RUNS CODE` or
-`DESTRUCTIVE` — and the question. A prompt to let GAIA into a file or folder
-outside the chat's folders is headed `ACCESS`. Tools GAIA knows get a plain question (`Run
+`DESTRUCTIVE` — and the question. A prompt to let GAIA write to, or run
+something in, a file or folder outside the chat's folders is headed `ACCESS`;
+reading there never asks. Tools GAIA knows get a plain question (`Run
 this command?`, `Write this file?`, `Install this skill?`); any other tool reads
 `Allow <tool>?`. A `DESTRUCTIVE` prompt adds a warning line under the call.
 

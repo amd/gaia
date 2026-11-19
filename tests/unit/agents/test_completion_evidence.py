@@ -1487,6 +1487,7 @@ def test_a_named_file_that_links_outside_the_grant_is_never_probed(
     _assert_named_link_never_probed(ledger, validator, monkeypatch)
 
 
+@pytest.mark.usefixtures("confined_reads")
 def test_a_named_link_is_refused_even_where_symlinks_cannot_be_made(
     tmp_path, monkeypatch
 ):
@@ -1505,6 +1506,7 @@ def test_a_named_link_is_refused_even_where_symlinks_cannot_be_made(
     _assert_named_link_never_probed(ledger, validator, monkeypatch)
 
 
+@pytest.mark.usefixtures("confined_reads")
 def test_a_script_literal_outside_the_read_grant_is_never_probed(tmp_path):
     ledger, validator, report = _report_turn(tmp_path)
     other = report.parent / "other.md"

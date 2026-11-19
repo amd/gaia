@@ -108,6 +108,7 @@ class TestSensitiveReadsAreRefused:
 
         assert validator.validate_read(str(doc), prompt_user=False) == (True, "")
 
+    @pytest.mark.usefixtures("confined_reads")
     def test_out_of_scope_reads_say_what_to_do(self, validator, tmp_path):
         allowed, reason = validator.validate_read("/somewhere/else.txt", False)
 

@@ -306,3 +306,9 @@ def test_the_next_turn_asks_again(layout):
     agent.path_validator.validate_read(str(layout["pdf"]))
 
     assert len(console.asked) == 2
+
+
+@pytest.fixture(autouse=True)
+def _reads_are_confined(confined_reads):
+    """These tests pin the rule a GAIA_ALLOWED_PATHS session keeps: a read is
+    held to the allowed folders, and asked about outside them."""

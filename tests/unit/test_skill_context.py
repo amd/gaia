@@ -867,3 +867,9 @@ def test_the_audit_still_flags_a_raw_subprocess(tmp_path):
     body = "import subprocess\nsubprocess.run(['soffice'])\nreturn {}\n"
     skill_dir = _write_skill(tmp_path, "raw-probe", ["program:run:soffice"], body)
     assert audit_skill(skill_dir).verdict != "ALLOW"
+
+
+@pytest.fixture(autouse=True)
+def _reads_are_confined(confined_reads):
+    """These tests pin the rule a GAIA_ALLOWED_PATHS session keeps: a read is
+    held to the allowed folders, and asked about outside them."""

@@ -356,17 +356,17 @@ def test_strip_tls_host_brackets_ipv6_literal():
 # ============================================================================
 
 
-def test_adapter_blocks_rebind_when_pinned_ip_is_private(monkeypatch):
-    """The adapter's own resolution returns a private IP — pinning
+def test_adapter_blocks_rebind_when_pinned_ip_is_cloud_metadata(monkeypatch):
+    """The adapter's own resolution returns the cloud-metadata IP — pinning
     must reject it rather than caching/dialing it.
 
     ``_resolve_first_ip`` performs a single ``getaddrinfo``, so the fixture
-    returns the rebound private IP directly: the contract under test is that
+    returns the rebound IP directly: the contract under test is that
     the adapter validates the exact address it is about to pin/dial.
     """
 
     def fake_getaddrinfo(host, port, *args, **kwargs):
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", port))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", port))]
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
@@ -375,17 +375,31 @@ def test_adapter_blocks_rebind_when_pinned_ip_is_private(monkeypatch):
     with patch.object(
         PinnedIPAdapter.__bases__[0], "send", side_effect=AssertionError("connected!")
     ):
-        with pytest.raises(ValueError, match="private/reserved IP"):
+        with pytest.raises(ValueError, match="cloud-metadata, link-local or reserved"):
             adapter._resolve_first_ip("example.local", 80)
 
     # Poisoned IP must NOT be cached — a later safe lookup should be retryable.
     assert ("example.local", 80) not in adapter._pinned_cache
 
 
-def test_full_request_blocked_when_rebind_returns_private_ip(monkeypatch):
+def test_adapter_pins_a_private_ip_and_notes_it(monkeypatch):
+    """A private address is read, and kept for the result's warning."""
+    from gaia.web.client import take_local_addresses
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    take_local_addresses()
+
+    assert PinnedIPAdapter()._resolve_first_ip("nas.lan", 80) == "10.0.0.5"
+    assert take_local_addresses() == {"nas.lan": "10.0.0.5"}
+
+
+def test_full_request_blocked_when_rebind_returns_the_metadata_ip(monkeypatch):
     """End-to-end through WebClient.get: validate_url's resolution returns a
-    public IP (passes the pre-flight), but the adapter's resolution returns a
-    private IP. The fetch must raise and NEVER reach the transport."""
+    public IP (passes the pre-flight), but the adapter's resolution returns
+    the cloud-metadata IP. The fetch must raise and NEVER reach the transport."""
     calls = {"count": 0}
 
     def fake_getaddrinfo(host, port=None, *args, **kwargs):
@@ -394,7 +408,9 @@ def test_full_request_blocked_when_rebind_returns_private_ip(monkeypatch):
         # Call 2 = PinnedIPAdapter._resolve_first_ip (rebound to private).
         if calls["count"] == 1:
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 0))]
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", port or 0))]
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", port or 0))
+        ]
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
@@ -405,9 +421,11 @@ def test_full_request_blocked_when_rebind_returns_private_ip(monkeypatch):
         with patch.object(
             PinnedIPAdapter.__bases__[0],
             "send",
-            side_effect=AssertionError("transport reached private IP"),
+            side_effect=AssertionError("transport reached the metadata IP"),
         ):
-            with pytest.raises(ValueError, match="private/reserved IP"):
+            with pytest.raises(
+                ValueError, match="cloud-metadata, link-local or reserved"
+            ):
                 client.get("http://rebind.example/path")
     finally:
         client.close()

@@ -450,7 +450,7 @@ def test_a_refusal_without_a_route_still_offers_approval(_isolated):
 def test_the_refusal_never_names_a_tool_the_agent_lacks(_isolated):
     agent = _unattended(_isolated, file_tools=False)
 
-    error = _shell(agent, "type notes.txt")["error"]
+    error = _shell(agent, "git grep TODO")["error"]
 
     for missing in ("read_file", "browse_directory", "run_python"):
         assert missing not in error
@@ -487,19 +487,20 @@ WEB_CLAUSE = "web tools refuse to fetch"
 @pytest.mark.parametrize(
     "allowed, host, refused",
     [
-        ("", "127.0.0.1", True),
+        # The fetcher reads this PC and the local network, allowlisted or not.
+        ("", "127.0.0.1", False),
         ("127.0.0.1", "127.0.0.1", False),
         ("localhost", "localhost", False),
         ("localhost", "LOCALHOST", False),
         ("2130706433", "2130706433", False),
         ("::1", "[::1]", False),
-        # Allowlisting one spelling does not allow another.
-        ("localhost", "127.0.0.1", True),
-        ("127.0.0.1", "127.1", True),
-        # The allowlist only ever opens loopback.
-        ("10.0.0.5", "10.0.0.5", True),
+        ("localhost", "127.0.0.1", False),
+        ("127.0.0.1", "127.1", False),
+        ("", "10.0.0.5", False),
+        ("", "printer.local", False),
+        # A cloud-metadata address stays refused, and no allowlist opens it.
+        ("", "169.254.169.254", True),
         ("169.254.169.254", "169.254.169.254", True),
-        ("printer.local", "printer.local", True),
         (" 127.0.0.1 , other", "127.0.0.1", False),
         ("example.com", "example.com", False),
     ],
@@ -525,10 +526,10 @@ def test_the_card_names_the_refused_host_when_one_is(monkeypatch):
     monkeypatch.setenv("GAIA_WEB_ALLOWED_HOSTS", "127.0.0.1")
 
     note = private_fetch_note(
-        [("127.0.0.1", "this PC"), ("10.0.0.5", "your local network")]
+        [("127.0.0.1", "this PC"), ("169.254.169.254", "your local network")]
     )
 
-    assert "10.0.0.5" in note and WEB_CLAUSE in note
+    assert "169.254.169.254" in note and WEB_CLAUSE in note
 
 
 def test_an_allowlisted_curl_still_asks_but_makes_no_web_claim(_isolated, monkeypatch):
@@ -540,5 +541,6 @@ def test_an_allowlisted_curl_still_asks_but_makes_no_web_claim(_isolated, monkey
     blocked = _shell(agent, f"curl {FEED}")
 
     assert allowed["executed"] is False and blocked["executed"] is False
+    # The web tools read this PC either way, so neither card says they won't.
     assert WEB_CLAUSE not in allowed["error"]
-    assert WEB_CLAUSE in blocked["error"]
+    assert WEB_CLAUSE not in blocked["error"]

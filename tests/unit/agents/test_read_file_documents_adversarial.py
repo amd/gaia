@@ -175,7 +175,7 @@ def test_a_workbook_with_many_sheets_is_read_sheet_by_sheet(read_file, tmp_path)
     assert read_file(str(path))["status"] == "success"
 
 
-def test_a_workbook_past_the_text_cap_is_outlined_not_cut(
+def test_a_workbook_past_the_text_cap_is_read_up_to_it(
     read_file, tmp_path, monkeypatch
 ):
     openpyxl = pytest.importorskip("openpyxl")
@@ -192,28 +192,25 @@ def test_a_workbook_past_the_text_cap_is_outlined_not_cut(
 
     assert time.monotonic() - started < 60
     assert result["status"] == "success", result
-    # Its sheets and first rows under their own key, never as the file's text.
-    assert "content" not in result
-    assert "row 0 | 0 | 0" in result["overview"]
-    assert "row 5 |" not in result["overview"]
-    assert "too long to read in full" in result["note"]
+    assert "row 0 | 0 | 0" in result["content"]
+    # Extraction stopped at the cap: the total is the part read, not the file.
+    assert 20_000 < result["total_chars"] < 20_100
+    assert "This is not the whole file" in result["partial"]
+    assert "the first 20,000 characters" in result["partial"]
 
 
-@pytest.mark.parametrize("size, refused", [(0, False), (1, False), (2, True)])
-def test_the_text_cap_boundary(read_file, tmp_path, monkeypatch, size, refused):
-    """Exactly the cap is read; one character more is refused, never truncated."""
+@pytest.mark.parametrize("size", [0, 1, 2, 5000])
+def test_a_long_word_document_is_read_whole(read_file, tmp_path, monkeypatch, size):
+    """Its text is already extracted, so nothing is cut at the cap."""
     path = _docx(tmp_path / "edge.docx", ["placeholder"])
     text = "x" * (MAX_EXTRACT_CHARS - 1 + size)
     monkeypatch.setattr("gaia.rag.docx_utils.extract_docx_text", lambda _p: text)
 
     result = read_file(str(path))
 
-    if refused:
-        assert _is_clean_error(result), result
-        assert "index_document" in result["error"]
-    else:
-        assert result["status"] == "success", result
-        assert result["total_chars"] == len(text)
+    assert result["status"] == "success", result
+    assert result["total_chars"] == len(text)
+    assert "partial" not in result
 
 
 @pytest.mark.parametrize(

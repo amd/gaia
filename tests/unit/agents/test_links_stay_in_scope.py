@@ -248,7 +248,7 @@ def test_a_file_changing_refusal_points_to_the_file_tools(layout, command):
 def test_a_read_inside_the_allowed_folders_points_to_readers_and_python(layout):
     agent = _agent(layout)
 
-    error = _shell(agent, "type notes.txt")["error"]
+    error = _shell(agent, "git grep TODO")["error"]
 
     assert "read_file" in error and "browse_directory" in error
     assert "run_python to compute" in error
@@ -683,3 +683,9 @@ def test_mklink_keeps_a_slash_target_and_drops_only_its_switches(tmp_path, switc
 
     assert _norm_path("/etc", str(tmp_path)) in found
     assert _norm_path(switch, str(tmp_path)) not in found
+
+
+@pytest.fixture(autouse=True)
+def _reads_are_confined(confined_reads):
+    """These tests pin the rule a GAIA_ALLOWED_PATHS session keeps: a read is
+    held to the allowed folders, and asked about outside them."""
