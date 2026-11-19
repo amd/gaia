@@ -25,7 +25,7 @@ import { PanelSection } from './PanelSection';
 import { useAppear } from './appear';
 import { sameFile, type ChatDocument, type CommandState, type FocusFacet, type FocusKind, type LivePlan, type RanCommand } from './sessionFocus';
 import type { Message, Schedule } from '../../types';
-import type { MessageKey } from '../../i18n/registry';
+import type { MessageKey, MessageRef } from '../../i18n/registry';
 import { dateLocale, translator, useT } from '../../i18n/useT';
 
 const ICON = 14;
@@ -125,7 +125,7 @@ export function ScheduleSection({ schedules }: { schedules: Schedule[] }) {
     const t = useT();
     const setShowSchedules = useChatStore((s) => s.setShowSchedules);
     // The store keeps one error for every screen. This panel shows only how its own last action ended.
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<string | MessageRef | null>(null);
     // One action at a time across the rows: the store has a single error, so two at once could hide a failure.
     const [working, setWorking] = useState(false);
     if (schedules.length === 0) return null;
@@ -134,7 +134,7 @@ export function ScheduleSection({ schedules }: { schedules: Schedule[] }) {
             <ul className="sp-list" aria-label={t('sched.listLabel')}>
                 {schedules.map((schedule) => <ScheduleRow key={schedule.id} schedule={schedule} working={working} onWorking={setWorking} onSettled={setError} />)}
             </ul>
-            {error && <span className="sp-error" role="alert">{error}</span>}
+            {error && <span className="sp-error" role="alert">{typeof error === 'string' ? error : t(error.ref, error.params)}</span>}
             <button type="button" className="link-btn sp-more" onClick={() => setShowSchedules(true)}>
                 {t('sched.manage')}
             </button>
@@ -147,7 +147,7 @@ interface ScheduleRowProps {
     /** An action from this panel is in flight, on this row or another. */
     working: boolean;
     onWorking: (working: boolean) => void;
-    onSettled: (error: string | null) => void;
+    onSettled: (error: string | MessageRef | null) => void;
 }
 
 function ScheduleRow({ schedule, working, onWorking, onSettled }: ScheduleRowProps) {
