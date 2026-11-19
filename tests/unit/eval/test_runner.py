@@ -1372,6 +1372,58 @@ class TestModelRequirements:
         )
         assert missing == ["ffmpeg is not on PATH (tag requires_asr)"]
 
+    def test_image_and_music_tags_name_their_models(self):
+        missing = runner._missing_requirements(
+            {"tags": ["requires_sd", "requires_music"]}, set()
+        )
+        assert missing == [
+            f"{runner.SD_MODEL} is not downloaded on the Lemonade server (tag requires_sd)",
+            f"{runner.MUSIC_MODEL} is not downloaded on the Lemonade server "
+            "(tag requires_music)",
+        ]
+        assert (
+            runner._missing_requirements(
+                {"tags": ["requires_sd"]}, {runner.SD_MODEL, runner.MUSIC_MODEL}
+            )
+            == []
+        )
+
+    @pytest.mark.parametrize(
+        "model,tag,skipped",
+        [
+            ("Gemma-4-E4B-it-GGUF", "requires_full_tier", True),
+            ("Gemma-4-E4B-it-GGUF", "requires_compact_tier", False),
+            ("Qwen3.6-35B-A3B-GGUF", "requires_full_tier", False),
+            ("Qwen3.6-35B-A3B-GGUF", "requires_compact_tier", True),
+        ],
+    )
+    def test_tier_tags_follow_the_pinned_agent_model(
+        self, monkeypatch, model, tag, skipped
+    ):
+        from gaia.agents.base.model_features import TIER_ENV
+
+        monkeypatch.delenv(TIER_ENV, raising=False)
+        reasons = runner._tier_mismatch({"tags": [tag]}, model)
+        assert bool(reasons) is skipped
+        if skipped:
+            assert tag in reasons[0]
+
+    def test_tier_tags_follow_the_default_model_when_none_is_pinned(self, monkeypatch):
+        import gaia.llm.lemonade_client as lc
+        from gaia.agents.base.model_features import TIER_ENV
+
+        monkeypatch.delenv(TIER_ENV, raising=False)
+        monkeypatch.setattr(
+            lc, "resolve_default_chat_model", lambda: "Gemma-4-E4B-it-GGUF"
+        )
+        assert runner._tier_mismatch({"tags": ["requires_compact_tier"]}, None) == []
+        assert runner._tier_mismatch({"tags": ["requires_full_tier"]}, None)
+
+    def test_untagged_scenario_ignores_the_tier(self):
+        assert (
+            runner._tier_mismatch({"tags": ["t1_basic"]}, "Gemma-4-E4B-it-GGUF") == []
+        )
+
     def test_unreachable_lemonade_fails_loudly(self, monkeypatch):
         from gaia.llm.lemonade_client import LemonadeClient
 

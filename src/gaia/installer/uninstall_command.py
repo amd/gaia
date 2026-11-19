@@ -196,6 +196,7 @@ _USER_DATA_NAMES = (
     "seeder",
     "catalog-cache.json",
     "backend.pid",
+    "backend-pids",
 )
 
 

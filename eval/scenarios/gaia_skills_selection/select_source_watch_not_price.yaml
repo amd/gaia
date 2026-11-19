@@ -1,0 +1,40 @@
+# FIXTURE-SYNC: http://127.0.0.1:8765/observatory_v1.html / observatory_v2.html —
+# v2 adds one item: aurora watch alert issued for Friday night, Aug 28.
+id: select_source_watch_not_price
+name: "Skill Selection — Watching a Page for Notices Picks source-watch"
+category: gaia_skills_selection
+severity: high
+tags: [t2_compound, local_blocked_no_embedder]
+description: |
+  Watching a page for new notices overlaps price-watch and rss-digest. The
+  request is about new items on a page, not a price or a feed, so source-watch
+  is the fit.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  notes: "Every hub/skills skill ships with the flagship; fixture server on 127.0.0.1:8765. v1/v2 stand in for one page at two points in time."
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all). Then send this turn: ask the agent to watch the observatory page for new notices"
+    user_message: "can you watch this page and let me know when there are new notices? http://127.0.0.1:8765/observatory_v1.html"
+    ground_truth:
+      expected_behavior: "Loads source-watch, fetches the page, records what is already there as seen"
+    success_criteria: |
+      agent_tools[] shows load_skill("source-watch") and a fetch of the page.
+      FAIL if price-watch or rss-digest is loaded instead, or no skill is
+      loaded.
+
+  - turn: 2
+    objective: "Say the page updated (now at observatory_v2.html) and ask what's new"
+    user_message: "it updated — it's at http://127.0.0.1:8765/observatory_v2.html now. anything new?"
+    ground_truth:
+      expected_answer: "One new item: aurora watch alert issued for Friday night, Aug 28"
+    success_criteria: "Reports exactly the one new item from the v2 page. Re-reporting items already on v1 as new, or inventing items, is a FAIL."
+
+expected_outcome: |
+  source-watch is picked over the price and feed skills, and only the new item
+  is reported.

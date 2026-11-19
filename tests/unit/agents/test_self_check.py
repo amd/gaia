@@ -24,6 +24,7 @@ from gaia.agents.base.completion import CompletionEvidence
 from gaia.agents.base.self_check import (
     SELF_CHECK_TAG,
     mechanical_findings,
+    misplaced_findings,
     miss_note,
     quotes_figures,
     read_verdict,
@@ -411,6 +412,49 @@ def test_a_fix_after_the_check_brings_no_second_check(agent, tmp_path, caplog):
     assert "model_steps=3 tool_calls=2" in _log_lines(caplog)[-1]
 
 
+@pytest.mark.parametrize(
+    "verdict, note",
+    [
+        ("RESULT: PASS", None),
+        ("RESULT: MISS - the region column is not in totals.csv", "region column"),
+    ],
+)
+def test_a_fix_whose_reply_ends_with_a_verdict_is_the_answer(
+    agent, tmp_path, verdict, note
+):
+    _sales(tmp_path)
+    stale = "I totalled sales.csv into totals.csv: 2 rows in, total 3."
+    fixed = "I totalled sales.csv into totals.csv: 2 rows in, total 30 (corrected)."
+    _script(
+        agent,
+        _call("read_file", file_path="sales.csv"),
+        _call("write_file", file_path="totals.csv", content="total\n3\n"),
+        _call("read_file", file_path="totals.csv"),
+        {"answer": stale},
+        _call("write_file", file_path="totals.csv", content="total\n30\n"),
+        _call("read_file", file_path="totals.csv"),
+        {"answer": f"{fixed}\n{verdict}"},
+    )
+
+    result = agent.process_query(REQUEST, max_steps=12)
+
+    assert result["result"].startswith(fixed), result["result"]
+    assert "total 3." not in result["result"]
+    if note:
+        assert f"Not as requested: {verdict.split(' - ', 1)[1]}." in result["result"]
+    else:
+        assert "Not as requested" not in result["result"]
+
+
+def test_a_pass_with_no_work_after_the_check_keeps_the_answer(agent, tmp_path):
+    _sales(tmp_path)
+    _script(agent, *WORK, {"answer": "Looks right to me.\nRESULT: PASS"})
+
+    result = agent.process_query(REQUEST, max_steps=12)
+
+    assert result["result"] == ANSWER
+
+
 def test_a_short_acknowledgement_keeps_the_answer(agent, tmp_path):
     _sales(tmp_path)
     _script(agent, *WORK, {"answer": "All met."})
@@ -637,6 +681,84 @@ def test_text_saved_under_an_office_name_is_raised_not_fatal(tmp_path):
         "`deck.pptx` is not a presentation: it holds plain text under a .pptx "
         "name, so it will not open.",
     ]
+
+
+def test_a_parser_error_of_any_class_is_no_findings_not_a_crash(tmp_path):
+    """A reader that raises its own error class must not end the turn: the
+    check is advisory, so the file is logged and skipped."""
+    from gaia.agents.base import deliverables, self_check
+
+    class ParserError(Exception):
+        pass
+
+    def broken(_path):
+        raise ParserError("unexpected end of archive")
+
+    book = _book(tmp_path / "out.xlsx", {"Summary": [["a", 1]]})
+    with patch.object(deliverables, "_xlsx_blocks", broken):
+        assert deliverables.read_blocks(book) == []
+    with patch("openpyxl.load_workbook", broken):
+        assert self_check._sheets(book) is None
+        assert mechanical_findings("Build out.xlsx with a 'Totals' tab", [book]) == []
+
+
+def test_a_file_in_a_mistyped_copy_of_the_working_folder_is_raised(tmp_path):
+    """A retyped absolute path that lost a few characters makes a new folder:
+    the file exists, but not where the user looks."""
+    home = tmp_path / "runs" / "knowledgework-20261119-071118" / "kw-research"
+    slip = tmp_path / "runs" / "knowledgework-20261119" / "kw-research"
+    home.mkdir(parents=True)
+    slip.mkdir(parents=True)
+    report = slip / "answers.md"
+    report.write_text("# Answers\n", encoding="utf-8")
+    findings = misplaced_findings("Write answers.md", [str(report)], str(home))
+    assert len(findings) == 1
+    assert "`answers.md` was written to" in findings[0]
+    assert str(slip) in findings[0] and str(home) in findings[0]
+    assert mechanical_findings("Write answers.md", [str(report)], folder=str(home))
+
+
+def test_a_file_written_elsewhere_on_purpose_is_not_raised(tmp_path):
+    home = tmp_path / "project-v1"
+    home.mkdir()
+    # The working folder, a folder under it and a folder above it.
+    inside = home / "out" / "answers.md"
+    inside.parent.mkdir()
+    inside.write_text("x", encoding="utf-8")
+    above = tmp_path / "answers.md"
+    above.write_text("x", encoding="utf-8")
+    here = home / "answers.md"
+    here.write_text("x", encoding="utf-8")
+    assert misplaced_findings("", [str(inside), str(above), str(here)], str(home)) == []
+    # A sibling with a similar name that already held files: not made by the write.
+    sibling = tmp_path / "project-v2"
+    sibling.mkdir()
+    (sibling / "README.md").write_text("x", encoding="utf-8")
+    copy = sibling / "answers.md"
+    copy.write_text("x", encoding="utf-8")
+    assert misplaced_findings("", [str(copy)], str(home)) == []
+    # A new folder the request names.
+    named = tmp_path / "project-v3"
+    named.mkdir()
+    asked = named / "answers.md"
+    asked.write_text("x", encoding="utf-8")
+    request = f"Write answers.md into {named}"
+    assert misplaced_findings(request, [str(asked)], str(home)) == []
+    # A folder nothing like the working folder.
+    far = tmp_path / "exports" / "2026"
+    far.mkdir(parents=True)
+    other = far / "answers.md"
+    other.write_text("x", encoding="utf-8")
+    assert misplaced_findings("", [str(other)], str(home)) == []
+
+
+def test_a_self_check_that_raises_is_skipped_not_fatal(caplog):
+    """Whatever goes wrong while planning the check, the turn keeps its answer."""
+    agent = MagicMock(spec=Agent)
+    agent._build_self_check_plan.side_effect = RuntimeError("boom")
+    with caplog.at_level(logging.ERROR):
+        assert Agent._self_check_plan(agent) is None
+    assert "could not run" in caplog.text
 
 
 def test_an_empty_file_that_is_meant_to_be_empty_is_not_raised(tmp_path):
