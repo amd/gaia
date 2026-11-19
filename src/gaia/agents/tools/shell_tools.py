@@ -825,7 +825,8 @@ def _confirm_once(error: Dict[str, Any], note: str) -> Dict[str, Any]:
         "hint": error.get("hint")
         or (
             "It runs only if the user approves this exact command once. If "
-            "they decline, do not reach the same result another way."
+            "they decline, that command is off: do not run it through another "
+            "tool or script."
         ),
     }
 
@@ -7965,7 +7966,8 @@ class ShellToolsMixin:
                 "has_errors": True,
                 "hint": (
                     "It runs once the user approves it at the prompt. If they "
-                    "decline, do not reach the same result another way."
+                    "decline, that command is off: do not run it through "
+                    "another tool or script."
                 ),
             }
 

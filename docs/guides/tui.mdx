@@ -815,8 +815,9 @@ saying what it can do.
 A command GAIA doesn't run unasked — `python script.py`, `git commit`, `npm test`
 with no skill loaded for it — gets this prompt rather than an error. `a` covers
 that one command family (`git commit`, `python (any script)`) for the session and
-nothing wider. If you deny it, the agent is told not to get the same result
-another way, and stops to explain.
+nothing wider. If you deny it, the agent is told that this one command is off:
+it must not run it through another tool or script, and it carries on with the
+rest of the task by other means and says what it could not do.
 
 A command GAIA's own checks don't cover — `git push`, `git fetch`, Python passed
 with `-c`, a PowerShell command it can't read, a line with `$(…)`, a path outside
@@ -982,8 +983,11 @@ this command?`, `Write this file?`, `Install this skill?`); any other tool reads
 `Allow <tool>?`. A `DESTRUCTIVE` prompt adds a warning line under the call.
 
 **y** runs it once, **n** or **esc** denies. Denying is a normal outcome, not an
-error — the agent is told you said no, doesn't try another way to do the same
-thing, and carries on with whatever doesn't need it. When nobody can answer — a
+error — the agent is told you said no to that one action, doesn't do the same
+thing through another tool, and carries on with the task by other means. A no
+covers the command on what it named (`pip install pandas`, not every `pip
+install`), and a declined script's own new output files can still be produced
+another way. When nobody can answer — a
 scheduled or background run, or a prompt that expires — the command doesn't run.
 A command GAIA's own checks don't cover offers no `a`: it shows the exact line
 and a risk line, and runs once if you say yes (see

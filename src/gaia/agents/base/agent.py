@@ -862,11 +862,14 @@ def _argument_shape(name: str, param: inspect.Parameter) -> str:
     return f"{name} ({getattr(annotation, '__name__', annotation)})"
 
 
-#: Put on a call the user declined, so the model stops instead of rerouting.
+#: Put on a call the user declined: that action is off, the task is not.
 DECLINED_HINT = (
-    "The user declined this. Do not try to get the same result another way "
-    "(a different command, tool, or script). Tell the user what you were going "
-    "to do and why, then stop."
+    "The user declined this one call, not the tool and not the task. Do not "
+    "repeat it or reword it: the same command, script, or change to the same "
+    "file through another tool is the same call. Carry on with the task by a "
+    "different, legitimate means (another tool, a loaded skill's tool, reading "
+    "the files directly), and say in your answer what you could not do. If "
+    "nothing else can do the job, tell the user what you need and why."
 )
 
 #: Tools whose output is a computed result: when one was denied, nothing was computed.
@@ -875,8 +878,8 @@ COMPUTATION_TOOLS = frozenset(
 )
 COMPUTATION_NOT_RUN = (
     "The computation did not run, so it produced no figures. Do not report "
-    "computed figures (totals, sums, counts, averages) as if it had. Tell the "
-    "user what is needed to compute them."
+    "computed figures (totals, sums, counts, averages) as if it had. Compute "
+    "them by a different means, or tell the user what is needed to compute them."
 )
 COMPUTATION_FAILED = (
     "The computation failed before it printed anything, so nothing was "
@@ -8375,6 +8378,16 @@ Do NOT wrap conversational replies in JSON.
         folders += [getattr(self, "scratch_dir", None), os.getcwd()]
         return [str(f) for f in folders if f]
 
+    def _may_create_unasked(self, path: str) -> bool:
+        """True when a new file at *path* is inside the folders this chat may write."""
+        validator = self._read_validator()
+        if validator is None:
+            return False
+        return (
+            validator.is_path_allowed(path, prompt_user=False)
+            and not validator.is_write_blocked(path)[0]
+        )
+
     #: The answers the denied-effect question offers.
     ALLOW_DENIED_EFFECT = "Allow once"
     KEEP_DENIED_EFFECT = "Don't run it"
@@ -8434,9 +8447,9 @@ Do NOT wrap conversational replies in JSON.
             )
         elif answer is None:
             asked = (
-                "Stop and ask the user: name the exact command you need "
-                f"(`{command}`) and why you need it, or tell them what you can "
-                "still do without it."
+                "Carry on by a different means if there is one. If the task "
+                "cannot be finished without this, ask the user: name the exact "
+                f"command you need (`{command}`) and why you need it."
             )
         elif answer is False:
             asked = (
@@ -8464,9 +8477,10 @@ Do NOT wrap conversational replies in JSON.
                 "error": (
                     f"Not run: this {effect.describe()}, which {denial.who()} "
                     f"earlier in this request (`{denial.rendered}` — "
-                    f"{denial.reason}). A denial covers the effect, not only the "
-                    "tool it was asked through, so do not reach it with another "
-                    f"tool, command, or script. {asked}"
+                    f"{denial.reason}). That no is to this one action, whichever "
+                    "tool carries it, so do not reach it with another tool, "
+                    "command, or script; steps that do something else are still "
+                    f"open. {asked}"
                 ),
             },
             False,
@@ -9237,7 +9251,11 @@ Do NOT wrap conversational replies in JSON.
                         denied["denied_by"] = "policy"
                     elif ledger is not None:
                         ledger.record(
-                            tool_name, tool_args, denied_error, by_user=by_user
+                            tool_name,
+                            tool_args,
+                            denied_error,
+                            by_user=by_user,
+                            may_create=self._may_create_unasked,
                         )
                 return denied
             # A call approved once runs against this record, and only once.
@@ -13395,17 +13413,20 @@ Do NOT wrap conversational replies in JSON.
                         # "Fix the error" read as "find another way" is how a
                         # user's no got routed around.
                         prompt = header + (
-                            "This was a denial or refusal, not a mistake to fix. "
-                            "It is a decision about what the action DOES, so the "
-                            "same effect through another tool, command, or script "
-                            "is also declined.\n\n"
+                            "This was a denial or refusal of that one action, "
+                            "not a mistake to fix and not a no to the task. It is "
+                            "a decision about what the action DOES: the same "
+                            "command, script, host or file change through another "
+                            "tool is the same action.\n\n"
                             "INSTRUCTIONS:\n"
-                            "1. Do not retry it, and do not reach the same result "
-                            "another way.\n"
-                            "2. Continue only with steps that do not need it.\n"
-                            "3. Otherwise stop and tell the user what is blocked, "
-                            "the exact command you need and why, and what you can "
-                            "do without it."
+                            "1. Do not retry it, and do not do the same thing "
+                            "through another tool, command, or script.\n"
+                            "2. Carry on with the task by a different, legitimate "
+                            "means: another tool, a loaded skill's tool, or "
+                            "reading the files directly.\n"
+                            "3. In your answer say what was not done and why. If "
+                            "nothing else can do the job, stop and tell the user "
+                            "the exact command you need and why."
                         )
                     else:
                         prompt = header + (

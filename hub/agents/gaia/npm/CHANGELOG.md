@@ -21,6 +21,14 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
   or put caveats inside one.
 ### Changed
 
+- **Declining one tool call no longer ends the task.** A declined call told the
+  model not to get the same result "another way" and to stop, so one refused
+  script closed every other route to the work. The no now covers that action
+  only: the same command, script, host or change to the same file is still
+  stopped whichever tool carries it, and the model is told to carry on by
+  other means and say what it could not do. A declined command covers what it
+  named (`pip install pandas`, not every `pip install`), and a file a declined
+  Python script would only have created is no longer off limits.
 - **The skill suggestion now tells the model which skill to load.** Local models
   ignored the old "skills that may fit this request" line: over 56 tasks one
   called `load_skill` on 3. The line now reads "Call load_skill('pdf') before
