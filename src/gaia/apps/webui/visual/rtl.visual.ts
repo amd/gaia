@@ -63,8 +63,13 @@ async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) 
 }
 
 /** Every rule break on the page, as readable lines. */
-const audit = (page: Page): Promise<string[]> =>
-    page.evaluate(() => {
+// A cut text's fade follows a scroll timeline, which picks up new text on the next frame.
+const nextFrames = (page: Page) =>
+    page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+
+const audit = async (page: Page): Promise<string[]> => {
+    await nextFrames(page);
+    return page.evaluate(() => {
         const problems: string[] = [];
         const label = (el: Element) =>
             `<${el.tagName.toLowerCase()} class="${String(el.className).slice(0, 40)}"> "${(el.textContent ?? '').trim().slice(0, 40)}"`;
@@ -119,18 +124,29 @@ const audit = (page: Page): Promise<string[]> =>
                 // Aligned to its end, the last line's "…" lands past the edge and is clipped: "preparation a."
                 const toEnd = style.textAlign === 'end' || style.textAlign === (style.direction === 'rtl' ? 'left' : 'right');
                 if (toEnd) problems.push(`clamped text aligned to its end hides its "…": ${label(el)}`);
+                // A fade down the block is taller than one line, so a one-line clamp would dim all of it.
+                const mask = style.maskImage || style.getPropertyValue('-webkit-mask-image');
+                const oneLine = el.clientHeight < 2 * (parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2);
+                if (oneLine && mask !== 'none' && !/to (left|right)/.test(mask)) problems.push(`one-line clamp faded top to bottom: ${label(el)}`);
             }
 
             const text = el.textContent?.trim() ?? '';
             if (el.querySelector(':scope > :not(i18n-label)') || !text) continue;
 
+            // Cut text fades out at its end; a "…" is the old look, and a hard cut hides that more exists.
+            const faded = (style.maskImage || style.getPropertyValue('-webkit-mask-image')) !== 'none';
+            const cut = !srOnly && box.width > 2 && style.whiteSpace === 'nowrap' && style.overflowX === 'hidden'
+                && el.scrollWidth > el.clientWidth + 1;
+            if (style.textOverflow === 'ellipsis') problems.push(`ends in "…" instead of fading: ${label(el)}`);
+            else if (cut && !faded) problems.push(`cut off with no fade: ${label(el)}`);
+
             // A long name that shrinks to nothing tells the reader nothing.
-            if (style.textOverflow === 'ellipsis' && box.width < 40 && el.scrollWidth > box.width + 1) {
+            if (cut && box.width < 40) {
                 problems.push(`text squeezed to ${Math.round(box.width)}px: ${label(el)}`);
             }
 
             // An English name cut off in rtl keeps its end and loses its start.
-            if (style.textOverflow === 'ellipsis' && style.direction === 'rtl' && latin.test(text) && !arabic.test(text)) {
+            if (cut && style.direction === 'rtl' && latin.test(text) && !arabic.test(text)) {
                 problems.push(`Latin text truncates from its start: ${label(el)}`);
             }
 
@@ -341,6 +357,7 @@ const audit = (page: Page): Promise<string[]> =>
         }
         return [...new Set(problems)];
     });
+};
 
 // A reply that never ends, so the card stays up for the screenshot.
 const RECORDING_EVENTS = [
@@ -1758,6 +1775,10 @@ for (const locale of ['en', 'ar']) {
         const tail = page.locator('.doc-name-tail').first();
         await expect(tail).toHaveText(/finance\)\.pdf$/);
         await expect(tail).toBeInViewport();
+        // A cut name fades at its own end: the right for an English name, the left for an Arabic one, in either UI.
+        const fades = await page.locator('.doc-name-head').evaluateAll((els) =>
+            els.map((el) => getComputedStyle(el).getPropertyValue('--fade-to').trim()));
+        expect(fades).toEqual(['right', 'left']);
         // A name in the other script still starts at the UI's own edge.
         const other = page.locator('.doc-name-split').nth(locale === 'ar' ? 0 : 1);
         const [textBox, infoBox] = await other.evaluate((el) => {
@@ -3639,6 +3660,8 @@ test.describe('clamped English in Arabic ends with its own "…"', () => {
         await shot(page, 'clamped-skill-ar');
         expect(await clampedBlocks(page)).toContain('skill-row-desc ltr');
         expect(await audit(page)).toEqual([]);
+        // English in the Arabic UI fades at its own end, the right.
+        expect(await page.locator('.skill-row-desc').first().evaluate((el) => getComputedStyle(el).maskImage)).toContain('to right');
     });
 
     test('a schedule prompt', async ({ page }) => {
