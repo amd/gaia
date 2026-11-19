@@ -119,6 +119,9 @@ jobs:
   refresh:
     name: Re-run gaia eval, refresh-or-reject scorecard
     runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    env:
+      # AMD's lab pool: on AMD's network whatever a probe says.
+      GAIA_AMD_NETWORK: '1'
     defaults:
       run:
         shell: powershell
@@ -155,15 +158,6 @@ jobs:
           "EVAL_MODEL=$model" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
           Write-Host "Eval driver and judge model: $model"
 
-      - name: Preflight — judge credential
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) {
-            Write-Host '::error::ANTHROPIC_API_KEY is not set - the eval cannot judge. Add the repository secret.'
-            exit 1
-          }
-
       - name: Setup Python Environment
         id: venv
         uses: ./.github/actions/setup-venv
@@ -193,6 +187,26 @@ jobs:
           $bare = (Get-Command python -ErrorAction SilentlyContinue).Source
           Write-Host "Venv interpreter: $env:VENV_PY"
           Write-Host "Bare 'python' on this runner: $(if ($bare) { $bare } else { 'none' })"
+
+      # On AMD's network Claude goes only through the AMD LLM Gateway, which
+      # needs a gateway key instead of ANTHROPIC_API_KEY.
+      - name: Check for AMD's network
+        id: amd_net
+        uses: ./.github/actions/amd-network
+        with:
+          gateway-key: ${{ secrets.LEMONADE_AMD_API_KEY }}
+          python: ${{ env.VENV_PY }}
+          what: "The scorecard refresh"
+
+      - name: Preflight — judge credential
+        if: steps.amd_net.outputs.on != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) {
+            Write-Host '::error::ANTHROPIC_API_KEY is not set - the eval cannot judge. Add the repository secret.'
+            exit 1
+          }
 
       - name: Resolve version, committed basis, and fail fast on a basis mismatch
         id: pre
@@ -296,7 +310,8 @@ jobs:
       - name: Run the gaia eval categories serially (real eval)
         timeout-minutes: 1980
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ steps.amd_net.outputs.on != 'true' && secrets.ANTHROPIC_API_KEY || '' }}
+          GAIA_GATEWAY_TOKEN: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || '' }}
           # An empty Claude config, so a login left on this runner can't win
           # over the key (the eval tries the subscription first).
           CLAUDE_CONFIG_DIR: ${{ runner.temp }}\claude-key-only

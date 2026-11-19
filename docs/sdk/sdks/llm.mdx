@@ -60,6 +60,17 @@ print(response)
 Use `create_client(use_claude=True)` for the Claude provider. Local and on-prem
 models use `create_client("lemonade", base_url=..., model=...)`.
 
+### On AMD's network
+
+On AMD's network the Claude provider raises `DirectAnthropicBlockedError`
+(`gaia.llm.amd_network`) instead of building a client that would reach
+`api.anthropic.com`, naming the gateway model to use. Pass an `amd.Claude-*` id
+to `create_client("lemonade", model=...)` to reach Claude through the AMD LLM
+Gateway. Every Anthropic SDK client GAIA builds goes through
+`gaia.llm.amd_network.anthropic_client`, which applies this check; see
+[On AMD's network](/guides/llm-gateway#on-amds-network-claude-only-goes-through-the-gateway)
+for how the network is detected.
+
 ### Local only
 
 When the user has set `network_policy` to `local_ai_only`, `LemonadeClient`'s

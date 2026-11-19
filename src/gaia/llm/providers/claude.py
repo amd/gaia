@@ -24,6 +24,7 @@ try:
 except ImportError:
     anthropic = None  # type: ignore[assignment]
 
+from ..amd_network import anthropic_client, assert_direct_anthropic_allowed
 from ..base_client import LLMClient
 from ..lemonade_client import is_provider_context_overflow
 from ..local_only import assert_provider_permitted
@@ -548,6 +549,8 @@ class ClaudeProvider(LLMClient):
         from gaia.env import credential, load_env
 
         load_env()
+        # Before the key check, so an AMD-network user is told to use the gateway.
+        assert_direct_anthropic_allowed(self._model, what="The Claude backend")
 
         key = api_key or credential("ANTHROPIC_API_KEY")
         if not key:
@@ -569,11 +572,27 @@ class ClaudeProvider(LLMClient):
             client_kwargs["default_headers"] = {"anthropic-beta": "oauth-2025-04-20"}
         else:
             client_kwargs["api_key"] = key
-        return sdk.Anthropic(**client_kwargs)
+        return anthropic_client(
+            sdk, model=self._model, what="The Claude backend", **client_kwargs
+        )
 
     @property
     def provider_name(self) -> str:
         return "Claude"
+
+    def _permit_request(self) -> None:
+        """Local only, then the AMD-network check, on every request.
+
+        The client outlives the network it was built on: a VPN that connects
+        later must stop the next request, not only the next client.
+        """
+        assert_provider_permitted(self._DESTINATION)
+        base_url = getattr(self._client, "base_url", None)
+        assert_direct_anthropic_allowed(
+            self._model,
+            str(base_url) if base_url is not None else None,
+            what="The Claude backend",
+        )
 
     # ── request shaping ─────────────────────────────────────────────────
 
@@ -1106,7 +1125,7 @@ class ClaudeProvider(LLMClient):
         if stream:
             return self._stream_chat(params, name_map, prefix_digest)
 
-        assert_provider_permitted(self._DESTINATION)
+        self._permit_request()
         start = time.monotonic()
         try:
             response = self._client.messages.create(**params)
@@ -1173,7 +1192,7 @@ class ClaudeProvider(LLMClient):
     def _stream_chat(
         self, params: dict, name_map: Dict[str, str], prefix_digest: str
     ) -> Iterator[str]:
-        assert_provider_permitted(self._DESTINATION)
+        self._permit_request()
         start = time.monotonic()
         try:
             events = self._client.messages.create(**params, stream=True)
@@ -1398,7 +1417,10 @@ class GatewayClaudeProvider(ClaudeProvider):
 
         token, self._gateway_token_source = gateway.resolve_gateway_token_with_source()
         gateway.warn_if_claude_token_may_drift(self._gateway_token_source)
-        return sdk.Anthropic(
+        return anthropic_client(
+            sdk,
+            model=self._gateway_model,
+            what="The gateway Claude backend",
             # Explicit, so the SDK reads no ANTHROPIC_* credential from the
             # environment. _build_params omits the header it would carry.
             api_key=token,

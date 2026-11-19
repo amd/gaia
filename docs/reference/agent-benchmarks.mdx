@@ -331,7 +331,8 @@ gaia eval tasks run --suite everyday --model fireworks.glm-5p3-flash \
 gaia eval tasks run --suite everyday --harness claude-code \
   --model fireworks.glm-5p3-flash --repeats 3 --out "$BENCH/cc-glm"
 
-# Claude Code on Anthropic's own model, as the reference row
+# Claude Code on Anthropic's own model, as the reference row. Off AMD's network
+# only: on it an Anthropic model id is refused; use amd.Claude-Opus-5 instead.
 gaia eval tasks run --suite everyday --harness claude-code \
   --model claude-opus-5 --out "$BENCH/cc-opus"
 

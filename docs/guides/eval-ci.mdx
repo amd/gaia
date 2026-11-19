@@ -528,6 +528,10 @@ gaia eval agent --corpus-dir ~/my-project/eval-corpus
   The agent under test can run shell commands, so its backend must never inherit `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or the backup `CLAUDE_CODE_OAUTH_TOKEN_BACKUP`; only the `gaia eval agent` step needs them. On a public repository anyone can download workflow artifacts, and GitHub masks secrets only in job logs. Keep uploads to scorecards and reproduce a regression locally for its traces.
 </Warning>
 
+<Note>
+  **Runners on AMD's network.** There GAIA sends Claude only through the AMD LLM Gateway, so the driver and judge need a gateway key, not an Anthropic credential. GAIA's own workflows run `.github/actions/amd-network` after installing GAIA: it reports whether the runner is on AMD's network, fails with an error naming the `LEMONADE_AMD_API_KEY` repository secret when it is and no key is available, and then the eval steps get the key as `GAIA_GATEWAY_TOKEN` and skip the Anthropic account probe. GAIA's own lab jobs pin `GAIA_AMD_NETWORK=1` so a missed probe can't send them to Anthropic, and pass Anthropic credentials only when the runner is off AMD's network. GitHub-hosted runners read as off the network and run unchanged. Keep the gateway key out of the agent-under-test's environment too.
+</Note>
+
 <Warning>
   Never use `--fix` in CI pipelines. Fix mode patches source code directly and should only be used in local development where changes can be reviewed before committing.
 </Warning>

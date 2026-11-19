@@ -88,6 +88,7 @@ from the committed seed, and runs the benchmark (~17 minutes on a 4B model).
   only; a full-corpus run regenerates `SCORECARD.md`, a subset run
   smoke-tests the pipeline without committing. The drafting eval needs a Claude
   judge — a subscription through the `claude` CLI (`CLAUDE_CODE_OAUTH_TOKEN`,
-  or the CLI's own login) first, then `ANTHROPIC_API_KEY`. With none it exits
+  or the CLI's own login) first, then `ANTHROPIC_API_KEY`; on AMD's network
+  the AMD LLM Gateway instead, with the gateway key. With none it exits
   non-zero and fails the build; never a skip, never a pass.
 </details>

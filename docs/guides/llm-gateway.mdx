@@ -208,6 +208,47 @@ Lemonade still has to be running with the gateway connected: agent startup check
 and probes tool calling through it. Every other gateway model,
 `amd.DeepSeek-V4.1-Flash` and `amd.Gemma-4-31B` included, still chats through Lemonade.
 
+### On AMD's network, Claude only goes through the gateway
+
+On AMD's network GAIA never sends Claude traffic to Anthropic directly
+(`api.anthropic.com`). Anything that would — `--use-claude`, a `claude-*` model,
+a hybrid pairing with a direct Claude member, Claude Code runs for session
+analysis, the eval fixer, or a bench arm on an Anthropic model — fails with an
+error naming the gateway model to use instead, for example
+`gaia gateway use amd.Claude-Opus-5-5`. Nothing is rerouted for you. The eval
+judge is the one exception: it moves to the gateway itself and says so (see
+[Which Claude account pays](/guides/eval#which-claude-account-pays)).
+
+What changes on AMD's network:
+
+- **Saved choices that name a direct Claude model fail with the fix.** A
+  `claude-*` hybrid member, a `claude-*` default for Telegram or Slack, or a
+  remembered `/model claude-*` now errors on the next turn, naming the gateway
+  model to switch to. They are listed as unavailable in the Agent UI and the TUI.
+- **`gaia eval` judges and drives through the gateway.** Your Claude Code login,
+  subscription token and `ANTHROPIC_API_KEY` are not used; the gateway key is.
+  `gaia eval agent --fix` and Claude-backed session analysis go the same way.
+  Flagship baselines were judged by Anthropic directly, so re-check a regression
+  against a gateway-judged run.
+- **Long-running processes notice.** Every request is checked, so a VPN that
+  connects after GAIA started stops direct Claude from the next request on.
+
+GAIA counts this machine as on AMD's network when `GAIA_AMD_NETWORK=1` is set
+(GAIA's CI sets it on AMD's lab runners; no value turns it off), when the
+gateway is set up here — a non-blank `LEMONADE_AMD_API_KEY` or
+`GAIA_GATEWAY_TOKEN` in GAIA's environment, a gateway key in the OS credential
+store, or a `~/.gaia/gateway.json` naming AMD's gateway — or when
+`llm-api.amd.com` accepts a connection within 2 seconds, directly or through
+`HTTPS_PROXY`. A `gateway.json` naming another gateway makes those keys its
+keys, so they don't count. A set-up gateway decides it on its own, so a DNS failure can't
+make GAIA think it is off the network. Listing models never contacts an AMD
+host unless an Anthropic key is set. Off AMD's network nothing changes.
+
+Only the gateway's own address (`https://llm-api.amd.com/...`, written plainly)
+is allowed as a Claude endpoint, for example through `ANTHROPIC_BASE_URL` or
+`GAIA_GATEWAY_ANTHROPIC_BASE_URL`; any other base URL is refused, because GAIA
+can't tell where a proxy forwards.
+
 ### Models that cannot stream
 
 For some models the gateway accepts a streaming request and then sends no
@@ -344,7 +385,9 @@ It prints the model, the label and the classifier's reason, and runs nothing.
 Hybrid isn't tied to the gateway. Any model a provider set up here offers can
 be the cheap, strong or classifier model: one downloaded on this PC, a gateway
 model, a Fireworks AI model once it has a key, or an Anthropic `claude-*` model
-when `ANTHROPIC_API_KEY` is set. With every member on this PC, hybrid works
+when `ANTHROPIC_API_KEY` is set and this machine is off AMD's network. On AMD's
+network the direct `claude-*` models are listed as unavailable, with the gateway
+model to use instead. With every member on this PC, hybrid works
 under Local only; with any member in the cloud, Local only refuses the turn.
 A classifier on this PC is free but, if small, may route less accurately.
 
@@ -357,8 +400,8 @@ Built-in templates set the models and policy in one step:
 | `gateway-balanced` | the default pair, `balanced` policy | the gateway |
 | `local-plus-cloud` | your local chat model / Claude Opus 5.5 | a local model and the gateway |
 | `all-local` | Gemma-4-E4B / Qwen3.6-35B-A3B | both downloaded; Qwen needs a PC it fits |
-| `fireworks` | Fireworks DeepSeek V4.1 Flash / Claude Opus 5.5 (gateway, else Anthropic) | a Fireworks key |
-| `claude-direct` | Claude Haiku 5.5 / Claude Opus 5.5 | `ANTHROPIC_API_KEY` |
+| `fireworks` | Fireworks DeepSeek V4.1 Flash / Claude Opus 5.5 (gateway, else Anthropic off AMD's network) | a Fireworks key |
+| `claude-direct` | Claude Haiku 5.5 / Claude Opus 5.5 | `ANTHROPIC_API_KEY`, off AMD's network only |
 
 ```bash
 gaia hybrid templates          # each template, and why one can't run here
@@ -451,6 +494,7 @@ a set of prompts would route, run `python util/hybrid_classify_live.py "<prompt>
 | `Local only is on` (a refused token or a 409) | `network_policy` is `local_ai_only`, so GAIA hands Lemonade no gateway token. Run `gaia config set network_policy cloud_allowed`, then reconnect. See [Local only](/reference/cli#local-only). |
 | `has no cloud provider registered` | Lemonade has the cloud API but no provider registered yet, so it refuses the token. Run `gaia gateway install` to register it, then `gaia gateway auth` again. |
 | `older than v2026.44.1` or `has no cloud-provider API` | Lemonade is older than 2026.44.1, the oldest GAIA supports, so `gaia gateway install` registers nothing. GAIA upgrades its own Lemonade Server when its daemon next starts it (`gaia daemon restart` does that now); update any other from [lemonade-server.ai](https://lemonade-server.ai). |
+| `GAIA doesn't send Claude traffic to Anthropic directly on the AMD network` | This machine is on AMD's network, so direct Claude is refused. Use the gateway model the error names, for example `gaia gateway use amd.Claude-Opus-5-5`. See [On AMD's network](#on-amds-network-claude-only-goes-through-the-gateway). |
 | The probe returns 404 or redirects | Wrong host. `llm.amd.com` is the SSO portal; the API is `llm-api.amd.com/Unified/v1`. |
 | `auth` succeeds but discovers 0 models | The gateway rejected the key. Lemonade stores it without validating, so this is where a bad key first shows. Run `scripts/diagnose-gateway-auth.ps1`. |
 | `The selected cloud model is unavailable (HTTP 404)` | The gateway no longer serves that model, or your account cannot use it. Run `gaia gateway models`, then `gaia gateway use <id>` with a deployed one. `gaia gateway test --model <id>` checks a model before you switch. |

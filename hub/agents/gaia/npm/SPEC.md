@@ -853,7 +853,9 @@ That is a limit on the *launch flag*, not on the agent. Since contract 2.14 a
 caller can ask for Anthropic per request with `/query`'s `provider` field (§5.2),
 so local inference is this package's **default**, not a property of the transport
 that nobody can change. Anything reaching Anthropic is named by the request that
-asked for it.
+asked for it. On AMD's network the core refuses direct Anthropic outright — a
+`provider: "claude"` turn fails with an error naming the AMD LLM Gateway model
+(`amd.Claude-*`) to use instead.
 
 ---
 

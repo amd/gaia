@@ -410,6 +410,9 @@ type ChatModel struct {
 	lemonadeUp      bool
 	lemonadeVersion string
 	lemonadeBaseURL string
+	// claudeUnavailable is the agent's latest word on which direct Claude ids
+	// it refuses (AMD's network); the /model picker shows them unavailable.
+	claudeUnavailable map[string]event.ClaudeBlock
 	// lemonadeDownRefused makes the "local server is down" pre-refusal fire
 	// once per down report instead of forever. Nothing refreshes lemonadeUp
 	// between pings, so a sticky refusal would outlive the problem — see

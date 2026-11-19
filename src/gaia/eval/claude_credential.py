@@ -6,6 +6,9 @@
 One order for every eval that calls Claude — the judges, the agent-eval driver,
 ``gaia eval tasks``:
 
+0. On AMD's network (:mod:`gaia.llm.amd_network`), the AMD LLM Gateway's
+   Anthropic route with the gateway key, and nothing else: Claude must not
+   reach Anthropic directly from there. No gateway key is an error.
 1. The Claude Code subscription: ``CLAUDE_CODE_OAUTH_TOKEN``, else the
    ``claude`` CLI's own login. Either needs the CLI on PATH.
 2. ``ANTHROPIC_API_KEY`` from the environment.
@@ -33,6 +36,7 @@ log = get_logger(__name__)
 API_KEY_VAR = "ANTHROPIC_API_KEY"
 OAUTH_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
 
+GATEWAY = "amd_gateway"
 OAUTH_TOKEN = "oauth_token"
 CLI_LOGIN = "cli_login"
 ENV_KEY = "env_key"
@@ -76,6 +80,7 @@ TOKEN_WITHOUT_CLI_ERROR = (
 
 #: Fixed text per source, for messages that must not carry a credential value.
 _SOURCE_NAMES = {
+    GATEWAY: "the AMD LLM Gateway",
     OAUTH_TOKEN: "the Claude Code subscription (CLAUDE_CODE_OAUTH_TOKEN)",
     CLI_LOGIN: "the Claude Code CLI login",
     ENV_KEY: "ANTHROPIC_API_KEY from the environment",
@@ -93,34 +98,192 @@ class ClaudeCredential:
     source: str
     dotenv_path: Optional[str] = None
     api_key: Optional[str] = field(default=None, repr=False)
+    #: Gateway only: its Anthropic route, and where its key came from.
+    base_url: Optional[str] = None
+    key_source: Optional[str] = None
 
     @property
     def label(self) -> str:
         """Where the credential came from; never any part of its value."""
         if self.source == DOTENV_KEY and self.dotenv_path:
             return f"{API_KEY_VAR} from {self.dotenv_path}"
+        if self.is_gateway and self.key_source:
+            from gaia.llm.gateway import describe_token_source
+
+            return (
+                f"{_SOURCE_NAMES[GATEWAY]} ({describe_token_source(self.key_source)})"
+            )
         return _SOURCE_NAMES[self.source]
 
     @property
     def is_subscription(self) -> bool:
         return self.source in (OAUTH_TOKEN, CLI_LOGIN)
 
+    @property
+    def is_gateway(self) -> bool:
+        return self.source == GATEWAY
+
     def cli_flags(self) -> list:
-        """Flags for ``claude -p``: ``--bare`` restricts auth to the API key."""
+        """Flags for ``claude -p``: ``--bare`` restricts auth to the API key.
+
+        On the gateway no settings file is read, so none can override the
+        environment that points the CLI at the gateway.
+        """
+        if self.is_gateway:
+            return list(GATEWAY_CLI_FLAGS)
         return [] if self.is_subscription else ["--bare"]
+
+    def cli_model(self, model: str, role: str = "Claude judge") -> str:
+        """The ``--model`` for ``claude -p``: *model*, or its gateway route id.
+
+        Raises:
+            ValueError: on the gateway, *model* has no gateway equivalent.
+        """
+        if not self.is_gateway:
+            return model
+        from gaia.llm.gateway import gateway_claude_upstream_id
+
+        return gateway_claude_upstream_id(gateway_judge_model(model, role))
 
     def cli_env(self, base: Mapping[str, str]) -> Dict[str, str]:
         """*base* adjusted so ``claude -p`` authenticates with this credential.
 
         The CLI prefers an inherited API key to OAuth, so the subscription path
         drops it; the key path carries a ``.env`` key the environment lacks.
+        The gateway path drops every Anthropic credential and points the CLI,
+        and nothing else, at the gateway.
         """
         env = dict(base)
+        if self.is_gateway:
+            return _gateway_cli_env(env, self)
         if self.is_subscription:
             env.pop(API_KEY_VAR, None)
         else:
             env[API_KEY_VAR] = self.api_key or ""
         return env
+
+
+#: ``claude -p`` flags on the gateway: read no settings file.
+GATEWAY_CLI_FLAGS = ("--setting-sources", "")
+
+#: Variables that would send the CLI somewhere other than ANTHROPIC_BASE_URL,
+#: or authenticate it with an Anthropic credential.
+_ROUTE_OVERRIDES = (
+    API_KEY_VAR,
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+)
+
+
+def _gateway_cli_env(env: Dict[str, str], cred: "ClaudeCredential") -> Dict[str, str]:
+    from gaia.llm.gateway import DEFAULT_AUTH_HEADER_NAME, DEFAULT_AUTH_HEADER_PREFIX
+
+    for name in list(env):
+        upper = name.upper()
+        if upper in _ROUTE_OVERRIDES or upper.startswith(OAUTH_TOKEN_VAR):
+            del env[name]
+    env.update(
+        {
+            "ANTHROPIC_BASE_URL": cred.base_url or "",
+            # The gateway reads its APIM header; the bearer copy is ignored there.
+            "ANTHROPIC_AUTH_TOKEN": cred.api_key or "",
+            "ANTHROPIC_CUSTOM_HEADERS": (
+                f"{DEFAULT_AUTH_HEADER_NAME}: "
+                f"{DEFAULT_AUTH_HEADER_PREFIX}{cred.api_key or ''}"
+            ),
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        }
+    )
+    return env
+
+
+def gateway_credential() -> ClaudeCredential:
+    """The AMD LLM Gateway's Anthropic route and key, for an eval on AMD's network.
+
+    Raises:
+        RuntimeError: no gateway key, or no known Anthropic route for it.
+    """
+    from gaia.llm import gateway
+    from gaia.llm.amd_network import AMD_GATEWAY_ANTHROPIC_BASE_URL, is_gateway_url
+
+    try:
+        token, source = gateway.resolve_gateway_token_with_source()
+        base_url = gateway.gateway_anthropic_base_url()
+    except gateway.GatewayError as e:
+        raise RuntimeError(
+            "On the AMD network the eval's Claude calls go through the AMD LLM "
+            f"Gateway, never to Anthropic directly, and that failed: {e}"
+        ) from e
+    if not is_gateway_url(base_url):
+        raise RuntimeError(
+            f"On the AMD network the eval's Claude calls go only to the AMD LLM "
+            f"Gateway, but its Anthropic route is set to {base_url!r} (from "
+            f"{gateway.GATEWAY_ANTHROPIC_ENV_VAR}). Unset it, or set it to "
+            f"{AMD_GATEWAY_ANTHROPIC_BASE_URL}."
+        )
+    return ClaudeCredential(
+        GATEWAY, api_key=token, base_url=base_url, key_source=source
+    )
+
+
+#: Claude Code's model aliases, pinned for a run that goes through the gateway,
+#: which serves exact ids only. Not used for the judge, whose model is explicit.
+CLI_ALIASES = {
+    "opus": "claude-opus-5-5",
+    "sonnet": "claude-sonnet-5-5",
+    "haiku": "claude-haiku-5-5",
+}
+
+
+def claude_code_route(
+    model: Optional[str], role: str, base: Optional[Mapping[str, str]] = None
+) -> tuple:
+    """``(flags, env, model)`` for a Claude Code run that is not the eval judge.
+
+    Off AMD's network: no flags, *base* (or this process's environment) as is,
+    and *model* unchanged. On it: the gateway's flags, environment and model
+    id, so the run never reaches Anthropic. Checked before returning either way.
+
+    Raises:
+        RuntimeError: on AMD's network with no usable gateway key or route.
+        ValueError: on AMD's network, *model* has no gateway equivalent.
+        DirectAnthropicBlockedError: the environment would still reach Anthropic.
+    """
+    from gaia.llm.amd_network import assert_claude_cli_allowed, on_amd_network
+
+    env = dict(os.environ if base is None else base)
+    flags: list = []
+    if on_amd_network():
+        cred = gateway_credential()
+        target = model or "sonnet"
+        model = cred.cli_model(CLI_ALIASES.get(target, target), role)
+        env = cred.cli_env(env)
+        flags = cred.cli_flags()
+    assert_claude_cli_allowed(model, env, what=role)
+    return flags, env, model
+
+
+def gateway_judge_model(model: str, role: str = "Claude judge") -> str:
+    """The gateway id for *model*, announced; raises when the gateway has none."""
+    from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+    from gaia.llm.amd_network import GATEWAY_EQUIVALENTS, gateway_equivalent
+
+    equivalent = gateway_equivalent(model)
+    if equivalent is None:
+        raise ValueError(
+            f"On the AMD network the {role} runs through the AMD LLM Gateway, "
+            f"which has no equivalent of {model!r}. Use one of "
+            f"{', '.join(GATEWAY_EQUIVALENTS)} (e.g. --model {DEFAULT_CLAUDE_MODEL}). "
+            "See https://amd-gaia.ai/docs/guides/llm-gateway."
+        )
+    line = f"{role}: {equivalent} via AMD LLM Gateway"
+    if line not in _announced:
+        _announced.add(line)
+        print(line, file=sys.stderr, flush=True)
+    return equivalent
 
 
 def _auth_status(claude_bin: str, env: Mapping[str, str]) -> dict:
@@ -202,6 +365,10 @@ def resolve_claude_credential(
     env: Optional[Mapping[str, str]] = None,
 ) -> ClaudeCredential:
     """The first usable credential in the order above; raises when there is none."""
+    from gaia.llm.amd_network import on_amd_network
+
+    if on_amd_network():
+        return gateway_credential()
     env = os.environ if env is None else env
     claude_bin = _claude_bin()
     token = (env.get(OAUTH_TOKEN_VAR) or "").strip()

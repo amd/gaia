@@ -852,6 +852,7 @@ does not list them. A plain progress `status` omits them.
 | `lemonade_base_url` | string | The Lemonade URL that was probed. |
 | `agent_version` | string | The running agent's own release version (`gaia_agent.__version__`). The TUI header shows this and no other source, so an agent that omits it gets a header with no version. |
 | `gaia_version` | string | The GAIA core version the running agent has loaded. |
+| `claude_unavailable` | object? | Only on AMD's network: each direct Claude id the agent will refuse, mapped to `{"reason", "use"}` — why, and the AMD LLM Gateway id to pick instead. The TUI shows those ids as unavailable in its model picker. Absent off that network. |
 
 A turn whose history no longer fits the model's context sends one more `status`
 before it starts: `history_cut` is `{"turns": N, "tokens": T}`, the completed

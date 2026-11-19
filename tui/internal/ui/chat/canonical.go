@@ -81,6 +81,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			// Replaced, not merged: a respawned agent may be another build.
 			m.agentVersion = reportedVersion(e.AgentVersion)
 			m.gaiaVersion = reportedVersion(e.GaiaVersion)
+			m.claudeUnavailable = e.ClaudeUnavailable
 			if e.LemonadeReachable != nil {
 				m.lemonadeKnown = true
 				m.lemonadeUp = *e.LemonadeReachable

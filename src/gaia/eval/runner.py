@@ -34,7 +34,11 @@ from typing import Optional
 import requests
 import yaml
 
-from gaia.eval.claude_credential import announce, resolve_claude_credential
+from gaia.eval.claude_credential import (
+    announce,
+    claude_code_route,
+    resolve_claude_credential,
+)
 from gaia.eval.claude_outage import (
     CREDENTIAL,
     HEADLINES,
@@ -52,6 +56,7 @@ from gaia.eval.fixture_env import localize
 from gaia.eval.process_tree import kill_tree as _kill_tree
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
+from gaia.llm.amd_network import assert_claude_cli_allowed
 from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
 
 logger = logging.getLogger(__name__)
@@ -2347,6 +2352,12 @@ def run_scenario_subprocess(
     claude_bin = shutil.which("claude") or "claude"
 
     bare_flags, driver_env = _driver_auth()
+    model = resolve_claude_credential().cli_model(model, role="Claude eval driver")
+    assert_claude_cli_allowed(
+        model,
+        os.environ if driver_env is None else driver_env,
+        what="The eval driver (Claude Code)",
+    )
     cmd = [claude_bin, "-p", *bare_flags]
     cmd.extend(
         [
@@ -2921,9 +2932,14 @@ def run_fix_iteration(scorecard, run_dir, iteration):
     )
 
     claude_cmd = shutil.which("claude") or "claude"
-    cmd = [claude_cmd, "-p", prompt, "--dangerously-skip-permissions"]
-
     assert_provider_permitted("the Claude Code CLI")
+    flags, fixer_env, fixer_model = claude_code_route(
+        DEFAULT_MODEL, "The eval fixer (Claude Code)"
+    )
+    cmd = [claude_cmd, "-p", prompt, "--dangerously-skip-permissions", *flags]
+    if flags:
+        # The gateway serves exact ids only, so the CLI's default can't be used.
+        cmd += ["--model", fixer_model]
     print(f"[FIX] Invoking Claude Code fixer (iteration {iteration})...")
     try:
         proc = subprocess.run(
@@ -2934,6 +2950,7 @@ def run_fix_iteration(scorecard, run_dir, iteration):
             errors="replace",
             timeout=600,
             cwd=str(REPO_ROOT),
+            env=fixer_env,
             check=False,
         )
         output = (proc.stdout or "") + (proc.stderr or "")

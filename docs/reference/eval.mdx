@@ -77,6 +77,11 @@ Judging uses the first Claude credential it finds: your Claude Code subscription
 file. Each run prints which one it uses, for example
 `Claude judge: using the Claude Code CLI login`. See
 [Configuration](/sdk/configuration#env-files) for which `.env` files GAIA reads.
+On AMD's network the judge uses none of those: it goes through the AMD LLM
+Gateway's Anthropic route with your gateway key and prints, for example,
+`Claude judge: amd.Claude-Opus-5 via AMD LLM Gateway`; a judge model with no
+gateway equivalent stops the run. See
+[Which Claude account pays](/guides/eval#which-claude-account-pays).
 
 ### What gets scored
 

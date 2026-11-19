@@ -171,6 +171,8 @@ class Inventory:
     #: Local catalog models not downloaded yet -> why they can't be used.
     local_missing: Dict[str, str] = field(default_factory=dict)
     local_only: bool = False
+    #: On AMD's network direct Claude is refused; the gateway's Claude is used.
+    amd_network: bool = False
     #: Why the model server couldn't be asked; set, its providers can't be used.
     server_down: Optional[str] = None
 
@@ -193,6 +195,10 @@ class Inventory:
             return f"{model_id} isn't a model on this PC"
         if self.local_only:
             return f"Local only is on, so {model_id} can't be used"
+        if provider == CLAUDE and self.amd_network:
+            from gaia.llm.amd_network import gateway_only_reason
+
+            return gateway_only_reason(model_id)
         if provider not in PROVIDER_NAMES:
             return f"no provider set up here offers {model_id}"
         setup = self.setup.get(provider)
@@ -203,7 +209,7 @@ class Inventory:
     def checked(self) -> str:
         """The providers set up here, for an error message."""
         ready = [PROVIDER_NAMES[p] for p in PROVIDERS if not self.setup.get(p)]
-        missing = [SETUP_HINTS[p] for p in PROVIDERS if self.setup.get(p)]
+        missing = [self.setup[p] for p in PROVIDERS if self.setup.get(p)]
         text = f"Checked {', '.join(ready)}."
         if missing:
             text += f" To use more models: {'; '.join(missing)}."
@@ -299,25 +305,28 @@ def offline_inventory(
 ) -> Inventory:
     """What can be used while the model server isn't answering: direct Claude only."""
     inv = Inventory(local_only=local_only, server_down=server_down)
-    if anthropic_key:
-        for model_id in CLAUDE_MODELS:
-            inv.offers[model_id] = Offer(
-                model_id,
-                CLAUDE,
-                not local_only,
-                (
-                    f"Local only is on, so {model_id} can't be used"
-                    if local_only
-                    else None
-                ),
-            )
-    inv.setup = {
-        LOCAL: None,
-        AMD: None,
-        FIREWORKS: None,
-        CLAUDE: None if anthropic_key else SETUP_HINTS[CLAUDE],
-    }
+    claude_setup = _add_claude_offers(inv, anthropic_key=anthropic_key)
+    inv.setup = {LOCAL: None, AMD: None, FIREWORKS: None, CLAUDE: claude_setup}
     return inv
+
+
+def _add_claude_offers(inv: Inventory, *, anthropic_key: bool) -> Optional[str]:
+    """Offer the direct Claude models; returns Anthropic's set-up hint, or None.
+
+    On AMD's network they are listed unavailable with the gateway model to use.
+    """
+    from gaia.llm.amd_network import gateway_only_reason, on_amd_network
+
+    # Probed only when direct Claude could be used; otherwise no AMD host is contacted.
+    inv.amd_network = on_amd_network(probe=anthropic_key)
+    amd_block = gateway_only_reason(CLAUDE_STRONG) if inv.amd_network else None
+    if anthropic_key or amd_block:
+        for model_id in CLAUDE_MODELS:
+            reason = gateway_only_reason(model_id) if amd_block else None
+            if inv.local_only:
+                reason = f"Local only is on, so {model_id} can't be used"
+            inv.offers[model_id] = Offer(model_id, CLAUDE, reason is None, reason)
+    return amd_block or (None if anthropic_key else SETUP_HINTS[CLAUDE])
 
 
 def build_inventory(
@@ -377,24 +386,13 @@ def build_inventory(
                     else None
                 ),
             )
-    if anthropic_key:
-        for model_id in CLAUDE_MODELS:
-            inv.offers[model_id] = Offer(
-                model_id,
-                CLAUDE,
-                not local_only,
-                (
-                    f"Local only is on, so {model_id} can't be used"
-                    if local_only
-                    else None
-                ),
-            )
+    claude_setup = _add_claude_offers(inv, anthropic_key=anthropic_key)
     offered = {o.provider for o in inv.offers.values()}
     inv.setup = {
         LOCAL: None if LOCAL in offered else SETUP_HINTS[LOCAL],
         AMD: None if AMD in offered else SETUP_HINTS[AMD],
         FIREWORKS: None if FIREWORKS in offered else SETUP_HINTS[FIREWORKS],
-        CLAUDE: None if anthropic_key else SETUP_HINTS[CLAUDE],
+        CLAUDE: claude_setup,
     }
     return inv
 
@@ -535,12 +533,12 @@ def describe(template: Template, inv: Inventory) -> Dict[str, Any]:
             f": {detail}" if detail else "; the GAIA log has the details"
         )
     if template.id == "fireworks" and inv.check(strong) and inv.check(CLAUDE_STRONG):
-        reason = (
-            f"{reason}. The strong model needs the AMD LLM Gateway or an "
-            "Anthropic key"
-            if reason
-            else reason
+        needs = (
+            "the AMD LLM Gateway"
+            if inv.amd_network
+            else "the AMD LLM Gateway or an Anthropic key"
         )
+        reason = f"{reason}. The strong model needs {needs}" if reason else reason
     return {
         "id": template.id,
         "name": template.name,

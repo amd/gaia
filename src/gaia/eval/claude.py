@@ -18,12 +18,26 @@ except ImportError:
 
 
 from gaia.env import load_env
-from gaia.eval.claude_credential import announce, api_key_credential
+from gaia.eval.claude_credential import (
+    announce,
+    api_key_credential,
+    gateway_credential,
+    gateway_judge_model,
+)
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, claude_pricing
+from gaia.llm.amd_network import (
+    anthropic_client,
+    assert_direct_anthropic_allowed,
+    is_gateway_url,
+    on_amd_network,
+)
 from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 
 load_env()
+
+# Large documents take a while to judge.
+_TIMEOUT = 300.0
 
 
 def first_text_block(blocks, model):
@@ -98,6 +112,14 @@ class ClaudeClient:
         if model is None:
             model = DEFAULT_CLAUDE_MODEL
         self.log = self.__class__.log  # Use the class-level logger for instances
+        self.model = model
+        self._pricing = claude_pricing(model)
+        self.max_tokens = max_tokens
+        self.max_retries = max_retries
+        self.temperature = temperature
+        if on_amd_network():
+            self._init_gateway(model, max_retries)
+            return
         found = api_key_credential()
         if found is None:
             error_msg = (
@@ -116,18 +138,66 @@ class ClaudeClient:
         # Initialize Anthropic client with retry support
         # The SDK handles exponential backoff automatically
         assert_provider_permitted("Anthropic Claude")
-        self.client = anthropic.Anthropic(
+        self.client = anthropic_client(
+            anthropic,
+            model=model,
+            what="The eval's Claude client",
             api_key=self.api_key,
             max_retries=max_retries,
-            timeout=300.0,  # 5 minute timeout for large documents
+            timeout=_TIMEOUT,
         )
-        self.model = model
-        self._pricing = claude_pricing(model)
-        self.max_tokens = max_tokens
-        self.max_retries = max_retries
-        self.temperature = temperature
         self.log.info(
             f"Initialized ClaudeClient with model: {model}, max_retries: {max_retries}"
+        )
+
+    def _init_gateway(self, model, max_retries):
+        """Point this client at the AMD LLM Gateway's Anthropic route."""
+        from gaia.llm.gateway import (  # pylint: disable=import-outside-toplevel
+            DEFAULT_AUTH_HEADER_NAME,
+            DEFAULT_AUTH_HEADER_PREFIX,
+            gateway_claude_upstream_id,
+        )
+
+        assert_provider_permitted("the AMD LLM Gateway")
+        found = gateway_credential()
+        announce(found)
+        gateway_id = gateway_judge_model(model)
+        self.api_key = None
+        self.model = gateway_claude_upstream_id(gateway_id)
+        self.client = anthropic_client(
+            anthropic,
+            model=gateway_id,
+            what="The eval's Claude client",
+            base_url=found.base_url,
+            # The gateway reads the APIM header and ignores the bearer; X-Api-Key
+            # is omitted so an ANTHROPIC_API_KEY in the environment never goes.
+            auth_token=found.api_key,
+            default_headers={
+                DEFAULT_AUTH_HEADER_NAME: (
+                    f"{DEFAULT_AUTH_HEADER_PREFIX}{found.api_key}"
+                ),
+                "X-Api-Key": anthropic.Omit(),
+            },
+            max_retries=max_retries,
+            timeout=_TIMEOUT,
+        )
+        self.log.info(
+            f"Initialized ClaudeClient with {gateway_id} via AMD LLM Gateway, "
+            f"max_retries: {max_retries}"
+        )
+
+    def _permit(self):
+        """Local only, then the AMD-network check, before every request.
+
+        A client built off AMD's network must not keep reaching Anthropic once
+        a VPN connects.
+        """
+        base_url = str(self.client.base_url)
+        assert_provider_permitted(
+            "the AMD LLM Gateway" if is_gateway_url(base_url) else "Anthropic Claude"
+        )
+        assert_direct_anthropic_allowed(
+            self.model, base_url, what="The eval's Claude client"
         )
 
     def _sampling_kwargs(self):
@@ -175,7 +245,7 @@ class ClaudeClient:
         if self.log.isEnabledFor(logging.DEBUG):
             self.log.debug(f"Prompt token count: {self.count_tokens(prompt)}")
         try:
-            assert_provider_permitted("Anthropic Claude")
+            self._permit()
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -199,7 +269,7 @@ class ClaudeClient:
         """
         self.log.info("Getting completion with usage tracking from Claude")
         try:
-            assert_provider_permitted("Anthropic Claude")
+            self._permit()
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -241,7 +311,7 @@ class ClaudeClient:
             raise
 
     def count_tokens(self, prompt):
-        assert_provider_permitted("Anthropic Claude")
+        self._permit()
         return self.client.messages.count_tokens(
             model=self.model, messages=[{"role": "user", "content": prompt}]
         )
@@ -304,7 +374,7 @@ class ClaudeClient:
                 text_content = self._convert_html_to_text(
                     file_path, save_text, output_dir
                 )
-                assert_provider_permitted("Anthropic Claude")
+                self._permit()
                 message = self.client.messages.create(
                     model=self.model,
                     max_tokens=self.max_tokens,
@@ -337,7 +407,7 @@ class ClaudeClient:
                 self.log.debug(f"File encoded, size: {len(file_content)} bytes")
 
             self.log.info("Sending file for analysis")
-            assert_provider_permitted("Anthropic Claude")
+            self._permit()
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -404,7 +474,7 @@ class ClaudeClient:
                     self.log.debug(
                         f"Read text file, length: {len(text_content)} characters"
                     )
-                assert_provider_permitted("Anthropic Claude")
+                self._permit()
                 message = self.client.messages.create(
                     model=self.model,
                     max_tokens=self.max_tokens,
@@ -453,7 +523,7 @@ class ClaudeClient:
                 self.log.debug(f"File encoded, size: {len(file_content)} bytes")
 
             self.log.info("Sending file for analysis")
-            assert_provider_permitted("Anthropic Claude")
+            self._permit()
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -562,7 +632,7 @@ class ClaudeClient:
             if prompt:
                 message_content.append({"type": "text", "text": prompt})
 
-            assert_provider_permitted("Anthropic Claude")
+            self._permit()
             token_count = self.client.messages.count_tokens(
                 model=self.model,
                 messages=[{"role": "user", "content": message_content}],

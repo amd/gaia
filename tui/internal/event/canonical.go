@@ -68,6 +68,10 @@ type CanonicalStatusEvent struct {
 	// only version the header may show. Empty from an agent that predates them.
 	AgentVersion string `json:"agent_version,omitempty"`
 	GaiaVersion  string `json:"gaia_version,omitempty"`
+	// ClaudeUnavailable lists the direct Claude ids the agent will refuse
+	// here, keyed by id: on AMD's network Claude goes only through the AMD
+	// LLM Gateway. Empty off that network and from an older agent.
+	ClaudeUnavailable map[string]ClaudeBlock `json:"claude_unavailable,omitempty"`
 	// Phase names what the model is doing while nothing else is on the wire:
 	// "loading_model", "downloading_model", "reading", "loading_tools",
 	// "reasoning" or "tool_call". Empty on narration and on agents that predate it. Words
@@ -368,4 +372,11 @@ func CanonicalTerminalType(evt interface{}) string {
 		return CanonicalTypeError
 	}
 	return ""
+}
+
+// ClaudeBlock is why one direct Claude id can't be used, and the gateway id
+// to pick instead.
+type ClaudeBlock struct {
+	Reason string `json:"reason"`
+	Use    string `json:"use"`
 }

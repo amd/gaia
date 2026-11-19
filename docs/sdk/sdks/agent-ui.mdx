@@ -3210,7 +3210,10 @@ the same way.
     offers — downloaded local models that can run on this PC, the AMD LLM
     Gateway's models, Fireworks AI's when it has a key, and Anthropic's
     `claude-*` models when `ANTHROPIC_API_KEY` is set — plus any configured
-    model none offers. Each has `provider` (`local`, `amd`, `fireworks` or
+    model none offers. On AMD's network the direct `claude-*` models are
+    always listed with `available: false` and a `reason` naming the gateway
+    model to use (`On the AMD network Claude runs through the AMD LLM Gateway —
+    use amd.Claude-Opus-5-5`), and a `PUT` choosing one is a **422**. Each has `provider` (`local`, `amd`, `fireworks` or
     `claude`; listed in that order), `display_name`, `available` with a
     `reason` when not, and prices `input_per_million` / `output_per_million` /
     `cache_read_per_million` with their `price_source`, `null` when unknown,
@@ -3256,7 +3259,9 @@ the same way.
     `classifier_note`. The ids are stable: `gateway-deepseek-opus` (the
     default, and the only measured one), `gateway-deepseek-sonnet`,
     `gateway-balanced`, `local-plus-cloud`, `all-local` (works under Local
-    only), `fireworks` and `claude-direct`.
+    only), `fireworks` and `claude-direct`. On AMD's network `claude-direct`
+    is unavailable with that same gateway reason, and `fireworks` never takes
+    a direct Claude as its strong model.
   </Accordion>
 
   <Accordion title="POST /api/hybrid/templates/{template_id}/apply">

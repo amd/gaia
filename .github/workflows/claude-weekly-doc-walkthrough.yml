@@ -276,6 +276,9 @@ jobs:
       - Windows
       - xsj-dispatch
       - strix-point
+    env:
+      # AMD's lab pool: on AMD's network whatever a probe says.
+      GAIA_AMD_NETWORK: '1'
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -441,6 +444,15 @@ jobs:
           Write-Host "Installed: $gaiaVersion"
           "- **Environment:** ✅ $($wheel.Name) installed, ``gaia --version`` -> $gaiaVersion" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
+      # After the wheel install: the check runs GAIA's own network detection.
+      - name: Check for AMD's network
+        id: amd_net
+        uses: ./.github/actions/amd-network
+        with:
+          gateway-key: ${{ secrets.LEMONADE_AMD_API_KEY }}
+          python: ${{ env.RUN_DIR }}\venv\Scripts\python.exe
+          what: "The doc walkthrough"
+
       - name: Start an isolated Lemonade instance on the dedicated port
         shell: powershell
         run: |
@@ -490,9 +502,15 @@ jobs:
         id: executor
         continue-on-error: true
         uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
+        # On AMD's network Claude Code goes only to the AMD LLM Gateway.
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.amd_net.outputs.on == 'true' && 'https://llm-api.amd.com/Anthropic' || '' }}
+          ANTHROPIC_CUSTOM_HEADERS: "${{ steps.amd_net.outputs.on == 'true' && format('Ocp-Apim-Subscription-Key: {0}', secrets.LEMONADE_AMD_API_KEY) || '' }}"
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: ${{ steps.amd_net.outputs.on == 'true' && '1' || '' }}
         with:
-          anthropic_api_key: ${{ needs.discover.outputs.claude_account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
-          claude_code_oauth_token: ${{ needs.discover.outputs.claude_account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # On AMD's network the key is the gateway's and no Anthropic token goes in.
+          anthropic_api_key: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || (needs.discover.outputs.claude_account == 'none' && secrets.ANTHROPIC_API_KEY || '') }}
+          claude_code_oauth_token: ${{ steps.amd_net.outputs.on != 'true' && (needs.discover.outputs.claude_account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) || '' }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # On `schedule`, github.actor is whoever last touched the default branch — a bot
           # in this repo: github-merge-queue[bot] normally, github-actions[bot] after a
@@ -637,9 +655,15 @@ jobs:
         if: always()
         continue-on-error: true
         uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
+        # On AMD's network Claude Code goes only to the AMD LLM Gateway.
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.amd_net.outputs.on == 'true' && 'https://llm-api.amd.com/Anthropic' || '' }}
+          ANTHROPIC_CUSTOM_HEADERS: "${{ steps.amd_net.outputs.on == 'true' && format('Ocp-Apim-Subscription-Key: {0}', secrets.LEMONADE_AMD_API_KEY) || '' }}"
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: ${{ steps.amd_net.outputs.on == 'true' && '1' || '' }}
         with:
-          anthropic_api_key: ${{ needs.discover.outputs.claude_account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
-          claude_code_oauth_token: ${{ needs.discover.outputs.claude_account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # On AMD's network the key is the gateway's and no Anthropic token goes in.
+          anthropic_api_key: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || (needs.discover.outputs.claude_account == 'none' && secrets.ANTHROPIC_API_KEY || '') }}
+          claude_code_oauth_token: ${{ steps.amd_net.outputs.on != 'true' && (needs.discover.outputs.claude_account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) || '' }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # See the executor step's note — scheduled runs are actored by a bot.
           allowed_bots: "github-merge-queue,github-actions"
