@@ -99,6 +99,8 @@ Change the version in the `label` value to match the new release tag.
 
 The terminal's six raw binaries publish to the Agent Hub (R2), where the flagship agent's lock pins them, and `release_components.yml` gates a tag against this manifest — publishing under a stale `version` fails the release, since R2 paths are immutable. The installers and the desktop app ship on the GitHub release only, so `hub/components/agent-ui/` is no longer published and needs no bump.
 
+Skills need no step here: `release_skills.yml` publishes every `hub/skills/` version the hub does not have yet, and fails the release if a published skill changed without a `version:` bump.
+
 #### 5. `src/gaia/apps/webui/package.json` and `package-lock.json` — bump the UI version
 
 Run `node installer/version/bump-ui-version.mjs` after `src/gaia/version.py` is updated; it reads the new version from there and rewrites both files.

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Lemonade /system-info bodies, trimmed to the fields the fit check reads.
@@ -33,7 +34,6 @@ func capacityOf(t *testing.T, body string) Capacity {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.ServerVersion = "2026.39.1"
 	return c
 }
 
@@ -115,7 +115,7 @@ func TestEntriesPutRecommendationsFirstAndJudgeFit(t *testing.T) {
 		{ID: "Huge-GGUF", Size: 200, Labels: []string{"chat"}},
 		{ID: "Qwen3-Coder-Next-GGUF", Size: 48, Labels: []string{"chat", "coding"}},
 	}
-	entries := BuildEntries("local", models, capacityOf(t, macM4), nil)
+	entries := BuildEntries("local", models, capacityOf(t, macM4), nil, NPUVerdict{})
 	if entries[0].Model.ID != "Qwen3.6-35B-A3B-GGUF" || entries[0].Listed || entries[0].Selectable() {
 		t.Fatalf("the unlisted default should lead, unselectable on a 12 GB Mac: %+v", entries[0])
 	}
@@ -143,7 +143,7 @@ func TestEntriesPutRecommendationsFirstAndJudgeFit(t *testing.T) {
 
 func TestUnreadableMachineBlocksEveryDownload(t *testing.T) {
 	models := []Model{{ID: "Tiny-GGUF", Size: 0.5, Labels: []string{"chat"}}, {ID: "Have-GGUF", Size: 9, Downloaded: true, Labels: []string{"chat"}}}
-	for _, e := range BuildEntries("local", models, Capacity{}, fmt.Errorf("boom")) {
+	for _, e := range BuildEntries("local", models, Capacity{}, fmt.Errorf("boom"), NPUVerdict{}) {
 		if e.NeedsDownload() && e.Selectable() {
 			t.Fatalf("%s downloadable without a fit check", e.Model.ID)
 		}
@@ -154,11 +154,11 @@ func TestUnreadableMachineBlocksEveryDownload(t *testing.T) {
 }
 
 func TestFireworksKeepsItsSuggestionFirstAndHidesWhatTheAccountLacks(t *testing.T) {
-	entries := BuildEntries("fireworks", []Model{{ID: "fireworks.z", Recipe: "cloud"}, {ID: TopRecommendation().ID, Recipe: "cloud"}}, Capacity{}, nil)
+	entries := BuildEntries("fireworks", []Model{{ID: "fireworks.z", Recipe: "cloud"}, {ID: TopRecommendation().ID, Recipe: "cloud"}}, Capacity{}, nil, NPUVerdict{})
 	if len(entries) != 2 || entries[0].Model.ID != TopRecommendation().ID || !entries[0].Selectable() {
 		t.Fatalf("suggested Fireworks model should lead: %+v", entries)
 	}
-	for _, e := range BuildEntries("fireworks", []Model{{ID: "fireworks.z", Recipe: "cloud"}}, Capacity{}, nil) {
+	for _, e := range BuildEntries("fireworks", []Model{{ID: "fireworks.z", Recipe: "cloud"}}, Capacity{}, nil, NPUVerdict{}) {
 		if e.Model.ID == TopRecommendation().ID {
 			t.Fatal("a Fireworks model the account lacks was listed")
 		}
@@ -236,7 +236,7 @@ func TestCatalogListsUndownloadedChatModelsOnly(t *testing.T) {
 			{"id":"fireworks.glm","recipe":"cloud","labels":["chat"]}]}`)
 	}))
 	defer s.Close()
-	entries, err := New(s.URL).Catalog(context.Background(), "local", capacityOf(t, strixHalo128), nil)
+	entries, err := New(s.URL).Catalog(context.Background(), "local", capacityOf(t, strixHalo128), nil, NPUVerdict{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestCatalogListsUndownloadedChatModelsOnly(t *testing.T) {
 }
 
 func TestRecommendedBuiltinMissingFromLemonadeIsUnavailableNotTooBig(t *testing.T) {
-	for _, e := range BuildEntries("local", nil, capacityOf(t, strixHalo128), nil) {
+	for _, e := range BuildEntries("local", nil, capacityOf(t, strixHalo128), nil, NPUVerdict{}) {
 		if e.Model.ID != "Qwen3-Coder-Next-GGUF" {
 			continue
 		}
@@ -295,34 +295,9 @@ func TestRealLemonadeReportsMatchThePythonRule(t *testing.T) {
 }
 
 func TestUnknownFitIsLabelledAsSuch(t *testing.T) {
-	for _, e := range BuildEntries("local", []Model{{ID: "Tiny-GGUF", Size: 1, Labels: []string{"chat"}}}, Capacity{}, fmt.Errorf("boom")) {
+	for _, e := range BuildEntries("local", []Model{{ID: "Tiny-GGUF", Size: 1, Labels: []string{"chat"}}}, Capacity{}, fmt.Errorf("boom"), NPUVerdict{}) {
 		if e.Model.ID == "Tiny-GGUF" && (!e.FitUnknown || e.Selectable()) {
 			t.Fatalf("%+v", e)
-		}
-	}
-}
-
-func TestQwenFlashNeedsANewEnoughLemonade(t *testing.T) {
-	halo := capacityOf(t, strixHalo128)
-	for version, want := range map[string]bool{"2026.39.1": true, "2026.40.0~3.abc": true, "11.9.0": false, "": false} {
-		halo.ServerVersion = version
-		for _, e := range BuildEntries("local", nil, halo, nil) {
-			if e.Recommended == nil || e.Recommended.RegisterAs == "" || e.Recommended.MinLemonade == "" {
-				continue
-			}
-			if e.Selectable() != want || e.NeedsUpgrade == want {
-				t.Errorf("Lemonade %q: selectable=%v needsUpgrade=%v reason=%q", version, e.Selectable(), e.NeedsUpgrade, e.Reason)
-			}
-		}
-	}
-}
-
-func TestTooSmallBeatsTooOldInTheReason(t *testing.T) {
-	mac := capacityOf(t, macM4)
-	mac.ServerVersion = "11.9.0"
-	for _, e := range BuildEntries("local", nil, mac, nil) {
-		if e.Recommended != nil && e.Recommended.RegisterAs != "" && (e.NeedsUpgrade || !strings.Contains(e.Reason, "memory")) {
-			t.Fatalf("a PC too small was told to upgrade Lemonade: %+v", e)
 		}
 	}
 }
@@ -334,7 +309,7 @@ func TestGatewayPickerLeadsWithDeepSeekV41Flash(t *testing.T) {
 		{ID: "amd.DeepSeek-V4-Flash", Recipe: "cloud"},
 		{ID: "amd.DeepSeek-V4.1-Flash", Recipe: "cloud"},
 	}
-	entries := BuildEntries("amd", models, Capacity{}, nil)
+	entries := BuildEntries("amd", models, Capacity{}, nil, NPUVerdict{})
 	if len(entries) != 3 || entries[0].Model.ID != "amd.DeepSeek-V4.1-Flash" ||
 		entries[0].Recommended == nil || !entries[0].Selectable() {
 		t.Fatalf("first gateway row = %+v, want a selectable recommended DeepSeek-V4.1-Flash", entries[0])
@@ -343,5 +318,152 @@ func TestGatewayPickerLeadsWithDeepSeekV41Flash(t *testing.T) {
 		if e.Recommended != nil {
 			t.Errorf("%s must not be recommended", e.Model.ID)
 		}
+	}
+}
+
+func npuEntry(entries []Entry, id string) *Entry {
+	for i := range entries {
+		if entries[i].Model.ID == id {
+			return &entries[i]
+		}
+	}
+	return nil
+}
+
+func TestAColdNPUPCIsOfferedGemmaBeforeLemonadeListsIt(t *testing.T) {
+	entries := BuildEntries("local", nil, Capacity{MemoryGB: 8, DiskFreeGB: 500, NPUMemoryGB: 32}, nil, verdict(true, true, true))
+	e := npuEntry(entries, "gemma4-it-e4b-FLM")
+	if e == nil || !e.Selectable() || e.Listed || e.Featured() {
+		t.Fatalf("cold NPU row: %+v", e)
+	}
+}
+
+func TestAPCWithoutAnNPUDropsTheUnlistedNPURecommendation(t *testing.T) {
+	entries := BuildEntries("local", nil, Capacity{MemoryGB: 64, DiskFreeGB: 500}, nil, verdict(false, false, true))
+	if e := npuEntry(entries, "gemma4-it-e4b-FLM"); e != nil {
+		t.Fatalf("a PC with no NPU must drop the unlisted recommendation: %+v", e)
+	}
+}
+
+// #7975: every FLM build on the PC was offered, though only the ladder is proven.
+func TestOnlyProvenNPUModelsAreOffered(t *testing.T) {
+	flm := func(id string) Model {
+		return Model{ID: id, Recipe: "flm", Downloaded: true, Labels: []string{"chat"}}
+	}
+	models := []Model{flm("gemma4-it-e4b-FLM"), flm("lfm2-1.2b-FLM"), flm("qwen3.5-4b-FLM"),
+		{ID: "Tiny-GGUF", Downloaded: true, Labels: []string{"chat"}}}
+	entries := BuildEntries("local", models, Capacity{MemoryGB: 64, DiskFreeGB: 500, NPUMemoryGB: 32}, nil, verdict(true, true, true))
+
+	kept := OnlyProvenNPU(entries, []string{"QWEN3.5-4B-FLM"})
+
+	for id, want := range map[string]bool{
+		"gemma4-it-e4b-FLM": true, "lfm2-1.2b-FLM": false, "qwen3.5-4b-FLM": true, "Tiny-GGUF": true,
+	} {
+		if got := npuEntry(kept, id) != nil; got != want {
+			t.Errorf("%s offered = %v, want %v", id, got, want)
+		}
+	}
+}
+
+func TestAnFLMModelIsJudgedOnSystemRAM(t *testing.T) {
+	entries := BuildEntries("local", nil, Capacity{MemoryGB: 2, DiskFreeGB: 500, NPUMemoryGB: 32}, nil, verdict(true, true, true))
+	if e := npuEntry(entries, "gemma4-it-e4b-FLM"); e == nil || !e.Fits {
+		t.Fatalf("a small GPU pool must not refuse an NPU model: %+v", e)
+	}
+}
+
+func TestChatLabelWinsOverAudioAndSingleTurnLoses(t *testing.T) {
+	if !isChatModel(Model{ID: "gemma4-it-e4b-FLM", Labels: []string{"audio", "chat"}}) {
+		t.Fatal("an omni FLM model is a chat model")
+	}
+	if isChatModel(Model{ID: "gemma4e-flash-e4b-FLM", Labels: []string{"chat", "single-turn"}}) {
+		t.Fatal("a single-turn build cannot hold a conversation")
+	}
+}
+
+func TestAColdPullInstallsTheBackendFirstThenGoesByName(t *testing.T) {
+	var order []string
+	var install, pull map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/install"):
+			order = append(order, "install")
+			_ = json.NewDecoder(r.Body).Decode(&install)
+			fmt.Fprint(w, `{"status":"success"}`)
+		case strings.HasSuffix(r.URL.Path, "/pull"):
+			order = append(order, "pull")
+			_ = json.NewDecoder(r.Body).Decode(&pull)
+			fmt.Fprint(w, "event: complete\ndata: {\"percent\":100}\n\n")
+		}
+	}))
+	defer s.Close()
+	rec := Recommended{ID: "gemma4-it-e4b-FLM", Provider: "local", Device: "npu"}
+	e := Entry{Model: Model{ID: rec.ID}, Recommended: &rec, Fits: true}
+	if err := New(s.URL).Pull(context.Background(), e, nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(order, ",") != "install,pull" {
+		t.Fatalf("order: %v", order)
+	}
+	if install["recipe"] != "flm" || install["backend"] != "npu" {
+		t.Fatalf("install body: %v", install)
+	}
+	if _, ok := pull["recipe"]; ok || pull["model_name"] != rec.ID {
+		t.Fatalf("built-in pull must go by name only (#1655): %v", pull)
+	}
+}
+
+func TestAListedFLMModelSkipsTheInstall(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/install") {
+			t.Error("the backend is in: Lemonade already lists the model")
+		}
+		fmt.Fprint(w, "event: complete\ndata: {\"percent\":100}\n\n")
+	}))
+	defer s.Close()
+	e := Entry{Model: Model{ID: "gemma4-it-e4b-FLM", Recipe: "flm"}, Listed: true, Fits: true}
+	if err := New(s.URL).Pull(context.Background(), e, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAFailedBackendInstallStopsThePull(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/pull") {
+			t.Error("pull after a failed install")
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer s.Close()
+	rec := Recommended{ID: "gemma4-it-e4b-FLM", Provider: "local", Device: "npu"}
+	e := Entry{Model: Model{ID: rec.ID}, Recommended: &rec, Fits: true}
+	if err := New(s.URL).Pull(context.Background(), e, nil); err == nil || !strings.Contains(err.Error(), "NPU backend") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAnAddedFLMRowSurvivesAPCWithoutAnNPU(t *testing.T) {
+	rec := Recommended{ID: "qwen3.5-4b-FLM", Provider: "local", Device: "npu", Custom: true, SizeGB: 5}
+	entries := BuildEntries("local", nil, Capacity{MemoryGB: 64, DiskFreeGB: 500}, nil, NPUVerdict{}, rec)
+	e := npuEntry(entries, rec.ID)
+	if e == nil || e.Fits {
+		t.Fatalf("an added row must stay, so it can be removed, and must not fit: %+v", e)
+	}
+}
+
+func TestTheBackendInstallIsNotBoundByTheShortClientTimeout(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/install") {
+			time.Sleep(150 * time.Millisecond)
+		}
+		fmt.Fprint(w, "event: complete\ndata: {\"percent\":100}\n\n")
+	}))
+	defer s.Close()
+	c := New(s.URL)
+	c.HTTP.Timeout = 50 * time.Millisecond
+	rec := Recommended{ID: "gemma4-it-e4b-FLM", Provider: "local", Device: "npu"}
+	e := Entry{Model: Model{ID: rec.ID}, Recommended: &rec, Fits: true}
+	if err := c.Pull(context.Background(), e, nil); err != nil {
+		t.Fatal(err)
 	}
 }

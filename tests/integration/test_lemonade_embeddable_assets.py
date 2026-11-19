@@ -25,9 +25,13 @@ from pathlib import Path
 
 import pytest
 
-from gaia.installer.lemonade_installer import INSTALLER_SHA256, LEGACY_MSI_SHA256
+from gaia.installer.lemonade_installer import (
+    INSTALLER_SHA256,
+    LEGACY_MSI_SHA256,
+    OLDEST_REMOVABLE_LEMONADE,
+)
 from gaia.llm.lemonade_embedded import _ASSET_TEMPLATES, EMBEDDABLE_SHA256
-from gaia.version import LEMONADE_MIN_VERSION, LEMONADE_VERSION, parse_version
+from gaia.version import LEMONADE_VERSION, parse_version
 
 RELEASE_API = (
     "https://api.github.com/repos/lemonade-sdk/lemonade/releases/tags/v{version}"
@@ -181,7 +185,7 @@ def test_release_tag_list_names_every_supported_release(every_release):
         for line in RELEASE_TAGS.read_text(encoding="utf-8").splitlines()
         if line.strip() and line[0] != "#"
     }
-    oldest = parse_version(LEMONADE_MIN_VERSION)
+    oldest = parse_version(OLDEST_REMOVABLE_LEMONADE)
     newest = parse_version(LEMONADE_VERSION)
     supported = {
         release["tag_name"]

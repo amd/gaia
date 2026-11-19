@@ -329,7 +329,13 @@ def _stopped_md(stopped):
     if not stopped:
         return []
     not_run = stopped.get("not_run") or []
+    partial = stopped.get("partial") or {}
     return [
+        *(
+            [f"> **INCOMPLETE — {partial['summary']}.**", ">"]
+            if partial.get("summary")
+            else []
+        ),
         f"> **Stopped: {stopped.get('headline')}** during "
         f"`{stopped.get('after_scenario')}`. {len(not_run)} scenario(s) have no "
         "result, which is NOT a failure of the agent. Resets: "

@@ -93,3 +93,24 @@ func TestLogfIsConcurrencySafe(t *testing.T) {
 		t.Errorf("want 50 intact lines, got %d", got)
 	}
 }
+
+// The second half of the same bug: every other --dev line, such as the SSE
+// contract note, wrote to stderr and scrolled the alt screen, stranding a stale
+// copy of the composer above the real one.
+func TestDevLogfWritesToTheLog(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(EnvHome, home)
+	CloseLog()
+	t.Cleanup(CloseLog)
+
+	DevLogf("sse: %s", "ready")
+	CloseLog()
+
+	raw, err := os.ReadFile(filepath.Join(home, LogFileName))
+	if err != nil {
+		t.Fatalf("expected the diagnostic in %s: %v", LogFileName, err)
+	}
+	if !strings.Contains(string(raw), "[DEBUG] sse: ready") {
+		t.Errorf("log missing the diagnostic, got: %q", raw)
+	}
+}

@@ -621,7 +621,7 @@ def _parse_python(raw: Any, where: str) -> Optional[PythonConfig]:
     if entry_module is not None and not _nonempty_str(entry_module):
         raise ManifestError(
             f"gaia-agent.yaml{where}: python.entry_module must be a non-empty "
-            f"string (e.g. 'gaia_agent_chat.agent')."
+            f"string (e.g. 'gaia_agent.agent')."
         )
     if entry_class is not None and not _nonempty_str(entry_class):
         raise ManifestError(

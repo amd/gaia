@@ -73,7 +73,7 @@ class TestModelRegistry:
         models = INIT_PROFILES["npu"]["models"]
         assert "embed-gemma-300m-FLM" in models
         # Chat model must remain so both pull on `gaia init --profile npu`.
-        assert "gemma4-it-e2b-FLM" in models
+        assert "gemma4-it-e4b-FLM" in models
 
 
 # ---------------------------------------------------------------------------

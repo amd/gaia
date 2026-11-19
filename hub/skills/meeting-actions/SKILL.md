@@ -1,6 +1,6 @@
 ---
 name: meeting-actions
-description: Pull every action item out of meeting notes, minutes or transcripts, including commitments made in passing ("I'll send it", "let me check"), with owner, due date and status, merged across meetings into one row per item, plus a separate log of decisions. Use when the user asks for action items, follow-ups, to-dos, owners, next steps, decisions, an action tracker, or what is still open from one or more meetings.
+description: Pull every action item out of meeting notes, minutes or transcripts, including commitments made in passing ("I'll send it"), with owner, due date and status, merged across meetings, plus a separate decision log. Use when the user asks for action items, follow-ups, to-dos, owners, next steps, decisions or what is still open from meetings.
 license: MIT
 version: 1.0.0
 metadata:

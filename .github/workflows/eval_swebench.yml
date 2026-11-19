@@ -43,7 +43,6 @@ on:
       - 'src/gaia/agents/tools/**'
       - 'src/gaia/llm/providers/lemonade.py'
       - 'hub/agents/gaia/python/gaia_agent/**'
-      - 'hub/agents/chat/python/gaia_agent_chat/**'
       - 'hub/skills/coding/**'
       - 'src/gaia/eval/bench/**'
       - 'src/gaia/eval/flagship_tasks.py'
@@ -92,7 +91,7 @@ jobs:
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
-          install-package: '-e .[dev,eval] -e hub/agents/chat/python -e hub/agents/gaia/python'
+          install-package: '-e .[dev,eval] -e hub/agents/gaia/python'
 
       - name: Install the SWE-bench grading harness
         # Not a GAIA dependency: only this workflow grades with it.

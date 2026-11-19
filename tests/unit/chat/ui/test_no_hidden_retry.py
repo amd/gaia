@@ -76,8 +76,10 @@ async def test_streamed_turn_is_not_replayed_after_a_model_error(runtime):
 
     assert agent.tool_runs == 1, "the turn's tools ran again on a hidden retry"
     assert not any("retrying" in (e.get("message") or "") for e in events)
-    errors = [e for e in events if e.get("type") == "error"]
-    assert errors and LemonadeModelNotLoadedError.user_message in errors[0]["content"]
+    assert not [e for e in events if e.get("type") == "error"]
+    (done,) = [e for e in events if e.get("type") == "done"]
+    assert done.get("failed") is True
+    assert done["content"].count(LemonadeModelNotLoadedError.user_message) == 1
 
 
 async def test_non_streamed_turn_is_not_replayed_after_a_model_error(runtime):

@@ -1,0 +1,47 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# PR + main CI for the amd-gaia.ai apex router (workers/website-router/). The
+# Worker is deployed by hand, so this suite is the only thing that checks its
+# routing and caching contract before it ships.
+
+name: Website Router CI
+
+on:
+  pull_request:
+    paths:
+      - 'workers/website-router/**'
+      - '.github/workflows/website_router_ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'workers/website-router/**'
+      - '.github/workflows/website_router_ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-router-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Router tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/website-router
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests (node --test)
+        run: npm test

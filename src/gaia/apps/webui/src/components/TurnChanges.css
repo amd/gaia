@@ -70,7 +70,7 @@
 
 .turn-changes-warning ul {
     margin: 2px 0 0;
-    padding-left: 16px;
+    padding-inline-start: 16px;
     color: var(--text-secondary);
     font-family: var(--font-mono);
     font-size: 11px;
@@ -106,10 +106,6 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-}
-
-.changes-review-file .render-diff__title {
-    word-break: break-all;
 }
 
 .changes-review-loading {

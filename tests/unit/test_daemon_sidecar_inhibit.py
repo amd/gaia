@@ -46,6 +46,8 @@ class _FakeManager:
 
         return self._mode_override or os.environ.get(self.spec.mode_env_var) or "user"
 
+    uses_ignored_lemonade = False
+
     @property
     def is_running(self):
         return self._running
@@ -68,20 +70,20 @@ class _FakeManager:
 def _registry():
     from gaia.daemon.sidecars.registry import SidecarRegistry
 
-    reg = SidecarRegistry({"email": builtin_specs()["email"]})
+    reg = SidecarRegistry({"gaia": builtin_specs()["gaia"]})
     reg._manager_factory = _FakeManager  # type: ignore[attr-defined]
     return reg
 
 
 def test_inhibited_agent_id_refuses_to_spawn(monkeypatch):
-    monkeypatch.setenv(INHIBIT_SIDECAR_ENV_VAR, "email")
+    monkeypatch.setenv(INHIBIT_SIDECAR_ENV_VAR, "gaia")
     reg = _registry()
 
     with pytest.raises(SidecarInhibitedError) as exc:
-        reg.ensure("email")
+        reg.ensure("gaia")
 
     assert INHIBIT_SIDECAR_ENV_VAR in str(exc.value)
-    assert "email" in str(exc.value)
+    assert "gaia" in str(exc.value)
     # It's a SidecarSpawnError subclass, so the existing route mapping (502)
     # and any other SidecarSpawnError-handling caller needs no new branch.
     assert isinstance(exc.value, SidecarSpawnError)
@@ -92,14 +94,14 @@ def test_wildcard_inhibits_every_agent(monkeypatch):
     reg = _registry()
 
     with pytest.raises(SidecarInhibitedError):
-        reg.ensure("email")
+        reg.ensure("gaia")
 
 
 def test_other_agent_ids_are_unaffected(monkeypatch):
-    monkeypatch.setenv(INHIBIT_SIDECAR_ENV_VAR, "gaia")
+    monkeypatch.setenv(INHIBIT_SIDECAR_ENV_VAR, "some-other-agent")
     reg = _registry()
 
-    entry = reg.ensure("email")  # not in the inhibited list
+    entry = reg.ensure("gaia")  # not in the inhibited list
 
     assert entry["state"] == "running"
 
@@ -108,7 +110,7 @@ def test_unset_env_var_never_inhibits(monkeypatch):
     monkeypatch.delenv(INHIBIT_SIDECAR_ENV_VAR, raising=False)
     reg = _registry()
 
-    entry = reg.ensure("email")
+    entry = reg.ensure("gaia")
 
     assert entry["state"] == "running"
 
@@ -118,9 +120,9 @@ def test_attaching_to_an_already_running_agent_ignores_inhibit(monkeypatch):
     # access to one that is already up (that would be new production
     # behavior, not a test hold).
     reg = _registry()
-    reg.ensure("email")  # fresh spawn, before the var is set
+    reg.ensure("gaia")  # fresh spawn, before the var is set
 
-    monkeypatch.setenv(INHIBIT_SIDECAR_ENV_VAR, "email")
-    entry = reg.ensure("email")  # attach path
+    monkeypatch.setenv(INHIBIT_SIDECAR_ENV_VAR, "gaia")
+    entry = reg.ensure("gaia")  # attach path
 
     assert entry["state"] == "running"

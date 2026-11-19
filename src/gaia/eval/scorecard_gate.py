@@ -16,17 +16,17 @@ Usage::
 
     # Presence-only (first adoption):
     python -m gaia.eval.scorecard_gate \\
-        --scorecard hub/agents/email/npm/SCORECARD.md
+        --scorecard hub/agents/gaia/npm/SCORECARD.md
 
     # With a baseline from a file (unit tests):
     python -m gaia.eval.scorecard_gate \\
-        --scorecard hub/agents/email/npm/SCORECARD.md \\
+        --scorecard hub/agents/gaia/npm/SCORECARD.md \\
         --baseline-file /tmp/prev-SCORECARD.md
 
     # With a baseline resolved from a git ref (CI):
     python -m gaia.eval.scorecard_gate \\
-        --scorecard hub/agents/email/npm/SCORECARD.md \\
-        --baseline-ref agent-pkg-email-v0.2.3
+        --scorecard hub/agents/gaia/npm/SCORECARD.md \\
+        --baseline-ref agent-pkg-gaia-v0.1.0
 
 Exit codes:
     0 — Passed (presence-only first adoption, equal score, or score improved).
@@ -95,10 +95,8 @@ def env_ctx_size(parsed: dict) -> int | None:
     Lives in ``recipe.environment.ctx_size`` — absent on cards produced
     before the envelope landed (implicitly the model's 64K registry floor).
 
-    Public (#2094): the ``email_scorecard_refresh.yml`` ``pre`` step imports
-    this directly to read the committed card's ctx stamp before spending any
-    eval budget, rather than re-deriving the ``recipe.environment.ctx_size``
-    path in ad-hoc PowerShell/Python.
+    Public (#2094) so a workflow can read a committed card's ctx stamp before
+    spending any eval budget.
     """
     env = parsed.get("recipe", {}).get("environment")
     if not isinstance(env, dict):
@@ -107,6 +105,17 @@ def env_ctx_size(parsed: dict) -> int | None:
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
     return int(v)
+
+
+_GIT_TIMEOUT_S = 60
+
+
+def _git_hung(exc: subprocess.TimeoutExpired) -> str:
+    return (
+        f"`{' '.join(exc.cmd)}` did not finish within {exc.timeout:g}s. Check "
+        "for a stale .git/index.lock or a hung credential prompt, or use "
+        "--baseline-file instead."
+    )
 
 
 def _parse_baseline_ref(scorecard_path: Path, ref: str) -> str | None:
@@ -129,7 +138,10 @@ def _parse_baseline_ref(scorecard_path: Path, ref: str) -> str | None:
             capture_output=True,
             text=True,
             check=True,
+            timeout=_GIT_TIMEOUT_S,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(_git_hung(exc)) from exc
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         raise ValueError(
             f"Cannot determine git repository root: {exc}. "
@@ -158,9 +170,12 @@ def _parse_baseline_ref(scorecard_path: Path, ref: str) -> str | None:
             capture_output=True,
             text=True,
             check=False,
+            timeout=_GIT_TIMEOUT_S,
         )
     except FileNotFoundError as exc:
         raise ValueError(f"git not found: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(_git_hung(exc)) from exc
     if ref_check.returncode != 0:
         raise ValueError(
             f"baseline ref {ref!r} does not resolve to a commit. "
@@ -173,9 +188,12 @@ def _parse_baseline_ref(scorecard_path: Path, ref: str) -> str | None:
             capture_output=True,
             text=True,
             check=False,
+            timeout=_GIT_TIMEOUT_S,
         )
     except FileNotFoundError as exc:
         raise ValueError(f"git not found: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(_git_hung(exc)) from exc
 
     if result.returncode != 0:
         # File absent at that ref → first adoption (presence-only pass).
@@ -203,7 +221,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--scorecard",
         required=True,
-        help="Path to the candidate SCORECARD.md (e.g. hub/agents/email/npm/SCORECARD.md).",
+        help="Path to the candidate SCORECARD.md (e.g. hub/agents/gaia/npm/SCORECARD.md).",
     )
     baseline_group = parser.add_mutually_exclusive_group()
     baseline_group.add_argument(
@@ -361,9 +379,9 @@ def main(argv=None) -> int:
         print(
             f"ERROR: --require-ctx-match is set but the candidate SCORECARD.md "
             f"at {candidate_path} records no 'recipe.environment.ctx_size'.\n"
-            f"  Re-generate the card from a benchmark run made with an explicit "
-            f"ctx pin (gaia eval benchmark --ctx-size ...) so the release "
-            f"states the window it was measured under (#1892)."
+            f"  Re-generate the card from an eval run made with an explicit "
+            f"context size (set GAIA_CTX_SIZE) so the release states the "
+            f"window it was measured under (#1892)."
         )
         return 1
 

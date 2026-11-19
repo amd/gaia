@@ -148,6 +148,10 @@ def test_indexing_normalizes_no_break_spaces_only_for_embedding(tmp_path, from_c
     sdk = _make(tmp_path)
     if from_cache:
         assert sdk.index_document(str(doc))["success"]
+        # Drop the saved vectors so the reload embeds the cached chunks.
+        for name in os.listdir(sdk.config.cache_dir):
+            if name.endswith(".npy"):
+                os.remove(os.path.join(sdk.config.cache_dir, name))
         sdk = _make(tmp_path)
 
     result = sdk.index_document(str(doc))

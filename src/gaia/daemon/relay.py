@@ -31,7 +31,7 @@ sidecar-authored one.
 
 Cancel semantics: a client disconnect (or a non-terminal stream end) triggers a
 best-effort ``POST /v1/<agent>/query/<run_id>/cancel`` upstream — mirroring
-``gaia.ui.email_sidecar.relay``'s crash/cancel handling — so an abandoned run
+``gaia.ui.sidecar.relay``'s crash/cancel handling — so an abandoned run
 stops occupying the single-tenant LLM slot. Best-effort by design: the sidecar
 may already be dead, so transport failures are logged, never raised.
 
@@ -62,23 +62,18 @@ from gaia.daemon.sidecars.errors import (
     SidecarUnresponsiveError,
     UnknownAgentError,
 )
-from gaia.daemon.timeouts import DEFAULT_AGENT_READ_TIMEOUT, agent_read_timeout
+from gaia.daemon.timeouts import agent_read_timeout
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
 #: Connect timeout — a dead sidecar should fail fast on TCP connect.
 CONNECT_TIMEOUT = 10.0
-#: Read timeout between upstream chunks — spans a whole agent-loop step, so it
-#: matches the sidecar proxy's long per-request budget, not the connect one.
-# Compatibility alias for the historical floor; the request path resolves the
-# effective value with agent_read_timeout() so long-lived daemons see env changes.
-READ_TIMEOUT = DEFAULT_AGENT_READ_TIMEOUT
-#: Cancel POST timeout — best-effort cleanup must never wait out READ_TIMEOUT.
+#: Cancel POST timeout — best-effort cleanup must never wait out the read timeout.
 CANCEL_TIMEOUT = 10.0
 
 #: Canonical event types that terminate a ``/query`` stream (frozen 7-event
-#: contract, spec #2015/#2016 — mirrors ``gaia_agent_email.sse_translation``).
+#: contract, spec #2015/#2016).
 TERMINAL_TYPES = frozenset({"final", "error"})
 
 #: Methods the relay accepts — everything a sidecar route can serve.

@@ -62,9 +62,9 @@ class TestScratchHolders:
             ensure_scratch_dir(path)
 
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 
 @pytest.fixture
@@ -75,8 +75,8 @@ def make_agent():
 
     def build(allowed_path):
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(
                 ChatAgentConfig(silent_mode=True, allowed_paths=[str(allowed_path)])
@@ -195,7 +195,7 @@ class TestRunPythonSurvivesADeletedScratchDir:
         def fail(*_a, **_k):
             raise NotADirectoryError(267, "The directory name is invalid")
 
-        monkeypatch.setattr("gaia_agent_chat.agent.run_python_job", fail)
+        monkeypatch.setattr("gaia_agent.chat_agent.run_python_job", fail)
 
         result = run_python(code="print(1)")
 

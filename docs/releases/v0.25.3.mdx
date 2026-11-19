@@ -1,0 +1,101 @@
+---
+title: "v0.25.3"
+description: "Add Hugging Face models by link, run the agent from a script, search chat contents, and fixes for gateway models, context size, updates and storage."
+---
+
+# GAIA v0.25.3 Release Notes
+
+## What's New
+
+- **Add any GGUF chat model from Hugging Face by pasting its link** — in Settings › Model, the terminal UI's `/provider` › Local (Ctrl+A), or `gaia model add`. GAIA checks that the model loads and fits this PC before saving it. (PR [#5559](https://github.com/amd/gaia/pull/5559))
+- **Run the GAIA agent once from a script or CI job** — `gaia -p "<prompt>"` prints only the answer, or JSON with `--output-format json`, and exits non-zero when the turn fails. (PR [#5962](https://github.com/amd/gaia/pull/5962))
+- **Search chats by anything said in them**, not just the title, ignoring case and accents. (PR [#5586](https://github.com/amd/gaia/pull/5586))
+- **Run now on a scheduled task** tries it immediately and keeps its next scheduled time. (PR [#5720](https://github.com/amd/gaia/pull/5720))
+- **Index `.epub` books** chapter by chapter. A file GAIA can't read is refused with advice on converting it, instead of being indexed as garbage. (PR [#5644](https://github.com/amd/gaia/pull/5644))
+- **Generate music and sound effects locally** with Lemonade's audio-generation models. (PR [#6064](https://github.com/amd/gaia/pull/6064))
+- **The new chat opens on an NPU-dot backdrop**, and every chat shows its working folder beside the model in the composer. (PR [#5560](https://github.com/amd/gaia/pull/5560))
+- **Lemonade Server v2026.44.1** brings image generation back to the GPU on Windows and reports AMD GPU usage and VRAM there. (PR [#6020](https://github.com/amd/gaia/pull/6020))
+
+## Bug Fixes
+
+- **Agents on AMD LLM Gateway models run their tool calls** instead of finishing without doing the work. GAIA asks each cloud model once whether it calls tools natively. (PR [#5963](https://github.com/amd/gaia/pull/5963))
+- **The GAIA agent in the Agent UI sees the tool calls it made on earlier turns**, so "why did that fail?" gets an answer. (PR [#5806](https://github.com/amd/gaia/pull/5806))
+- **A local model keeps its context window after another model evicts it**, instead of coming back at 4K tokens, and Settings › Model › Context size works for more models. (PR [#5970](https://github.com/amd/gaia/pull/5970))
+- **`gaia chat --index`, `gaia talk --index` and `enable_rag` index the named file from any folder.** (PR [#6067](https://github.com/amd/gaia/pull/6067))
+- **The first code search on a large repo no longer hangs the turn** — the index builds in the background and search reports its progress. (PR [#5805](https://github.com/amd/gaia/pull/5805))
+- **An update restarts the daemon even while the Agent UI's own GAIA agent is running.** (PR [#6072](https://github.com/amd/gaia/pull/6072))
+- **Turning auto-update off stops the desktop app installing on quit**, the two apps keep each other's update settings and version pin, arm64 Linux finds its update, and the terminal UI no longer says "up to date" when a release has no installer for this PC. (PR [#5974](https://github.com/amd/gaia/pull/5974))
+- **Two GAIA processes starting together on a new database no longer fail with "database is locked".** (PRs [#5953](https://github.com/amd/gaia/pull/5953), [#6045](https://github.com/amd/gaia/pull/6045))
+- **The daemon starts in its own folder**, so on Windows it no longer locks the folder it was launched from, and it no longer reads that folder's `mcp_servers.json`. (PR [#5960](https://github.com/amd/gaia/pull/5960))
+- **Reading, listing, browsing, finding, searching, running and writing a bare file name all use the chat's folder.** (PR [#6009](https://github.com/amd/gaia/pull/6009))
+- **Deep file searches look in your home folder before scanning the whole disk.** (PR [#6079](https://github.com/amd/gaia/pull/6079))
+- **The terminal UI checks the local model you picked when your default is a gateway model**, instead of offering a ~4 GB download. (PR [#6017](https://github.com/amd/gaia/pull/6017))
+- **`gaia gateway install` restores the token saved by `gaia gateway auth`** after Lemonade restarts. (PR [#6077](https://github.com/amd/gaia/pull/6077))
+- **`gaia llm` with a cloud thinking model prints only the answer**, and concurrent calls no longer receive each other's reasoning. (PRs [#6068](https://github.com/amd/gaia/pull/6068), [#6011](https://github.com/amd/gaia/pull/6011))
+- **Setup output in the Agent UI has no terminal colour codes**, and the Schedules dialog keeps its list when pause, delete or create fails. (PRs [#6076](https://github.com/amd/gaia/pull/6076), [#6050](https://github.com/amd/gaia/pull/6050))
+- **A relayed turn that ends while its approved step waits now says the step didn't run**, and Stop stays stopped. (PR [#6029](https://github.com/amd/gaia/pull/6029))
+- **Email agent guidance names the Connectors tab.** (PR [#6018](https://github.com/amd/gaia/pull/6018))
+- **Docs** — the C++ guide states its OpenAI authentication limit, and the `/query` memory and path fields, email queue status fields and skills tool mixins are documented. (PRs [#6062](https://github.com/amd/gaia/pull/6062), [#6061](https://github.com/amd/gaia/pull/6061), [#6058](https://github.com/amd/gaia/pull/6058), [#6028](https://github.com/amd/gaia/pull/6028))
+
+## Known Issues
+
+- **The first chat after launching the desktop app can wait on "Waiting for the GPU" and never start** when a background task GAIA proposed for itself is holding the model. Restart the app to free it. Tracked in [#6006](https://github.com/amd/gaia/issues/6006).
+- **Attaching an image on a PC that uses only AMD LLM Gateway models starts a ~5 GB vision-model download inside the turn.** Run `gaia download --agent vlm` first so the download happens up front. Tracked in [#5990](https://github.com/amd/gaia/issues/5990).
+- **A relayed GAIA turn can lose its final answer after you approve a prompt**, about one time in ten. It now says the step didn't run; send the message again. Tracked in [#6019](https://github.com/amd/gaia/issues/6019).
+- **A repo picked with `index_codebase` is forgotten on the next turn**, so a follow-up code search finds nothing. Name the repo again in the follow-up. Tracked in [#6055](https://github.com/amd/gaia/issues/6055).
+- **Some tools still resolve a bare file name against GAIA's own folder**, not the chat's: shell working folders, code search, watched folders, and saved audio, screenshot and download paths. Give them full paths. Tracked in [#6065](https://github.com/amd/gaia/issues/6065).
+
+## Contributors
+
+Thanks to the community members who contributed to this release:
+
+- [@huong8373tt-beep](https://github.com/huong8373tt-beep) — bare file names in the chat's folder, daemon restarts during updates, home-first deep search, gateway token restore, clean setup output, per-call reasoning, relay Stop handling, email Connectors guidance, docs, and test and CI reliability (PRs [#6009](https://github.com/amd/gaia/pull/6009), [#6072](https://github.com/amd/gaia/pull/6072), [#6079](https://github.com/amd/gaia/pull/6079), [#6077](https://github.com/amd/gaia/pull/6077), [#6076](https://github.com/amd/gaia/pull/6076), [#6011](https://github.com/amd/gaia/pull/6011), [#6029](https://github.com/amd/gaia/pull/6029), [#6018](https://github.com/amd/gaia/pull/6018), [#6062](https://github.com/amd/gaia/pull/6062), [#6061](https://github.com/amd/gaia/pull/6061), [#6058](https://github.com/amd/gaia/pull/6058), [#5995](https://github.com/amd/gaia/pull/5995), [#6031](https://github.com/amd/gaia/pull/6031))
+- [@fl0rianr](https://github.com/fl0rianr) — local music and sound-effect generation (PR [#6064](https://github.com/amd/gaia/pull/6064))
+- [@akshat-lakhera](https://github.com/akshat-lakhera) — keeping the schedule list visible when an action fails (PR [#6050](https://github.com/amd/gaia/pull/6050))
+- [@nathan-vincent-dev](https://github.com/nathan-vincent-dev) — documenting the skills tool mixins (PR [#6028](https://github.com/amd/gaia/pull/6028))
+
+## Full Changelog
+
+**39 commits** since v0.25.2:
+
+- `73936f3a0` — fix(search): search the user's home before deep filesystem scans (#6079)
+- `8c531ec62` — fix(ui): remove terminal colour codes from setup output (#6076)
+- `4f7bd71bd` — fix(gateway): restore a remembered token during install (#6077)
+- `d85274ba0` — feat(hub): stable/next channels and a neutral tui path in the hub Worker (#6101)
+- `e0ad53dda` — feat(audio): add Lemonade music and sound effect generation tools (#6064)
+- `f19e86e12` — fix(daemon): let updates restart while GAIA's own agent runs (#6072)
+- `3e0d80e5e` — docs(email): describe model queue status fields (#6058)
+- `36354db10` — docs(cpp): correct OpenAI authentication guidance (#6062)
+- `de1be2e94` — docs(spec): document query memory and path fields (#6061)
+- `44f31f4a2` — fix(webui): keep the schedule list visible when pause, delete or create fails (#6050)
+- `f5b176681` — feat(models): add a local GGUF model by pasting its Hugging Face link (#5559)
+- `1d7f2e395` — docs(plans): record the release-train decisions (#5172) (#6082)
+- `ae7b2d48a` — feat(ui): NPU-dot backdrop on the new chat, folder chip in the composer (#5560)
+- `73f6b22a5` — feat(ui): search chats by what was said, not just the title (#5586)
+- `c437be3b9` — refactor(ui): move ChatView's pure stream helpers into utils/chatStream.ts (#5460)
+- `f614e9743` — fix(update): stop unasked installs and lost settings between the two apps (#5974)
+- `c0571cdfb` — fix(rag): index a file named with --index or enable_rag from any folder (#6067)
+- `9296e7e6b` — feat(cli): add `gaia -p` for one headless agent run (#5962)
+- `eba0732fc` — feat(ui): Run now on a scheduled task, to try it without waiting (#5720)
+- `1f05db50e` — fix(lemonade): keep the chosen context window after a model is evicted (#5970)
+- `9b3659f27` — feat(rag): index .epub books and refuse binary files instead of indexing garbage (#5644)
+- `11c3623ea` — fix(llm): keep a cloud model's reasoning out of gaia llm output (#6068)
+- `9c493ec9d` — feat(admin): private dashboard for adoption, development, CI and eval health (#5891)
+- `898b003c3` — chore(deps): bump Lemonade Server to v2026.44.1 (#6020)
+- `49dbae511` — fix(agent): resolve relative tools in chat workspace (#6009)
+- `051494f5e` — test(relay): isolate flagship document tests from Lemonade (#5995)
+- `f855282aa` — test(ci): run chat profile characterization (#6031)
+- `313e051ea` — test(ui): keep stopped requeued relays cancelled (refs #6019) (#6029)
+- `a588a907d` — docs(release): list the stuck-first-chat issue in v0.25.2's known issues (#6059)
+- `d8a6330bc` — fix(code-index): stop a first search on a large repo from hanging the turn (#5805)
+- `9a5832b24` — fix(storage): create the memory schema in one write (#6045)
+- `41e15a370` — fix(agent): run gateway models' tool calls natively and stop false completion gaps (#5963)
+- `966107b71` — fix(chat): show a relayed flagship its earlier tool calls (#5806)
+- `9197b0f37` — fix(storage): open a database another GAIA process is already creating (#5953)
+- `4593f95a8` — fix(daemon): start the daemon in its own folder, not the launcher's (#5960)
+- `a228a86e4` — docs(sdk): add skills and skill_learning to tool-mixins table (#6028)
+- `4cf8223d8` — fix(email): name the Connectors tab in runtime guidance (#6018)
+- `40a576653` — fix(llm): keep reasoning fallback local to each call (#6011)
+- `aced35e3b` — fix(tui): check the picked local model when the default is a cloud model (#6017)
+
+Full Changelog: [v0.25.2...v0.25.3](https://github.com/amd/gaia/compare/v0.25.2...v0.25.3)

@@ -5,7 +5,7 @@
 
 The Agent UI boot path (gaia.ui.server._import_modules) eagerly imports
 faiss, and gaia.rag.sdk lazily imports
-pypdf / numpy / fitz (pymupdf). After AppImage install — which only
+pypdf / numpy / pypdfium2. After AppImage install — which only
 resolves setup.py[ui] — those modules were missing and RAG broke
 silently. This test asserts the [ui] extra in setup.py declares every
 distribution required by the boot path.
@@ -30,7 +30,7 @@ SETUP_PY = Path(__file__).resolve().parents[2] / "setup.py"
 REQUIRED_UI_DISTS = {
     "faiss-cpu": "src/gaia/ui/server.py boot import",
     "pypdf": "src/gaia/rag/sdk.py PdfReader",
-    "pymupdf": "src/gaia/rag/sdk.py fitz",
+    "pypdfium2": "src/gaia/rag/pdf_utils.py PDFium image extraction",
     "numpy": "src/gaia/rag/sdk.py / faiss",
 }
 

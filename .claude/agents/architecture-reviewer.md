@@ -54,7 +54,7 @@ Severity, the nit budget, and length caps come from [`REVIEW.md`](../../REVIEW.m
 - **Architectural impact** — High / Medium / Low, with one-line rationale
 - **Dependency direction** — clean / violates upward or circular
 - **Layering** — correct layer? Could it be pushed down for more reuse?
-- **Consistency** — matches the shape of existing hub agent packages (`hub/agents/chat/`, `docqa/`, `routing/`)?
+- **Consistency** — matches the shape of existing hub agent packages (`hub/agents/gaia/`, `email/`)?
 - **Breaking changes** — surface area affected, migration path
 - **Recommendations** — concrete refactors with file paths
 

@@ -67,7 +67,7 @@ def _find_files(root, index=None):
 
     registered = {}
 
-    def mock_tool(atomic=True):
+    def mock_tool(atomic=True, **_kwargs):
         def decorator(func):
             registered[func.__name__] = func
             return func

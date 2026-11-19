@@ -333,6 +333,209 @@ def test_live_detects_empty_response(scaffolded_python, monkeypatch):
         cli_agent.cmd_test(_test_args(scaffolded_python, lint=False, live=True))
 
 
+class _UnreachableModelAgent:
+    """Shape of Agent.process_query when Lemonade refuses the connection."""
+
+    def process_query(self, prompt, **kwargs):
+        return {
+            "status": "failed",
+            "result": "Failed to load Gemma-4-E4B-it-GGUF: connection refused",
+            "system_prompt": "You are a helpful agent.",
+            "model_unreachable": True,
+            "model_failed": True,
+        }
+
+
+class _ResultAgent:
+    def __init__(self, result):
+        self.result = result
+
+    def process_query(self, prompt, **kwargs):
+        return self.result
+
+
+def _live(scaffolded_python, monkeypatch, agent):
+    monkeypatch.setattr(cli_agent, "_instantiate_agent", lambda pkg, parsed: agent)
+    cli_agent.cmd_test(_test_args(scaffolded_python, lint=False, live=True))
+
+
+def test_live_detects_unreachable_model(scaffolded_python, monkeypatch):
+    with pytest.raises(cli_agent.AgentWorkflowError, match="model was unreachable"):
+        _live(scaffolded_python, monkeypatch, _UnreachableModelAgent())
+
+
+def test_live_model_failure_wins_over_success_status(scaffolded_python, monkeypatch):
+    # A non-empty answer and a "success" status must not mask a failed model call.
+    agent = _ResultAgent(
+        {"status": "success", "result": "Looks fine to me.", "model_failed": True}
+    )
+    with pytest.raises(cli_agent.AgentWorkflowError, match="Lemonade Server"):
+        _live(scaffolded_python, monkeypatch, agent)
+
+
+def test_live_error_status_blames_the_agent_not_lemonade(
+    scaffolded_python, monkeypatch
+):
+    agent = _ResultAgent({"status": "error", "error": "tool exploded", "result": "x"})
+    with pytest.raises(cli_agent.AgentWorkflowError) as excinfo:
+        _live(scaffolded_python, monkeypatch, agent)
+    message = str(excinfo.value)
+    assert "tool exploded" in message and "Fix the agent" in message
+    assert "Lemonade" not in message
+
+
+def test_live_recovered_failed_turn_passes_with_warning(
+    scaffolded_python, monkeypatch, capsys
+):
+    # Agent.process_query marks a turn "failed" for errors it recovered from
+    # (a trimmed context overflow here); the answer is still valid.
+    agent = _ResultAgent(
+        {
+            "status": "failed",
+            "result": "Paris is the capital of France.",
+            "system_prompt": "You are a helpful agent.",
+            "model_unreachable": False,
+            "model_failed": False,
+            "error_history": [
+                {
+                    "step": 2,
+                    "error": "ctx overflow",
+                    "type": "llm_context_overflow_trimmed",
+                }
+            ],
+        }
+    )
+    _live(scaffolded_python, monkeypatch, agent)
+    out = capsys.readouterr().out
+    assert "[WARN]" in out and "ctx overflow" in out
+    assert "All live gates passed." in out
+
+
+def test_live_metadata_only_result_is_empty(scaffolded_python, monkeypatch):
+    agent = _ResultAgent(
+        {"result": "  ", "system_prompt": "x", "conversation": [{"role": "user"}]}
+    )
+    with pytest.raises(cli_agent.AgentWorkflowError, match="empty response"):
+        _live(scaffolded_python, monkeypatch, agent)
+
+
+def test_live_empty_response_names_the_answer_keys(scaffolded_python, monkeypatch):
+    with pytest.raises(cli_agent.AgentWorkflowError, match="final_answer"):
+        _live(scaffolded_python, monkeypatch, _ResultAgent({"output": "hi"}))
+
+
+_MODEL = cli_agent._MODEL_REMEDY
+_UNUSABLE = cli_agent._UNUSABLE_REMEDY
+
+
+@pytest.mark.parametrize(
+    "result,expected",
+    [
+        ({"status": "success", "result": "hi"}, None),
+        ({"status": "incomplete", "result": "partial"}, None),
+        ({"status": "failed", "result": "answer", "error_history": ["x"]}, None),
+        ({"status": "cancelled", "result": ""}, None),
+        ("plain string", None),
+        (None, None),
+        ({"model_unreachable": True}, ("the model was unreachable", _MODEL)),
+        (
+            {"model_unreachable": True, "model_failed": True},
+            ("the model was unreachable", _MODEL),
+        ),
+        ({"model_failed": True}, ("the model call failed", _MODEL)),
+        (
+            {
+                "model_failed": True,
+                "error_history": [
+                    {
+                        "type": "output_truncated",
+                        "error": "reply cut off at the output-token limit",
+                    }
+                ],
+            },
+            (
+                "the model call failed (reply cut off at the output-token limit)",
+                _UNUSABLE,
+            ),
+        ),
+        (
+            {
+                "status": "failed",
+                "error_history": [
+                    {"type": "tool_call_parse_error", "error": "bad json"}
+                ],
+            },
+            ("the model never gave a usable reply (bad json)", _UNUSABLE),
+        ),
+        (
+            {
+                "error_history": [
+                    {"type": "stream_cut_off", "error": "stream ended early"}
+                ]
+            },
+            ("the model never gave a usable reply (stream ended early)", _UNUSABLE),
+        ),
+        (
+            {
+                "status": "failed",
+                "error_history": [
+                    {
+                        "type": "tool_call_parse_error",
+                        "error": "bad json",
+                        "recovered": True,
+                    }
+                ],
+            },
+            None,
+        ),
+        (
+            {"status": "error", "error": "boom"},
+            ("status 'error' (boom)", "Fix the agent"),
+        ),
+        (
+            {"status": "error", "error_history": [{"error": "timeout"}]},
+            ("status 'error' (timeout)", "Fix the agent"),
+        ),
+        ({"status": "error"}, ("status 'error'", "Fix the agent")),
+        # A malformed error_history must not crash or yield a single character.
+        (
+            {"status": "error", "error_history": "oops"},
+            ("status 'error'", "Fix the agent"),
+        ),
+        (
+            {"status": "error", "error_history": [None]},
+            ("status 'error'", "Fix the agent"),
+        ),
+    ],
+)
+def test_failed_response(result, expected):
+    assert cli_agent._failed_response(result) == expected
+
+
+@pytest.mark.parametrize(
+    "result,expected",
+    [
+        ({"status": "success"}, None),
+        ({"status": "failed"}, "no error recorded"),
+        (
+            {"status": "failed", "error_history": ["Empty LLM response"]},
+            "Empty LLM response",
+        ),
+        ({"status": "failed", "error_history": [{"message": "m"}]}, "m"),
+        ({"status": "failed", "error_history": {"not": "a list"}}, "no error recorded"),
+        ("failed", None),
+    ],
+)
+def test_failed_turn_note(result, expected):
+    assert cli_agent._failed_turn_note(result) == expected
+
+
+def test_nonempty_response_ignores_metadata_only_dict():
+    # system_prompt and conversation are always set on an Agent result.
+    result = {"result": "", "system_prompt": "x", "conversation": [{"role": "user"}]}
+    assert not cli_agent._nonempty_response(result)
+
+
 @pytest.fixture
 def starters_package(tmp_path, monkeypatch):
     module_name = "gaia_test_starters"

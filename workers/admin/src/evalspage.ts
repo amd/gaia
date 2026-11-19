@@ -90,6 +90,9 @@ function drawRun(runs){var e=D.evals,r=runs.find(function(x){return x.run_id===P
     return '<div class="srow" style="grid-template-columns:minmax(120px,1fr) 90px 48px 64px;margin:4px 0"><span class="mono trunc" style="font-size:11.5px" title="'+esc(x.category)+'">'+esc(x.category)+'</span><span class="b"><i style="width:'+(x.passRate*100)+'%;background:'+(x.passRate>=.8?'var(--good)':x.passRate>=.6?'var(--warn)':'var(--bad)')+'"></i></span><span class="p num" title="'+x.passed+' of '+x.scenarios+' passed">'+x.passed+'/'+x.scenarios+'</span><span class="p num '+(d==null?'':d>0?'good':d<0?'bad':'')+'" title="Change from the previous run that measured this category">'+(d==null?'new':d===0?'±0':(d>0?'+':'')+Math.round(d*100)+' pts')+'</span></div>';}).join(''):'<div class="empty">No categories.</div>';
   document.querySelectorAll('[data-sf]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.sf===P.sf));});
   var skip=function(st){return /^SKIPPED/.test(st||'');},all=e.scenarios||[],rows=all.filter(function(s){if(P.sf==='fail')return s.status!=='PASS';if(P.sf==='changed')return s.previous!=null&&!skip(s.status)&&(s.previous==='PASS')!==(s.status==='PASS');return true;});
+   // Regressions first, then other failures, newly fixed, passing, skipped; by category within each.
+   var rank=function(s){return skip(s.status)?4:s.status==='PASS'?(s.previous&&s.previous!=='PASS'?2:3):s.previous==='PASS'?0:1;};
+   rows=rows.slice().sort(function(a,b){return rank(a)-rank(b);});
   var reg=all.filter(function(s){return s.previous==='PASS'&&s.status!=='PASS'&&!skip(s.status);}).length,fix=all.filter(function(s){return s.previous&&s.previous!=='PASS'&&s.status==='PASS';}).length;
   el('scen-sum').innerHTML='<span class="bad">'+fmt(reg)+' regressed</span> · <span class="good">'+fmt(fix)+' fixed</span> against each scenario’s previous run';
   el('scen').innerHTML=rows.length?'<div class="scroll" style="max-height:520px"><table><tr><th>Scenario</th><th>Category</th><th>Result</th><th>Before</th><th class="n">Score</th><th class="n">Time</th><th class="n">Tokens in / out</th><th class="n">Tools</th><th class="n">Tok/s</th><th class="n">Cost</th><th>Root cause</th></tr>'
@@ -147,7 +150,7 @@ ${card("trend", "Pass rate over time", "One point per run, one line per tier: co
 <div class="card"><div class="ch"><span class="t">Scenarios${infoBtn("scen", "Scenarios")}</span><span class="spacer"></span>${seg("sf", [["all", "All"], ["fail", "Not passing"], ["changed", "Changed"]], "Show")}<span class="d" id="scen-sum"></span></div><div id="scen"></div></div>
 </section>
 <section class="stack"><div class="head"><h2>History</h2></div>
-<div class="card"><div class="ch"><span class="t">Runs${infoBtn("runs", "Runs")}</span><span class="d">Newest first. Click a row to open it.</span></div><div id="runs"></div></div>
+<div class="card"><div class="ch"><span class="t">Runs${infoBtn("runs", "Runs")}</span><span class="d">Newest first. Click a row to open it; click a column title to sort.</span></div><div id="runs"></div></div>
 <div class="card"><div class="ch"><span class="t">Least reliable scenarios${infoBtn("rel", "Least reliable scenarios")}</span><span class="d">Across the runs shown, lowest pass rate first.</span></div><div id="rel"></div></div>
 </section>`;
   return shell(

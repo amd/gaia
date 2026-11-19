@@ -72,7 +72,7 @@ describe('a file dropped onto the chat', () => {
         });
 
         expect(await screen.findByText('report.pdf')).toBeInTheDocument();
-        expect(screen.getByText('1 indexed')).toBeInTheDocument();
+        expect(screen.getByText('1 document')).toBeInTheDocument();
     });
 });
 

@@ -16,6 +16,9 @@
  *   agents/<id>/<version>/CAPABILITY_MATRIX.md  capability matrix markdown, per version (optional)
  *   agents/<id>/<version>/<filename>        the artifact (wheel or binary)
  *
+ * `agents/tui/` and `agents/terminal-hub/` are one package under two ids (see
+ * {@link ID_ALIASES}); a read under either falls back to the other.
+ *
  * Skills (#2467) get their own top-level prefix rather than sharing agents/ —
  * they are a separate lane with a separate publish contract, and a shared prefix
  * would make `listAgentIds` return them as agents:
@@ -26,11 +29,23 @@
  *   skills/<name>/<version>/<filename>      the skill bundle artifact
  */
 
+import { HttpError } from "./http";
 import type { AgentManifest, CatalogIndex, SkillManifest } from "./types";
 
 export const INDEX_KEY = "index.json";
 export const AGENTS_PREFIX = "agents/";
 export const SKILLS_PREFIX = "skills/";
+
+/**
+ * Legacy agent id -> the neutral id replacing it. For one release cycle each id
+ * of a pair resolves the other's objects, and their manifests read as one.
+ */
+export const ID_ALIASES: ReadonlyMap<string, string> = new Map([["terminal-hub", "tui"]]);
+
+/** The other id of `id`'s alias pair, or undefined when it has none. */
+export function aliasOf(id: string): string | undefined {
+  return ID_ALIASES.get(id) ?? [...ID_ALIASES].find(([, canonical]) => canonical === id)?.[0];
+}
 
 export function agentManifestKey(id: string): string {
   return `${AGENTS_PREFIX}${id}/manifest.json`;
@@ -79,6 +94,25 @@ export function evalScorecardKey(id: string, version: string): string {
 export function packageFilesKey(id: string, version: string): string {
   return `${versionDir(id, version)}package-files.json`;
 }
+
+/**
+ * Filenames the agent lane writes as per-version docs beside the artifact. An
+ * artifact with one of these names would be overwritten by the doc, so the
+ * publish lane rejects them. Derived from the key builders so the two can't drift.
+ */
+export const AGENT_RESERVED_FILENAMES: ReadonlySet<string> = new Set(
+  [
+    rawManifestKey,
+    readmeKey,
+    changelogKey,
+    specKey,
+    skillKey,
+    evaluationKey,
+    capabilityMatrixKey,
+    evalScorecardKey,
+    packageFilesKey,
+  ].map((key) => key("_", "_").slice(versionDir("_", "_").length))
+);
 
 /**
  * Read the README markdown for one published version. Returns "" when no
@@ -207,21 +241,93 @@ export async function readAgentManifest(
   return (await obj.json()) as AgentManifest;
 }
 
-/** Write the per-agent manifest as pretty JSON. */
-export async function writeAgentManifest(
+/** How many times a catalog write re-reads and retries after losing a race. */
+export const CATALOG_WRITE_ATTEMPTS = 5;
+
+/**
+ * Write `key` only if it still holds the object `basis` was read from (or is
+ * still absent when `basis` is null). Returns false when another writer got
+ * there first, so the caller can re-read and recompute.
+ */
+async function putIfUnchanged(
   bucket: R2Bucket,
-  manifest: AgentManifest
-): Promise<void> {
-  await bucket.put(agentManifestKey(manifest.id), JSON.stringify(manifest, null, 2), {
+  key: string,
+  basis: { etag: string } | null,
+  body: string
+): Promise<boolean> {
+  const written = await bucket.put(key, body, {
     httpMetadata: { contentType: "application/json; charset=utf-8" },
+    onlyIf: basis ? { etagMatches: basis.etag } : { etagDoesNotMatch: "*" },
   });
+  return written !== null;
 }
 
-/** Write the top-level catalog index. */
-export async function writeIndex(bucket: R2Bucket, index: CatalogIndex): Promise<void> {
-  await bucket.put(INDEX_KEY, JSON.stringify(index, null, 2), {
-    httpMetadata: { contentType: "application/json; charset=utf-8" },
-  });
+function catalogConflict(key: string): HttpError {
+  return new HttpError(
+    503,
+    "catalog_conflict",
+    `${key} kept changing under concurrent writes, so it was not updated after ` +
+      `${CATALOG_WRITE_ATTEMPTS} attempts. Retry the request; a retry is safe and ` +
+      `picks up where this one stopped.`
+  );
+}
+
+/**
+ * Read-modify-write a JSON catalog object with an etag precondition, re-reading
+ * and re-applying `update` when a concurrent writer wins. `update` may throw to
+ * abort (e.g. when the re-read shows the change already landed).
+ */
+async function updateJsonObject<T>(
+  bucket: R2Bucket,
+  key: string,
+  update: (current: T | null) => T
+): Promise<T> {
+  for (let attempt = 0; attempt < CATALOG_WRITE_ATTEMPTS; attempt++) {
+    const obj = await bucket.get(key);
+    const next = update(obj ? ((await obj.json()) as T) : null);
+    if (await putIfUnchanged(bucket, key, obj, JSON.stringify(next, null, 2))) return next;
+  }
+  throw catalogConflict(key);
+}
+
+/** Apply `update` to the per-agent manifest at `id` without losing a concurrent write. */
+export function updateAgentManifest(
+  bucket: R2Bucket,
+  id: string,
+  update: (current: AgentManifest | null) => AgentManifest
+): Promise<AgentManifest> {
+  return updateJsonObject(bucket, agentManifestKey(id), update);
+}
+
+/** Equal apart from `generated_at`, which every rebuild restamps. */
+function sameIndex(a: CatalogIndex, b: CatalogIndex): boolean {
+  return (
+    JSON.stringify({ ...a, generated_at: "" }) === JSON.stringify({ ...b, generated_at: "" })
+  );
+}
+
+/**
+ * Write the top-level catalog index from `derive`, which is re-run when another
+ * writer replaces index.json first. The index is fully derived from the
+ * manifests, so re-deriving after a lost race picks up the other writer's change.
+ * An index whose entries haven't changed is left alone.
+ */
+export async function writeIndex(
+  bucket: R2Bucket,
+  derive: () => Promise<CatalogIndex>
+): Promise<CatalogIndex> {
+  for (let attempt = 0; attempt < CATALOG_WRITE_ATTEMPTS; attempt++) {
+    const basis = await bucket.get(INDEX_KEY);
+    const current = basis ? ((await basis.json()) as CatalogIndex) : null;
+    const index = await derive();
+    if (current && sameIndex(current, index)) {
+      return current;
+    }
+    if (await putIfUnchanged(bucket, INDEX_KEY, basis, JSON.stringify(index, null, 2))) {
+      return index;
+    }
+  }
+  throw catalogConflict(INDEX_KEY);
 }
 
 // ── Skills lane (#2467) ─────────────────────────────────────────────────────
@@ -252,6 +358,13 @@ export function skillAuditKey(name: string, version: string): string {
   return `${skillVersionDir(name, version)}audit.json`;
 }
 
+/** The skills lane's per-version doc filenames — see AGENT_RESERVED_FILENAMES. */
+export const SKILL_RESERVED_FILENAMES: ReadonlySet<string> = new Set(
+  [skillDocKey, skillChangelogKey, skillAuditKey].map((key) =>
+    key("_", "_").slice(skillVersionDir("_", "_").length)
+  )
+);
+
 /** Read and parse the per-skill manifest, or null if the skill doesn't exist. */
 export async function readSkillManifest(
   bucket: R2Bucket,
@@ -262,14 +375,13 @@ export async function readSkillManifest(
   return (await obj.json()) as SkillManifest;
 }
 
-/** Write the per-skill manifest as pretty JSON. */
-export async function writeSkillManifest(
+/** Apply `update` to the per-skill manifest at `name` without losing a concurrent write. */
+export function updateSkillManifest(
   bucket: R2Bucket,
-  manifest: SkillManifest
-): Promise<void> {
-  await bucket.put(skillManifestKey(manifest.name), JSON.stringify(manifest, null, 2), {
-    httpMetadata: { contentType: "application/json; charset=utf-8" },
-  });
+  name: string,
+  update: (current: SkillManifest | null) => SkillManifest
+): Promise<SkillManifest> {
+  return updateJsonObject(bucket, skillManifestKey(name), update);
 }
 
 /**

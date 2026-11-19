@@ -50,9 +50,9 @@ def test_dropping_any_required_key_is_reported(dropped):
 @pytest.mark.parametrize(
     "version",
     [
-        "2026.39.1",  # a CalVer release
-        "2026.39.0~12.abc1234",  # a CalVer development build
-        "11.9.0",  # the last semver release
+        "2026.44.1",  # the supported floor
+        "2026.44.1~12.abc1234",  # a development build of it
+        "2027.1.0",  # a newer release
     ],
 )
 def test_versions_gaia_can_gate_on_pass(version):

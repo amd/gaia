@@ -43,9 +43,8 @@ def flagship():
 
     ``select`` scores against whatever registry it is handed, and sibling test
     modules clear the process-global ``_TOOL_REGISTRY`` in their own fixtures.
-    Reading it live makes selection assertions depend on test order — a smaller
-    registry lets everything fit under the cap, so a negative assertion passes
-    or fails according to what ran first. The snapshot pins it.
+    Reading it live makes selection assertions depend on test order: a tool
+    missing from a smaller registry cannot trigger a jump. The snapshot pins it.
     """
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
@@ -66,7 +65,7 @@ def _select_fresh(agent, query):
     selected = agent.tool_loader.select(query, agent._registry_snapshot)
     if selected is None:
         if agent.tool_loader.session_disabled:
-            pytest.skip("semantic tool selection needs a reachable embedder")
+            pytest.skip("tool retrieval needs a reachable embedder")
         pytest.fail("select() returned None with the session still enabled")
     return selected
 
@@ -92,13 +91,16 @@ def test_the_sd_persona_stays_out_of_the_system_prompt(flagship):
     assert "Aqua Vista" not in prompt
 
 
-def test_the_capability_is_still_advertised_as_a_bundle(flagship):
+def test_the_capability_stays_findable_through_search_tools(flagship):
     """Suppressing the persona must not make the tools undiscoverable.
 
-    The one-line bundle entry is how a semantic miss is recovered, and it is
-    the entire intended prompt cost of this capability.
+    Outside the core list, ``search_tools`` is how a retrieval miss is recovered:
+    the prompt names it and the tools are in the registry it searches.
     """
-    assert "- image_gen:" in flagship.system_prompt
+    assert "call search_tools with what you want to do" in " ".join(
+        flagship.system_prompt.split()
+    )
+    assert SD_TOOLS <= set(flagship.tool_loader.tool_docs(flagship._registry_snapshot))
 
 
 @pytest.mark.parametrize(
@@ -111,10 +113,9 @@ def test_the_capability_is_still_advertised_as_a_bundle(flagship):
 def test_an_image_request_selects_the_tools_without_any_skill_loaded(flagship, query):
     """Registering the tools is not the same as the model being shown them.
 
-    The flagship runs per-turn semantic tool selection, so a tool outside the
-    turn's selected set is invisible to the model. If this fails the capability
-    is only reachable through the escape hatch, which the model has to think to
-    use.
+    A session starts on core, so a tool outside it is invisible to the model
+    until the session jumps. If this fails the capability is only reachable
+    through ``search_tools``, which the model has to think to use.
     """
     selected = _select_fresh(flagship, query)
 
@@ -124,9 +125,9 @@ def test_an_image_request_selects_the_tools_without_any_skill_loaded(flagship, q
 def test_a_document_question_does_not_drag_in_the_image_tools(flagship):
     """The other half: breadth must not cost every unrelated turn.
 
-    Must be a FRESH conversation. Selected tools stay loaded across turns
-    until the cap evicts them, so asking this after an image request measures
-    that (correct) stickiness rather than the first-turn match.
+    Must be a FRESH conversation. A jump lasts the session, so asking this
+    after an image request measures that (correct) stickiness rather than the
+    first-turn match.
     """
     selected = _select_fresh(flagship, "what does my document say about revenue")
 

@@ -71,9 +71,7 @@ def _bundled_only(roots, tmp_path: Path) -> SkillManager:
 # --------------------------------------------------------------------------
 
 
-def test_a_bundled_skill_tool_registers_on_load_and_goes_on_unload(
-    flagship, tmp_path
-):
+def test_a_bundled_skill_tool_registers_on_load_and_goes_on_unload(flagship, tmp_path):
     """rss-digest ships fetch_rss in its tools.py; loading it must offer the tool."""
     from gaia.agents.base.tools import _TOOL_REGISTRY
 
@@ -91,15 +89,142 @@ def test_a_bundled_skill_tool_registers_on_load_and_goes_on_unload(
         # Only the skill's own tools were added: tool counts and capability
         # docs describe the agent without skills, and stay true until a load.
         assert set(flagship._tools_registry) - before == {"rss-digest/fetch_rss"}
-        offered = {
-            s["function"]["name"] for s in flagship._build_openai_tool_schemas()
-        }
+        offered = {s["function"]["name"] for s in flagship._build_openai_tool_schemas()}
         assert "rss-digest/fetch_rss" in offered
     finally:
         assert flagship.unload_skill("rss-digest")
 
     assert set(flagship._tools_registry) == before
     assert "rss-digest/fetch_rss" not in _TOOL_REGISTRY
+
+
+@pytest.mark.parametrize(
+    "skill_name, card, tools",
+    [
+        (
+            "guides",
+            "guide",
+            {
+                "show_recipe",
+                "show_workout",
+                "show_how_to",
+                "show_checklist",
+                "show_itinerary",
+            },
+        ),
+        ("calculators", "calculator", {"show_tip_calculator", "show_loan_calculator"}),
+    ],
+)
+def test_a_card_skill_adds_its_tools_only_once_loaded(
+    flagship, tmp_path, skill_name, card, tools
+):
+    """The card tools stay off the flagship's list until their skill loads, and
+    every one of them then draws its card in the Agent UI and the TUI."""
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    manager = _bundled_only(flagship.SKILL_DIRS, tmp_path)
+    expected = {f"{skill_name}/{name}" for name in tools}
+    before = set(flagship._tools_registry)
+    assert not before & (expected | tools), "card tools registered without a load"
+
+    flagship.load_skill(skill_name, manager=manager)
+    try:
+        assert set(flagship._tools_registry) - before == expected
+        for name in expected:
+            assert SSEOutputHandler._RENDER_TOOL_TO_LANG[name] == card
+    finally:
+        assert flagship.unload_skill(skill_name)
+
+    assert set(flagship._tools_registry) == before
+
+
+def test_the_calendar_skill_asks_before_every_change_on_the_flagship(
+    flagship, tmp_path
+):
+    """The calendar tools stay off the list until the skill loads, and then
+    every create, move and cancel waits for a person; reads do not."""
+    assert flagship.BUNDLES_CALENDAR_SKILL
+    assert not any(n.startswith("calendar/") for n in flagship._tools_registry)
+
+    flagship.load_skill(
+        "calendar", manager=_bundled_only(flagship.SKILL_DIRS, tmp_path)
+    )
+    try:
+        for name in (
+            "create_calendar_event",
+            "update_calendar_event",
+            "cancel_calendar_event",
+        ):
+            assert flagship._tool_requires_confirmation(f"calendar/{name}", {})
+        for name in ("list_calendar_events", "check_calendar_availability"):
+            assert not flagship._tool_requires_confirmation(f"calendar/{name}", {})
+    finally:
+        assert flagship.unload_skill("calendar")
+
+
+def test_the_send_email_skill_asks_before_any_mail_leaves_on_the_flagship(
+    flagship, tmp_path
+):
+    """The drafting and sending tools stay off the list until the skill loads;
+    then every send, draft edit and draft deletion waits for a person, and a
+    new draft or a draft listing does not."""
+    gated = (
+        "send_now",
+        "send_draft",
+        "reply_to_message",
+        "forward_message",
+        "update_draft",
+        "discard_draft",
+    )
+    assert flagship.BUNDLES_SEND_EMAIL_SKILL
+    assert not any(n.startswith("send-email/") for n in flagship._tools_registry)
+    assert not set(gated) & flagship.confirmation_required_tools()
+
+    flagship.load_skill(
+        "send-email", manager=_bundled_only(flagship.SKILL_DIRS, tmp_path)
+    )
+    try:
+        for name in gated:
+            assert flagship._tool_requires_confirmation(f"send-email/{name}", {})
+        for name in ("create_draft", "list_drafts"):
+            assert not flagship._tool_requires_confirmation(f"send-email/{name}", {})
+    finally:
+        assert flagship.unload_skill("send-email")
+
+
+def test_the_browser_pane_skill_is_gated_on_the_flagship(tmp_path):
+    """Its tools stay off the list until it loads; browser_eval then asks every
+    time, and the others ask through the browser gate, by site and control."""
+    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
+
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                BrowserUseToolsMixin, "_pane_at_startup", lambda self: (True, True)
+            )
+            agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+        before = set(agent._tools_registry)
+        assert not any(n.startswith("browser-pane/") for n in before)
+        assert "browser-pane" in agent.skill_manager.discover()
+
+        agent.load_skill(
+            "browser-pane", manager=_bundled_only(agent.SKILL_DIRS, tmp_path)
+        )
+        added = set(agent._tools_registry) - before
+        assert len(added) == 9 and all(n.startswith("browser-pane/") for n in added)
+        assert agent._tools_registry["browser-pane/browser_eval"][
+            "requires_confirmation"
+        ]
+        assert "browser_call_needs_confirmation" in agent.confirmation_hooks()
+        assert agent.unload_skill("browser-pane")
+        assert set(agent._tools_registry) == before
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
 
 
 def test_a_bundled_skill_scripts_file_runs_by_path(flagship, tmp_path):
@@ -169,9 +294,7 @@ def test_the_description_lint_covers_bundled_skill_tools():
 
     agent = build_full_agent_skeleton()
     before = dict(agent._instance_tools)
-    names = {
-        s["function"]["name"] for s in check.bundled_skill_tool_schemas(agent)
-    }
+    names = {s["function"]["name"] for s in check.bundled_skill_tool_schemas(agent)}
 
     assert "rss-digest/fetch_rss" in names
     assert agent._instance_tools == before, "the lint left skill tools behind"
@@ -233,3 +356,82 @@ def test_the_freeze_refuses_a_skill_name_in_both_roots(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="dup"):
         freeze._resolve_add_data()
 
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "try:\n    import gaia_no_such_module_xyz\nexcept ImportError:\n    pass\n",
+        "try:\n    import gaia_no_such_module_xyz\n"
+        "except ModuleNotFoundError:\n    pass\n",
+        "try:\n    import gaia_no_such_module_xyz\n"
+        "except (OSError, ImportError):\n    pass\n",
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n    import gaia_no_such_module_xyz\n",
+        "import typing\nif typing.TYPE_CHECKING:\n"
+        "    from gaia_no_such_module_xyz import thing\n",
+    ],
+    ids=["except-import", "except-mnf", "except-tuple", "type-checking", "typing-dot"],
+)
+def test_the_freeze_skips_an_import_the_skill_guards(tmp_path, source):
+    """An optional or type-only import cannot fail the build."""
+    skill_dir = tmp_path / "guards"
+    skill_dir.mkdir()
+    (skill_dir / "tools.py").write_text(source)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(freeze, "REPO_ROOT", tmp_path)
+        hidden = freeze.skill_code_hidden_imports([skill_dir])
+
+    assert "gaia_no_such_module_xyz" not in hidden
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # A handler that does not catch ImportError leaves the import required.
+        "try:\n    import gaia_no_such_module_xyz\nexcept KeyError:\n    pass\n",
+        # The import in the handler or else branch is not guarded by it.
+        "try:\n    pass\nexcept ImportError:\n    import gaia_no_such_module_xyz\n",
+        "try:\n    pass\nexcept ImportError:\n    pass\n"
+        "else:\n    import gaia_no_such_module_xyz\n",
+        # The else branch of `if TYPE_CHECKING` runs.
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    pass\n"
+        "else:\n    import gaia_no_such_module_xyz\n",
+        # Any other condition is not a type-only guard.
+        "import os\nif os.name == 'nt':\n    import gaia_no_such_module_xyz\n",
+        # Inside a function is still a runtime import.
+        "def f():\n    import gaia_no_such_module_xyz\n",
+    ],
+    ids=[
+        "except-other",
+        "in-handler",
+        "in-else",
+        "type-checking-else",
+        "other-if",
+        "nested-def",
+    ],
+)
+def test_the_freeze_still_refuses_an_unguarded_import(tmp_path, source):
+    skill_dir = tmp_path / "unguarded"
+    skill_dir.mkdir()
+    (skill_dir / "tools.py").write_text(source)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(freeze, "REPO_ROOT", tmp_path)
+        with pytest.raises(SystemExit, match="gaia_no_such_module_xyz"):
+            freeze.skill_code_hidden_imports([skill_dir])
+
+
+def test_the_freeze_still_bundles_a_guarded_import_that_is_installed(tmp_path):
+    """Optional is not excluded: an installed optional module must ship too."""
+    skill_dir = tmp_path / "optional"
+    skill_dir.mkdir()
+    (skill_dir / "tools.py").write_text(
+        "try:\n    import gaia.web.client\nexcept ImportError:\n    pass\n"
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(freeze, "REPO_ROOT", tmp_path)
+        hidden = freeze.skill_code_hidden_imports([skill_dir])
+
+    assert "gaia.web.client" in hidden

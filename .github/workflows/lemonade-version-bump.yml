@@ -42,8 +42,6 @@ jobs:
     if: github.repository == 'amd/gaia'
     runs-on: ubuntu-latest
     steps:
-      - name: Show which Claude account this job uses
-        run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
@@ -94,13 +92,10 @@ jobs:
           fi
 
           # Guard 2: don't bump to a release missing an asset GAIA downloads (a release can
-          # exist before all assets finish uploading). Covers the five installers AND the
-          # four embeddable archives, whose SHA-256 pins the bump has to refresh — catching a
+          # exist before all assets finish uploading). Covers the two MSIs (the Windows
+          # uninstall downloads them) AND the four embeddable archives, whose SHA-256 pins the bump has to refresh — catching a
           # partial upload here is free, whereas discovering it inside the Claude step is not.
           for required in lemonade.msi lemonade-server-minimal.msi \
-                          "lemonade-server_${target}-debian13_amd64.deb" \
-                          "lemonade-server_${target}-debian13_arm64.deb" \
-                          "Lemonade-${target}-Darwin.pkg" \
                           "lemonade-embeddable-${target}-windows-x64.zip" \
                           "lemonade-embeddable-${target}-ubuntu-x64.tar.gz" \
                           "lemonade-embeddable-${target}-ubuntu-arm64.tar.gz" \
@@ -168,13 +163,22 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Pick the Claude account
+        id: claude_account
+        if: steps.detect.outputs.should_bump == 'true'
+        uses: ./.github/actions/claude-credential
+        with:
+          primary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          secondary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
+          what: "The Lemonade bump"
+
       - name: Prepare Lemonade bump commit
         if: steps.detect.outputs.should_bump == 'true'
-        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
         with:
           # Prefer subscription OAuth, fall back to API key — same wiring as claude.yml.
-          anthropic_api_key: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
-          claude_code_oauth_token: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          anthropic_api_key: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # Scheduled runs execute as a bot actor (e.g. github-merge-queue), which the
           # action's actor gate rejects unless allow-listed. This workflow only triggers
@@ -217,9 +221,9 @@ jobs:
                to
                  `LEMONADE_VERSION = "${{ steps.detect.outputs.target_version }}"`
                This constant is the single source of truth — CI and the installer derive the
-               download URLs from it. Do NOT touch the per-profile `min_lemonade_version`
-               floors in src/gaia/installer/init_command.py (those are deliberately
-               conservative minimums, not "latest").
+               download URLs from it. Do NOT touch `LEMONADE_MIN_VERSION` in the same
+               file (the oldest version GAIA runs against, raised deliberately, not
+               "latest").
             3. Refresh the embeddable SHA-256 pins. `gaia lemonade embedded install`
                verifies its download against the digests in
                `EMBEDDABLE_SHA256` (src/gaia/llm/lemonade_embedded.py), keyed by asset
@@ -240,26 +244,26 @@ jobs:
                branch and stop.
 
                Then refresh `INSTALLER_SHA256` (src/gaia/installer/lemonade_installer.py)
-               the same way. `gaia install --lemonade` verifies the installer against it.
+               the same way. `gaia uninstall --purge-lemonade` verifies the MSI it downloads against it.
                Its keys are `v<version>/<asset name>`, because the MSI names carry no
                version, and its values are bare hex. First MOVE its two outgoing
                `v${{ steps.detect.outputs.current_version }}/lemonade.msi` and
                `v${{ steps.detect.outputs.current_version }}/lemonade-server-minimal.msi`
                entries, unchanged, to the end of `LEGACY_MSI_SHA256` in the same file
                (uninstalling that version downloads its MSI; never delete or edit a
-               legacy entry). Then rewrite `INSTALLER_SHA256` to exactly these five
+               legacy entry). Then rewrite `INSTALLER_SHA256` to exactly these two
                keys, with the digests this prints:
                  ```
                  gh api repos/lemonade-sdk/lemonade/releases/tags/v${{ steps.detect.outputs.target_version }} \
-                   --jq '.assets[] | select(.name == "lemonade.msi" or .name == "lemonade-server-minimal.msi" or (.name|test("^lemonade-server_.*-debian13_(amd64|arm64)[.]deb$")) or (.name|test("^Lemonade-.*-Darwin[.]pkg$"))) | "v${{ steps.detect.outputs.target_version }}/\(.name) \(.digest | sub("^sha256:";""))"'
+                   --jq '.assets[] | select(.name == "lemonade.msi" or .name == "lemonade-server-minimal.msi") | "v${{ steps.detect.outputs.target_version }}/\(.name) \(.digest | sub("^sha256:";""))"'
                  ```
-               The same stop rule applies if any of the five has no digest. You do not
+               The same stop rule applies if either has no digest. You do not
                need to check the values yourself: before opening the PR, the job runs
                tests/integration/test_lemonade_embeddable_assets.py on your commit, which
                compares every pin against the release API and fails on any mismatch.
 
                Then update `tests/fixtures/lemonade/release_tags.txt`, which lists every
-               supported release, oldest first. Find every stable release newer than
+               release GAIA can remove, oldest first. Find every stable release newer than
                `v${{ steps.detect.outputs.current_version }}`, up to and including the
                target:
                  ```
@@ -470,7 +474,8 @@ jobs:
           set -euo pipefail
           python -m pytest -v --tb=short \
             tests/unit/test_lemonade_download_urls.py::TestEveryReleaseIsPinned \
-            tests/integration/test_lemonade_embeddable_assets.py
+            tests/integration/test_lemonade_embeddable_assets.py \
+            tests/integration/test_lemonade_linux_abi.py
           python util/check_doc_versions.py
 
       - name: Open the bump PR
@@ -494,10 +499,10 @@ jobs:
       # Fail loudly: a silent failure here means the pin quietly goes stale. Fires on ANY
       # step failure (detection included), and tailors the message to which phase broke so
       # the issue never claims the PR failed when detection was the thing that died.
-      - name: File a tracking issue on failure
+      - name: Compose the failure issue
+        id: failmsg
         if: failure()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET: ${{ steps.detect.outputs.target_version }}
           SHOULD_BUMP: ${{ steps.detect.outputs.should_bump }}
           COMMIT: ${{ steps.commit.outcome }}
@@ -541,12 +546,32 @@ jobs:
 
           cc @kovtcharov-amd"
           fi
+          {
+            echo "title=$TITLE"
+            echo "body<<GAIA_AUTO_ISSUE_EOF"
+            echo "$BODY"
+            echo "GAIA_AUTO_ISSUE_EOF"
+          } >> "$GITHUB_OUTPUT"
 
-          # One rolling issue for either failure type — match the shared title prefix.
-          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search 'in:title "Lemonade version-bump"' --json number --jq '.[0].number // empty')
-          if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body "$BODY"
-          else
-            gh issue create --title "$TITLE" --body "$BODY" --assignee kovtcharov-amd --label bug --label devops
-          fi
+      - name: File a tracking issue on failure
+        if: failure()
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: report
+          # One rolling issue for either failure type.
+          key: lemonade-version-bump/failure
+          legacy-title-prefix: "⚠️ Lemonade version-bump"
+          title: ${{ steps.failmsg.outputs.title || '⚠️ Lemonade version-bump run failed' }}
+          body: ${{ steps.failmsg.outputs.body || format('The Lemonade version-bump workflow failed in run {0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+          labels: |
+            bug
+            devops
+          assignees: kovtcharov-amd
+
+      - name: Close the tracking issue once a run succeeds
+        if: success()
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key: lemonade-version-bump/failure
+          legacy-title-prefix: "⚠️ Lemonade version-bump"

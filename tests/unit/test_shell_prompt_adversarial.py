@@ -251,7 +251,7 @@ def test_typing_a_at_the_terminal_on_a_one_time_prompt_denies(monkeypatch):
 
 
 def test_no_grant_scope_exists_for_any_one_time_shell_call():
-    for tool in ("run_shell_command", "run_cli_command", "wait_for_condition"):
+    for tool in ("run_shell_command", "wait_for_condition"):
         assert grant_scope(tool, {"command": "git status", RISK_NOTE_ARG: "x"}) is None
 
 
@@ -980,7 +980,7 @@ class _RunProbe(scratch_mod._Probe):
             agent.ran.append(("run_shell_command", command, working_directory))
             return {"status": "success", "return_code": 0}
 
-        @register_tool
+        @register_tool(override=True)
         def execute_python_file(file_path: str, args: str = "") -> dict:
             """Probe runner with arguments."""
             agent.ran.append(("execute_python_file", file_path, args))

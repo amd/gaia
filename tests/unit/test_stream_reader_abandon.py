@@ -66,10 +66,12 @@ def half_a_chunk(conn):
 
 class SilentServer:
     """Accepts one connection, runs *behaviour*, then waits for the client to
-    hang up; ``client_hung_up`` is set once it has."""
+    hang up; ``client_hung_up`` is set once it has. ``request_in`` is set once
+    the request has arrived and *behaviour* has run."""
 
     def __init__(self, behaviour):
         self.behaviour = behaviour
+        self.request_in = threading.Event()
         self.client_hung_up = threading.Event()
         self.listener = socket.create_server(("127.0.0.1", 0))
         self.port = self.listener.getsockname()[1]
@@ -81,8 +83,13 @@ class SilentServer:
             conn.settimeout(HOLD)
             request = b""
             while b"\r\n\r\n" not in request:
-                request += conn.recv(65536)
+                data = conn.recv(65536)
+                if not data:
+                    self.client_hung_up.set()
+                    return
+                request += data
             self.behaviour(conn)
+            self.request_in.set()
             try:
                 while conn.recv(65536):
                     pass
@@ -169,9 +176,17 @@ def test_a_stall_ends_the_reader_and_its_socket(behaviour):
     "behaviour", [never_answers, headers_then_silence, half_a_chunk]
 )
 def test_stop_ends_the_reader_and_its_socket(behaviour):
-    stop_at = time.monotonic() + 0.5
     with SilentServer(behaviour) as server:
-        with model_retry_notices(lambda n: None, lambda: time.monotonic() > stop_at):
+        stop_at = []
+
+        def stopped():
+            # Stop once the reader waits on a read, not at a fixed time a slow PC
+            # can reach before the request is even sent.
+            if not stop_at and server.request_in.is_set():
+                stop_at.append(time.monotonic() + 0.3)
+            return bool(stop_at) and time.monotonic() > stop_at[0]
+
+        with model_retry_notices(lambda n: None, stopped):
             with pytest.raises(StreamCancelledError):
                 list(_stream(server.port, ByteActivity(), FAR))
         _assert_clean(server)

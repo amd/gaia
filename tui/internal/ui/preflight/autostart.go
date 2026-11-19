@@ -20,7 +20,6 @@ package preflight
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -76,7 +75,6 @@ func startLemonade(ctx context.Context, l launcher, probe func(context.Context) 
 	// thing we just started the moment the check finishes.
 	cmd := exec.Command(l.Argv[0], l.Argv[1:]...) // #nosec G204 -- argv is resolved from a fixed set of installed launchers, never user input
 	cmd.Stdout, cmd.Stderr = nil, nil
-	cmd.Env = startEnv(l)
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("could not run %s: %w", strings.Join(l.Argv, " "), err)
@@ -88,23 +86,6 @@ func startLemonade(ctx context.Context, l launcher, probe func(context.Context) 
 	return fmt.Errorf(
 		"ran %s, but nothing was answering %ds later",
 		strings.Join(l.Argv, " "), int(autoStartWindow.Seconds()))
-}
-
-// startEnv is the child's environment.
-//
-// The context window is passed here rather than in the command string because a
-// service-managed launcher gets it from its unit file or plist — setting it on
-// the `systemctl` client process would change nothing while looking like it did.
-// Same reasoning as ctxPrefix, which is that decision's display half.
-func startEnv(l launcher) []string {
-	if l.ServiceManaged {
-		return os.Environ()
-	}
-	env := os.Environ()
-	if l.CtxSize <= 0 {
-		return env
-	}
-	return append(env, fmt.Sprintf("%s=%d", ctxSizeEnv, l.CtxSize))
 }
 
 // waitForLemonade polls until the server answers or the window closes.

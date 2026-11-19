@@ -17,6 +17,9 @@ the Agent UI's counterpart of ``PermissionState`` in the flagship's stdio host
 - **grants**: "always allow" answers, scoped to the invocation by
   :func:`gaia.agents.base.tool_grants.grant_scope`. They last until the chat is
   deleted or the backend restarts, and can be listed and revoked.
+- **relayed grants**: "always allow" answers a relayed sidecar agent holds in
+  its own session. Kept here as the sidecar reported them, so the chat lists
+  them beside its own; revoking one goes through the sidecar.
 
 State is in memory only on purpose: consent given in one run of GAIA must not
 silently approve tools in the next.
@@ -58,6 +61,8 @@ class SessionPermissions:
         self._lock = threading.Lock()
         self._full_access = full_access
         self._grants: Dict[str, str] = {}
+        self._relayed: Dict[str, str] = {}
+        self._relayed_agent: Optional[str] = None
         self._handler: Any = None
 
     @property
@@ -78,8 +83,32 @@ class SessionPermissions:
         logger.warning("Agent UI full access %s", "ENABLED" if enabled else "disabled")
 
     def grants(self) -> List[Dict[str, str]]:
+        """Every grant in this chat: its own, then the relayed agent's."""
         with self._lock:
-            return [{"key": k, "label": v} for k, v in self._grants.items()]
+            merged = {**self._grants, **self._relayed}
+            return [{"key": k, "label": v} for k, v in merged.items()]
+
+    @property
+    def relayed_agent(self) -> Optional[str]:
+        """The sidecar agent holding this chat's relayed grants, if any."""
+        with self._lock:
+            return self._relayed_agent if self._relayed else None
+
+    def relayed_keys(self) -> List[str]:
+        with self._lock:
+            return list(self._relayed)
+
+    def set_relayed_grants(self, agent_id: str, grants: List[Dict[str, str]]) -> None:
+        """Replace the relayed grants with what *agent_id*'s sidecar reported."""
+        with self._lock:
+            self._relayed = {str(g["key"]): str(g["label"]) for g in grants}
+            self._relayed_agent = agent_id
+
+    def forget_relayed(self, key: Optional[str] = None) -> int:
+        """Drop relayed grants the sidecar no longer holds. Returns the count."""
+        with self._lock:
+            keys = list(self._relayed) if key is None else [key]
+            return sum(self._relayed.pop(k, None) is not None for k in keys)
 
     def grant(self, tool_name: str, tool_args: Any) -> Optional[str]:
         """Record an "always" answer for this call; None when it has no scope."""

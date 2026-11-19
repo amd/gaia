@@ -138,6 +138,14 @@ def zero_token_errors(scorecard: dict) -> list:
     ]
 
 
+def partial_run(scorecard: dict) -> str:
+    """The runner's ``partial: N of M ran, stopped because ...`` line, or ``""``."""
+    partial = scorecard.get("partial")
+    if isinstance(partial, dict) and partial.get("summary"):
+        return str(partial["summary"])
+    return ""
+
+
 def check_category(baseline_path: Path, current_path: Path, category: str):
     """Return ``(problems, status_line)`` for one category.
 
@@ -213,6 +221,9 @@ def _write_summary(lines) -> None:
 
 
 def main(argv=None) -> int:
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(
         prog="python -m gaia.eval.integrity_gate",
         description="Fail a CI eval run that did not actually measure what it compares.",
@@ -280,6 +291,7 @@ def main(argv=None) -> int:
 
     problems = []
     no_tokens = []
+    partial = []
     for category in args.categories:
         current_path = results_dir / category / "scorecard.json"
         cat_problems, status_line = check_category(
@@ -289,15 +301,23 @@ def main(argv=None) -> int:
         )
         print(status_line)
         problems.extend(cat_problems)
+        if current_path.exists():
+            stopped = partial_run(_load(current_path))
+            if stopped:
+                partial.append(f"{category}: {stopped}")
         if args.fail_on_zero_token_errors and current_path.exists():
             no_tokens += zero_token_errors(_load(current_path))
+
+    if partial:
+        # A run that stopped part-way is never a full one, whatever --enforce says.
+        problems.extend(f"PARTIAL RUN - {line}" for line in partial)
 
     if no_tokens:
         message = (
             f"{len(no_tokens)} scenario(s) were cut off or never started because "
             f"Claude was unavailable: {', '.join(no_tokens)}. These are "
-            "not results. Usually the quota ran out: wait for the window to reset "
-            "(or switch CLAUDE_ACCOUNT), then re-dispatch just these with the "
+            "not results. Usually the quota ran out on every configured Claude "
+            "account: wait for a reset, then re-dispatch just these with the "
             "`scenarios` input. If the quota is fine, the driver failed before its "
             "first call (credential or CLI flags): read the error in each trace."
         )
@@ -348,8 +368,13 @@ def main(argv=None) -> int:
     summary += [f"- {problem}" for problem in problems]
     summary += [""]
 
-    if args.enforce or no_tokens:
-        reason = "enforce=true" if args.enforce else "Claude was never reached"
+    if args.enforce or no_tokens or partial:
+        if args.enforce:
+            reason = "enforce=true"
+        elif partial:
+            reason = "the run stopped part-way"
+        else:
+            reason = "Claude was never reached"
         print(f"{reason} - failing the build.")
         summary.append(f"**{reason} — this failed the build.**")
         _write_summary(summary)

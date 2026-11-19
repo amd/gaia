@@ -983,6 +983,160 @@ class TestLinuxBranches:
 
 
 # ---------------------------------------------------------------------------
+# Linux recently-used.xbel — written by another app, so parsed defensively
+# ---------------------------------------------------------------------------
+
+
+def _write_xbel(home: Path, body: str) -> Path:
+    path = home / ".local" / "share" / "recently-used.xbel"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+_XBEL_HEADER = '<?xml version="1.0" encoding="UTF-8"?>\n'
+_XBEL_OPEN = (
+    '<xbel version="1.0" '
+    'xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks" '
+    'xmlns:mime="http://www.freedesktop.org/standards/shared-mime-info">\n'
+)
+
+
+class TestLinuxRecentXbel:
+    def _warnings(self, caplog):
+        return [
+            rec.getMessage()
+            for rec in caplog.records
+            if rec.name == DISCOVERY_LOGGER and rec.levelno == logging.WARNING
+        ]
+
+    def test_normal_xbel_yields_recent_file_types(self, isolated_disc, tmp_path):
+        _write_xbel(
+            tmp_path,
+            _XBEL_HEADER
+            + _XBEL_OPEN
+            + '  <bookmark href="file:///home/u/a.py" added="2026-01-01T00:00:00Z">\n'
+            '    <info><metadata owner="http://freedesktop.org">\n'
+            '      <mime:mime-type type="text/x-python"/>\n'
+            "    </metadata></info>\n"
+            "  </bookmark>\n"
+            '  <bookmark href="file:///home/u/my%20script.py"/>\n'
+            '  <bookmark href="file:///home/u/paper.pdf"/>\n'
+            '  <bookmark href="https://example.com/x.py"/>\n'
+            "</xbel>\n",
+        )
+
+        facts = isolated_disc._scan_linux_recent_files()
+
+        contents = [f["content"] for f in facts]
+        assert contents == ["Regularly works with Python files (found in recent files)"]
+
+    def test_bare_doctype_is_still_parsed(self, isolated_disc, tmp_path):
+        _write_xbel(
+            tmp_path,
+            _XBEL_HEADER
+            + "<!DOCTYPE xbel>\n"
+            + _XBEL_OPEN
+            + '  <bookmark href="file:///a.py"/>\n'
+            '  <bookmark href="file:///b.py"/>\n'
+            "</xbel>\n",
+        )
+
+        assert len(isolated_disc._scan_linux_recent_files()) == 1
+
+    def test_internal_entity_is_not_expanded(self, isolated_disc, tmp_path, caplog):
+        caplog.set_level(logging.WARNING, logger=DISCOVERY_LOGGER)
+        _write_xbel(
+            tmp_path,
+            _XBEL_HEADER
+            + '<!DOCTYPE xbel [<!ENTITY ext "py">]>\n'
+            + _XBEL_OPEN
+            + '  <bookmark href="file:///a.&ext;"/>\n'
+            '  <bookmark href="file:///b.&ext;"/>\n'
+            "</xbel>\n",
+        )
+
+        assert isolated_disc._scan_linux_recent_files() == []
+        assert any("DOCTYPE" in m for m in self._warnings(caplog))
+
+    def test_billion_laughs_is_refused(self, isolated_disc, tmp_path, caplog):
+        caplog.set_level(logging.WARNING, logger=DISCOVERY_LOGGER)
+        entities = ['<!ENTITY lol0 "lol">'] + [
+            f'<!ENTITY lol{i} "{("&lol" + str(i - 1) + ";") * 10}">'
+            for i in range(1, 10)
+        ]
+        _write_xbel(
+            tmp_path,
+            _XBEL_HEADER
+            + "<!DOCTYPE xbel [\n"
+            + "\n".join(entities)
+            + "\n]>\n"
+            + _XBEL_OPEN
+            + '  <bookmark href="file:///&lol9;.py"/>\n'
+            "</xbel>\n",
+        )
+
+        assert isolated_disc._scan_linux_recent_files() == []
+        assert any("DOCTYPE" in m for m in self._warnings(caplog))
+
+    def test_external_entity_is_never_read(self, isolated_disc, tmp_path, caplog):
+        caplog.set_level(logging.WARNING, logger=DISCOVERY_LOGGER)
+        secret = tmp_path / "secret.txt"
+        secret.write_text("py", encoding="utf-8")
+        _write_xbel(
+            tmp_path,
+            _XBEL_HEADER
+            + f'<!DOCTYPE xbel [<!ENTITY ext SYSTEM "{secret.as_uri()}">]>\n'
+            + _XBEL_OPEN
+            + '  <bookmark href="file:///a.&ext;"/>\n'
+            '  <bookmark href="file:///b.&ext;"/>\n'
+            "</xbel>\n",
+        )
+
+        assert isolated_disc._scan_linux_recent_files() == []
+        assert any("DOCTYPE" in m for m in self._warnings(caplog))
+
+    def test_external_dtd_is_refused(self, isolated_disc, tmp_path, caplog):
+        caplog.set_level(logging.WARNING, logger=DISCOVERY_LOGGER)
+        _write_xbel(
+            tmp_path,
+            _XBEL_HEADER
+            + '<!DOCTYPE xbel SYSTEM "http://example.invalid/xbel.dtd">\n'
+            + _XBEL_OPEN
+            + '  <bookmark href="file:///a.py"/>\n'
+            '  <bookmark href="file:///b.py"/>\n'
+            "</xbel>\n",
+        )
+
+        assert isolated_disc._scan_linux_recent_files() == []
+        assert any("DOCTYPE" in m for m in self._warnings(caplog))
+
+    def test_malformed_xbel_is_reported(self, isolated_disc, tmp_path, caplog):
+        caplog.set_level(logging.WARNING, logger=DISCOVERY_LOGGER)
+        _write_xbel(tmp_path, _XBEL_HEADER + _XBEL_OPEN + '<bookmark href="x"')
+
+        assert isolated_disc._scan_linux_recent_files() == []
+        assert any("recently-used.xbel" in m for m in self._warnings(caplog))
+
+    @pytest.mark.parametrize("encoding", ["shift_jis", "no-such-encoding"])
+    def test_unreadable_encoding_is_reported(
+        self, isolated_disc, tmp_path, caplog, encoding
+    ):
+        caplog.set_level(logging.WARNING, logger=DISCOVERY_LOGGER)
+        _write_xbel(
+            tmp_path,
+            f'<?xml version="1.0" encoding="{encoding}"?>\n'
+            + _XBEL_OPEN
+            + '  <bookmark href="file:///a.py"/>\n'
+            '  <bookmark href="file:///b.py"/>\n'
+            "</xbel>\n",
+        )
+
+        assert isolated_disc._scan_linux_recent_files() == []
+        assert any("recently-used.xbel" in m for m in self._warnings(caplog))
+
+
+# ---------------------------------------------------------------------------
 # Unsupported platform — reported by name, never silently empty (#1956 D1)
 # ---------------------------------------------------------------------------
 

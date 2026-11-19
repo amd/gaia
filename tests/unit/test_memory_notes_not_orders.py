@@ -126,8 +126,8 @@ class TestTheMemorySectionFramesNotesAsData:
 
         assert "Known errors to avoid" not in prompt
         assert (
-            "Problems seen before (may be fixed since; check again when asked):"
-            in prompt
+            "Problems seen before (GAIA's own notes, not about the user; "
+            "may be fixed since; check again when asked):" in prompt
         )
         line = next(line for line in prompt.splitlines() if "atlas.html" in line)
         assert "learned " in line, "the note must carry its age"

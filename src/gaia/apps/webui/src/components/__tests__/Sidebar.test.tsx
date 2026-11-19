@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
 import { useChatStore } from '../../stores/chatStore';
@@ -40,7 +40,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: SESSIONS, currentSessionId: null, runningSessionIds: [], pendingDeleteIds: [],
         sidebarOpen: true, sidebarCollapsed: false, settingsSection: null,
-        showMemoryDashboard: false, showSchedules: false, messageQueues: {},
+        showMemoryDashboard: false, showSchedules: false, messageQueues: {}, locale: 'en',
     });
 });
 
@@ -62,6 +62,12 @@ describe('Sidebar', () => {
         fireEvent.change(screen.getByRole('searchbox', { name: /Search chats/ }), { target: { value: 'trip' } });
         expect(screen.getByRole('button', { name: 'Plan the trip' })).toBeInTheDocument();
         expect(screen.queryByText('Fix the build')).not.toBeInTheDocument();
+    });
+
+    it('Connectors opens the connectors settings pane', () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Connectors' }));
+        expect(useChatStore.getState().settingsSection).toBe('connectors');
     });
 
     it('puts search above New chat, expanded and collapsed', () => {
@@ -89,6 +95,12 @@ describe('Sidebar', () => {
         expect(onNewChat).toHaveBeenCalledOnce();
     });
 
+    it('Skills opens the skills settings, beside Memory and Scheduled tasks', () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: /Skills/ }));
+        expect(useChatStore.getState().settingsSection).toBe('skills');
+    });
+
     it('opens a chat', () => {
         render(<Sidebar onNewChat={vi.fn()} />);
         fireEvent.click(screen.getByRole('button', { name: 'Plan the trip' }));
@@ -101,6 +113,14 @@ describe('Sidebar', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Plan the trip' }));
         expect(useChatStore.getState().currentSessionId).toBe('b');
         expect(useChatStore.getState().showMemoryDashboard).toBe(false);
+    });
+
+    it('marks only Memory as selected while it replaces the chat', () => {
+        useChatStore.setState({ currentSessionId: 'a', showMemoryDashboard: true });
+        const { container } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(container.querySelectorAll('.sb-row.is-active, .sb-nav-item.is-active')).toHaveLength(1);
+        expect(container.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+        expect(container.querySelector('.sb-nav-item.is-active')).toHaveAccessibleName('Memory');
     });
 
     it('clicking the open chat leaves the Memory dashboard too', () => {
@@ -121,6 +141,21 @@ describe('Sidebar', () => {
         await waitFor(() => expect(screen.queryByText('Tax questions')).not.toBeInTheDocument());
     });
 
+    it('keeps the delete confirmation while the pointer rests on it', () => {
+        // Reverting under the pointer swaps the wide label for Pin, so the confirming click pins.
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        const button = screen.getByRole('button', { name: 'Delete Tax questions' });
+        fireEvent.pointerEnter(button);
+        fireEvent.click(button);
+        act(() => { vi.advanceTimersByTime(10_000); });
+        expect(screen.getByRole('button', { name: 'Confirm delete Tax questions' })).toBeInTheDocument();
+
+        fireEvent.pointerLeave(button);
+        act(() => { vi.advanceTimersByTime(3_000); });
+        expect(screen.getByRole('button', { name: 'Delete Tax questions' })).toBeInTheDocument();
+    });
+
     it('shows a chat still holding messages to send, and flags one that failed', () => {
         useChatStore.getState().updateQueue('b', (q) => messageQueue.enqueue(messageQueue.enqueue(q, 'one', 'queued'), 'two', 'queued'));
         useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(q, 'bad', 'failed'));
@@ -138,6 +173,19 @@ describe('Sidebar', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Confirm delete Tax questions and its 2 unsent messages' }));
         await waitFor(() => expect(mockedApi.deleteSession).toHaveBeenCalledExactlyOnceWith('c'));
         await waitFor(() => expect(useChatStore.getState().messageQueues.c).toBeUndefined());
+    });
+
+    it('reads the unsent-message delete confirmation in Arabic', () => {
+        useChatStore.setState({ locale: 'ar' });
+        useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(messageQueue.enqueue(q, 'one', 'queued'), 'two', 'queued'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        const plain = (s: string | null) => (s ?? '').replace(/[\u2066-\u2069]/g, '');
+        const button = (name: string) => screen.getAllByRole('button').find((b) => plain(b.getAttribute('aria-label')).startsWith(name))!;
+        fireEvent.click(button('حذف Tax questions'));
+        const confirm = button('تأكيد حذف Tax questions');
+        expect(plain(confirm.getAttribute('aria-label'))).toContain('تأكيد حذف Tax questions ورسائلها غير المُرسلة (2)');
+        expect(plain(confirm.getAttribute('title'))).toContain('انقر مرة أخرى لحذف هذه المحادثة ورسائلها غير المُرسلة (2)');
+        expect(plain(confirm.textContent)).toContain('حذف الرسائل غير المُرسلة (2)؟');
     });
 
     it('keeps the unsent messages when the delete fails', async () => {
@@ -171,7 +219,7 @@ describe('Sidebar', () => {
 
     it('shows a cloud location for a cloud model', () => {
         useModelStore.setState({
-            active: { provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi-k2', label: 'Kimi', remote: true, is_default: false },
+            active: { provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi-k2', label: 'Kimi', remote: true, is_default: false, provider_name: 'Fireworks AI' },
         });
         render(<Sidebar onNewChat={vi.fn()} />);
         expect(screen.getByRole('button', { name: 'Fireworks AI · kimi-k2' })).toBeInTheDocument();

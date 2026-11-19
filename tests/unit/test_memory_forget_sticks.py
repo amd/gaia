@@ -286,6 +286,14 @@ class TestMatching:
             ("User prefers dark mode", "User prefers dark roast coffee", False),
             ("User has a dog", "User's dog Max is allergic to chicken", False),
             ("User's wife works at AMD", "User works at AMD in Markham", False),
+            ("User's setting is -5", "User's setting is 5", False),
+            ("User knows C++", "User knows C", False),
+            ("User knows C#", "User knows C", False),
+            ("User's setting is +1", "User's setting is 1", False),
+            # Date/phone/range separators stay format-insensitive for forget.
+            ("User's birthday is 1990-05-14", "User's birthday is 1990/05/14", True),
+            ("User's phone is 555-1234", "User's phone number is 555 1234", True),
+            ("User's range is 10-12", "User's range is 10 to 12", True),
         ],
     )
     def test_same_memory(self, store, forgotten, new, same):

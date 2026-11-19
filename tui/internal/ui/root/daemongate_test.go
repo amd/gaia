@@ -10,7 +10,7 @@ import (
 )
 
 // The daemon gate may skip the local chat model only for a sidecar that runs
-// the launch model. The flagship's does; email's takes no per-turn model.
+// the launch model. The flagship's does; another sidecar takes no per-turn model.
 func TestDaemonGateIsToldTheCloudModelOnlyForTheFlagship(t *testing.T) {
 	flagship := catalog.Agent{ID: catalog.FlagshipID, Name: "GAIA", Transport: catalog.TransportDaemon}
 	m := NewFlagshipModel(flagship, false).
@@ -20,11 +20,11 @@ func TestDaemonGateIsToldTheCloudModelOnlyForTheFlagship(t *testing.T) {
 		t.Fatalf("flagship gate checks %q, want the restored cloud model", got)
 	}
 
-	email := catalog.Agent{ID: "email", Name: "Email", Transport: catalog.TransportDaemon}
-	m = NewFlagshipModel(email, false)
+	sidecar := catalog.Agent{ID: sampleSidecarID, Name: "Notes", Transport: catalog.TransportDaemon}
+	m = NewFlagshipModel(sidecar, false)
 	m.model = "amd.Gemma-4-31B" // a gate pick sets this whatever the agent
-	updated, _ = m.beginPreflight(email)
+	updated, _ = m.beginPreflight(sidecar)
 	if got := updated.(FlagshipModel).preflight.LaunchModel(); got != "" {
-		t.Fatalf("email gate was told %q; its sidecar ignores a per-turn model", got)
+		t.Fatalf("sidecar gate was told %q; it ignores a per-turn model", got)
 	}
 }

@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from gaia.logger import get_logger
 
-from ..security import require_ui_header
+from ..security import require_ui_header, via_tunnel
 
 logger = get_logger(__name__)
 
@@ -26,11 +26,8 @@ router = APIRouter(tags=["lemonade"])
 
 #: What GAIA does on a server it does not own, shown before the user switches.
 WHAT_GAIA_DOES = (
-    "GAIA registers its embedding model (user.embeddinggemma-300m-GGUF) on "
-    "your server and loads its chat and embedding models there. It does not "
-    "change your server's own setup: no cloud providers or keys, no backends, "
-    "no saved load options, and it never unloads or deletes your models. It "
-    "never starts a Lemonade while set to use yours."
+    "GAIA downloads and runs its models on your server. It leaves your "
+    "server's settings and your own models as they are."
 )
 
 
@@ -82,13 +79,6 @@ class TargetRequest(BaseModel):
     api_key: Optional[str] = None
 
 
-def _via_tunnel(request: Request) -> bool:
-    return any(
-        h in request.headers
-        for h in ("x-forwarded-for", "x-forwarded-host", "x-forwarded-proto")
-    )
-
-
 @router.post("/api/lemonade/target", dependencies=[Depends(require_ui_header)])
 def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
     """Switch servers. Nothing is saved unless the user's server checks out."""
@@ -96,7 +86,7 @@ def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
     from gaia.daemon.errors import DaemonError
     from gaia.llm import lemonade_choice as choice
 
-    if _via_tunnel(request):
+    if via_tunnel(request):
         raise HTTPException(
             status_code=403,
             detail="Change the model server on the PC running GAIA, not over "
@@ -104,6 +94,7 @@ def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
         )
     try:
         previous_mode = choice.saved_mode()
+        over_env = body.mode == choice.MODE_GAIA and choice.configured_source() == "env"
         if body.mode == choice.MODE_EXTERNAL:
             if not (body.base_url or "").strip():
                 raise choice.LemonadeChoiceError(
@@ -111,7 +102,8 @@ def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
                     "http://localhost:13305."
                 )
             choice.use_external(body.base_url, body.api_key)
-        else:
+        elif not over_env:
+            # Over LEMONADE_BASE_URL it is saved with the switch, so a failed start undoes both.
             choice.set_mode(body.mode)
     except choice.LemonadeChoiceError as e:
         raise HTTPException(
@@ -123,10 +115,14 @@ def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
     _drop_cached_agents()
     applied = None
     try:
-        if body.mode == choice.MODE_GAIA:
+        if over_env:
+            applied = choice.switch_to_gaia_over_env()
+        elif body.mode == choice.MODE_GAIA:
             applied = choice.apply_gaia_switch(previous_mode)
         else:
             applied = choice.apply_to_daemon()
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except DaemonError as e:
         if body.mode != choice.MODE_GAIA:
             raise HTTPException(
