@@ -802,7 +802,9 @@ INSTANTIATE_TEST_SUITE_P(
         PermissionCase{"NoLevel", "networkread", "missing its level"},
         PermissionCase{"UnknownDomain", "teleport:read", "unknown domain"},
         PermissionCase{"UndefinedLevel", "network:teleport", "does not define"},
-        PermissionCase{"WrongDomainForLevel", "shell:read", "does not define"}),
+        PermissionCase{"WrongDomainForLevel", "shell:read", "does not define"},
+        PermissionCase{"ProgramWithoutItsName", "program:run", "without naming the program"},
+        PermissionCase{"ScratchWithAScope", "scratch:write:x", "takes no scope"}),
     [](const ::testing::TestParamInfo<PermissionCase>& info) { return info.param.label; });
 
 TEST(SkillPermissions, GrammarIsValidatedNotEnforced) {
@@ -811,8 +813,8 @@ TEST(SkillPermissions, GrammarIsValidatedNotEnforced) {
     const Skill skill = gaia::parseSkill(frontmatter(
         "name: ok\ndescription: d\nmetadata:\n  gaia:\n    permissions:\n"
         "      - filesystem:write:./**\n      - mcp:connect:mcp-tavily\n"
-        "      - shell:none\n"));
-    EXPECT_EQ(skill.gaia.permissions.size(), 3u);
+        "      - shell:none\n      - program:run:soffice\n      - scratch:write\n"));
+    EXPECT_EQ(skill.gaia.permissions.size(), 5u);
     EXPECT_EQ(gaia::parseSkill(gaia::toMarkdown(skill)), skill);
 }
 

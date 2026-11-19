@@ -285,6 +285,8 @@ const std::map<std::string, std::set<std::string>>& domainLevels() {
         {"filesystem", {"read", "write", "none"}},
         {"mcp",        {"connect", "none"}},
         {"network",    {"read", "write", "none"}},
+        {"program",    {"run", "none"}},
+        {"scratch",    {"write", "none"}},
         {"shell",      {"execute", "none"}},
     };
     return kLevels;
@@ -344,6 +346,21 @@ void validatePermission(const std::string& raw, const std::string& skillName) {
             " does not define. Valid levels for " + pyRepr(domain) + ": " +
             sortedLevels(domain) + ". Grammar: " + FORMAT_DOCS_URL +
             "#permission-model");
+    }
+
+    const std::string scope =
+        secondColon == std::string::npos ? std::string() : stripWhitespace(trimmed.substr(secondColon + 1));
+    if (domain == "program" && level == "run" && scope.empty()) {
+        throw SkillValidationError(
+            "Skill '" + skillName + "' declares " + pyRepr(raw) +
+            " without naming the program. Scope it to the one executable its code runs, e.g. "
+            "'program:run:soffice'. Grammar: " + FORMAT_DOCS_URL + "#permission-model");
+    }
+    if (domain == "scratch" && !scope.empty()) {
+        throw SkillValidationError(
+            "Skill '" + skillName + "' declares " + pyRepr(raw) +
+            "; 'scratch' takes no scope. The folder is a fresh temporary one per tool call. "
+            "Declare 'scratch:write'. Grammar: " + FORMAT_DOCS_URL + "#permission-model");
     }
 }
 
