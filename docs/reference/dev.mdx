@@ -318,7 +318,8 @@ installs the package. That lane must name the file and run the check too.
 A pull request, and its group in the merge queue, can run part of the unit
 suite. It does when every file it changes is a unit test, modified Python code
 under `src/gaia` or a hub agent package that the nightly coverage map records, or
-a file tests only read: a docs page (`.md`/`.mdx`), an Agent UI source under
+a file tests only read: a docs page (`.md`/`.mdx` outside `src/`, `eval/` and
+`installer/`), an Agent UI source under
 `src/gaia/apps/webui/`, a file under `tui/`, or hub data outside `hub/skills/`
 and the agents' Python packages. Such a file reaches only the tests that name it
 or scan its folder. A queue group runs no unit tests when none of its files is in
@@ -337,7 +338,8 @@ script reads. Linux runs the selection; Windows runs the part of it that touches
 the OS (processes, paths, locks, permissions). On a pull request macOS runs that
 part too, but only when a changed file is OS-touching code (the daemon,
 sidecars, installer, shell and file tools, connectors and keyring, process and
-path helpers) or a test that makes OS calls. Every push to main runs the full
+path helpers, the Lemonade launch and client code, the CLI, and every module
+that branches on macOS) or a test that makes OS calls. Every push to main runs the full
 suite on Linux, and Windows and macOS run what the changes since the last green
 push reach. The nightly run
 is the full suite on all three operating systems at the head of main, and a red

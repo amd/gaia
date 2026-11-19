@@ -190,6 +190,29 @@ OS_MODULE_PREFIXES = PLATFORM_MODULE_PREFIXES + (
     "gaia.device",
     "gaia.login_path",
     "gaia.log_rotation",
+    "gaia.program_lookup",
+    "gaia.cli",
+    "gaia.llm.lemonade_client",
+    "gaia.llm.lemonade_embedded",
+    "gaia.llm.lemonade_tls",
+    "gaia.llm.gpu_memory",
+    "gaia.llm.cloud_keys",
+    "gaia.hub.native_launcher",
+    "gaia.hub.compatibility",
+    "gaia.agents.registry",
+    "gaia.agents.base.console",
+    "gaia.agents.base.discovery",
+    "gaia.agents.base.memory",
+    "gaia.agents.base.system_context",
+    "gaia.agents.tools.protected_folders",
+    "gaia.agents.tools.screenshot_tools",
+    "gaia.utils.user_folders",
+    "gaia.utils.terminal",
+    "gaia.ui.routers.files",
+    "gaia.ui.tunnel",
+    "gaia.mcp.client.mcp_client",
+    "gaia.eval.bench.config",
+    "gaia.eval.bench.sandbox",
 )
 OS_PATH_PREFIXES = ("installer/",)
 # A changed test that spawns processes, sends signals or reads the platform.
@@ -218,6 +241,9 @@ class Graph:
     # Files named by a string: followed one hop, from the changed file.
     read_deps: Dict[str, Set[str]] = field(default_factory=_edges)
     scanner_tokens: Dict[str, Set[str]] = field(default_factory=dict)
+    # Folders a test names by path and reads a file from by a computed name
+    # (`LOCALES / f"{locale}.ts"`): any non-Python file under one reaches it.
+    folder_reads: Dict[str, Set[str]] = field(default_factory=_edges)
     # Modules a test runs in a child process (`python -m gaia.cli`): coverage
     # can't see inside it, so their function-level imports always count.
     subprocess_targets: Dict[str, Set[str]] = field(default_factory=_edges)
@@ -309,6 +335,11 @@ class _Imports(ast.NodeVisitor):
         # Pieces of a joined path: "SKILL.md" there is not a bare file name.
         self.path_pieces: List[str] = []
         self._joined: Set[int] = set()
+        # Constant folders a joined path continues past with a computed name
+        # (`ROOT / "hub" / "skills" / name`).
+        self.folder_strings: List[str] = []
+        # Inner links of a `/` chain, already read with the whole chain.
+        self._chained: Set[int] = set()
         self._depth = 0
 
     def _function(self, node: ast.AST) -> None:
@@ -352,16 +383,29 @@ class _Imports(ast.NodeVisitor):
             self._joined.update(id(c) for c in tail)
 
     def visit_BinOp(self, node: ast.BinOp) -> None:
-        if isinstance(node.op, ast.Div):
+        if isinstance(node.op, ast.Div) and id(node) not in self._chained:
             parts: List[ast.AST] = []
             current: ast.AST = node
             while isinstance(current, ast.BinOp) and isinstance(current.op, ast.Div):
                 parts.insert(0, current.right)
+                self._chained.add(id(current))
                 current = current.left
             if _joins_a_path(current):
                 parts = list(current.args) + parts
             self._add_path(parts)
+            self._add_folders(parts)
         self.generic_visit(node)
+
+    def _add_folders(self, parts: List[ast.AST]) -> None:
+        """Record each run of constant pieces a computed piece follows."""
+        run: List[str] = []
+        for part in parts:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                run.append(part.value)
+                continue
+            if len(run) > 1:
+                self.folder_strings.append("/".join(run))
+            run = []
 
     def visit_Call(self, node: ast.Call) -> None:
         if _joins_a_path(node):
@@ -383,11 +427,16 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
     stems: Dict[str, Set[str]] = defaultdict(set)
     basenames: Dict[str, Set[str]] = defaultdict(set)
     path_suffixes: Dict[str, Set[str]] = defaultdict(set)
+    dir_suffixes: Dict[str, Set[str]] = defaultdict(set)
     for path in files:
         basenames[PurePosixPath(path).name].add(path)
         parts = PurePosixPath(path).parts
         for start in range(len(parts) - 1):
             path_suffixes["/".join(parts[start:])].add(path)
+        for end in range(1, len(parts)):
+            folder = "/".join(parts[:end])
+            for start in range(end):
+                dir_suffixes["/".join(parts[start:end])].add(folder)
         if path.endswith(".py"):
             stems[PurePosixPath(path).stem].add(path)
             for root in roots:
@@ -437,6 +486,15 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
         if name in _IGNORED_BASENAMES or len(targets) > MAX_BASENAME_FANOUT:
             return set()
         return targets
+
+    def folder_targets(pieces: List[str]) -> Set[str]:
+        """The tracked folders a string of two or more path pieces can mean."""
+        # One piece alone ("src", "docs") says nothing about which folder.
+        for start in range(len(pieces) - 1):
+            found = dir_suffixes.get("/".join(pieces[start:]))
+            if found and len(found) <= MAX_BASENAME_FANOUT:
+                return found
+        return set()
 
     def link(src: str, name: str, edges: Dict[str, Set[str]], parent_only=False):
         found = resolve(name)
@@ -520,6 +578,10 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
         tokens: Set[str] = {
             p for text in found.path_pieces for p in _PATH_SPLIT_RE.split(text) if p
         }
+        if not package_code:
+            for text in found.folder_strings:
+                folders = folder_targets([p for p in _PATH_SPLIT_RE.split(text) if p])
+                graph.folder_reads[path].update(folders)
         for text in found.strings:
             value = text.strip()
             if package_code and spawns and "." in value:
@@ -547,6 +609,8 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
             tokens.update(p for p in pieces if "\n" not in p and len(p) < 80)
             targets = read_targets(pieces, package_code)
             graph.read_deps[path].update(t for t in targets if t != path)
+            if not package_code and not targets:
+                graph.folder_reads[path].update(folder_targets(pieces))
         # Shipped code that lists a directory is linked by the names it reads.
         if not package_code and _SCANNER_RE.search(source):
             graph.scanner_tokens[path] = tokens
@@ -714,6 +778,14 @@ def affected_files(
         affected.update(rev_read.get(path, ()))
         if path.endswith("__init__.py"):
             affected.update(rev_init.get(path, ()))
+        # Python reaches its readers through imports; a folder read is how a
+        # test finds a data file by a name it computes.
+        if not path.endswith(".py"):
+            affected.update(
+                reader
+                for reader, folders in graph.folder_reads.items()
+                if any(path.startswith(folder + "/") for folder in folders)
+            )
         dirs = PurePosixPath(path).parts[:-1]
         for scanner, tokens in graph.scanner_tokens.items():
             if any(d in tokens for d in dirs):
@@ -859,7 +931,10 @@ def read_only_class(path: str) -> Optional[str]:
         return None
     if path.startswith("hub/"):
         return "hub data"
-    if p.suffix in {".md", ".mdx"} and not path.startswith("src/"):
+    # eval/ prompts and corpora and the installer tree are inputs, not pages.
+    if p.suffix in {".md", ".mdx"} and not path.startswith(
+        ("src/", "eval/", "installer/")
+    ):
         return "docs"
     return None
 

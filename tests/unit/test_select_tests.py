@@ -6,6 +6,7 @@ A test the selector leaves out is a bug that merges green, so each way a test
 can depend on a file gets a case here, built in a throwaway repo.
 """
 
+import re
 import subprocess
 import sys
 import textwrap
@@ -788,6 +789,20 @@ RO_FILES = {
     "tests/unit/test_npm_readme.py": (
         "PATH = ROOT / 'hub' / 'agents' / 'gaia' / 'npm' / 'README.md'\n"
     ),
+    # A folder named by path, then a file in it by a computed name.
+    "src/gaia/apps/webui/src/i18n/locales/en.ts": "export {}",
+    "src/gaia/apps/webui/src/i18n/locales/ar.ts": "export {}",
+    "tests/unit/test_locale_fstring.py": (
+        "def test_l(webui, locale):\n"
+        "    (webui / f'i18n/locales/{locale}.ts').read_text()\n"
+    ),
+    "tests/unit/test_locale_folder.py": (
+        "LOCALES = ROOT / 'src/gaia/apps/webui/src/i18n/locales'\n"
+        "def test_l(locale):\n"
+        "    (LOCALES / f'{locale}.ts').read_text()\n"
+    ),
+    "eval/prompts/judge.md": "judge",
+    "installer/tui/README.md": "readme",
 }
 
 
@@ -828,6 +843,10 @@ def ro_graph(tmp_path):
         ("src/gaia/agents/prompt.md", None),
         ("website/src/pages/not-a-unit-test-input.astro", None),
         ("eval/ci_lanes.json", None),
+        # Prompts, corpora and installer notes are inputs, not docs pages.
+        ("eval/prompts/judge.md", None),
+        ("eval/corpus/doc.md", None),
+        ("installer/tui/README.md", None),
     ],
 )
 def test_read_only_class_names_the_files_that_only_reach_their_readers(path, kind):
@@ -849,6 +868,11 @@ def test_read_only_class_names_the_files_that_only_reach_their_readers(path, kin
             {"tests/unit/test_tui_models.py"},
         ),
         ("hub/agents/gaia/npm/README.md", {"tests/unit/test_npm_readme.py"}),
+        # The folder is named by path; the file by an f-string or a variable.
+        (
+            "src/gaia/apps/webui/src/i18n/locales/ar.ts",
+            {"tests/unit/test_locale_fstring.py", "tests/unit/test_locale_folder.py"},
+        ),
     ],
 )
 def test_a_read_only_file_selects_only_its_readers(ro_graph, changed, readers):
@@ -1071,3 +1095,79 @@ def test_lane_scope_reads_the_diff_from_git(git_repo, tmp_path_factory, monkeypa
     args = ["lane-scope", "--base", "main", "--workflow", str(wf)]
     st.main(args + ["--narrow-prefix", WEBUI, "--github-output", "tui"])
     assert out.read_text(encoding="utf-8").splitlines() == ["tui_full=false"]
+
+
+def test_a_folder_read_does_not_widen_a_python_change(ro_graph):
+    # Python reaches its readers through imports, not through folder reads.
+    hit = _reach(ro_graph, "src/gaia/core/base.py")
+    assert "tests/unit/test_locale_folder.py" not in hit
+
+
+def test_a_single_folder_name_is_not_a_folder_read(tmp_path):
+    files = {
+        "docs/a.mdx": "a",
+        "tests/unit/test_one_name.py": "DOCS = 'docs'\n",
+    }
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    graph = st.build_graph(repo=tmp_path, files=sorted(files))
+    assert not graph.folder_reads.get("tests/unit/test_one_name.py")
+
+
+# The two real tests that read a locale file by a computed name.
+LOCALE_READERS = [
+    "tests/unit/test_other_server_start_hint_translated.py",
+    "tests/unit/test_flagship_tool_labels.py",
+]
+
+
+@pytest.mark.parametrize("locale", ["en", "ar"])
+def test_the_real_locale_tests_are_selected_by_a_locale_edit(locale):
+    locales = "src/gaia/apps/webui/src/i18n/locales"
+    files = sorted(
+        LOCALE_READERS
+        + [p.relative_to(REPO).as_posix() for p in (REPO / locales).iterdir()]
+    )
+    graph = st.build_graph(repo=REPO, files=files)
+    hit = st.affected_files(graph, [f"{locales}/{locale}.ts"], {})
+    assert set(LOCALE_READERS) <= hit
+
+
+_DARWIN_RE = re.compile(
+    r"""sys\.platform\s*(?:==|!=|\.startswith\()\s*\(?["']darwin"""
+    r"""|platform\.system\(\)\s*==\s*["']Darwin"""
+)
+
+
+def test_every_module_that_branches_on_macos_runs_the_macos_lane():
+    # A module with a darwin branch the gate doesn't list would merge without
+    # the macOS lane ever running on its PR.
+    missing = []
+    for path in sorted((REPO / "src/gaia").rglob("*.py")):
+        if not _DARWIN_RE.search(path.read_text(encoding="utf-8", errors="ignore")):
+            continue
+        rel = path.relative_to(REPO).as_posix()
+        if not st.os_reason([rel], st.Graph(files=set())):
+            missing.append(rel)
+    assert not missing, (
+        "These modules branch on macOS but the macOS lane skips them on a PR. "
+        f"Add them to OS_MODULE_PREFIXES in util/select_tests.py: {missing}"
+    )
+
+
+def test_a_folder_joined_with_a_computed_name_is_a_folder_read(tmp_path):
+    files = {
+        "docs/guides/chat.mdx": "a",
+        "docs/other/x.mdx": "b",
+        "tests/unit/test_guide_by_name.py": (
+            "def page(name):\n" "    return ROOT / 'docs' / 'guides' / f'{name}.mdx'\n"
+        ),
+    }
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    graph = st.build_graph(repo=tmp_path, files=sorted(files))
+    reader = "tests/unit/test_guide_by_name.py"
+    assert reader in st.affected_files(graph, ["docs/guides/chat.mdx"], {})
+    assert reader not in st.affected_files(graph, ["docs/other/x.mdx"], {})
