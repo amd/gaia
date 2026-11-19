@@ -5398,7 +5398,9 @@ Do NOT wrap conversational replies in JSON.
         new_filter = self._select_tools_for_turn(user_input)
         if new_filter is not None:
             # A loaded skill's tools stay listed whatever this turn selected.
-            missing = [t for t in self._pinned_skill_tools() if t not in new_filter]
+            # getattr: test stubs copy this method onto a plain class.
+            pinned = getattr(self, "_pinned_skill_tools", None)
+            missing = [t for t in (pinned() if pinned else ()) if t not in new_filter]
             if missing:
                 new_filter = [*new_filter, *missing]
         if new_filter != self._active_tool_filter:
