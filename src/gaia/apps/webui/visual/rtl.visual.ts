@@ -354,9 +354,19 @@ const audit = async (page: Page): Promise<string[]> => {
             const icon = button.querySelector(':scope > svg');
             if (!icon || !shown(button) || !button.textContent?.trim()) continue;
             const iconBox = icon.getBoundingClientRect();
-            const range = document.createRange();
-            range.selectNodeContents(button);
-            const gaps = [...range.getClientRects()]
+            // An element child counts by its own box, so text its overflow clips never reaches the icon.
+            const boxes: DOMRect[] = [];
+            for (const node of button.childNodes) {
+                if (node === icon || node instanceof SVGElement || !node.textContent?.trim()) continue;
+                if (node instanceof Element) {
+                    if (shown(node)) boxes.push(...node.getClientRects());
+                    continue;
+                }
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                boxes.push(...range.getClientRects());
+            }
+            const gaps = boxes
                 .filter((r) => r.left >= iconBox.right - 1 || r.right <= iconBox.left + 1)
                 .map((r) => Math.max(r.left - iconBox.right, iconBox.left - r.right));
             if (gaps.length && Math.min(...gaps) < 3) problems.push(`icon touches its label: ${label(button)}`);
@@ -364,6 +374,33 @@ const audit = async (page: Page): Promise<string[]> => {
         return [...new Set(problems)];
     });
 };
+
+// The icon-gap rule on two probes: a label its own box clips just short of the icon (Linux fonts did this to the
+// model pill), which is fine, and a bare label with no gap, which is not.
+test('the icon-gap rule ignores text its own box clips and still catches a label touching its icon', async ({ page }) => {
+    await open(page, '', 'ar');
+    await page.evaluate(() => {
+        const host = document.createElement('div');
+        host.dir = 'rtl';
+        host.style.cssText = 'position:fixed;top:200px;left:40px;z-index:9999;display:flex;flex-direction:column;gap:12px';
+        host.innerHTML = `
+            <button type="button" class="probe-clipped" style="display:flex;align-items:center;gap:6px;font-size:12px">
+                <svg width="13" height="13" aria-hidden="true"></svg>
+                <span dir="ltr" style="flex:none;overflow:hidden;white-space:nowrap;text-align:left">Gemma-4-E4B-it-GGUF</span>
+            </button>
+            <button type="button" class="probe-touching" style="display:flex;align-items:center;gap:0;font-size:12px">
+                <svg width="13" height="13" aria-hidden="true"></svg>محلي
+            </button>`;
+        document.body.append(host);
+        const span = host.querySelector('.probe-clipped span') as HTMLElement;
+        const range = document.createRange();
+        range.selectNodeContents(span);
+        // Clip the text 5 px short, so its hidden tail ends 1 px from the icon, inside the 6 px gap.
+        span.style.width = `${range.getBoundingClientRect().width - 5}px`;
+    });
+    const found = (await audit(page)).filter((f) => f.startsWith('icon touches its label') && f.includes('probe-'));
+    expect(found).toEqual(['icon touches its label: <button class="probe-touching"> "محلي"']);
+});
 
 // A reply that never ends, so the card stays up for the screenshot.
 const RECORDING_EVENTS = [
