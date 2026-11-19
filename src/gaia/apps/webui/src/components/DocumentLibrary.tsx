@@ -19,7 +19,7 @@ import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
 import { IndexingProgress } from './IndexingProgress';
-import { isServerFailure, serverFailureText } from '../utils/documentFailure';
+import { isServerFailure, serverFailureText, serverNotAddedText, waitsForServerReturn } from '../utils/documentFailure';
 import './DocumentLibrary.css';
 
 /** Split a stored indexing error into a one-line summary and the rest. */
@@ -426,9 +426,7 @@ export function DocumentLibrary() {
                 // Its row carries the reason and Retry; attaching it would promise a chat a file it can't search.
                 log.doc.warn(`"${filename}" couldn't be added (${doc.error_kind ?? 'unreadable'}); not attaching it`);
                 const name = doc.filename || filename;
-                setActionError(serverFailureText(doc.error_kind, t)
-                    ? t('docs.notAddedServer', { name })
-                    : t('docs.notAdded', { name }));
+                setActionError(serverNotAddedText(doc.error_kind, name, t) ?? t('docs.notAdded', { name }));
             } else if (doc?.id) {
                 try {
                     await attachToTarget(doc.id, doc.filename || filename);
@@ -705,17 +703,18 @@ export function DocumentLibrary() {
             case 'failed': {
                 const hint = doc.error_kind ? PERMANENT_FAILURE_HINTS[doc.error_kind] : undefined;
                 const serverReason = serverFailureText(doc.error_kind, t);
+                const waiting = waitsForServerReturn(doc.error_kind);
                 const lastError = serverReason ?? doc.last_error;
                 const reason = lastError ? splitFailureReason(lastError) : null;
                 return (
                     <div className="doc-failure">
                         <div className="doc-indexing-status">
                             <span
-                                className="doc-status-badge doc-status-failed"
+                                className={waiting ? 'doc-status-badge doc-status-waiting' : 'doc-status-badge doc-status-failed'}
                                 title={lastError || undefined}
-                                aria-label={lastError ? t('docs.failedAria', { error: lastError }) : t('docs.indexingFailed')}
+                                aria-label={lastError ? t(waiting ? 'docs.waitingAria' : 'docs.failedAria', { error: lastError }) : t('docs.indexingFailed')}
                             >
-                                <AlertCircle size={12} /> {hint ? t('docs.cantRead') : t('docs.failed')}
+                                <AlertCircle size={12} /> {hint ? t('docs.cantRead') : waiting ? t('docs.waiting') : t('docs.failed')}
                             </span>
                             <button
                                 className={hint ? 'btn-retry btn-retry-quiet' : 'btn-retry'}
