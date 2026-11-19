@@ -26,7 +26,7 @@ describe("releaseDownloads", () => {
   });
 
   it("never counts a sub-package tag as the main line", () => {
-    expect(releaseDownloads([rel("agent-pkg-email-v0.5.0")], [])[0]!.main).toBe(false);
+    expect(releaseDownloads([rel("agent-pkg-gaia-v0.5.0")], [])[0]!.main).toBe(false);
   });
 });
 
@@ -46,6 +46,12 @@ describe("dailyDeltas", () => {
       row("2026-10-02", 140, "latest.yml"),
     ]);
     expect(points[0]).toMatchObject({ install: 2, meta: 40 });
+  });
+
+  it("counts a release's first day from zero when its rows are filtered but the day before had a snapshot", () => {
+    expect(dailyDeltas([row("2026-10-02", 25), row("2026-10-03", 26)]).points.map((p) => p.install)).toEqual([1]);
+    const { points } = dailyDeltas([row("2026-10-02", 25), row("2026-10-03", 26)], ["2026-10-01", "2026-10-02", "2026-10-03"]);
+    expect(points.map((p) => p.install)).toEqual([25, 1]);
   });
 
   it("drops a delta that spans a missed day instead of spreading it", () => {

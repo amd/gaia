@@ -46,13 +46,19 @@ from release_tag import ReleaseTag, parse_tag  # noqa: E402
 
 WINDOWS_SETUP_PLATFORM = "win-x64"
 INSTALLER_SUMS = "gaia-installers-SHA256SUMS.txt"
+_TUI_PLATFORMS = (
+    "linux-amd64",
+    "linux-arm64",
+    "darwin-amd64",
+    "darwin-arm64",
+    "windows-amd64.exe",
+    "windows-arm64.exe",
+)
+# Each binary twice: gaia-<platform> is the name a GAIA installed before the
+# binary became gaia-cli looks for when it updates.
 TUI_FILES = (
-    "gaia-linux-amd64",
-    "gaia-linux-arm64",
-    "gaia-darwin-amd64",
-    "gaia-darwin-arm64",
-    "gaia-windows-amd64.exe",
-    "gaia-windows-arm64.exe",
+    *(f"gaia-cli-{p}" for p in _TUI_PLATFORMS),
+    *(f"gaia-{p}" for p in _TUI_PLATFORMS),
     "gaia-tui-SHA256SUMS.txt",
 )
 # The frozen gaia install.sh and install.ps1 fetch. The best-effort Intel Mac

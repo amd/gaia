@@ -53,8 +53,9 @@ def test_agent_help_omits_publishing_commands(parser):
     text = _help(agent)
     assert "SUPPRESS" not in text
     assert "publish " not in text  # "a published agent" is fine
-    for visible in ("test", "export", "import", "install", "list"):
+    for visible in ("test", "export", "import", "install"):
         assert visible in metavar
+    assert "list" not in metavar
 
 
 @pytest.mark.parametrize(

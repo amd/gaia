@@ -31,7 +31,7 @@ describe('AboutSettings', () => {
     it('links release notes, docs, problem reports and the license', () => {
         render(<AboutSettings />);
         expect(screen.getByRole('link', { name: /What’s new/ })).toHaveAttribute('href', 'https://github.com/amd/gaia/releases');
-        expect(screen.getByRole('link', { name: /Documentation/ })).toHaveAttribute('href', 'https://amd-gaia.ai/docs');
+        expect(screen.getByRole('link', { name: /Documentation/ })).toHaveAttribute('href', 'https://amd-gaia.ai/docs/guides/agent-ui');
         expect(screen.getByRole('link', { name: /Report a problem/ })).toHaveAttribute('rel', 'noopener noreferrer');
         expect(screen.getByRole('link', { name: /License/ })).toBeInTheDocument();
     });

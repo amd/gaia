@@ -18,6 +18,8 @@ from gaia.skills.errors import SkillPermissionError, SkillValidationError
 from gaia.skills.permissions import parse_permissions
 from tests.unit.skills_helpers import make_key
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 # ---------------------------------------------------------------------------
 # SemVer ranges
 # ---------------------------------------------------------------------------

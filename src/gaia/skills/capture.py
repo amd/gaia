@@ -50,6 +50,7 @@ from gaia.skills.format import (
     parse_skill_file,
     reset_security_tier,
 )
+from gaia.skills.human_only import require_user_terminal
 from gaia.skills.lock import (
     SOURCE_CAPTURED,
     UNVERSIONED,
@@ -746,6 +747,7 @@ def import_bundle(
         SkillPermissionError: a permission is un-bridged or above the ceiling.
         SkillValidationError: the ``SKILL.md`` fails the schema gate.
     """
+    require_user_terminal("gaia skill import")
     from gaia.skills.audit.findings import (
         AUDIT_ENGINE,
         content_digest,
@@ -1000,6 +1002,7 @@ def promote_skill(
         SkillCaptureError: the skill exists but was not captured — hub installs
             and imports are not what promote governs.
     """
+    require_user_terminal("gaia skill promote")
     from gaia.skills.audit.engine import audit_skill
 
     safe_name = _validate_name(name)

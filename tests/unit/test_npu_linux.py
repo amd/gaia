@@ -538,7 +538,8 @@ def test_setup_plan_lists_the_problems_for_the_screen(not_set_up):
             }
         ],
     }
-    assert _npu_status(None) == {"present": False, "ready": False, "problems": []}
+    # Unread capacity is unchecked, not "no NPU" (#7341).
+    assert _npu_status(None) is None
 
 
 def test_npu_problem_is_a_plain_value():
@@ -707,7 +708,7 @@ class TestSetupEndpoints:
 
         from gaia.ui.routers import setup as setup_router
 
-        monkeypatch.setattr(setup_router, "build_plan", lambda: {"npu": "plan"})
+        monkeypatch.setattr(setup_router, "build_plan", lambda **_: {"npu": "plan"})
         app = FastAPI()
         app.include_router(setup_router.router)
         self.app = app

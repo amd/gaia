@@ -16,14 +16,13 @@ func cloudDaemonCfg(model string) Config {
 	return Config{AgentID: "gaia", AgentName: "GAIA", Model: model}
 }
 
-// gaiaFake is newFake's daemon answering for the flagship instead of email.
+// gaiaFake is newFake's daemon answering for the flagship alone.
 func gaiaFake(initStatus int, initBody string) *fakeTransport {
 	f := newFake()
 	f.bodies = map[string]Response{
-		"GET /daemon/v1/agents": {Status: 200, Body: []byte(strings.ReplaceAll(
-			agentsRunning, `"agent_id":"email"`, `"agent_id":"gaia"`))},
-		"GET /v1/gaia/health": {Status: 200, Body: []byte(healthOK)},
-		"GET /v1/gaia/init":   {Status: initStatus, Body: []byte(initBody)},
+		"GET /daemon/v1/agents": {Status: 200, Body: []byte(agentsRunning)},
+		"GET /v1/gaia/health":   {Status: 200, Body: []byte(healthOK)},
+		"GET /v1/gaia/init":     {Status: initStatus, Body: []byte(initBody)},
 	}
 	return f
 }

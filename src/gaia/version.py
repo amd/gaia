@@ -10,7 +10,7 @@ from importlib.metadata import version as get_package_version_metadata
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-__version__ = "0.26.0"
+__version__ = "0.27.0"
 
 # Lemonade version used across CI and installer
 LEMONADE_VERSION = "2026.44.1"
@@ -21,11 +21,21 @@ LEMONADE_VERSION = "2026.44.1"
 LEMONADE_MIN_VERSION = "2026.44.1"
 
 
+def base_version(version: str) -> str:
+    """The release a version names, without its ``~``/``+`` build suffix.
+
+    Lemonade's dev and PPA builds report ``2026.48.0~1809.2d1f23e4``; that is
+    release ``2026.48.0``.
+    """
+    return re.split(r"[~+]", str(version).strip().lstrip("v"), maxsplit=1)[0].strip()
+
+
 def parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
     """Parse a dotted version into a comparable int tuple, or None.
 
-    Keeps each component's leading digits so Lemonade's CalVer development
-    builds (``2026.39.0~12.abc1234``) compare instead of reading as unknown.
+    Drops a build suffix first (see :func:`base_version`), so Lemonade's CalVer
+    development builds (``2026.39.0~12.abc1234``) compare by their release
+    instead of reading as unknown, and a suffix never leaks into a component.
 
     The frozen sidecars vendor their own copy — they cannot import this — and
     ``tests/unit/test_lemonade_calver.py`` holds them to it.
@@ -33,7 +43,7 @@ def parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
     if not version:
         return None
     try:
-        parts = str(version).strip().lstrip("v").split(".")[:3]
+        parts = base_version(version).split(".")[:3]
         return tuple(int(re.match(r"\s*(\d+)", p).group(1)) for p in parts)
     except (ValueError, IndexError, AttributeError):
         return None

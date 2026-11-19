@@ -486,6 +486,111 @@ def test_one_label_on_both_sides_is_counted_not_named_twice():
     assert "1 of 2 pytest runs didn't pass" in statement
 
 
+#: The status-only answer that still got "1 of 2 pytest runs didn't pass".
+REPORTED_FAILURE = (
+    "No — the full suite fails: 1 failed, 4 passed (the -k usage subset alone "
+    "passes: 2 passed, 3 deselected)."
+)
+MIXED_PYTEST_RUNS = [
+    {"tool": "t", "check_label": "pytest", "failed": True, "check_target": "pytest -q"},
+    {"tool": "t", "check_label": "pytest", "check_target": "pytest -q -k usage"},
+]
+
+
+def test_an_answer_that_reports_the_failed_tests_gets_no_note():
+    assert "1 of 2 pytest runs didn't pass" in build_verification_scope(
+        MIXED_PYTEST_RUNS
+    )
+    assert build_verification_scope(MIXED_PYTEST_RUNS, answer=REPORTED_FAILURE) == ""
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "One test failed.",
+        "The suite does not pass: 3 failed, 52 passed.",
+        "Two tests still fail, but the discount one passes now.",
+        "pytest fails with an import error.",
+        "52 passed; 3 failed.",
+        "No, the suite fails: 1 failed, 4 passed.",
+    ],
+)
+def test_a_plain_failure_report_gets_no_note(answer):
+    executions = [_execution("pytest", failed=True)]
+    assert build_verification_scope(executions, answer=answer) == ""
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "All set.",
+        "All 5 tests pass.",
+        "52 passed, 0 failed.",
+        "I fixed the failing test.",
+        # A success claim beside the failure is the case the note is for.
+        "Done. 1 failed, 4 passed.",
+        "It works now. One test failed earlier.",
+        # Something failed, but the sentence is not about the tests.
+        "I tried the command twice and it kept failing: boom.",
+        "The upload failed, so the report was not sent.",
+        # A pass said in a clause of its own, or the failure denied or put in the past.
+        "Previously 3 tests failed; now they pass.",
+        "1 test failed before my fix; the suite is green now.",
+        "Not a single test failed.",
+        "The tests didn't fail.",
+        "No tests are failing anymore.",
+        "One test failed. The rest of the suite is fine and the others pass.",
+    ],
+)
+def test_an_answer_that_does_not_plainly_report_the_failure_keeps_the_note(answer):
+    executions = [_execution("pytest", failed=True)]
+    assert build_verification_scope(executions, answer=answer) == (
+        f"{VERIFICATION_NOTE_OPENER} — pytest didn't pass."
+    )
+
+
+def test_a_failed_lint_is_not_covered_by_a_report_of_failed_tests():
+    executions = [_execution("pytest", failed=True), _execution("ruff", failed=True)]
+    assert "pytest, ruff didn't pass" in build_verification_scope(
+        executions, answer="One test failed."
+    )
+
+
+def test_a_reported_failure_leaves_the_other_reasons_in_the_note():
+    statement = build_verification_scope(
+        [_execution("pytest", failed=True)],
+        unchecked_change="cart.py",
+        answer="One test failed.",
+    )
+    assert statement == (
+        f"{VERIFICATION_NOTE_OPENER} — I changed `cart.py` and didn't run the "
+        "tests afterwards."
+    )
+
+
+def test_loop_adds_no_note_to_a_status_answer_that_reports_the_failure(agent):
+    _scripted_runs(
+        agent,
+        (
+            {"status": "error", "error": "1 failed, 4 passed", "return_code": 1},
+            "python -m pytest -q",
+        ),
+        (
+            {"status": "success", "return_code": 0, "stdout": "2 passed"},
+            "python -m pytest -q -k usage",
+        ),
+        answer=REPORTED_FAILURE,
+    )
+    result = agent.process_query(
+        "Do not fix anything, I only want a status. Does the suite pass?",
+        max_steps=5,
+    )
+    assert result["result"] == REPORTED_FAILURE
+    # The data still says what the runs showed.
+    assert result["verification"]["state"] == "partially verified"
+    assert result["verification"]["failed"] == ["pytest"]
+
+
 def test_a_split_label_sits_beside_labels_that_did_not_split():
     statement = build_verification_scope(
         [
@@ -591,6 +696,130 @@ def test_a_trimmed_rerun_that_still_fails_is_not_verified(agent):
     assert result["verification"]["state"] != "verified"
 
 
+@pytest.mark.parametrize(
+    "before, after",
+    [
+        # rc18 round 3: the verifying rerun added one traceback flag.
+        ("python -m pytest -q 2>&1 | tail -40", "python -m pytest -q --tb=short 2>&1"),
+        ("pytest", "pytest --tb short"),
+        ("pytest", "pytest -q"),
+        ("pytest -q", "pytest -vv"),
+        ("pytest tests/", "pytest --verbose tests/ --no-header"),
+        ("pytest tests/", "pytest tests/ -rA"),
+        ("pytest tests/", "pytest -r fE tests/"),
+        ("pytest", "pytest --color=yes --durations=10 --durations-min=0.5"),
+        ("pytest", "pytest --color no --durations 5"),
+        ("pytest", "pytest -p no:cacheprovider"),
+        ("pytest", "pytest -pno:cacheprovider -l --showlocals"),
+        ("pytest", "pytest --no-summary --show-capture=no --verbosity=2"),
+        ("pytest", "pytest --disable-warnings --code-highlight=no --full-trace"),
+        ("pytest -x", "pytest -xq"),
+        ("pytest -x", "pytest -qx --tb=line"),
+        ("pytest -k cart", "pytest -q -k cart -v"),
+        ("cd repo && pytest -q", "cd repo && pytest --tb=short -v | tail -5"),
+        (".venv/Scripts/pytest.exe -q", ".venv/Scripts/pytest.exe --tb=long"),
+        ("uv run pytest", "uv run pytest -q"),
+    ],
+)
+def test_a_flag_that_only_changes_the_report_is_the_same_check(before, after):
+    assert verification_check_target(
+        "run_shell_command", {"command": before}
+    ) == verification_check_target("run_shell_command", {"command": after})
+
+
+@pytest.mark.parametrize(
+    "narrower",
+    [
+        "pytest -q -k cart",
+        "pytest -q -m slow",
+        "pytest -q tests/test_cart.py",
+        "pytest -q tests/test_cart.py::test_total",
+        "pytest -q -x",
+        "pytest -q --lf",
+        "pytest -q --deselect tests/test_cart.py::test_total",
+        "pytest -q --ignore=tests/e2e",
+        "pytest -q -p no:randomly",
+        "pytest -q -W error",
+        "pytest -q -s",
+        # A flag's value is not a flag: "-k -v" selects tests named "-v".
+        "pytest -q -k -v",
+        "pytest -q -kv",
+        'pytest -q -k "cart and -v"',
+        # After "--" every word is a path.
+        "pytest -q -- -v",
+    ],
+)
+def test_a_flag_that_changes_what_runs_is_a_different_check(narrower):
+    full = verification_check_target("run_shell_command", {"command": "pytest -q"})
+    assert verification_check_target("run_shell_command", {"command": narrower}) != full
+
+
+@pytest.mark.parametrize(
+    "clustered, without_value",
+    [
+        # A value letter that ends a cluster owns the next word, as "-k -v" does.
+        ("pytest -xk -v", "pytest -xk"),
+        ("pytest -sm -q", "pytest -sm"),
+    ],
+)
+def test_a_clustered_value_flag_keeps_its_value(clustered, without_value):
+    def target(command):
+        return verification_check_target("run_shell_command", {"command": command})
+
+    assert target(clustered) != target(without_value)
+    assert target(clustered) == target(clustered.replace("pytest", "pytest -v", 1))
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        # Only pytest's own flags are read; another program's "-v" is its own.
+        ("ruff check . -q", "ruff check ."),
+        ("pytest -q && mypy -v src", "pytest -q && mypy src"),
+        ("pytest -q; ls -l", "pytest -q; ls"),
+        ('pytest -k "a -v b"', 'pytest -k "a b"'),
+    ],
+)
+def test_report_flags_are_only_dropped_from_pytest(first, second):
+    assert verification_check_target(
+        "run_shell_command", {"command": first}
+    ) != verification_check_target("run_shell_command", {"command": second})
+
+
+def test_loop_says_nothing_when_the_fixed_rerun_adds_a_report_flag(agent):
+    """rc18 round 3: "1 of 2 pytest runs didn't pass" after "5 passed"."""
+    _scripted_runs(
+        agent,
+        (
+            {"status": "error", "error": "1 failed", "return_code": 1},
+            "python -m pytest -q 2>&1 | tail -40",
+        ),
+        (
+            {"status": "success", "return_code": 0, "stdout": "5 passed"},
+            "python -m pytest -q --tb=short 2>&1 | tail -20",
+        ),
+    )
+    result = agent.process_query("fix the test", max_steps=5)
+    assert result["verification"]["state"] == "verified"
+    _assert_no_note(result["result"])
+
+
+def test_loop_keeps_the_failed_suite_after_a_filtered_rerun_with_report_flags(agent):
+    _scripted_runs(
+        agent,
+        (
+            {"status": "error", "error": "1 failed", "return_code": 1},
+            "python -m pytest -q 2>&1 | tail -40",
+        ),
+        (
+            {"status": "success", "return_code": 0, "stdout": "1 passed"},
+            "python -m pytest -q --tb=short -k cart 2>&1 | tail -20",
+        ),
+    )
+    result = agent.process_query("fix the test", max_steps=5)
+    assert result["verification"]["state"] != "verified"
+
+
 def test_a_named_check_tool_is_targeted_by_its_arguments():
     assert verification_check_target(
         "run_tests", {"path": "tests/"}
@@ -637,7 +866,7 @@ def test_loop_reports_a_newly_broken_test_as_not_passing(agent):
     assert "pytest passed" not in line
 
 
-def _scripted_runs(agent_, *runs):
+def _scripted_runs(agent_, *runs, answer="Done."):
     """Script the model to run each command in turn, the shell returning each result."""
     results = [result for result, _ in runs]
     real_tool_result = _DummyAgent.shell_result
@@ -645,7 +874,7 @@ def _scripted_runs(agent_, *runs):
     def _next_result():
         return results.pop(0) if results else real_tool_result
 
-    responses = [_tool_call(command) for _, command in runs] + [_answer("Done.")]
+    responses = [_tool_call(command) for _, command in runs] + [_answer(answer)]
     chat = _stub_chat(agent_, *responses)
     send = chat.send_messages.side_effect
 
@@ -699,7 +928,7 @@ def test_parsed_answer_after_a_passing_check_carries_no_note(agent):
 
 def test_parsed_answer_after_a_failing_check_says_so(agent):
     agent.shell_result = {"status": "error", "error": "1 failed", "return_code": 1}
-    _stub_chat(agent, _tool_call("pytest tests/unit -q"), _answer("One test failed."))
+    _stub_chat(agent, _tool_call("pytest tests/unit -q"), _answer("Here you go."))
     result = agent.process_query("run the tests", max_steps=5)
     assert _scope_line(result["result"]) == (
         f"{VERIFICATION_NOTE_OPENER} — pytest didn't pass."
@@ -1157,7 +1386,7 @@ def test_loop_still_reports_a_real_failing_test_as_having_run(agent):
         "stderr": "",
         "has_errors": True,
     }
-    _stub_chat(agent, _tool_call("pytest tests/"), _answer("One test failed."))
+    _stub_chat(agent, _tool_call("pytest tests/"), _answer("Here you go."))
 
     result = agent.process_query("run the tests")
 

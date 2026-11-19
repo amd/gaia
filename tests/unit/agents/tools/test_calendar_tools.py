@@ -1114,6 +1114,11 @@ class TestConnectionErrors:
             "kind": "connect_account",
             "providers": ["google", "microsoft"],
             "agent_id": "installed:gaia",
+            # The calendar asks for calendar access, not mail.
+            "scopes": {
+                "google": ["https://www.googleapis.com/auth/calendar.events"],
+                "microsoft": ["https://graph.microsoft.com/Calendars.ReadWrite"],
+            },
         }
         assert "Connect button" in result["error"]
         assert "never give or run a terminal command" in result["error"]
@@ -2201,8 +2206,8 @@ class TestThePromptShowsTheRealEvent:
         assert shown["calendar_account"] == ACCOUNT
 
     def test_a_relayed_card_gets_the_checked_values(self, make_agent):
-        from gaia.ui.email_sidecar import relay
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
         from gaia.ui.sse_translation import CanonicalTranslator
 
         lookalike = "ceo@\u0430pple.com"

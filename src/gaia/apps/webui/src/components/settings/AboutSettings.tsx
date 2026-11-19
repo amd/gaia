@@ -9,7 +9,7 @@ import type { MessageKey } from '../../i18n/registry';
 
 const LINKS: Array<{ label: MessageKey; href: string }> = [
     { label: 'settings.about.whatsNew', href: 'https://github.com/amd/gaia/releases' },
-    { label: 'settings.about.docs', href: 'https://amd-gaia.ai/docs' },
+    { label: 'settings.about.docs', href: 'https://amd-gaia.ai/docs/guides/agent-ui' },
     { label: 'settings.about.report', href: 'https://github.com/amd/gaia/issues/new/choose' },
     { label: 'settings.about.license', href: 'https://github.com/amd/gaia/blob/main/LICENSE.md' },
 ];

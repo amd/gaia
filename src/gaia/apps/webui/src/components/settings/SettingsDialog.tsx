@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { lazy, Suspense, useEffect, useRef, type KeyboardEvent } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, type KeyboardEvent } from 'react';
 import { ChevronLeft, Loader2, X } from 'lucide-react';
 import { useChatStore, type SettingsSection } from '../../stores/chatStore';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
@@ -50,6 +50,11 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
         panel.current?.querySelector<HTMLElement>('.settings-nav-item.is-active'),
     );
 
+    // One scroller serves every tab, so a new tab would open at the last one's offset.
+    useLayoutEffect(() => {
+        if (scroller.current) scroller.current.scrollTop = 0;
+    }, [section]);
+
     // Panes load their data first, so wait for the setting to appear before landing on it.
     useEffect(() => {
         const root = scroller.current;
@@ -96,6 +101,7 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     }, [jump, section]);
 
     if (!section) return null;
+    const backTo = jump && jump.section === section ? jump.from : undefined;
 
     const moveInNav = (e: KeyboardEvent<HTMLElement>) => {
         const at = SECTIONS.indexOf(section);
@@ -155,17 +161,17 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
                         <X size={18} />
                     </button>
                     {/* Outside the scroller: a sticky tab title must not cover the way back. */}
-                    {jump && jump.section === section && (
+                    {backTo && (
                         <button
                             type="button"
                             className="settings-back"
                             onClick={() => {
-                                open(jump.from);
-                                panel.current?.querySelector<HTMLElement>(`[data-section="${jump.from}"]`)?.focus();
+                                open(backTo);
+                                panel.current?.querySelector<HTMLElement>(`[data-section="${backTo}"]`)?.focus();
                             }}
                         >
                             <ChevronLeft size={14} aria-hidden="true" />
-                            {t.compose((say) => say('settings.backTo', { section: say(`settings.section.${jump.from}`) }))}
+                            {t.compose((say) => say('settings.backTo', { section: say(`settings.section.${backTo}`) }))}
                         </button>
                     )}
                     <div ref={scroller} className="settings-scroll">

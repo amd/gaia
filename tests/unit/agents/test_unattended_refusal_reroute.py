@@ -24,7 +24,7 @@ from gaia.agents.base.console import (
     user_denial_message,
 )
 from gaia.agents.base.denied_effects import UNATTENDED_REFUSAL, DeniedEffects
-from gaia.agents.base.tools import tool
+from gaia.agents.base.tools import get_tool_metadata, tool
 from gaia.agents.tools.shell_tools import (
     ALLOWED_COMMANDS,
     ShellToolsMixin,
@@ -191,6 +191,8 @@ def test_a_prompt_nothing_could_show_records_no_refusal(_isolated, reason):
     )
 
     assert denied["status"] == "denied"
+    # The Agent UI reads this so it does not say "You declined".
+    assert denied["denied_by"] == "policy"
     assert "hint" not in denied
     assert not agent._denied_effects
     assert written["status"] == "success"
@@ -270,7 +272,8 @@ def test_a_persons_no_to_curl_still_blocks_the_feed_tool(_isolated, monkeypatch)
     assert agent.ran == []
 
 
-def test_a_hard_policy_block_still_blocks(_isolated):
+def test_a_hard_policy_block_on_a_program_does_not_block_the_file(_isolated):
+    """Refusing a program says nothing of its files; write_file has its own checks."""
     agent = _unattended(_isolated)
     agent.policy_refusal_for_call = lambda name, args: (
         {"status": "error", "tier": "refuse", "error": "not allowed"}
@@ -283,9 +286,8 @@ def test_a_hard_policy_block_still_blocks(_isolated):
         "write_file", {"file_path": "b.txt", "content": "copied"}
     )
 
-    assert rerouted["status"] == "denied"
-    assert "was refused" in rerouted["error"]
-    assert agent.ran == []
+    assert rerouted["status"] == "success"
+    assert agent.ran == [("write_file", "b.txt")]
 
 
 _PY_DELETES = [
@@ -368,19 +370,81 @@ def test_a_timed_out_prompt_still_records_nothing(_isolated):
 _NO_PROMPT = ("dir", "findstr") if os.name == "nt" else ("ls", "grep")
 
 
-def test_the_refusal_names_the_auto_approved_routes(_isolated):
+def _no_console_run(tools):
+    """The shell tool on a host nothing could prompt on."""
+    host = ShellToolsMixin()
+    host.register_shell_tools()
+    host._tools_registry = tools
+    return get_tool_metadata("run_shell_command")["function"]
+
+
+def test_the_refusal_leads_with_the_auto_approved_routes(_isolated):
     agent = _unattended(_isolated)
 
-    error = _shell(agent, "type notes.txt")["error"]
+    error = _shell(agent, "Get-Process")["error"]
 
     for route in ("read_file", "browse_directory", "run_python"):
         assert route in error
     for command in _NO_PROMPT:
         assert f"`{command}`" in error
         assert command in ALLOWED_COMMANDS
-    # One sentence added, not a lecture.
-    added = error.split("turn on full access.", 1)[1].strip()
-    assert added.startswith("Use ") and added.count(".") == 1
+    assert "Nobody said no: this is not a refusal" in error
+    assert error.index("not a refusal") < error.index("Finish the task with")
+    # The route replaces the approval remedy rather than following it.
+    assert "turn on full access" not in error
+    added = error.split("not a refusal. Finish the task with ", 1)[1]
+    assert added.count(".") == 1
+
+
+def test_a_host_with_no_console_leads_with_the_route(_isolated):
+    run = _no_console_run({"write_file": object(), "read_file": object()})
+
+    refused = run(command="echo hi > out.txt", working_directory=str(_isolated))
+
+    error = refused["error"]
+    assert refused[UNATTENDED_REFUSAL] is True
+    assert error.startswith("Not run: `echo hi > out.txt` needs your approval")
+    assert "write_file to create or change files" in error
+    assert "start the request from the GAIA terminal UI" not in error
+
+
+def test_a_refused_delete_keeps_the_approval_remedy(_isolated):
+    agent = _unattended(_isolated)
+
+    refused = _shell(agent, "rm -rf victim")
+
+    error = refused["error"]
+    assert UNATTENDED_REFUSAL not in refused
+    assert "needs your approval" in error
+    assert (
+        "run the request interactively to approve it, or turn on full access" in error
+    )
+    assert "not a refusal" not in error
+    assert "write_file" not in error
+
+
+def test_a_hard_block_keeps_its_plain_refusal(_isolated):
+    agent = _unattended(_isolated)
+
+    refused = _shell(agent, "curl http://169.254.169.254/latest/meta-data/")
+
+    error = refused["error"]
+    assert UNATTENDED_REFUSAL not in refused
+    assert "stays off limits whatever anyone approves" in error
+    assert "not a refusal" not in error
+    assert "start the request from the GAIA terminal UI" not in error
+
+
+def test_a_refusal_without_a_route_still_offers_approval(_isolated):
+    run = _no_console_run({})
+
+    refused = run(command="echo hi > out.txt", working_directory=str(_isolated))
+
+    error = refused["error"]
+    assert refused[UNATTENDED_REFUSAL] is True
+    assert "Tell the user the exact command so they can run it themselves" in error
+    assert "start the request from the GAIA terminal UI" in error
+    assert "not a refusal" not in error
 
 
 def test_the_refusal_never_names_a_tool_the_agent_lacks(_isolated):

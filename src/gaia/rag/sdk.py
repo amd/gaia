@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -52,6 +53,8 @@ from gaia.llm.lemonade_client import (
     EMBED_MAX_CHARS,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
+    RERANK_QUERY_MAX_CHARS,
+    RERANKER_LLAMACPP_ARGS,
     resident_vision_model,
     resolve_default_vision_model,
     vision_off_reason,
@@ -62,6 +65,7 @@ from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_tex
 from gaia.rag.html_utils import HTML_EXTENSIONS, extract_html_text
 from gaia.rag.normalize import search_form
 from gaia.rag.pdf_tables import looks_tabular, tables_as_rows
+from gaia.rag.pdf_utils import pdf_parse_limits
 from gaia.rag.text_units import (
     SENTENCE_BREAK,
     estimate_tokens,
@@ -83,6 +87,7 @@ from gaia.utils.file_lock import (
     write_text_atomic,
 )
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
+from gaia.utils.text_decoding import TRIED_ENCODINGS, decode_text
 
 _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -90,10 +95,6 @@ _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF32_BE, "utf-32"),
     (codecs.BOM_UTF16_LE, "utf-16"),
     (codecs.BOM_UTF16_BE, "utf-16"),
-)
-_TEXT_TRIED_ENCODINGS = ", ".join(
-    list(dict.fromkeys(e for _, e in _TEXT_BOM_ENCODINGS))
-    + ["utf-8", "cp1252", "detected legacy encodings (Windows-1256, Shift-JIS, GBK…)"]
 )
 
 
@@ -195,39 +196,6 @@ def folder_index_skip_reason(file_path) -> Optional[str]:
     if not ext:
         return "no file extension, so the document type is unknown"
     return f"{ext} files are not a supported document type"
-
-
-def _decode_text_bytes(data: bytes) -> str:
-    """Decode text bytes, detecting legacy encodings; raise when none fits."""
-    for bom, encoding in _TEXT_BOM_ENCODINGS:
-        if data.startswith(bom):
-            return data.decode(encoding)
-
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        pass
-
-    from charset_normalizer import from_bytes
-
-    matches = from_bytes(data)
-    try:
-        cp1252_text = data.decode("cp1252")
-    except UnicodeDecodeError:
-        cp1252_text = None
-    # Short Western text scores as cp1250/cp775 too; keep cp1252 when it reads cleanly.
-    if cp1252_text is not None and any(str(m) == cp1252_text for m in matches):
-        return cp1252_text
-    best = matches.best()
-    if best is not None:
-        return str(best)
-    # Symbol-heavy Western text ("12€ — 15€") the detector can't place.
-    high = sum(byte >= 0x80 for byte in data)
-    if cp1252_text is not None and high <= sum(0x20 < byte < 0x80 for byte in data):
-        return cp1252_text
-    raise UnicodeDecodeError(
-        "text", data, 0, len(data), "no text encoding fits these bytes"
-    )
 
 
 # --- PDF extraction errors ---------------------------------------------------
@@ -650,6 +618,10 @@ EMBED_WAIT_REPORT_S = 15
 #: Tries for a batch the embedder answers with no vectors (still loading).
 EMBED_WARMUP_ATTEMPTS = 3
 EMBED_WARMUP_PAUSE_S = 2
+#: Lemonade catalog reranker named when none is downloaded.
+_SUGGESTED_RERANKER = "bge-reranker-v2-m3-GGUF"
+#: llama-server's error when an input is longer than the loaded ubatch.
+_RERANK_BATCH_TOO_SMALL = "increase the physical batch size"
 
 # Windows' sharing and lock violations: another program has the file open.
 _SHARING_WINERRORS = frozenset({32, 33})
@@ -857,6 +829,11 @@ class RAGConfig:
     vlm_model: Optional[str] = field(default_factory=resolve_default_vision_model)
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
+    # Optional second-stage retrieval: off unless set, never downloads a reranker.
+    enable_reranking: bool = False
+    reranking_model: Optional[str] = None
+    reranking_candidate_multiplier: int = 3
+    reranking_timeout: int = 30
     # Security settings
     allowed_paths: Optional[List[str]] = None
     # Index each object of a JSON array as its own record (None: whole file)
@@ -966,6 +943,8 @@ class RAGSDK:
         self.llm_client = None
         self.use_lemonade_embeddings = False
         self._embedding_cache = None  # content-keyed query-embed cache (lazy)
+        self._reranking_model: Optional[str] = None
+        self._reranking_checked = False
         self.index = None
         self.chunks = []
         self.indexed_files = set()
@@ -995,6 +974,8 @@ class RAGSDK:
         self.file_content_keys = {}
         # {file_path: (_stat_key, ns it was taken)} of those same bytes
         self.file_stat_keys = {}
+        # A load pushed a document out to fit under max_total_chunks.
+        self._evicted_for_size = False
         self._state_lock = threading.RLock()
 
         # Create cache directory
@@ -1844,6 +1825,34 @@ class RAGSDK:
         return tables_as_rows(text, layout, header)
 
     def _extract_text_from_pdf(self, pdf_path: str) -> tuple:
+        """:meth:`_read_pdf_text` under :func:`pdf_parse_limits`.
+
+        pypdf parses lazily, so the whole read, not just the open, runs under them.
+        """
+        try:
+            from pypdf.errors import (  # pylint: disable=import-outside-toplevel
+                LimitReachedError,
+            )
+        except ImportError:  # pragma: no cover - PyPDF2 has no such limit
+            LimitReachedError = ()  # type: ignore[assignment,misc]
+
+        try:
+            with pdf_parse_limits():
+                return self._read_pdf_text(pdf_path)
+        except LimitReachedError as e:
+            file_name = Path(pdf_path).name
+            self.log.error(f"PDF past GAIA's parsing limits {pdf_path}: {e}")
+            raise PDFExtractionError(
+                f"Could not read PDF: {file_name}\n"
+                "Reason: the file is too complex for GAIA to read safely "
+                f"(pypdf: {e}).\n"
+                "Suggestions:\n"
+                "  1. Print it to a new PDF (Print, then 'Save as PDF' or "
+                "'Microsoft Print to PDF') and index the new file\n"
+                "  2. Or split it into smaller PDFs and index those"
+            ) from e
+
+    def _read_pdf_text(self, pdf_path: str) -> tuple:
         """
         Extract text from PDF file with VLM for images (always enabled if available).
 
@@ -2751,11 +2760,11 @@ These positions indicate where to split the text."""
                 data = f.read()
 
             try:
-                text = _decode_text_bytes(data)
+                text = decode_text(data)[0]
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode file: {file_path}\n"
-                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    f"Tried encodings: {TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Convert the file to UTF-8 encoding\n"
                     "  2. Check if the file is corrupted\n"
@@ -2786,11 +2795,11 @@ These positions indicate where to split the text."""
                 data = f.read()
 
             try:
-                decoded = _decode_text_bytes(data)
+                decoded = decode_text(data)[0]
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode CSV file: {csv_path}\n"
-                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    f"Tried encodings: {TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
                     "  2. Check if the file is a valid CSV (not corrupted)\n"
@@ -3891,6 +3900,7 @@ These positions indicate where to split the text."""
 
                 # Remove from indexed files
                 self.indexed_files.discard(file_path)
+                self._evicted_for_size = False
 
                 # Clean up LRU tracking
                 if file_path in self.file_access_times:
@@ -4105,6 +4115,8 @@ These positions indicate where to split the text."""
                 )
                 break
             evicted_files.append(path)
+        if evicted_files:
+            self._evicted_for_size = True
 
         # Check indexed files limit
         while (
@@ -4130,6 +4142,27 @@ These positions indicate where to split the text."""
             or len(self.indexed_files) <= self.config.max_indexed_files
         )
         return chunks_ok and files_ok, evicted_files
+
+    def full_by(self) -> Optional[str]:
+        """Which limit stops the index taking one more document without pushing one out.
+
+        ``"size"`` once its passages reach ``max_total_chunks``, or a load had
+        to push a document out to fit under it; ``"files"`` at
+        ``max_indexed_files`` documents; None while there is room.
+        """
+        with self._state_lock:
+            files = len(self.indexed_files)
+            chunks = len(self.chunks)
+            evicted_for_size = self._evicted_for_size
+        if evicted_for_size or 0 < self.config.max_total_chunks <= chunks:
+            return "size"
+        if 0 < self.config.max_indexed_files <= files:
+            return "files"
+        return None
+
+    def is_full(self) -> bool:
+        """True when indexing one more document would push out one already held."""
+        return self.full_by() is not None
 
     def _has_indexing_capacity(self, replacing: Optional[str] = None) -> bool:
         """Check if there is capacity to index another document.
@@ -5058,13 +5091,187 @@ These positions indicate where to split the text."""
         snapshot = self._search_chunks(query)
         return snapshot["retrieved_chunks"], snapshot["scores"]
 
+    def _resolve_reranking_model(self) -> Optional[str]:
+        if not self.config.enable_reranking:
+            return None
+        if self._reranking_checked:
+            return self._reranking_model
+        try:
+            if self.llm_client is None:
+                from gaia.llm.lemonade_client import LemonadeClient
+
+                self.llm_client = LemonadeClient(base_url=self.config.base_url)
+            models = self.llm_client.list_models(show_all=False).get("data", [])
+        except Exception as error:
+            raise RuntimeError(
+                "Reranking is enabled, but GAIA could not list Lemonade's "
+                f"downloaded models: {error}\n"
+                "Make sure Lemonade Server is running and reachable, or set "
+                "enable_reranking=False."
+            ) from error
+        requested = self.config.reranking_model
+        candidates = [item for item in models if self._is_downloaded_reranker(item)]
+        if requested:
+            model = next(
+                (item.get("id") for item in candidates if item.get("id") == requested),
+                None,
+            )
+            if not model:
+                raise RuntimeError(
+                    f"Reranking is enabled, but reranker {requested!r} is not "
+                    "downloaded in Lemonade.\n"
+                    f"{self._reranker_download_hint(requested)}\n"
+                    "Or clear reranking_model, or set enable_reranking=False."
+                )
+        elif candidates:
+            model = candidates[0].get("id")
+        else:
+            raise RuntimeError(
+                "Reranking is enabled, but no downloaded Lemonade model has the "
+                "reranking label.\n"
+                f"{self._reranker_download_hint(_SUGGESTED_RERANKER)}\n"
+                "Or set enable_reranking=False."
+            )
+        self._load_reranker(model)
+        self._reranking_model = model
+        self._reranking_checked = True
+        return model
+
+    @staticmethod
+    def _is_downloaded_reranker(item: Any) -> bool:
+        if isinstance(item, dict):
+            labels = item.get("labels")
+            labels = [] if labels is None else labels
+            if isinstance(labels, list):
+                return item.get("downloaded") is not False and "reranking" in {
+                    str(label).lower() for label in labels
+                }
+        raise RuntimeError(
+            "Reranking is enabled, but Lemonade's model list has an entry "
+            f"GAIA cannot read: {item!r}\n"
+            "Update Lemonade Server, or set enable_reranking=False."
+        )
+
+    def _load_reranker(self, model: str) -> None:
+        # llama-server rejects an input longer than its ubatch (default 512).
+        try:
+            self.llm_client.load_model(
+                model,
+                llamacpp_args=RERANKER_LLAMACPP_ARGS,
+                # Saved so Lemonade's own reload after an eviction keeps it too.
+                save_options=not self.llm_client.is_users_server(),
+            )
+        except Exception as error:
+            stop = _stop_behind(error)
+            if stop is not None:
+                raise stop from error
+            raise RuntimeError(
+                f"Reranking is enabled, but Lemonade could not load reranker "
+                f"{model!r} with {RERANKER_LLAMACPP_ARGS}: {error}\n"
+                "Check the Lemonade Server log, or set enable_reranking=False."
+            ) from error
+
+    def _reranker_download_hint(self, model: str) -> str:
+        from gaia.llm.lemonade_launcher import (  # pylint: disable=import-outside-toplevel
+            describe_client_hint,
+        )
+
+        server = getattr(self.llm_client, "base_url", None) or "your Lemonade Server"
+        return (
+            f"Download {model}. {describe_client_hint('pull', model).instruction}\n"
+            f"Or download it in the Lemonade Model Manager ({server})."
+        )
+
+    def _send_rerank(
+        self, query: str, candidate_chunks: List[str], model: str
+    ) -> Dict[str, Any]:
+        try:
+            return self.llm_client.rerank(
+                query,
+                candidate_chunks,
+                model=model,
+                timeout=self.config.reranking_timeout,
+            )
+        except Exception as error:
+            # A user-run Lemonade keeps no saved options, so its own reload
+            # after an eviction brings the reranker back at the default batch.
+            batch_too_small = _RERANK_BATCH_TOO_SMALL in str(error).lower()
+            if not batch_too_small or not self.llm_client.is_users_server():
+                raise
+            self.log.warning(
+                f"Reranker {model} came back without {RERANKER_LLAMACPP_ARGS}; "
+                "reloading it with them and retrying once."
+            )
+        self._load_reranker(model)
+        return self.llm_client.rerank(
+            query,
+            candidate_chunks,
+            model=model,
+            timeout=self.config.reranking_timeout,
+        )
+
+    def _rerank_candidates(
+        self, query: str, candidate_chunks: List[str], model: str
+    ) -> Tuple[List[int], List[float]]:
+        if len(candidate_chunks) < 2:
+            return list(range(len(candidate_chunks))), [1.0] * len(candidate_chunks)
+        if len(query) > RERANK_QUERY_MAX_CHARS:
+            self.log.warning(
+                f"Search query is {len(query)} chars; only the first "
+                f"{RERANK_QUERY_MAX_CHARS} are used to rerank results."
+            )
+            query = query[:RERANK_QUERY_MAX_CHARS]
+        try:
+            response = self._send_rerank(query, candidate_chunks, model)
+            results = response.get("results")
+            if not isinstance(results, list):
+                raise ValueError("response has no results list")
+            ranked: List[Tuple[int, float]] = []
+            seen = set()
+            for item in results:
+                index = item.get("index") if isinstance(item, dict) else None
+                score = item.get("relevance_score") if isinstance(item, dict) else None
+                if (
+                    isinstance(index, bool)
+                    or not isinstance(index, int)
+                    or index < 0
+                    or index >= len(candidate_chunks)
+                    or index in seen
+                    or isinstance(score, bool)
+                    or not isinstance(score, (int, float))
+                    or not math.isfinite(float(score))
+                ):
+                    raise ValueError("response contains an invalid rerank result")
+                seen.add(index)
+                ranked.append((index, float(score)))
+            if len(ranked) != len(candidate_chunks):
+                raise ValueError("response does not score every candidate")
+            ranked.sort(key=lambda result: result[1], reverse=True)
+            order = [index for index, _ in ranked]
+            scores = []
+            for _, logit in ranked:
+                # Stable sigmoid: math.exp overflows on large negative logits.
+                if logit >= 0:
+                    scores.append(1.0 / (1.0 + math.exp(-logit)))
+                else:
+                    scores.append(math.exp(logit) / (1.0 + math.exp(logit)))
+            return order, scores
+        except Exception as error:
+            stop = _stop_behind(error)
+            if stop is not None:
+                raise stop from error
+            raise RuntimeError(
+                f"Lemonade rerank failed for model {model}: {error}"
+            ) from error
+
     def _search_chunks(self, query: str) -> Dict[str, Any]:
-        """Retrieve relevant chunks and indices from a consistent snapshot."""
+        """Retrieve chunks from a snapshot, optionally reranking FAISS candidates."""
         snapshot = self._snapshot_query_state()
         chunks_snapshot = snapshot["chunks"]
         index_snapshot = snapshot["index"]
 
         self._load_embedder()
+        reranking_model = self._resolve_reranking_model()
 
         # Generate query embedding
         if self.config.show_stats:
@@ -5072,13 +5279,21 @@ These positions indicate where to split the text."""
         self.log.debug(f"Encoding query: {query[:50]}...")
         query_embedding = self._encode_query(query)
 
-        # Search for similar chunks
-        k = min(self.config.max_chunks, len(chunks_snapshot))
+        # Search for similar chunks; reranking widens the candidate pool.
+        result_limit = min(self.config.max_chunks, len(chunks_snapshot))
+        multiplier = max(1, int(self.config.reranking_candidate_multiplier))
+        candidate_limit = (
+            min(len(chunks_snapshot), result_limit * multiplier)
+            if reranking_model
+            else result_limit
+        )
         if self.config.show_stats:
-            print(f"  🎯 Finding {k} most relevant chunks...")
-        # A document indexed under two names would fill the top k with copies,
-        # so identical chunks count once: fetch more until k distinct remain.
-        fetch = k
+            print(f"  🎯 Finding {candidate_limit} most relevant chunks...")
+
+        # Fetch enough candidates to keep candidate_limit distinct chunks. This
+        # prevents identical indexed copies from consuming reranker slots or
+        # hiding a different chunk from the model.
+        fetch = candidate_limit
         while True:
             # pylint: disable=no-value-for-parameter
             distances, indices = index_snapshot.search(
@@ -5099,16 +5314,33 @@ These positions indicate where to split the text."""
                 if chunk in position:
                     duplicate_indices[position[chunk]].append(idx)
                     continue
-                if len(retrieved_chunks) == k:
+                if len(retrieved_chunks) == candidate_limit:
                     continue
                 position[chunk] = len(retrieved_chunks)
                 retrieved_indices.append(idx)
                 retrieved_chunks.append(chunk)
                 scores.append(1.0 / (1.0 + float(dist)))
                 duplicate_indices.append([])
-            if len(retrieved_chunks) == k or fetch >= len(chunks_snapshot):
+
+            if len(retrieved_chunks) == candidate_limit or fetch >= len(
+                chunks_snapshot
+            ):
                 break
             fetch = min(len(chunks_snapshot), fetch * 2)
+
+        # A lone candidate keeps its vector score; there is nothing to reorder.
+        if reranking_model and len(retrieved_chunks) > 1:
+            order, rerank_scores = self._rerank_candidates(
+                query, retrieved_chunks, reranking_model
+            )
+            retrieved_indices = [retrieved_indices[i] for i in order]
+            retrieved_chunks = [retrieved_chunks[i] for i in order]
+            duplicate_indices = [duplicate_indices[i] for i in order]
+            scores = rerank_scores
+        retrieved_indices = retrieved_indices[:result_limit]
+        retrieved_chunks = retrieved_chunks[:result_limit]
+        duplicate_indices = duplicate_indices[:result_limit]
+        scores = scores[:result_limit]
 
         if self.config.show_stats:
             avg_relevance = sum(scores) / len(scores) if scores else 0.0

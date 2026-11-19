@@ -3,9 +3,10 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
+import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
 import type { LogReadResponse, LogSourcesResponse, ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
+import type { PageElementWire } from '../../services/browser-pane/contract';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
@@ -283,6 +284,15 @@ export async function downloadModel(
         model_name: modelName,
         force,
         load_after: loadAfter,
+    });
+}
+
+/** Forget a failed download on the server, so it stays dismissed after a reload. */
+export async function dismissDownloadFailure(
+    modelName: string,
+): Promise<{ status: string; model: string }> {
+    return apiFetch('POST', '/system/download-progress/dismiss', {
+        model_name: modelName,
     });
 }
 
@@ -638,10 +648,16 @@ const AGENT_EVENT_TYPES = new Set([
     'followup_taken', 'followup_returned', 'followup_unavailable', 'context_usage',
 ]);
 
+/** What a send carries besides its text and callbacks. */
+export interface SendExtras {
+    /** Elements picked in the browser pane, sent as `page_elements`. */
+    pageElements?: PageElementWire[];
+}
+
 export function sendMessageStream(
     sessionId: string,
     message: string,
-    onChunkOrCallbacks: ((event: StreamEvent) => void) | StreamCallbacks,
+    onChunkOrCallbacks: ((event: StreamEvent) => void) | (StreamCallbacks & SendExtras),
     onDone?: (event: StreamEvent) => void,
     onError?: (error: Error) => void,
     agentType?: string,
@@ -673,6 +689,9 @@ export function sendMessageStream(
             session_id: sessionId,
             message,
             stream: true,
+            ...(typeof onChunkOrCallbacks !== 'function' && onChunkOrCallbacks.pageElements
+                ? { page_elements: onChunkOrCallbacks.pageElements }
+                : {}),
             ...(agentType ? { agent_type: agentType } : {}),
             ...(device ? { device } : {}),
         }),
@@ -1049,7 +1068,8 @@ export async function deleteDocument(id: string): Promise<void> {
 
 /** How far a running index has got: PDF pages read, then chunks embedded. */
 export interface IndexProgress {
-    phase: 'reading' | 'embedding';
+    /** `starting`: waiting for GAIA's model server to start, at launch. */
+    phase: 'starting' | 'reading' | 'embedding';
     done: number;
     /** Null when the count isn't known upfront (e.g. pages of a non-PDF). */
     total: number | null;
@@ -1238,42 +1258,6 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
 
 export async function getMCPRuntimeStatus(): Promise<{ servers: MCPServerStatus[] }> {
     return apiFetch('GET', '/mcp/status');
-}
-
-// -- Schedules -----------------------------------------------------------------
-
-export async function listSchedules(): Promise<{ schedules: Schedule[]; total: number }> {
-    return apiFetch('GET', '/schedules');
-}
-
-/** The user's IANA time zone, so "daily at 9am" means 9am where they are. */
-export function browserTimeZone(): string | undefined {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
-}
-
-export async function createSchedule(name: string, interval: string, prompt: string): Promise<Schedule> {
-    return apiFetch('POST', '/schedules', { name, interval, prompt, timezone: browserTimeZone() });
-}
-
-export async function updateSchedule(name: string, status: string): Promise<Schedule> {
-    return apiFetch('PUT', `/schedules/${encodeURIComponent(name)}`, { status });
-}
-
-/** Run a schedule once now; its next scheduled time stays as it was. */
-export async function runScheduleNow(name: string): Promise<Schedule> {
-    return apiFetch('POST', `/schedules/${encodeURIComponent(name)}/run`);
-}
-
-export async function deleteSchedule(name: string): Promise<void> {
-    return apiFetch('DELETE', `/schedules/${encodeURIComponent(name)}`);
-}
-
-export async function getScheduleResults(name: string, limit: number = 20): Promise<{ results: ScheduleResult[]; total: number }> {
-    return apiFetch('GET', `/schedules/${encodeURIComponent(name)}/results?limit=${limit}`);
-}
-
-export async function parseScheduleInput(input: string): Promise<ParsedSchedule> {
-    return apiFetch('POST', '/schedules/parse', { input, timezone: browserTimeZone() });
 }
 
 // -- Undo a turn's file changes (#5225) --------------------------------------

@@ -148,9 +148,9 @@ export const SYSTEM_STATUS = {
     default_model_is_cloud: false, default_model_size_gb: 4.9, lemonade_url: 'http://127.0.0.1:13305',
     expected_model_loaded: true, download_progress: null, init_state: 'ready',
     init_tasks: [
-        { name: 'Checking LLM server', status: 'done' },
-        { name: 'Loading ML libraries', status: 'done' },
-        { name: 'Loading AI model', status: 'done' },
+        { name: 'Checking LLM server', step: 'check_server', status: 'done' },
+        { name: 'Loading ML libraries', step: 'load_libraries', status: 'done' },
+        { name: 'Loading AI model', step: 'load_model', status: 'done' },
     ],
     warm_up: { state: 'done', elapsed_seconds: 2.0, prompt_tokens: 1800, cached_tokens: 1800, error: null },
     detected_devices: ['gpu'], active_profile: 'chat', config_error: null, probe_warnings: [],
@@ -217,6 +217,13 @@ const ROUTES: Record<string, unknown> = {
     'GET /agents': { agents: [{ id: 'gaia', name: 'GAIA', description: '', source: 'installed', conversation_starters: [], models: [] }], total: 1 },
     'GET /connectors': { connectors: [] },
     'GET /memory/settings': { memory_enabled: true },
+    'GET /memory/embedder': {
+        device: 'gpu', chosen: false, default_device: 'gpu',
+        options: [
+            { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', proven: true, present: true, available: true, reason: null, downloaded: true },
+            { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', proven: false, present: true, available: false, reason: "its search results aren't reliable yet, so GAIA embeds on the GPU", downloaded: true },
+        ],
+    },
     'GET /skills': { skills: [] },
     'GET /skills/featured': { libraries: [{ id: 'pstack', name: 'pstack', url: 'https://github.com/michael-denyer/pstack-claude', description: 'Engineering workflows: design, review, CI fixes, TDD, PR hygiene (MIT)' }] },
     'GET /system/resources': RESOURCES,
@@ -385,6 +392,13 @@ export async function withSettingsPanes(page: Page, options: { networkPolicy?: '
             policy_notices: options.policyNotices ?? [],
         },
         'GET /memory/settings': { memory_enabled: true },
+        'GET /memory/embedder': {
+            device: 'gpu', chosen: false, default_device: 'gpu',
+            options: [
+                { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', proven: true, present: true, available: true, reason: null, downloaded: true },
+                { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', proven: false, present: true, available: false, reason: "its search results aren't reliable yet, so GAIA embeds on the GPU", downloaded: true },
+            ],
+        },
         'GET /skills': {
             skills: [
                 skill('gh-cli', 'agent-bundled', 'Work with GitHub from the terminal: issues, pull requests and releases.', { always_on: true }),
@@ -486,7 +500,7 @@ const DISCORD_BOT = {
 export const DISCORD_STATES: Record<string, Record<string, unknown>> = {
     none: DISCORD_BASE,
     pairing: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'pairing', pairing_code: 'K7QX4M9P', pairing_expires_at: 1e10, detail: 'DM the code to the bot to pair it with your Discord account.' },
-    connected: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'connected', paired: true, owner_name: 'someone_with_a_long_name', model: 'Qwen3.6-35B-A3B-GGUF', always_allowed: ['write_file on files in C:/Users/someone_with_a_long_name/Documents/projects/quarterly-report', 'dir'] },
+    connected: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'connected', paired: true, owner_name: 'someone_with_a_long_name', model: 'Qwen3.6-35B-A3B-GGUF', always_allowed: ['changes to files in C:/Users/someone_with_a_long_name/Documents/projects/quarterly-report', 'dir'] },
     crashed: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'stopped', running: false, paired: true, owner_name: 'kalin', detail: 'The Discord bridge stopped unexpectedly.' },
     taken_over: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'taken_over', paired: true, owner_name: 'kalin', detail: 'Another PC is answering this Discord bot.' },
     token_invalid: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'token_invalid', paired: true, owner_name: 'kalin', detail: 'Discord rejected the bot token (HTTP 401). Reset the token in the Developer Portal and paste the new one.' },
