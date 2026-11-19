@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <regex>
@@ -346,6 +347,9 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
         if (words.empty()) return false;
         const bool cd = words[0] == "cd";
         if (cd && (words.size() != 2 || words[1] == "-")) return false;  // home, or the previous folder
+        // With CDPATH set, `cd name` can land in a folder that is not under this one.
+        const char* cdPath = std::getenv("CDPATH");
+        if (cd && cdPath != nullptr && *cdPath != '\0') return false;
         if (followsLinks(words)) {
             bool named = false;
             for (size_t i = 1; i < words.size(); ++i) {

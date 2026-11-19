@@ -437,6 +437,7 @@ struct StdioTransport::Impl {
     int stdinFd = -1;
     int stdoutFd = -1;
     bool running = false;
+    mutable bool reaped = false;  // waitpid has collected the child: its pid may belong to another process now
 
     ~Impl() {
         cleanup();
@@ -445,6 +446,7 @@ struct StdioTransport::Impl {
     void cleanup() {
         if (stdinFd >= 0) { close(stdinFd); stdinFd = -1; }
         if (stdoutFd >= 0) { close(stdoutFd); stdoutFd = -1; }
+        if (reaped) running = false;
         if (running && pid > 0) {
             kill(pid, SIGTERM);
             int status;
@@ -487,6 +489,7 @@ struct StdioTransport::Impl {
         envp.push_back(nullptr);
         const long maxFd = sysconf(_SC_OPEN_MAX);
 
+        reaped = false;
         pid = fork();
         if (pid < 0) {
             close(stdinPipe[0]); close(stdinPipe[1]);
@@ -573,9 +576,11 @@ struct StdioTransport::Impl {
     }
 
     bool isAlive() const {
-        if (!running || pid <= 0) return false;
+        if (!running || pid <= 0 || reaped) return false;
         int status;
-        return waitpid(pid, &status, WNOHANG) == 0;
+        if (waitpid(pid, &status, WNOHANG) == 0) return true;
+        reaped = true;
+        return false;
     }
 };
 

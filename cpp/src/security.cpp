@@ -372,6 +372,8 @@ bool isReadOnlyShellCommand(const std::string& command, bool posixShell) {
             for (size_t dots = a.find(".."); dots != std::string::npos; dots = a.find("..", dots + 1)) {
                 const size_t next = dots + 2;
                 if (next == a.size() || a[next] == '/' || a[next] == '\\') return false;
+                // cmd.exe also ends an argument at a comma, a semicolon or an equals sign.
+                if (!posixShell && (a[next] == ',' || a[next] == ';' || a[next] == '=')) return false;
             }
             // file_read refuses a key or .env file; reading one through the shell at least asks.
             if (a[0] != '-' && isCredentialFileName(a.substr(a.find_last_of("/\\") + 1))) return false;
