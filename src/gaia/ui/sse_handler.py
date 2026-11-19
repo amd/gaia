@@ -41,6 +41,7 @@ from gaia.agents.tools.connect_card import (
     connect_card_in,
 )
 from gaia.llm.providers.lemonade import (
+    NATIVE_TOOL_CALLS_PREFIX,
     TOOL_CALL_PROGRESS_INTERVAL_S,
     TOOL_CALL_PROGRESS_MIN_CHARS,
 )
@@ -455,8 +456,9 @@ _NATIVE_ENVELOPE_TOOL_NAME_RE = re.compile(
 )
 # Opener of a native tool-call envelope, wherever it sits in the buffer.
 _NATIVE_ENVELOPE_OPEN_RE = re.compile(r'\{\s*"__tool_calls__"\s*:')
-# The opener as a literal, for recognising one split across chunks.
-_NATIVE_OPENER = '{"__tool_calls__":'
+# The opener, for recognising one split across chunks. Shared with the
+# provider's sentinel so the two cannot drift if it ever changes.
+_NATIVE_OPENER = NATIVE_TOOL_CALLS_PREFIX
 
 
 def _partial_native_opener_start(text: str) -> Optional[int]:
@@ -1417,7 +1419,7 @@ class SSEOutputHandler(OutputHandler):
         cached_tokens: Optional[int] = None,
     ):
         if answer:
-                        # A native tool-call envelope is a control frame, never the
+            # A native tool-call envelope is a control frame, never the
             # answer: reduce it to the text beside the call before the other
             # cleaners run, so it cannot reach the transcript as raw JSON.
             answer = _strip_native_envelope(answer)
@@ -1683,9 +1685,18 @@ class SSEOutputHandler(OutputHandler):
                 return True
         # A chunk can end mid-opener ("Then {"__to"): hold the partial
         # opener back the same way, so the next chunk decides what it is
-        # instead of the fragment leaking as prose.
+        # instead of the fragment leaking as prose. Hold it only when the
+        # head would really be classified as an envelope: a tail that merely
+        # looks like the opener's start ({" followed by a space, or a
+        # truncated key such as {"__tool_ calls) is ordinary text, and
+        # holding it would loop forever, the buffer never shrinking while
+        # _take_leading_envelopes keeps asking for the same head.
         partial = _partial_native_opener_start(buf)
-        if partial is not None and self._fence_at(buf[:partial])[0] is None:
+        if (
+            partial is not None
+            and self._fence_at(buf[:partial])[0] is None
+            and _leading_envelope(buf[partial:], end_of_stream)[0] != _ENV_NONE
+        ):
             prose = buf[:partial]
             if prose.strip():
                 self._json_filtered = False
