@@ -307,31 +307,31 @@ class TestResolveReleaseRetries:
         assert len(self.requests) == 1
         assert self.sleeps == []
 
-    def test_a_wait_that_would_reach_the_budget_stops_without_sleeping(
-        self, monkeypatch
-    ):
-        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "3")
-        self._urlopen(monkeypatch, _http_error(403, {"Retry-After": "30"}))
+    def test_a_wait_that_lands_exactly_on_the_budget_is_allowed(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "1")
+        self._urlopen(
+            monkeypatch,
+            _http_error(403, {"Retry-After": "30"}),
+            _JsonResponse(b"[]"),
+        )
 
-        with pytest.raises(RuntimeError, match="wait budget"):
-            resolve._get(self.URL)
-        assert len(self.requests) == 1
-        assert self.sleeps == []
+        assert resolve._get(self.URL) == []
+        assert self.sleeps == [30.0]
+        assert len(self.requests) == 2
 
-    def test_cumulative_waits_cannot_be_pushed_over_the_budget_by_the_last_delay(
-        self, monkeypatch
-    ):
+    def test_the_total_wait_cannot_be_pushed_past_the_budget(self, monkeypatch):
         monkeypatch.setenv("GITHUB_FETCH_RETRIES", "3")
         self._urlopen(
             monkeypatch,
             _http_error(403, {"Retry-After": "20"}),
             _http_error(403, {"Retry-After": "10"}),
+            _http_error(403, {"Retry-After": "1"}),
         )
 
         with pytest.raises(RuntimeError, match="wait budget"):
             resolve._get(self.URL)
-        assert sum(self.sleeps) == 20.0
-        assert len(self.requests) == 2
+        assert sum(self.sleeps) == 30.0
+        assert len(self.requests) == 3
 
     @pytest.mark.parametrize(
         "env, expected",

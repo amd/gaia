@@ -15,6 +15,7 @@ import {
   pickReleaseCandidate,
   pickStableRelease,
   retryDelayMs,
+  retryWaitMs,
   streamReleases,
   sumAssetDownloads,
   type GithubRelease,
@@ -514,19 +515,6 @@ describe('githubFetch retries', () => {
     await expect(mod.getReleaseStats()).rejects.toThrow(/HTTP 500/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
-
-  it('does not wait a delay that would reach the 30 s budget', async () => {
-    vi.stubEnv('GITHUB_TOKEN', 'test-token');
-    vi.stubEnv('GITHUB_FETCH_RETRIES', '1');
-    const fetchMock = vi.fn(
-      async () => new Response('', { status: 429, headers: { 'retry-after': '60' } }),
-    );
-    vi.stubGlobal('fetch', fetchMock);
-
-    const mod = await import('./github');
-    await expect(mod.getReleaseStats()).rejects.toThrow(/HTTP 429 after 1 attempt/);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe('retryDelayMs', () => {
@@ -564,5 +552,21 @@ describe('retryDelayMs', () => {
     const bare = new Response('', { status: 403 });
     expect(retryDelayMs(bare, 1)).toBe(500);
     expect(retryDelayMs(bare, 3)).toBe(2000);
+  });
+});
+
+describe('retryWaitMs', () => {
+  it('allows a capped 30 s wait that lands exactly on the budget', () => {
+    const res = new Response('', { status: 403, headers: { 'retry-after': '60' } });
+    expect(retryWaitMs(res, 1, 0)).toBe(30_000);
+  });
+
+  it('refuses a final wait that would take the total past 30 s', () => {
+    const res = new Response('', { status: 403, headers: { 'retry-after': '20' } });
+    const bare = new Response('', { status: 403 });
+    expect(retryWaitMs(res, 1, 10_000)).toBe(20_000);
+    expect(retryWaitMs(res, 1, 20_000)).toBeNull();
+    expect(retryWaitMs(bare, 1, 29_500)).toBe(500);
+    expect(retryWaitMs(bare, 1, 29_501)).toBeNull();
   });
 });

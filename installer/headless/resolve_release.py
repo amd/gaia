@@ -223,13 +223,14 @@ def _get(url: str) -> Any:
                 raise
             delay = _retry_delay(exc, attempt)
             remaining = _RETRY_WAIT_BUDGET_S - waited
-            # Stop before a wait that would reach the budget, so the total wait
-            # stays under 30 s even when the final delay is the largest one.
-            if delay >= remaining:
+            # A wait that lands exactly on the budget is allowed; one that would
+            # take the total past it is not, so the cumulative wait never
+            # exceeds 30 s.
+            if delay > remaining:
                 raise RuntimeError(
                     f"{url} returned HTTP {exc.code} after {attempt} attempt(s); "
-                    f"the next retry would wait {delay:.1f}s and reach the "
-                    f"{_RETRY_WAIT_BUDGET_S:.0f}s wait budget "
+                    f"the next retry would wait {delay:.1f}s and take the total "
+                    f"past the {_RETRY_WAIT_BUDGET_S:.0f}s wait budget "
                     f"(GITHUB_FETCH_RETRIES={retries}). Nothing was tested."
                 ) from exc
             print(

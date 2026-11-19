@@ -318,6 +318,16 @@ function clampWait(ms: number): number {
   return Math.max(0, Math.min(ms, RETRY_WAIT_CAP_MS));
 }
 
+/** The wait before a retry, or null when it would take the total past 30 s. */
+export function retryWaitMs(
+  res: Response,
+  attempt: number,
+  waitedMs: number,
+): number | null {
+  const delayMs = retryDelayMs(res, attempt);
+  return delayMs <= RETRY_WAIT_BUDGET_MS - waitedMs ? delayMs : null;
+}
+
 function githubHeaders(): Record<string, string> {
   const headers: Record<string, string> = { Accept: "application/vnd.github+json" };
   const token = process.env.GITHUB_TOKEN;
@@ -372,11 +382,10 @@ async function githubFetch(url: string): Promise<Response> {
     }
     if (attempt > retries) throw rateLimitError(url, res.status, attempt);
 
-    const delayMs = retryDelayMs(res, attempt);
-    const remainingMs = RETRY_WAIT_BUDGET_MS - waitedMs;
-    // Stop before a wait that would reach the budget, so the total wait stays
-    // under 30 s even when the final delay is the largest one.
-    if (delayMs >= remainingMs) throw rateLimitError(url, res.status, attempt);
+    const delayMs = retryWaitMs(res, attempt, waitedMs);
+    // A wait that lands exactly on the budget is allowed; one that would take
+    // the total past it is not, so the cumulative wait never exceeds 30 s.
+    if (delayMs === null) throw rateLimitError(url, res.status, attempt);
     waitedMs += delayMs;
     if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
