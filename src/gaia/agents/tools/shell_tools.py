@@ -6625,12 +6625,14 @@ class ShellToolsMixin:
         )
         return session.cwd
 
-    def _line_is_read_only(self, command: str) -> bool:
+    def _line_is_read_only(self, command: str, honour_grants: bool = True) -> bool:
         """Return whether *command* is read-only under the ordinary policy.
 
         Full access changes whether a command may run, not whether it can write.
         Reparse under the normal policy so redirections and other shell-only
-        constructs still count as untracked changes.
+        constructs still count as untracked changes. *honour_grants* False
+        judges a skill-granted CLI as ungranted, since its confirmable writes
+        pass the whitelist.
         """
         # Full access hands the raw line to sh, which expands $ and backticks
         # even inside double quotes; the shell-less parse sees only text.
@@ -6650,7 +6652,7 @@ class ShellToolsMixin:
         steps, parse_error = _parse_line(command, bypass_gates=False)
         if parse_error is not None or not steps:
             return False
-        granted = shell_granted_binaries(self)
+        granted = shell_granted_binaries(self) if honour_grants else frozenset()
         for step in steps:
             if step.is_cd:
                 return False
@@ -6871,7 +6873,7 @@ class ShellToolsMixin:
                 if refusal is not None:
                     break
             refusal = self._path_traversal_refusal(
-                step, step_cwd, granted, outside, searchable
+                step, step_cwd, granted, outside, searchable, line=command
             ) or self._git_path_refusal(step.segments, step_cwd, outside)
         if refusal is not None:
             return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
@@ -6911,7 +6913,7 @@ class ShellToolsMixin:
         unscanned: list = []
         for step in steps:
             refusal = self._path_traversal_refusal(
-                step, cwd, frozenset(), unscanned, searchable=False
+                step, cwd, frozenset(), unscanned, searchable=False, line=command
             )
             if refusal is not None:
                 return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
@@ -7155,6 +7157,7 @@ class ShellToolsMixin:
         granted: frozenset,
         outside: Optional[list] = None,
         searchable: Optional[bool] = None,
+        line: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Refuse an argument that resolves outside the allowed paths.
 
@@ -7181,9 +7184,16 @@ class ShellToolsMixin:
         An environment assignment's value is held to the same rule on EVERY
         segment, granted or not — it is never a remote id, and a value like
         ``PYTHONPATH`` decides which code the command imports.
+
+        When the whole *line* only reads, an image GAIA generated
+        (``PathValidator.is_generated_image``) may be named although GAIA's
+        state folder is otherwise out of reach.
         """
         if not hasattr(self, "path_validator"):
             return None
+        media_reads = line is not None and self._line_is_read_only(
+            line, honour_grants=False
+        )
 
         from gaia.skills.binaries import policy_argv
 
@@ -7204,7 +7214,7 @@ class ShellToolsMixin:
         for label, arg in candidates:
             for candidate_path in _flag_path_values(arg):
                 refusal = self._path_candidate_refusal(
-                    label, arg, candidate_path, cwd, outside
+                    label, arg, candidate_path, cwd, outside, media_reads
                 )
                 if refusal:
                     return refusal
@@ -7238,6 +7248,7 @@ class ShellToolsMixin:
         candidate_path: str,
         cwd: str,
         outside: Optional[list] = None,
+        media_reads: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Refuse *candidate_path* (read from *arg*) when it leaves the allowed paths."""
         # A lone '/x' is a Windows switch there (/i, /format:list), not a path.
@@ -7247,7 +7258,12 @@ class ShellToolsMixin:
         # cmd.exe drops an unquoted '^' that shlex keeps; check its reading too.
         if _pipe_dialect() == "cmd" and "^" in candidate_path:
             refusal = self._path_candidate_refusal(
-                label, arg, re.sub(r"\^(.?)", r"\1", candidate_path), cwd, outside
+                label,
+                arg,
+                re.sub(r"\^(.?)", r"\1", candidate_path),
+                cwd,
+                outside,
+                media_reads,
             )
             if refusal:
                 return refusal
@@ -7268,7 +7284,9 @@ class ShellToolsMixin:
         if candidate_path.startswith(("http://", "https://", "git://", "ssh://")):
             return None
         for path in dict.fromkeys((candidate_path, expanded)):
-            refusal = self._resolved_path_refusal(label, arg, path, cwd, outside)
+            refusal = self._resolved_path_refusal(
+                label, arg, path, cwd, outside, media_reads
+            )
             if refusal:
                 return refusal
         return None
@@ -7280,6 +7298,7 @@ class ShellToolsMixin:
         candidate_path: str,
         cwd: str,
         outside: Optional[list] = None,
+        media_reads: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Refuse *candidate_path* when it resolves outside the allowed paths."""
         try:
@@ -7310,6 +7329,9 @@ class ShellToolsMixin:
                 ),
                 "has_errors": True,
             }
+        generated = getattr(self.path_validator, "is_generated_image", None)
+        if media_reads and callable(generated) and generated(resolved_path):
+            return None
         if not self._path_allowed(resolved_path, prompt_user=outside is None):
             return self._outside_scope(
                 resolved_path,
@@ -8404,7 +8426,11 @@ class ShellToolsMixin:
                 search_plan = _search_plan(command, steps)
                 for step, step_cwd in zip(steps, step_cwds):
                     error = self._path_traversal_refusal(
-                        step, step_cwd, granted, searchable=search_plan is not None
+                        step,
+                        step_cwd,
+                        granted,
+                        searchable=search_plan is not None,
+                        line=command,
                     )
                     if error:
                         return error

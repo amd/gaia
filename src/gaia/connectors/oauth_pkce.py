@@ -236,6 +236,7 @@ class OAuthPkceHandler:
             grant_agents=grant_agents,
             add_account=bool(config.get("add_account")),
             account=config.get("account") or None,
+            callback_port=config.get("callback_port"),
         )
 
     async def disconnect(
