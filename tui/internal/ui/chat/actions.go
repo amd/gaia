@@ -685,33 +685,6 @@ func fileKind(path string) string {
 	return "file"
 }
 
-// categoryVerb is the live status line's verb while an action of cat runs.
-func categoryVerb(cat string) string {
-	switch cat {
-	case catShell:
-		return "Running a command"
-	case catPython:
-		return "Running a Python script"
-	case catRead:
-		return "Reading"
-	case catWrite:
-		return "Writing a file"
-	case catEdit:
-		return "Editing a file"
-	case catWeb:
-		return "Searching the web"
-	case catFetch:
-		return "Reading a web page"
-	case catDocs:
-		return "Searching your documents"
-	case catList:
-		return "Looking through folders"
-	case catSkill:
-		return "Setting up a skill"
-	}
-	return "Working"
-}
-
 // filesTouched names up to three distinct files a run of calls touched —
 // "Edited dates.py, test_dates.py x3" — so a count never claims one file was
 // changed three times, or three files when it was two. More than three are
