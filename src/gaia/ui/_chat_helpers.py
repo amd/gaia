@@ -4564,6 +4564,8 @@ async def _get_chat_response(
             counts,
             failed=isinstance(result, dict) and bool(result.get("model_failed")),
         )
+        if turn_box is not None:
+            turn_box["failed"] = _turn_failure(None, None, result)[0]
         if isinstance(result, dict):
             if model_messages is not None:
                 model_messages.extend(result.get("model_messages", []))
@@ -4632,6 +4634,8 @@ async def _get_chat_response(
         raise
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
+        if turn_box is not None:
+            turn_box["failed"] = True
         # Surface the typed Lemonade error's friendly user_message
         # when we have one, instead of a stock "trouble connecting"
         # blob.  Falls back to the generic copy when we can't
@@ -5897,6 +5901,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 library_notices=library_notices,
                 ends_turn=True,
                 stopped=turn_cancelled,
+                # As on `done`: a Stop wins over the failure it cut short.
+                failed=turn_failed and not turn_cancelled,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -6009,6 +6015,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     library_notices=library_notices,
                     ends_turn=True,
                     stopped=turn_cancelled,
+                    failed=failed,
                 )
                 done_event = _done_event(
                     msg_id,

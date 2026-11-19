@@ -728,7 +728,14 @@ async def attach_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    db.attach_document(session_id, request.document_id)
+    if not db.attach_document(session_id, request.document_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The chat or the document was removed while attaching, so nothing "
+                "was attached. Refresh the document library and try again."
+            ),
+        )
     return {"attached": True}
 
 
