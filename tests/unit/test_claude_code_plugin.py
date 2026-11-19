@@ -9,7 +9,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from gaia_agent.entry import MCP_SELECTOR
+import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 MARKETPLACE = REPO / ".claude-plugin" / "marketplace.json"
@@ -35,12 +35,14 @@ def test_the_marketplace_points_at_a_plugin_with_the_same_name_and_version():
 
 
 def test_the_mcp_server_launches_the_agent_binary_in_mcp_mode():
+    # The core unit lane doesn't install the gaia agent; its own CI covers this.
+    entry = pytest.importorskip("gaia_agent.entry")
     # In plugin.json, not .mcp.json: the repo's .gitignore drops every .mcp.json.
     servers = _load(_plugin_dir() / ".claude-plugin" / "plugin.json")["mcpServers"]
     assert servers["gaia"] == {
         "type": "stdio",
         "command": "gaia-agent",
-        "args": [MCP_SELECTOR],
+        "args": [entry.MCP_SELECTOR],
     }
 
 
