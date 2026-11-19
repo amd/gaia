@@ -240,9 +240,11 @@ jobs:
   # payload is staged. It is a binary, so a release verifies it in the
   # binaries call, where windows_setup.yml can pick it up without waiting for
   # the macOS and Linux packages; the packages call then reuses that artifact.
+  # A published release's gaiacpp is fetched only for packages: on a final tag
+  # release_components.yml calls this before publish.yml has made that release.
   gaiacpp:
     name: Verify gaiacpp
-    if: inputs.build_binaries && inputs.gaiacpp != ''
+    if: inputs.build_binaries && inputs.gaiacpp != '' && (inputs.installers || inputs.gaiacpp != 'release')
     outputs:
       ok: ${{ steps.done.outputs.ok }}
     runs-on: ubuntu-latest
