@@ -292,12 +292,8 @@ def bundled_skill_dirs() -> list[Path]:
 
 
 def _skill_code_files(skill_dir: Path) -> list[Path]:
-    """The Python a skill runs: ``tools.py`` and anything under ``scripts/``."""
-    files = [skill_dir / "tools.py"] if (skill_dir / "tools.py").is_file() else []
-    scripts = skill_dir / "scripts"
-    if scripts.is_dir():
-        files += sorted(scripts.rglob("*.py"))
-    return files
+    """The Python a skill runs: ``tools.py``, ``scripts/`` and the modules they import."""
+    return sorted(p for p in skill_dir.rglob("*.py") if "__pycache__" not in p.parts)
 
 
 def _is_local_module(name: str, skill_dir: Path, source: Path) -> bool:

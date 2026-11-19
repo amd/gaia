@@ -665,6 +665,8 @@ class AgentStepResponse(BaseModel):
     declined: Optional[bool] = None
     # Nobody answered its prompt in time; it never ran either.
     timedOut: Optional[bool] = None
+    # GAIA's own rule stopped it; nobody was asked, so nobody declined.
+    refused: Optional[bool] = None
     # GAIA turned this call down itself; no prompt was shown, so not the user's no.
     autoDeclined: Optional[bool] = None
     active: bool = False

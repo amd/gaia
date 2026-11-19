@@ -4,6 +4,7 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
+import * as api from '../services/api';
 import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId, FoundItem } from '../types';
 import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
@@ -290,6 +291,8 @@ interface ChatState {
     systemStatus: SystemStatus | null;
     backendConnected: boolean;
     setSystemStatus: (status: SystemStatus | null) => void;
+    /** Forget a failed download on the server, then clear it from the status. */
+    dismissDownloadFailure: (modelName: string) => Promise<void>;
     setBackendConnected: (connected: boolean) => void;
 
     // UI state
@@ -648,6 +651,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     systemStatus: null,
     backendConnected: true, // Assume connected until proven otherwise
     setSystemStatus: (status) => set({ systemStatus: status }),
+    dismissDownloadFailure: async (modelName) => {
+        await api.dismissDownloadFailure(modelName);
+        set((state) => {
+            const status = state.systemStatus;
+            if (!status || status.download_progress?.state !== 'error') return state;
+            return { systemStatus: { ...status, download_progress: null } };
+        });
+    },
     setBackendConnected: (connected) => set({ backendConnected: connected }),
 
     // UI

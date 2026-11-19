@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScheduleManager } from '../ScheduleManager';
 import { useChatStore } from '../../stores/chatStore';
 import { useScheduleStore } from '../../stores/scheduleStore';
-import { ApiError, parseScheduleInput } from '../../services/api';
+import { ApiError } from '../../services/api';
+import { parseScheduleInput } from '../../services/scheduleApi';
 import type { Schedule } from '../../types';
 
 vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 const schedule: Schedule = {
     id: 'id-1',
@@ -55,7 +57,7 @@ describe('New schedule form', () => {
         fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
         expect(screen.getByLabelText('When to run').tagName).toBe('TEXTAREA');
         expect(screen.getByLabelText('Name').tagName).toBe('INPUT');
-        expect(screen.getByLabelText('Prompt').tagName).toBe('TEXTAREA');
+        expect(screen.getByLabelText('What GAIA does').tagName).toBe('TEXTAREA');
     });
 
     it('ties the reason a schedule was rejected to the schedule field', async () => {
@@ -95,7 +97,7 @@ describe('Reusing a schedule name', () => {
         fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
         fireEvent.change(screen.getByLabelText('When to run'), { target: { value: 'every day' } });
         fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Morning brief' } });
-        fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Hello' } });
+        fireEvent.change(screen.getByLabelText('What GAIA does'), { target: { value: 'Hello' } });
         fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
 
         const name = screen.getByLabelText('Name');

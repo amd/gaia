@@ -275,6 +275,11 @@ def pytest_configure(config):  # noqa: D103 — pytest hook
         "markers",
         "npu_host_probe: let gaia.llm.npu_linux read this machine's NPU setup",
     )
+    config.addinivalue_line(
+        "markers",
+        "real_path_refresh: let gaia.program_lookup read PATH from the registry "
+        "or the login shell (its sources must be mocked)",
+    )
 
 
 _REAL_START_EMBEDDED = {}
@@ -390,6 +395,21 @@ def _no_npu_host_probe(request, monkeypatch):
     if request.node.get_closest_marker("npu_host_probe"):
         return
     monkeypatch.setattr(npu_linux, "problems", lambda: [])
+
+
+@pytest.fixture(autouse=True)
+def _no_real_path_refresh(request, monkeypatch):
+    """Keep a program a test hides from ``PATH`` hidden.
+
+    A lookup that misses re-reads ``PATH`` from the registry, which on a
+    developer's PC would put the real git or gh back and flip the test. Opt a
+    test in with @pytest.mark.real_path_refresh.
+    """
+    if request.node.get_closest_marker("real_path_refresh"):
+        return
+    from gaia import program_lookup
+
+    monkeypatch.setattr(program_lookup, "refresh_path", lambda after_install=False: [])
 
 
 @pytest.fixture(autouse=True)

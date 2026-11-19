@@ -232,7 +232,9 @@
     padding-inline: 6px;
     background: var(--bg-card);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 
 .composer-attachment.is-image.has-error {
@@ -241,7 +243,9 @@
 
 .composer-attachment-name {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
     color: var(--text-primary);
 }
@@ -317,7 +321,9 @@
 
 .composer-chip-label {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 
 /* A long memory-switch label is cut before it squeezes the model name; its eye icon carries the state. */
@@ -385,12 +391,14 @@
 
 .skill-menu-row.is-selected { background: var(--bg-hover); }
 
-.skill-menu-name { flex: none; font-weight: 600; }
+.skill-menu-name { flex: none; font-weight: 500; }
 
 .skill-menu-desc {
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
     color: var(--text-muted);
 }

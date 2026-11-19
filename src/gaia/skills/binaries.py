@@ -88,6 +88,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
+from gaia import program_lookup
 from gaia.skills.errors import FORMAT_DOCS_URL, SkillPermissionError
 
 logger = logging.getLogger(__name__)
@@ -2320,7 +2321,11 @@ def resolve_binary_policies(
     declared = _declared_binaries(permissions)
     for permission in binary_permissions(permissions):
         policy = BINARY_POLICIES[(permission.scope or "").lower()]
-        if require_installed and shutil.which(policy.binary) is None:
+        # At load, a CLI installed since GAIA started must be found.
+        if (
+            require_installed
+            and program_lookup.resolve_refreshing(policy.binary) is None
+        ):
             alias = _installed_alias(policy, declared)
             if alias:
                 logger.warning(

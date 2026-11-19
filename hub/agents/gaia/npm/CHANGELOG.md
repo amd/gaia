@@ -8,6 +8,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
+- **`gaia -p --time-limit` uses the time it is given.** One slow step made the
+  agent stop with minutes left, so a found answer often never reached the
+  requested file. It now stops two typical steps short of the limit, is always
+  warned first, and its closing step may run one last tool call, so a final
+  write lands. Every model call is capped to what the time left allows, and a
+  call still running past the limit is abandoned with the result still
+  reported. Qwen's `<function=…>` tool-call text now runs as a call instead of
+  being shown as the answer. The agent is told the time used at 25% and 50%,
+  its last tool call may run for half of the time left instead of being
+  refused, and the 70% warning no longer invites it to rewrite a finished file
+  or put caveats inside one.
 ### Changed
 
 - **Office files are checked before they are handed over.** The bundled
@@ -24,6 +35,36 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
   headings, tables, pictures, slides and charts. Text saved under a .docx name
   is an error that says how to build a real one. The skill also teaches real
   headings and tables in Word files and native charts.
+- **The skill suggestion now tells the model which skill to load.** Local models
+  ignored the old "skills that may fit this request" line: over 56 tasks one
+  called `load_skill` on 3. The line now reads "Call load_skill('pdf') before
+  you start: it covers this kind of request. Also consider: office-docs." It is
+  still one line in the user's message, with the skills in the same order.
+- **A skill that clearly fits the request can load before the turn (opt-in).**
+  With `GAIA_SKILL_AUTOLOAD=1` or `skill_autoload=True`, the best match loads
+  first when it scores at least 0.55 and is 0.03 ahead of every skill it does
+  not pair with. The request then opens with "Loaded report-from-sources
+  because it matches this request". Weaker matches are suggested as before.
+  - Skills that pair with the best match no longer block it, and the best of
+    them that also scores 0.55 loads with it. Two skills per turn at most.
+  - Only trusted skills load this way: ones that ship with the agent, and hub
+    installs at the `community` tier or above. A captured skill, your own
+    skill and anything from a `.claude` folder stay suggestions.
+  - A skill that grants a command-line program stays a suggestion in Ask mode.
+    Under full access it loads, with a warning naming the program. Switch full
+    access off and the skill is unloaded at the next turn.
+  - The skill bodies in the prompt, plus the new one, must fit in 18% of the
+    model's context window (about 5,900 tokens of the default 32,768).
+  - A skill unloaded earlier in the session is not auto-loaded again.
+  - `GAIA_SKILL_AUTOLOAD_TAU` and `GAIA_SKILL_AUTOLOAD_MARGIN` (or
+    `skill_autoload_threshold` and `skill_autoload_margin`) set the 0.55 and
+    0.03.
+  - If you turn it on where it cannot run (catalogue or suggestions off, fast
+    mode, memory off, or an embedder other than `embeddinggemma-300m`), one
+    warning says it is inactive and why.
+
+  Off by default: 0.55 and 0.03 have not been re-measured on the current
+  labelled requests.
 - **Start a message with `/` and a skill's name to run that skill**, as in
   Claude Code: `/pdf turn notes.md into a report`. The agent loads the skill
   with the same checks as `load_skill` and follows it for the rest of the line.
@@ -53,6 +94,15 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
 - A reply that goes quiet partway through is requested again, up to twice,
   instead of ending the turn; the work done so far is kept either way.
+- A file a script wrote and the agent then showed whole with `cat` counts as
+  read back. Before, the answer still carried "has not been read back
+  completely" and the turn was marked unfinished.
+- A cloud model that spends a whole reply reasoning and returns nothing is
+  asked for its lowest reasoning level on the next request, so the turn moves
+  on. A turn now ends on its third cut-off reply in a row, not its third overall.
+- In a `gaia -p` run the agent is told nobody can answer questions, so it
+  settles an open choice itself and says what it assumed instead of ending on
+  an offer to change it later.
 - `run_python` no longer drops long output without saying so. Output past
   8,000 characters used to be cut silently, so a scan's later hits never
   reached the agent. It now gets the start and end, is told how much was left

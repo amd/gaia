@@ -195,7 +195,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
             </ul>
             {changes.incomplete && (
                 <p className="sp-warn-text" role="note">
-                    <AlertTriangle size={11} aria-hidden="true" /> {untrackedWarning(changes.untracked, { inChat: true, undo: 'Undo all' })}
+                    <AlertTriangle size={11} aria-hidden="true" /> {untrackedWarning(changes.untracked, { inChat: true }, t)}
                 </p>
             )}
             <div className="sp-actions-row">
