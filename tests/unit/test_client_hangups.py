@@ -119,19 +119,33 @@ def test_the_daemon_installs_it_when_it_starts(caplog):
     assert seen["levels"] == [logging.INFO]
 
 
-def test_the_agent_ui_server_installs_it_when_it_starts(caplog):
+class _StopStartup(Exception):
+    pass
+
+
+def test_the_agent_ui_server_installs_it_when_it_starts(caplog, monkeypatch):
     from fastapi.testclient import TestClient
 
-    from gaia.ui.server import create_app
+    import gaia.ui.server as server
 
-    async def report_a_hangup():
-        asyncio.get_running_loop().call_exception_handler(
-            {"message": "m", "exception": ConnectionResetError(10054, "reset")}
-        )
+    seen = {}
 
-    with TestClient(create_app(db_path=":memory:")) as client:
+    def install_then_stop(loop):
+        quiet_client_hangups(loop)
         with caplog.at_level(logging.DEBUG, logger="gaia.client_hangups"):
-            client.portal.call(report_a_hangup)
+            asyncio.get_running_loop().call_exception_handler(
+                {"message": "m", "exception": ConnectionResetError(10054, "reset")}
+            )
+        seen["levels"] = [
+            r.levelno for r in caplog.records if r.name == "gaia.client_hangups"
+        ]
+        # Stop before the boot jobs start: their threads outlive the test.
+        raise _StopStartup
 
-    hangups = [r for r in caplog.records if r.name == "gaia.client_hangups"]
-    assert [r.levelno for r in hangups] == [logging.INFO]
+    monkeypatch.setattr(server, "quiet_client_hangups", install_then_stop)
+
+    with pytest.raises(_StopStartup):
+        with TestClient(server.create_app(db_path=":memory:")):
+            pass
+
+    assert seen["levels"] == [logging.INFO]
