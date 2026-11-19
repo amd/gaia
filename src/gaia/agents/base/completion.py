@@ -1162,6 +1162,18 @@ class CompletionEvidence:
             and os.path.isfile(key)
         ]
 
+    def inputs_for(self, outputs: list[str]) -> list[str]:
+        """The files this turn's tools were given to read, other than *outputs*."""
+        written = {self.key(path) for path in outputs}
+        scratch = (self.scratch or "").rstrip("/\\")
+        return sorted(
+            key
+            for key in self.read_paths
+            if key not in written
+            and not (scratch and key.startswith((scratch + "/", scratch + "\\")))
+            and os.path.isfile(key)
+        )
+
     def _find_executor_writes(self, key: str) -> None:
         """Record what a script wrote at *key*, or inside it when it is a folder.
 
@@ -1656,6 +1668,34 @@ class CompletionEvidence:
                 ):
                     gaps.append(f"No removal of `{key}` was observed this turn.")
         return gaps
+
+
+#: Opens the one reminder to compare what a turn wrote with what it read.
+RECONCILE_TAG = "[check:reconcile]"
+_RECONCILE_SHOWN = 5
+
+
+def _listed(paths: list[str]) -> str:
+    shown = ", ".join(f"`{path}`" for path in paths[:_RECONCILE_SHOWN])
+    more = len(paths) - _RECONCILE_SHOWN
+    return f"{shown} and {more} more" if more > 0 else shown
+
+
+def reconcile_check(outputs: list[str], inputs: list[str]) -> str:
+    """Ask once for the written *outputs* to be compared with their *inputs*."""
+    sources = _listed(inputs)
+    return (
+        f"{RECONCILE_TAG} You wrote {_listed(outputs)} from {sources}. Before "
+        "you finish, compare the output with its sources once. (1) Open each "
+        "file you wrote and look at what is in it now: `read_file`, or a short "
+        "script for a large one. (2) Compare it with the inputs: rows or items "
+        "in against rows or items out, totals and sums, every input file "
+        "accounted for, and values that came out blank, zero or changed when "
+        "they were parsed. (3) Fix what does not match, or say plainly in your "
+        "answer what differs and by how much. If you already made this "
+        "comparison in this turn and it matched, do not repeat it. This check "
+        "is internal: answer the user without mentioning it."
+    )
 
 
 def caveated_answer(answer: str | None, gaps: list[str]) -> str:

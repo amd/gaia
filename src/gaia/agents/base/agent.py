@@ -56,11 +56,13 @@ from gaia.agents.base.call_risk import (
 from gaia.agents.base.chunk_index import OUTPUT_TOOLS
 from gaia.agents.base.completion import (
     _BINARY_SUFFIXES,
+    RECONCILE_TAG,
     WRITE_TOOLS,
     CompletionEvidence,
     caveated_answer,
     incomplete_answer,
     mentioned_paths,
+    reconcile_check,
     saved_before_error,
 )
 from gaia.agents.base.console import (
@@ -11875,6 +11877,46 @@ Do NOT wrap conversational replies in JSON.
             answer=answer,
         )
 
+    def _reconcile_reminder(self) -> Optional[str]:
+        """The compare-output-with-inputs reminder, for a turn that owes one.
+
+        Only a turn that wrote a document or data file after reading other
+        files: a chat answer, a code edit, or a file written from nothing has
+        no inputs to reconcile.
+        """
+        evidence = getattr(self, "_completion_evidence", None)
+        if evidence is None or not any(
+            name in self._tools_registry for name in ("read_file", "run_python")
+        ):
+            return None
+        # An extraction's export is written and matched by the framework itself.
+        if getattr(getattr(self, "_extraction_ledger", None), "enabled", False):
+            return None
+        written = [
+            path
+            for path in evidence.written_files()
+            if os.path.splitext(path)[1].lower() in DELIVERABLE_SUFFIXES
+        ]
+        if not written:
+            return None
+        written_keys = {evidence.key(path) for path in written}
+        # Files a tool read, a script named, or the request names.
+        locate = path_locator([os.getcwd(), self._verification_project_root()])
+        records = getattr(self, "_turn_tool_executions", None) or []
+        request = self._request_text(getattr(self, "_current_query", "") or "")
+        named = (locate(raw) for raw in input_paths(records) + mentioned_paths(request))
+        inputs = list(
+            dict.fromkeys(
+                evidence.key(path)
+                for path in [*evidence.inputs_for(written), *filter(None, named)]
+                if evidence.key(path) not in written_keys
+            )
+        )
+        if not inputs:
+            return None
+        shown = [evidence.written_as.get(path, path) for path in written]
+        return reconcile_check(shown, inputs)
+
     def _deliverable_blocks(self, path: str) -> list:
         """``read_blocks``, cached per turn by the file's size and mtime."""
         try:
@@ -12952,6 +12994,8 @@ Do NOT wrap conversational replies in JSON.
         cut_off_continuations = 0
         stream_cut_offs = 0
         completion_corrections = 0
+        # The output-against-inputs reminder goes out once a turn.
+        reconcile_prompted = False
         # The answer a completion correction asked to replace.
         answer_before_completion_check: Optional[str] = None
         completion_gaps = []
@@ -15737,6 +15781,14 @@ Do NOT wrap conversational replies in JSON.
                                     "complete answer again."
                                 )
                         else:
+                            if artifact_gaps and not reconcile_prompted:
+                                # One prompt, not two, when both are due.
+                                also = self._reconcile_reminder()
+                                if also:
+                                    reconcile_prompted = True
+                                    correction += " Also: " + also.removeprefix(
+                                        RECONCILE_TAG + " "
+                                    )
                             self._turn_scope.widen(correction)
                             if artifact_gaps:
                                 # Writing and reading back the deliverable is the
@@ -15746,6 +15798,22 @@ Do NOT wrap conversational replies in JSON.
                         conversation.append({"role": "user", "content": correction})
                         continue
                     completion_gaps.extend(artifact_gaps)
+                elif (
+                    not reconcile_prompted
+                    and not completion_gaps
+                    and steps_taken < steps_limit - 1
+                    and not self._time_limit_passed()
+                ):
+                    reminder = self._reconcile_reminder()
+                    if reminder:
+                        reconcile_prompted = True
+                        answer_before_completion_check = unfinalized_answer
+                        reminder += " " + _GIVE_ANSWER_AGAIN
+                        self._turn_scope.widen(reminder)
+                        self._reopen_turn_scope(conversation)
+                        messages.append({"role": "user", "content": reminder})
+                        conversation.append({"role": "user", "content": reminder})
+                        continue
                 # Validate after subclass rewriting, before console/SSE emission.
                 final_test_claim = unsupported_test_claim(
                     answer_candidate, self._turn_tool_executions

@@ -21,6 +21,14 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
   or put caveats inside one.
 ### Changed
 
+- **A file built from other files is compared with them before the answer.**
+  Models said "built and verified" without opening the output, so dropped
+  rows and totals that did not match the sources reached the user. A turn
+  that wrote a document or data file after reading other files is now asked
+  once to re-open what it wrote, reconcile counts and totals with its
+  inputs, and fix or report any mismatch. It costs one extra model step, is
+  never asked twice in a turn, and is not asked on a chat answer, a code
+  edit, or a file written from nothing.
 - **A loaded skill's tools stay on the tool list, and `load_skill` says
   which ones.** A skill loaded by a skill set, or by any agent that picks
   its own tools each turn, could name tools the model was never sent. Every
