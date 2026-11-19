@@ -5,13 +5,14 @@
 
 **Narrowing is an allowlist.** A PR runs a subset only when every changed file
 is a unit-test file, shipped ``.py`` code under a root the coverage map
-measures (``src/gaia``, and ``hub/agents`` when the map includes it) with an
-entry in the map, or a file tests only ever read (``read_only_class``: docs
-pages, Agent UI sources, the Go TUI tree, hub data), which reaches just the
-tests that name it or scan its folder. Everything else runs the whole suite:
-other data files, pinned manifests and lockfiles, ``util/`` scripts, test
-helpers and fixtures, ``eval/``, configs, workflows, any ``conftest.py``, a deleted or renamed file, a missing or stale map, this script
-and the workflow that runs it. Tests load such files by path
+measures (``src/gaia``, and ``hub/agents`` when the map includes it), or a
+file tests only ever read (``read_only_class``: docs pages, Agent UI sources,
+the Go TUI tree, hub data), which reaches just the tests that name it or scan
+its folder. Everything else runs the whole suite: other data files, pinned
+manifests and lockfiles, ``util/`` scripts, test helpers and fixtures,
+``eval/``, configs, workflows, any ``conftest.py``, a deleted or renamed file,
+a missing or stale map, this script and the workflow that runs it. Tests load
+such files by path
 (``spec_from_file_location``, ``runpy``, ``open``), and neither imports nor
 coverage can follow what those scripts import or read. A selection over
 ``FULL_FRACTION`` of the suite also runs everything, since the saving is gone.
@@ -41,8 +42,8 @@ everything for nearly any change.
 - Code run in a child process (``python -m gaia.daemon``), by a test or by
   shipped code, counts with all its imports, since coverage can't see inside.
   A module named only in a docstring is not run that way: docstrings never run.
-- A test the map never ran (added since the nightly build) follows imports
-  inside functions too.
+- A test the map never ran, or source file it has no entry for (added since
+  the nightly build), follows imports inside functions too.
 
 **The workflow's own paths filter** (``--trigger-paths-from``) decides only
 whether anything runs, as GitHub does for a pull request: a merge-queue group
@@ -898,10 +899,11 @@ def full_run_reason(
     """Why the whole suite must run, or None if the selection can narrow.
 
     Narrowing is an allowlist: every changed file must be a unit-test file,
-    shipped .py code the coverage map measures and has an entry for, or a
-    read-only file (``read_only_class``). Anything else (other data files, util/ scripts, test helpers and fixtures, eval/, configs,
-    workflows) can be loaded by path or read by a script, which neither imports
-    nor coverage can follow, so it runs everything.
+    shipped .py code the coverage map measures, or a read-only file
+    (``read_only_class``). Anything else (other data files, util/ scripts, test
+    helpers and fixtures, eval/, configs, workflows) can be loaded by path or
+    read by a script, which neither imports nor coverage can follow, so it runs
+    everything.
     """
     if coverage is None:
         return "no coverage map"
@@ -923,8 +925,6 @@ def full_run_reason(
             continue
         if not is_measured(path, coverage):
             return f"{path} is outside the code the coverage map measures"
-        if path not in coverage:
-            return f"{path} has no entry in the coverage map"
     return None
 
 
@@ -1095,6 +1095,16 @@ def select(
     if platform_only:
         tests = [p for p in tests if is_platform_sensitive(graph, p)]
     detail = reason or f"{len(changed)} changed file(s)"
+    if reason is None and coverage is not None:
+        unmapped = [
+            p
+            for p in changed
+            if p.endswith(".py")
+            and p not in coverage
+            and not is_test_file(p, test_root)
+        ]
+        if unmapped:
+            detail += "; read statically, no map entry yet: " + ", ".join(unmapped)
     return Selection(
         full=reason is not None and not platform_only,
         reason=detail,

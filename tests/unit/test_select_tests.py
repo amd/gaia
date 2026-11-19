@@ -323,11 +323,17 @@ def test_a_test_the_map_never_ran_follows_lazy_imports(graph):
     assert "tests/unit/test_cli.py" in hit
 
 
-def test_a_source_file_the_map_never_saw_runs_the_full_suite(graph):
-    # sinks.py is new since the map (or never ran): nothing vouches for it.
+def test_a_source_file_the_map_never_saw_selects_by_its_imports(graph):
+    # sinks.py is new since the map, so its importers stand in for coverage.
     coverage = {"src/gaia/cli.py": {"tests/unit/test_cli.py"}}
-    reason = _full(graph, "src/gaia/tools/sinks.py", coverage=coverage)
-    assert "no entry in the coverage map" in reason
+    sel = st.select(graph, ["src/gaia/tools/sinks.py"], coverage)
+    assert not sel.full and "src/gaia/tools/sinks.py" in sel.reason
+    assert {"tests/unit/test_patch.py", "tests/unit/test_proc.py"} <= set(sel.tests)
+    assert "tests/unit/test_unrelated.py" not in sel.tests
+    # A deleted one may still be named by a test, so it runs everything.
+    assert "deleted or renamed" in _full(
+        graph, "src/gaia/tools/gone.py", coverage=coverage
+    )
 
 
 def test_a_stale_map_runs_the_full_suite(graph):
