@@ -527,9 +527,14 @@ private:
         }
         if (s.turnLock) {
             // Stopped while other chats hold the sidecar: don't wait a whole turn to find out.
+            ++approvalsReturning_;
             while (!s.turnLock->try_lock_for(std::chrono::milliseconds(100))) {
-                if (run->cancelled) return ToolConfirmResult::DENY;
+                if (run->cancelled) {
+                    --approvalsReturning_;
+                    return ToolConfirmResult::DENY;
+                }
             }
+            --approvalsReturning_;
             // Another chat may have moved the process; the shell keeps its own folder.
             std::error_code ec;
             if (!s.shellDir.empty()) fs::current_path(s.shellDir, ec);
@@ -920,7 +925,13 @@ private:
             // chat waiting on its user lets go of it (see confirm()).
             std::unique_lock<std::timed_mutex> turnLock(turnsMu_, std::defer_lock);
             // A turn stopped while it waits behind another chat's turn gives its place up.
-            while (!turnLock.try_lock_for(std::chrono::milliseconds(100))) {
+            for (;;) {
+                // A chat whose user has just answered an approval goes ahead of turns not yet started.
+                if (approvalsReturning_.load() > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                } else if (turnLock.try_lock_for(std::chrono::milliseconds(100))) {
+                    break;
+                }
                 if (run->cancelled) break;
             }
             const bool started = turnLock.owns_lock();
@@ -1122,6 +1133,7 @@ private:
     std::set<std::string> earlyCancels_;
     std::deque<std::string> earlyCancelOrder_;
     std::timed_mutex turnsMu_;
+    std::atomic<int> approvalsReturning_{0};  // chats waiting to take turnsMu_ back after an approval
 };
 
 }  // namespace

@@ -389,6 +389,7 @@ size_t tagToolCallEnd(const std::string& text, size_t body) {
 // followed by words is prose about the format, and so is anything in a code fence.
 std::optional<TagToolCall> tagToolCall(const std::string& reply) {
     std::optional<TagToolCall> first;
+    size_t lastEnd = std::string::npos;
     for (size_t at = reply.find('<'); at != std::string::npos; at = reply.find('<', at + 1)) {
         size_t body = std::string::npos;
         if (startsWithAt(reply, at, "<tool_call>")) {
@@ -414,8 +415,16 @@ std::optional<TagToolCall> tagToolCall(const std::string& reply) {
         }
         // Resume past this call, so its own contents are not counted as another one.
         const size_t end = tagToolCallEnd(reply, body);
-        if (end == std::string::npos) break;
+        if (end == std::string::npos) {
+            lastEnd = end;
+            break;
+        }
+        lastEnd = end;
         at = end - 1;
+    }
+    // A long passage after the last call is an answer that shows what a call looks like.
+    if (first && lastEnd != std::string::npos && lastEnd < reply.size() && reply.size() - lastEnd > 240) {
+        return std::nullopt;
     }
     return first;
 }

@@ -1602,3 +1602,26 @@ TEST(AgentResilience, AnAnswerThatShowsAToolCallAsAnExampleStaysAnAnswer) {
         EXPECT_EQ(r["result"], shown);
     }
 }
+
+TEST(AgentResilience, ATagToolCallShownWithItsExplanationIsNotRun) {
+    const std::string shown =
+        "Qwen models write a call as <tool_call>{\"name\": \"add\", \"arguments\": {\"a\": 1, \"b\": 2}}</tool_call> "
+        "and the agent runs it when it is the last thing in the reply. The name is the tool to run and the "
+        "arguments object holds its inputs, each checked against the tool's schema before anything happens. "
+        "Nothing was run to write this explanation, and nothing needs to be: it only describes the format.";
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer(shown));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("how do Qwen models write a tool call?");
+    EXPECT_TRUE(agent.executed.empty());
+    EXPECT_EQ(mock.requestCount(), 1);
+
+    bench::MockLlmServer real;
+    real.pushResponse(answer("Adding them.\n<tool_call>{\"name\": \"add\", \"arguments\": {\"a\": 1, \"b\": 2}}</tool_call>"));
+    real.pushResponse(answer("3"));
+    ResilienceAgent second(cfgFor(real));
+    second.initForTest();
+    second.processQuery("add 1 and 2");
+    EXPECT_EQ(second.executed, (std::vector<std::string>{"add"})) << "a call that ends the reply still runs";
+}
