@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
 import type { GpuMemoryStatus } from '../../../types';
 import { GpuMemoryPanel, gpuGbAtSetting } from '../GpuMemoryPanel';
+import { useModelStore } from '../../../stores/modelStore';
 import { gpuStatus } from './fixtures';
 import coldStrixHalo from './coldStrixHalo.json';
 
@@ -77,6 +78,23 @@ describe('GPU memory: what a bigger share unlocks', () => {
         render(<Harness initial={status} />);
         expect(screen.getByText('Recommended: keep the current split. Qwen3.6-35B-A3B already fits, so more GPU memory is optional.')).toBeInTheDocument();
         expect(screen.queryByText('Recommended', { selector: '.gpu-tag' })).toBeNull();
+    });
+
+    it.each([
+        ['chosen in this setup', true, false],
+        ['already in use', false, true],
+    ])('recommends no split for a local model when chat runs in the cloud (%s)', (_how, chosen, inUse) => {
+        useModelStore.setState({ active: inUse ? { provider: 'fireworks', model: 'fireworks.glm', label: 'GLM', remote: true } as never : null });
+        const fits = [{ id: 'Qwen3.6-35B-A3B-GGUF', size_gb: 23.3, need_gb: 27, default: true, fits_now: true, fits_at_setting_gb: null }];
+        const { unmount } = render(<GpuMemoryPanel status={gpuStatus({ recommended_setting_gb: null, models: fits })} onStatus={vi.fn()} mode="setup" names={NAMES} cloud={chosen} />);
+        expect(screen.queryByText(/Recommended: keep the current split/)).toBeNull();
+        unmount();
+
+        render(<GpuMemoryPanel status={gpuStatus()} onStatus={vi.fn()} mode="setup" names={NAMES} cloud={chosen} />);
+        expect(screen.queryByText('Recommended', { selector: '.gpu-tag' })).toBeNull();
+        // Nothing is picked for the user; the split stays as it is until they choose.
+        expect(screen.getByRole('radio', { name: /^Keep/ })).toHaveAttribute('aria-checked', 'true');
+        useModelStore.setState({ active: null });
     });
 
     it('picks keeping the current share when that is the advice, with Keep as is the main way on', () => {

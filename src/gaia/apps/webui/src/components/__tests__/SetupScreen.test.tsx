@@ -283,7 +283,10 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         mockedApi.cancelSetup.mockResolvedValue({ cancelled: true });
         renderSetup();
         expect(await screen.findByText("Getting GAIA's model server ready…")).toBeInTheDocument();
-        expect(screen.getByRole('progressbar', { name: "Getting GAIA's model server ready…" })).toHaveAttribute('value', '40');
+        // One bar on the screen, the checks' own; the server's progress is a number on its line (#7711).
+        expect(screen.getByText('40%')).toBeInTheDocument();
+        expect(screen.queryByRole('progressbar', { name: "Getting GAIA's model server ready…" })).toBeNull();
+        expect(screen.getAllByRole('progressbar')).toHaveLength(1);
         const bar = document.querySelector('.setup-footer') as HTMLElement;
         fireEvent.click(within(bar).getByRole('button', { name: 'Cancel' }));
         await waitFor(() => expect(mockedApi.cancelSetup).toHaveBeenCalledWith());
@@ -356,6 +359,9 @@ describe('SetupScreen: the recommendation', () => {
         fireEvent.click(cloudCard);
         expect(cloud).toBeChecked();
         expect(bar.queryByRole('button', { name: /Download and start/ })).toBeNull();
+        // Nothing local is chosen or downloaded on the cloud path, so neither control is offered (#7711).
+        expect(bar.queryByRole('button', { name: 'Customize' })).toBeNull();
+        expect(screen.queryByText('See everything that will be downloaded')).toBeNull();
         clickContinue();
         await screen.findByRole('heading', { name: 'Connect a cloud provider' });
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
@@ -522,7 +528,7 @@ describe('SetupScreen: first run, local', () => {
         fireEvent.click(screen.getByRole('checkbox', { name: /embeddinggemma/ }));
         fireEvent.click(screen.getByRole('checkbox', { name: /Speech to text/ }));
         clickContinue();
-        await waitFor(() => expect(mockedApi.skipSetupModel).toHaveBeenCalledExactlyOnceWith(EMBED.id, true));
+        await waitFor(() => expect(mockedApi.skipSetupModel).toHaveBeenCalledExactlyOnceWith(EMBED.id, true, false));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledWith(false, false, expect.objectContaining({ extraModels: [WHISPER.id] })));
     });
 
@@ -535,7 +541,7 @@ describe('SetupScreen: first run, local', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Choose a different model for images' }));
         fireEvent.click(visionRadio(/Gemma-4-E4B-it/));
         clickContinue();
-        await waitFor(() => expect(mockedApi.chooseSetupVisionModel).toHaveBeenCalledExactlyOnceWith(GEMMA.id));
+        await waitFor(() => expect(mockedApi.chooseSetupVisionModel).toHaveBeenCalledExactlyOnceWith(GEMMA.id, false));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledWith(false, false, expect.objectContaining({ extraModels: [GEMMA.id] })));
         expect(mockedApi.chooseSetupChatModel).not.toHaveBeenCalled();
     });
@@ -796,7 +802,7 @@ describe('SetupScreen: warnings and confirmations', () => {
         const sheet = await screen.findByRole('alertdialog', { name: 'This model may not run on this PC' });
         expect(sheet).toHaveTextContent('too little free memory right now');
         fireEvent.click(within(sheet).getByRole('button', { name: 'Use it anyway' }));
-        await waitFor(() => expect(mockedApi.chooseSetupChatModel).toHaveBeenLastCalledWith(GEMMA.id, true));
+        await waitFor(() => expect(mockedApi.chooseSetupChatModel).toHaveBeenLastCalledWith(GEMMA.id, true, false));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalled());
     });
 
@@ -863,9 +869,12 @@ describe('SetupScreen: warnings and confirmations', () => {
         expect(screen.getByText(/runs on the NPU, which doesn't read images, so reading images is off/)).toBeInTheDocument();
         expect(screen.queryByRole('radio', { name: /Skip for now/ })).not.toBeInTheDocument();
         clickContinue();
-        await waitFor(() => expect(mockedApi.chooseSetupChatModel).toHaveBeenCalledWith(FLM.id, false));
-        await waitFor(() => expect(mockedApi.skipSetupModel).toHaveBeenCalledWith(GEMMA.id, true));
+        await waitFor(() => expect(mockedApi.chooseSetupChatModel).toHaveBeenCalledWith(FLM.id, false, false));
+        await waitFor(() => expect(mockedApi.skipSetupModel).toHaveBeenCalledWith(GEMMA.id, true, false));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledWith(false, false, expect.objectContaining({ extraModels: [] })));
+        // Setup reads its own local plan, even when chat ran on a cloud model before.
+        expect(mockedApi.getSetupPlan).toHaveBeenCalled();
+        for (const call of mockedApi.getSetupPlan.mock.calls) expect(call).toEqual([false]);
     });
 
     it('says everything is already here on the models screen, and finishes from there', async () => {

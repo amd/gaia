@@ -197,7 +197,7 @@ type runHandle struct {
 }
 
 // NewSSEClient builds a daemon-transport client for agentID (the path segment in
-// /v1/<agent>/query, e.g. "email").
+// /v1/<agent>/query, e.g. "gaia").
 func NewSSEClient(agentID string, dc *daemon.Client, opts SSEOptions) *SSEClient {
 	if opts.ConnectTimeout <= 0 {
 		opts.ConnectTimeout = defaultConnectTimeout
@@ -235,8 +235,11 @@ type queryRequest struct {
 	// Sent only to a peer proven >= 2.20 (negotiate.go); empty omits it.
 	Surface string `json:"surface,omitempty"`
 	// The folder GAIA was started in: where relative paths and the project map
-	// resolve. Not a file scope; allowed_paths is never sent. Peer >= 2.24 only.
+	// resolve. Sent only to a peer proven >= 2.24.
 	WorkingDirectory string `json:"working_directory,omitempty"`
+	// That same folder as the session's file scope, as `gaia -p` sends it, so
+	// the agent looks there first and reads there without asking.
+	AllowedPaths []string `json:"allowed_paths,omitempty"`
 }
 
 // Send starts one turn. The returned channel carries the canonical event types
@@ -303,11 +306,13 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		surface = "tui"
 	}
 	var workingDirectory string
+	var allowedPaths []string
 	if peer.supportsWorkingDirectory {
 		workingDirectory, err = os.Getwd()
 		if err != nil {
 			return nil, fmt.Errorf("could not read the folder GAIA was started in, which the agent needs to resolve file names you give without a full path; restart GAIA from a folder that exists: %w", err)
 		}
+		allowedPaths = []string{workingDirectory}
 	}
 
 	payload, err := json.Marshal(queryRequest{
@@ -320,6 +325,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		SessionID:          sessionID,
 		Surface:            surface,
 		WorkingDirectory:   workingDirectory,
+		AllowedPaths:       allowedPaths,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not encode the '%s' query request: %w", s.agentID, err)
@@ -519,6 +525,10 @@ func (s *SSEClient) consume(
 		evt := event.ParseCanonicalEvent(payload)
 		if crashed, ok := evt.(event.CanonicalErrorEvent); ok && crashed.RawDetail != "" {
 			s.opts.Logf("sse: the '%s' agent stopped mid-turn: %s", s.agentID, crashed.RawDetail)
+			if crashed.Detail == event.AgentStoppedDetail && streamed.Len() == 0 {
+				crashed.Detail = event.AgentStoppedBeforeAnswerDetail // nothing is "kept above"
+				evt = crashed
+			}
 		}
 		if malformed, bad := evt.(event.CanonicalMalformedEvent); bad {
 			// Visible, but never fatal: one broken frame must not kill the run.
@@ -593,13 +603,19 @@ func (s *SSEClient) consume(
 			Source: "tui",
 		})
 	case reader.Err() != nil:
+		// The daemon or agent went away mid-answer; the next message restarts it.
+		raw := fmt.Sprintf("the '%s' query stream failed mid-run: %v", s.agentID, reader.Err())
+		s.opts.Logf("sse: %s", raw)
+		detail := event.AgentStoppedDetail
+		if streamed.Len() == 0 {
+			detail = event.AgentStoppedBeforeAnswerDetail // nothing is "kept above"
+		}
 		emit(event.CanonicalErrorEvent{
-			Type: event.CanonicalTypeError,
-			Detail: fmt.Sprintf(
-				"the '%s' query stream failed mid-run: %v. Check `gaia daemon status`",
-				s.agentID, reader.Err()),
-			Status: http.StatusBadGateway,
-			Source: "tui",
+			Type:      event.CanonicalTypeError,
+			Detail:    detail,
+			RawDetail: raw,
+			Status:    http.StatusBadGateway,
+			Source:    "tui",
 		})
 	default:
 		// The contract mandates exactly one terminal event; a clean EOF without
@@ -724,11 +740,10 @@ type respondRequest struct {
 // verbatim, exactly like Respond and cancelRun build their own paths instead
 // of taking one off the wire.
 //
-// No shipped sidecar implements this route today: the email agent's `/query`
-// speaks the stateless stop-and-hand-off model, where needs_confirmation ends
-// the run immediately and there is no server-side pause to resume. Calling
-// this against that sidecar gets a 404, handled below like any other
-// already-ended run — the same shape Respond already handles, not a new
+// No shipped sidecar implements this route today. A sidecar whose `/query`
+// speaks the stateless stop-and-hand-off model ends the run at
+// needs_confirmation, with no server-side pause to resume, so calling this
+// against it gets a 404, handled below like any other already-ended run — the same shape Respond already handles, not a new
 // failure class.
 func (s *SSEClient) Confirm(ctx context.Context, runID string, approved bool) error {
 	s.mu.Lock()
@@ -869,8 +884,7 @@ func (s *SSEClient) cancelRun(handle *runHandle) error {
 // stream — unlike the caller's context.CancelFunc, which tears that read
 // down immediately and is exactly what let a resend beat the daemon's
 // session run_lock (cooperative cancellation, released by the sidecar's
-// worker thread's own `finally`, checked once per agent-loop step; see
-// hub/agents/email/python/gaia_agent_email/query_routes.py).
+// worker thread's own `finally`, checked once per agent-loop step).
 //
 // Leaving the read running is what makes the eventual terminal signal a
 // near-certain settlement signal in practice — not a proven one. The
@@ -1235,9 +1249,8 @@ func newRunID() (string, error) {
 func (s *SSEClient) Supports(c Capability) (supported, known bool) {
 	switch c {
 	case CapabilityMemory:
-		// Agent id alone, and therefore answerable without the peer: `email`
-		// has no memory store at any version, while the flagship has one at
-		// every version. Deliberately NOT gated on the contract floor — see
+		// Agent id alone, and therefore answerable without the peer: only the
+		// flagship has a memory store, and it has one at every version. Deliberately NOT gated on the contract floor — see
 		// the doc comment.
 		return s.agentID == memoryAgentID, true
 	default:

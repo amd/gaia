@@ -29,7 +29,7 @@ from gaia.agents.tools.connect_card import (
     with_connect_remedy,
 )
 from gaia.agents.tools.email_tools import EmailToolsMixin
-from gaia.ui.email_sidecar import relay
+from gaia.ui.sidecar import relay
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 
@@ -37,6 +37,7 @@ AGENT = "installed:gaia"
 CARD = {"kind": "connect_account", "providers": ["google"], "agent_id": AGENT}
 GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
 GMAIL_COMPOSE = "https://www.googleapis.com/auth/gmail.compose"
+MAIL_READ = "https://graph.microsoft.com/Mail.Read"
 
 
 def _agent(surface):
@@ -131,6 +132,35 @@ def test_the_card_says_which_accounts_are_connected_already():
     )
     assert card["reconnect"] == ["google"]
     assert "reconnect" not in connect_card(["google"], agent_id=AGENT)
+
+
+def test_the_card_names_the_account_that_failed_for_its_providers_only():
+    """The app offers that account, not whichever of several it would guess."""
+    card = connect_card(
+        ["google"],
+        agent_id=AGENT,
+        account={"google": "jane.work@example.com", "microsoft": "x", "": "y"},
+    )
+    assert card["account"] == {"google": "jane.work@example.com"}
+    assert "account" not in connect_card(["google"], agent_id=AGENT)
+    assert connect_card_in({CONNECT_CARD_KEY: card}) == card
+
+
+def test_an_error_naming_its_account_puts_it_on_the_card():
+    error = MailboxError("Expired.", connect=("google",), reconnect=("google",))
+    error.account = {"google": "1084"}
+    payload = with_connect_card(
+        {"error": "Expired."}, error, agent_id=AGENT, surface="agent_ui"
+    )
+    assert payload[CONNECT_CARD_KEY]["account"] == {"google": "1084"}
+
+
+@pytest.mark.parametrize(
+    "account", ["jane@example.com", {"microsoft": "x"}, {"google": ""}, {"google": 7}]
+)
+def test_a_card_whose_account_is_malformed_is_no_card(account):
+    card = {"kind": CONNECT_CARD_KIND, "providers": ["google"], "account": account}
+    assert connect_card_in({CONNECT_CARD_KEY: card}) is None
 
 
 def test_a_card_with_no_provider_is_a_bug_not_an_empty_button_row():
@@ -310,6 +340,8 @@ def test_in_the_agent_ui_no_mailbox_shows_the_button_and_names_no_command(mail, 
         "kind": CONNECT_CARD_KIND,
         "providers": ["google", "microsoft"],
         "agent_id": AGENT,
+        # Reading the inbox asks only to read it: no send, no calendar.
+        "scopes": {"google": [GMAIL_READONLY], "microsoft": [MAIL_READ]},
     }
     assert "No readable mailbox is available" in out["error"]
     assert "google: not connected" in out["error"]
@@ -497,6 +529,49 @@ def test_in_an_app_a_write_without_write_access_is_a_reconnect(monkeypatch):
     assert err.value.connect == ("google",)
     assert f"lacks {GMAIL_COMPOSE}" in str(err.value)
     assert "gaia connectors" not in str(err.value)
+
+    # The card asks for the write when the write is what failed.
+    out = with_connect_card(
+        {"error": str(err.value)},
+        err.value,
+        agent_id=AGENT,
+        surface="agent_ui",
+        scopes={"google": [GMAIL_READONLY]},
+    )
+    assert out[CONNECT_CARD_KEY]["scopes"] == {
+        "google": [GMAIL_READONLY, GMAIL_COMPOSE]
+    }
+
+
+def test_a_card_names_only_the_access_it_was_given():
+    assert "scopes" not in connect_card(["google"], agent_id=AGENT)
+    card = connect_card(
+        ["google", "microsoft"],
+        agent_id=AGENT,
+        scopes={"google": [GMAIL_READONLY, GMAIL_READONLY], "microsoft": []},
+    )
+    assert card["scopes"] == {"google": [GMAIL_READONLY]}
+
+
+@pytest.mark.parametrize(
+    "scopes",
+    [
+        {"microsoft": [MAIL_READ]},
+        {"google": []},
+        {"google": "gmail.readonly"},
+        [GMAIL_READONLY],
+    ],
+)
+def test_a_card_whose_access_list_is_malformed_is_no_card(scopes):
+    assert connect_card_in({CONNECT_CARD_KEY: {**CARD, "scopes": scopes}}) is None
+
+
+def test_the_status_check_asks_only_to_read_too(mail):
+    out = mail("agent_ui")("list_connected_mailboxes")
+    assert out[CONNECT_CARD_KEY]["scopes"] == {
+        "google": [GMAIL_READONLY],
+        "microsoft": [MAIL_READ],
+    }
 
 
 # --- the stream: handler -> canonical -> relay ------------------------------

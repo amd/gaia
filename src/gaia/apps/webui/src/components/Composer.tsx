@@ -60,7 +60,9 @@ export function Composer({
     // What is sent: the text plus a link for each attached file.
     const sentLength = attachments.compose(value.trim()).length;
     const tooLong = sentLength > MAX_MESSAGE_CHARS;
-    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong;
+    // A refused file would silently vanish on send, so it must be removed first.
+    const refusedNames = attachments.attachments.filter((a) => a.error).map((a) => a.name).join(', ');
+    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong && !refusedNames;
 
     const shownPlaceholder = disabledReason || placeholder || t('composer.placeholder');
 
@@ -116,7 +118,7 @@ export function Composer({
                     {attachments.attachments.map((a) => {
                         const Icon = attachmentIcon(a);
                         return (
-                        <li key={a.id} className={`composer-attachment${a.error ? ' has-error' : ''}${a.isMedia ? ' is-media' : ''}`}>
+                        <li key={a.id} title={a.isImage && a.url ? a.name : undefined} className={`composer-attachment${a.error ? ' has-error' : ''}${a.isMedia ? ' is-media' : ''}${a.isImage && a.url ? ' is-image' : ''}`}>
                             {a.isImage && a.url
                                 ? <img src={a.url} alt="" className="composer-attachment-thumb" />
                                 : <Icon size={14} aria-hidden="true" />}
@@ -162,6 +164,9 @@ export function Composer({
                     {t('composer.tooLong', { sent: sentLength.toLocaleString(), max: MAX_MESSAGE_CHARS.toLocaleString() })}
                     {' '}{t('composer.tooLongHint')}
                 </p>
+            )}
+            {refusedNames && hasContent && (
+                <p className="composer-limit-error" role="alert">{t('composer.removeRefused', { names: refusedNames })}</p>
             )}
             <div className="composer-row">
                 <div className="composer-row-left">

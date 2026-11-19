@@ -528,6 +528,75 @@ def _guard_real_gaia_home():
         yield
 
 
+_DEFAULT_LEMONADE_PORT = 13305
+_LOOPBACK_HOSTS = {"localhost", "::1", "0:0:0:0:0:0:0:1"}
+
+
+def _is_loopback(host) -> bool:
+    return isinstance(host, str) and (
+        host.lower() in _LOOPBACK_HOSTS or host.startswith("127.")
+    )
+
+
+def _redirected_lemonade_url() -> str | None:
+    """LEMONADE_BASE_URL when it points away from a local Lemonade on 13305."""
+    base_url = os.environ.get("LEMONADE_BASE_URL", "").strip()
+    if not base_url:
+        return None
+    parsed = urllib.parse.urlsplit(base_url)
+    if _is_loopback(parsed.hostname) and parsed.port == _DEFAULT_LEMONADE_PORT:
+        return None
+    return base_url
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _guard_default_lemonade_port():
+    """Fail a test that reaches local 13305 while LEMONADE_BASE_URL says otherwise.
+
+    Covers sockets opened in this process (requests, urllib, httpx sync); a
+    subprocess or a Windows proactor event loop is not seen.
+    """
+    redirected = _redirected_lemonade_url()
+    if redirected is None:
+        yield
+        return
+
+    import socket
+
+    def _check(address):
+        if (
+            isinstance(address, tuple)
+            and len(address) >= 2
+            and address[1] == _DEFAULT_LEMONADE_PORT
+            and _is_loopback(address[0])
+        ):
+            pytest.fail(
+                f"This test connected to {address[0]}:{_DEFAULT_LEMONADE_PORT}, "
+                f"but LEMONADE_BASE_URL={redirected} points tests elsewhere: it "
+                "would reach, and could load models on, the real Lemonade on "
+                "this machine. Resolve the address from LEMONADE_BASE_URL "
+                "(gaia.llm.lemonade_client._get_lemonade_config) instead of "
+                "hard-coding the default port.",
+                pytrace=False,
+            )
+
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+
+    def guarded_connect(self, address):
+        _check(address)
+        return real_connect(self, address)
+
+    def guarded_connect_ex(self, address):
+        _check(address)
+        return real_connect_ex(self, address)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(socket.socket, "connect", guarded_connect)
+        mp.setattr(socket.socket, "connect_ex", guarded_connect_ex)
+        yield
+
+
 def _sqlite_target(database, uri: bool) -> Path | None:
     """The file a ``sqlite3.connect`` call opens, or None for an in-memory DB."""
     if isinstance(database, int):
@@ -582,7 +651,7 @@ def _off_real_home(path: Path) -> Path:
 
 @pytest.fixture(scope="session", autouse=True)
 def _redirect_default_databases():
-    """Open the file index, scratchpad and email stores under ``_TEST_GAIA_HOME``, not ``~/.gaia``.
+    """Open the file index and scratchpad stores under ``_TEST_GAIA_HOME``, not ``~/.gaia``.
 
     Both default to ``gaia_home()``, and GAIA_HOME stays unset (see
     _STATE_ENV). ``ChatAgentConfig`` passes that same default in explicitly, so
@@ -604,13 +673,6 @@ def _redirect_default_databases():
 
         return init
 
-    def redirect_path(real_resolve):
-        @functools.wraps(real_resolve)
-        def resolve(self):
-            return str(_off_real_home(Path(real_resolve(self)).expanduser()))
-
-        return resolve
-
     with pytest.MonkeyPatch.context() as mp:
         for module, cls in (
             (index, index.FileSystemIndexService),
@@ -618,15 +680,6 @@ def _redirect_default_databases():
         ):
             mp.setattr(module, "gaia_home", redirected_home)
             mp.setattr(cls, "__init__", redirect_init(cls.__init__))
-        # The email agent keeps state.db and memory.db under ~/.gaia/email; its
-        # package is absent from jobs that don't install it.
-        if importlib.util.find_spec("gaia_agent_email") is not None:
-            from gaia_agent_email.config import EmailAgentConfig
-
-            for name in ("resolved_db_path", "resolved_memory_db_path"):
-                mp.setattr(
-                    EmailAgentConfig, name, redirect_path(getattr(EmailAgentConfig, name))
-                )
         yield
 
 

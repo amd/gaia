@@ -114,6 +114,44 @@ describe('PrivacySettings local only', () => {
         expect(await screen.findByRole('status')).toHaveTextContent('Cloud models are unavailable');
     });
 
+    describe('with the model server not answering', () => {
+        const RAW = "couldn't check whether collection.router is a cloud model: Request failed: "
+            + "HTTPConnectionPool(host='127.0.0.1', port=59999): Max retries exceeded [WinError 10061]";
+        beforeEach(() => {
+            mockedApi.updateSettings.mockResolvedValue({
+                network_policy: 'local_ai_only',
+                policy_notices: [
+                    { code: 'saved_models_not_checked', severity: 'warning', reason: RAW, cause: 'model_server_down', models: ['collection.router'] },
+                    { code: 'users_server_keeps_keys', severity: 'info', url: 'http://127.0.0.1:59999' },
+                ],
+            } as never);
+        });
+        afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+        it('says so in plain words, without the connection error', async () => {
+            render(<PrivacySettings />);
+            fireEvent.click(await findReadySwitch());
+
+            const alert = await screen.findByRole('alert');
+            expect(alert).toHaveTextContent("Local only is on, but GAIA couldn't check whether your saved model collection.router is a cloud model because the model server isn't answering");
+            expect(alert).toHaveTextContent('Settings → Model');
+            expect(alert).toHaveTextContent('keeps any cloud keys it already holds');
+            expect(alert.textContent).not.toMatch(/HTTPConnectionPool|WinError|Request failed|\(/);
+            expect(screen.getByRole('switch', { name: 'Local only' })).toBeChecked();
+        });
+
+        it('says so in Arabic', async () => {
+            useChatStore.setState({ locale: 'ar' });
+            render(<PrivacySettings />);
+            fireEvent.click(await screen.findByRole('switch'));
+
+            const alert = await screen.findByRole('alert');
+            expect(alert).toHaveTextContent('خادم النماذج لا يستجيب');
+            expect(alert).toHaveTextContent('collection.router');
+            expect(alert.textContent).not.toMatch(/HTTPConnectionPool|WinError/);
+        });
+    });
+
     it('still reports a failed switch-on when the saved policy loads late', async () => {
         const loaded = slowPolicyLoad();
         mockedApi.updateSettings.mockRejectedValueOnce(new Error('policy file is read-only'));
@@ -129,35 +167,83 @@ describe('PrivacySettings local only', () => {
 });
 
 describe('PrivacySettings delete all chats', () => {
-    it('deletes nothing on the first click and asks for a second', () => {
+    const askToDelete = () => fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
+    const confirmDelete = () => fireEvent.click(screen.getByRole('button', { name: 'Delete 2 chats' }));
+
+    it('asks in a dialog that names what goes, with Cancel focused, and deletes nothing yet', () => {
         render(<PrivacySettings />);
-        fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
+        askToDelete();
+        const dialog = screen.getByRole('alertdialog', { name: 'Delete all 2 chats?' });
+        expect(dialog).toHaveTextContent("This can't be undone.");
+        expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+        expect(screen.getByRole('button', { name: 'Delete 2 chats' })).toHaveClass('btn-danger');
         expect(mockedApi.deleteSession).not.toHaveBeenCalled();
-        expect(screen.getByRole('button', { name: 'Click again to delete all chats' })).toBeInTheDocument();
         expect(useChatStore.getState().sessions).toEqual([TRIP, TAXES]);
     });
 
-    it('deletes every chat on the second click and says so', async () => {
+    it('titles the card where everyone can see it', () => {
         render(<PrivacySettings />);
-        fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
-        fireEvent.click(screen.getByRole('button', { name: 'Click again to delete all chats' }));
+        expect(screen.getByRole('heading', { name: 'Delete chats' })).toBeVisible();
+        expect(screen.getByRole('region', { name: 'Delete chats' })).toContainElement(screen.getByRole('button', { name: 'Delete all chats' }));
+    });
+
+    it('a second click on the same button does not delete', () => {
+        render(<PrivacySettings />);
+        askToDelete();
+        expect(screen.queryByRole('button', { name: /Click again/ })).not.toBeInTheDocument();
+        expect(mockedApi.deleteSession).not.toHaveBeenCalled();
+    });
+
+    it('Cancel closes the dialog and keeps every chat', () => {
+        render(<PrivacySettings />);
+        askToDelete();
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        expect(mockedApi.deleteSession).not.toHaveBeenCalled();
+    });
+
+    it('Escape cancels too', () => {
+        render(<PrivacySettings />);
+        askToDelete();
+        fireEvent.keyDown(document, { key: 'Escape' });
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        expect(mockedApi.deleteSession).not.toHaveBeenCalled();
+    });
+
+    it('says one chat, not 1 chats', () => {
+        useChatStore.setState({ sessions: [TRIP] });
+        render(<PrivacySettings />);
+        askToDelete();
+        expect(screen.getByRole('alertdialog', { name: 'Delete your 1 chat?' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Delete 1 chat' })).toBeInTheDocument();
+    });
+
+    it('deletes every chat once confirmed and says so', async () => {
+        render(<PrivacySettings />);
+        askToDelete();
+        confirmDelete();
         await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('All chats deleted.'));
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
         expect(mockedApi.deleteSession).toHaveBeenNthCalledWith(1, 'trip');
         expect(mockedApi.deleteSession).toHaveBeenNthCalledWith(2, 'taxes');
         expect(useChatStore.getState().sessions).toEqual([]);
     });
 
-    it('asks again once the confirm expires, and that click still deletes nothing', () => {
-        vi.useFakeTimers();
+    it('keeps the count it asked about while the chats are being deleted', async () => {
+        let finishFirst: () => void = () => {};
+        mockedApi.deleteSession.mockReturnValueOnce(new Promise<void>((r) => { finishFirst = r; }));
+        let finishSecond: () => void = () => {};
+        mockedApi.deleteSession.mockReturnValueOnce(new Promise<void>((r) => { finishSecond = r; }));
         render(<PrivacySettings />);
-        fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
-        act(() => { vi.advanceTimersByTime(3999); });
-        expect(screen.getByRole('button', { name: 'Click again to delete all chats' })).toBeInTheDocument();
-        act(() => { vi.advanceTimersByTime(1); });
-        fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
-        expect(mockedApi.deleteSession).not.toHaveBeenCalled();
-        expect(screen.getByRole('button', { name: 'Click again to delete all chats' })).toBeInTheDocument();
+        askToDelete();
+        confirmDelete();
+        await act(async () => { finishFirst(); });
+        expect(useChatStore.getState().sessions).toEqual([TAXES]);
+        expect(screen.getByRole('alertdialog', { name: 'Delete all 2 chats?' })).toBeInTheDocument();
+        expect(screen.queryByRole('alertdialog', { name: 'Delete your 1 chat?' })).not.toBeInTheDocument();
+        await act(async () => { finishSecond(); });
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     });
 
     it('names the chats that stayed, and does not claim they are all gone', async () => {
@@ -165,8 +251,8 @@ describe('PrivacySettings delete all chats', () => {
             if (id === 'trip') throw new Error('disk full');
         });
         render(<PrivacySettings />);
-        fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
-        fireEvent.click(screen.getByRole('button', { name: 'Click again to delete all chats' }));
+        askToDelete();
+        confirmDelete();
         expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete 1 chat(s): Trip plan: disk full');
         expect(screen.queryByText('All chats deleted.')).not.toBeInTheDocument();
         expect(mockedApi.deleteSession).toHaveBeenCalledTimes(2);
@@ -176,8 +262,8 @@ describe('PrivacySettings delete all chats', () => {
     it('counts every failure when none of the deletes succeed', async () => {
         mockedApi.deleteSession.mockRejectedValue(new Error('offline'));
         render(<PrivacySettings />);
-        fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
-        fireEvent.click(screen.getByRole('button', { name: 'Click again to delete all chats' }));
+        askToDelete();
+        confirmDelete();
         expect(await screen.findByRole('alert')).toHaveTextContent(
             'Could not delete 2 chat(s): Trip plan: offline; Taxes: offline',
         );

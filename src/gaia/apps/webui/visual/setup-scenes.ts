@@ -605,6 +605,19 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        // The installer carries the model server: it read "From included with GAIA".
+        name: 'download-bundled',
+        answers: {
+            status: RUN_PARTS,
+            plan: { ...PLAN, components: COMPONENTS.map((c) => (c.id === 'server' ? { ...c, source: 'the GAIA installer', bundled: true } : c)) },
+        },
+        reach: async (page) => {
+            const server = page.locator('.setup-content').first();
+            await expect(server).toBeVisible();
+            await expect(server.locator('.setup-content-from')).not.toContainText(/From|من /);
+        },
+    },
+    {
         name: 'download-failed',
         answers: { status: RUN_ROW_FAILED },
         reach: (page) => expect(page.locator('.dl-row.is-failed')).toBeVisible(),
@@ -663,7 +676,7 @@ export const SETUP_SCENES: SetupScene[] = [
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
+export const NARROW_SCENES = ['check-failed', 'plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

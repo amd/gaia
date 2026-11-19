@@ -122,11 +122,13 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
         setDraft(null);
         if (save) onRename(session.id, draft);
     };
+    // Held while the pointer rests on it: the wider label reverting under a reader puts Pin under the click.
+    const [overDelete, setOverDelete] = useState(false);
     useEffect(() => {
-        if (!confirm) return;
+        if (!confirm || overDelete) return;
         const timer = setTimeout(() => setConfirm(false), 3000);
         return () => clearTimeout(timer);
-    }, [confirm]);
+    }, [confirm, overDelete]);
     useEffect(() => {
         if (!editing && refocus.current) {
             refocus.current = false;
@@ -291,6 +293,8 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
                         type="button"
                         className={`sb-row-delete${confirm ? ' is-confirm' : ''}`}
                         onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
+                        onPointerEnter={() => setOverDelete(true)}
+                        onPointerLeave={() => setOverDelete(false)}
                         aria-label={confirm
                             ? (unsent > 0
                                 ? t.plural('row.confirmDeleteUnsentAria', unsent, { title: session.title })
@@ -596,7 +600,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                             onChange={(e) => setQuery(e.target.value)}
                             onKeyDown={onSearchKey}
                             {...CLAIMS_ESCAPE}
-                            placeholder={t('sidebar.search')}
+                            placeholder={t.bare('sidebar.search')}
                             aria-label={t.hint(t('sidebar.search'), formatShortcut('Mod+K'))}
                             aria-controls="sb-chat-list"
                             aria-activedescendant={picked ? resultRowId(picked.id) : undefined}
@@ -644,7 +648,8 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                                     <SessionRow
                                         key={s.id}
                                         session={s}
-                                        active={s.id === currentSessionId}
+                                        // Memory replaces the chat on screen, so its row is the one selected.
+                                        active={s.id === currentSessionId && !showMemory}
                                         phone={phone}
                                         moved={s.id === movedId}
                                         focusPin={s.id === pinFocusId}

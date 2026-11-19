@@ -22,6 +22,7 @@ from gaia.agents.base.verification import EXECUTED_KEY
 from gaia.agents.tools.browser_tools import PRIMARY_SOURCE_MARKER
 from gaia.llm.inference_location import InferenceLocation
 from gaia.logger import get_logger
+from gaia.upload_names import display_file_name
 
 logger = get_logger(__name__)
 
@@ -242,7 +243,7 @@ class TurnLedger:
                 entry = docs.setdefault(
                     path,
                     {
-                        "name": display_names.get(base, base),
+                        "name": display_names.get(base) or display_file_name(path),
                         "path": path,
                         "pages": [],
                         "passages": 0,

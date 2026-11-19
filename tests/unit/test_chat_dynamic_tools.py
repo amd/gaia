@@ -321,6 +321,28 @@ class TestSelectToolsForTurn:
         a = _selecting_agent(self.NAMES, {"spare_tool": 0.9})
         assert a._select_tools_for_turn("anything") == self.NAMES
 
+    def test_a_mail_question_jumps_below_the_retrieval_bar(self):
+        """The reported 0.39 never clears 0.40; the request must carry the jump."""
+        names = [
+            "core_tool",
+            "check_mailbox_access",
+            "list_inbox",
+            "search_email",
+            "read_email",
+        ]
+        a = _selecting_agent(names, {name: 0.39 for name in names[1:]})
+        assert a._select_tools_for_turn("did my landlord email me?") == names
+
+    def test_a_postal_mail_request_stays_on_core_below_the_bar(self):
+        names = ["core_tool", "check_mailbox_access", "list_inbox"]
+        a = _selecting_agent(names, {name: 0.39 for name in names[1:]})
+        assert a._select_tools_for_turn("mail the package") == ["core_tool"]
+
+    def test_a_mail_question_without_mail_tools_stays_on_core(self):
+        """The compact tier withholds mail; there is no tool to request."""
+        a = _selecting_agent(["core_tool", "read_file"], {"read_file": 0.39})
+        assert a._select_tools_for_turn("did my landlord email me?") == ["core_tool"]
+
     def test_the_message_names_tools_by_the_current_turn_only(self):
         a = _selecting_agent(self.NAMES)
         a._select_tools_for_turn("hello")

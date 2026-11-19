@@ -679,9 +679,15 @@ class SSEOutputHandler(OutputHandler):
         self.relay_hidden_turns = 0
         self.relay_context_error: Optional[str] = None
         self.relay_performance: Optional[Dict[str, Any]] = None
+        # The route a relayed hybrid turn took, from the sidecar's ``final``.
+        self.relayed_route: Optional[Dict[str, Any]] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
+        # The turn's answer and record for later turns, sealed when the answer
+        # prints so a daemon's final event need not wait on the run thread's tail.
+        self.staged_answer: Optional[str] = None
+        self.staged_model_messages: Optional[List[Dict[str, Any]]] = None
         # Set by mark_turn_failed; the next answer event carries ``failed``.
         self._turn_failed = False
         self._turn_failure: Optional[str] = None
@@ -941,6 +947,9 @@ class SSEOutputHandler(OutputHandler):
         # A "denied" call nobody answered is not one the user declined.
         if isinstance(data, dict) and data.get("timed_out") is True:
             event["timed_out"] = True
+        # Nor is one GAIA turned down itself without showing a prompt.
+        if isinstance(data, dict) and data.get("declined_by") == "agent":
+            event["declined_by"] = "agent"
         # A refusal must not read as a site contacted, relayed or not.
         if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
             event[EXECUTED_KEY] = False
@@ -1185,13 +1194,8 @@ class SSEOutputHandler(OutputHandler):
     # === Structured-render map (#2109) ===
 
     # Mapping from tool name to the card "kind" the frontend's render-card
-    # registry draws (spec §4.2). Shared with the sidecar's own canonical
-    # translator (``gaia_agent_email/sse_translation.py`` duplicates this map
-    # to stay dependency-light) — a test in that package
-    # (``test_render_tool_to_lang_maps_stay_in_sync``) pins the two dicts
-    # equal so the duplication can't silently drift.
+    # registry draws (spec §4.2).
     _RENDER_TOOL_TO_LANG: ClassVar[Dict[str, str]] = {
-        "pre_scan_inbox": "email_pre_scan",
         # #2765: a generic ``table`` card (no new client code) so the thread
         # view renders straight from tool data instead of model prose.
         "get_thread": "table",
@@ -1312,6 +1316,20 @@ class SSEOutputHandler(OutputHandler):
     def print_turn_metrics(self, record: Dict[str, Any]):
         """Stash the sealed turn record for the answer event that follows."""
         self._turn_metrics = record
+
+    def stage_final_model_messages(
+        self, answer: str, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Keep the turn's answer and record sealed at the answer for ``final``.
+
+        The agent seals them before ``print_final_answer``; the daemon reads them
+        from here so ``final`` carries the measurement and what later turns
+        replay without waiting on the run thread (which may still be storing
+        memory or writing a trace).
+        """
+        self.staged_answer = answer
+        self.staged_model_messages = messages
+        return messages
 
     def mark_turn_failed(self, failure: Optional[str] = None) -> None:
         """The answer that follows ends a turn a model failure cut short."""
@@ -2079,6 +2097,7 @@ class SSEOutputHandler(OutputHandler):
                     f"'{tool_name}' needs your approval and nobody can answer on "
                     "this run. Start the request from the GAIA terminal UI or "
                     "Agent UI to approve it there.",
+                    unattended=True,
                 )
 
         # Before auto-approve: the eval runs with it on, and this is its only no.
@@ -2162,7 +2181,7 @@ class SSEOutputHandler(OutputHandler):
             logger.info(
                 "Background mode: immediately denied confirmation for '%s'", tool_name
             )
-            self._last_denial = Denial(tool_name, unattended_message)
+            self._last_denial = Denial(tool_name, unattended_message, unattended=True)
             return False
 
         confirm_id = str(uuid.uuid4())
@@ -2193,7 +2212,7 @@ class SSEOutputHandler(OutputHandler):
         if scope is not None:
             request["always_scope"] = scope.label
             # ``always_scope`` is matched as-is by the MCP control; this is its wording.
-            always_label = grant_phrase(tool_name, scope.subject)
+            always_label = scope.phrase or grant_phrase(tool_name, scope.subject)
             if always_label:
                 request["always_label"] = always_label
         # What this call does — `pytest` is not `rm -rf` — so the prompt's label
@@ -2225,6 +2244,7 @@ class SSEOutputHandler(OutputHandler):
                 tool_name,
                 f"Confirmation for '{tool_name}' was abandoned: the run was "
                 "cancelled before the user answered.",
+                unattended=True,
             )
             return False
 
@@ -2446,7 +2466,7 @@ class SSEOutputHandler(OutputHandler):
         for the whole blocking ``read()``, and ``close()`` waits on that same
         lock — so a cross-thread ``close()`` blocks until the read returns on
         its own (proven by the real-socket test in
-        ``tests/unit/test_email_sidecar_proxy.py``). ``shutdown()`` bypasses
+        ``tests/unit/test_sidecar_proxy.py``). ``shutdown()`` bypasses
         the file-object layer entirely and wakes the parked ``recv``
         immediately; the relay's stream generator then closes the response
         itself on the way out. ``resp.close()`` remains only as the fallback
@@ -2605,8 +2625,8 @@ class SSEOutputHandler(OutputHandler):
     def resolve_user_input(self, request_id: str, response: str) -> bool:
         """Unblock a pending ``request_user_input_blocking()`` call.
 
-        Called by ``POST /api/chat/user-input`` and by the email sidecar's
-        ``POST /v1/email/query/{run_id}/respond``.  Returns ``False`` if no
+        Called by ``POST /api/chat/user-input`` and by a sidecar's
+        ``POST /v1/<agent>/query/{run_id}/respond``.  Returns ``False`` if no
         request with that ID is pending, so the caller can answer 409 rather
         than report an accepted answer nothing will read.
         """

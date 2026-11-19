@@ -1150,7 +1150,7 @@ describe('Chat App Integration', () => {
     it('should have drag-and-drop with visual overlay', () => {
       expect(chatContent).toContain('isDragOver');
       expect(chatContent).toContain('drag-overlay');
-      expectTranslated(chatContent, "{t('chat.dropOverlay')}", 'chat.dropOverlay', 'Drop files to index them for this chat');
+      expectTranslated(chatContent, "{t('chat.dropOverlay')}", 'chat.dropOverlay', 'Drop files to add them to this chat');
     });
 
     it('should auto-upload dropped files', () => {
@@ -1266,7 +1266,9 @@ describe('Chat App Integration', () => {
     it('should render error banner with AlertTriangle icon', () => {
       expect(msgContent).toContain('AlertTriangle');
       expect(msgContent).toContain('error-banner');
-      expectTranslated(msgContent, "t('msg.error')", 'msg.error', 'Something went wrong');
+      // A failure GAIA can name is headed with its cause; the rest keep the generic line.
+      expectTranslated(msgContent, ": 'msg.error')", 'msg.error', 'Something went wrong');
+      expect(msgContent).toContain('failedTurn.${failedTurn.kind}.title');
     });
 
     it('should apply error CSS class to error messages', () => {
@@ -1344,8 +1346,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should use dynamic version from build constant', () => {
-      expect(advancedContent).toContain('const version = __APP_VERSION__');
-      expect(advancedContent).toContain('GAIA v{version}');
+      const aboutContent = fs.readFileSync(path.join(settingsDir, 'AboutSettings.tsx'), 'utf8');
+      expect(aboutContent).toContain('`GAIA v${__APP_VERSION__}`');
     });
 
     it('should render as a modal settings dialog with section nav', () => {
@@ -1379,9 +1381,11 @@ describe('Chat App Integration', () => {
       expect(privacyContent).toContain('className="btn-danger"');
     });
 
-    it('should have danger zone warning text and two-step confirm', () => {
+    it('should have danger zone warning text and a confirmation sheet', () => {
       expect(privacyContent).toContain("t('settings.privacy.deleteWarning')");
-      expect(privacyContent).toContain("confirm ? t('settings.privacy.deleteConfirm') : t('settings.privacy.delete')");
+      expect(privacyContent).toContain('<ConfirmSheet');
+      expect(privacyContent).toContain("'settings.privacy.deleteYes'");
+      expect(privacyContent).toContain("t('settings.privacy.deleteCancel')");
     });
   });
 

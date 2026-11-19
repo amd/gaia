@@ -422,16 +422,10 @@ class LemonadeManager:
         # A server the user chose isn't GAIA's to install or start.
         configured = configured_lemonade_url()
         if configured:
-            from gaia.llm.lemonade_choice import SWITCH_BACK_HINT, _env_url
+            from gaia.llm.lemonade_choice import unreachable_server_message
 
-            switch_back = (
-                "unset LEMONADE_BASE_URL to use GAIA's own server"
-                if _env_url()
-                else SWITCH_BACK_HINT
-            )
             print(
-                f"❌ Error: Lemonade Server at {configured} not reachable. "
-                f"Start Lemonade on that host, or {switch_back}.",
+                f"❌ Error: {unreachable_server_message(configured)}",
                 file=sys.stderr,
             )
             return
@@ -791,6 +785,8 @@ class LemonadeManager:
         elif min_context_size is None:
             min_context_size = resolve_ctx_size(device=device)
             if not is_cloud:
+                # Never resize the model this one is about to replace.
+                own_window_of = chat_model
                 # The window the chat model's own load gets when memory is short.
                 min_context_size = fit_ctx_to_free_memory(
                     chat_model, min_context_size, base_url

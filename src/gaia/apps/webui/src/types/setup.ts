@@ -45,6 +45,8 @@ export interface SetupComponent {
     /** null when it can't be known before the download starts. */
     size_gb: number | null;
     source: string;
+    /** It comes with the installer, so nothing is downloaded from `source`. */
+    bundled?: boolean;
     /** null when the plan can't tell yet. */
     installed: boolean | null;
 }

@@ -150,7 +150,7 @@ class _FakeHandle:
 
 def _no_agent_package(monkeypatch, handle=None, acquire_error=None):
     """The Hub-binary install: no ``gaia_agent`` package beside the UI."""
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
     calls = []
@@ -231,7 +231,7 @@ def test_an_agent_that_fails_to_list_is_a_502_with_its_reason(client, monkeypatc
 
 def test_the_proxy_asks_the_flagships_skills_route():
     """Pin the outgoing call, not just that one was made."""
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     seen = {}
 
@@ -315,6 +315,29 @@ def test_a_bad_link_is_a_400_naming_why(client, monkeypatch):
     r = client.post("/api/skills/link/preview", json={"url": "http://x"})
     assert r.status_code == 400
     assert "https" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("route", ["preview", "add"])
+def test_a_link_with_nothing_behind_it_names_no_terminal_command(
+    client, monkeypatch, route
+):
+    """The desktop app put no `gaia` on PATH, so a command is no remedy (#7973)."""
+    from gaia.skills import link
+
+    def missing(*args, **kwargs):
+        raise link.SkillLinkNotFoundError("Nothing found at https://x/y.")
+
+    monkeypatch.setattr(link, "preview_link", missing)
+    monkeypatch.setattr(link, "add_from_link", missing)
+    body = {"url": "https://github.com/acme/none"}
+    if route == "add":
+        body.update(names=["a"], pin="sha256:" + "0" * 64)
+    r = client.post(f"/api/skills/link/{route}", json=body)
+
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "gaia skill" not in detail
+    assert "skills folder inside .gaia" in detail
 
 
 def test_add_passes_the_chosen_names_and_code_opt_in(client, monkeypatch):

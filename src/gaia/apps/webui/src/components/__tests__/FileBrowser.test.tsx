@@ -250,6 +250,18 @@ describe('FileBrowser Index Selected', () => {
         expect(await screen.findByText('Added 1 file')).toBeInTheDocument();
         expect(screen.queryByText(/indexed/i)).not.toBeInTheDocument();
     });
+
+    it('blames the model server, not the file, without the connection error', async () => {
+        mockedApi.uploadDocumentByPath.mockResolvedValue({
+            ...DOC, indexing_status: 'failed', error_kind: 'model_server_down',
+            last_error: "Lemonade Server is not reachable: HTTPConnectionPool(host='127.0.0.1') [WinError 10061]",
+        } as never);
+        await indexNotes();
+        await waitFor(() => expect(document.querySelector('.upload-error-toast')).not.toBeNull());
+        const toast = document.querySelector('.upload-error-toast')!;
+        expect(toast).toHaveTextContent("GAIA's model server isn't answering");
+        expect(toast.textContent).not.toMatch(/HTTPConnectionPool|WinError/);
+    });
 });
 
 describe('FileBrowser Ask Agent', () => {
@@ -510,5 +522,59 @@ describe('FileBrowser in Arabic', () => {
         }
         expect(within(dialog).getByPlaceholderText(/ابحث عن ملفات على جهازك/)).toBeInTheDocument();
         expect(within(dialog).getByRole('combobox', { name: /تصفية حسب نوع الملف/ })).toHaveDisplayValue(/كل الملفات/);
+    });
+});
+
+describe('FileBrowser folder add', () => {
+    const DOC = {
+        id: 'doc-1', filename: 'report.md', filepath: '/home/user/docs/scan/report.md', file_size: 512,
+        chunk_count: 1, indexed_at: '', last_accessed_at: null, sessions_using: 1, indexing_status: 'complete',
+    };
+
+    beforeEach(() => {
+        useChatStore.setState({
+            sessions: [{ id: 'session-1', title: 'Chat', document_ids: [] } as never],
+            documents: [],
+        });
+        mockedApi.browseFiles.mockResolvedValue({
+            ...BROWSE_RESPONSE,
+            entries: [{ name: 'scan', path: '/home/user/docs/scan', type: 'folder', size: 0, extension: '', modified: '' }],
+        });
+        mockedApi.attachDocument.mockResolvedValue(undefined as never);
+        mockedApi.listDocuments.mockResolvedValue({
+            documents: [DOC] as never, total: 1, total_size_bytes: 512, total_chunks: 1,
+        });
+    });
+
+    async function addScanFolder() {
+        render(<FileBrowser onStartChat={vi.fn()} />);
+        const row = (await screen.findByText('scan')).closest('.fb-entry') as HTMLElement;
+        fireEvent.click(within(row).getByRole('checkbox'));
+        fireEvent.click(screen.getByRole('button', { name: /Add to library/i }));
+        await waitFor(() => expect(mockedApi.indexFolder).toHaveBeenCalled());
+    }
+
+    it('counts the files a folder failed on and refreshes the library to show them', async () => {
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 1, skipped: 0, skipped_images: 0,
+            errors: ['contract_summary.txt: the embedder was restarting'], documents: [DOC],
+        } as never);
+
+        await addScanFolder();
+
+        expect(await screen.findByText('Done: 1 added, 1 failed')).toBeInTheDocument();
+        expect(mockedApi.listDocuments).toHaveBeenCalled();
+    });
+
+    it("says how many of a folder's images were left out", async () => {
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 0, skipped_images: 2, errors: [], documents: [DOC],
+        } as never);
+
+        await addScanFolder();
+
+        expect(await screen.findByText(
+            'Added 1 file Left out 2 images: add them one at a time and GAIA will read them.',
+        )).toBeInTheDocument();
     });
 });

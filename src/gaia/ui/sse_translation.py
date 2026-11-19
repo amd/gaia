@@ -124,6 +124,8 @@ SUMMARY_VIEW_KEYS = (
     "needs_model",
     # Set on a "denied" call nobody answered, so it isn't shown as the user's no.
     "timed_out",
+    # "agent" on a "denied" call GAIA turned down itself, with no prompt shown.
+    "declined_by",
     # False on a call refused before it ran, so a relayed refusal contacted nothing.
     "executed",
     "summary_truncated",
@@ -178,7 +180,7 @@ class CanonicalTranslator:
     Args:
         run_id: The host-minted run handle, echoed on pause events.
         agent_id: Agent this run belongs to. Drives ``respond_url`` — the reason
-            this is a parameter and not a constant: a hardcoded ``/v1/email/...``
+            this is a parameter and not a constant: a hardcoded ``/v1/<agent>/...``
             silently points every other agent's client at the wrong sidecar.
         action_labels: ``tool name -> human headline`` for confirmation prompts.
         summary_renderer: ``(tool, args) -> str`` override for the whole
@@ -675,6 +677,14 @@ class CanonicalTranslator:
         # control channel, not this event stream.
         return []
 
+    def _on_context_usage(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Pass a live measurement through unchanged (contract 2.28).
+
+        Its shape is the same ``context_usage`` an in-process turn streams, so
+        the composer updates during the turn instead of waiting for ``final``.
+        """
+        return [dict(event)]
+
     # -- confirmation summary ----------------------------------------------
 
     def _render_args_summary(self, tool: str, args: Dict[str, Any]) -> str:
@@ -730,6 +740,7 @@ class CanonicalTranslator:
         "tool_confirm_denied": _on_tool_confirm_denied,
         "agent_created": _on_agent_created,
         "skill_use": _on_skill_use,
+        "context_usage": _on_context_usage,
         # tool_args is handled before dispatch (merges into the pending tool_call).
     }
 
