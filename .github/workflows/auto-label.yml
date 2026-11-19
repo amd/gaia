@@ -33,7 +33,10 @@ jobs:
         env:
           MAX_WAIT: 120
         run: &backoff |
-          core=$(gh api rate_limit --jq '.resources.core | "\(.remaining) \(.reset)"')
+          if ! core=$(gh api rate_limit --jq '.resources.core | "\(.remaining) \(.reset)"'); then
+            echo "::warning::Could not read the rate limit, so retrying after the fixed backoff."
+            core="-1 $(date +%s)"
+          fi
           read -r remaining reset <<<"$core"
           wait=30
           if [ "$remaining" -eq 0 ]; then
@@ -67,10 +70,11 @@ jobs:
       - name: Report labeler failure
         if: steps.attempt3.outcome == 'failure'
         run: |
-          remaining=$(gh api rate_limit --jq '.resources.core.remaining')
-          if [ "$remaining" -eq 0 ]; then
+          if ! remaining=$(gh api rate_limit --jq '.resources.core.remaining'); then
+            echo "::error title=Auto label::actions/labeler failed 3 times and the rate-limit lookup failed too, so the cause is unknown. Re-run the job; if it fails again, check .github/labeler.yml and the attempt logs above."
+          elif [ "$remaining" -eq 0 ]; then
             echo "::error title=Auto label (infrastructure)::The repo's GitHub API rate limit is spent, so the labeler never ran. This says nothing about the PR. Re-run the job once the limit resets."
           else
-            echo "::error title=Auto label::actions/labeler failed 3 times with $remaining API calls left, so this is not the rate limit. Check .github/labeler.yml and the attempt logs above."
+            echo "::error title=Auto label::actions/labeler failed 3 times with $remaining core API calls left. A secondary rate limit or an error in .github/labeler.yml can cause this; the attempt logs above say which."
           fi
           exit 1

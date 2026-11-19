@@ -62,7 +62,7 @@ def test_final_failure_is_reported_and_fails_the_job(steps):
     assert "exit 1" in report["run"]
 
 
-def _fake_bin(tmp_path: Path, remaining: int, reset: int) -> dict:
+def _fake_bin(tmp_path: Path, remaining: int, reset: int, gh_fails=False) -> dict:
     bindir = tmp_path / "bin"
     bindir.mkdir()
     log = tmp_path / "slept"
@@ -70,7 +70,8 @@ def _fake_bin(tmp_path: Path, remaining: int, reset: int) -> dict:
         # Emits what `--jq` would for the query the step asked for.
         "gh": (
             "#!/usr/bin/env bash\n"
-            'case "$*" in\n'
+            + ('echo "API rate limit exceeded" >&2; exit 1\n' if gh_fails else "")
+            + 'case "$*" in\n'
             f'  *remaining*reset*) echo "{remaining} {reset}" ;;\n'
             f"  *remaining*) echo {remaining} ;;\n"
             "  *) exit 2 ;;\n"
@@ -136,3 +137,21 @@ def test_report_names_the_rate_limit_only_when_it_is_spent(
     assert f"::error title={title}" in proc.stdout
     if remaining:
         assert "infrastructure" not in proc.stdout
+
+
+@needs_bash
+def test_a_failed_rate_limit_lookup_still_backs_off_and_retries(steps, tmp_path):
+    backoff = next(s for s in steps if "sleep" in s.get("run", ""))
+    fake = _fake_bin(tmp_path, 0, int(time.time()) + 60, gh_fails=True)
+    proc = _run(backoff["run"], fake["env"], MAX_WAIT="600")
+    assert proc.returncode == 0, proc.stderr
+    assert int(fake["log"].read_text().strip()) == 30
+
+
+@needs_bash
+def test_a_failed_rate_limit_lookup_still_fails_the_job_loudly(steps, tmp_path):
+    fake = _fake_bin(tmp_path, 0, int(time.time()) + 60, gh_fails=True)
+    proc = _run(steps[-1]["run"], fake["env"])
+    assert proc.returncode == 1
+    assert "::error title=Auto label::" in proc.stdout
+    assert "cause is unknown" in proc.stdout
