@@ -56,6 +56,15 @@ BURST_MIN_BUCKET = 3
 BURST_MEDIAN_FACTOR = 3.0
 BURST_SIGMAS = 6.0
 ENTITY_SHARE_WARN = 0.30
+#: Above this share of all entities a list is not "the anomalous ones": a
+#: criterion that matches this many describes normal operation.
+ENTITY_SHARE_IMPLAUSIBLE = 1 / 3
+#: Shares are not judged on fewer entities than this.
+ENTITY_SHARE_MIN_TOTAL = 20
+#: A share is of a known population only when routine templates name at
+#: least this share of the entities; ids seen only in anomaly lines are all
+#: flagged by construction.
+ENTITY_BASELINE_MIN_SHARE = 0.05
 #: Below this share of parsed lines a file's format was probably misread.
 MIN_PARSED_SHARE = 0.95
 ENTITY_TEMPLATE_SHARE_DROP = 0.50

@@ -27,6 +27,7 @@ from .analysis import (
 )
 from .limits import (
     DEFAULT_TOP_N,
+    ENTITY_SHARE_IMPLAUSIBLE,
     MAX_FILES,
     MAX_HOSTS_PER_TEMPLATE,
     MAX_HOSTS_TOTAL,
@@ -656,6 +657,12 @@ class TriageResult:
         result: Dict[str, Any] = {
             "status": "success",
             "headline": self._headline(),
+            # Not cut to the warning length: this one changes what to deliver.
+            **(
+                {"entity_list_warning": self.entities["implausible"]}
+                if self.entities["implausible"]
+                else {}
+            ),
             "coverage": {
                 "files": files[:OUT_FILES],
                 "files_total": len(files),
@@ -710,34 +717,92 @@ class TriageResult:
                     "files_without_timestamps",
                 )
             },
-            "warnings": [
-                _short(w, OUT_WARNING_CHARS) for w in self.warnings[:OUT_WARNINGS]
-            ],
+            "warnings": [_short(w, OUT_WARNING_CHARS) for w in self._warnings_view()],
         }
         if len(self.warnings) > OUT_WARNINGS:
             result["warnings"].append(
                 f"... {len(self.warnings) - OUT_WARNINGS} more warnings in the full output."
             )
+        step = self.next_step()
+        if step:
+            result["next_step"] = step
+        return result
+
+    def _warnings_view(self) -> List[str]:
+        """The warnings the compact result shows: the entity ones are never cut off."""
+        first = [w for w in self.entities["warnings"] if w in self.warnings]
+        rest = [w for w in self.warnings if w not in first]
+        return (first + rest)[:OUT_WARNINGS]
+
+    def _context_step(self) -> Optional[str]:
+        """Which lines to read next, to see what led up to the finding."""
         if self.bursts and self.bursts[0]["start_loc"]:
             first = self.loc(self.bursts[0]["start_loc"])
-            result["next_step"] = (
+            return (
                 f"read_file the lines before {first['file']}:{first['line']} (start_line="
                 f"{max(1, first['line'] - 30)}) to see what led up to the first burst."
             )
-        elif self.anomalies and self.anomalies[0].first_loc:
+        if self.anomalies and self.anomalies[0].first_loc:
             first = self.loc(self.anomalies[0].first_loc)
-            result["next_step"] = (
-                f"read_file around {first['file']}:{first['line']} to see the context of {self.anomalies[0].tid}."
-            )
-        elif self.persistent and self.persistent[0].first_loc:
+            return f"read_file around {first['file']}:{first['line']} to see the context of {self.anomalies[0].tid}."
+        if self.persistent and self.persistent[0].first_loc:
             first = self.loc(self.persistent[0].first_loc)
-            result["next_step"] = (
+            return (
                 f"{self.persistent[0].tid} is {PERSISTENT_READING}. read_file around "
                 f"{first['file']}:{first['line']}, then say which reading the evidence "
                 "supports; if the log cannot tell, ask the user whether these errors "
                 "are expected."
             )
-        return result
+        return None
+
+    def _entity_step(self, output: Optional[Dict[str, Any]]) -> Optional[str]:
+        """What to do about the anomalous-entity list: never rebuild it by hand."""
+        ent = self.entities
+        count, total = len(ent["flagged"]), ent["total"]
+        if not count:
+            return None
+        listed = bool(output and output.get("written") and "flagged" in output)
+        if ent["implausible"]:
+            return (
+                f"The entity list holds {count} of {total} entities ({ent['share']:.0%}): "
+                "too many to be the anomalous ones"
+                + (f", so {output['path']} is not a deliverable yet" if listed else "")
+                + ". Do not deliver it and do not recompute it with your own script. "
+                f"Call again with entity_max_share={ENTITY_SHARE_IMPLAUSIBLE:.2f} or "
+                'entity_min_level="ERROR" and a new output_path, or report the share '
+                "itself as the finding."
+            )
+        if listed:
+            return (
+                f"{output['path']} is the anomalous-entity list ({count} of {total} "
+                f"entities, {ent['share']:.1%}), with the evidence for each id: give "
+                "that file to the user as the list, or filter its rows. Do not "
+                "recompute the list with your own script."
+            )
+        where = (
+            "entities.list is the complete list"
+            if count <= OUT_ENTITY_LIST
+            else "entities.sample is only a sample"
+        )
+        return (
+            f"{count} of {total} entities ({ent['share']:.1%}) are flagged; {where}. "
+            "If the user wants the list as a file, call again with output_path="
+            "'<new file>.csv' and deliver that file. Do not rebuild the list with "
+            "your own script."
+        )
+
+    def next_step(self, output: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        """What the caller should do next, given the file this call wrote (if any).
+
+        The entity list comes first when a file was written or the list is
+        implausible: that is the part a caller otherwise redoes by hand.
+        """
+        context, entity = self._context_step(), self._entity_step(output)
+        entity_first = bool(
+            entity and (self.entities["implausible"] or (output or {}).get("written"))
+        )
+        parts = [entity, context] if entity_first else [context, entity]
+        return " ".join(p for p in parts if p) or None
 
     def _entities_view(self) -> Dict[str, Any]:
         """The ready anomalous-entity list, with how it was built."""
@@ -750,8 +815,18 @@ class TriageResult:
             "total": ent["total"],
             "flagged": len(flagged),
             "share": round(ent["share"], 4),
+            "plausible": not ent["implausible"],
             "by_template": ent["per_template"],
         }
+        if flagged and not ent["population_known"]:
+            view["share_note"] = (
+                "ids of this kind appear almost only in anomaly templates, so the "
+                "share is of the ids the anomalies name, not of a known population."
+            )
+        if ent["broadest"]:
+            view["broadest_template"] = ent["broadest"]
+        if ent["filters"]:
+            view["filters"] = ent["filters"]
         if ent["narrowed"]:
             view["narrowed"] = ent["narrowed"]
         if len(flagged) <= OUT_ENTITY_LIST:
@@ -817,13 +892,35 @@ class TriageResult:
                     if k not in ("list", "sample", "full_list")
                 },
                 "list": [
-                    {"entity": e, "kind": v["kind"], "templates": v["templates"]}
+                    {"entity": e, **self._evidence(v)}
                     for e, v in sorted(self.entities["flagged"].items())
                 ],
             },
             "levels": dict(self.an.level_totals),
             "checks": self.checks,
             "warnings": self.warnings,
+        }
+
+    def _evidence(self, v: Dict[str, Any]) -> Dict[str, Any]:
+        """Why one entity is on the list: enough to filter the list without the logs."""
+        return {
+            "kind": v["kind"],
+            "templates": v["templates"],
+            "severity": SEVERITY_NAMES[v["sev"]],
+            "seen_from": self.ts(v["first"]),
+            "seen_to": self.ts(v["last"]),
+            "also_in_routine": v["routine"],
+            "template_share": round(v["reach"], 4),
+        }
+
+    def _list_summary(self) -> Dict[str, Any]:
+        """How many entities a written list holds, out of how many."""
+        ent = self.entities
+        return {
+            "flagged": len(ent["flagged"]),
+            "total": ent["total"],
+            "share": round(ent["share"], 4),
+            "plausible": not ent["implausible"],
         }
 
     def write(self, path: Path) -> Dict[str, Any]:
@@ -838,6 +935,7 @@ class TriageResult:
                 "path": str(path),
                 "rows": len(self.entities["flagged"]),
                 "kind": "entity list (one per line after a '#' comment line)",
+                **self._list_summary(),
             }
         if path.suffix.lower() == ".csv":
             with skill_context.open_write(path, "x", newline="") as f:
@@ -848,6 +946,11 @@ class TriageResult:
                         "kind",
                         "templates",
                         "template_text",
+                        "severity",
+                        "seen_from",
+                        "seen_to",
+                        "also_in_routine",
+                        "template_share",
                         "generator=" + OUTPUT_MARKER,
                     ]
                 )
@@ -856,11 +959,33 @@ class TriageResult:
                     texts = " || ".join(
                         _short(by_id[i].key, 120) for i in v["templates"] if i in by_id
                     )
-                    writer.writerow([e, v["kind"], " ".join(v["templates"]), texts, ""])
+                    ev = self._evidence(v)
+                    writer.writerow(
+                        [
+                            e,
+                            v["kind"],
+                            " ".join(v["templates"]),
+                            texts,
+                            ev["severity"],
+                            ev["seen_from"] or "",
+                            ev["seen_to"] or "",
+                            "yes" if ev["also_in_routine"] else "no",
+                            ev["template_share"],
+                            "",
+                        ]
+                    )
             return {
                 "path": str(path),
                 "rows": len(self.entities["flagged"]),
                 "kind": "entity list (CSV)",
+                "columns": (
+                    "entity, kind, templates and template_text (the anomaly "
+                    "templates that name it), severity (the worst of them), "
+                    "seen_from / seen_to (time buckets), also_in_routine (yes when "
+                    "routine templates name it too), template_share (share of all "
+                    "entities its rarest template touches)"
+                ),
+                **self._list_summary(),
             }
         payload = self.full()
         with skill_context.open_write(path, "x") as f:
@@ -868,7 +993,8 @@ class TriageResult:
         return {
             "path": str(path),
             "templates": len(payload["templates"]),
-            "kind": "full detail (JSON)",
+            "kind": "full detail (JSON); the entity list with its evidence is entities.list",
+            **self._list_summary(),
         }
 
 

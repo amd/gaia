@@ -2,13 +2,13 @@
 name: log-triage
 description: Find what actually went wrong in log files. Use when the user asks for a root cause, an incident summary, anomalies, errors, failures or "what happened" in system, application, server, cluster, device or audit logs. Its triage_logs tool reads every file over its full range, keeps steady baseline noise apart from anomalies, finds bursts with exact first and last timestamps, and lists the hosts and ids an incident hit.
 license: MIT
-version: 1.1.0
+version: 1.2.0
 metadata:
   gaia:
     security_tier: community
     tools:
       - name: triage_logs
-        description: Parse, template and rank log files; return anomalies, bursts, baseline, coverage, entities and checks.
+        description: Parse, template and rank log files; return anomalies, bursts, baseline, coverage, entities and checks, and write the anomalous-entity list with its evidence to output_path.
         parameters:
           paths:
             type: array
@@ -45,6 +45,14 @@ metadata:
             type: string
             required: false
             default: ""
+          entity_min_level:
+            type: string
+            required: false
+            default: ""
+          entity_max_share:
+            type: number
+            required: false
+            default: 0.0
         returns:
           type: object
     tools_required:
@@ -77,8 +85,14 @@ incident.
   A list of failed requests, sessions or jobs is `entities.list`. When the
   user wants a list file, pass `output_path` on the first call (a new `.csv`
   or `.txt`, outside the log folder or under a name of its own), so the logs
-  are read once. `status: partial` means the file was not written: say so,
-  with the `error`. Say how many were flagged out of `total`.
+  are read once; `output` returns the path, the count and the `share` of all
+  entities. `status: partial` means the file was not written: say so, with
+  the `error`. Say how many were flagged out of `total`.
+- **A list of most entities is not an anomaly list.** When
+  `entity_list_warning` is present (over a third flagged), do not deliver the
+  list: call again with `entity_max_share=0.33` (templates rare relative to
+  all entities) or `entity_min_level="ERROR"` (error-bearing templates only),
+  or report the share itself as the finding.
 - **Baseline is not the incident, unless it is the whole log.** Report
   `baseline` templates once as background, never in an anomaly total. Steady
   ERROR or FATAL templates in `persistent_errors` are either routine or an

@@ -849,6 +849,155 @@ def test_a_list_that_is_mostly_baseline_says_so(tmp_path):
     res = _lease_log(tmp_path, narrow=False)
     assert len(res.entities["flagged"]) == 200
     assert any("small minority" in w for w in res.warnings)
+    assert res.entities["implausible"], "200 of 300 is over a third"
+
+
+def _mostly_flagged_log(tmp_path) -> Path:
+    """300 jobs: a short WARN template names 200 of them and nothing else does,
+    a short FATAL template names 6 more, and 94 only ever open routinely."""
+    lines = [
+        f"{_iso(T0 + i * 60)} h-{i % 4} INFO heartbeat ok seq {i}" for i in range(360)
+    ]
+    lines += [
+        f"{_iso(T0 + i * 200)} h-{i % 4} INFO opened job-{206 + i}" for i in range(94)
+    ]
+    burst_t = T0 + 200 * 60
+    lines += [
+        f"{_iso(burst_t + i * 0.5)} h-{i % 4} WARN job-{i} lost lease, retrying"
+        for i in range(200)
+    ]
+    lines += [
+        f"{_iso(burst_t + 30 + i)} h-1 FATAL job-{200 + i} corrupted checkpoint"
+        for i in range(6)
+    ]
+    lines.sort()
+    return _write(tmp_path / "a.log", lines)
+
+
+def test_a_list_of_most_entities_is_reported_as_implausible(tmp_path):
+    """Two thirds flagged is not an anomaly list, even when no routine line
+    names those ids: the result must say so where it cannot be missed."""
+    path = _mostly_flagged_log(tmp_path)
+    out = _call(paths=[str(path)], output_path=str(tmp_path / "ids.csv"))
+    ent = out["entities"]
+    assert (ent["flagged"], ent["total"]) == (206, 300)
+    assert ent["plausible"] is False
+    warning = out["entity_list_warning"]
+    assert warning.startswith("IMPLAUSIBLE ENTITY LIST: 206 of 300 entities (69%)")
+    assert "not an anomaly criterion" in warning
+    assert "entity_max_share=0.33" in warning and 'entity_min_level="ERROR"' in warning
+    # The broadest template is named, and the warning leads the list.
+    assert ent["broadest_template"]["entities"] == 200
+    assert ent["broadest_template"]["id"] in warning
+    assert out["warnings"][0].startswith("IMPLAUSIBLE ENTITY LIST")
+    # The file the caller asked for exists, but is not presented as the answer.
+    assert out["output"]["written"] and out["output"]["plausible"] is False
+    assert out["output"]["share"] == ent["share"] == round(206 / 300, 4)
+    step = out["next_step"]
+    assert step.startswith("The entity list holds 206 of 300 entities (69%)")
+    assert "do not recompute it with your own script" in step
+    assert "entity_max_share=0.33" in step
+
+
+@pytest.mark.parametrize(
+    "tighten", [{"entity_min_level": "error"}, {"entity_max_share": 0.33}]
+)
+def test_either_tightening_argument_leaves_the_rare_severe_ids(tmp_path, tighten):
+    path = _mostly_flagged_log(tmp_path)
+    out = _call(paths=[str(path)], **tighten)
+    ent = out["entities"]
+    assert ent["list"] == sorted(f"job-{200 + i}" for i in range(6))
+    assert ent["plausible"] is True and "entity_list_warning" not in out
+    ((name, used),) = ent["filters"].items()
+    assert name in tighten and len(used["templates_left_out"]) == 1
+
+
+@pytest.mark.parametrize(
+    "bad,needle",
+    [
+        ({"entity_min_level": "loud"}, "entity_min_level 'loud' is not a level"),
+        ({"entity_max_share": 33}, "entity_max_share 33 is not a share"),
+        ({"entity_max_share": -0.1}, "entity_max_share -0.1 is not a share"),
+    ],
+)
+def test_a_tightening_argument_that_means_nothing_is_an_error(tmp_path, bad, needle):
+    path = _steady(tmp_path / "a.log", hours=1)
+    out = _call(paths=[str(path)], **bad)
+    assert out["status"] == "error" and needle in out["error"]
+
+
+def _short_fault_log(tmp_path) -> Path:
+    t = T0 + 3 * 3600
+    extra = [
+        (t + k, f"{_iso(t + k)} app-01 FATAL raid array degraded on sess-{k:03d}a")
+        for k in range(30)
+    ]
+    return _steady(tmp_path / "a.log", extra=extra)
+
+
+def test_the_written_list_carries_the_evidence_and_is_the_deliverable(tmp_path):
+    import csv
+
+    _short_fault_log(tmp_path)
+    target = tmp_path / "out" / "ids.csv"
+    out = _call(paths=[str(tmp_path / "a.log")], output_path=str(target))
+    output, ent = out["output"], out["entities"]
+    assert output["written"] and output["path"] == str(target)
+    assert (output["flagged"], output["total"]) == (30, ent["total"])
+    assert output["share"] == ent["share"] and output["plausible"] is True
+    # Session ids occur only in the fault's own lines, so all of them are
+    # flagged by construction: that is said, and it is not called implausible.
+    assert ent["share"] == 1.0 and "not of a known population" in ent["share_note"]
+    assert "entity_list_warning" not in out
+    with open(target, encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert [r["entity"] for r in rows] == sorted(f"sess-{k:03d}a" for k in range(30))
+    t = T0 + 3 * 3600
+    for row in rows:
+        assert row["severity"] == "FATAL" and row["also_in_routine"] == "no"
+        assert row["templates"] and "raid array degraded" in row["template_text"]
+        assert float(row["template_share"]) == round(30 / ent["total"], 4)
+        seen_from, seen_to = (
+            datetime.fromisoformat(row[c].replace("Z", "+00:00"))
+            .replace(tzinfo=timezone.utc)
+            .timestamp()
+            for c in ("seen_from", "seen_to")
+        )
+        assert seen_from <= t + 30 and seen_to >= t and seen_to > seen_from
+    # next_step hands the file over instead of leaving the caller to rebuild it.
+    assert out["next_step"].startswith(f"{target} is the anomalous-entity list (30 of")
+    assert "Do not recompute the list with your own script" in out["next_step"]
+    assert "read_file" in out["next_step"], "the context step is still there"
+
+
+def test_the_json_output_lists_each_entity_with_its_evidence(tmp_path):
+    _short_fault_log(tmp_path)
+    target = tmp_path / "t.json"
+    out = _call(paths=[str(tmp_path / "a.log")], output_path=str(target))
+    assert out["output"]["flagged"] == 30
+    listed = json.loads(target.read_text(encoding="utf-8"))["entities"]["list"]
+    assert len(listed) == 30
+    assert listed[0]["severity"] == "FATAL" and listed[0]["also_in_routine"] is False
+    assert listed[0]["seen_from"] and listed[0]["template_share"] > 0
+
+
+def test_without_an_output_path_next_step_names_the_way_to_the_file(tmp_path):
+    _short_fault_log(tmp_path)
+    out = _call(paths=[str(tmp_path / "a.log")])
+    assert "output" not in out
+    step = out["next_step"]
+    assert "entities.list is the complete list" in step
+    assert "output_path='<new file>.csv'" in step
+    assert "Do not rebuild the list with your own script" in step
+
+
+def test_the_tool_description_carries_the_list_rules():
+    """The model reads the description on every call; SKILL.md only once."""
+    from gaia.agents.base.tools import _schema_description
+
+    text = " ".join(_schema_description(lt.triage_logs.__doc__).split())
+    assert "never rebuild the list with your own script" in text
+    assert "output_path" in text and "more than a third" in text
 
 
 def test_bytes_that_do_not_decode_are_counted_and_reported(tmp_path):

@@ -214,8 +214,11 @@ templates, keeps steady baseline templates apart from anomalies, reports errors
 that last the whole log as persistent, finds bursts with exact first and last
 timestamps, compares each burst with the quiet window before it,
 measures clock offsets between files, and lists the hosts and ids an anomaly
-hit. The model then reads around the first burst line and writes a blameless
-postmortem.
+hit. With `output_path` it writes that list itself, one row per id with its
+evidence, and returns the path, the count and the share of all entities; a
+list that holds more than a third of them is reported as implausible, with
+the two arguments that tighten it. The model then reads around the first
+burst line and writes a blameless postmortem.
 
 - **Demonstrates** — a skill shipping a deterministic tool for work small models
   do unreliably from instructions, reading the user's files only through
@@ -223,7 +226,8 @@ postmortem.
 - **Provides** — `triage_logs`. **Consumes** — `list_files`, `read_file`, and
   `run_python` for the manual fallback.
 - **Configure** — one or more log files or folders; `timestamp_regex`,
-  `host_regex` and `entity_regex` when a format is unusual.
+  `host_regex` and `entity_regex` when a format is unusual; `entity_max_share`
+  and `entity_min_level` when the entity list is too broad.
 
 ### meeting-actions
 
