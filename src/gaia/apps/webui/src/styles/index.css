@@ -191,6 +191,7 @@
     --duration: 200ms;        /* rows, popovers, toasts */
     --duration-slow: 320ms;   /* panels and height changes */
     --duration-spring: 440ms; /* step done, needs you, an answer arriving */
+    --duration-wash: 900ms;   /* the highlight on something new, fading */
     --duration-press: 80ms;   /* a press settles faster than it rose */
     --duration-spin: 900ms;   /* one spinner turn */
     --duration-blink: 1s;
