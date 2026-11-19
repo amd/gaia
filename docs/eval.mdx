@@ -623,7 +623,7 @@ After a run, results are written to `eval/results/<run_id>/`:
 ```
 
 <Tip>
-  Use `--category` to limit CI costs. The `rag_quality` and `context_retention` categories cover the highest-impact tests and typically complete in under 10 minutes.
+  Use `--category` to limit CI costs. The `rag_quality` and `context_retention` categories cover the highest-impact tests and take roughly 75 -- 110 minutes together, since scenarios run one at a time (see [Typical Costs](/guides/eval-ci#typical-costs)).
 </Tip>
 
 The benchmark includes a GitHub Actions workflow at `.github/workflows/test_eval.yml` that runs structural validation (scenario YAML parsing, manifest integrity, scorecard generation) on every push to `main` or PR targeting `main`. Full LLM-driven eval runs are triggered via `workflow_dispatch` or scheduled separately.

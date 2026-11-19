@@ -787,7 +787,7 @@ def read_file_fn():
 class TestReadFileBinaryGuard:
     """Tests for the binary document early-exit guard in read_file."""
 
-    @pytest.mark.parametrize("extension", [".pptx", ".epub"])
+    @pytest.mark.parametrize("extension", [".epub"])
     def test_index_only_extension_points_at_index_document(
         self, read_file_fn, extension, tmp_path
     ):

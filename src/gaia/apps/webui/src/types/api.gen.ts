@@ -40,11 +40,13 @@ export interface ApiSchemas {
   DiscordStartRequest: DiscordStartRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
+  DismissDownloadRequest: DismissDownloadRequest;
   DocumentListResponse: DocumentListResponse;
   DocumentResponse: DocumentResponse;
   DocumentUploadRequest: DocumentUploadRequest;
   DownloadProgress: DownloadProgress;
   EditScheduleRequest: EditScheduleRequest;
+  EmbedderBody: EmbedderBody;
   EvalMailboxRequest: EvalMailboxRequest;
   FileEntry: FileEntry;
   FileListResponse: FileListResponse;
@@ -561,6 +563,9 @@ export interface DiscoveryCommitItem {
   entity?: string | null;
   sensitive?: boolean;
 }
+export interface DismissDownloadRequest {
+  model_name: string;
+}
 /**
  * List of documents.
  */
@@ -632,6 +637,12 @@ export interface EditScheduleRequest {
    * IANA time zone the schedule's times are in. Defaults to the server machine's zone.
    */
   timezone?: string | null;
+}
+/**
+ * ``npu`` or ``gpu``; None is the default (the GPU).
+ */
+export interface EmbedderBody {
+  device?: ("npu" | "gpu") | null;
 }
 export interface EvalMailboxRequest {
   attached: boolean;

@@ -681,6 +681,27 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     **Response (400):** the model cannot be pulled — it is hosted on a gateway (no weights to download), it is a `user.` model GAIA has no checkpoint and recipe for and Lemonade doesn't list either, or Lemonade's model list couldn't be read to check such a model (`detail` asks the user to try again). A `user.` model Lemonade already lists is pulled by name instead. `detail` says which case applies, and for an unknown model tells the user to add it from its Hugging Face link: **Settings > Model > Add a model from Hugging Face** in the Agent UI, or `/provider` → **Local** → `ctrl+a` in the terminal app. The Agent UI shows `detail` next to the Download button that was pressed.
   </Accordion>
 
+  <Accordion title="POST /api/system/download-progress/dismiss">
+    Forget a failed download, so its warning stays gone after a reload. `GET /api/system/status` reports a failed pull in `download_progress` and keeps reporting it until that model is pulled again; this route clears that one entry. Only a failed entry for the named model is removed: an active download of the same model, and every other model's entry, are left alone.
+
+    **Request:**
+    ```json
+    {
+      "model_name": "Qwen3.6-35B-A3B-GGUF"
+    }
+    ```
+
+    **Response (200):** `status` is `dismissed` when an entry was removed and `unchanged` when there was no failed entry to remove.
+    ```json
+    {
+      "status": "dismissed",
+      "model": "Qwen3.6-35B-A3B-GGUF"
+    }
+    ```
+
+    **Response (400):** `model_name` is empty. The Agent UI's download chip and its connection banner both call this route, so a dismissed failure does not return on the next status poll.
+  </Accordion>
+
   <Accordion title="GET /api/system/work-in-progress">
     Answers still being written and documents still being indexed. The desktop app reads it when you quit, to warn that the work would be lost; nothing polls it.
 
@@ -1581,7 +1602,7 @@ of that router's connector types.
 ### Session environment, outputs and agent info
 
 What one chat may reach, what it produced, and which tools and skills its agent
-has, behind the session panel's Folders and access, Outputs, Skills and Agent info sections. Folder and internet changes are stored with
+has, behind the session panel's Environment, Outputs, Skills and Agent info sections. Folder and internet changes are stored with
 the chat, applied to its agent before every turn, and applied to a running
 agent at once, so they take effect on its next step.
 
@@ -2274,6 +2295,26 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
     system-context refresh.
   </Accordion>
 
+  <Accordion title="GET /api/memory/embedder">
+    Where every chat embeds documents and memory: `device` (`gpu`, or `npu`
+    from a choice saved before it was withdrawn), `chosen` (true when the user
+    picked it), `default_device` (`gpu`), and `options`, one per device with
+    its `model`, `display_name`, `proven` (false for a device GAIA hasn't
+    proven, which can't be chosen), `available` and `reason` (null while the
+    model server is starting) and `downloaded`.
+  </Accordion>
+
+  <Accordion title="PUT /api/memory/embedder">
+    Body `{"device": "gpu" | null}`; `null` is the default, the GPU.
+    Saves `embedding_device` in `~/.gaia/config.json`. Each open chat moves to
+    the new embedder with its next message, keeping its conversation and loaded
+    skills. Stored memory is re-embedded as chats use it, or at once with
+    `POST /api/memory/rebuild-embeddings`. Returns the view above plus
+    `changed`, false when the embedder stayed the same. **409** while a reply
+    runs, for `npu` (not proven), or for a device this PC's hardware can't run; **503** while the model
+    server is starting.
+  </Accordion>
+
   <Accordion title="POST /api/memory/admin/clear">
     **Eval-only**, gated by `GAIA_MEMORY_ADMIN=1` (403 otherwise). Wipes
     memory for a scenario reset — `scope` is `all` / `knowledge` /
@@ -2753,7 +2794,8 @@ plan and make one set of choices.
     `npu` says whether this PC has an NPU (`present`), whether a model can run
     on it now (`ready`), and what stops it (`problems`, each `code`, `title`,
     `fix` and `params`); while it isn't ready, the NPU model's `fit_code` is
-    `npu`. `gaia init --plan --json` prints the same object; its
+    `npu`. `npu` is null when the PC's capacity couldn't be read: unchecked,
+    not "no NPU". `gaia init --plan --json` prints the same object; its
     [CLI reference](/reference/cli#choosing-models) lists every field.
   </Accordion>
 

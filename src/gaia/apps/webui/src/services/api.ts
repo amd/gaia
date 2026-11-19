@@ -287,6 +287,15 @@ export async function downloadModel(
     });
 }
 
+/** Forget a failed download on the server, so it stays dismissed after a reload. */
+export async function dismissDownloadFailure(
+    modelName: string,
+): Promise<{ status: string; model: string }> {
+    return apiFetch('POST', '/system/download-progress/dismiss', {
+        model_name: modelName,
+    });
+}
+
 // -- Agents --------------------------------------------------------------------
 
 export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number }> {

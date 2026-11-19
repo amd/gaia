@@ -20,12 +20,16 @@ from gaia.agents.base.file_snapshots import before_change
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.document_text import (
+    HTML_PAGES,
+    DocumentTooLong,
     cached_document_text,
     document_type,
     index_only_error,
     read_budget,
     read_document,
+    read_html_text,
     text_page_notes,
+    too_long_error,
     with_small_limit_warning,
 )
 from gaia.agents.tools.edit_impact import edit_impact
@@ -280,9 +284,12 @@ TAIL_LINES = 50
 def _line_window(
     lines: list, start_line: Optional[int], end_line: Optional[int], max_chars: int
 ) -> Dict[str, Any]:
-    """Lines *start_line*..*end_line* (1-based, inclusive), numbered like ``cat -n``."""
+    """Lines *start_line*..*end_line* (1-based, inclusive), numbered like ``cat -n``.
+
+    A *start_line* of 0 is the first line: counting from 0 is an easy slip.
+    """
     total = len(lines)
-    start = 1 if start_line is None else start_line
+    start = 1 if not start_line else start_line
     if start < 1:
         return {"error": "start_line is 1-based: the first line is 1."}
     if total == 0:
@@ -327,6 +334,16 @@ def _line_window(
     return window
 
 
+def _written_this_turn(host: Any, file_path: str) -> bool:
+    """True when this turn wrote *file_path*: a read of it is a read-back."""
+    evidence = getattr(host, "_completion_evidence", None)
+    files = getattr(evidence, "files", None) or {}
+    if not files:
+        return False
+    item = files.get(evidence.key(file_path))
+    return item is not None and bool(item.written)
+
+
 def _outlined_if_oversized(host: Any, result: Dict[str, Any]) -> Optional[Dict]:
     """A whole-file read too large for one tool result, as an outline plus its head.
 
@@ -340,12 +357,8 @@ def _outlined_if_oversized(host: Any, result: Dict[str, Any]) -> Optional[Dict]:
     if len(json.dumps(result, ensure_ascii=False, default=str)) <= threshold:
         return None
     # A file this turn wrote keeps the archived form: its pages prove a read-back.
-    evidence = getattr(host, "_completion_evidence", None)
-    files = getattr(evidence, "files", None) or {}
-    if files:
-        item = files.get(evidence.key(result["file_path"]))
-        if item is not None and item.written:
-            return None
+    if _written_this_turn(host, result["file_path"]):
+        return None
     content = result["content"]
     lines = content.splitlines()
     outline = render_outline(
@@ -473,7 +486,7 @@ class FileIOToolsMixin:
             "==== READING DOCUMENTS ====\n"
             "To review, compare, reconcile, audit or summarise a few documents, "
             "read each one in full with read_file instead of indexing it — it "
-            "returns the text of .docx, .pdf and .xlsx files, in parts when long "
+            "returns the text of .docx, .pdf, .xlsx and .pptx files, in parts when long "
             "(continue at next_offset until it is null). Retrieved snippets miss "
             "what no query asked for, such as a date that differs between two "
             "documents. For these tasks this replaces the index-then-query "
@@ -496,12 +509,14 @@ class FileIOToolsMixin:
             limit: Optional[int] = None,
             start_line: Optional[int] = None,
             end_line: Optional[int] = None,
+            raw: bool = False,
         ) -> Dict[str, Any]:
             """Read any file, analyzed by type.
 
             - Python (.py): syntax validation + functions/classes
-            - Word (.docx), PDF and Excel (.xlsx): extracted text, in parts when
-              long; continue at next_offset until it is null
+            - Word (.docx), PDF, Excel (.xlsx), PowerPoint (.pptx): extracted
+              text, in parts when long; continue at next_offset until it is null
+            - HTML: the page's text, without markup
             - Other text files: raw content
 
             Read the part you need with start_line/end_line, e.g. the line a
@@ -510,9 +525,10 @@ class FileIOToolsMixin:
             Args:
                 file_path: Path to the file to read
                 offset: Zero-based character offset for a bounded text page.
-                limit: Page size in characters, not lines (1..8000 for text files); omitted preserves full analysis. For lines use start_line/end_line.
+                limit: Page size in characters (1..8000 for text files); omitted preserves full analysis. With start_line: how many lines.
                 start_line: First line to return (1-based); the result is line-numbered.
                 end_line: Last line to return, inclusive (at most 400 lines per read).
+                raw: True returns an HTML file's markup instead of its text.
 
             Returns:
                 Dictionary with file content and type-specific metadata
@@ -534,7 +550,7 @@ class FileIOToolsMixin:
                 if locked:
                     return locked
 
-                unreadable = index_only_error(file_path)
+                unreadable = index_only_error(file_path, self)
                 if unreadable:
                     return unreadable
                 is_document = document_type(file_path) is not None
@@ -543,12 +559,26 @@ class FileIOToolsMixin:
                 seen = stamp_of(file_path)
 
                 if start_line is not None or end_line is not None:
-                    if offset or limit is not None:
+                    if offset:
                         return {
                             "status": "error",
-                            "error": "Use offset/limit (characters) or "
-                            "start_line/end_line (lines), not both.",
+                            "error": "offset counts characters and "
+                            "start_line/end_line count lines: use one or the "
+                            "other. To read lines, drop offset.",
                         }
+                    if limit is not None and end_line is None:
+                        # Beside a start line, a limit is a number of lines.
+                        if isinstance(limit, bool) or not isinstance(limit, int):
+                            return {
+                                "status": "error",
+                                "error": "limit must be a whole number of lines.",
+                            }
+                        if limit < 1:
+                            return {
+                                "status": "error",
+                                "error": "limit must be 1 or more lines.",
+                            }
+                        end_line = max(start_line or 1, 1) + limit - 1
                     try:
                         if is_document:
                             text = cached_document_text(self, file_path)[0]
@@ -560,6 +590,8 @@ class FileIOToolsMixin:
                             "status": "error",
                             "error": f"{file_path} is binary: it has no lines to read.",
                         }
+                    except DocumentTooLong as e:
+                        return too_long_error(self, file_path, e)
                     except (ImportError, ValueError) as e:
                         return {"status": "error", "error": str(e)}
                     page = _line_window(lines, start_line, end_line, read_budget(self))
@@ -571,6 +603,18 @@ class FileIOToolsMixin:
                 if is_document:
                     return with_small_limit_warning(
                         read_document(self, file_path, offset, limit), limit
+                    )
+
+                # The text is what a reader wants from a page; its markup is
+                # several times the size. A file this turn wrote reads back as
+                # written, and edits need the markup: neither is recorded here.
+                if (
+                    os.path.splitext(file_path)[1].lower() in HTML_PAGES
+                    and not raw
+                    and not _written_this_turn(self, file_path)
+                ):
+                    return with_small_limit_warning(
+                        read_html_text(self, file_path, offset, limit), limit
                     )
 
                 if offset or limit is not None:

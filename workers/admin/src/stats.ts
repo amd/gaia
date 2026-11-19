@@ -68,11 +68,15 @@ export interface DailyPoint {
  * snapshot are skipped (a gap, not a zero), and a delta spanning a gap is
  * dropped rather than spread. A negative delta (an asset or release was
  * deleted) is reported separately so it is visible instead of clipped.
+ * `snapshotDays` lists every day a snapshot was taken, for when `rows` is
+ * filtered (to one release, say): a day with a snapshot but none of these
+ * rows then counts from zero instead of being mistaken for a gap.
  */
 export function dailyDeltas(
   rows: { day: string; tag: string; asset: string; downloads: number }[],
+  snapshotDays: string[] = [],
 ): { points: DailyPoint[]; negativeDays: string[] } {
-  const byDay = new Map<string, Map<string, number>>();
+  const byDay = new Map<string, Map<string, number>>(snapshotDays.map((d) => [d, new Map()]));
   for (const r of rows) {
     const m = byDay.get(r.day) ?? new Map<string, number>();
     m.set(`${r.tag}\u0000${r.asset}`, r.downloads);

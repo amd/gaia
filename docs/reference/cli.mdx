@@ -121,7 +121,7 @@ echo "List the Python files here" | gaia -p --output-format json
 | `--output-format text\|json` | `text` (default) prints the answer alone; `json` prints one JSON object (below) |
 | `--verbose` | With `--output-format json`: add the turn's full `conversation` (every model message and tool call) |
 | `--max-steps <n>` | Cap on agent steps for this run, at least 1. Default: the agent's own limit ([Agent step limit](#agent-step-limit)) |
-| `--time-limit <seconds>` | Wall-clock seconds the turn may take, at least 1. The agent is told the limit with the request, and to write a first version of any requested file early. At 25% and 50% it is told the time used. At 70% it is told to write what was asked for and not yet written, to leave a finished file alone, and to keep caveats in its answer rather than in the file; it is always told before it stops, even when one long step jumps past 70%. Near the limit it stops working, keeping back two of its typical steps (three while a requested file is missing, never less than 5% of the limit): it writes any requested file still missing, may make one last tool call that runs (a final write, say), and answers. Each model call is capped to the output the time left allows at the model's measured speed. A shell or Python command, a wait or a sleep the agent starts gets a timeout no longer than the time left before that stop, and one with no time left is refused; the one last tool call may run for half of what is left of the limit. A turn still busy at the limit is stopped there: a running shell or Python command ends, a model call still running 5 seconds past the limit is abandoned, and the answer says the time limit stopped the turn, followed by the agent's latest findings. A turn the limit ended reports `status: incomplete` and exits 1, even when it wrote its file and answered. Counted from the start of the turn, after server start-up, so give a wrapper's own timeout some headroom above it. Can't be combined with `--attempts` yet (a usage error). Default: no limit |
+| `--time-limit <seconds>` | Wall-clock seconds the turn may take, at least 1. The agent is told the limit with the request, and to write a first version of any requested file early. At 25% and 50% it is told the time used. At 70% it is told to write what was asked for and not yet written, to leave a finished file alone, and to keep caveats in its answer rather than in the file; it is always told before it stops, even when one long step jumps past 70%. Near the limit it stops working, keeping back two of its typical steps (three while a requested file is missing, never less than 5% and never more than 25% of the limit): it writes any requested file still missing, may make one last tool call that runs (a final write, say), and answers. Each model call is capped to the output the time left allows at the model's measured speed; the reply that may carry the last tool call gets half of the time left, and the final answer is short (at most 2,048 tokens), a summary of where the work stands and the next steps that names files rather than repeating them. A shell or Python command, a wait or a sleep the agent starts gets a timeout no longer than the time left before that stop, and one with no time left is refused; the one last tool call may run for half of what is left of the limit. A turn still busy at the limit is stopped there: a running shell or Python command ends, a model call still running 5 seconds past the limit is abandoned, and the answer says the time limit stopped the turn, followed by the agent's latest findings. A turn the limit ended reports `status: incomplete` and exits 1, even when it wrote its file and answered. Counted from the start of the turn, after server start-up, so give a wrapper's own timeout some headroom above it. Can't be combined with `--attempts` yet (a usage error). Default: no limit |
 | `--attempts <n>` | Run `n` (up to 4) independent attempts, then one turn that checks and combines them ([below](#independent-attempts)). Default: 1 |
 | `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking. A request that only hands over quoted text to translate, reword or proofread still has them refused |
 | `--full-access` | Full access, as the TUI's `/full-access`: lifts the shell guardrails, so test runners, build tools and other commands outside the no-prompt list run, and grants paths outside the current folder without asking. Implies `--dangerously-skip-permissions` |
@@ -426,7 +426,7 @@ canonical choices list):
 | `rag` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Document Q&A with retrieval | ~6 GB |
 | `mcp` | _(none)_ | Sets up the MCP servers config (`~/.gaia/mcp_servers.json`) — no Lemonade install or model downloads | – |
 | `vlm` | Gemma-4-E4B-it-GGUF | Vision pipeline for document and image extraction | ~6 GB |
-| `npu` | gemma4-it-e4b-FLM, embed-gemma-300m-FLM | The flagship [GAIA agent](/guides/gaia) on the Ryzen AI NPU via the FLM backend (requires XDNA2 NPU) | ~10 GB |
+| `npu` | gemma4-it-e4b-FLM, user.embeddinggemma-300m-GGUF | The flagship [GAIA agent](/guides/gaia) on the Ryzen AI NPU via the FLM backend (requires XDNA2 NPU) | ~10 GB |
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
@@ -1908,6 +1908,7 @@ gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, `gaia schedule` runs (when no `last_model` is set), `gaia telegram` sessions, the MCP bridge's `/chat` and `/llm`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3.6-35B-A3B-GGUF` on a PC with the memory for it and never overwrites a value you set. `user.Qwen3.8-Flash-Next-GGUF` is available on a 128 GB Strix Halo; choose it here, `gaia init` never does |
+| `embedding_device` | (unset) | Where every chat embeds documents and memory: `gpu`, or unset for the GPU (`auto` unsets it). The NPU isn't accepted: its embedder's search isn't reliable yet. Set in the Agent UI under **Settings → Memory**. Changing it re-embeds stored memory |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) for commands that load without naming a model. A model always runs on the device it was built for |
 | `context_sizes` | _(empty)_ | Context window per local model, set in the Agent UI under **Settings → Model** (`gaia config set` refuses it). A model not listed gets GAIA's automatic size; `GAIA_CTX_SIZE` overrides it |
 | `custom_models` | _(empty)_ | Local models you added from a Hugging Face link, managed with [`gaia model`](#model-command), the Agent UI or the TUI (`gaia config set` refuses it) |
@@ -3780,15 +3781,20 @@ server's memory when GAIA is not in use:
 
 - **Closing the last GAIA app unloads every model.** The Agent UI (desktop app
   or `npx @amd-gaia/agent-ui`) and `gaia-cli` register with the daemon while
-  they run. When the last one exits, and no `gaia` command or sidecar agent is
-  still using the server, the daemon unloads all of its models. The server
-  stays up, so the next launch only reloads the model. An app that is killed
-  rather than closed is noticed within about five seconds.
+  they run. When the last one exits, no `gaia` command is still using the
+  server, and no turn is still running in a sidecar agent, the daemon stops
+  its idle sidecar agents and unloads all of its models. The server stays up,
+  so the next launch only reloads the model, and the next message starts the
+  agent again. An app that is killed rather than closed is noticed within
+  about five seconds.
 - **Every GAIA process holds a lease while it uses the server.** Each client
-  of the server registers on its own: apps, `gaia` commands, sidecar agents,
-  and a process under another `GAIA_HOME` whose `LEMONADE_BASE_URL` names this
-  server (it registers with this daemon too). A lease is renewed every 30
-  seconds and dropped when its process exits or stops renewing for two minutes.
+  of the server registers on its own: apps, `gaia` commands, and a process
+  under another `GAIA_HOME` whose `LEMONADE_BASE_URL` names this server (it
+  registers with this daemon too). A lease is renewed every 30 seconds and
+  dropped when its process exits or stops renewing for two minutes. A sidecar
+  agent the daemon runs also registers, but its lease holds nothing open: the
+  agent serves the apps and commands above, and a turn relayed to it is what
+  counts.
 - **No lease and no request for 15 minutes stops the server.** The daemon also
   reads the server's own activity, so a request from a process it does not
   know about restarts the clock, and nothing is stopped or unloaded while a

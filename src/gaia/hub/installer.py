@@ -523,7 +523,13 @@ def clear_progress(agent_id: Optional[str] = None) -> None:
 def _download_and_verify(
     url: str, expected_sha256: str, fetcher: catalog_mod.Fetcher
 ) -> bytes:
-    data = fetcher(url)
+    if fetcher is catalog_mod.fetch_bytes:
+        try:
+            data = catalog_mod.download_artifact(url)
+        except catalog_mod.ArtifactDownloadError as exc:
+            raise InstallError(str(exc)) from exc
+    else:
+        data = fetcher(url)
     actual = hashlib.sha256(data).hexdigest()
     if actual != (expected_sha256 or "").lower():
         raise ChecksumError(
