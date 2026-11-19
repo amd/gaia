@@ -153,6 +153,32 @@ describe("cleanupOrphanedBackends", () => {
     expect(warn.mock.calls.join("\n")).toMatch(/9001.*EPERM/);
   });
 
+  test("a live app pid whose recorded backend is gone (pid reused) loses its record, nothing is killed", async () => {
+    recordBackend({ gaiaDir, ownerPid: 5, backendPid: 9001 });
+    const { killBackend, kept } = await cleanupAs(1, { alive: [5], backends: [] });
+    expect(killBackend).not.toHaveBeenCalled();
+    expect(kept).toEqual([]);
+    expect(recorded(5)).toBe(false);
+  });
+
+  test("a live app's record is kept when its backend can't be verified", async () => {
+    recordBackend({ gaiaDir, ownerPid: 5, backendPid: 9001 });
+    const killBackend = jest.fn(async () => {});
+    const { kept } = await cleanupOrphanedBackends({
+      gaiaDir,
+      selfPid: 1,
+      killBackend,
+      isBackend: () => {
+        throw new Error("probe failed");
+      },
+      isAlive: () => true,
+      logger: quiet,
+    });
+    expect(killBackend).not.toHaveBeenCalled();
+    expect(kept).toEqual([9001]);
+    expect(recorded(5)).toBe(true);
+  });
+
   test("the legacy backend.pid from an older app is still cleaned up", async () => {
     fs.writeFileSync(path.join(gaiaDir, LEGACY_PIDFILE), "7777\n");
     const { killBackend } = await cleanupAs(1);

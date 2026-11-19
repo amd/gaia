@@ -207,6 +207,21 @@ async function cleanupOrphanedBackends({
       continue;
     }
     if (ownerPid !== selfPid && isAlive(ownerPid)) {
+      // A record whose backend is gone is stale, even if its app's pid is now
+      // someone else's; it can never protect a live backend, so drop it.
+      let stale = false;
+      if (!Number.isNaN(backendPid)) {
+        try {
+          stale = !isBackend(backendPid);
+        } catch (err) {
+          logger.warn(`[main] Could not verify pid ${backendPid} from ${PIDFILE_DIR}/${name}: ${err.message}`);
+        }
+      }
+      if (stale) {
+        logger.log(`[main] Backend pid ${backendPid} of app pid ${ownerPid} is gone; removing its record`);
+        remove(file);
+        continue;
+      }
       if (!Number.isNaN(backendPid)) kept.push(backendPid);
       logger.log(`[main] Backend pid ${backendPid} belongs to running GAIA app pid ${ownerPid}; leaving it`);
       continue;
