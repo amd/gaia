@@ -10,16 +10,36 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
 ### Changed
 
+- **The skill suggestion now tells the model which skill to load.** Local models
+  ignored the old "skills that may fit this request" line: over 56 tasks one
+  called `load_skill` on 3. The line now reads "Call load_skill('pdf') before
+  you start: it covers this kind of request. Also consider: office-docs." It is
+  still one line in the user's message, with the skills in the same order.
 - **A skill that clearly fits the request can load before the turn (opt-in).**
-  Local models often ignore the "skills that may fit this request" line: over
-  56 tasks one called `load_skill` on 3. With `GAIA_SKILL_AUTOLOAD=1` or
-  `skill_autoload=True`, a match scoring at least 0.55 and 0.03 ahead of every
-  other skill loads first (two per turn at most), and the request opens with
-  "Loaded report-from-sources because it matches this request". Weaker matches
-  are suggested as before. A skill that would grant a command-line program, or
-  push loaded skill bodies past ~6,000 tokens, is only suggested. It runs only
-  on the `embeddinggemma-300m` embedder it was measured with. Off by default:
-  the 0.55 floor has not been re-measured on the current labelled requests.
+  With `GAIA_SKILL_AUTOLOAD=1` or `skill_autoload=True`, the best match loads
+  first when it scores at least 0.55 and is 0.03 ahead of every skill it does
+  not pair with. The request then opens with "Loaded report-from-sources
+  because it matches this request". Weaker matches are suggested as before.
+  - Skills that pair with the best match no longer block it, and the best of
+    them that also scores 0.55 loads with it. Two skills per turn at most.
+  - Only trusted skills load this way: ones that ship with the agent, and hub
+    installs at the `community` tier or above. A captured skill, your own
+    skill and anything from a `.claude` folder stay suggestions.
+  - A skill that grants a command-line program stays a suggestion in Ask mode.
+    Under full access it loads, with a warning naming the program. Switch full
+    access off and the skill is unloaded at the next turn.
+  - The skill bodies in the prompt, plus the new one, must fit in 18% of the
+    model's context window (about 5,900 tokens of the default 32,768).
+  - A skill unloaded earlier in the session is not auto-loaded again.
+  - `GAIA_SKILL_AUTOLOAD_TAU` and `GAIA_SKILL_AUTOLOAD_MARGIN` (or
+    `skill_autoload_threshold` and `skill_autoload_margin`) set the 0.55 and
+    0.03.
+  - If you turn it on where it cannot run (catalogue or suggestions off, fast
+    mode, memory off, or an embedder other than `embeddinggemma-300m`), one
+    warning says it is inactive and why.
+
+  Off by default: 0.55 and 0.03 have not been re-measured on the current
+  labelled requests.
 - **Start a message with `/` and a skill's name to run that skill**, as in
   Claude Code: `/pdf turn notes.md into a report`. The agent loads the skill
   with the same checks as `load_skill` and follows it for the rest of the line.

@@ -631,21 +631,24 @@ and are not loaded yet, adds one line to that turn's context, beside the
 current time at the top of the user's message:
 
 ```
-Skills that may fit this request and are not loaded yet: transcribe-meeting,
-summarize — use load_skill for the ones that cover what was asked and ignore
-the rest.
+Call load_skill('transcribe-meeting') before you start: it covers this kind of
+request. Also consider: summarize.
 ```
 
-The wording offers the skills and does not order a load: a near miss can score
-as high as a real match, so the model has to be free to pass one over.
+It is one line. The best match is an instruction, because a local model passes
+over a line that only offers names: over 56 tasks, Qwen3.6-35B-A3B was offered
+a fitting skill on nearly every one and called `load_skill` on 3. The other
+matches follow in the same order and stay an offer. A near miss can score as
+high as a real match, so the instruction is sometimes wrong; the effect of this
+wording on such requests has not been measured yet.
 
 The line goes in the user's message, not the system prompt. A system prompt
 that changes from turn to turn makes the server re-read the whole conversation.
 
-By default it suggests and never loads — the model still decides. The per-turn
-word matcher the catalogue replaced loaded the right skill on 0 of 24 tasks; a
-wrong suggestion costs one line the model can ignore. Loading a very strong
-match for the model is opt-in (see [Auto-load](#auto-load)).
+By default GAIA does not load the skill itself — the model still makes the
+call. The per-turn word matcher the catalogue replaced loaded the right skill
+on 0 of 24 tasks. Loading a very strong match for the model is opt-in (see
+[Auto-load](#auto-load)).
 
 - **Matching.** The same embedder as skill-body selection scores
   `name: first line of description` against the current message (cut at 4,000
@@ -656,15 +659,16 @@ match for the model is opt-in (see [Auto-load](#auto-load)).
   companions follow it only when they score at least **0.40** themselves:
   pairing is mutual, so `office-docs` pairs with five skills, and adding
   companions unconditionally cut precision from 0.84 to 0.52.
-- **Calibration.** 54 invented requests over the 20 hub skills
+- **Calibration.** The numbers here are an old measurement: 54 invented
+  requests over 20 hub skills
   (`tests/fixtures/skills/skill_suggestion_cases.json`). 12 of them should get
   no suggestion, and 5 of those are near misses such as *"what is a pivot
   table?"*. With `embeddinggemma-300m`: precision 0.84, recall 0.93, and 3 of
   the 12 negatives got a suggestion. All 3 are near misses scoring 0.35–0.44,
   as high as real requests (the weakest best match on a positive is 0.30), so
   no threshold removes them without losing recall. The fixture has since
-  grown to cover every hub skill on main; rerun the calibration before
-  changing the defaults. Every hub skill needs
+  grown to cover every hub skill on main and has not been measured again;
+  rerun the calibration before changing the defaults. Every hub skill needs
   labelled requests; the coverage test names any that has none. The scores
   depend on the embedding model: `nomic-embed-text-v2` measured far worse on
   the first 37 requests, so recalibrate before changing the embedder. Run
@@ -684,11 +688,9 @@ the floor. Turning the catalogue off turns suggestions off too.
 
 ##### Auto-load
 
-Local models often ignore even a correct suggestion: over 56 tasks,
-Qwen3.6-35B-A3B was offered a fitting skill on nearly every one and called
-`load_skill` on 3. With auto-load on, a match far above the suggestion floor is
-loaded before the turn, and the turn's context says so above the suggestion
-line:
+A model can ignore an instruction too. With auto-load on, a match far above the
+suggestion floor is loaded before the turn starts, and the turn's context says
+so above the suggestion line:
 
 ```
 Loaded report-from-sources because it matches this request — its instructions
@@ -697,29 +699,57 @@ are in the system prompt.
 
 It is **off by default**. Turn it on with `GAIA_SKILL_AUTOLOAD=1` or
 `GaiaAgentConfig(skill_autoload=True)`; `GAIA_SKILL_AUTOLOAD=0` wins over the
-config. `skill_autoload_threshold` sets the floor. It needs suggestions on, and
-weaker matches are suggested exactly as they are without it.
+config. It needs suggestions on, and weaker matches are suggested exactly as
+they are without it.
 
-- **When.** A suggested skill scoring at least **0.55**, when the best such
-  skill leads every other skill, loaded or not, by **0.03**. At most two per
-  turn; further matches stay suggestions.
-- **Calibration.** Measured with `embeddinggemma-300m` on an earlier set of 71
-  requests, 26 of them negatives: 11 skills loaded on 10 requests, none outside
-  a request's labels and none on a negative (the highest scored 0.524), for
-  recall 0.21. The labelled set has changed since and the floor has not been
-  re-measured on it, which is why auto-load is opt-in. Measure it with
-  `GAIA_SKILL_SUGGEST_CALIBRATE=1 pytest tests/unit/test_skill_suggester.py -k autoload_calibration`.
-- **Never loaded for the model.** A skill already loaded; one auto-loaded
-  earlier in the session and since unloaded; one that would grant a
-  command-line program (`shell:execute:<binary>`), since that grant runs its
-  allowed subcommands without a prompt; a `.claude` skill that ships tools;
-  and one whose body would bring the loaded skill bodies past ~6,000 tokens.
-  These stay suggestions. A load that fails is logged as a warning and stays a
-  suggestion too.
-- **Only on the calibrated embedder.** On any embedder other than
-  `embeddinggemma-300m`, such as the NPU profile's FLM embedder, auto-load
-  stays off even with `GAIA_SKILL_AUTOLOAD=1`: a warning says so at startup and
-  matches stay suggestions.
+- **When.** The best suggested skill loads when it scores at least **0.55**
+  and leads every skill it does not pair with, loaded or not, by **0.03**.
+- **Companions.** Skills that pair (`pairs_with`, in either direction) score
+  alike by design, so a companion close behind the best match is not a reason
+  to hold back. The best-scoring companion that also reaches 0.55 loads with
+  it. At most two skills load per turn; further matches stay suggestions.
+  Example: `slide-decks` 0.62, `report-from-sources` 0.60 and `office-docs`
+  0.595, all paired, load `slide-decks` and `report-from-sources`.
+- **Settings.** `skill_autoload_threshold` (`GAIA_SKILL_AUTOLOAD_TAU`) sets the
+  floor and `skill_autoload_margin` (`GAIA_SKILL_AUTOLOAD_MARGIN`) the lead.
+  The env values win, and one that is not a number stops startup.
+- **Calibration.** 0.55 and 0.03 are from an old measurement, taken before the
+  companion rule: `embeddinggemma-300m` on an earlier set of 71 requests, 26 of
+  them negatives, loaded 11 skills on 10 requests, none outside a request's
+  labels and none on a negative (the highest scored 0.524), for recall 0.21.
+  They have not been re-measured on the current labelled set, which is why
+  auto-load is opt-in. Run
+  `GAIA_SKILL_SUGGEST_CALIBRATE=1 pytest tests/unit/test_skill_suggester.py -k autoload_calibration -s`
+  with `LEMONADE_BASE_URL` naming a running server. It prints precision,
+  recall, wrong loads and loads on negatives for each floor from 0.40 to 0.60
+  and each lead from 0.00 to 0.05, and fails if the defaults load anything on
+  a negative.
+- **Trusted skills only.** A skill loads this way only when it ships with the
+  agent, or was installed from the hub and `skill-lock.json` records it at the
+  `community` tier or above. A captured skill, one you wrote yourself, an
+  `experimental` install and anything from a `.claude` folder stay
+  suggestions: nothing checked them, so the model has to ask.
+- **Skills that grant a program.** A skill with `shell:execute:<binary>` lets
+  that program's allowed subcommands run without a prompt. In Ask mode such a
+  skill stays a suggestion. Under full access everything is pre-approved
+  already, so it loads, and a warning names the skill and the programs. When
+  full access is switched off, the skill is unloaded at the start of the next
+  turn and its grant goes with it. It is not auto-loaded again in that
+  session. Pre-approving gated tools without full access does not count.
+- **Size.** The skill bodies in the prompt this turn, plus the new one, must
+  fit in 18% of the model's context window: about 5,900 tokens of the default
+  32,768. The window is read each turn. Bodies that have collapsed to their
+  one-line reminder do not count. A skill skipped for size stays a suggestion,
+  and a warning gives its size, the tokens in use, the budget and the window.
+- **Unloaded skills stay unloaded.** A skill unloaded earlier in the session,
+  by the model or by you, is not auto-loaded again, also after the agent is
+  rebuilt for changed settings.
+- **A load that fails** is logged as a warning and stays a suggestion.
+- **Asked for but inactive.** Auto-load cannot run with the catalogue or
+  suggestions off, in fast mode, with memory off (matching uses its embedder),
+  or on any embedder other than `embeddinggemma-300m`, such as the NPU
+  profile's FLM embedder. If you turned it on, one warning at startup says it
+  is inactive and why.
 
 The loaded body pins for the next few turns, like an explicit `load_skill`.
 
