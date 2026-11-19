@@ -21,6 +21,12 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
   or put caveats inside one.
 ### Changed
 
+- **A file a skill's tool saves counts as saved.** A deck or report written by
+  a skill tool existed on disk, yet the turn ended "incomplete" with "No
+  successful write to `deck.pptx` is recorded for this turn", because the
+  completion check only knew the built-in write tools. A write made through
+  `gaia.skills.context` (`check_write`, `open_write`) is now on the same
+  record once the file has really changed.
 - **A file built from other files is compared with them before the answer.**
   Models said "built and verified" without opening the output, so dropped
   rows and totals that did not match the sources reached the user. A turn

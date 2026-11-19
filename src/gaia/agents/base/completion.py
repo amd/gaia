@@ -739,6 +739,9 @@ class CompletionEvidence:
             )
         )
         self.disk_tool_ran = False
+        # Paths a skill tool was cleared to write during the call now running,
+        # with each file's stamp from before: path as given -> (key, stamp).
+        self._skill_writes: dict[str, tuple[str, Any]] = {}
         # Files a successful call was given to read, and whether a call that
         # can read many at once (a script, an indexer) succeeded.
         self.read_paths: set[str] = set()
@@ -891,9 +894,19 @@ class CompletionEvidence:
         executed: bool = True,
     ) -> None:
         self.sequence += 1
+        skill_writes, self._skill_writes = self._skill_writes, {}
         if not executed:
             self._record_refusal(tool, args, result)
             return
+        for path, (key, old) in skill_writes.items():
+            current = self._stamp(key)
+            # Cleared is not written: only a file that changed counts.
+            if current is None or current is _UNOBSERVABLE or current == old:
+                continue
+            self.disk_tool_ran = True
+            self.removed.discard(key)
+            self.written_as[key] = path
+            self.files[key] = FileEvidence(key, self.sequence if successful else 0)
         if tool in WRITE_TOOLS or tool in SIDE_EFFECT_PATHS or tool in _EXEC_TOOLS:
             self.disk_tool_ran = True
         if successful and tool in _BULK_READERS:
@@ -985,6 +998,18 @@ class CompletionEvidence:
             )
         if tool in _EXEC_TOOLS and successful:
             self._note_summaries(args, data)
+
+    def expect_skill_write(self, path: str) -> None:
+        """A skill tool was cleared to write *path*; the call's record checks it.
+
+        A skill's tool is not one of the write tools this ledger knows by
+        name, so the file it saves through ``gaia.skills.context`` would
+        otherwise read as never written.
+        """
+        if "\x00" in path or path in self._skill_writes:
+            return
+        key = self.key(path)
+        self._skill_writes[path] = (key, self._stamp(key))
 
     def _note_summaries(self, args: dict, data: dict) -> None:
         """A successful run that names a script output and prints something checked it.
