@@ -124,6 +124,12 @@ def test_the_load_limits_context_checkpoints():
     assert 0 < int(flags[flags.index("--ctx-checkpoints") + 1]) < 32
 
 
+def test_the_load_skips_llama_cpps_warm_up_run():
+    # The warm-up left ~250 MB of GPU memory allocated per chat model, and the
+    # first reply's first token came no sooner with it.
+    assert "--no-warmup" in CHAT_LLAMACPP_ARGS.split()
+
+
 def test_the_load_has_a_slot_for_every_pinned_request():
     # llama.cpp defers a request for a slot it lacks until the caller gives up.
     flags = CHAT_LLAMACPP_ARGS.split()

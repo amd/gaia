@@ -190,6 +190,10 @@ def test_the_user_prefix_matches_either_way_round(client):
             "llamacpp_args": "--parallel 3 --kv-unified --cache-ram 0 "
             "--slot-prompt-similarity 0.5"
         },
+        {  # what GAIA saved before it skipped the warm-up
+            "llamacpp_args": "--parallel 3 --kv-unified --cache-ram 0 "
+            "--slot-prompt-similarity 0.5 --ctx-checkpoints 16"
+        },
     ],
 )
 def test_no_user_args_still_gets_the_chat_flags(client, options):

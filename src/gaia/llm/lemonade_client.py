@@ -916,10 +916,12 @@ NPU_BACKEND_INSTALL_TIMEOUT = 600  # seconds; the FastFlowLM release download
 # llama.cpp keeps up to 32 context checkpoints per slot in host RAM (63 MB each
 # for Qwen3.6-35B); 16 halves that and re-reads no more tokens on a new chat,
 # an edit or a regenerate.
+# llama.cpp's warm-up run at load leaves ~250 MB of GPU memory allocated and
+# makes the first reply no faster.
 # Args the user saved for the model in Lemonade win (users_llamacpp_args).
 CHAT_LLAMACPP_ARGS = (
     "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5 "
-    "--ctx-checkpoints 16"
+    "--ctx-checkpoints 16 --no-warmup"
 )
 #: Slots requests are pinned to (llama.cpp ``id_slot``). Left to LRU, a memory
 #: extraction landed on the conversation's slot and overwrote it, and the next
@@ -937,6 +939,8 @@ _GAIA_SAVED_CHAT_ARGS = frozenset(
     {
         CHAT_LLAMACPP_ARGS,
         with_vulkan_token_tables(CHAT_LLAMACPP_ARGS, "vulkan"),
+        "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5 "
+        "--ctx-checkpoints 16",
         "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
         "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
         "--parallel 1",
