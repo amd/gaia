@@ -8995,7 +8995,10 @@ Do NOT wrap conversational replies in JSON.
 
         script_tool, script_args = as_script_call(tool_name, tool_args)
         if script_tool != tool_name:
-            if script_tool not in execution_registry:
+            if script_tool in execution_registry:
+                tool_name, tool_args = script_tool, script_args
+            elif script_tool in self._tools_registry:
+                # Withheld from this agent: the path must not run by this route.
                 return {
                     **NOT_EXECUTED,
                     "status": "error",
@@ -9005,7 +9008,8 @@ Do NOT wrap conversational replies in JSON.
                         "this agent. Pass the code itself as `code`."
                     ),
                 }
-            tool_name, tool_args = script_tool, script_args
+            # An agent with no such tool: the call stays as sent, so the
+            # approval gate below answers it like any other run_python call.
 
         # A stand-in written to disk replaces the real file with that word.
         stand_in = _write_stand_in(
