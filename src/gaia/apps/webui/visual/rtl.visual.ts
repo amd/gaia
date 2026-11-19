@@ -2097,7 +2097,7 @@ for (const locale of ['ar', 'en']) {
         });
         await expect(page.locator('.msg-stats-ts')).toHaveText(month);
         await expect(page.getByText('q1-summary.csv')).toBeVisible();
-        await expect(page.locator('.sp-list[aria-label]')).toContainText(month);
+        await expect(page.locator('.sp-list[aria-label]:has(.sp-output)')).toContainText(month);
         await expect(page.locator('.library-notices')).toContainText('schedule-fall.xlsx');
         await expect(page.locator('.library-notices')).toContainText('run.exe');
         await page.getByText('The plan has three goals.').hover();
@@ -2206,7 +2206,7 @@ test('session panel with Arabic names', async ({ page }) => {
 });
 
 for (const locale of ['ar', 'en'] as const) {
-    test(`the session panel leads with files and folders, details last (${locale})`, async ({ page }) => {
+    test(`the session panel leads with the environment, details last (${locale})`, async ({ page }) => {
         await open(page, `#${ANSWER_SESSION}`, locale);
         const panel = page.locator('.session-panel');
         await expect(panel.locator('.sp-group-title')).toBeVisible();
@@ -2220,14 +2220,14 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
-test('a long hyphenated folder path wraps as one unit, below its Arabic label', async ({ page }) => {
+test('a long folder path stays on its row and gives way to the folder name', async ({ page }) => {
     const path = `C:\\gtest\\h-r6\\${'a-long-folder-name\\'.repeat(4)}.gaia\\documents`;
     await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
         await p.route(`**/api/sessions/${ANSWER_SESSION}/environment`, (route) =>
             route.fulfill({
                 json: {
                     session_id: ANSWER_SESSION,
-                    folders: [{ path, kind: 'folder', source: 'gaia_documents', removable: false }],
+                    folders: [{ path, kind: 'folder', source: 'added', removable: false }],
                     removed: [], internet: true, enforced: true,
                 },
             }),
@@ -2236,22 +2236,365 @@ test('a long hyphenated folder path wraps as one unit, below its Arabic label', 
     const el = page.locator('.sp-item-path', { hasText: 'h-r6' });
     await expect(el).toBeVisible();
     const layout = await el.evaluate((node) => {
-        const box = node.getBoundingClientRect();
         const text = document.createRange();
         text.selectNodeContents(node);
-        const label = document.createRange();
-        label.setStart(node.parentElement!, 0);
-        label.setEndBefore(node);
+        const name = node.parentElement!.querySelector('.sp-item-name')!;
         return {
             lines: new Set([...text.getClientRects()].map((r) => Math.round(r.top))).size,
-            boxes: node.getClientRects().length,
-            labelInside: [...label.getClientRects()].some((r) => r.width > 0 && r.bottom > box.top + 1),
+            clipped: node.scrollWidth > node.clientWidth,
+            nameCut: name.scrollWidth > name.clientWidth + 1,
+            sameRow: Math.abs(name.getBoundingClientRect().top - node.getBoundingClientRect().top) < 6,
         };
     });
-    expect(layout.lines, 'the path should be long enough to wrap').toBeGreaterThan(1);
-    expect(layout.boxes, 'the path splits into pieces around the label').toBe(1);
-    expect(layout.labelInside, 'the label sits between the halves of the path').toBe(false);
+    expect(layout.lines, 'the path wraps onto a second line').toBe(1);
+    expect(layout.clipped, 'the path should be long enough to be cut short').toBe(true);
+    expect(layout.nameCut, 'the folder name is cut instead of the path').toBe(false);
+    expect(layout.sameRow, 'the path dropped below its name').toBe(true);
     expect(await audit(page)).toEqual([]);
+});
+
+/** A chat that has made things: every section that only shows with content, at once. */
+async function withBusyPanel(page: Page): Promise<void> {
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/environment`, (route) =>
+        route.fulfill({
+            json: {
+                session_id: ANSWER_SESSION,
+                folders: [
+                    { path: 'C:\\Users\\you\\Work\\gaia', kind: 'folder', source: 'added', removable: true },
+                    { path: 'C:\\Users\\you\\.gaia\\documents', kind: 'folder', source: 'gaia_documents', removable: false },
+                    { path: 'C:\\Users\\you\\Documents\\lease-2026.pdf', kind: 'file', source: 'document', removable: false },
+                ],
+                removed: [], internet: false, enforced: true, internet_enforced: true,
+            },
+        }),
+    );
+    await page.route('**/api/providers/local/status', (route) =>
+        route.fulfill({
+            json: {
+                state: 'loaded', active_model: 'Gemma-4-E4B-it-GGUF', active_display_name: 'Gemma 4 E4B', active_remote: false,
+                model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B',
+                placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'lemonade', warning: null },
+                ctx_size: 65536, memory: { source: 'lemonade', total_gb: 96, free_gb: 65.2, model_gb: 6.2 }, memory_error: null,
+                error: null, base_url: 'http://127.0.0.1:13305', owner: 'gaia', busy: false, restarting: false, restart_error: null,
+            },
+        }),
+    );
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/outputs`, (route) =>
+        route.fulfill({
+            json: {
+                session_id: ANSWER_SESSION,
+                items: [{
+                    id: 'o1', kind: 'file', name: 'action-items.md', path: 'C:\\Users\\you\\Documents\\action-items.md', detail: null,
+                    message_id: 2, created_at: null, change: 'created', state: 'present', openable: true, revealable: true,
+                }],
+            },
+        }),
+    );
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/capabilities`, (route) =>
+        route.fulfill({
+            json: {
+                session_id: ANSWER_SESSION, agent_type: 'gaia',
+                skills: [{ name: 'summarize', how: 'model' }],
+                tools: [{ name: 'read_file', description: 'Read a file from disk.', category: 'file_io' }],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`the session panel with outputs, a skill and internet off (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withBusyPanel);
+        const panel = page.locator('.session-panel');
+        await expect(panel.locator('.sp-item-name', { hasText: 'action-items.md' })).toBeVisible();
+        await expect(panel.locator('.sp-item-name', { hasText: 'summarize' })).toBeVisible();
+        await expect(panel.getByRole('switch').first()).toHaveAttribute('aria-checked', 'false');
+        expect(await audit(page)).toEqual([]);
+expect(await forcedLeftToRight(page)).toEqual([]);
+        await shot(page, `session-panel-full-${locale}`);
+    });
+}
+
+/**
+ * Translated phrases that an ancestor forces left to right. In Arabic that
+ * reverses the phrase: "3 من 5" reads as "5 of 3". Only numbers, paths and
+ * names take dir="ltr"; a sentence takes its language's direction.
+ */
+const forcedLeftToRight = (page: Page, within = '.session-panel'): Promise<string[]> =>
+    page.evaluate((selector) =>
+        [...document.querySelectorAll(`${selector} [dir="ltr"] i18n-label`)]
+            .map((el) => `forced left to right: "${(el.closest('[dir="ltr"]')?.textContent ?? '').trim().slice(0, 60)}"`),
+    within);
+
+/** The panel shapes itself to the chat: each kind of work brings its own rows. */
+const json = (body: unknown) => (route: { fulfill: (r: { json: unknown }) => Promise<void> }) => route.fulfill({ json: body });
+
+const CONTEXT_USED = {
+    available: true, session_id: ANSWER_SESSION, window: 65536, reply_reserve: 4096, system: 6200, tools: 5400, documents: 3100,
+    history: 2800, query: 200, used: 17700, history_budget: 40000, history_used: 2800, turns_in_view: 2, turns_hidden: 0,
+    at_risk: [], categories: [], model: 'Gemma-4-E4B-it-GGUF', tokenizer: { exact: true, model: 'Gemma-4-E4B-it-GGUF' },
+};
+
+async function withCodingPanel(page: Page): Promise<void> {
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/environment`, json({
+        session_id: ANSWER_SESSION,
+        folders: [
+            { path: '/home/you/projects/kestrel', kind: 'folder', source: 'working_folder', removable: false },
+            { path: '/home/you/.gaia/documents', kind: 'folder', source: 'gaia_documents', removable: false },
+        ],
+        removed: [], internet: true, enforced: true, internet_enforced: true,
+    }));
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/changes/total`, json({
+        files: [
+            {
+                path: '/home/you/projects/kestrel/src/upload.ts', change: 'edited', unified: '', binary: false, too_large: false,
+                truncated: false, additions: 14, deletions: 6, before_size: 900, after_size: 1100, message_ids: [2], changed_since: null,
+            },
+            {
+                path: '/home/you/projects/kestrel/tests/upload.test.ts', change: 'created', unified: '', binary: false, too_large: false,
+                truncated: false, additions: 42, deletions: 0, before_size: 0, after_size: 1300, message_ids: [2], changed_since: null,
+            },
+        ],
+        totals: { files: 2, additions: 56, deletions: 6, uncounted: 0 }, turns: 1, pending: false, untracked: [], incomplete: false,
+    }));
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/changes/git`, json({
+        available: true,
+        repos: [{
+            root: '/home/you/projects/kestrel', branch: 'fix/flaky-upload', remote: 'origin', default_branch: 'main', gh: true,
+            files: ['src/upload.ts', 'tests/upload.test.ts'], uncommitted: ['src/upload.ts', 'tests/upload.test.ts'], ignored: [],
+            draft: { title: 'Fix the flaky upload test', body: '' }, pr_blocked: null,
+        }],
+    }));
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/capabilities`, json({
+        session_id: ANSWER_SESSION, agent_type: 'gaia', skills: [{ name: 'coding', how: 'model' }],
+        tools: [{ name: 'read_file', description: 'Read a file from disk.', category: 'file_io' }],
+    }));
+    await page.route(`**/api/chat/context/${ANSWER_SESSION}`, json({ ...CONTEXT_USED, used: 54300 }));
+}
+
+async function withDocumentsPanel(page: Page): Promise<void> {
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/environment`, json({
+        session_id: ANSWER_SESSION,
+        folders: [
+            { path: '/home/you/.gaia/documents', kind: 'folder', source: 'gaia_documents', removable: false },
+            { path: '/home/you/Documents/lease-2025.pdf', name: 'lease-2025.pdf', kind: 'file', source: 'document', removable: false },
+            { path: '/home/you/Documents/lease-2026.pdf', name: 'lease-2026.pdf', kind: 'file', source: 'document', removable: false },
+            { path: '/home/you/Documents/addendum-scan.pdf', name: 'addendum-scan.pdf', kind: 'file', source: 'document', removable: false },
+        ],
+        removed: [], internet: true, enforced: true, internet_enforced: true,
+    }));
+    const doc = (id: string, name: string, chunks: number, status: string, error: string | null = null) => ({
+        id, filename: name, filepath: `/home/you/Documents/${name}`, file_size: 200_000, chunk_count: chunks, indexed_at: NOW.toISOString(),
+        last_accessed_at: null, sessions_using: 1, indexing_status: status, last_error: error,
+    });
+    await page.route((url) => url.pathname === '/api/documents', json({
+        documents: [
+            doc('d1', 'lease-2025.pdf', 84, 'complete'),
+            doc('d2', 'lease-2026.pdf', 91, 'complete'),
+            doc('d3', 'addendum-scan.pdf', 0, 'indexing'),
+        ],
+        total: 3, total_size_bytes: 600_000, total_chunks: 175,
+    }));
+    await page.route(`**/api/chat/context/${ANSWER_SESSION}`, json(CONTEXT_USED));
+}
+
+async function withScheduledPanel(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === '/api/schedules', json({
+        schedules: [{
+            id: 's9', name: 'Morning brief', interval_seconds: 86_400, prompt: 'Summarize my unread email and calendar for today',
+            status: 'active', created_at: NOW.toISOString(), last_run_at: NOW.toISOString(),
+            next_run_at: new Date(NOW.getTime() + 17 * 3_600_000).toISOString(),
+            last_result: '3 new items', run_count: 9, error_count: 0, session_id: ANSWER_SESSION, schedule_config: null,
+            last_error: null, description: 'Every day',
+            description_parts: { kind: 'every', count: 1, unit: 'day', days: null, time: null, start_hour: null, end_hour: null },
+        }],
+        total: 1,
+    }));
+}
+
+/** A chat that only ran shell commands: no file GAIA tracks changed, no skill loaded. */
+async function withCommandsPanel(page: Page): Promise<void> {
+    const shell = (id: number, command: string, over: Record<string, unknown> = {}) => ({
+        id, type: 'tool', tool: 'run_shell_command', label: 'Using run_shell_command', detail: `command: ${command}, timeout: 120`,
+        success: true, active: false, timestamp: id, ...over,
+    });
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, json({
+        messages: [
+            { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Clone the gaia repo into my Work folder', created_at: NOW.toISOString(), rag_sources: null },
+            {
+                id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'Git is installed, but the clone was not run.',
+                created_at: NOW.toISOString(), rag_sources: null,
+                agent_steps: [
+                    shell(1, 'git clone https://github.com/amd/gaia.git /home/you/Work/gaia', { success: false }),
+                    // As the server saves a finished command: its output kept, in snake_case.
+                    shell(2, 'winget install Git.Git --source winget --silent --accept-source-agreements', {
+                        commandOutput: {
+                            command: 'winget install Git.Git --source winget --silent --accept-source-agreements',
+                            stdout: 'Successfully installed', stderr: '', return_code: 0, cwd: null, duration_seconds: 41.5, truncated: false,
+                        },
+                    }),
+                    shell(3, 'git clone https://github.com/amd/gaia.git /home/you/Work/gaia', { success: false, declined: true }),
+                ],
+            },
+        ],
+        total: 2,
+    }));
+}
+
+const USE_CASES: Array<{ name: string; setup: (page: Page) => Promise<void>; chip: string; section: string }> = [
+    { name: 'commands', setup: withCommandsPanel, chip: 'commands', section: 'commands' },
+    { name: 'coding', setup: withCodingPanel, chip: 'coding', section: 'changes' },
+    { name: 'documents', setup: withDocumentsPanel, chip: 'documents', section: 'documents' },
+    { name: 'scheduled', setup: withScheduledPanel, chip: 'scheduled', section: 'schedule' },
+];
+
+for (const useCase of USE_CASES) {
+    for (const locale of ['ar', 'en'] as const) {
+        test(`the session panel for a ${useCase.name} chat brings that work's rows (${locale})`, async ({ page }) => {
+            await open(page, `#${ANSWER_SESSION}`, locale, useCase.setup);
+            const panel = page.locator('.session-panel');
+            await expect(panel.locator(`[data-section="${useCase.section}"]`)).toBeVisible();
+            // The chip for this work, by its kind, so the check holds in every language.
+            await expect(panel.locator(`.sp-chip.is-${useCase.chip}`)).toBeVisible();
+            await expect(panel.locator('.sp-chip.is-chat')).toHaveCount(0);
+            if (useCase.name === 'commands') {
+                // One ran, one failed, one was refused: a saved command is not called failed for how it was stored.
+                for (const state of ['ok', 'failed', 'declined']) {
+                    await expect(panel.locator(`.sp-cmd-icon.is-${state}`)).toHaveCount(1);
+                }
+            }
+            // Nothing for work this chat isn't doing.
+            for (const other of USE_CASES.filter((u) => u !== useCase)) {
+                await expect(panel.locator(`[data-section="${other.section}"]`)).toHaveCount(0);
+            }
+            expect(await audit(page)).toEqual([]);
+expect(await forcedLeftToRight(page)).toEqual([]);
+            await shot(page, `session-panel-${useCase.name}-${locale}`);
+        });
+    }
+}
+
+/** The plan's lines in the interface language, as the agent writes them. */
+const PLAN_LINES = {
+    en: ['Read the upload handler', 'Make the retry wait for the lock', 'Run the upload tests'],
+    ar: ['قراءة معالج الرفع', 'جعل إعادة المحاولة تنتظر القفل', 'تشغيل اختبارات الرفع'],
+};
+
+/** POST /api/chat/send makes a three-step plan, is on its second step, then holds the turn open. */
+async function holdOnPlan(page: Page, narrations: string[]): Promise<void> {
+    await page.addInitScript((stepNarrations) => {
+        const realFetch = window.fetch.bind(window);
+        window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+            if (!url.includes('/api/chat/send')) return realFetch(input, init);
+            const events = [
+                {
+                    type: 'plan', steps: ['read_file', 'edit_file', 'run_shell_command'],
+                    step_narrations: stepNarrations,
+                    current_step: 1,
+                },
+                { type: 'tool_start', tool: 'edit_file', detail: '', narration: 'Editing upload.ts' },
+            ];
+            const body = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    for (const e of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`));
+                },
+            });
+            return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+        };
+    }, narrations);
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`the session panel shows the plan a running turn is working through (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) => holdOnPlan(p, PLAN_LINES[locale]));
+        const panel = page.locator('.session-panel');
+        await expect(panel.locator('[data-section="plan"]')).toHaveCount(0);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Fix the flaky upload test');
+        await box.press('Enter');
+        const steps = panel.locator('[data-section="plan"] .sp-plan-step');
+        await expect(steps).toHaveCount(3);
+        await expect(steps.nth(0)).toHaveClass(/is-done/);
+        await expect(steps.nth(1)).toHaveClass(/is-running/);
+        await expect(steps.nth(2)).toHaveClass(/is-pending/);
+        await expect(panel.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '1');
+        expect(await audit(page)).toEqual([]);
+expect(await forcedLeftToRight(page)).toEqual([]);
+        await shot(page, `session-panel-plan-${locale}`);
+    });
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`the session panel keeps a finished plan, all ticked, after the reply ends (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, json({
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Fix the flaky upload test', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The upload test passes now.',
+                        created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [{
+                            id: 1, type: 'plan', label: 'Created plan', active: false, success: true, timestamp: 1,
+                            planSteps: ['read_file', 'edit_file', 'run_shell_command'], planNarrations: PLAN_LINES[locale], currentStep: 2,
+                        }, {
+                            id: 2, type: 'tool', tool: 'run_shell_command', label: 'Using run_shell_command', detail: 'command: npm test',
+                            success: true, active: false, timestamp: 2,
+                        }],
+                    },
+                ],
+                total: 2,
+            }));
+        });
+        const panel = page.locator('.session-panel');
+        const steps = panel.locator('[data-section="plan"] .sp-plan-step');
+        await expect(steps).toHaveCount(3);
+        await expect(page.getByText(locale === 'en' ? 'The upload test passes now.' : /The upload test passes now/).first()).toBeVisible();
+        await expect(panel.locator('[data-section="plan"] .sp-plan-step.is-done')).toHaveCount(3);
+        await expect(panel.locator('[data-section="plan"] .sp-plan-step.is-done svg').first()).toBeVisible();
+        await expect(panel.locator('[data-section="plan"] .spin')).toHaveCount(0);
+        await expect(panel.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '3');
+        // The work is over: the chat is no longer "working a plan".
+        await expect(panel.locator('.sp-chip.is-plan')).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+expect(await forcedLeftToRight(page)).toEqual([]);
+        await shot(page, `session-panel-plan-finished-${locale}`);
+    });
+}
+
+test('a plain chat keeps the panel to its environment, with one quiet chip', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`, 'en');
+    const panel = page.locator('.session-panel');
+    await expect(panel.locator('.sp-chip')).toHaveText(['Chat']);
+    for (const section of ['plan', 'schedule', 'documents', 'commands', 'changes', 'outputs', 'skills']) {
+        await expect(panel.locator(`[data-section="${section}"]`)).toHaveCount(0);
+    }
+});
+
+test('a section that turns up later eases in; one there from the start does not', async ({ page }) => {
+    let made = false;
+    await open(page, `#${ANSWER_SESSION}`, 'en', async (p) => {
+        await p.route(`**/api/sessions/${ANSWER_SESSION}/outputs`, (route) =>
+            route.fulfill({
+                json: {
+                    session_id: ANSWER_SESSION,
+                    items: made ? [{
+                        id: 'o1', kind: 'file', name: 'action-items.md', path: '/home/you/Documents/action-items.md', detail: null,
+                        message_id: 2, created_at: null, change: 'created', state: 'present', openable: true, revealable: true,
+                    }] : [],
+                },
+            }),
+        );
+    });
+    const panel = page.locator('.session-panel');
+    await expect(panel.locator('[data-section="environment"]')).toBeVisible();
+    await expect(panel.locator('[data-section="environment"]')).not.toHaveClass(/sp-appear/);
+    // Past the settle window, the chat makes something: an undo event makes Outputs read again.
+    await page.waitForTimeout(1200);
+    made = true;
+    await page.evaluate((id) => window.dispatchEvent(new CustomEvent('gaia:changes-undone', { detail: id })), ANSWER_SESSION);
+    const outputs = panel.locator('[data-section="outputs"]');
+    await expect(outputs).toBeVisible();
+    await expect(outputs).toHaveClass(/sp-appear/);
 });
 
 test.describe('English', () => {
@@ -3379,7 +3722,7 @@ for (const locale of ['ar', 'en']) {
 
         test(`session panel Runs on: server not answering, ${owner}'s server (${locale})`, async ({ page }) => {
             await open(page, `#${ANSWER_SESSION}`, locale, async (p) => { await p.route('**/api/providers/local/status', (route) => route.fulfill({ json: SERVER_DOWN(owner) })); });
-            const row = page.locator('.session-panel .sp-env-row').filter({ has: page.locator('.sp-error') });
+            const row = page.locator('.session-panel .sp-row').filter({ has: page.locator('.sp-error') });
             await row.scrollIntoViewIfNeeded();
             const error = row.locator('.sp-error');
             await expect(error).toBeVisible();
@@ -3387,7 +3730,7 @@ for (const locale of ['ar', 'en']) {
             if (locale === 'ar') await expect(error).toContainText('خادم النماذج لا يستجيب');
             await shot(page, `session-panel-runs-on-${locale}-server-down-${owner}`);
             expect(await audit(page)).toEqual([]);
-            if (locale === 'ar') expect(await untranslated(page, '.session-panel .sp-env-row:has(.sp-error)')).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.session-panel .sp-row:has(.sp-error)')).toEqual([]);
         });
     }
 }
@@ -3452,6 +3795,20 @@ async function withCloudSpending(page: Page): Promise<void> {
 }
 
 for (const locale of ['ar', 'en']) {
+    // Fonts differ by OS, so a row that fits on one PC runs past the panel's edge on another. Narrowest panel, longest row.
+    test(`a cloud chat's rows stay inside the session panel at its narrowest (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await withCloudSpending(p);
+            await p.addInitScript(() => window.localStorage.setItem('gaia.sessionPanel.width', '280'));
+        });
+        const panel = page.locator('.session-panel');
+        await expect(panel.locator('.sp-row.is-remote')).toBeVisible();
+        expect(Math.round((await panel.boundingBox())!.width)).toBe(280);
+        expect(await audit(page)).toEqual([]);
+expect(await forcedLeftToRight(page)).toEqual([]);
+        await shot(page, `session-panel-cloud-narrow-${locale}`);
+    });
+
     test(`cloud spending chip and breakdown (${locale})`, async ({ page }) => {
         await open(page, `#${ANSWER_SESSION}`, locale, withCloudSpending);
         const chip = page.locator('.spend-meter');

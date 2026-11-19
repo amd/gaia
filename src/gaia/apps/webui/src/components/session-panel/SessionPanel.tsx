@@ -10,12 +10,13 @@
  * width, not two.
  *
  * Nothing in it polls: sections read on open, on expand, and when a reply
- * ends; closed or collapsed, they are unmounted.
+ * ends. A closed panel is unmounted and reads nothing; a section that shows
+ * only with content reads it even while collapsed.
  */
 
 import { useCallback, useEffect, useRef } from 'react';
 import { AlertTriangle, PanelRightClose, PanelRightOpen, X } from 'lucide-react';
-import { useSessionPanelStore, clampWidth, PANEL_DEFAULT_WIDTH, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from '../../stores/sessionPanelStore';
+import { useSessionPanelStore, clampWidth, isFreshFocus, PANEL_DEFAULT_WIDTH, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from '../../stores/sessionPanelStore';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
@@ -29,6 +30,10 @@ import { ChangesSection } from './ChangesSection';
 import { BrowserPaneToggle } from '../browser-pane/BrowserPane';
 import { AgentInfoSection } from './AgentInfoSection';
 import { SkillsSection } from './SkillsSection';
+import { SessionInfoSection } from './SessionInfoSection';
+import { CommandsSection, DocumentsSection, FocusBar, PlanSection, ScheduleSection } from './FocusSections';
+import { useSessionFocus } from './sessionFocus';
+import { PanelSettled, useSettled } from './appear';
 import type { ContextUsage, Message } from '../../types';
 import { useT } from '../../i18n/useT';
 import './SessionPanel.css';
@@ -42,11 +47,13 @@ interface SessionPanelProps {
     /** A reply is running; sections refresh when it ends. */
     busy: boolean;
     onUsage?: (usage: ContextUsage) => void;
+    /** The chat's measured context use, when the host has one. */
+    usage?: ContextUsage | null;
     /** Scroll the transcript to the answer with this id. */
     onJumpToMessage: (messageId: number) => boolean;
 }
 
-export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessage }: SessionPanelProps) {
+export function SessionPanel({ sessionId, messages, busy, usage, onUsage, onJumpToMessage }: SessionPanelProps) {
     const t = useT();
     const overlay = useMediaQuery(PANEL_OVERLAY_QUERY);
     const open = useSessionPanelStore((s) => (overlay ? s.overlayOpen : s.open));
@@ -81,12 +88,11 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
 
     // Asked to show a section (e.g. the context meter's "Details"): open where we are.
     useEffect(() => {
-        if (focus && overlay) setOverlayOpen(true);
+        if (overlay && isFreshFocus(focus)) setOverlayOpen(true);
     }, [focus, overlay, setOverlayOpen]);
 
     if (!open) return null;
 
-    const answer = railState(messages, busy);
     return (
         <>
             {overlay && <div className="sp-backdrop" onClick={close} aria-hidden="true" />}
@@ -118,27 +124,56 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
                         {overlay ? <X size={14} /> : <PanelRightClose size={14} />}
                     </button>
                 </header>
-                <div className="sp-body">
-                    {answer && (
-                        <PanelSection id="answer" title={t('sp.section.answer')}>
-                            <ThisAnswer messages={messages} busy={busy} />
-                        </PanelSection>
-                    )}
-                    {/* What the chat made and may touch first; how it ran sits under Details. */}
-                    <OutputsSection sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
-                    <ChangesSection sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
-                    <EnvironmentSection sessionId={sessionId} busy={busy} />
-                    <SkillsSection sessionId={sessionId} busy={busy} />
-                    <h3 className="sp-group-title">{t('sp.details')}</h3>
-                    <PanelSection id="context" title={t('sp.section.context')}>
-                        <div className="sp-context">
-                            <ContextDetails sessionId={sessionId} busy={busy} onUsage={onUsage} />
-                        </div>
-                    </PanelSection>
-                    <AgentInfoSection sessionId={sessionId} busy={busy} />
-                </div>
+                <PanelBody
+                    sessionId={sessionId}
+                    messages={messages}
+                    busy={busy}
+                    usage={usage}
+                    onUsage={onUsage}
+                    onJumpToMessage={onJumpToMessage}
+                />
             </aside>
         </>
+    );
+}
+
+/**
+ * The panel's content, shaped by what the chat is doing: Environment is always
+ * there, and each kind of work brings its own section when it starts.
+ */
+function PanelBody({ sessionId, messages, busy, usage, onUsage, onJumpToMessage }: SessionPanelProps) {
+    const t = useT();
+    const focus = useSessionFocus(sessionId, messages, busy);
+    const settled = useSettled(sessionId);
+    return (
+        <PanelSettled.Provider value={settled}>
+            <div className="sp-body">
+                <FocusBar facets={focus.facets} />
+                <EnvironmentSection sessionId={sessionId} busy={busy} usage={usage} hideDocuments />
+                <PlanSection plan={focus.plan} />
+                <ScheduleSection schedules={focus.schedules} />
+                {/* Coding leads with what changed; other chats with what they read and made. One key, so moving keeps its state. */}
+                {focus.coding && <ChangesSection key="changes" sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />}
+                <CommandsSection commands={focus.commands} onJumpToMessage={onJumpToMessage} />
+                <DocumentsSection documents={focus.documents} messages={messages} />
+                {focus.showAnswer && (
+                    <PanelSection id="answer" title={t('sp.section.answer')}>
+                        <ThisAnswer messages={messages} busy={busy} />
+                    </PanelSection>
+                )}
+                <OutputsSection sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
+                {!focus.coding && <ChangesSection key="changes" sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />}
+                <SkillsSection sessionId={sessionId} busy={busy} />
+                <h3 className="sp-group-title">{t('sp.details')}</h3>
+                <PanelSection id="context" title={t('sp.section.context')}>
+                    <div className="sp-context">
+                        <ContextDetails sessionId={sessionId} busy={busy} onUsage={onUsage} />
+                    </div>
+                </PanelSection>
+                <AgentInfoSection sessionId={sessionId} busy={busy} />
+                <SessionInfoSection sessionId={sessionId} />
+            </div>
+        </PanelSettled.Provider>
     );
 }
 

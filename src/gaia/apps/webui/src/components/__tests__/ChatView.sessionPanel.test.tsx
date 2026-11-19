@@ -114,7 +114,7 @@ describe('ChatView session panel: this answer', () => {
         });
         await waitFor(() => expect(
             panel(),
-        ).toHaveTextContent('Working on this answer'));
+        ).not.toHaveTextContent('AMD LLM Gateway (cloud)'));
         expect(panel()).not.toHaveTextContent('AMD LLM Gateway');
     });
 

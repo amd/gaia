@@ -422,6 +422,7 @@
             "group": "Agent UI",
             "pages": [
               "plans/gaia-ui-redesign",
+              "plans/session-panel-context",
               "plans/voice",
               "plans/phone-calls",
               "plans/security-model",
