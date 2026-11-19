@@ -51,6 +51,20 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
   other means and say what it could not do. A declined command covers what it
   named (`pip install pandas`, not every `pip install`), and a file a declined
   Python script would only have created is no longer off limits.
+- **Office files are checked before they are handed over.** The bundled
+  `office-docs` skill ships two tools that never write the file.
+  `verify_workbook` recalculates a copy of an .xlsx (with LibreOffice when
+  installed) and names every cell with `#REF!`, `#VALUE!`, `#DIV/0!`,
+  `#NAME?`, a circular reference, a SUM/SUMIFS over text, or a criterion that
+  matches no row. A workbook with errors returns `status: errors_found`, and
+  one with typed totals and no formulas returns `no_formulas`. Without
+  LibreOffice nothing is computed: findings that depend on a value are
+  warnings, and the result tells the agent to compute the figures it reports
+  with pandas and to say the formulas were not recalculated. `verify_document`
+  confirms a .docx or .pptx is a real Word or PowerPoint file and counts its
+  headings, tables, pictures, slides and charts. Text saved under a .docx name
+  is an error that says how to build a real one. The skill also teaches real
+  headings and tables in Word files and native charts.
 - **The skill suggestion now tells the model which skill to load.** Local models
   ignored the old "skills that may fit this request" line: over 56 tasks one
   called `load_skill` on 3. The line now reads "Call load_skill('pdf') before

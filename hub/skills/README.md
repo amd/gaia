@@ -5,7 +5,7 @@ a procedure written for a model to follow, plus the tools it needs. Unlike an
 agent, it does not run on its own, so it is a separate lane with its own package
 format and publish contract ([#2467](https://github.com/amd/gaia/issues/2467)).
 
-This directory is the AMD **starter pack** (#893): twenty-six worked examples,
+This directory is the AMD **starter pack** (#893): twenty-seven worked examples,
 each demonstrating a different platform primitive (RAG, scratchpad SQL,
 memory, browser, file I/O, CLI grants, email, audio and music, image
 generation, and skills that ship their own tools: `rss-digest`; `calendar` and
