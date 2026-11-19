@@ -1378,10 +1378,8 @@ class ChatAgent(
             return
         self._rag_failure_logged = signature
         if missing:
-            logger.warning(
-                "RAG not available (install with: uv pip install -e '.[rag]'): %s",
-                exc,
-            )
+            # *exc* already carries the install hint that is true for this build.
+            logger.warning("RAG not available: %s", exc)
         else:
             logger.warning("RAG failed to start: %s", exc)
         logger.debug("RAG init traceback:", exc_info=True)
