@@ -36,7 +36,7 @@ The agent can search files, run commands, and use MCP tools — but only after y
 Agent UI guide: https://amd-gaia.ai/docs/guides/agent-ui
 v<version> release notes: https://amd-gaia.ai/docs/releases/v<version>
 
-Note this is a beta release of the UI and the Email Agent, if you notice any bugs or issues please report them here or create an issue!
+Note this is a beta release of the UI, if you notice any bugs or issues please report them here or create an issue!
 ````
 
 ## Format rules
@@ -47,7 +47,7 @@ Note this is a beta release of the UI and the Email Agent, if you notice any bug
 - `**What's new in v<version>**` is **bold with no trailing colon** — it is not a `##` heading.
 - Highlights **are `- ` bullets**, each `- **Title** — Description`.
 - 3–5 highlights for a patch, 5–7 for a minor. Anything more becomes a wall of text.
-- The "agent can search files…" and "Note this is a beta release of the UI and the Email Agent…" sentences are **fixed boilerplate** — copy them verbatim every release.
+- The "agent can search files…" and "Note this is a beta release of the UI…" sentences are **fixed boilerplate** — copy them verbatim every release.
 - First-line framing reflects the release character: patches = "a patch release with X and Y"; minor/major = "out — focused on X, Y, and Z"; hotfixes = "a hotfix for X". Match the actual scope, don't oversell.
 - Carry the release notes' beta framing into the announcement where it applies — this channel is where users hit the rough edges first, so don't oversell here.
 

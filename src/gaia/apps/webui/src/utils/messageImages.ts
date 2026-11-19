@@ -11,6 +11,14 @@ export interface MessageImage {
 /** A line that is only an image the composer uploaded: `![name](/api/files/uploads/<file>)`. */
 const UPLOADED_IMAGE_LINE = /^!\[([^\]]*)\]\((\/api\/files\/uploads\/[^)\s]+)\)$/;
 
+function decodedName(encoded: string): string {
+    try {
+        return decodeURIComponent(encoded);
+    } catch {
+        return encoded;
+    }
+}
+
 /**
  * Pull the uploaded images out of what the user sent, so they show as thumbnails
  * instead of full-size pictures. Everything else stays in `text` as written.
@@ -23,7 +31,7 @@ export function splitUploadedImages(content: string): { text: string; images: Me
         if (line.trim().startsWith('```')) inFence = !inFence;
         const match = inFence ? null : UPLOADED_IMAGE_LINE.exec(line.trim());
         const src = match ? safeUrlTransform(match[2]) : '';
-        if (match && src) images.push({ src, name: match[1] || match[2].split('/').pop() || '' });
+        if (match && src) images.push({ src, name: match[1] || decodedName(match[2].split('/').pop() || '') });
         else kept.push(line);
     }
     if (images.length === 0) return { text: content, images };

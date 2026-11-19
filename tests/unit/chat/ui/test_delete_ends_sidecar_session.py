@@ -14,9 +14,9 @@ from fastapi.testclient import TestClient
 
 from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.ui import session_environment
-from gaia.ui.email_sidecar import daemon_client
 from gaia.ui.routers import sessions as sessions_router
 from gaia.ui.server import create_app
+from gaia.ui.sidecar import daemon_client
 
 
 class _Proxy:
@@ -175,10 +175,19 @@ def test_running_handle_ignores_another_running_agent(monkeypatch):
     assert ensured == []
 
 
-def test_running_handle_attaches_only_to_the_running_agent(monkeypatch):
-    ensured = _daemon(monkeypatch, agents=[{"agent_id": "gaia", "state": "running"}])
-    daemon_client.running_handle("gaia")
-    assert ensured == ["gaia"]
+def test_running_handle_routes_through_the_relay_without_ensure(monkeypatch):
+    ensured = _daemon(
+        monkeypatch,
+        agents=[{"agent_id": "gaia", "state": "running", "api_version": "2.30"}],
+    )
+    handle = daemon_client.running_handle("gaia")
+    # ensure would start a stopped agent or restart one on the wrong Lemonade.
+    assert ensured == []
+    assert (handle.base_url, handle.token, handle.api_version) == (
+        "http://127.0.0.1:1",
+        "t",
+        "2.30",
+    )
 
 
 def test_running_handle_raises_a_sidecar_error_when_the_daemon_drops(monkeypatch):
@@ -190,7 +199,7 @@ def test_running_handle_raises_a_sidecar_error_when_the_daemon_drops(monkeypatch
 
 
 def test_end_session_targets_only_this_chat():
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     seen = []
 
@@ -260,3 +269,246 @@ def test_deleting_one_chat_never_ends_another(monkeypatch):
 
     assert proxy.ended == [gone]
     assert client.get(f"/api/sessions/{keep}").status_code == 200
+
+
+# --- A delete must never start, stop or restart the agent -------------------
+
+
+def _listing(agents):
+    return SimpleNamespace(status_code=200, json=lambda: {"agents": agents})
+
+
+def _response(status_code, body=None, text=""):
+    def json():
+        if body is None:
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+        return body
+
+    return SimpleNamespace(status_code=status_code, json=json, text=text)
+
+
+_RUNNING = [{"agent_id": "gaia", "state": "running", "api_version": "2.30"}]
+
+
+@pytest.fixture
+def live_daemon(monkeypatch):
+    """A live daemon whose start/ensure/stop calls all fail the test.
+
+    Returns ``(set_state, deletes)``. ``set_state`` picks the agents listing and
+    the end-session reply; ``deletes`` records each DELETE the backend sends as
+    ``(url, timeout, authorization)``.
+    """
+    import requests
+
+    daemon = {"base_url": "http://127.0.0.1:1"}
+    monkeypatch.setattr(
+        daemon_client,
+        "attach",
+        lambda: SimpleNamespace(
+            base_url=daemon["base_url"], token="dt", api_version="1.4"
+        ),
+    )
+    monkeypatch.setattr(
+        daemon_client,
+        "start_or_attach",
+        lambda: pytest.fail("a chat delete must not start the daemon"),
+    )
+    monkeypatch.setattr(
+        requests,
+        "post",
+        lambda url, *a, **k: pytest.fail(f"a chat delete must not POST {url}"),
+    )
+    state = {
+        "listing": _listing([]),
+        "reply": _response(200, {"session_id": "x", "deleted": True}),
+    }
+    monkeypatch.setattr(requests, "get", lambda *a, **k: state["listing"])
+    deletes = []
+
+    def delete(self, url, timeout=None, **kwargs):
+        deletes.append((url, timeout, self.headers.get("Authorization")))
+        reply = state["reply"]
+        if callable(reply):
+            return reply(self, url, timeout=timeout, **kwargs)
+        return reply
+
+    monkeypatch.setattr(requests.Session, "delete", delete)
+
+    def set_state(agents=None, listing=None, reply=None, base_url=None):
+        if listing is not None:
+            state["listing"] = listing
+        elif agents is not None:
+            state["listing"] = _listing(agents)
+        if reply is not None:
+            state["reply"] = reply
+        if base_url is not None:
+            daemon["base_url"] = base_url
+
+    return set_state, deletes
+
+
+def _unended(caplog, sid):
+    records = [
+        r
+        for r in caplog.records
+        if f"Could not end deleted chat {sid}" in r.getMessage()
+    ]
+    assert len(records) == 1, caplog.text
+    return records[0]
+
+
+@pytest.mark.parametrize(
+    "agents",
+    [
+        [],
+        [{"agent_id": "gaia", "state": "stopped", "api_version": None}],
+        [{"agent_id": "gaia", "state": "starting", "api_version": "2.30"}],
+        [{"agent_id": "email", "state": "running", "api_version": "2.30"}],
+    ],
+)
+def test_a_delete_never_starts_an_agent_that_is_not_running(
+    monkeypatch, live_daemon, agents
+):
+    set_state, deletes = live_daemon
+    set_state(agents=agents)
+    client, sid = _relayed_app(monkeypatch)
+
+    assert client.delete(f"/api/sessions/{sid}").status_code == 200
+    assert deletes == []
+
+
+def test_a_delete_goes_through_the_relay_never_ensure(monkeypatch, live_daemon):
+    # ensure is the only path that restarts an agent on another Lemonade, so a
+    # delete that never POSTs to the daemon cannot restart it.
+    from gaia.ui.sidecar import proxy as proxy_mod
+
+    set_state, deletes = live_daemon
+    set_state(agents=_RUNNING)
+    client, sid = _relayed_app(monkeypatch)
+
+    assert client.delete(f"/api/sessions/{sid}").status_code == 200
+    assert deletes == [
+        (
+            f"http://127.0.0.1:1/v1/gaia/sessions/{sid}",
+            proxy_mod._END_SESSION_TIMEOUT,
+            "Bearer dt",
+        )
+    ]
+
+
+def test_end_session_timeout_matches_the_other_best_effort_calls():
+    from gaia.ui.sidecar import proxy as proxy_mod
+
+    assert proxy_mod._END_SESSION_TIMEOUT == proxy_mod._CANCEL_TIMEOUT
+    assert proxy_mod._END_SESSION_TIMEOUT == proxy_mod._SWITCH_TIMEOUT
+
+
+def test_an_agent_that_exits_before_the_call_is_not_restarted(
+    monkeypatch, live_daemon, caplog
+):
+    set_state, deletes = live_daemon
+    # The relay's answer once the listed sidecar is gone.
+    set_state(
+        agents=_RUNNING,
+        reply=_response(503, {"detail": "agent 'gaia' has no running sidecar"}),
+    )
+    client, sid = _relayed_app(monkeypatch)
+
+    with caplog.at_level("INFO"):
+        assert client.delete(f"/api/sessions/{sid}").status_code == 200
+
+    assert len(deletes) == 1
+    assert _unended(caplog, sid).levelname == "WARNING"
+
+
+def test_a_delete_mid_answer_is_logged_below_error(monkeypatch, live_daemon, caplog):
+    set_state, _ = live_daemon
+    set_state(agents=_RUNNING, reply=_response(409, {"detail": "running a turn"}))
+    client, sid = _relayed_app(monkeypatch)
+
+    with caplog.at_level("INFO"):
+        assert client.delete(f"/api/sessions/{sid}").status_code == 200
+
+    assert _unended(caplog, sid).levelname == "WARNING"
+    assert client.get(f"/api/sessions/{sid}").status_code == 404
+
+
+@pytest.mark.parametrize(
+    "listing, reply, expected",
+    [
+        (_response(200, None, text="<html>proxy</html>"), None, "not JSON"),
+        (_response(200, ["not", "an", "object"]), None, "unexpected shape"),
+        (_response(200, {"agents": "gaia"}), None, "unexpected shape"),
+        (_response(200, {"agents": ["gaia"]}), None, "unexpected shape"),
+        (None, _response(200, None, text="<html>ok</html>"), "not JSON"),
+        (None, _response(200, ["deleted"]), "not a JSON object"),
+    ],
+)
+def test_a_malformed_reply_never_fails_the_delete(
+    monkeypatch, live_daemon, caplog, listing, reply, expected
+):
+    set_state, _ = live_daemon
+    set_state(agents=_RUNNING, listing=listing, reply=reply)
+    client, sid = _relayed_app(monkeypatch)
+
+    r = client.delete(f"/api/sessions/{sid}")
+
+    assert r.status_code == 200, r.text
+    assert client.get(f"/api/sessions/{sid}").status_code == 404
+    record = _unended(caplog, sid)
+    assert record.levelname == "ERROR"
+    assert expected in record.getMessage()
+
+
+@pytest.mark.allow_network
+def test_a_hung_agent_cannot_stall_the_delete(monkeypatch, live_daemon, caplog):
+    import socket
+    import threading
+    import time
+
+    import requests
+
+    from gaia.ui.sidecar import proxy as proxy_mod
+
+    # A real socket that accepts and never answers.
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(4)
+    server.settimeout(0.2)
+    accepted = []
+    stop = threading.Event()
+
+    def accept():
+        while not stop.is_set():
+            try:
+                accepted.append(server.accept()[0])
+            except OSError:
+                continue
+
+    threading.Thread(target=accept, daemon=True).start()
+    set_state, deletes = live_daemon
+    set_state(
+        agents=_RUNNING,
+        base_url=f"http://127.0.0.1:{server.getsockname()[1]}",
+        # The real transport, so only the timeout can end the call.
+        reply=lambda self, url, **k: requests.Session.request(self, "DELETE", url, **k),
+    )
+    monkeypatch.setattr(proxy_mod, "_END_SESSION_TIMEOUT", 0.5)
+    client, sid = _relayed_app(monkeypatch)
+
+    try:
+        with caplog.at_level("INFO"):
+            started = time.monotonic()
+            r = client.delete(f"/api/sessions/{sid}")
+            elapsed = time.monotonic() - started
+    finally:
+        stop.set()
+        for conn in accepted:
+            conn.close()
+        server.close()
+
+    assert r.status_code == 200, r.text
+    assert accepted, "the end-session call never reached the hung agent"
+    assert deletes[0][1] == 0.5
+    assert elapsed < 5.0
+    assert _unended(caplog, sid).levelname == "WARNING"

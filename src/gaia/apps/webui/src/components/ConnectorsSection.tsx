@@ -31,6 +31,9 @@ import { ConnectorGuide, hasConnectorGuide, showsFieldHint } from './ConnectorGu
 import { connectorDescription, connectorDescriptionBare, fieldHelp, fieldLabel, missingFieldsMessage } from '../utils/connectorText';
 import { personalizeSourceKind, requestPersonalize } from '../utils/connectorPersonalize';
 import { ConnectorTileMenu } from './ConnectorTileMenu';
+import { AccountAddress, ConnectorAccountList } from './ConnectorAccounts';
+import { accountChoices, needsSignIn, showsAccountList } from '../utils/connectorAccounts';
+import { ConfirmSheet } from './setup/ConfirmSheet';
 import { SettingsDisclosure } from './settings/SettingsDisclosure';
 import { ltrIn } from './setup/format';
 import './ConnectorsSection.css';
@@ -246,7 +249,8 @@ export function ConnectorsSection() {
                 api.listAgentMcps(),
             ]);
             setConnectors(rows);
-            setConnectedAtLoad(new Set(rows.filter((c) => !('error' in c) && c.configured).map((c) => c.id)));
+            // An account whose sign-in expired is still the user's: it stays under "Connected".
+            setConnectedAtLoad(new Set(rows.filter((c) => !('error' in c) && (c.configured || !!c.accounts?.length)).map((c) => c.id)));
             setAgentMcps(mcps);
             setError(null);
         } catch (e) {
@@ -491,7 +495,33 @@ function ConnectorTile({
     const soleAgent = connector.type === 'mcp_server' ? soleMcpAgent(agents, connector.id) : null;
     // Status for the tile header (#1004): an unconfigured connector's group already says so,
     // so it only flags one that needs setup first.
+    const accounts = connector.accounts ?? [];
     const renderStatus = () => {
+        if (accounts.length > 1) {
+            const attention = accounts.filter(needsSignIn);
+            return (
+                <>
+                    <span className="connector-status ok">
+                        {attention.length === 0 && <CheckCircle2 size={12} />}
+                        {t.plural('settings.connectors.accountCount', accounts.length)}
+                    </span>
+                    {attention.length > 0 && (
+                        <span className="connector-status failed" role="status">
+                            <AlertCircle size={12} />
+                            {t(attention.some((a) => a.status === 'reauth_required') ? 'settings.connectors.signInExpired' : 'settings.connectors.notWorking')}
+                        </span>
+                    )}
+                </>
+            );
+        }
+        if (accounts.length === 1 && needsSignIn(accounts[0])) {
+            return (
+                <span className="connector-status failed" role="status">
+                    <AlertCircle size={12} />
+                    {t(accounts[0].status === 'reauth_required' ? 'settings.connectors.signInExpired' : 'settings.connectors.notWorking')}
+                </span>
+            );
+        }
         if (!connector.configured) {
             // Still in the "Connected" group it was listed in, so the row has to say it left.
             if (wasConnected) return <span className="connector-status idle" role="status">{t('settings.connectors.disconnected')}</span>;
@@ -506,10 +536,18 @@ function ConnectorTile({
         if (check?.state === 'failed' && !check.slow) {
             return <span className="connector-status failed" role="status">{t('settings.connectors.notWorking')}</span>;
         }
+        // An MCP server is only known to work once a check has started it.
+        if (connector.type === 'mcp_server' && check?.state !== 'ok') {
+            return (
+                <span className="connector-status idle" role="status">
+                    {t(check?.state === 'checking' ? 'settings.connectors.checkingShort' : 'settings.connectors.turnedOn')}
+                </span>
+            );
+        }
         return (
             <span className="connector-status ok">
                 <CheckCircle2 size={12} />
-                {connector.account_id ? <bdi dir="ltr">{connector.account_id}</bdi> : t('settings.connectors.connected')}
+                {connector.account_id ? <AccountAddress email={connector.account_id} max={40} /> : t('settings.connectors.connected')}
             </span>
         );
     };
@@ -708,18 +746,48 @@ function OAuthConfigureBody({
         ),
     );
 
-    const handleDisconnect = async () => {
+    // Accounts the server found when this tile showed one: removed only once the user agrees.
+    const [removeAll, setRemoveAll] = useState<string[] | null>(null);
+    const handleDisconnect = async (all = false) => {
         setBusy(true);
         setErr(null);
         try {
-            await api.disconnectConnector(connector.id);
+            await (all ? api.disconnectConnector(connector.id, { all: true }) : api.disconnectConnector(connector.id));
+            setRemoveAll(null);
             onChanged();
+        } catch (e) {
+            const choices = all ? null : accountChoices(e);
+            if (choices) setRemoveAll(choices);
+            else setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const accountList = showsAccountList(connector);
+    const hasAccounts = (connector.accounts?.length ?? 0) > 0;
+    // Another account, or the same one again: access matches what the stored account holds.
+    const signIn = async (target: api.AuthorizeTarget) => {
+        const scopes = connector.scopes.length > 0 ? connector.scopes : connectScopes(connector, []);
+        const r = await api.authorizeConnector(connector.id, scopes, [], target);
+        openAuthUrl(r.authorization_url);
+    };
+    const handleAddAccount = async () => {
+        setBusy(true);
+        setErr(null);
+        try {
+            await signIn({ addAccount: true });
         } catch (e) {
             setErr(e instanceof Error ? e.message : String(e));
         } finally {
             setBusy(false);
         }
     };
+    const addAccountLink = (
+        <button type="button" className="connector-add-account" disabled={busy} onClick={() => void handleAddAccount()}>
+            {t('settings.connectors.addAccount', { name: connector.display_name })}
+        </button>
+    );
 
     // First-time setup: persist the OAuth client credentials, then
     // start the browser flow in one shot. The configure endpoint
@@ -805,7 +873,7 @@ function OAuthConfigureBody({
                     ))}
                 </div>
             )}
-            {!connector.configured && askGrants && (
+            {!connector.configured && !hasAccounts && askGrants && (
                 <div className="oauth-grant-onconnect">
                     <p className="oauth-grant-onconnect-label">{t('settings.connectors.grantOnConnect')}</p>
                     {grantableAgents.map((a) => (
@@ -827,20 +895,51 @@ function OAuthConfigureBody({
             {!showSetupForm && (
                 <OAuthClientEditor connector={connector} onChanged={onChanged} />
             )}
-            {err && (
+            {accountList && (
+                <ConnectorAccountList connector={connector} onChanged={onChanged} onSignIn={(account) => signIn({ account })} />
+            )}
+            {err && !removeAll && (
                 <div className="configure-error">
                     <AlertCircle size={12} /> {err}
                 </div>
             )}
+            {removeAll && (
+                <ConfirmSheet
+                    title={t('settings.connectors.disconnectAllAsk', { n: removeAll.length, name: connector.display_name })}
+                    confirmLabel={t('settings.connectors.disconnectAll')}
+                    cancelLabel={t('settings.connectors.cancel')}
+                    onConfirm={() => void handleDisconnect(true)}
+                    onCancel={() => {
+                        setRemoveAll(null);
+                        setErr(null);
+                        onChanged();
+                    }}
+                    danger
+                    busy={busy}
+                >
+                    <ul className="confirm-accounts">
+                        {removeAll.map((address) => (
+                            <li key={address}><AccountAddress email={address} /></li>
+                        ))}
+                    </ul>
+                    <p>{t('settings.connectors.disconnectAllBody')}</p>
+                    {err && <p className="configure-error" role="alert">{err}</p>}
+                </ConfirmSheet>
+            )}
             <div className="configure-actions">
-                {connector.configured ? (
-                    <button
-                        className="btn-secondary"
-                        disabled={busy}
-                        onClick={() => void handleDisconnect()}
-                    >
-                        {busy ? <Loader2 size={12} className="spin" /> : t('settings.connectors.disconnect')}
-                    </button>
+                {accountList ? (
+                    addAccountLink
+                ) : connector.configured ? (
+                    <>
+                        <button
+                            className="btn-secondary"
+                            disabled={busy}
+                            onClick={() => void handleDisconnect()}
+                        >
+                            {busy ? <Loader2 size={12} className="spin" /> : t('settings.connectors.disconnect')}
+                        </button>
+                        {hasAccounts && addAccountLink}
+                    </>
                 ) : showSetupForm ? (
                     <button
                         className="btn-primary"

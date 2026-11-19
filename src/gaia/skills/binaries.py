@@ -2426,8 +2426,8 @@ def normalize_binary(token: str) -> str:
 
 
 #: ``gaia`` subcommands only a person at their own terminal may run. They decide
-#: which skills GAIA trusts, so no approval lets the agent run them.
-HUMAN_ONLY_GAIA_SUBCOMMANDS = frozenset({"skill"})
+#: which skills and folders GAIA trusts, so no approval lets the agent run them.
+HUMAN_ONLY_GAIA_SUBCOMMANDS = frozenset({"skill", "trust", "project"})
 
 #: How a refusal names the command family only the user may run.
 HUMAN_ONLY_CALL = "gaia skill"
@@ -2440,8 +2440,9 @@ def human_only_message(spelled: str) -> str:
     """The refusal for *spelled*, a ``gaia`` command only the user may run."""
     return (
         f"'{spelled}' is not permitted for GAIA: promoting, installing or "
-        "trusting a skill is the user's decision, made from their own "
-        "terminal, and no approval lets the agent run it"
+        "trusting a skill, and trusting a folder's guidance, is the user's "
+        "decision, made from their own terminal, and no approval lets the "
+        "agent run it"
     )
 
 
@@ -2465,10 +2466,10 @@ def _bare_word(token: str) -> str:
     return word
 
 
-#: Modules that run ``gaia skill`` or change skill trust when imported and called.
+#: Modules that run ``gaia skill`` or change skill or folder trust when imported and called.
 TRUST_MODULES = re.compile(
-    r"^gaia\.(?:cli|__main__|skills\.(?:cli|capture|install|signing|drift|publish|"
-    r"link|migrate|human_only))(?!\w)"
+    r"^gaia\.(?:cli|__main__|project_trust|project_trust_cli|skills\.(?:cli|capture|"
+    r"install|signing|drift|publish|link|migrate|human_only))(?!\w)"
 )
 
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -66,11 +67,11 @@ def _mock_token_endpoint(scope="openid"):
                 "expires_in": 3600,
                 "scope": scope,
                 "id_token": (
-                    # JWT payload {"email": "alice@example.com"}; signature
+                    # JWT payload {"email": "alice@example.com", "sub": "alice-sub"}; signature
                     # is a placeholder — flow.py decodes only the email
                     # claim, not the signature.
                     "header."
-                    "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9"
+                    "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
                     ".sig"
                 ),
             },
@@ -162,7 +163,9 @@ class TestGrantedScopesTruthfulness:
                     "scope": "openid https://www.googleapis.com/auth/gmail.modify "
                     "https://www.googleapis.com/auth/gmail.send",
                     "id_token": (
-                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                        "header."
+                        "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
+                        ".sig"
                     ),
                 },
             )
@@ -205,7 +208,9 @@ class TestGrantedScopesTruthfulness:
                     "expires_in": 3600,
                     # No "scope" key at all.
                     "id_token": (
-                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                        "header."
+                        "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
+                        ".sig"
                     ),
                 },
             )
@@ -246,7 +251,9 @@ class TestGrantedScopesTruthfulness:
                     # Calendar was granted by an earlier connect and folded in.
                     "scope": " ".join(requested + [extra]),
                     "id_token": (
-                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                        "header."
+                        "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
+                        ".sig"
                     ),
                 },
             )
@@ -296,9 +303,16 @@ class TestTenantRecordedOnConnect:
                     "expires_in": 3600,
                     "scope": "openid",
                     "id_token": (
-                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                        "header."
+                        "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
+                        ".sig"
                     ),
                 },
+            )
+        )
+        respx.get(url__startswith="https://graph.microsoft.com/v1.0/me").mock(
+            return_value=httpx.Response(
+                200, json={"id": "alice-oid", "mail": "alice@example.com"}
             )
         )
         respx.route(host="127.0.0.1").pass_through()
@@ -778,3 +792,100 @@ class TestBrowserLaunchReporting:
         assert not any(
             "no browser could be launched" in r.message for r in caplog.records
         ), "a browser that opened fine was reported as failed"
+
+
+class TestCallbackPort:
+    @respx.mock
+    async def test_explicit_callback_port_bound_and_returned(self, google_provider):
+        _mock_token_endpoint()
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            free_port = s.getsockname()[1]
+
+        info = await start_authorization(
+            "google", scopes=["openid"], callback_port=free_port
+        )
+        assert info["callback_port"] == free_port
+
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        redirect_uri = params["redirect_uri"][0]
+        assert redirect_uri == f"http://127.0.0.1:{free_port}/callback"
+
+        state = params["state"][0]
+        async with httpx.AsyncClient() as c:
+            resp = await c.get(f"{redirect_uri}?code=test-code&state={state}")
+        assert resp.status_code == 200
+
+        result = await asyncio.wait_for(
+            complete_authorization(info["flow_id"]), timeout=2.0
+        )
+        assert result["account_email"] == "alice@example.com"
+
+    @respx.mock
+    async def test_explicit_callback_port_already_in_use_fails_cleanly(
+        self, google_provider
+    ):
+        from gaia.connectors.errors import ConnectorsError
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            busy_port = s.getsockname()[1]
+
+            with pytest.raises(ConnectorsError) as exc_info:
+                await start_authorization(
+                    "google", scopes=["openid"], callback_port=busy_port
+                )
+
+            assert f"Could not bind OAuth callback to port {busy_port}" in str(
+                exc_info.value
+            )
+            assert "port is already in use" in str(exc_info.value)
+            assert "--callback-port" in str(exc_info.value)
+
+    @pytest.mark.parametrize("invalid_port", [0, -1, 65536, 100000, True, False])
+    async def test_invalid_callback_port_rejected(self, google_provider, invalid_port):
+        from gaia.connectors.errors import ConnectorsError
+
+        with pytest.raises(ConnectorsError) as exc_info:
+            await start_authorization(
+                "google", scopes=["openid"], callback_port=invalid_port
+            )
+
+        assert "Invalid callback port" in str(exc_info.value)
+
+    @respx.mock
+    async def test_explicit_callback_port_permission_denied_reports_elevated_rights(
+        self, google_provider, monkeypatch
+    ):
+        from aiohttp.web import TCPSite
+
+        from gaia.connectors.errors import ConnectorsError
+
+        async def _fake_start(self):
+            raise PermissionError("Permission denied")
+
+        monkeypatch.setattr(TCPSite, "start", _fake_start)
+
+        with pytest.raises(ConnectorsError) as exc_info:
+            await start_authorization("google", scopes=["openid"], callback_port=80)
+
+        err_msg = str(exc_info.value)
+        assert "Could not bind OAuth callback to port 80" in err_msg
+        assert "permission denied (ports below 1024 need elevated rights)" in err_msg
+        assert "Choose a free port above 1024 with --callback-port" in err_msg
+
+    @respx.mock
+    async def test_invalid_callback_port_does_not_evict_existing_pending_flow(
+        self, google_provider
+    ):
+        from gaia.connectors.errors import ConnectorsError
+        from gaia.connectors.flow import _pending
+
+        info = await start_authorization("google", scopes=["openid"])
+        flow_id = info["flow_id"]
+        assert flow_id in _pending
+
+        with pytest.raises(ConnectorsError):
+            await start_authorization("google", scopes=["openid"], callback_port=-1)
+
+        assert flow_id in _pending

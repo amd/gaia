@@ -85,6 +85,7 @@ from gaia.agents.base.tool_grants import (
     PROJECT_TRUST_PROMPT_TOOL,
     RESOLVED_PATH_ARG,
     SCRATCH_ARG,
+    SITE_ARG,
 )
 from gaia.agents.base.untrusted_text import strip_untrusted_field_markers
 from gaia.ui.event_narration import (
@@ -180,7 +181,7 @@ class CanonicalTranslator:
     Args:
         run_id: The host-minted run handle, echoed on pause events.
         agent_id: Agent this run belongs to. Drives ``respond_url`` — the reason
-            this is a parameter and not a constant: a hardcoded ``/v1/email/...``
+            this is a parameter and not a constant: a hardcoded ``/v1/<agent>/...``
             silently points every other agent's client at the wrong sidecar.
         action_labels: ``tool name -> human headline`` for confirmation prompts.
         summary_renderer: ``(tool, args) -> str`` override for the whole
@@ -622,6 +623,8 @@ class CanonicalTranslator:
             prompt_context["working_directory"] = str(folder)
         if args.get(RISK_NOTE_ARG):
             prompt_context["risk_note"] = str(args[RISK_NOTE_ARG])
+        if args.get(SITE_ARG):
+            prompt_context["site"] = str(args[SITE_ARG])
         # A calendar card shows the checked values: the addresses as notified,
         # the event's real title, text with its hidden characters as codes.
         if tool in CALENDAR_WRITE_TOOLS:
@@ -865,7 +868,14 @@ PROMPT_ARG_VALUE_CHARS = 64_000
 
 #: Keys GAIA writes into a prompt's arguments; the agent refuses them from a model.
 PROMPT_ONLY_ARGS = frozenset(
-    {RISK_NOTE_ARG, SCRATCH_ARG, EXACT_TEXT_ARG, RESOLVED_PATH_ARG, NEEDS_PERSON_ARG}
+    {
+        RISK_NOTE_ARG,
+        SCRATCH_ARG,
+        EXACT_TEXT_ARG,
+        RESOLVED_PATH_ARG,
+        NEEDS_PERSON_ARG,
+        SITE_ARG,
+    }
 )
 
 

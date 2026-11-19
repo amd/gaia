@@ -212,7 +212,7 @@ func TestPickingTheCurrentSessionChangesNothing(t *testing.T) {
 }
 
 func TestADaemonAgentSaysItKeepsNoSessions(t *testing.T) {
-	m, _ := liveChatModel(t, "email")
+	m, _ := liveChatModel(t, sampleSidecarID)
 	m = step(t, m, chat.OpenSessionsMsg{})
 	if m.activeView != viewChat || !strings.Contains(lastStatus(m), "does not keep sessions") {
 		t.Fatalf("view %v status %q", m.activeView, lastStatus(m))

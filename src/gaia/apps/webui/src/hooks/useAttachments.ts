@@ -6,8 +6,10 @@ import type { Translate } from '../i18n/useT';
 import { useT } from '../i18n/useT';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { usePickedElementsStore } from '../stores/pickedElementsStore';
 import { isMediaFile } from '../utils/mediaFiles';
 import type { Attachment } from '../types';
+import type { PageElementWire } from '../../services/browser-pane/contract';
 
 /** Files attached to the message being composed, uploaded as soon as they are added. */
 export interface UseAttachments {
@@ -23,6 +25,8 @@ export interface UseAttachments {
     uploading: boolean;
     /** The message text with markdown links to the uploaded files appended. */
     compose: (text: string) => string;
+    /** The chips picked in the browser pane, for the request being sent; clears them. */
+    takeElements: () => PageElementWire[] | undefined;
 }
 
 const MODERN_OFFICE: Record<string, string> = { '.doc': '.docx', '.xls': '.xlsx', '.ppt': '.pptx' };
@@ -163,5 +167,6 @@ export function useAttachments(): UseAttachments {
         hasImage: attachments.some((a) => a.uploaded && a.isImage),
         uploading: attachments.some((a) => a.uploading),
         compose,
+        takeElements: usePickedElementsStore.getState().take,
     };
 }
