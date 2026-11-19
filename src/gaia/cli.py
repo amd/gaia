@@ -3965,7 +3965,7 @@ afterwards (or `swebench <run_dir>` does, later).
 
     skills_cli.add_subparser(subparsers)
 
-    # Project trust (issue #7003) — gaia project trust {list|add|decline|forget}
+    # gaia project trust {list|add|decline|forget}, alias gaia trust
     from gaia import project_trust_cli
 
     project_trust_cli.add_subparser(subparsers)
@@ -6617,7 +6617,7 @@ Let me know your answer!
         rc = skills_cli.handle(args)
         sys.exit(rc)
 
-    # Handle Project trust command (issue #7003)
+    # Handle Project trust command
     if args.action in ("project", "trust"):
         from gaia import project_trust_cli
 

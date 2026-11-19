@@ -2143,7 +2143,9 @@ Manage whether GAIA is allowed to read project guidance (`CLAUDE.md`, `AGENTS.md
 gaia project trust <subcommand> [OPTIONS]
 ```
 
-_Alias:_ `gaia trust <subcommand> [OPTIONS]`
+_Alias:_ `gaia trust <subcommand> [OPTIONS]` — `gaia trust list`, `gaia trust add`, `gaia trust decline` and `gaia trust forget` behave exactly like their `gaia project trust` forms.
+
+Only you can trust a folder: `add` refuses to run when an agent, or a process an agent started, calls it.
 
 **Subcommands:**
 
@@ -2167,6 +2169,10 @@ gaia project trust list --json
 
 ```bash Pre-approve current repository for unattended runs
 gaia project trust add
+```
+
+```bash Never load a folder's guidance
+gaia project trust decline /path/to/repo
 ```
 
 ```bash Forget an answer or clear missing folders
@@ -4485,8 +4491,8 @@ API keys and tokens in GAIA's state files (`lemonade/state.json`, `host/instance
 Most commands support these options. They come from a shared parent parser, so
 despite the name they are **not** accepted by `gaia agent`, `gaia cache`,
 `gaia config`, `gaia connectors`, `gaia daemon`, `gaia diagnostics`, `gaia engineering`,
-`gaia gateway`, `gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory`, `gaia model` or
-`gaia skill` — passing one there fails with `unrecognized arguments`.
+`gaia gateway`, `gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory`, `gaia model`,
+`gaia project`, `gaia skill` or `gaia trust` — passing one there fails with `unrecognized arguments`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|

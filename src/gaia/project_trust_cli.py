@@ -175,6 +175,15 @@ def _handle_list(args: argparse.Namespace) -> int:
 
 
 def _handle_add(args: argparse.Namespace) -> int:
+    from gaia.skills.human_only import started_by_agent
+
+    # Trusting puts a folder's guidance and skills in the prompt: the user's call, never an agent's.
+    if started_by_agent():
+        sys.stderr.write(
+            "Refused 'gaia trust add': only you can trust a folder, from your own "
+            "terminal. An agent or a process it started cannot.\n"
+        )
+        return EXIT_USAGE
     folder = getattr(args, "folder", None)
     resolved = resolve_project_folder(folder)
     remember_folder_trust(resolved, TRUSTED)
@@ -238,7 +247,11 @@ def _handle_forget(args: argparse.Namespace) -> int:
         sys.stdout.write(f"Trust store: {trust_store_path()}\n")
         return EXIT_OK
 
-    resolved = resolve_project_folder(folder)
+    # A folder that is gone can still have a saved answer; forget it by its path.
+    if folder and not os.path.exists(os.path.expanduser(folder)):
+        resolved = os.path.expanduser(folder)
+    else:
+        resolved = resolve_project_folder(folder)
     removed = forget_folder_trust(folder=resolved)
     if not removed:
         sys.stdout.write(f"No saved answer for {resolved} in {trust_store_path()}.\n")

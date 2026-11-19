@@ -304,3 +304,115 @@ def test_guidance_loads_after_trust_add(repo, capsys):
     agent2 = _FakeAgent(repo, console)
     agent2._on_task_start("second")
     assert agent2._full_project_context() is True
+
+
+def _parse(argv):
+    parser = project_trust_cli.argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="action")
+    project_trust_cli.add_subparser(subparsers)
+    return parser.parse_args(argv)
+
+
+@pytest.mark.parametrize("prefix", [["project", "trust"], ["trust"]])
+def test_cli_forget_a_deleted_folder_by_its_path(tmp_path, capsys, prefix):
+    gone = tmp_path / "gone_repo"
+    gone.mkdir()
+    remember_folder_trust(gone, TRUSTED)
+    gone.rmdir()
+
+    rc = project_trust_cli.handle(_parse([*prefix, "forget", str(gone)]))
+
+    assert rc == 0
+    assert "Forgot trust answer" in capsys.readouterr().out
+    assert folder_trust(gone) is None
+
+
+def test_cli_forget_an_unknown_deleted_path_changes_nothing(repo, tmp_path, capsys):
+    remember_folder_trust(repo, TRUSTED)
+
+    rc = project_trust_cli.handle(
+        _parse(["trust", "forget", str(tmp_path / "never_existed")])
+    )
+
+    assert rc == 0
+    assert "No saved answer" in capsys.readouterr().out
+    assert folder_trust(repo) == TRUSTED
+
+
+@pytest.mark.parametrize("prefix", [["project", "trust"], ["trust"]])
+def test_an_agent_started_process_cannot_trust_a_folder(
+    repo, monkeypatch, capsys, prefix
+):
+    from gaia.skills.human_only import AGENT_CHILD_ENV
+
+    monkeypatch.setenv(AGENT_CHILD_ENV, "1")
+
+    rc = project_trust_cli.handle(_parse([*prefix, "add", str(repo)]))
+
+    assert rc != 0
+    assert "only you can trust a folder" in capsys.readouterr().err
+    assert folder_trust(repo) is None
+
+
+def test_an_agent_tool_in_process_cannot_trust_a_folder(repo, monkeypatch, capsys):
+    from gaia.skills.human_only import AGENT_CHILD_ENV, agent_tool_running
+
+    monkeypatch.delenv(AGENT_CHILD_ENV, raising=False)
+    with agent_tool_running():
+        rc = project_trust_cli.handle(_parse(["trust", "add", str(repo)]))
+
+    assert rc != 0
+    assert folder_trust(repo) is None
+
+
+def test_an_agent_cannot_flip_a_declined_folder_to_trusted(repo, monkeypatch):
+    from gaia.skills.human_only import AGENT_CHILD_ENV
+
+    remember_folder_trust(repo, DECLINED)
+    monkeypatch.setenv(AGENT_CHILD_ENV, "1")
+
+    project_trust_cli.handle(_parse(["trust", "add", str(repo)]))
+
+    assert folder_trust(repo) == DECLINED
+
+
+def test_add_from_a_subfolder_trusts_the_repository(repo, monkeypatch):
+    sub = repo / "src" / "pkg"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(sub)
+
+    assert project_trust_cli.handle(_parse(["trust", "add"])) == 0
+
+    assert folder_trust(repo) == TRUSTED
+    assert folder_trust(sub) is None
+
+
+def test_add_does_not_climb_to_a_parent_that_only_has_guidance(tmp_path, monkeypatch):
+    parent = tmp_path / "work"
+    child = parent / "notes"
+    child.mkdir(parents=True)
+    (parent / "AGENTS.md").write_text("# hostile\n", encoding="utf-8")
+    monkeypatch.chdir(child)
+
+    assert project_trust_cli.handle(_parse(["trust", "add"])) == 0
+
+    assert folder_trust(child) == TRUSTED
+    assert folder_trust(parent) is None
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["trust", "list"],
+        ["project", "trust", "list", "--json"],
+        ["trust", "add"],
+        ["trust", "forget", "--missing"],
+    ],
+)
+def test_gaia_parser_routes_trust_commands(argv):
+    from gaia.cli import build_parser
+
+    args = build_parser().parse_args(argv)
+
+    assert args.action in ("project", "trust")
+    assert args.trust_action == argv[argv.index("trust") + 1]

@@ -184,11 +184,11 @@ def forget_folder_trust(
 def resolve_project_folder(
     folder: Optional[Union[str, "os.PathLike[str]"]] = None,
 ) -> str:
-    """Resolve *folder* (or cwd) to the repository or project root.
+    """Resolve *folder* (or cwd) to the enclosing repository, else *folder* itself.
 
-    Matches the lookup folder that ``ProjectMapMixin`` checks during agent
-    sessions, so pre-saving or forgetting trust for a repository from one of its
-    subfolders affects the same entry the session consults.
+    Mirrors how a session picks the folder it asks about when no
+    ``GAIA_PROJECT_ROOT`` or ``project_root`` is set: the nearest code
+    repository below the home directory, otherwise the working directory.
     """
     if folder:
         target = Path(folder).expanduser().resolve()
@@ -199,11 +199,7 @@ def resolve_project_folder(
     else:
         target = Path.cwd().resolve()
 
-    from gaia.agents.base.project_map import (
-        PROJECT_INSTRUCTION_FILES,
-        is_agent_own_source,
-        is_code_repository,
-    )
+    from gaia.agents.base.project_map import is_agent_own_source, is_code_repository
 
     try:
         home = Path.home().resolve()
@@ -219,9 +215,6 @@ def resolve_project_folder(
             if not is_agent_own_source(ancestor):
                 return str(ancestor)
             break
-        if any((ancestor / name).is_file() for name in PROJECT_INSTRUCTION_FILES):
-            if not is_agent_own_source(ancestor):
-                return str(ancestor)
 
     return str(target)
 

@@ -562,13 +562,15 @@ def test_resolve_project_folder_finds_repo_root_from_subfolder(repo):
     assert resolve_project_folder(sub) == str(repo.resolve())
 
 
-def test_resolve_project_folder_finds_instruction_root_without_vcs(tmp_path):
+def test_resolve_project_folder_keeps_a_non_vcs_folder_as_named(tmp_path):
     project = tmp_path / "non_vcs_project"
     project.mkdir()
     (project / "CLAUDE.md").write_text("# Instructions\n", encoding="utf-8")
     sub = project / "docs"
     sub.mkdir()
-    assert resolve_project_folder(sub) == str(project.resolve())
+    # A session outside a repository only reads guidance from its own folder.
+    assert resolve_project_folder(project) == str(project.resolve())
+    assert resolve_project_folder(sub) == str(sub.resolve())
 
 
 def test_resolve_project_folder_nonexistent_raises():
