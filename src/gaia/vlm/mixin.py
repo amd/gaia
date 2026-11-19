@@ -195,6 +195,26 @@ class VLMToolsMixin:
             "image_path": image_path,
         }
 
+    def _image_reader(self) -> Any:
+        """The client that reads the next image: one for a tested vision model
+        that is already loaded, so the read doesn't unload it, else ``vlm_client``.
+        """
+        from gaia.llm.lemonade_client import resident_vision_model
+        from gaia.llm.vlm_client import VLMClient
+
+        configured = self.vlm_client
+        resident = resident_vision_model(configured.vlm_model, client=configured.client)
+        if resident == configured.vlm_model:
+            return configured
+        logger.info(
+            "Reading the image with %s, which is already loaded, instead of %s: "
+            "loading %s would unload it.",
+            resident,
+            configured.vlm_model,
+            configured.vlm_model,
+        )
+        return VLMClient(vlm_model=resident, base_url=configured.base_url)
+
     def _analyze_image(self, image_path: str, focus: str = "all") -> Dict[str, Any]:
         """
         Analyze an image with VLM and provide detailed description.
@@ -237,14 +257,15 @@ class VLMToolsMixin:
             image_bytes = path.read_bytes()
 
             # VLMClient.extract_from_image expects bytes and returns markdown string
-            description = self.vlm_client.extract_from_image(image_bytes, prompt=prompt)
+            reader = self._image_reader()
+            description = reader.extract_from_image(image_bytes, prompt=prompt)
 
             return {
                 "status": "success",
                 "image_path": str(path),
                 "focus": focus,
                 "description": description,
-                "model": self.vlm_client.vlm_model,
+                "model": reader.vlm_model,
             }
 
         except VisionModelMissingError as e:
@@ -286,14 +307,15 @@ class VLMToolsMixin:
             image_bytes = path.read_bytes()
 
             prompt = f"Answer this question about the image: {question}"
-            answer = self.vlm_client.extract_from_image(image_bytes, prompt=prompt)
+            reader = self._image_reader()
+            answer = reader.extract_from_image(image_bytes, prompt=prompt)
 
             return {
                 "status": "success",
                 "image_path": str(path),
                 "question": question,
                 "answer": answer,
-                "model": self.vlm_client.vlm_model,
+                "model": reader.vlm_model,
             }
 
         except VisionModelMissingError as e:

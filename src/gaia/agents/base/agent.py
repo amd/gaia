@@ -3374,6 +3374,8 @@ class Agent(abc.ABC):
     _thinking_cut_off: bool = False
     # Set by a caller with nobody watching (gaia -p): the model is told so.
     no_one_to_ask: bool = False
+    # How many replies this turn were cut off that way.
+    _thinking_cut_offs: int = 0
 
     # Skills: lazily built manager + the skills loaded into this agent.
     # Instance-level once set, so one agent's skills never leak into a sibling.
@@ -11207,9 +11209,10 @@ Do NOT wrap conversational replies in JSON.
         """The reasoning effort for the next model call, if any is asked for.
 
         The agent's own choice (ReasoningEffortToolsMixin), except right after
-        a reply cut off with nothing but thinking in it.
+        a reply cut off with nothing but thinking in it, and for the rest of a
+        turn that has had two such replies.
         """
-        if self._thinking_cut_off:
+        if self._thinking_cut_off or self._thinking_cut_offs >= 2:
             # Thinking used a whole reply: ask a cloud model for its least.
             from gaia.llm.lemonade_client import cloud_lowest_reasoning_effort
 
@@ -12854,6 +12857,7 @@ Do NOT wrap conversational replies in JSON.
         self._open_step_stats = None
         self._step_stats_recorded = False
         self._thinking_cut_off = False
+        self._thinking_cut_offs = 0
 
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
@@ -14097,6 +14101,7 @@ Do NOT wrap conversational replies in JSON.
                 self._thinking_cut_off = _was_all_thinking(
                     response, reasoning, response_stats
                 )
+                self._thinking_cut_offs += self._thinking_cut_off
                 messages.append(
                     {
                         "role": "user",

@@ -6,7 +6,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
+Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
 - **`gaia -p --time-limit` uses the time it is given.** One slow step made the
   agent stop with minutes left, so a found answer often never reached the
@@ -129,7 +129,9 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
   completely" and the turn was marked unfinished.
 - A cloud model that spends a whole reply reasoning and returns nothing is
   asked for its lowest reasoning level on the next request, so the turn moves
-  on. A turn now ends on its third cut-off reply in a row, not its third overall.
+  on; after a second such reply in one turn, that level holds for the rest of
+  the turn. A turn now ends on its third cut-off reply in a row, not its third
+  overall.
 - In a `gaia -p` run the agent is told nobody can answer questions, so it
   settles an open choice itself and says what it assumed instead of ending on
   an offer to change it later.
