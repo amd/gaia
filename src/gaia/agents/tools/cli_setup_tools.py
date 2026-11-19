@@ -36,9 +36,13 @@ than a package manager, and it is the same size no matter how many skills use it
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
+from gaia import program_lookup
+from gaia.agents.base.call_risk import NEEDS_PERSON_ARG
+from gaia.agents.base.denied_effects import UNATTENDED_REFUSAL
 from gaia.agents.base.file_snapshots import note_untracked
+from gaia.agents.base.person_approval import a_person_can_answer, preapproved
 from gaia.logger import get_logger
 from gaia.skills.binaries import BINARY_POLICIES, BinaryPolicy
 from gaia.skills.binary_setup import (
@@ -137,6 +141,14 @@ def _sign_in_command(policy: BinaryPolicy) -> str:
     return " ".join([policy.binary, *setup.auth_login_argv])
 
 
+def _install_command(policy: BinaryPolicy) -> str:
+    """The install command as one line, or "" where GAIA has none for this OS."""
+    if policy.setup is None:
+        return ""
+    plan = install_plan(policy)
+    return plan.command if plan is not None else ""
+
+
 def _command_mismatch(expected: str, supplied: str) -> bool:
     """True when the echoed command is not the one the table would run.
 
@@ -147,6 +159,68 @@ def _command_mismatch(expected: str, supplied: str) -> bool:
     into an injection point.
     """
     return " ".join((supplied or "").split()) != " ".join(expected.split())
+
+
+class _PersonMustApprove:
+    """Pre-flight for a setup tool: a person approves it, or it does not run.
+
+    Pre-approval (Full access, ``GAIA_AUTO_APPROVE_TOOLS``, ``gaia -p
+    --dangerously-skip-permissions``) answers tool prompts on the user's behalf.
+    Installing software, or signing in to an account, is not theirs to answer:
+    where a person can be asked they are, and where nobody can it is refused
+    with the command to run by hand.
+    """
+
+    def __init__(
+        self,
+        host: Any,
+        action: str,
+        command_of: Callable[[BinaryPolicy], str],
+        refuse_first: Optional[
+            Callable[[BinaryPolicy], Optional[Dict[str, Any]]]
+        ] = None,
+    ):
+        self._host = host
+        self._action = action
+        self._command_of = command_of
+        self._refuse_first = refuse_first
+
+    def _preapproved(self) -> bool:
+        return preapproved(getattr(self._host, "console", None))
+
+    def __call__(self, args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        policy, unknown = _resolve_policy(str(args.get("binary") or ""))
+        if unknown is not None:
+            return unknown
+        # Before the prompt: nobody should approve a run that will be refused.
+        repeat = self._refuse_first(policy) if self._refuse_first else None
+        if repeat is not None:
+            return repeat
+        console = getattr(self._host, "console", None)
+        if not self._preapproved() or a_person_can_answer(console):
+            return None
+        # The table's own command, never the text the model passed in.
+        command = self._command_of(policy)
+        by_hand = f" To do it yourself, run: {command}" if command else ""
+        return {
+            "status": "error",
+            "error": (
+                f"Not run: {self._action} '{policy.binary}' needs a person's "
+                f"approval, and nobody can be asked in this run.{by_hand}"
+            ),
+            "has_errors": True,
+            "hint": (
+                "Tell the user what is missing and give them that command. Do "
+                "not reach the same result another way."
+            ),
+            UNATTENDED_REFUSAL: True,
+        }
+
+    def prompt_args_of(
+        self, args: Dict[str, Any]  # pylint: disable=unused-argument
+    ) -> Dict[str, Any]:
+        """Mark the prompt so pre-approval does not answer it."""
+        return {NEEDS_PERSON_ARG: True} if self._preapproved() else {}
 
 
 class CliSetupToolsMixin:
@@ -163,6 +237,33 @@ class CliSetupToolsMixin:
     same-named method here would never be called at all. Silently dead code in
     a permission path is worse than none.
     """
+
+    def _installs_left_unreachable(self) -> set:
+        """Programs installed during this request that GAIA still cannot find."""
+        # The agent makes a new denial ledger for each request.
+        request = getattr(self, "_denied_effects", None)
+        kept = getattr(self, "_unreachable_installs", None)
+        if kept is None or kept[0] is not request:
+            kept = (request, set())
+            self._unreachable_installs = kept
+        return kept[1]
+
+    def _repeat_install_refusal(self, policy: BinaryPolicy) -> Optional[Dict[str, Any]]:
+        """The block for installing again what an install here left unfound."""
+        if policy.binary not in self._installs_left_unreachable():
+            return None
+        return {
+            "status": "error",
+            "error": (
+                f"Not run: the install of '{policy.binary}' already finished "
+                "during this request and GAIA still cannot find it, so running "
+                "it again would change nothing. Tell the user that, and that "
+                f"'{policy.binary} --version' in a new terminal window shows "
+                "whether it is there."
+            ),
+            "has_errors": True,
+            "installed": False,
+        }
 
     def register_cli_setup_tools(self) -> None:
         """Register the CLI setup tools."""
@@ -191,7 +292,13 @@ class CliSetupToolsMixin:
             logger.info("CLI setup check: %s is %s", policy.binary, status.state)
             return _status_payload(status, policy)
 
-        @tool(atomic=True, timeout=_INSTALL_TOOL_TIMEOUT_S)
+        @tool(
+            atomic=True,
+            timeout=_INSTALL_TOOL_TIMEOUT_S,
+            preflight=_PersonMustApprove(
+                self, "installing", _install_command, self._repeat_install_refusal
+            ),
+        )
         def install_cli(binary: str, command: str) -> Dict[str, Any]:
             """Install a skill's CLI using this machine's package manager.
 
@@ -256,6 +363,10 @@ class CliSetupToolsMixin:
                     ),
                 }
 
+            repeat = self._repeat_install_refusal(policy)
+            if repeat is not None:
+                return repeat
+
             logger.info("Installing '%s' with: %s", policy.binary, plan.command)
             note_untracked("install_cli", str(plan.command))
             try:
@@ -263,22 +374,26 @@ class CliSetupToolsMixin:
             except SetupError as exc:
                 return {"status": "error", "error": str(exc), "has_errors": True}
 
+            # The installer added its folder to PATH for new processes only.
+            program_lookup.refresh_path(after_install=True)
             try:
                 after = detect(policy)
             except SetupError as exc:
                 return {"status": "error", "error": str(exc), "has_errors": True}
             if after.state == MISSING:
                 # The package manager said it worked and the CLI is still not
-                # there — usually a PATH that this process inherited before the
-                # install. Say that, rather than reporting a success the next
+                # there. Say that, rather than reporting a success the next
                 # command will contradict.
+                self._installs_left_unreachable().add(policy.binary)
                 return {
                     "status": "error",
                     "error": (
-                        f"'{plan.command}' reported success but '{policy.binary}' "
-                        "is still not on PATH for this process. It is most "
-                        "likely installed and simply not visible until GAIA is "
-                        "restarted — restart it and try again."
+                        f"'{plan.command}' reported success, but GAIA still "
+                        f"cannot find '{policy.binary}'. Do not install it "
+                        "again. Tell the user the "
+                        "install finished but the program is not reachable, "
+                        f"and that '{policy.binary} --version' in a new "
+                        "terminal window shows whether it is there."
                     ),
                     "has_errors": True,
                     "command_output": output,
@@ -290,7 +405,11 @@ class CliSetupToolsMixin:
                 "command_output": output,
             }
 
-        @tool(atomic=True, timeout=_SIGN_IN_TOOL_TIMEOUT_S)
+        @tool(
+            atomic=True,
+            timeout=_SIGN_IN_TOOL_TIMEOUT_S,
+            preflight=_PersonMustApprove(self, "signing in to", _sign_in_command),
+        )
         def sign_in_cli(binary: str, command: str) -> Dict[str, Any]:
             """Sign a CLI in to the user's account through their browser.
 

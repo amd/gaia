@@ -10,12 +10,9 @@ learned during the turn. A skill activated by ``load_skill`` lives on
 no skills loaded while the model, having just said "it's loaded", keeps
 promising otherwise.
 
-Started as a deliberate mirror of ``gaia_agent_email.agent_routes._SessionRegistry``
-— same idle-TTL + LRU bounds, same claim-the-lock eviction — and has since
-diverged: this one reserves a slot while an agent builds so the cap is a real
-bound, and tears agents down through ``close()``, which the email agent does not
-have. The duplication is a known cost; extracting one shared registry into core
-touches the email agent's tested paths and belongs in its own change.
+Idle-TTL + LRU bounds with claim-the-lock eviction. It reserves a slot while
+an agent builds so the cap is a real bound, and tears agents down through
+``close()``.
 """
 
 from __future__ import annotations
@@ -79,6 +76,62 @@ class SessionCapacityError(RuntimeError):
     A temporary, actionable condition — the HTTP layer maps it to 503 so a
     client can distinguish "try again shortly" from a bug-shaped 500.
     """
+
+
+def _carry_session_state(old: Any, new: Any, session_id: str) -> None:
+    """Give a rebuilt agent what its chat set on the old one.
+
+    A retained session keeps these until the caller changes them, so a
+    rebuild that dropped them would quietly put an offline chat back online,
+    or a private one back into memory: the conversation, loaded skills, the
+    internet switch, the memory mode, granted, read-only and withheld paths,
+    which documents are attached, the working folder, and which skills were
+    auto-loaded or unloaded, so a rebuild never auto-loads one the user dropped.
+    """
+    new.conversation_history = list(getattr(old, "conversation_history", None) or [])
+    if hasattr(old, "internet_off"):
+        new.internet_off = old.internet_off
+    if getattr(old, "_incognito", False) and hasattr(new, "_incognito"):
+        new._incognito = True
+        new._incognito_reason = getattr(old, "_incognito_reason", None)
+    old_validator = getattr(old, "path_validator", None)
+    new_validator = getattr(new, "path_validator", None)
+    if old_validator is not None and new_validator is not None:
+        for path in sorted(old_validator.allowed_paths - new_validator.allowed_paths):
+            new_validator.add_allowed_path(str(path))
+        for path in sorted(
+            old_validator.read_only_paths - new_validator.read_only_paths
+        ):
+            new_validator.add_read_only_path(str(path))
+        # Last, so a document the user took off stays refused over any grant.
+        for path in sorted(old_validator.withheld_paths):
+            new_validator.withhold_path(str(path))
+    # Which documents are attached, so one removed next turn loses its grant.
+    for records in ("_attached_documents", "_withheld_documents"):
+        if hasattr(old, records):
+            setattr(new, records, set(getattr(old, records)))
+    old_dir = getattr(getattr(old, "config", None), "working_directory", None)
+    if old_dir is not None and getattr(new, "config", None) is not None:
+        new.config.working_directory = old_dir
+    for name in list(getattr(old, "loaded_skills", None) or {}):
+        try:
+            new.load_skill(name)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(
+                "session %s: skill %r was not loaded again after its agent was "
+                "rebuilt for changed settings (%s); the user can load it again",
+                session_id,
+                name,
+                exc,
+            )
+    # After the loads above, so they cannot overwrite what the session recorded.
+    for records in ("_autoloaded_skills", "_unloaded_skills"):
+        if getattr(old, records, None) is not None:
+            setattr(new, records, set(getattr(old, records)))
+    if getattr(old, "_autoload_granted", None) is not None:
+        new._autoload_granted = {
+            name: list(programs) for name, programs in old._autoload_granted.items()
+        }
 
 
 class _AgentSession:
@@ -151,6 +204,37 @@ class _AgentSession:
         self.model_id = target
         self.provider = PROVIDER_CLAUDE if is_claude_model(target) else PROVIDER_LOCAL
         return display
+
+    def follow_settings(self, **config_kwargs: Any) -> bool:
+        """Rebuild the agent when settings it was built from changed since.
+
+        Its model server and MCP tools are fixed as it is built, so a server
+        or connector changed in Settings needs a new agent. Keeps this
+        session's model and what :func:`_carry_session_state` lists; the old
+        agent's pending memory work finishes and its MCP servers stop before
+        it closes. Must be called with ``run_lock`` held. Returns True when it
+        rebuilt.
+        """
+        changed = getattr(self.agent, "built_settings_changed", None)
+        if not callable(changed) or changed() is not True:
+            return False
+        kwargs = {
+            k: v
+            for k, v in config_kwargs.items()
+            if k not in ("model_id", "claude_model", "use_claude")
+        }
+        if self.provider == PROVIDER_CLAUDE:
+            kwargs["use_claude"] = True
+            if self.model_id:
+                kwargs["claude_model"] = self.model_id
+        elif self.model_id:
+            kwargs["model_id"] = self.model_id
+        old = self.agent
+        new = build_session_agent(**kwargs)
+        _carry_session_state(old, new, self.session_id)
+        self.agent = new
+        close_agent(old)
+        return True
 
     def is_running(self) -> bool:
         return self.run_lock.locked()

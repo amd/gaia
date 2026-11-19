@@ -574,11 +574,31 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
         # The header shows these, not an install record that may name another build.
         "agent_version": agent_version,
         "gaia_version": gaia_version,
+        "skills": _skill_commands(agent),
     }
     # Reported even on the Claude path: embeddings (RAG, memory) still run on
     # Lemonade, so "chat is remote" does not mean Lemonade being down is fine.
     event.update(_lemonade_health(_status_lemonade_url(agent)))
     return event
+
+
+def _skill_commands(agent: Any) -> List[Dict[str, str]]:
+    """Installed skills, for the TUI's ``/`` list: typing ``/<name>`` runs one.
+
+    Empty for an agent without the skill library: it cannot run them.
+    """
+    if not callable(getattr(agent, "activate_skill", None)):
+        return []
+    skills = agent.skill_manager.discover()
+    return [
+        {"name": name, "description": skills[name].description or ""}
+        for name in sorted(skills)
+    ]
+
+
+def _skills_event(agent: Any) -> Dict[str, Any]:
+    """A status line carrying only the skill list, after it may have changed."""
+    return {"type": "status", "message": "", "skills": _skill_commands(agent)}
 
 
 def _status_lemonade_url(agent: Any) -> Optional[str]:
@@ -1219,6 +1239,7 @@ def run_skills_command(agent: Any, query: str, out) -> None:
     args = query.strip()[len(SKILLS_COMMAND_PREFIX) :].split()
     if not args:
         skills = sorted(agent.skill_manager.reload())
+        _write(_skills_event(agent), out)
         listing = ", ".join(f"`{n}`" for n in skills) or "none"
         _write(
             {
@@ -1291,6 +1312,7 @@ def run_skills_command(agent: Any, query: str, out) -> None:
     # The skill catalog sits in the cached prompt head; recompose so this
     # session can see what was just added.
     agent.rebuild_system_prompt()
+    _write(_skills_event(agent), out)
     lines = [f"Added {len(result.added)} skill(s) from {link}."]
     if result.added:
         lines.append(", ".join(f"`{a['name']}`" for a in result.added))
@@ -1421,6 +1443,44 @@ def _write_if_wire_alive(event: Dict[str, Any], out) -> bool:
     except OSError as exc:
         logger.warning("stdout is gone (%s) — nothing left to report to", exc)
         return False
+
+
+def follow_settings(agent: Any, config_kwargs: Dict[str, Any]) -> Any:
+    """The agent to run the next turn on: a new one when Settings changed since.
+
+    Its model server and MCP tools are fixed as it is built. The new agent
+    runs the model this session is on, keeps its transcript, and gets what
+    the session set on the old one.
+    """
+    changed = getattr(agent, "built_settings_changed", None)
+    if not callable(changed) or changed() is not True:
+        return agent
+    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaia_agent.session_registry import _carry_session_state, close_agent
+
+    kwargs = {
+        k: v
+        for k, v in config_kwargs.items()
+        if k not in ("model_id", "claude_model", "use_claude")
+    }
+    if getattr(agent, "hybrid_router", None) is not None:
+        # model_id is the turn's routed model; the session runs on hybrid.
+        from gaia.llm.hybrid import HYBRID_MODEL_ID
+
+        kwargs["model_id"] = HYBRID_MODEL_ID
+    elif getattr(agent, "_use_claude", False):
+        kwargs["use_claude"] = True
+        kwargs["claude_model"] = agent.model_id
+    elif agent.model_id:
+        kwargs["model_id"] = agent.model_id
+    new = GaiaAgent(config=GaiaAgentConfig(**kwargs))
+    history = agent.conversation_history
+    _carry_session_state(agent, new, "terminal")
+    new.conversation_history = history
+    agent.conversation_history = []
+    close_agent(agent)
+    logger.info("rebuilt the agent for settings changed since it was built")
+    return new
 
 
 def _drain_memory(agent) -> None:
@@ -1833,6 +1893,10 @@ def run_turn(
         debug=dev,
     )
     result: Dict[str, Any] = {}
+    # Skills added or removed since the catalogue was built, e.g. in the Agent UI.
+    follow_skills = getattr(agent, "follow_installed_skills", None)
+    if callable(follow_skills):
+        follow_skills()
 
     def _run() -> None:
         try:
@@ -2304,6 +2368,7 @@ def main(argv: Optional[list] = None) -> int:
             logger.info("conversation history cleared by host /clear")
             continue
         try:
+            agent = follow_settings(agent, config_kwargs)
             dispatch_query(agent, query, out, dev=args.dev, state=state, index=index)
         except BrokenPipeError:
             # The wire is the parent. It being gone is not a turn to report.

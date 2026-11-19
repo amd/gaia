@@ -13,6 +13,8 @@ export interface ConnectAccountPayload {
     reconnect?: string[];
     /** Per provider, the access the failed call needs. */
     scopes?: Record<string, string[]>;
+    /** Per provider, the account the failed call used: its stable id or its address. */
+    account?: Record<string, string>;
 }
 
 function isScopeMap(value: unknown, providers: unknown[]): boolean {
@@ -23,6 +25,13 @@ function isScopeMap(value: unknown, providers: unknown[]): boolean {
             && Array.isArray(s)
             && s.length > 0
             && s.every((x) => typeof x === 'string' && x.length > 0),
+    );
+}
+
+function isAccountMap(value: unknown, providers: unknown[]): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    return Object.entries(value as Record<string, unknown>).every(
+        ([p, a]) => providers.includes(p) && typeof a === 'string' && a.length > 0,
     );
 }
 
@@ -37,7 +46,8 @@ export function isConnectAccountPayload(value: unknown): value is ConnectAccount
         (v.agent_id === undefined || typeof v.agent_id === 'string') &&
         (v.reconnect === undefined
             || (Array.isArray(v.reconnect) && v.reconnect.every((p) => typeof p === 'string'))) &&
-        (v.scopes === undefined || isScopeMap(v.scopes, v.providers))
+        (v.scopes === undefined || isScopeMap(v.scopes, v.providers)) &&
+        (v.account === undefined || isAccountMap(v.account, v.providers))
     );
 }
 
@@ -56,11 +66,18 @@ function mergeConnect(a: ConnectAccountPayload, b: ConnectAccountPayload): Conne
         const named = [a, b].filter((c) => c.providers.includes(p)).map((c) => c.scopes?.[p]);
         if (named.every((s) => s !== undefined)) scopes[p] = [...new Set(named.flat() as string[])];
     }
+    const account: Record<string, string> = {};
+    for (const p of providers) {
+        const named = new Set([a, b].map((c) => c.account?.[p]).filter((x): x is string => !!x));
+        if (named.size === 1) account[p] = [...named][0];
+    }
     const merged: ConnectAccountPayload = { ...a, providers };
     if (reconnect.length > 0) merged.reconnect = reconnect;
     else delete merged.reconnect;
     if (Object.keys(scopes).length > 0) merged.scopes = scopes;
     else delete merged.scopes;
+    if (Object.keys(account).length > 0) merged.account = account;
+    else delete merged.account;
     return merged;
 }
 

@@ -123,7 +123,7 @@
     background: var(--accent-fill);
     color: var(--accent-fill-text);
     font-size: var(--fs-label);
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     cursor: pointer;
     white-space: nowrap;
@@ -240,7 +240,9 @@
 .fb-search-scope {
     color: var(--text-muted);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -320,7 +322,9 @@
 .fb-entry-name {
     flex: 1;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
     color: var(--text-primary);
 }
@@ -398,10 +402,12 @@
 
 .fb-preview-name {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 

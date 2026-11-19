@@ -66,11 +66,13 @@
 #                      (the publish approval is human), then fails naming the
 #                      missing ones
 #   pull_request       on installer, install-script and download-page changes. A
-#                      PR does not build installers: it runs the newest release's
-#                      installers with the PR's journey scripts, install.sh and
-#                      install.ps1, and (for a candidate) packages rebuilt with
-#                      the PR's build scripts. A change to what an installer
-#                      contains is proven when the next release candidate is cut.
+#                      PR does not build installers: it reads the checked-in
+#                      release fixture (tests/fixtures/github/releases.json) and
+#                      runs that release's installers with the PR's journey
+#                      scripts, install.sh and install.ps1, and (for a candidate)
+#                      packages rebuilt with the PR's build scripts. A change to
+#                      what an installer contains is proven when the next release
+#                      candidate is cut.
 #
 # Safety: the journey scripts refuse to run outside GitHub Actions, keep
 # everything under $RUNNER_TEMP, and point HOME/USERPROFILE at a fresh sandbox
@@ -97,6 +99,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - '.github/workflows/test_installers_headless.yml'
+      - 'tests/fixtures/github/releases.json'
       - 'installer/**'
       - 'LICENSE.md'
       - 'src/gaia/version.py'
@@ -142,6 +145,14 @@ jobs:
         name: Pick the release and wait for its assets
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          # Bounded, opt-in retries for live releases reads. They ride out a
+          # transient 403 but cannot refill the shared hourly quota that caused
+          # run 44443909497.
+          GITHUB_FETCH_RETRIES: ${{ github.event_name != 'pull_request' && '3' || '' }}
+          # PRs read the checked-in fixture so they do not spend that quota.
+          # Tag and dispatch runs leave it empty and fetch live.
+          GAIA_GITHUB_FIXTURE: ${{ github.event_name == 'pull_request' && format('{0}/tests/fixtures/github/releases.json', github.workspace) || '' }}
           TAG_INPUT: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || '' }}
           WAIT: ${{ github.ref_type == 'tag' && '300' || '0' }}
         run: python installer/headless/resolve_release.py --tag "${TAG_INPUT}" --wait-minutes "${WAIT}" --out release.json
@@ -476,6 +487,8 @@ jobs:
               mkdir -p "${RUNNER_TEMP}/journey"
               docker run -d --name gaia-fedora --network host -v "${RUNNER_TEMP}/journey:/work" fedora:44 sleep infinity
               docker exec gaia-fedora cat /etc/os-release | head -n 3
+              # Fetched here so the timed install measures the package, not a slow mirror.
+              docker exec gaia-fedora dnf -q makecache
               ;;
           esac
       - name: Run the journey

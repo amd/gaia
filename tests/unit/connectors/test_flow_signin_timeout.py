@@ -41,7 +41,7 @@ def _mock_token_endpoint():
                 "refresh_token": "r",
                 "expires_in": 3600,
                 "scope": "openid",
-                "id_token": "h.eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9.s",
+                "id_token": "h.eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0.s",
             },
         )
     )

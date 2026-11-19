@@ -31,6 +31,7 @@ reported under its own name.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import subprocess
@@ -102,8 +103,24 @@ def job_pytest_commands(workflow: str, job: str) -> List[List[str]]:
     return commands
 
 
+def expand_globs(paths: List[str]) -> List[str]:
+    """Expand path globs, which no shell sees when the guard runs pytest itself.
+
+    A workflow step like ``pytest tests/unit/test_relay_*.py`` reaches pytest
+    already split into arguments, so the star is literal here and pytest exits 4
+    on it. An unmatched pattern is kept as-is so the failure still names it.
+    """
+    expanded: List[str] = []
+    for path in paths:
+        for item in sorted(glob.glob(path, root_dir=lanes.REPO_ROOT)) or [path]:
+            if item not in expanded:
+                expanded.append(item)
+    return expanded
+
+
 def collect_skips(paths: List[str]) -> List[Dict[str, str]]:
     """Collect `paths` in this interpreter's env; return what skipped wholesale."""
+    paths = expand_globs(paths)
     with tempfile.TemporaryDirectory() as tmp:
         report = Path(tmp) / "skips.json"
         env = dict(os.environ)

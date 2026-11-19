@@ -7,7 +7,7 @@
 # honest?": re-run the REAL judged eval over every gaia_* category on the
 # self-hosted Lemonade runner, regenerate hub/agents/gaia/npm/SCORECARD.md via
 # the gen_scorecard adapter, then either commit a refreshed card or reject a
-# regressed/sub-bar one. Mirrors email_scorecard_refresh.yml's guards:
+# regressed/sub-bar one. Guards:
 #
 #   - NO auto-commit on main (workflow_dispatch has no branches: restriction;
 #     a careless dispatch against main would otherwise push straight to it).

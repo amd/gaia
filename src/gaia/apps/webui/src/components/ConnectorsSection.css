@@ -34,7 +34,8 @@
     .connector-tile-header {
         flex-wrap: wrap;
     }
-    .connector-status.ok {
+    /* Any status, not only Connected: a long name otherwise pushes the chevron to its own line. */
+    .connector-status {
         order: 3;
         flex-basis: 100%;
         min-width: 0;
@@ -84,7 +85,7 @@
 
 .connector-tile-name {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .connector-tile-type {
@@ -336,7 +337,7 @@
 
 .grants-header {
     font-size: var(--fs-label);
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     color: var(--text-muted);
     margin-bottom: 8px;
@@ -362,7 +363,7 @@
 
 .grant-agent-card-name {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     color: var(--text-primary);
     margin-bottom: 10px;
@@ -593,7 +594,7 @@
 
 .agent-mcp-server-name {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .agent-mcp-agent-label {
@@ -701,7 +702,9 @@
     color: var(--text-muted);
     font-size: 11px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
     max-width: 60%;
 }
@@ -736,7 +739,7 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 18px;
     letter-spacing: 2px;
-    font-weight: 600;
+    font-weight: 500;
     padding: 4px 10px;
     border-radius: 6px;
     background: var(--bg-tertiary);
@@ -805,3 +808,78 @@ p.connector-check { flex-direction: row; align-items: center; gap: 6px; }
     margin: 0;
     font-size: 12px;
 }
+
+/* ── Several accounts of one OAuth connector ─────────────────── */
+
+.connector-accounts ul {
+    list-style: none;
+    margin: 0 0 6px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+}
+.connector-account {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+}
+.connector-account + .connector-account {
+    border-top: 1px solid var(--border-light);
+}
+.connector-account-who {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    /* Never narrower than the address: the status and buttons wrap below instead. */
+    flex: 1 0 auto;
+    max-width: 100%;
+    color: var(--text-primary);
+}
+.account-address {
+    white-space: nowrap;
+    min-width: 0;
+}
+/* The accounts a "Disconnect all" would remove, inside its confirm sheet. */
+.confirm-accounts {
+    margin: 0;
+    padding-inline-start: 18px;
+    color: var(--text-primary);
+}
+.connector-account-default {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    padding: 0 8px;
+}
+.connector-account-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-inline-start: auto;
+}
+.connector-account-hint {
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.4;
+    margin: 0 0 4px;
+}
+.connector-add-account {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-size: 12px;
+    color: var(--accent);
+    cursor: pointer;
+}
+.connector-add-account:hover:not(:disabled) { text-decoration: underline; }
+.connector-add-account:disabled { color: var(--text-muted); cursor: default; }

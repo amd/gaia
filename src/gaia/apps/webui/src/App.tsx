@@ -8,6 +8,7 @@ import { ChatView } from './components/ChatView';
 import { NewChat } from './components/NewChat';
 import { ModelNeededDialog } from './components/ModelNeededDialog';
 import { LogsDialog } from './components/LogsDialog';
+import { ShortcutsDialog } from './components/ShortcutsDialog';
 import { SetupScreen } from './components/SetupScreen';
 import { ensureModel } from './stores/modelNeededStore';
 import { SettingsDialog } from './components/settings/SettingsDialog';
@@ -18,6 +19,8 @@ import { UpdateIndicator } from './components/UpdateIndicator';
 import { DownloadChip } from './components/setup/DownloadChip';
 import { NotificationCenter } from './components/NotificationCenter';
 import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
+import { BrowserPane } from './components/browser-pane/BrowserPane';
+import { browserPaneApi, useBrowserPaneStore } from './stores/browserPaneStore';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
@@ -25,6 +28,7 @@ import { useScheduleStore } from './stores/scheduleStore';
 import { useGoalHealthStore } from './stores/goalHealthStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
+import { useRetryServerWaitingDocs } from './hooks/useRetryServerWaitingDocs';
 import { useWindowTitle } from './hooks/useWindowTitle';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { startActiveRunsPoll } from './services/activeRuns';
@@ -450,6 +454,7 @@ function App() {
     useEffect(() => startQueueDispatcher(), []);
 
     useChatAlerts();
+    useRetryServerWaitingDocs();
 
     // Open a chat named in the URL (?session= or #hash), on load and on back/forward.
     const urlResolved = useRef(false);
@@ -595,6 +600,8 @@ function App() {
         clearSavedDraft(NEW_CHAT_DRAFT_KEY);
         if (modeError && !session.private) writeSavedDraft(chatDraftKey(session.id), text);
         addSession(session);
+        // Before the switch, so main moves the screen's tabs instead of showing the chat empty.
+        useBrowserPaneStore.getState().claimDraft(session.id);
         setCurrentSession(session.id);
         setMessages([]);
         setDraftText('');
@@ -724,6 +731,7 @@ function App() {
     }, []);
 
     // ── Keyboard shortcuts ─────────────────────────────────────────────
+    const [showShortcuts, setShowShortcuts] = useState(false);
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             const mod = e.ctrlKey || e.metaKey;
@@ -732,6 +740,7 @@ function App() {
             else if (!e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); window.dispatchEvent(new CustomEvent('gaia:focus-search')); }
             else if (!e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); useChatStore.getState().toggleSidebarCollapsed(); }
             else if (!e.shiftKey && e.key === ',') { e.preventDefault(); openSettings(); }
+            else if (e.key === '/') { e.preventDefault(); setShowShortcuts((v) => !v); }
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
@@ -849,6 +858,8 @@ function App() {
         );
     }
 
+    // Beside a chat or a new chat, in the desktop app only.
+    const paneApi = !showMemoryDashboard && !showSchedules ? browserPaneApi() : undefined;
     const main = showMemoryDashboard ? (
         <Suspense fallback={<Loading />}><MemoryDashboard /></Suspense>
     ) : currentSessionId ? (
@@ -924,6 +935,7 @@ function App() {
                     {main}
                 </ErrorBoundary>
             </div>
+            {paneApi && <BrowserPane api={paneApi} />}
 
             {showSchedules && <Suspense fallback={null}><ScheduleManager /></Suspense>}
             {showDocLibrary && <Suspense fallback={null}><DocumentLibrary /></Suspense>}
@@ -948,6 +960,7 @@ function App() {
             {settingsSection && <SettingsDialog onUseSkill={useSkill} />}
             <ModelNeededDialog />
             <LogsDialog />
+            {showShortcuts && <ShortcutsDialog onClose={() => setShowShortcuts(false)} />}
             <UpdateIndicator />
             {createError && (
                 <div className="toast toast-dismissible" role="alert">

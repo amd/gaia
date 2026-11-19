@@ -44,6 +44,7 @@ from ..models import (
     WireModel,
 )
 from ..security import refuse_on_device_listener
+from ..session_environment import path_error_reason
 from ..utils import (
     ALLOWED_EXTENSIONS,
     FOLDER_INDEX_EXTENSIONS,
@@ -263,7 +264,12 @@ async def upload_by_path(
         raise HTTPException(status_code=400, detail="Invalid file path")
 
     # Resolve once — used for both the lock key and safe_open validation
-    resolved = Path(request.filepath).resolve()
+    try:
+        resolved = Path(request.filepath).resolve()
+    except (ValueError, OSError) as e:  # too long for the OS
+        raise HTTPException(
+            status_code=400, detail=f"Invalid file path: {path_error_reason(e)}"
+        ) from e
     lock = upload_locks.setdefault(str(resolved), asyncio.Lock())
 
     async with lock:

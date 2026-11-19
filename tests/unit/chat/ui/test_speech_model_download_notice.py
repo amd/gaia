@@ -16,8 +16,8 @@ from gaia.agents.tools.audio_tools import (
     SPEECH_MODEL_DOWNLOADED_PHASE,
 )
 from gaia.ui import _chat_helpers as helpers
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import GAIA_PROFILE
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 

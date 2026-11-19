@@ -1849,11 +1849,11 @@ class TestASpellingDoesNotChangeTheTier:
         ],
     )
     def test_another_spelling_of_a_read_asks_rather_than_runs_unasked(
-        self, command, request
+        self, command, monkeypatch
     ):
         """The no-prompt list names bare programs; nothing else joins it."""
-        if "/gh " in command:
-            request.getfixturevalue("gh_on_path")
+        # About the spelling, not whether this machine has pwsh or gh.
+        monkeypatch.setattr("gaia.program_lookup.resolve", lambda name: f"/bin/{name}")
         assert validate(command)["tier"] == TIER_CONFIRM
         assert refusal(command) is None
 

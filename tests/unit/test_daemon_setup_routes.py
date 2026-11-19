@@ -145,7 +145,7 @@ def test_plan_is_the_same_answer_as_the_ui(daemon, ui, plan):
 
 
 def test_plan_that_cannot_be_worked_out_is_503(daemon, monkeypatch):
-    def broken():
+    def broken(**_):
         raise sp.SetupPlanError("Lemonade answered but could not list its models")
 
     monkeypatch.setattr(setup_router, "build_plan", broken)
@@ -194,14 +194,42 @@ def test_chat_model_refusal_is_422(daemon, monkeypatch):
 
 def test_skip_saves_and_returns_the_plan(daemon, plan, monkeypatch):
     saved = []
-    monkeypatch.setattr(sp, "set_model_skipped", lambda m, s: saved.append((m, s)))
+    monkeypatch.setattr(
+        sp,
+        "set_model_skipped",
+        lambda m, s, skip_chat_model=None: saved.append((m, s, skip_chat_model)),
+    )
     r = daemon.post(
         "/daemon/v1/setup/models/skip",
         json={"model_id": "Gemma-4-E4B-it-GGUF", "skipped": True},
         headers=AUTH,
     )
     assert r.status_code == 200 and r.json() == PLAN
-    assert saved == [("Gemma-4-E4B-it-GGUF", True)]
+    assert saved == [("Gemma-4-E4B-it-GGUF", True, None)]
+
+
+def test_the_tui_reads_and_changes_the_local_setup_plan(daemon, plan, monkeypatch):
+    """The TUI passes skip_chat_model=false; the daemon hands it to every plan."""
+    saved = []
+    monkeypatch.setattr(
+        sp,
+        "set_model_skipped",
+        lambda m, s, skip_chat_model=None: saved.append(skip_chat_model),
+    )
+    assert (
+        daemon.get(
+            "/daemon/v1/setup/plan?skip_chat_model=false", headers=AUTH
+        ).status_code
+        == 200
+    )
+    r = daemon.post(
+        "/daemon/v1/setup/models/skip?skip_chat_model=false",
+        json={"model_id": "Gemma-4-E4B-it-GGUF", "skipped": True},
+        headers=AUTH,
+    )
+    assert r.status_code == 200
+    assert saved == [False]
+    assert [k.get("skip_chat_model") for _, k in plan] == [False, False]
 
 
 def test_download_is_202_and_asks_about_low_disk_first(daemon, monkeypatch):

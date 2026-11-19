@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import * as api from '../../services/api';
+import * as api from '../../services/scheduleApi';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScheduleManager } from '../ScheduleManager';
 import { useChatStore } from '../../stores/chatStore';
 import { useScheduleStore } from '../../stores/scheduleStore';
 
 vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 beforeEach(() => {
     useChatStore.setState({ showSchedules: true });
@@ -64,14 +65,14 @@ describe('ScheduleManager', () => {
         fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
         fireEvent.change(screen.getByLabelText('When to run'), { target: { value: 'every 3 hours' } });
         fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Stretch break' } });
-        fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Stand up and stretch.' } });
+        fireEvent.change(screen.getByLabelText('What GAIA does'), { target: { value: 'Stand up and stretch.' } });
         fireEvent.keyDown(document, { key: 'Escape' });
         first.unmount();
 
         render(<ScheduleManager />);
         expect(screen.getByLabelText('When to run')).toHaveValue('every 3 hours');
         expect(screen.getByLabelText('Name')).toHaveValue('Stretch break');
-        expect(screen.getByLabelText('Prompt')).toHaveValue('Stand up and stretch.');
+        expect(screen.getByLabelText('What GAIA does')).toHaveValue('Stand up and stretch.');
     });
 
     it('starts with the form closed again after Cancel', () => {
@@ -93,7 +94,7 @@ describe('ScheduleManager', () => {
         fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
         fireEvent.change(screen.getByLabelText('When to run'), { target: { value: 'every 3 hours' } });
         fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Stretch break' } });
-        fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Stand up and stretch.' } });
+        fireEvent.change(screen.getByLabelText('What GAIA does'), { target: { value: 'Stand up and stretch.' } });
         fireEvent.click(screen.getByRole('button', { name: /^Create/ }));
         expect(createSchedule).toHaveBeenCalled();
         first.unmount();
