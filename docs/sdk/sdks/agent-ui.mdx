@@ -1401,7 +1401,7 @@ Deleting a chat deletes its copies.
   </Accordion>
 
   <Accordion title="POST /api/sessions/{session_id}/documents">
-    Attach a document from the library to a session.
+    Attach a document from the library to a session. Returns **404** when the session or document doesn't exist, and **409** when either is removed while the attach is being written (nothing is attached).
 
     **Request:**
     ```json
