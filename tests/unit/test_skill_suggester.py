@@ -630,18 +630,39 @@ def _real_embedder():
     import requests
 
     from gaia.agents.base.memory import EMBEDDING_MODEL
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
 
     base_url = os.environ.get("LEMONADE_BASE_URL", "").rstrip("/")
     if not base_url:
         pytest.fail("set LEMONADE_BASE_URL to the running Lemonade Server")
     model = os.environ.get("GAIA_SKILL_SUGGEST_EMBED_MODEL", EMBEDDING_MODEL)
+    # GAIA's own Lemonade is key-protected, and the suite hides its state file
+    # (conftest's _isolate_embedded_lemonade_paths): name the real home to read it.
+    with pytest.MonkeyPatch.context() as mp:
+        if not os.environ.get("GAIA_HOME", "").strip():
+            mp.setenv("GAIA_HOME", str(Path.home() / ".gaia"))
+        headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
     def batch(texts):
         response = requests.post(
             f"{base_url}/embeddings",
             json={"model": model, "input": list(texts)},
+            headers=headers,
             timeout=120,
         )
+        if response.status_code in (401, 403):
+            pytest.fail(
+                f"{base_url} rejected the request ({response.status_code}): "
+                + (
+                    "the resolved API key is not this server's."
+                    if headers
+                    else "no API key was found for it."
+                )
+                + " Set LEMONADE_API_KEY to the server's key."
+            )
         response.raise_for_status()
         rows = [item["embedding"] for item in response.json()["data"]]
         vecs = np.asarray(rows, dtype=np.float32)
