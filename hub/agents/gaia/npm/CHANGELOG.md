@@ -18,7 +18,10 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   being shown as the answer. The agent is told the time used at 25% and 50%,
   its last tool call may run for half of the time left instead of being
   refused, and the 70% warning no longer invites it to rewrite a finished file
-  or put caveats inside one.
+  or put caveats inside one. The time kept back is never more than a quarter
+  of the limit, so one long early step no longer ends the turn near its
+  halfway point, and the answer after a time-limit stop is a short summary (at
+  most 2,048 tokens) that names files instead of repeating them.
 ### Changed
 
 - **Office files are checked before they are handed over.** The bundled
