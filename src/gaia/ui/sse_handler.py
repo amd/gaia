@@ -232,10 +232,15 @@ def _strip_balanced_json_blobs(text: str, needle: "re.Pattern") -> str:
 # The agent's response protocol: {"thought", "goal", "plan", "tool",
 # "tool_args", "answer"}. A streamed reply in this shape is the model talking to
 # the harness, not to the user, and must never reach the transcript raw.
-_ENVELOPE_KEYS = frozenset({"thought", "goal", "plan", "tool", "tool_args", "answer"})
+# The provider's native tool-call envelope ({"__tool_calls__": [...],
+# "finish_reason": ..., "content": ...}) is the same kind of control frame:
+# it carries the call, not the answer, so it is filtered the same way.
+_ENVELOPE_KEYS = frozenset(
+    {"thought", "goal", "plan", "tool", "tool_args", "answer", "__tool_calls__"}
+)
 # Keys only the protocol uses: one of them makes an object an envelope even
 # when the model adds a key of its own.
-_ENVELOPE_MARKER_KEYS = frozenset({"thought", "tool_args", "answer"})
+_ENVELOPE_MARKER_KEYS = frozenset({"thought", "tool_args", "answer", "__tool_calls__"})
 _ENVELOPE_LEAD_RE = re.compile(r'\{\s*"(\w+)"\s*:')
 _ENVELOPE_LEAD_PARTIAL_RE = re.compile(r'\{\s*(?:"\w*(?:"\s*)?)?')
 _FENCE_OPEN_RE = re.compile(r"```[ \t]*(?:json|JSON)?[ \t]*\r?\n")
@@ -444,8 +449,69 @@ _MARKUP_TOOL_NAME_RE = re.compile(r'name\s*=\s*"([\w.-]+)"')
 # The tool an opener that ends in ``name=`` names.
 _MARKUP_INVOKED_NAME_RE = re.compile(r'\s*"([\w.-]+)"')
 _ENVELOPE_TOOL_NAME_RE = re.compile(r'"tool"\s*:\s*"([\w.-]+)"')
+# The tool a native envelope names, nested under ``__tool_calls__``.
+_NATIVE_ENVELOPE_TOOL_NAME_RE = re.compile(
+    r'"function"\s*:\s*\{\s*"name"\s*:\s*"([\w.-]+)"'
+)
+# Opener of a native tool-call envelope, wherever it sits in the buffer.
+_NATIVE_ENVELOPE_OPEN_RE = re.compile(r'\{\s*"__tool_calls__"\s*:')
+# The opener as a literal, for recognising one split across chunks.
+_NATIVE_OPENER = '{"__tool_calls__":'
+def _partial_native_opener_start(text: str) -> Optional[int]:
+    """Start of a trailing partial native-envelope opener, if any.
+
+    A chunk can end mid-opener (``Then {"__to``): the ``{`` is already out
+    of the buffer by the time the rest arrives, so hold the partial opener
+    back instead of showing it as prose. The next chunk decides whether it
+    is an envelope or ordinary text. Only the last ``{`` can start one, and
+    only a strict prefix of the opener counts; a full opener is handled by
+    the regex above, and anything else is prose.
+    """
+    i = text.rfind("{")
+    if i < 0:
+        return None
+    if len(text) - i > len(_NATIVE_OPENER) + 8:
+        # A partial opener is short; a longer tail is ordinary text.
+        return None
+    tail = re.sub(r"\s+", "", text[i:])
+    if len(tail) >= len(_NATIVE_OPENER):
+        return None
+    if _NATIVE_OPENER.startswith(tail):
+        return i
+    return None
+
+
 # Longest opener/closer, so a tag split across two tokens is still recognised.
 _MARKUP_TAIL = 64
+
+
+def _strip_native_envelope(text: str) -> str:
+    """A whole native tool-call envelope reduced to the text beside the call.
+
+    The provider's ``{"__tool_calls__": [...], "finish_reason": ...,
+    "content": ...}`` envelope is a control frame, never the answer. Its
+    ``content`` is the model's own words alongside the call, so that text is
+    kept; anything else (no content, or not an envelope at all) passes through
+    unchanged. Prose that merely quotes the envelope's first characters is not
+    a whole envelope and is left alone.
+    """
+    if not text:
+        return text
+    stripped = text.strip()
+    if not _NATIVE_ENVELOPE_OPEN_RE.match(stripped):
+        return text
+    try:
+        parsed = json.loads(stripped, strict=False)
+    except ValueError:
+        return text
+    if not isinstance(parsed, dict):
+        return text
+    calls = parsed.get("__tool_calls__")
+    if not isinstance(calls, list):
+        return text
+    content = parsed.get("content")
+    return content if isinstance(content, str) else ""
+
 
 
 def _partial_markup_start(text: str) -> Optional[int]:
@@ -1350,6 +1416,10 @@ class SSEOutputHandler(OutputHandler):
         cached_tokens: Optional[int] = None,
     ):
         if answer:
+                        # A native tool-call envelope is a control frame, never the
+            # answer: reduce it to the text beside the call before the other
+            # cleaners run, so it cannot reach the transcript as raw JSON.
+            answer = _strip_native_envelope(answer)
             # Set aside the verification-scope line before the cleaners run: an
             # answer they strip to nothing (a card-echo) must stay empty, not
             # arrive as a message consisting only of the scope line (#3376).
@@ -1548,6 +1618,13 @@ class SSEOutputHandler(OutputHandler):
                 self._broken_envelope_head = self._stream_buffer[:256]
                 return self._take_leading_envelopes(end_of_stream)
             answer = envelope.get("answer")
+            if not (isinstance(answer, str) and answer.strip()):
+                # A native envelope carries the model's own words beside the
+                # call in "content"; dropping them would lose the framing of
+                # why it called a tool, so they are the answer here.
+                if isinstance(envelope.get("__tool_calls__"), list):
+                    content = envelope.get("content")
+                    answer = content if isinstance(content, str) else None
             if isinstance(answer, str) and answer.strip():
                 self._emit({"type": "answer", "content": answer})
             logger.debug("Filtered response envelope: %s", self._stream_buffer[:100])
@@ -1569,7 +1646,7 @@ class SSEOutputHandler(OutputHandler):
         while True:
             nl = buf.find("\n", pos)
             if nl < 0:
-                return False
+                break
             i = _skip_ws(buf, nl + 1)
             pos = nl + 1
             if i >= len(buf) or buf[i] != "{":
@@ -1584,10 +1661,43 @@ class SSEOutputHandler(OutputHandler):
                 self._emit({"type": "chunk", "content": prose})
             self._stream_buffer = buf[i:]
             return True
+        # No envelope on a line of its own. A native envelope needs no line:
+        # its opener is distinctive, so it splits wherever it appears, even
+        # glued to the prose before it. A fence still wins: JSON in a code
+        # block is the answer's own content. Checked only after the lines
+        # above, so a protocol envelope earlier in the buffer still splits
+        # first instead of being emitted as prose.
+        native = _NATIVE_ENVELOPE_OPEN_RE.search(buf)
+        if native is not None:
+            i = native.start()
+            if (
+                self._fence_at(buf[:i])[0] is None
+                and _leading_envelope(buf[i:], end_of_stream)[0] != _ENV_NONE
+            ):
+                prose = buf[:i]
+                if prose.strip():
+                    self._json_filtered = False
+                    self._emit({"type": "chunk", "content": prose})
+                self._stream_buffer = buf[i:]
+                return True
+        # A chunk can end mid-opener ("Then {"__to"): hold the partial
+        # opener back the same way, so the next chunk decides what it is
+        # instead of the fragment leaking as prose.
+        partial = _partial_native_opener_start(buf)
+        if partial is not None and self._fence_at(buf[:partial])[0] is None:
+            prose = buf[:partial]
+            if prose.strip():
+                self._json_filtered = False
+                self._emit({"type": "chunk", "content": prose})
+            self._stream_buffer = buf[partial:]
+            return True
+        return False
 
     def _report_envelope_progress(self) -> None:
         if self._call_progress_due(len(self._stream_buffer)):
             named = _ENVELOPE_TOOL_NAME_RE.search(self._stream_buffer)
+            if named is None:
+                named = _NATIVE_ENVELOPE_TOOL_NAME_RE.search(self._stream_buffer)
             self._report_call_progress(
                 len(self._stream_buffer),
                 self._stream_buffer,
@@ -3123,6 +3233,7 @@ def clean_reply_text(text: str) -> str:
     """Strip the LLM output artifacts a reply must not be stored with."""
     if not text:
         return text
+    text = _strip_native_envelope(text)
     text = _TOOL_CALL_JSON_SUB_RE.sub("", text)
     # _clean_answer_json MUST run before _THOUGHT_JSON_SUB_RE, or a leaked
     # {"thought":..., "answer":...} blob is stripped whole, answer included.
