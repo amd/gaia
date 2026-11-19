@@ -34,7 +34,7 @@ var developerMode bool
 // fullAccessFlag backs --full-access: the agent runs every gated tool — shell
 // commands, file writes — without asking, and the shell's own guardrails come
 // off with them (redirection and the other shell-only operators parse, the
-// read-only binary allowlist is replaced by a developer set, the rate limit is
+// shell runs any program, the rate limit is
 // lifted).
 //
 // Off unless passed, or saved as the default with /full-access always or

@@ -632,3 +632,11 @@ class TestReusedTableSaysWhatItHolds:
         assert again == (
             "Table 'sales' already exists with columns: product TEXT, revenue REAL."
         )
+
+
+def test_row_count_is_the_tables_rows_now(tmp_path):
+    service = ScratchpadService(db_path=str(tmp_path / "scratch.db"))
+    service.create_table("sales", "region TEXT, amount REAL")
+    assert service.row_count("sales") == 0
+    service.insert_rows("sales", [{"region": "east", "amount": 1.0}] * 3)
+    assert service.row_count("sales") == 3

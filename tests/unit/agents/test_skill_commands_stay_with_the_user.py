@@ -4,8 +4,9 @@
 
 The agent may not promote, install or trust a skill: every spelling of
 ``gaia skill`` through the shell tool is refused outright, with no approval
-prompt, whoever is watching and whatever mode the session is in. GAIA's other
-``gaia`` commands are unchanged. A pre-approved run that refuses a command
+prompt, whoever is watching. Full access is the exception: there the shell and
+Python tools run what they are given. GAIA's other ``gaia`` commands are
+unchanged. A pre-approved run that refuses a command
 reading files inside the allowed folders still offers ``run_python``; one that
 reaches outside them, or changes files, does not. Classification only: every
 process launch is stubbed to fail, so nothing here can run a real command.
@@ -87,7 +88,7 @@ SKILL_SPELLINGS = [
     'powershell -Command "g`aia skill promote x"',
 ]
 
-#: Clearing the agent marker is refused outright too.
+#: Clearing the agent marker is refused outright too, outside full access.
 MARKER_TAMPERING = [
     "set GAIA_AGENT_CHILD= && gaia automation list",
     "env -u GAIA_AGENT_CHILD gaia automation list",
@@ -96,13 +97,21 @@ MARKER_TAMPERING = [
 
 
 @pytest.mark.parametrize("command", MARKER_TAMPERING)
-def test_clearing_the_agent_marker_is_refused(layout, command):
-    agent = _agent(layout, full_access=True)
+@pytest.mark.parametrize("unattended", [False, True])
+def test_clearing_the_agent_marker_is_refused(layout, command, unattended):
+    agent = _agent(layout, unattended=unattended)
 
     refused = _refusal(agent, command)
 
     assert refused["tier"] == TIER_REFUSE
     assert "GAIA_AGENT_CHILD" in refused["error"]
+
+
+@pytest.mark.parametrize("command", MARKER_TAMPERING + SKILL_SPELLINGS)
+def test_full_access_does_not_refuse_the_command(layout, command):
+    agent = _agent(layout, full_access=True)
+
+    assert _refusal(agent, command) is None
 
 
 NOT_SKILL_COMMANDS = [
@@ -222,15 +231,11 @@ def _refusal(agent, command):
 
 
 @pytest.mark.parametrize("command", SKILL_SPELLINGS)
-@pytest.mark.parametrize("mode", ["interactive", "unattended", "full_access"])
+@pytest.mark.parametrize("mode", ["interactive", "unattended"])
 def test_every_spelling_of_gaia_skill_is_refused_before_any_prompt(
     layout, command, mode
 ):
-    agent = _agent(
-        layout,
-        unattended=mode == "unattended",
-        full_access=mode == "full_access",
-    )
+    agent = _agent(layout, unattended=mode == "unattended")
 
     refused = _refusal(agent, command)
 
@@ -467,7 +472,7 @@ PYTHON_SKILL_LAUNCHES = [
     "from gaia.skills.signing import TrustStore\nTrustStore.load('.').save()",
 ]
 
-#: Clearing the agent marker is refused as well, before anything runs.
+#: Clearing the agent marker is refused as well, outside full access.
 PYTHON_MARKER_TAMPERING = [
     "import os\nos.environ.pop('GAIA_AGENT_CHILD', None)",
     "import os\ndel os.environ['gaia_agent_child']",
@@ -476,7 +481,7 @@ PYTHON_MARKER_TAMPERING = [
 
 @pytest.mark.parametrize("code", PYTHON_MARKER_TAMPERING)
 def test_python_that_clears_the_agent_marker_is_refused(layout, code):
-    agent = _agent(layout, full_access=True)
+    agent = _agent(layout)
 
     result = agent._execute_tool("run_python", {"code": code})
 
@@ -485,16 +490,23 @@ def test_python_that_clears_the_agent_marker_is_refused(layout, code):
     assert agent.ran == []
 
 
+@pytest.mark.parametrize("code", PYTHON_MARKER_TAMPERING + PYTHON_SKILL_LAUNCHES)
+def test_full_access_runs_the_python_as_written(layout, code):
+    agent = _agent(layout, full_access=True)
+
+    result = agent._execute_tool("run_python", {"code": code})
+
+    # The probe tool records the call: nothing here starts a real process.
+    assert result.get("executed") is not False, result
+    assert agent.ran == [("run_python", code)]
+
+
 @pytest.mark.parametrize("code", PYTHON_SKILL_LAUNCHES)
-@pytest.mark.parametrize("mode", ["interactive", "unattended", "full_access"])
+@pytest.mark.parametrize("mode", ["interactive", "unattended"])
 def test_python_that_launches_gaia_skill_is_refused_before_any_prompt(
     layout, code, mode
 ):
-    agent = _agent(
-        layout,
-        unattended=mode == "unattended",
-        full_access=mode == "full_access",
-    )
+    agent = _agent(layout, unattended=mode == "unattended")
 
     result = agent._execute_tool("run_python", {"code": code})
 
