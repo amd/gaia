@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/file_tools.h>
 #include <gaia/tool_registry.h>
@@ -19,7 +20,7 @@ protected:
     fs::path tempDir_;
 
     void SetUp() override {
-        tempDir_ = fs::temp_directory_path() / "gaia_file_tools_test";
+        tempDir_ = fs::temp_directory_path() / testsupport::perProcess("gaia_file_tools_test");
         fs::create_directories(tempDir_);
         // The read/write anchor table is process-wide; clear it so these
         // cases are independent of each other and of run order.
@@ -610,7 +611,7 @@ protected:
     fs::path tempDir_;
 
     void SetUp() override {
-        tempDir_ = fs::temp_directory_path() / "gaia_file_tools_hardening";
+        tempDir_ = fs::temp_directory_path() / testsupport::perProcess("gaia_file_tools_hardening");
         std::error_code ec;
         fs::remove_all(tempDir_, ec);
         fs::create_directories(tempDir_);
@@ -1192,7 +1193,7 @@ TEST_F(FileToolsTest, NonAsciiNamesAreReadAndWrittenAsUtf8) {
 }
 
 TEST_F(FileToolsTest, FileSearch_DoesNotLeaveTheFolderThroughALink) {
-    const fs::path outside = fs::temp_directory_path() / "gaia_file_tools_outside";
+    const fs::path outside = fs::temp_directory_path() / testsupport::perProcess("gaia_file_tools_outside");
     std::error_code ec;
     fs::remove_all(outside, ec);
     fs::create_directories(outside);
@@ -1332,4 +1333,12 @@ TEST_F(FileToolsTest, FileEdit_AFileThatHoldsTheMarkerItselfStaysEditable) {
     r = FileIOTools::fileWrite().callback({{"path", notes}, {"content", "Tokens show as [redacted].\n"}});
     EXPECT_FALSE(r.contains("error")) << r.dump();
     EXPECT_EQ(readFile(notes), "Tokens show as [redacted].\n");
+}
+
+TEST_F(FileToolsHardeningTest, FileWrite_ACredentialFileIsRefusedAsAnEditIs) {
+    const fs::path env = tempDir_ / ".env";
+    json result = FileIOTools::fileWrite().callback({{"path", env.string()}, {"content", "KEY=1\n"}});
+    ASSERT_TRUE(result.contains("error")) << result.dump();
+    EXPECT_NE(result["error"].get<std::string>().find("credentials"), std::string::npos) << result.dump();
+    EXPECT_FALSE(fs::exists(env));
 }

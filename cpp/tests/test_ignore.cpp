@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/ignore.h>
 
@@ -82,7 +83,7 @@ protected:
     fs::path root_;
 
     void SetUp() override {
-        root_ = fs::temp_directory_path() / "gaia_ignore_test";
+        root_ = fs::temp_directory_path() / testsupport::perProcess("gaia_ignore_test");
         std::error_code ec;
         fs::remove_all(root_, ec);
         fs::create_directories(root_);

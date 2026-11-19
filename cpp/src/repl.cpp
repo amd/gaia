@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -52,13 +53,9 @@ std::string unreadableSessionMessage(const SessionStore& store, const std::strin
     return "";
 }
 
-/// SIGINT handler that cancels the active agent instead of terminating.
-void sigintHandler(int /*sig*/) {
-    Agent* agent = g_activeAgent.load();
-    if (agent) {
-        agent->requestCancel();
-    }
-}
+std::atomic<int> g_interruptsThisTurn{0};
+
+void sigintHandler(int /*sig*/) { replHandleInterrupt(); }
 
 /// Trim leading and trailing whitespace from a string.
 std::string trim(const std::string& s) {
@@ -69,6 +66,13 @@ std::string trim(const std::string& s) {
 }
 
 } // anonymous namespace
+
+void replHandleInterrupt() {
+    // Runs in a signal handler: only atomics and _Exit.
+    if (g_interruptsThisTurn.fetch_add(1) >= 1) std::_Exit(130);
+    Agent* agent = g_activeAgent.load();
+    if (agent) agent->requestCancel();
+}
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -413,6 +417,7 @@ void ReplRunner::runPlain() {
     // Main input loop
     std::string input;
     while (!exitRequested_) {
+        g_interruptsThisTurn.store(0);
         std::cout << prompt_ << std::flush;
 
         if (!std::getline(std::cin, input)) {

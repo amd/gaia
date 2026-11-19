@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -869,7 +870,7 @@ TEST(GaiaAgentTest, AOneLineScriptWithABlockAfterASemicolonIsRefused) {
 }
 
 TEST(GaiaAgentTest, AScriptOnASmallCsvNotYetReadIsNamed) {
-    const fs::path dir = fs::temp_directory_path() / "gaia_unread_table";
+    const fs::path dir = fs::temp_directory_path() / testsupport::perProcess("gaia_unread_table");
     fs::remove_all(dir);
     fs::create_directories(dir);
     std::ofstream(dir / "sales.csv") << "region,amount\nNorth,5\nSouth,7\n";

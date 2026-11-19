@@ -160,6 +160,18 @@ TEST(SkillLibraryTest, InstallValidatesCopiesAndReplaces) {
     EXPECT_THROW(SkillLibrary::removeInstalled("../etc", dest), SkillError);
 }
 
+TEST(SkillLibraryTest, AHubInstallRefusesANameThatIsNotPlain) {
+    // Refused before any request: the name reaches the unpack command line.
+    for (const char* name : {"", "x'; touch pwned; '", "a$b", "a b", "-rf", "../x", "a.b"}) {
+        try {
+            SkillLibrary::installFromHub(name, "1.0.0", "unused", false, nullptr);
+            ADD_FAILURE() << name;
+        } catch (const SkillError& e) {
+            EXPECT_NE(std::string(e.what()).find("Not a skill name"), std::string::npos) << name << ": " << e.what();
+        }
+    }
+}
+
 TEST(SkillLibraryTest, InstallLeftoversAreIgnoredAndDoNotBlockInstalls) {
     TempTree t;
     t.skill("src", "data-explore", "Explore a CSV.", "Version one.");

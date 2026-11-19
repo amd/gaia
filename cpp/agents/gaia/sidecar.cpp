@@ -195,7 +195,7 @@ struct Session {
     bool temporary = false;  // no session_id: dropped after its one turn
     std::mutex agentMu;      // held to swap `agent` and by readers on other threads
     std::unique_ptr<GaiaAgent> agent;
-    std::unique_lock<std::mutex>* turnLock = nullptr;  // the sidecar-wide turn lock while this chat holds it
+    std::unique_lock<std::timed_mutex>* turnLock = nullptr;  // the sidecar-wide turn lock while this chat holds it
     SidecarConsole* console = nullptr;  // owned by agent
     std::atomic<bool> busy{false};
     std::atomic<bool> bypass{false};
@@ -530,7 +530,15 @@ private:
                        {"message", "No answer to the approval request in 10 minutes, so " + tool + " was not run."}});
         }
         if (s.turnLock) {
-            s.turnLock->lock();
+            // Stopped while other chats hold the sidecar: don't wait a whole turn to find out.
+            ++approvalsReturning_;
+            while (!s.turnLock->try_lock_for(std::chrono::milliseconds(100))) {
+                if (run->cancelled) {
+                    --approvalsReturning_;
+                    return ToolConfirmResult::DENY;
+                }
+            }
+            --approvalsReturning_;
             // Another chat may have moved the process; the shell keeps its own folder.
             std::error_code ec;
             if (!s.shellDir.empty()) fs::current_path(s.shellDir, ec);
@@ -629,8 +637,12 @@ private:
                 run->cancel();
             } else {
                 std::lock_guard<std::mutex> lock(runsMu_);
-                if (earlyCancels_.size() >= kMaxEarlyCancels) earlyCancels_.erase(earlyCancels_.begin());
-                earlyCancels_.insert(id);
+                if (earlyCancels_.insert(id).second) earlyCancelOrder_.push_back(id);
+                // Oldest first: the newest is the one whose query is about to arrive.
+                while (earlyCancels_.size() > kMaxEarlyCancels && !earlyCancelOrder_.empty()) {
+                    earlyCancels_.erase(earlyCancelOrder_.front());
+                    earlyCancelOrder_.pop_front();
+                }
             }
             sendJson(res, 200, {{"run_id", id}, {"cancelled", run != nullptr}});
         });
@@ -658,6 +670,10 @@ private:
                 }
                 if (it == run->decisions.end() || !it->second.empty()) {
                     return sendDetail(res, 409, "No pending approval" + (confirmId.empty() ? "" : " " + confirmId));
+                }
+                // A late yes for an approval that already closed must not approve the next one.
+                if (confirmId.empty() && decision != "deny" && decision != "timeout") {
+                    return sendDetail(res, 422, "Approving needs the confirm_id of the approval card");
                 }
                 it->second = decision;
             }
@@ -915,11 +931,30 @@ private:
                      undoRequested, hasTurns]() mutable {
             // One chat works at a time: the working folder is process-wide. A
             // chat waiting on its user lets go of it (see confirm()).
-            std::unique_lock<std::mutex> turnLock(turnsMu_);
-            s->turnLock = &turnLock;
+            std::unique_lock<std::timed_mutex> turnLock(turnsMu_, std::defer_lock);
+            // A turn stopped while it waits behind another chat's turn gives its place up.
+            for (;;) {
+                // A chat whose user has just answered an approval goes ahead of turns not yet started.
+                if (approvalsReturning_.load() > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                } else if (turnLock.try_lock_for(std::chrono::milliseconds(100))) {
+                    break;
+                }
+                if (run->cancelled) break;
+            }
+            const bool started = turnLock.owns_lock();
+            if (started) s->turnLock = &turnLock;
             const auto t0 = std::chrono::steady_clock::now();
             json terminal;
-            try {
+            if (!started) {
+                terminal = {{"type", "final"}, {"answer", ""}};
+            } else try {
+                {
+                    // A new agent reads project skills from where the process stands: the last chat's folder.
+                    std::error_code moveEc;
+                    const std::string folder = chatFolder(*s);
+                    if (!folder.empty()) fs::current_path(folder, moveEc);
+                }
                 ensureAgent(*s);
                 {
                     std::lock_guard<std::mutex> lock(s->currentMu);
@@ -981,7 +1016,7 @@ private:
                 s->current.reset();
             }
             s->turnLock = nullptr;
-            turnLock.unlock();
+            if (turnLock.owns_lock()) turnLock.unlock();
             {
                 std::lock_guard<std::mutex> lock(runsMu_);
                 runs_.erase(run->id);  // the stream keeps its own reference
@@ -1041,7 +1076,7 @@ private:
     // Move the process and the shell to this chat's working folder: the one it
     // named, else its first folder, else home, so no chat starts in another's.
     // Returns what went wrong, or "".
-    static std::string enterWorkingDirectory(Session& s) {
+    static std::string chatFolder(const Session& s) {
         std::string dir = s.workingDirectory;
         if (dir.empty()) {
             for (const auto& r : s.roots) {
@@ -1053,6 +1088,17 @@ private:
             }
         }
         if (dir.empty()) dir = getEnvVar("USERPROFILE", getEnvVar("HOME"));
+        // With no home either, the folder the sidecar started in, never the last chat's.
+        static const std::string started = [] {
+            std::error_code ec;
+            return fs::current_path(ec).u8string();
+        }();
+        if (dir.empty()) dir = started;
+        return dir;
+    }
+
+    static std::string enterWorkingDirectory(Session& s) {
+        const std::string dir = chatFolder(s);
         if (dir.empty()) return "";
         std::error_code ec;
         fs::current_path(dir, ec);
@@ -1093,7 +1139,9 @@ private:
     std::mutex runsMu_;
     std::map<std::string, std::shared_ptr<Run>> runs_;
     std::set<std::string> earlyCancels_;
-    std::mutex turnsMu_;
+    std::deque<std::string> earlyCancelOrder_;
+    std::timed_mutex turnsMu_;
+    std::atomic<int> approvalsReturning_{0};  // chats waiting to take turnsMu_ back after an approval
 };
 
 }  // namespace

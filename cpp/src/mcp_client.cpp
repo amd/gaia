@@ -4,6 +4,7 @@
 #include "gaia/mcp_client.h"
 #include "gaia/keyring.h"
 
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -22,6 +23,8 @@
 #include <sys/select.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+extern char** environ;  // not declared by every libc's unistd.h
 #endif
 
 namespace gaia {
@@ -210,15 +213,32 @@ ToolInfo MCPToolSchema::toToolInfo(const std::string& serverName) const {
     info.policy = requiresConfirmation() ? ToolPolicy::CONFIRM : ToolPolicy::ALLOW;
 
     // Convert JSON Schema properties to ToolParameter list
-    if (inputSchema.contains("properties")) {
+    if (inputSchema.is_object() && inputSchema.contains("properties") && inputSchema["properties"].is_object()) {
         auto required = inputSchema.value("required", json::array());
         for (auto& [paramName, paramSchema] : inputSchema["properties"].items()) {
             ToolParameter param;
             param.name = paramName;
-            param.description = paramSchema.value("description", "");
+            // A schema may be `true`, and a nullable field's type is a list such as ["string","null"].
+            std::string typeStr = "string";
+            if (paramSchema.is_object()) {
+                const auto description = paramSchema.find("description");
+                if (description != paramSchema.end() && description->is_string()) {
+                    param.description = description->get<std::string>();
+                }
+                const auto type = paramSchema.find("type");
+                if (type != paramSchema.end() && type->is_string()) {
+                    typeStr = type->get<std::string>();
+                } else if (type != paramSchema.end() && type->is_array()) {
+                    for (const auto& one : *type) {
+                        if (one.is_string() && one != "null") {
+                            typeStr = one.get<std::string>();
+                            break;
+                        }
+                    }
+                }
+            }
 
             // Map JSON Schema types to ToolParamType
-            std::string typeStr = paramSchema.value("type", "string");
             if (typeStr == "string")       param.type = ToolParamType::STRING;
             else if (typeStr == "integer") param.type = ToolParamType::INTEGER;
             else if (typeStr == "number")  param.type = ToolParamType::NUMBER;
@@ -229,7 +249,7 @@ ToolInfo MCPToolSchema::toToolInfo(const std::string& serverName) const {
             // Check if parameter is required
             param.required = false;
             for (const auto& req : required) {
-                if (req.get<std::string>() == paramName) {
+                if (req.is_string() && req.get<std::string>() == paramName) {
                     param.required = true;
                     break;
                 }
@@ -292,12 +312,46 @@ struct StdioTransport::Impl {
         }
         SetHandleInformation(childStdoutRead, HANDLE_FLAG_INHERIT, 0);
 
-        STARTUPINFOA si = {};
-        si.cb = sizeof(si);
+        // The server's stderr is this process's, through a copy that can be inherited; with none
+        // (a windowed host) it is the null device.
+        HANDLE childStderr = nullptr;
+        const HANDLE ownStderr = GetStdHandle(STD_ERROR_HANDLE);
+        if (ownStderr == nullptr || ownStderr == INVALID_HANDLE_VALUE ||
+            !DuplicateHandle(GetCurrentProcess(), ownStderr, GetCurrentProcess(), &childStderr, 0, TRUE,
+                             DUPLICATE_SAME_ACCESS)) {
+            childStderr = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING,
+                                      FILE_ATTRIBUTE_NORMAL, nullptr);
+        }
+        if (childStderr == nullptr || childStderr == INVALID_HANDLE_VALUE) {
+            CloseHandle(childStdinRead);
+            CloseHandle(childStdoutWrite);
+            return false;
+        }
+
+        STARTUPINFOEXA six;
+        ZeroMemory(&six, sizeof(six));
+        STARTUPINFOA& si = six.StartupInfo;
+        si.cb = sizeof(six);
         si.hStdInput = childStdinRead;
         si.hStdOutput = childStdoutWrite;
-        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        si.hStdError = childStderr;
         si.dwFlags |= STARTF_USESTDHANDLES;
+
+        // These three and no others: any other handle it inherited (another server's pipe, the
+        // host's own) would stay open for as long as the server lives.
+        HANDLE inherited[3] = {childStdinRead, childStdoutWrite, childStderr};
+        SIZE_T attrSize = 0;
+        InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
+        std::vector<char> attrBuf(attrSize);
+        six.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
+        if (!InitializeProcThreadAttributeList(six.lpAttributeList, 1, 0, &attrSize) ||
+            !UpdateProcThreadAttribute(six.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited,
+                                       sizeof(inherited), nullptr, nullptr)) {
+            CloseHandle(childStdinRead);
+            CloseHandle(childStdoutWrite);
+            CloseHandle(childStderr);
+            return false;
+        }
 
         // Build merged environment block if overrides provided
         std::string envBlock;
@@ -325,18 +379,39 @@ struct StdioTransport::Impl {
             lpEnv = envBlock.empty() ? nullptr : static_cast<LPVOID>(&envBlock[0]);
         }
 
+        // CreateProcess only adds .exe, and npx, npm and yarn ship as .cmd files.
         std::string mutableCmd(cmdLine);
+        {
+            const bool quoted = !cmdLine.empty() && cmdLine[0] == '"';
+            const size_t end = quoted ? cmdLine.find('"', 1) : cmdLine.find_first_of(" \t");
+            const std::string program =
+                cmdLine.substr(quoted ? 1 : 0, end == std::string::npos ? std::string::npos : end - (quoted ? 1 : 0));
+            const std::string rest =
+                end == std::string::npos ? std::string() : cmdLine.substr(quoted ? end + 1 : end);
+            const bool bare = !program.empty() && program.find_first_of("\\/:.") == std::string::npos;
+            char found[MAX_PATH];
+            if (bare && SearchPathA(nullptr, program.c_str(), ".exe", MAX_PATH, found, nullptr) == 0) {
+                for (const char* ext : {".cmd", ".bat"}) {
+                    const DWORD n = SearchPathA(nullptr, program.c_str(), ext, MAX_PATH, found, nullptr);
+                    if (n == 0 || n >= MAX_PATH) continue;
+                    mutableCmd = "\"" + std::string(found, n) + "\"" + rest;
+                    break;
+                }
+            }
+        }
         BOOL ok = CreateProcessA(
             nullptr,
             mutableCmd.data(),
             nullptr, nullptr,
-            TRUE, 0,
+            TRUE, EXTENDED_STARTUPINFO_PRESENT,
             lpEnv, nullptr,
             &si, &procInfo
         );
 
+        DeleteProcThreadAttributeList(six.lpAttributeList);
         CloseHandle(childStdinRead);
         CloseHandle(childStdoutWrite);
+        CloseHandle(childStderr);
 
         if (!ok) return false;
         running = true;
@@ -399,6 +474,7 @@ struct StdioTransport::Impl {
     int stdinFd = -1;
     int stdoutFd = -1;
     bool running = false;
+    mutable bool reaped = false;  // waitpid has collected the child: its pid may belong to another process now
 
     ~Impl() {
         cleanup();
@@ -407,6 +483,7 @@ struct StdioTransport::Impl {
     void cleanup() {
         if (stdinFd >= 0) { close(stdinFd); stdinFd = -1; }
         if (stdoutFd >= 0) { close(stdoutFd); stdoutFd = -1; }
+        if (reaped) running = false;
         if (running && pid > 0) {
             kill(pid, SIGTERM);
             int status;
@@ -433,6 +510,23 @@ struct StdioTransport::Impl {
             return false;
         }
 
+        // Built before fork: setenv in the child of a threaded process can wait forever on a lock
+        // another thread held when it forked.
+        std::map<std::string, std::string> merged;
+        for (char** e = environ; e != nullptr && *e != nullptr; ++e) {
+            const std::string entry(*e);
+            const size_t eq = entry.find('=');
+            if (eq != std::string::npos && eq > 0) merged[entry.substr(0, eq)] = entry.substr(eq + 1);
+        }
+        for (const auto& kv : envVars) merged[kv.first] = kv.second;
+        std::vector<std::string> envStrings;
+        for (const auto& kv : merged) envStrings.push_back(kv.first + "=" + kv.second);
+        std::vector<char*> envp;
+        for (auto& s : envStrings) envp.push_back(&s[0]);
+        envp.push_back(nullptr);
+        const long maxFd = sysconf(_SC_OPEN_MAX);
+
+        reaped = false;
         pid = fork();
         if (pid < 0) {
             close(stdinPipe[0]); close(stdinPipe[1]);
@@ -444,14 +538,12 @@ struct StdioTransport::Impl {
             // Child
             dup2(stdinPipe[0], STDIN_FILENO);
             dup2(stdoutPipe[1], STDOUT_FILENO);
-            close(stdinPipe[0]); close(stdinPipe[1]);
-            close(stdoutPipe[0]); close(stdoutPipe[1]);
+            // Another server's pipe left open here would keep that server from ever seeing end-of-input.
+            for (int fd = 3; fd < (maxFd > 0 && maxFd < 65536 ? static_cast<int>(maxFd) : 1024); ++fd) close(fd);
 
-            // Apply environment overrides before exec
-            for (const auto& kv : envVars)
-                setenv(kv.first.c_str(), kv.second.c_str(), 1 /*overwrite*/);
-
-            execl("/bin/sh", "sh", "-c", cmdLine.c_str(), nullptr);
+            char* const argv[] = {const_cast<char*>("sh"), const_cast<char*>("-c"),
+                                  const_cast<char*>(cmdLine.c_str()), nullptr};
+            execve("/bin/sh", argv, envp.data());
             _exit(127);
         }
 
@@ -521,9 +613,11 @@ struct StdioTransport::Impl {
     }
 
     bool isAlive() const {
-        if (!running || pid <= 0) return false;
+        if (!running || pid <= 0 || reaped) return false;
         int status;
-        return waitpid(pid, &status, WNOHANG) == 0;
+        if (waitpid(pid, &status, WNOHANG) == 0) return true;
+        reaped = true;
+        return false;
     }
 };
 
@@ -554,15 +648,65 @@ StdioTransport::~StdioTransport() = default;
 StdioTransport::StdioTransport(StdioTransport&& other) noexcept = default;
 StdioTransport& StdioTransport::operator=(StdioTransport&& other) noexcept = default;
 
+#ifdef _WIN32
+namespace {
+// True when CreateProcess would run `command` through cmd.exe: a .cmd or .bat file, named or found on PATH.
+bool runsUnderCmd(const std::string& command) {
+    std::string lower;
+    for (const char c : command) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const auto endsWith = [&lower](const char* ext) {
+        const size_t n = std::strlen(ext);
+        return lower.size() >= n && lower.compare(lower.size() - n, n, ext) == 0;
+    };
+    if (endsWith(".cmd") || endsWith(".bat")) return true;
+    if (command.empty() || command.find_first_of("\\/:.") != std::string::npos) return false;
+    char found[MAX_PATH];
+    if (SearchPathA(nullptr, command.c_str(), ".exe", MAX_PATH, found, nullptr) != 0) return false;
+    for (const char* ext : {".cmd", ".bat"}) {
+        const DWORD n = SearchPathA(nullptr, command.c_str(), ext, MAX_PATH, found, nullptr);
+        if (n != 0 && n < MAX_PATH) return true;
+    }
+    return false;
+}
+}  // namespace
+#endif
+
+std::string StdioTransport::quoteArgument(const std::string& arg, bool windows) {
+    if (!windows) {
+        // /bin/sh: anything but plain characters goes in single quotes, where nothing is special.
+        const bool plain = !arg.empty() && arg.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                                                 "0123456789_@%+=:,./-") == std::string::npos;
+        if (plain) return arg;
+        std::string out = "'";
+        for (const char c : arg) out += c == '\'' ? std::string("'\\''") : std::string(1, c);
+        return out + "'";
+    }
+    // The C runtime's rules: backslashes count only before a quote, where each is doubled.
+    if (!arg.empty() && arg.find_first_of(" \t\"") == std::string::npos) return arg;
+    std::string out = "\"";
+    size_t slashes = 0;
+    for (const char c : arg) {
+        if (c == '\\') {
+            ++slashes;
+            continue;
+        }
+        out.append(c == '"' ? slashes * 2 + 1 : slashes, '\\');
+        slashes = 0;
+        out += c;
+    }
+    out.append(slashes * 2, '\\');
+    return out + "\"";
+}
+
 bool StdioTransport::connect() {
     if (impl_->running) return true;
 
-    // Build command line, quoting arguments that contain spaces
-    auto quoteArg = [](const std::string& arg) -> std::string {
-        if (arg.find(' ') != std::string::npos) {
-            return "\"" + arg + "\"";
-        }
-        return arg;
+    const auto quoteArg = [](const std::string& arg) {
+#ifdef _WIN32
+        return quoteArgument(arg, true);
+#else
+        return quoteArgument(arg, false);
+#endif
     };
     std::string cmdLine;
     if (args_.empty()) {
@@ -573,6 +717,18 @@ bool StdioTransport::connect() {
             cmdLine += " " + quoteArg(arg);
         }
     }
+
+#ifdef _WIN32
+    // npx and npm ship as .cmd files, so cmd.exe reads the line and acts on these characters itself.
+    if (runsUnderCmd(command_)) {
+        for (const auto& arg : args_) {
+            if (arg.find_first_of("&|<>^%!\"\r\n") == std::string::npos) continue;
+            throw std::runtime_error("the argument '" + arg + "' holds a character cmd.exe would act on (& | < > ^ % ! \"), "
+                                     "and " + command_ + " is a batch file that runs under cmd.exe. Start the "
+                                     "server's .exe or node directly in mcp.json, or move the value to an env entry.");
+        }
+    }
+#endif
 
     if (debug_) {
         std::cerr << "[MCP] Starting server: " << cmdLine << std::endl;

@@ -293,6 +293,17 @@ def tui_jobs() -> dict:
     return _workflow("tui_installers.yml")["jobs"]
 
 
+def test_a_tag_without_packages_never_fetches_a_release_that_does_not_exist_yet(
+    tui_jobs,
+):
+    # release_components.yml runs on a final tag before publish.yml has made
+    # the v<version> release; only its dispatch builds packages.
+    condition = tui_jobs["gaiacpp"]["if"]
+    assert "(inputs.installers || inputs.gaiacpp != 'release')" in condition
+    tui = _workflow("release_components.yml")["jobs"]["tui"]["with"]
+    assert tui["installers"] == "${{ github.event_name == 'workflow_dispatch' }}"
+
+
 def test_gaiacpp_is_verified_before_any_package_is_built(tui_jobs):
     job = tui_jobs["gaiacpp"]
     (download,) = [

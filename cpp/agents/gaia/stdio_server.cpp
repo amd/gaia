@@ -463,7 +463,10 @@ json StdioServer::statusEvent() {
                   {"lemonade_reachable", false},
                   {"lemonade_base_url", base},
                   {"agent_version", options_.agentVersion},
-                  {"gaia_version", options_.agentVersion}};
+                  {"gaia_version", options_.agentVersion},
+                  // What typing /<name> can run. Empty: gaiacpp doesn't start a skill that way yet, and a
+                  // listed name would promise it does.
+                  {"skills", json::array()}};
     // Its own short-lived client: a server that doesn't answer must not hold up the first line.
     try {
         HttpClientConfig hc;
@@ -544,6 +547,10 @@ void StdioServer::applyControl(const json& message) {
             note("dropped a '" + decision + "' decision: nothing is waiting for one");
         } else if (!id.empty() && id != pendingConfirmId_) {
             note("dropped a '" + decision + "' decision for " + id + ": the open approval is " + pendingConfirmId_);
+        } else if (id.empty() && decision != "deny" && decision != "timeout") {
+            // A late yes for an approval that already closed must not approve the next one.
+            note("dropped a '" + decision + "' decision with no confirm_id: approving needs the id of " +
+                 pendingConfirmId_);
         } else {
             decision_ = decision;
             decisionCv_.notify_all();

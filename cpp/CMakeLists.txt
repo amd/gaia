@@ -108,6 +108,9 @@ if(NOT httplib_FOUND)
     )
     FetchContent_MakeAvailable(httplib)
 endif()
+# httplib's default listen backlog of 5 drops connections when many chats open at once.
+# Set for every target so each translation unit sees the same httplib::Server.
+add_compile_definitions(CPPHTTPLIB_LISTEN_BACKLOG=128)
 
 # yaml-cpp (private dependency -- SKILL.md frontmatter parsing).
 # Kept out of the public headers: skill.h exposes nlohmann::json blobs, never

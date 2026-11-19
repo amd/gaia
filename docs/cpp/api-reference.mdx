@@ -147,10 +147,11 @@ try {
 If an MCP server disconnects mid-session (process crash, timeout), the agent **reconnects automatically**:
 
 ```
-MCP tool call → fails → reconnect to server → retry tool call → success or return error
+server found disconnected → reconnect → send the tool call
+tool call sent → fails (timeout, unreadable reply) → reconnect → return an error, do not send it again
 ```
 
-The subprocess is re-launched and re-initialized. If reconnection fails, the tool call returns an error and the LLM is notified.
+A call that failed after it was sent is never sent a second time: the server may already have run it, and repeating a `create_issue` or `send_message` would do it twice. The error tells the model so. The subprocess is re-launched and re-initialized either way; if reconnection fails, the tool call returns an error and the LLM is notified.
 
 ### Loop Detection
 
@@ -736,8 +737,15 @@ Each client keeps its connection to a server open and reuses it, so an HTTPS
 server costs one TLS set-up per client rather than one per request. Keep the
 `HttpClient` for as long as you talk to the server instead of building one per
 call. A connection idle for longer than `HttpClientConfig::keepAliveIdleSec`
-(30 by default) is reopened, and a stream ended early by its callback closes
-its connection.
+(4 by default, under the 5 seconds many servers keep an idle connection) is
+reopened, and a stream ended early by its callback closes its connection.
+
+`HttpClientConfig::cancelCheck` is asked about ten times a second while a
+request is in flight; once it returns true the request is dropped and
+`HttpError` is thrown, so a caller is never held for a whole read timeout.
+`LemonadeClient::setAbortCheck` sets it, which is how Stop ends a model load or
+the wait for a first token. `maxResponseBytes` stops a GET at a byte limit and
+returns what arrived.
 
 ### VectorIndex
 

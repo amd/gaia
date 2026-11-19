@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Write the look-alike tables used by the fence-marker name check.
 
-The core check (``src/gaia/agents/base/lookalikes.py``) and the email hub
-agent's copy (``hub/agents/email/python/gaia_agent_email/tools/lookalikes.py``)
-are generated from Unicode's ``confusables.txt`` (UTS #39), so the two stay
-identical and the data can be refreshed for a new Unicode version:
+The core check (``src/gaia/agents/base/lookalikes.py``) is generated from
+Unicode's ``confusables.txt`` (UTS #39), so the data can be refreshed for a new
+Unicode version:
 
     python util/gen_lookalikes.py path/to/confusables.txt
 
@@ -26,7 +25,6 @@ from typing import Dict, List
 REPO = Path(__file__).resolve().parents[1]
 TARGETS = (
     REPO / "src/gaia/agents/base/lookalikes.py",
-    REPO / "hub/agents/email/python/gaia_agent_email/tools/lookalikes.py",
 )
 WIDTH = 88
 

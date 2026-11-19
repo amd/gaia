@@ -223,6 +223,8 @@ SkillJson parseYamlFloat(const std::string& raw) {
 /// Resolve a *plain* (unquoted) YAML scalar to its JSON type.
 SkillJson resolvePlainScalar(const std::string& text) {
     if (isUnrepresentableScalar(text)) return text;
+    // No null, boolean or number is this long, and std::regex recurses once per character.
+    if (text.size() > 512) return text;
     if (std::regex_match(text, nullPattern())) return nullptr;
     if (std::regex_match(text, boolPattern())) {
         return text == "yes" || text == "Yes" || text == "YES" || text == "true" ||
@@ -242,11 +244,13 @@ namespace {
 
 constexpr size_t kMaxYamlNodes = 100000;
 constexpr size_t kMaxYamlBytes = 256 * 1024;
+constexpr size_t kMaxYamlDepth = 64;
 
 // Aliases are expanded on conversion, so a few lines of YAML can describe billions of nodes.
 struct YamlBudget {
     size_t nodes = 0;
     size_t bytes = 0;
+    size_t depth = 0;
 };
 
 void spendYamlBudget(YamlBudget& budget, size_t bytes, const std::string& source,
@@ -266,6 +270,18 @@ SkillJson convertYaml(const YAML::Node& node, const std::string& source, const c
     spendYamlBudget(budget, node.IsDefined() && node.IsScalar() ? node.Scalar().size() : 0,
                     source, what, docsUrl);
     if (!node.IsDefined() || node.IsNull()) return nullptr;
+
+    // An alias can name a value that contains itself; following it would never end.
+    struct Level {
+        size_t& depth;
+        explicit Level(size_t& d) : depth(d) { ++depth; }
+        ~Level() { --depth; }
+    } level(budget.depth);
+    if (budget.depth > kMaxYamlDepth) {
+        throw SkillValidationError(
+            source + ": the " + what + " nests more than " + std::to_string(kMaxYamlDepth) +
+            " levels deep, or a YAML '*alias' refers to a value that contains itself. Flatten it. See " + docsUrl);
+    }
 
     if (node.IsSequence()) {
         SkillJson out = SkillJson::array();

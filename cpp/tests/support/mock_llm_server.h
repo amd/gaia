@@ -256,6 +256,16 @@ private:
     /// They carry no Lemonade semantics — they exercise headers, bodies,
     /// streaming, slow responses, and error statuses.
     void registerGenericHttpRoutes() {
+        // A 4 MB body — drives response-size-limit tests.
+        server_->Get("/test/big", [](const httplib::Request&, httplib::Response& res) {
+            res.set_content(std::string(4u * 1024u * 1024u, 'x'), "text/plain");
+        });
+        // The same size as an error page.
+        server_->Get("/test/big-error", [](const httplib::Request&, httplib::Response& res) {
+            res.status = 500;
+            res.set_content(std::string(4u * 1024u * 1024u, 'e'), "text/plain");
+        });
+
         // Echoes the X-Gaia-Test request header back as the body.
         server_->Get("/test/echo", [](const httplib::Request& req, httplib::Response& res) {
             res.set_header("X-Gaia-Echo", "pong");

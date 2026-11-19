@@ -471,7 +471,8 @@ TEST_F(GaiacppStdio, StartupStatusCarriesTheModelPing) {
     start();
     const json status = waitFor("status");
     ASSERT_TRUE(status.is_object());
-    for (const auto& f : wireFixture()["events"]["status"]["stdio_extension"]) {
+    const json wire = wireFixture();  // a range-for over part of a temporary reads freed memory
+    for (const auto& f : wire["events"]["status"]["stdio_extension"]) {
         if (f == "lemonade_version") continue;  // only when the server reports one
         EXPECT_TRUE(status.contains(f.get<std::string>())) << f;
     }
@@ -1350,7 +1351,8 @@ TEST_F(GaiacppStdio, ModelCommandSwitchesListsAndRefuses) {
     EXPECT_EQ(ping["type"], "status") << "the ping comes right before the final";
     EXPECT_EQ(ping["model_id"], "other-model");
     EXPECT_EQ(ping["model_remote"], false);
-    for (const auto& f : wireFixture()["events"]["status"]["stdio_extension"]) {
+    const json wire = wireFixture();  // a range-for over part of a temporary reads freed memory
+    for (const auto& f : wire["events"]["status"]["stdio_extension"]) {
         if (f != "lemonade_version") EXPECT_TRUE(ping.contains(f.get<std::string>())) << f;
     }
 
@@ -1432,6 +1434,26 @@ TEST_F(GaiacppStdio, AMalformedControlIsRejectedAndChangesNothing) {
     for (const auto& l : logBuf_.lines()) rejected += l.find("rejected a control message") != std::string::npos ? 1 : 0;
     EXPECT_EQ(rejected, 6u);
     EXPECT_TRUE(logBuf_.contains("ignored unknown control verb 'make_coffee'"));
+}
+
+TEST_F(GaiacppStdio, AnApprovalWithoutItsIdApprovesNothing) {
+    const fs::path out = work_ / "late.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", out.string()}, {"content", "hi"}}));
+    mock_.pushResponse(answer("Not written."));
+    start();
+    ASSERT_TRUE(waitFor("status").is_object());
+    ask("write it");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    // A yes with no id could be a late answer to an approval that already closed.
+    control({{"gaia_control", "tool_decision"}, {"decision", "allow"}});
+    control({{"gaia_control", "tool_decision"}, {"decision", "always"}});
+    ASSERT_TRUE(logBuf_.waitForText("decision with no confirm_id"));
+    EXPECT_FALSE(fs::exists(out)) << "an id-less yes approved the open prompt";
+    // A no needs no id: it can only make the agent do less.
+    control({{"gaia_control", "tool_decision"}, {"decision", "deny"}});
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    EXPECT_FALSE(fs::exists(out));
 }
 
 TEST_F(GaiacppStdio, AClosedStdoutEndsTheServerWithoutWaitingForStdin) {

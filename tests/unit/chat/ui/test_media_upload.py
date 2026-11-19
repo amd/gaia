@@ -6,6 +6,7 @@ import os
 import re
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -122,11 +123,13 @@ def test_a_hostile_name_stays_a_plain_file_in_the_folder(client, tmp_path, name)
     response = _upload(client, name)
 
     assert response.status_code == 200
-    saved = response.json()["filename"]
-    assert re.fullmatch(r"[A-Za-z0-9._-]+\.mp4", saved)
-    assert (tmp_path / saved).parent == tmp_path
-    assert saved.split(".")[0].upper() not in ("CON", "NUL")
-    assert list(tmp_path.iterdir()) == [tmp_path / saved]
+    saved = response.json()
+    assert re.fullmatch(
+        r"(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+", quote(saved["filename"], safe="")
+    )
+    assert (tmp_path / saved["filename"]).parent == tmp_path
+    assert saved["filename"].split(".")[0].upper() not in ("CON", "NUL")
+    assert list(tmp_path.iterdir()) == [tmp_path / saved["filename"]]
 
 
 def test_a_recording_never_replaces_a_file_already_there(client, tmp_path):
@@ -155,9 +158,10 @@ def test_a_recording_that_cannot_be_given_a_name_says_why(
 
 
 def test_the_transcript_keeps_a_recognizable_name(client):
-    saved = _upload(client, "Quarterly review.mp4").json()["filename"]
+    saved = _upload(client, "Quarterly review.mp4").json()
 
-    assert saved == "Quarterly_review.mp4"
+    assert saved["filename"] == "Quarterly review.mp4"
+    assert saved["url"] == "/api/files/uploads/Quarterly%20review.mp4"
 
 
 def test_a_second_recording_with_the_same_name_keeps_both(client, tmp_path):
@@ -172,9 +176,9 @@ def test_a_second_recording_with_the_same_name_keeps_both(client, tmp_path):
 
 def test_an_attached_recording_reaches_the_agent_by_path(client, tmp_path, monkeypatch):
     monkeypatch.setattr(utils, "uploads_dir", lambda: tmp_path)
-    saved = _upload(client, "talk.mp4").json()
+    saved = _upload(client, "Quarterly review.mp4").json()
 
-    message = utils.resolve_upload_links(f"[talk.mp4]({saved['url']})")
+    message = utils.resolve_upload_links(f"[Quarterly review.mp4]({saved['url']})")
 
     assert str(tmp_path / saved["filename"]) in message
     assert utils.attached_upload_paths(message) == [str(tmp_path / saved["filename"])]

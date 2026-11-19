@@ -103,6 +103,10 @@ public:
     /// Construct with a shell command string (legacy mode).
     explicit StdioTransport(const std::string& command, int timeout = 30, bool debug = false);
 
+    /// One argument as it must be written on the server's command line so the
+    /// server receives exactly `arg`: for /bin/sh, or for a Windows command line.
+    static std::string quoteArgument(const std::string& arg, bool windows);
+
     /// Construct with command + args (modern mode, matches Anthropic config format).
     StdioTransport(const std::string& command, const std::vector<std::string>& args,
                    int timeout = 30, bool debug = false);

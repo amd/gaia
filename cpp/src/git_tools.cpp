@@ -4,9 +4,11 @@
 #include "gaia/git_tools.h"
 
 #include "gaia/process.h"
+#include "gaia/secrets.h"
 #include "gaia/security.h"
 
 #include <algorithm>
+#include <cstring>
 #include <sstream>
 #include <string>
 
@@ -18,8 +20,18 @@ constexpr std::size_t kMaxOutputBytes = 32u * 1024u;
 /// Run `git <command>` via ProcessRunner, capturing stdout+stderr. `failure`
 /// receives why git did not succeed, or "" when it exited 0.
 std::string runGit(const std::string& command, std::string& failure) {
+    // These tools run without asking, and a repo's own config can name a program for git to start:
+    // a file-system monitor, an external diff, a textconv filter.
+    std::string guarded = "git -c core.fsmonitor=false " + command;
+    for (const char* sub : {"diff", "show", "log"}) {
+        const size_t n = std::strlen(sub);
+        if (command.compare(0, n, sub) == 0 && (command.size() == n || command[n] == ' ')) {
+            guarded = std::string("git -c core.fsmonitor=false ") + sub + " --no-ext-diff --no-textconv" +
+                      command.substr(n);
+        }
+    }
     auto result = gaia::ProcessRunner::run(
-        "git " + command,
+        guarded,
         /*timeoutMs=*/30000,
         /*cwd=*/"",
         /*env=*/{},
@@ -284,6 +296,15 @@ json GitTools::doGitShow(const json& args) {
 
     if (!isSafeShellArg(ref)) {
         return json{{"error", "Invalid ref argument: contains unsafe characters."}};
+    }
+    // HEAD:.env would hand over a committed file that file_read refuses to open.
+    const size_t colon = ref.find(':');
+    if (colon != std::string::npos) {
+        const std::string name = ref.substr(ref.find_last_of(":/\\") + 1);
+        if (isCredentialFileName(name)) {
+            return json{{"error", "'" + name + "' holds credentials, keys or secrets, so the agent may not show it. "
+                                  "Open it yourself if you need its contents."}};
+        }
     }
 
     std::string failure;

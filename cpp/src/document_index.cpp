@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <regex>
@@ -58,11 +59,25 @@ std::string decodeXmlEntities(std::string s) {
 
 // Paragraph text of a .docx: <w:t> runs, <w:p> ends become newlines.
 std::string docxText(const std::string& path) {
-    ProcessResult r = ProcessRunner::run("unzip -p " + shellQuote(path) + " word/document.xml",
-                                         60000, "", {}, kMaxExtractBytes);
+#ifdef _WIN32
+    // Windows ships no unzip; its own tar reads zip archives. Named in full: a GNU tar earlier on
+    // PATH (Git's) does not read them, and takes C: for a remote host.
+    const char* root = std::getenv("SystemRoot");
+    const std::string tar = std::string(root != nullptr && *root != '\0' ? root : "C:\\Windows") + "\\System32\\tar.exe";
+    // Quoted only when it must be: cmd.exe drops the quotes of a command that starts with one.
+    const std::string extract = (tar.find(' ') == std::string::npos ? tar : shellQuote(tar)) + " -xOf " +
+                                shellQuote(path) + " word/document.xml";
+    const char* tool = "tar";
+#else
+    const std::string extract = "unzip -p " + shellQuote(path) + " word/document.xml";
+    const char* tool = "unzip";
+#endif
+    ProcessResult r = ProcessRunner::run(extract, 60000, "", {}, kMaxExtractBytes);
     if (r.exitCode != 0) {
+        // 127 from a POSIX shell and 9009 from cmd.exe both mean the program was not found.
+        const bool missing = r.exitCode == 127 || r.exitCode == 9009;
         throw std::runtime_error("Can't read Word file " + path + ": " +
-                                 (r.exitCode == 127 ? std::string("unzip is not installed")
+                                 (missing ? std::string(tool) + " is not installed"
                                                     : "it is not a valid .docx (" +
                                                           r.stderr_output.substr(0, 200) + ")"));
     }
@@ -166,6 +181,8 @@ std::vector<std::string> indexableFiles(const std::string& root, bool withDocume
             continue;
         }
         if (dir || !it->is_regular_file(ec)) continue;
+        // A link can lead out of the folder the user granted.
+        if (it->is_symlink(ec)) continue;
         bool document = false;
         if (!indexableExtension(p, withDocuments, &document)) continue;
         if (ignore.isIgnored(p.u8string(), false)) {
@@ -438,6 +455,14 @@ void DocumentIndex::registerTools(ToolRegistry& registry,
         json done = json::array(), failed = json::array();
         size_t total = 0;
         for (const auto& t : targets) {
+            // Each file too: a folder inside the granted one can be a junction to elsewhere.
+            if (checkPath && t != path) {
+                const std::string why = checkPath(t);
+                if (!why.empty()) {
+                    failed.push_back({{"file", t}, {"error", why}});
+                    continue;
+                }
+            }
             try {
                 const size_t n = indexFile(t);
                 total += n;

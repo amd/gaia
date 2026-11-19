@@ -70,8 +70,9 @@ bool isPrivateV4(uint32_t a) {  // host byte order
 }
 
 // The first local/private address `host` resolves to, or "" when all are public.
-// `resolved` is false when the name could not be looked up at all.
-std::string privateAddressOf(const std::string& host, bool& resolved) {
+// `resolved` is false when the name could not be looked up at all. `first` gets the
+// first address found, for the request to connect to.
+std::string privateAddressOf(const std::string& host, bool& resolved, std::string& first) {
 #ifdef _WIN32
     // Name lookup fails until Winsock is started, and a failed lookup is a refusal.
     static const int winsock = [] {
@@ -89,6 +90,13 @@ std::string privateAddressOf(const std::string& host, bool& resolved) {
     std::string found;
     for (addrinfo* ai = res; ai != nullptr && found.empty(); ai = ai->ai_next) {
         char buf[INET6_ADDRSTRLEN] = {};
+        if (first.empty() && (ai->ai_family == AF_INET || ai->ai_family == AF_INET6)) {
+            const void* raw = ai->ai_family == AF_INET
+                                  ? static_cast<const void*>(&reinterpret_cast<const sockaddr_in*>(ai->ai_addr)->sin_addr)
+                                  : static_cast<const void*>(&reinterpret_cast<const sockaddr_in6*>(ai->ai_addr)->sin6_addr);
+            char text[INET6_ADDRSTRLEN] = {};
+            if (inet_ntop(ai->ai_family, raw, text, sizeof text) != nullptr) first = text;
+        }
         if (ai->ai_family == AF_INET) {
             const auto* sin = reinterpret_cast<const sockaddr_in*>(ai->ai_addr);
             if (isPrivateV4(ntohl(sin->sin_addr.s_addr))) {
@@ -170,9 +178,10 @@ json WebTools::doWebFetch(const json& args) {
             return {{"status", "error"}, {"url", url},
                     {"error", "Too many redirects (more than " + std::to_string(kMaxRedirects) + ")."}};
         }
+        std::string checkedAddress;
         if (!allowPrivate) {
             bool resolved = false;
-            const std::string blocked = privateAddressOf(hostOf(origin), resolved);
+            const std::string blocked = privateAddressOf(hostOf(origin), resolved, checkedAddress);
             if (!resolved) {
                 return {{"status", "error"}, {"url", url},
                         {"error", "Refused: the address of " + hostOf(origin) + " could not be looked up, so "
@@ -193,6 +202,9 @@ json WebTools::doWebFetch(const json& args) {
         cfg.timeoutSec = 30;
         cfg.connectTimeoutSec = 15;
         cfg.returnRedirects = true;
+        cfg.maxResponseBytes = kMaxBodyBytes;  // stops the download; a cut after it would come too late
+        // A second lookup could answer with a different, private address than the one just checked.
+        if (!checkedAddress.empty()) cfg.hostAddresses[hostOf(origin)] = checkedAddress;
         cfg.defaultHeaders = {{"User-Agent", "gaia-agent/1.0"},
                               {"Accept", "text/html,text/plain,application/json,*/*"}};
         try {

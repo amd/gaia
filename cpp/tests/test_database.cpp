@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gaia/database.h>
 #include <gtest/gtest.h>
 
@@ -25,7 +26,7 @@ protected:
     fs::path dir;
 
     void SetUp() override {
-        dir = fs::temp_directory_path() / "gaia_database_test";
+        dir = fs::temp_directory_path() / testsupport::perProcess("gaia_database_test");
         fs::remove_all(dir);
         fs::create_directories(dir);
     }

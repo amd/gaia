@@ -57,6 +57,13 @@ TEST(MemoryStoreTest, RefusesCredentialsAndBadInput) {
     EXPECT_NO_THROW(m.remember("The API key is in the team password manager"));
 }
 
+TEST(MemoryStoreTest, AHugeTokenShapedFactIsRefusedWithoutCrashing) {
+    MemoryStore m(":memory:");
+    EXPECT_THROW(m.remember("sk-" + std::string(200000, 'a')), std::invalid_argument);
+    EXPECT_THROW(m.remember(std::string(10000, 'x') + " sk-abcdefghijklmnopqrstu"), std::invalid_argument)
+        << "a key past the first window is still found";
+}
+
 TEST(MemoryStoreTest, ARefusedSecretIsStillInThisChat) {
     MemoryStore m(":memory:");
     ToolRegistry reg;

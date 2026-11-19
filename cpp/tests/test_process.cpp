@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/process.h>
 
@@ -331,7 +332,7 @@ protected:
     fs::path dirB_;
 
     void SetUp() override {
-        fs::path root = fs::temp_directory_path() / "gaia_shell_session_test";
+        fs::path root = fs::temp_directory_path() / testsupport::perProcess("gaia_shell_session_test");
         std::error_code ec;
         fs::remove_all(root, ec);
         dirA_ = root / "alpha_dir";
@@ -342,7 +343,7 @@ protected:
 
     void TearDown() override {
         std::error_code ec;
-        fs::remove_all(fs::temp_directory_path() / "gaia_shell_session_test", ec);
+        fs::remove_all(fs::temp_directory_path() / testsupport::perProcess("gaia_shell_session_test"), ec);
     }
 };
 
@@ -409,6 +410,34 @@ TEST_F(ShellSessionTest, SessionsAreIndependent) {
               std::string::npos);
     EXPECT_NE(second.run(PRINT_CWD, 10000).stdout_output.find("beta_dir"),
               std::string::npos);
+}
+
+TEST(ProcessRunnerTest, ACommandThatLeavesABackgroundProcessStillReturns) {
+#ifdef _WIN32
+    const char* command = "start /b ping -n 20 127.0.0.1 & echo started";
+#else
+    const char* command = "(sleep 20 &) ; echo started";
+#endif
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto result = ProcessRunner::run(command, 60000);
+    const auto waited = std::chrono::steady_clock::now() - t0;
+    EXPECT_NE(result.stdout_output.find("started"), std::string::npos) << result.stdout_output;
+    EXPECT_LT(waited, std::chrono::seconds(12)) << "the read waited for the process left in the background";
+}
+
+TEST_F(ShellSessionTest, ASessionWhoseFolderWasDeletedGoesBackToItsStart) {
+    ShellSession session(dirB_.string());
+    ASSERT_EQ(session.run("mkdir gone_dir && cd gone_dir", 10000).exitCode, 0);
+    ASSERT_NE(session.cwd().find("gone_dir"), std::string::npos);
+    std::error_code ec;
+    fs::remove_all(dirB_ / "gone_dir", ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    auto result = session.run("echo still_works", 10000);
+    EXPECT_EQ(result.exitCode, 0) << result.stderr_output;
+    EXPECT_NE(result.stdout_output.find("still_works"), std::string::npos);
+    EXPECT_NE(result.stderr_output.find("no longer exists"), std::string::npos) << result.stderr_output;
+    EXPECT_EQ(session.run("echo again", 10000).stderr_output.find("no longer exists"), std::string::npos);
 }
 
 TEST_F(ShellSessionTest, SetCwdAndSetEnvSeedTheSession) {
@@ -752,6 +781,44 @@ TEST_F(ShellSessionTest, ACancelEndsTheSessionCommandAndLeavesNoTempFiles) {
         EXPECT_EQ(session.run(posixSyntax(shell) ? "true" : "rem", 30000).exitCode, 0) << shell;
         std::error_code ec;
         fs::remove_all(dir, ec);
+    }
+}
+
+TEST_F(ShellSessionTest, CommandsRunWhenTheTempFolderNameHoldsAnAmpersand) {
+    const fs::path odd = dirB_ / "R&D ^tmp";
+    fs::create_directories(odd);
+#ifdef _WIN32
+    const char* names[] = {"TMP", "TEMP"};
+#else
+    const char* names[] = {"TMPDIR"};
+#endif
+    std::vector<std::pair<std::string, std::string>> saved;
+    for (const char* name : names) {
+        const char* old = std::getenv(name);
+        saved.emplace_back(name, old != nullptr ? old : "");
+#ifdef _WIN32
+        _putenv_s(name, odd.string().c_str());
+#else
+        setenv(name, odd.string().c_str(), 1);
+#endif
+    }
+    for (const std::string& shell : sessionShells()) {
+        ShellSession session(dirB_.string(), shell);
+        const auto result = session.run("echo still_works", 30000);
+        EXPECT_EQ(result.exitCode, 0) << shell << ": " << result.stderr_output;
+        EXPECT_NE(result.stdout_output.find("still_works"), std::string::npos) << shell << ": " << result.stdout_output;
+        // The command ran in the session's folder, and a folder change is still kept.
+        const auto where = session.run(posixSyntax(shell) ? "pwd" : "cd", 30000);
+        EXPECT_NE(where.stdout_output.find("beta_dir"), std::string::npos) << shell << ": " << where.stdout_output;
+        EXPECT_EQ(where.stdout_output.find("R&D"), std::string::npos) << shell << ": " << where.stdout_output;
+    }
+    for (const auto& [name, value] : saved) {
+#ifdef _WIN32
+        _putenv_s(name.c_str(), value.c_str());
+#else
+        if (value.empty()) unsetenv(name.c_str());
+        else setenv(name.c_str(), value.c_str(), 1);
+#endif
     }
 }
 

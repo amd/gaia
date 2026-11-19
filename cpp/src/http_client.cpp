@@ -6,12 +6,16 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <exception>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <utility>
 
 #include <httplib.h>
@@ -158,6 +162,21 @@ HttpError::HttpError(const std::string& message, std::string url, int status, st
 // Impl
 // ---------------------------------------------------------------------------
 
+namespace {
+// Shared by a caller that may stop waiting and the helper thread running its request.
+struct CancelState {
+    std::mutex              mu;
+    std::mutex              stopMu;                // held while the connection is being closed
+    std::condition_variable cv;
+    bool                    done      = false;
+    bool                    abandoned = false;     // the caller has gone: touch nothing of its
+    httplib::ClientImpl*    client    = nullptr;   // the request's connection while it is in flight
+    HttpResponse            response;
+    std::exception_ptr      error;
+};
+thread_local CancelState* tlsCancel = nullptr;
+}  // namespace
+
 struct HttpClient::Impl {
     HttpClientConfig config;
 
@@ -184,6 +203,31 @@ struct HttpClient::Impl {
     class Lease {
     public:
         Lease(Impl& impl, const Target& t) : impl_(impl) {
+            acquire(t);
+            if (tlsCancel != nullptr) {
+                std::lock_guard<std::mutex> lock(tlsCancel->mu);
+                tlsCancel->client = &client();
+            }
+        }
+        ~Lease() {
+            if (tlsCancel != nullptr) {
+                // Waits out a close in progress: it is using this connection.
+                std::lock_guard<std::mutex> stopping(tlsCancel->stopMu);
+                std::lock_guard<std::mutex> lock(tlsCancel->mu);
+                tlsCancel->client = nullptr;
+            }
+            if (pooled_ == nullptr) return;
+            std::lock_guard<std::mutex> lock(impl_.poolMutex);
+            pooled_->busy     = false;
+            pooled_->lastUsed = std::chrono::steady_clock::now();
+        }
+        Lease(const Lease&)            = delete;
+        Lease& operator=(const Lease&) = delete;
+
+        httplib::ClientImpl& client() { return pooled_ != nullptr ? *pooled_->cli : *own_; }
+
+    private:
+        void acquire(const Target& t) {
             const std::string key = (t.useSSL ? "https://" : "http://") + t.host + ":" +
                                     std::to_string(t.port);
             std::lock_guard<std::mutex> lock(impl_.poolMutex);
@@ -201,18 +245,7 @@ struct HttpClient::Impl {
             if (idle > std::chrono::seconds(impl_.config.keepAliveIdleSec)) pooled_->cli->stop();
             pooled_->busy = true;
         }
-        ~Lease() {
-            if (pooled_ == nullptr) return;
-            std::lock_guard<std::mutex> lock(impl_.poolMutex);
-            pooled_->busy     = false;
-            pooled_->lastUsed = std::chrono::steady_clock::now();
-        }
-        Lease(const Lease&)            = delete;
-        Lease& operator=(const Lease&) = delete;
 
-        httplib::ClientImpl& client() { return pooled_ != nullptr ? *pooled_->cli : *own_; }
-
-    private:
         Impl&                                impl_;
         Pooled*                              pooled_ = nullptr;
         std::unique_ptr<httplib::ClientImpl> own_;
@@ -238,6 +271,7 @@ struct HttpClient::Impl {
             cli = std::make_unique<httplib::ClientImpl>(t.host, t.port);
         }
         cli->set_keep_alive(true);
+        if (!config.hostAddresses.empty()) cli->set_hostname_addr_map(config.hostAddresses);
         return cli;
     }
 
@@ -403,6 +437,19 @@ struct HttpClient::Impl {
                             "http:// URL.",
                         t.url);
     }
+
+    HttpResponse doGet(const std::string& path, const HttpHeaders& headers, int timeoutSec, int connectTimeoutSec);
+    HttpResponse doPost(const std::string& path, const std::string& body, const HttpHeaders& headers,
+                        int timeoutSec, int connectTimeoutSec);
+    HttpResponse doPostMultipart(const std::string& path, const std::vector<HttpMultipartPart>& parts,
+                                 const HttpHeaders& headers, int timeoutSec, int connectTimeoutSec);
+    HttpResponse doPostStreaming(const std::string& path, const std::string& body, HttpChunkCallback onChunk,
+                                 const HttpHeaders& headers, int timeoutSec, int connectTimeoutSec);
+
+    /// Runs `request` and returns its response. With a cancel check set it runs on a helper thread
+    /// while this one watches the check, and leaves that thread behind when the check fires.
+    static HttpResponse cancellable(const std::shared_ptr<Impl>& impl, const char* method,
+                                    const std::string& path, std::function<HttpResponse(Impl&)> request);
 };
 
 // ---------------------------------------------------------------------------
@@ -410,7 +457,7 @@ struct HttpClient::Impl {
 // ---------------------------------------------------------------------------
 
 HttpClient::HttpClient(const HttpClientConfig& config)
-    : impl_(std::make_unique<Impl>(config)) {
+    : impl_(std::make_shared<Impl>(config)) {
     if (config.timeoutSec <= 0 || config.connectTimeoutSec <= 0) {
         throw std::invalid_argument(
             "HttpClientConfig timeouts must be > 0 seconds (got timeoutSec=" +
@@ -431,13 +478,13 @@ HttpClient::~HttpClient() = default;
 // LemonadeClient's defaulted move would otherwise leave a live null.
 HttpClient::HttpClient(HttpClient&& other) noexcept
     : impl_(std::move(other.impl_)) {
-    other.impl_ = std::unique_ptr<Impl>(new Impl(HttpClientConfig{}));
+    other.impl_ = std::make_shared<Impl>(HttpClientConfig{});
 }
 
 HttpClient& HttpClient::operator=(HttpClient&& other) noexcept {
     if (this != &other) {
         impl_       = std::move(other.impl_);
-        other.impl_ = std::unique_ptr<Impl>(new Impl(HttpClientConfig{}));
+        other.impl_ = std::make_shared<Impl>(HttpClientConfig{});
     }
     return *this;
 }
@@ -466,82 +513,114 @@ void HttpClient::removeDefaultHeader(const std::string& name) {
 bool HttpClient::debug() const { return impl_->config.debug; }
 
 void HttpClient::setDebug(bool enabled) { impl_->config.debug = enabled; }
+void HttpClient::setCancelCheck(std::function<bool()> check) { impl_->config.cancelCheck = std::move(check); }
 
 // ---------------------------------------------------------------------------
 // Requests
 // ---------------------------------------------------------------------------
 
-HttpResponse HttpClient::get(const std::string& path, const HttpHeaders& headers,
+HttpResponse HttpClient::Impl::doGet(const std::string& path, const HttpHeaders& headers,
                              int timeoutSec, int connectTimeoutSec) {
-    const Impl::Target t = impl_->resolve(path);
-    const int readSec    = impl_->readTimeout(timeoutSec);
-    const int connectSec = impl_->connectTimeout(connectTimeoutSec);
-    const httplib::Headers hdrs = impl_->mergeHeaders(headers, t.url, nullptr);
-    impl_->logRequest("GET", t);
+    const Target t = resolve(path);
+    const int readSec    = readTimeout(timeoutSec);
+    const int connectSec = connectTimeout(connectTimeoutSec);
+    const httplib::Headers hdrs = mergeHeaders(headers, t.url, nullptr);
+    logRequest("GET", t);
 
-    Impl::Lease lease(*impl_, t);
+    Lease lease(*this, t);
     httplib::ClientImpl& cli = lease.client();
     applyTimeouts(cli, connectSec, readSec);
-    cli.set_follow_location(impl_->config.followRedirects);
+    cli.set_follow_location(config.followRedirects);
+    const std::size_t cap = config.maxResponseBytes;
+    if (cap > 0) {
+        HttpResponse capped;
+        bool over = false;
+        httplib::Result result = cli.Get(
+            t.path, hdrs,
+            [&](const httplib::Response& r) {
+                capped.status  = r.status;
+                capped.headers = convertHeaders(r.headers);
+                return true;
+            },
+            [&](const char* data, size_t n) {
+                const std::size_t room = cap - capped.body.size();
+                capped.body.append(data, std::min<std::size_t>(n, room));
+                over = n > room;
+                return !over;
+            });
+        if (over) {
+            cli.stop();  // the rest of the body is still on this connection
+            // A long error page is still an error, not the content that was asked for.
+            const bool redirect = capped.status >= 300 && capped.status < 400;
+            if (!capped.ok() && !(redirect && config.returnRedirects)) {
+                throw HttpError("GET " + t.url + " returned HTTP " + std::to_string(capped.status) + ": " +
+                                    truncateForError(capped.body),
+                                t.url, capped.status, capped.body);
+            }
+            return capped;
+        }
+        if (result) result->body = std::move(capped.body);
+        return finish("GET", t, result, connectSec, readSec);
+    }
     httplib::Result result = cli.Get(t.path, hdrs);
-    return impl_->finish("GET", t, result, connectSec, readSec);
+    return finish("GET", t, result, connectSec, readSec);
 }
 
-HttpResponse HttpClient::post(const std::string& path, const std::string& body,
+HttpResponse HttpClient::Impl::doPost(const std::string& path, const std::string& body,
                               const HttpHeaders& headers, int timeoutSec,
                               int connectTimeoutSec) {
-    const Impl::Target t = impl_->resolve(path);
-    const int readSec    = impl_->readTimeout(timeoutSec);
-    const int connectSec = impl_->connectTimeout(connectTimeoutSec);
+    const Target t = resolve(path);
+    const int readSec    = readTimeout(timeoutSec);
+    const int connectSec = connectTimeout(connectTimeoutSec);
     std::string contentType = "application/json";
-    const httplib::Headers hdrs = impl_->mergeHeaders(headers, t.url, &contentType);
-    impl_->logRequest("POST", t);
+    const httplib::Headers hdrs = mergeHeaders(headers, t.url, &contentType);
+    logRequest("POST", t);
 
-    Impl::Lease lease(*impl_, t);
+    Lease lease(*this, t);
     httplib::ClientImpl& cli = lease.client();
     applyTimeouts(cli, connectSec, readSec);
     cli.set_follow_location(false); // only GET follows redirects
     httplib::Result result = cli.Post(t.path, hdrs, body, contentType);
-    return impl_->finish("POST", t, result, connectSec, readSec);
+    return finish("POST", t, result, connectSec, readSec);
 }
 
-HttpResponse HttpClient::postMultipart(const std::string& path,
+HttpResponse HttpClient::Impl::doPostMultipart(const std::string& path,
                                        const std::vector<HttpMultipartPart>& parts,
                                        const HttpHeaders& headers, int timeoutSec,
                                        int connectTimeoutSec) {
-    const Impl::Target t = impl_->resolve(path);
-    const int readSec    = impl_->readTimeout(timeoutSec);
-    const int connectSec = impl_->connectTimeout(connectTimeoutSec);
+    const Target t = resolve(path);
+    const int readSec    = readTimeout(timeoutSec);
+    const int connectSec = connectTimeout(connectTimeoutSec);
     std::string ignoredType;
-    const httplib::Headers hdrs = impl_->mergeHeaders(headers, t.url, &ignoredType);
-    impl_->logRequest("POST", t);
+    const httplib::Headers hdrs = mergeHeaders(headers, t.url, &ignoredType);
+    logRequest("POST", t);
     httplib::MultipartFormDataItems items;
     for (const auto& p : parts) items.push_back({p.name, p.content, p.filename, p.contentType});
 
-    Impl::Lease lease(*impl_, t);
+    Lease lease(*this, t);
     httplib::ClientImpl& cli = lease.client();
     applyTimeouts(cli, connectSec, readSec);
     cli.set_follow_location(false); // only GET follows redirects
     httplib::Result result = cli.Post(t.path, hdrs, items);
-    return impl_->finish("POST", t, result, connectSec, readSec);
+    return finish("POST", t, result, connectSec, readSec);
 }
 
-HttpResponse HttpClient::postStreaming(const std::string& path, const std::string& body,
+HttpResponse HttpClient::Impl::doPostStreaming(const std::string& path, const std::string& body,
                                        HttpChunkCallback onChunk,
                                        const HttpHeaders& headers, int timeoutSec,
                                        int connectTimeoutSec) {
-    const Impl::Target t = impl_->resolve(path);
+    const Target t = resolve(path);
     if (!onChunk) {
         throw HttpError("postStreaming to " + t.url +
                             " requires a chunk callback (got an empty std::function).",
                         t.url);
     }
 
-    const int readSec    = impl_->readTimeout(timeoutSec);
-    const int connectSec = impl_->connectTimeout(connectTimeoutSec);
+    const int readSec    = readTimeout(timeoutSec);
+    const int connectSec = connectTimeout(connectTimeoutSec);
     std::string contentType = "application/json";
-    const httplib::Headers hdrs = impl_->mergeHeaders(headers, t.url, &contentType);
-    impl_->logRequest("POST (stream)", t);
+    const httplib::Headers hdrs = mergeHeaders(headers, t.url, &contentType);
+    logRequest("POST (stream)", t);
 
     int         status       = 0;
     bool        stoppedByCb  = false;
@@ -563,12 +642,21 @@ HttpResponse HttpClient::postStreaming(const std::string& path, const std::strin
             }
             return true; // drain the error body rather than hand it to the caller
         }
+        CancelState* cancel = tlsCancel;
+        if (cancel == nullptr) {
+            const bool keepGoing = onChunk(data, len);
+            if (!keepGoing) stoppedByCb = true;
+            return keepGoing;
+        }
+        // Held across the call, so the caller can't leave while its callback is running.
+        std::lock_guard<std::mutex> lock(cancel->mu);
+        if (cancel->abandoned) return false;
         const bool keepGoing = onChunk(data, len);
         if (!keepGoing) stoppedByCb = true;
         return keepGoing;
     };
 
-    Impl::Lease lease(*impl_, t);
+    Lease lease(*this, t);
     httplib::ClientImpl& cli = lease.client();
     applyTimeouts(cli, connectSec, readSec);
     cli.set_follow_location(false); // only GET follows redirects
@@ -608,6 +696,96 @@ HttpResponse HttpClient::postStreaming(const std::string& path, const std::strin
     response.status  = status;
     response.headers = std::move(responseHeaders);
     return response; // body stayed with the callback
+}
+
+HttpResponse HttpClient::Impl::cancellable(const std::shared_ptr<Impl>& impl, const char* method,
+                                           const std::string& path,
+                                           std::function<HttpResponse(Impl&)> request) {
+    const std::function<bool()> check = impl->config.cancelCheck;
+    if (!check) return request(*impl);
+
+    auto state = std::make_shared<CancelState>();
+    std::thread worker([impl, state, request] {
+        tlsCancel = state.get();
+        HttpResponse       response;
+        std::exception_ptr error;
+        try {
+            response = request(*impl);
+        } catch (...) {
+            error = std::current_exception();
+        }
+        tlsCancel = nullptr;
+        std::lock_guard<std::mutex> lock(state->mu);
+        state->response = std::move(response);
+        state->error    = error;
+        state->done     = true;
+        state->cv.notify_all();
+    });
+
+    std::unique_lock<std::mutex> lock(state->mu);
+    while (!state->cv.wait_for(lock, std::chrono::milliseconds(100), [&] { return state->done; })) {
+        lock.unlock();
+        const bool stop = check();
+        lock.lock();
+        if (!stop || state->done) continue;
+        state->abandoned = true;
+        // On a thread of its own: closing waits for a connection attempt in progress to finish.
+        std::thread([state] {
+            std::lock_guard<std::mutex> stopping(state->stopMu);
+            httplib::ClientImpl* client = nullptr;
+            {
+                std::lock_guard<std::mutex> held(state->mu);
+                client = state->client;
+            }
+            if (client != nullptr) client->stop();
+        }).detach();
+        // Closing the socket ends a blocked read on Linux and macOS, and the helper is back at once.
+        // On Windows it does not, so the helper is left to end with the server's reply or the timeout.
+        const bool back = state->cv.wait_for(lock, std::chrono::milliseconds(300), [&] { return state->done; });
+        lock.unlock();
+        if (back) worker.join();
+        else worker.detach();
+        throw HttpError(std::string(method) + " " + impl->resolve(path).url +
+                            " was cancelled before the server answered.",
+                        impl->resolve(path).url);
+    }
+    lock.unlock();
+    worker.join();
+    if (state->error) std::rethrow_exception(state->error);
+    return std::move(state->response);
+}
+
+HttpResponse HttpClient::get(const std::string& path, const HttpHeaders& headers,
+                             int timeoutSec, int connectTimeoutSec) {
+    return Impl::cancellable(impl_, "GET", path, [=](Impl& impl) {
+        return impl.doGet(path, headers, timeoutSec, connectTimeoutSec);
+    });
+}
+
+HttpResponse HttpClient::post(const std::string& path, const std::string& body,
+                              const HttpHeaders& headers, int timeoutSec,
+                              int connectTimeoutSec) {
+    return Impl::cancellable(impl_, "POST", path, [=](Impl& impl) {
+        return impl.doPost(path, body, headers, timeoutSec, connectTimeoutSec);
+    });
+}
+
+HttpResponse HttpClient::postMultipart(const std::string& path,
+                                       const std::vector<HttpMultipartPart>& parts,
+                                       const HttpHeaders& headers, int timeoutSec,
+                                       int connectTimeoutSec) {
+    return Impl::cancellable(impl_, "POST", path, [=](Impl& impl) {
+        return impl.doPostMultipart(path, parts, headers, timeoutSec, connectTimeoutSec);
+    });
+}
+
+HttpResponse HttpClient::postStreaming(const std::string& path, const std::string& body,
+                                       HttpChunkCallback onChunk,
+                                       const HttpHeaders& headers, int timeoutSec,
+                                       int connectTimeoutSec) {
+    return Impl::cancellable(impl_, "POST", path, [=](Impl& impl) {
+        return impl.doPostStreaming(path, body, onChunk, headers, timeoutSec, connectTimeoutSec);
+    });
 }
 
 } // namespace gaia

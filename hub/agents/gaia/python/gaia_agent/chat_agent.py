@@ -112,7 +112,7 @@ from gaia.agents.base.verification import (
     cut_by_time_limit,
 )
 from gaia.agents.install_hints import missing_package_hint
-from gaia.agents.registry import get_embedding_model_for_device
+from gaia.agents.registry import machine_embedding_model
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
@@ -327,6 +327,26 @@ def _with_project_paths(env: Dict[str, str], project: os.PathLike | str) -> None
     )
 
 
+def _server_refusal(
+    agent: Any, source: str, folder: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """The refusal for Python that starts a never-ending server, or None."""
+    from gaia.browser.dev_servers import (
+        dev_server_offered,
+        server_in_python,
+        server_refusal,
+    )
+
+    server = server_in_python(source)
+    if server is None:
+        return None
+    return {
+        "status": "error",
+        "error": server_refusal(server.what, folder, dev_server_offered(agent)),
+        "has_errors": True,
+    }
+
+
 #: The line in a Python tool's docstring that :func:`_lists_script_libraries` fills.
 SCRIPT_LIBRARIES_PLACEHOLDER = "{script_libraries}"
 
@@ -475,6 +495,44 @@ def _stopped_run_result(agent: Any, job: Any, timeout: int) -> Dict[str, Any]:
     return result
 
 
+#: On every Python run's result: a model that assumes the last call's
+#: variables are still there writes a snippet that dies on the first of them.
+FRESH_INTERPRETER = "new for this call: nothing is kept from earlier calls"
+
+#: Past this size a failed snippet is told how to fix it without sending it again.
+_COSTLY_TO_RESEND_CHARS = 2000
+
+
+def _fix_and_rerun_hint(
+    last_line: str, script: Optional[str], snippet_chars: int, tools: Collection[str]
+) -> Optional[str]:
+    """How to fix a failed run without typing the whole script again.
+
+    *script* is the saved file that ran, or None for a snippet. A name the
+    code never defined is most often one an earlier call defined.
+    """
+    edit = "edit_file" if "edit_file" in tools else None
+    save = "write_file" if "write_file" in tools else None
+    lost_name = last_line.startswith("NameError")
+    if script is not None:
+        if edit is None:
+            return None
+        fix = f"fix {script} with {edit} and run it again; don't send the script again"
+        if lost_name:
+            return f"Each call starts fresh, so the script must define it: {fix}"
+        return fix[0].upper() + fix[1:]
+    if edit is None or save is None:
+        return (
+            "Each call starts fresh: define it in this snippet" if lost_name else None
+        )
+    route = f"save the script with {save}, fix it with {edit}, and run it by path"
+    if lost_name:
+        return f"Each call starts fresh: {route}"
+    if snippet_chars >= _COSTLY_TO_RESEND_CHARS:
+        return f"To fix it without sending the code again, {route}"
+    return None
+
+
 def _python_run_result(
     run: Any,
     stdout: str,
@@ -482,11 +540,17 @@ def _python_run_result(
     seconds: float,
     note: Optional[str] = None,
     system_python_runs: bool = False,
+    script: Optional[str] = None,
+    snippet_chars: int = 0,
+    tools: Collection[str] = (),
 ) -> Dict[str, Any]:
     """A finished Python run as a tool result; a non-zero exit is an error.
 
     The error names the last stderr line — the exception or ``sys.exit``
     message — so a failed run never reads as a success to the model or the UI.
+    *script* is the saved file that ran (None for a snippet of *snippet_chars*
+    characters) and *tools* the agent's tool names: a failure says how to fix
+    and re-run it with them.
     """
     code = run.returncode
     result: Dict[str, Any] = {
@@ -496,6 +560,7 @@ def _python_run_result(
         "return_code": code,
         "has_errors": code != 0,
         "duration_seconds": round(seconds, 2),
+        "interpreter": FRESH_INTERPRETER,
     }
     if note:
         result["note"] = note
@@ -507,8 +572,10 @@ def _python_run_result(
         result["error"] = f"Python exited with code {code}" + (
             f": {last[:300]}" if last else ""
         )
-        hint = _missing_library_hint(last) or _system_python_hint(
-            last, system_python_runs
+        hint = (
+            _missing_library_hint(last)
+            or _system_python_hint(last, system_python_runs)
+            or _fix_and_rerun_hint(last, script, snippet_chars, tools)
         )
         if hint:
             result["error"] += f". {hint}"
@@ -932,11 +999,10 @@ class ChatAgent(
         # Its clients keep this server; a change in Settings needs a new agent.
         self._model_server_at_build = configured_lemonade_url()
 
-        # Embedder is device-scoped: the NPU profile uses the FLM-native
-        # embedder so chat and embeddings stay co-resident on the NPU backend
-        # (a GGUF embedder runs on Vulkan and evicts the FLM chat model every
-        # turn — #1744). GPU/CPU use the GGUF embedder `gaia init` downloads.
-        effective_embedding_model = get_embedding_model_for_device(config.device)
+        # One per PC, not per chat device, so a chat on the other device
+        # doesn't clear Memory's vectors.
+        effective_embedding_model = machine_embedding_model()
+        self._embedder_at_build = effective_embedding_model
 
         # RAG (#2323 Increment 3): ``RAGConfig`` is cheap (no I/O) and built
         # eagerly here — every profile's allowed_paths/model/embedding wiring
@@ -1358,10 +1424,8 @@ class ChatAgent(
             return
         self._rag_failure_logged = signature
         if missing:
-            logger.warning(
-                "RAG not available (install with: uv pip install -e '.[rag]'): %s",
-                exc,
-            )
+            # *exc* already carries the install hint that is true for this build.
+            logger.warning("RAG not available: %s", exc)
         else:
             logger.warning("RAG failed to start: %s", exc)
         logger.debug("RAG init traceback:", exc_info=True)
@@ -1730,7 +1794,8 @@ class ChatAgent(
             }
         self._tool_searches += 1
         loader = self.tool_loader
-        registry = self._tools_registry
+        # Only what this agent may run: a withheld tool must not turn up here.
+        registry = self._execution_tool_registry()
         tool_docs = {
             name: text
             for name, text in loader.tool_docs(registry).items()
@@ -1738,12 +1803,16 @@ class ChatAgent(
         }
         # A skill this model cannot load would only cost a failed load_skill.
         compact = bool(withheld_tools(self.model_features))
-        skill_docs = {
-            name: f"{name}: {skill.description}"
-            for name, skill in self.skill_manager.discover().items()
-            if name not in self.loaded_skills
-            and not (compact and _withheld_skill_tools(self, skill))
-        }
+        skill_docs = (
+            {
+                name: f"{name}: {skill.description}"
+                for name, skill in self.skill_manager.discover().items()
+                if name not in self.loaded_skills
+                and not (compact and _withheld_skill_tools(self, skill))
+            }
+            if self._tool_permitted("load_skill")
+            else {}
+        )
         try:
             tools = [
                 name for name, _ in loader.rank(query, tool_docs, TOOL_SEARCH_HITS)
@@ -2131,6 +2200,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         ):
             browser_section = """
 **BROWSER TOOLS:** search_web (DuckDuckGo, no key), fetch_page (extract readable text/links/tables), download_file (save URL locally; can then index_document).
+"""
+        # Only a chat open in GAIA desktop, where the user can see the pane.
+        if browser_section and getattr(self, "_browser_pane_attached", False):
+            browser_section += """**BROWSER PANE:** The user sees a browser pane beside this chat; the browser tools act there, and "this page" is its page (browser_snapshot reads it).
 """
 
         # Tail of Tier 1: indexing note kept separately so gated sections can
@@ -2574,10 +2647,19 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     def built_settings_changed(self) -> bool:
         """True when a setting this agent was built from changed since.
 
-        Its model server and MCP tools are fixed as it is built, so a chat
-        must rebuild its agent to follow Settings.
+        Its model server, embedder and MCP tools are fixed as it is built, so
+        a chat must rebuild its agent to follow Settings.
         """
-        return self.model_server_changed() or self.mcp_settings_changed()
+        return (
+            self.model_server_changed()
+            or self.embedder_changed()
+            or self.mcp_settings_changed()
+        )
+
+    def embedder_changed(self) -> bool:
+        """True when the embedder chosen in Settings › Memory changed since this agent was built."""
+        built = getattr(self, "_embedder_at_build", None)
+        return built is not None and built != machine_embedding_model()
 
     def model_server_changed(self) -> bool:
         """True when the Lemonade Server chosen in Settings changed since this agent was built.
@@ -2874,6 +2956,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "error": f"Could not read {file_path}: {e}",
                         "has_errors": True,
                     }
+                refused = _server_refusal(self, source, str(p.resolve().parent))
+                if refused is not None:
+                    return refused
                 start = time.monotonic()
                 run_dir = p.resolve().parent
                 try:
@@ -2951,6 +3036,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                                 n for n in (finished_job_note(job), undo_note) if n
                             )
                             or None,
+                            script=str(p),
+                            tools=self._tools_registry,
                         ),
                         check_from_python_run(
                             " ".join([file_path, args]).strip(),
@@ -2968,30 +3055,59 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
             @tool(timeout_arg="timeout")
             @_lists_script_libraries
-            def run_python(code: str, timeout: int = DEFAULT_PYTHON_TIMEOUT) -> dict:
-                """Run a Python snippet and return what it prints.
+            def run_python(
+                code: str = "",
+                path: str = "",
+                args: str = "",
+                timeout: int = DEFAULT_PYTHON_TIMEOUT,
+            ) -> dict:
+                """Run a Python snippet (`code`) or saved script (`path`).
 
-                Compute or check something without a file. Runs from the
-                project root, or your scratch directory with no project, so
-                use absolute paths for user files.
-                Report numbers from its output.
-
-                No access to your tools: `from gaia import <tool>` fails;
-                call it directly as a tool.
+                Every call starts a new interpreter: nothing carries over.
+                Long script: write_file it, run it by `path`, fix it with
+                edit_file; never send it twice. Runs from the project root
+                or your scratch directory: use absolute paths.
+                Report numbers from its output. `from gaia import <tool>`
+                fails: call it directly as a tool.
 
                 {script_libraries}
 
                 Args:
-                    code: Python source to run; print() whatever you need back.
+                    code: Python source to run; print() whatever you need back. Not with `path`.
+                    path: A saved .py file to run instead of `code`.
+                    args: Space-separated CLI arguments for the script at `path`.
                     timeout: Max seconds to run (default 120, max 1800). Raise it for big data jobs.
-
-                Returns:
-                    stdout, stderr, return_code, and duration.
                 """
                 import tempfile
                 import time
 
                 from gaia.agents.base.project_map import resolve_project_root
+
+                code = code if isinstance(code, str) else ""
+                path = path.strip() if isinstance(path, str) else ""
+                if bool(code.strip()) == bool(path):
+                    return {
+                        "status": "error",
+                        "error": (
+                            "Give run_python exactly one of `code` (Python "
+                            "source) or `path` (a saved .py file to run)"
+                            + (", not both." if path else ".")
+                        ),
+                        "has_errors": True,
+                        "executed": False,
+                    }
+                if path:
+                    return execute_python_file(path, args, timeout)
+                if isinstance(args, str) and args.strip():
+                    return {
+                        "status": "error",
+                        "error": (
+                            "`args` are passed to a saved script: give its "
+                            "`path` instead of `code`, or drop `args`."
+                        ),
+                        "has_errors": True,
+                        "executed": False,
+                    }
 
                 try:
                     timeout = resolve_python_timeout(timeout)
@@ -3018,6 +3134,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         ),
                         "has_errors": True,
                     }
+                refused = _server_refusal(self, code, None)
+                if refused is not None:
+                    return refused
 
                 try:
                     if hasattr(self, "_project_map_root"):
@@ -3186,13 +3305,17 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "files."
                     )
                 notes.append(_tool_import_hint(r.stderr, tool_names))
+                from gaia.agents.base.artifacts import retain_excerpt
+
                 result = _python_run_result(
                     r,
-                    r.stdout[:8000],
-                    r.stderr[:2000],
+                    retain_excerpt(self, r.stdout, 8000),
+                    retain_excerpt(self, r.stderr, 2000),
                     time.monotonic() - start,
                     " ".join(n for n in notes if n) or None,
                     system_python_runs=_shell_runs_any_python(self),
+                    snippet_chars=len(code),
+                    tools=self._tools_registry,
                 )
                 return attach_check(
                     result,

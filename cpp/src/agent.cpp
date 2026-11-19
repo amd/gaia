@@ -616,12 +616,17 @@ UsageStats extractUsage(const json& responseJson) {
     UsageStats usage;
     if (responseJson.contains("usage") && responseJson["usage"].is_object()) {
         const auto& u = responseJson["usage"];
-        usage.promptTokens = u.value("prompt_tokens", 0);
-        usage.completionTokens = u.value("completion_tokens", 0);
-        usage.totalTokens = u.value("total_tokens", 0);
+        // Some servers send null for a count they don't keep.
+        const auto count = [](const json& from, const char* key) {
+            const auto it = from.find(key);
+            return it != from.end() && it->is_number() ? it->get<int>() : 0;
+        };
+        usage.promptTokens = count(u, "prompt_tokens");
+        usage.completionTokens = count(u, "completion_tokens");
+        usage.totalTokens = count(u, "total_tokens");
         const auto details = u.find("prompt_tokens_details");
         if (details != u.end() && details->is_object()) {
-            usage.cachedTokens = details->value("cached_tokens", 0);
+            usage.cachedTokens = count(*details, "cached_tokens");
         }
         usage.peakContextTokens = usage.promptTokens + usage.completionTokens;
     }
@@ -937,6 +942,49 @@ size_t trimLongReplies(std::vector<Message>& messages) {
 }
 
 } // namespace
+
+namespace {
+// A reply that holds a tool call nothing ran: a call with words after it, or a plan with no call
+// and no answer. Returns what to tell the model, or nullopt when the reply is an answer.
+std::optional<std::string> strandedCallNote(const std::string& reply, const ToolRegistry& tools) {
+    static const char* const kSpace = " \t\r\n";
+    const auto fenced = [&reply](size_t at) {
+        size_t fences = 0;
+        for (size_t p = reply.find("```"); p != std::string::npos && p < at; p = reply.find("```", p + 3)) ++fences;
+        return fences % 2 == 1;
+    };
+    for (size_t at = reply.find('{'); at != std::string::npos; at = reply.find('{', at + 1)) {
+        if (fenced(at)) continue;
+        const std::string candidate = extractFirstJsonObject(reply.substr(at));
+        if (candidate.empty()) continue;
+        const json call = json::parse(candidate, nullptr, false);
+        if (!call.is_object()) continue;
+        bool onlyCallKeys = true;
+        for (const auto& [key, value] : call.items()) {
+            onlyCallKeys = onlyCallKeys && (key == "tool" || key == "tool_args" || key == "thought" ||
+                                            key == "goal" || key == "plan");
+        }
+        if (!onlyCallKeys) return std::nullopt;
+        const bool whole = reply.find_first_not_of(kSpace) == at &&
+                           reply.find_first_not_of(kSpace, at + candidate.size()) == std::string::npos;
+        const bool namesTool = call.contains("tool") && call["tool"].is_string();
+        if (!namesTool) {
+            if (whole && call.contains("plan")) {
+                return "Your reply held a plan but no tool call and no answer. Send the tool call for the "
+                       "first step, or give your final answer.";
+            }
+            return std::nullopt;
+        }
+        const std::string name = call["tool"].get<std::string>();
+        const std::string after = reply.substr(at + candidate.size());
+        // A long passage after it is an answer that shows an example; a short tail is a call that was meant.
+        if (!tools.hasTool(name) || after.size() > 240 || after.find('{') != std::string::npos) return std::nullopt;
+        return "Your call to " + name + " was not run: a tool call must be the last thing in a reply, and "
+               "this one had text after it. Send the call again with nothing after it, or give your final answer.";
+    }
+    return std::nullopt;
+}
+}  // namespace
 
 std::string stripReasoning(const std::string& text) {
     std::string out = text;
@@ -1295,17 +1343,20 @@ json Agent::callMcpTool(const std::string& serverName, const std::string& toolNa
 
     MCPClient* client = it->second.get();
 
-    // First attempt — happy path
     if (client->isConnected()) {
         try {
             return client->callTool(toolName, args);
         } catch (const std::runtime_error& e) {
-            console_->printWarning("MCP tool call failed: " + std::string(e.what()) +
-                                   " -- attempting reconnect to '" + serverName + "'");
+            // The server may have run the call before the reply was lost, so it is never sent a second time.
+            const std::string what = e.what();
+            const bool back = reconnectMcpServer(serverName);
+            return json{{"error", "MCP tool call failed: " + what + " It was not sent again, because '" + serverName +
+                                      "' may already have run it. " +
+                                      (back ? "The connection is open again; check what the call did before repeating it."
+                                            : "Reconnecting to the server failed too.")}};
         }
-    } else {
-        console_->printWarning("MCP server '" + serverName + "' disconnected -- attempting reconnect");
     }
+    console_->printWarning("MCP server '" + serverName + "' disconnected -- attempting reconnect");
 
     // Reconnect once and retry
     if (!reconnectMcpServer(serverName)) {
@@ -1613,7 +1664,7 @@ std::optional<std::string> toolFailure(const json& r) {
         }
         return "the tool reported a failure without a message";
     };
-    if (r.value("status", "") == "error") return message();
+    if (r.contains("status") && r["status"].is_string() && r["status"] == "error") return message();
     if (r.contains("ok") && r["ok"].is_boolean() && !r["ok"].get<bool>()) return message();
     if (r.contains("isError") && r["isError"].is_boolean() && r["isError"].get<bool>()) {
         return message();
@@ -1963,8 +2014,16 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     constexpr size_t kMaxToolCallsPerReply = 24;
     int malformedStreak = 0;
     std::string stopReason;  // why the loop ended without an answer: loop | empty
+    // A reply that stopped at the length limit is the answer so far, not the whole of it.
+    const auto markCutOff = [&](const std::string& finishReason) {
+        if (finishReason != "length") return;
+        incomplete = true;
+        finalAnswer += "\n\n[This answer was cut off at the model's reply limit of " +
+                       std::to_string(cfg.replyTokenLimit()) + " tokens.]";
+    };
     bool answerReviewed = false;
     bool answerSentBack = false;
+    bool strandedCallSentBack = false;
     bool claimPushed = false;
     // One chance for the agent to send a final answer back (reviewFinalAnswer), and one
     // more push when the answer after it still claims work that isn't there.
@@ -2370,6 +2429,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         ParsedResponse parsed = parseLlmResponse(response);
 
         // Tool-call text repeated from the request or from a file read this turn is a quote, not a call.
+        bool quotedCall = false;
         if (parsed.toolName.has_value()) {
             const auto squash = [](const std::string& text) {
                 std::string out;
@@ -2386,13 +2446,34 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 const json result = json::parse(m.content, nullptr, false);
                 const bool hasText = result.is_object() && result.contains("content") && result["content"].is_string();
                 const std::string shown = squash(hasText ? result["content"].get<std::string>() : m.content);
-                // Either way round: the reply is part of what was read, or repeats all of it.
+                // Either way round: the reply is part of what was read, or repeats all of a call that was read.
+                // A question or a line of a file that a real call passes on as an argument is not a quote.
+                const bool shownIsCall = shown.find("\"tool\"") != std::string::npos ||
+                                         shown.find("<tool_call>") != std::string::npos ||
+                                         shown.find("\"arguments\"") != std::string::npos;
                 quoted = shown.size() >= 20 && (shown.find(said) != std::string::npos ||
-                                                said.find(shown) != std::string::npos);
+                                                (shownIsCall && said.find(shown) != std::string::npos));
             }
             if (quoted) {
+                quotedCall = true;
                 parsed = ParsedResponse{};
                 parsed.answer = response;
+            }
+        }
+
+        // A call the reply buried under closing words never ran; taken for the answer, the turn would
+        // end "successfully" on text like {"tool": ...}. Asked for again, once.
+        if (!strandedCallSentBack && !quotedCall && !parsed.toolName.has_value() &&
+            !parsed.malformedToolCall.has_value() && stepsTaken < stepsLimit) {
+            if (const std::optional<std::string> note = strandedCallNote(response, tools_)) {
+                strandedCallSentBack = true;
+                if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
+                console_->printWarning("Reply sent back: " + *note);
+                Message retry;
+                retry.role = MessageRole::USER;
+                retry.content = "[Not done yet] " + *note;
+                messages.push_back(retry);
+                continue;
             }
         }
 
@@ -2428,6 +2509,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 continue;
             }
             finalAnswer = withUnresolved(parsed.answer.value());
+            markCutOff(llmResult.finishReason);
             if (!cfg.streaming || cfg.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }
@@ -2524,6 +2606,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 continue;
             }
             finalAnswer = withUnresolved(response);
+            markCutOff(llmResult.finishReason);
             if (!cfg.streaming || cfg.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }

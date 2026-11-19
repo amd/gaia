@@ -124,16 +124,20 @@ def _restore_environ():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_gaia_config(tmp_path, monkeypatch):
+def _isolate_gaia_config(tmp_path_factory, monkeypatch):
     """Keep unit tests off the developer's real ``~/.gaia/config.json``.
 
     ``GAIA_CONFIG_FILE`` is resolved at import time, so patching ``HOME`` is
     not enough.
+
+    The config gets its own folder, not ``tmp_path``: any config read leaves
+    ``config.json.lock`` beside the file, and ``tmp_path`` belongs to the test.
     """
     from gaia import config as config_mod
 
-    monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", tmp_path)
-    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
+    config_dir = tmp_path_factory.mktemp("gaia-config")
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_dir / "config.json")
 
 
 @pytest.fixture(autouse=True)
@@ -194,6 +198,19 @@ def _forget_engine_start_failure(monkeypatch):
     from gaia.llm import lemonade_client
 
     monkeypatch.setattr(lemonade_client, "_ENGINE_START_FAILURE", None)
+
+
+@pytest.fixture(autouse=True)
+def _forget_agent_registry():
+    """A server test's startup leaves its agent registry behind; the next chat test must not inherit it.
+
+    With no hub agents installed (as in CI) that registry is empty, so a later
+    chat turn answers "GAIA's assistant isn't installed" instead of running.
+    Cleared before the test, since a ``monkeypatch`` undo can put it back after.
+    """
+    helpers = sys.modules.get("gaia.ui._chat_helpers")
+    if helpers is not None:
+        helpers.set_agent_registry(None)
 
 
 #: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
@@ -259,7 +276,7 @@ def user_terminal(monkeypatch):
 _DAEMON_SPAWN_MESSAGE = (
     "Unit test tried to spawn a real GAIA daemon (gaia.daemon.client."
     "_spawn_and_wait). Mock the daemon boundary instead — e.g. monkeypatch "
-    "gaia.ui.email_sidecar.daemon_client.acquire_handle or "
+    "gaia.ui.sidecar.daemon_client.acquire_handle or "
     "gaia.daemon.client.start_or_attach. Real daemons belong in tests/integration/."
 )
 

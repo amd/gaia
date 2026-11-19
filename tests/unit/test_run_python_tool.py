@@ -89,6 +89,30 @@ def test_it_runs_a_snippet_and_returns_stdout(make_run_python, project, monkeypa
     assert result["has_errors"] is False
 
 
+def test_long_output_says_it_was_cut_and_where_the_rest_is(
+    make_run_python, project, monkeypatch
+):
+    import json
+
+    monkeypatch.chdir(project)
+    _, run_python = make_run_python(project)
+
+    result = run_python("for i in range(4000): print('line', i)")
+
+    assert result["status"] == "success"
+    shown = json.loads(result["stdout"])
+    assert shown["continuation"] == "read_tool_output" and shown["artifact"]
+    assert len(result["stdout"]) <= 8000
+    assert "line 3999" in result["stdout"], "the end of the output is kept"
+
+
+def test_short_output_is_returned_as_is(make_run_python, project, monkeypatch):
+    monkeypatch.chdir(project)
+    _, run_python = make_run_python(project)
+
+    assert run_python("print('x' * 7000)")["stdout"] == "x" * 7000 + chr(10)
+
+
 def test_relative_paths_resolve_against_the_project_root(
     make_run_python, project, monkeypatch
 ):
@@ -549,3 +573,159 @@ def test_an_unreadable_src_folder_fails_loudly(project, monkeypatch):
 
     with pytest.raises(OSError, match="src"):
         _project_import_paths(project)
+
+
+# ---------------------------------------------------------------- saved scripts
+
+
+def test_it_runs_a_saved_script_by_path_with_its_arguments(
+    make_run_python, project, monkeypatch
+):
+    """With only `code`, a saved script was typed out again for every run."""
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+    script = project / "job.py"
+    script.write_text("import sys\nprint('ran', sys.argv[1:])\n", encoding="utf-8")
+
+    result = run_python(path=str(script), args="one two")
+
+    assert result["status"] == "success", result
+    assert result["stdout"].strip() == "ran ['one', 'two']"
+
+
+def test_the_agent_runs_a_saved_script_through_run_python(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    agent, _ = make_run_python(project)
+    agent.console.auto_approve_gated_tools = True
+    script = project / "job.py"
+    script.write_text("print(6 * 7)\n", encoding="utf-8")
+
+    result = agent._execute_tool("run_python", {"path": str(script)})
+
+    assert result["status"] == "success", result
+    assert result["stdout"].strip() == "42"
+
+
+def test_a_script_outside_the_allowed_folders_is_refused_by_path(
+    make_run_python, project, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    script = outside / "job.py"
+    script.write_text("print('ran')\n", encoding="utf-8")
+
+    result = run_python(path=str(script))
+
+    assert result["status"] == "error"
+    assert "Access denied" in result["error"]
+
+
+@pytest.mark.parametrize(
+    "call, said",
+    [
+        ({"code": "print(1)", "path": "job.py"}, "not both"),
+        ({}, "exactly one of `code`"),
+        ({"code": "   "}, "exactly one of `code`"),
+        ({"code": "print(1)", "args": "-v"}, "`args` are passed to a saved script"),
+    ],
+)
+def test_code_and_path_are_one_or_the_other(
+    make_run_python, project, monkeypatch, call, said
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(**call)
+
+    assert result["status"] == "error"
+    assert result["executed"] is False
+    assert said in result["error"]
+
+
+def test_every_result_says_the_interpreter_is_new(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+    script = project / "job.py"
+    script.write_text("print(1)\n", encoding="utf-8")
+
+    for result in (run_python(code="print(1)"), run_python(path=str(script))):
+        assert result["status"] == "success", result
+        assert result["interpreter"].startswith("new for this call")
+
+
+def test_the_description_says_each_call_starts_fresh_and_to_run_by_path(
+    make_run_python, project
+):
+    make_run_python(project)
+    described = _TOOL_REGISTRY["run_python"]["description"]
+
+    assert "Every call starts a new interpreter" in described
+    assert "run it by `path`" in described
+    assert "edit_file" in described
+
+
+def test_a_name_from_an_earlier_call_says_each_call_starts_fresh(
+    make_run_python, project, monkeypatch
+):
+    """Six runs died on a variable or a scratch file an earlier call had made."""
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(code="print(table_from_the_last_call)")
+
+    assert result["status"] == "error"
+    assert "NameError" in result["error"]
+    assert (
+        "Each call starts fresh: save the script with write_file, fix it "
+        "with edit_file, and run it by path" in result["error"]
+    )
+
+
+def test_a_failed_saved_script_says_to_edit_it_and_run_it_again(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+    script = project / "job.py"
+    script.write_text("print(1 / 0)\n", encoding="utf-8")
+
+    result = run_python(path=str(script))
+
+    assert result["status"] == "error"
+    assert "ZeroDivisionError" in result["error"]
+    assert f"Fix {script} with edit_file and run it again" in result["error"]
+    assert "don't send the script again" in result["error"]
+
+
+def test_a_failed_long_snippet_says_how_to_fix_it_without_sending_it_again(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+    long_code = "\n".join(f"v{i} = {i}" for i in range(400)) + "\nprint(1 / 0)\n"
+
+    result = run_python(code=long_code)
+
+    assert result["status"] == "error"
+    assert (
+        "To fix it without sending the code again, save the script with "
+        "write_file, fix it with edit_file, and run it by path" in result["error"]
+    )
+
+
+def test_a_failed_short_snippet_is_not_told_to_save_it(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(code="print(1 / 0)")
+
+    assert result["status"] == "error"
+    assert "write_file" not in result["error"]
