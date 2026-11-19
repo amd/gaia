@@ -31,19 +31,19 @@ def header_row(table):
 
 doc = Document()
 doc.styles["Normal"].font.size = Pt(11)
-doc.add_heading("Term Sheet Review", level=1)
-doc.add_paragraph("To: Investment Committee | From: Deal Team")
-doc.add_heading("Key terms", level=2)
+doc.add_heading("Office Move Plan", level=1)
+doc.add_paragraph("To: Facilities team | From: Operations")
+doc.add_heading("Details", level=2)
 table = doc.add_table(rows=1, cols=2, style="Table Grid")
-table.rows[0].cells[0].text, table.rows[0].cells[1].text = "Term", "Value"
-for term, value in [("Pre-money valuation", "$40M"), ("Liquidation preference", "1x")]:
+table.rows[0].cells[0].text, table.rows[0].cells[1].text = "Item", "Detail"
+for item, detail in [("Move date", "14 June"), ("Desks", "42")]:
     cells = table.add_row().cells
-    cells[0].text, cells[1].text = term, value
+    cells[0].text, cells[1].text = item, detail
 header_row(table)
-doc.add_paragraph("Board seat for the lead investor", style="List Bullet")
-picture = doc.add_picture(r"C:\Users\me\Documents\cap_table.png", width=Inches(6))
-picture._inline.docPr.set("descr", "Cap table after the round: founders 62%, investors 38%.")
-path = r"C:\Users\me\Documents\term_sheet_memo.docx"
+doc.add_paragraph("Order new access cards", style="List Bullet")
+picture = doc.add_picture(r"C:\Users\me\Documents\floor_plan.png", width=Inches(6))
+picture._inline.docPr.set("descr", "Floor plan: 42 desks in three zones.")
+path = r"C:\Users\me\Documents\office_move_memo.docx"
 doc.save(path)
 print(path)
 ```
@@ -51,14 +51,14 @@ print(path)
 To edit an existing document, change the text of its runs so fonts and styles
 survive, cover table cells too, and save to a new name unless told to
 overwrite. A phrase split across two runs is missed by a run-level edit, so the
-check reads whole paragraphs.
+check reads whole paragraphs. This example renames a project throughout:
 
 ```python
 import re
 from docx import Document
 
-pattern = re.compile(r"Acme Corp")
-doc = Document(r"C:\Users\me\Documents\contract.docx")
+pattern = re.compile(r"Project Atlas")
+doc = Document(r"C:\Users\me\Documents\handbook.docx")
 paragraphs = list(doc.paragraphs)
 for table in doc.tables:
     for row in table.rows:
@@ -67,10 +67,10 @@ for table in doc.tables:
 hits = 0
 for p in paragraphs:
     for run in p.runs:
-        new, n = pattern.subn("[REDACTED]", run.text)
+        new, n = pattern.subn("Project Orion", run.text)
         if n:  # rewriting an untouched run would drop an inline picture
             run.text, hits = new, hits + n
-doc.save(r"C:\Users\me\Documents\contract_redacted.docx")
+doc.save(r"C:\Users\me\Documents\handbook_updated.docx")
 left = [m for p in paragraphs for m in pattern.findall(p.text)]
 print("replaced", hits, "left over", left)
 ```
@@ -82,7 +82,7 @@ user asked to be present or removed:
 from docx import Document
 from docx.oxml.ns import qn
 
-doc = Document(r"C:\Users\me\Documents\term_sheet_memo.docx")
+doc = Document(r"C:\Users\me\Documents\office_move_memo.docx")
 headings = [(p.style.name, p.text) for p in doc.paragraphs if p.style.name.startswith("Heading")]
 levels = [int(name.split()[-1]) for name, _ in headings if name.split()[-1].isdigit()]
 skipped = [b for a, b in zip([0, *levels], levels) if b > a + 1]
