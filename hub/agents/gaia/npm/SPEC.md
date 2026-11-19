@@ -591,10 +591,10 @@ Omitting it is a valid, explicit one-shot: nothing persists past that single
 turn, and the agent is not told otherwise.
 
 A retained session rebuilds its agent at the start of its next turn when the
-Lemonade Server chosen in Settings changed, or an MCP connector was turned on
-or off or (de)activated for GAIA, since it was built. The rebuilt agent keeps the conversation, loaded skills, the internet
-switch, the memory mode, granted folders and documents, and the working
-folder.
+Lemonade Server or the embedder chosen in Settings changed, or an MCP connector
+was turned on or off or (de)activated for GAIA, since it was built. The rebuilt
+agent keeps the conversation, loaded skills, the internet switch, the memory
+mode, granted folders and documents, and the working folder.
 
 Internal explicit deletion follows the same idle-only rule as eviction: it returns
 `False` for an absent or busy session and preserves a running agent. Successful

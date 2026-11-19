@@ -29,8 +29,10 @@ counting deterministically, in one streaming pass per file:
    median, merged into windows with exact first and last timestamps and the
    templates that occur only there.
 5. **Entities.** Ids (request, session, order, job, host ...) taken only from
-   anomaly templates, inside the anomaly's own window, with a check that
-   warns when the flagged share looks like the baseline.
+   anomaly templates, inside the anomaly's own window. ``output_path`` writes
+   the list with the evidence for each id, and the result says how many of
+   all entities it holds. A list that holds more than a third of them is
+   reported as implausible, with the two arguments that tighten it.
 
 Memory is bounded by caps on templates, hosts, entities and time buckets;
 whatever a cap cut off is reported in ``warnings``. Only the standard library
@@ -112,12 +114,18 @@ def triage_logs(
     bucket: str = "",
     top_n: int = DEFAULT_TOP_N,
     output_path: str = "",
+    entity_min_level: str = "",
+    entity_max_share: float = 0.0,
 ) -> dict:
     """Find what went wrong in log files: call this first for any log question.
 
     Reads every file in full (read-only, any size) and separates steady
-    baseline templates from anomalies. Returns checks, coverage, anomalies,
-    bursts, baseline, entities and warnings; quote its numbers exactly.
+    baseline templates from anomalies; quote its numbers exactly.
+
+    Asked which ids, hosts or jobs are anomalous? Pass output_path: this tool
+    writes that list with each id's evidence. Deliver or filter that file;
+    never rebuild the list with your own script. A list holding more than a
+    third of all entities is not an anomaly list: follow entity_list_warning.
 
     Args:
         paths: Log files and/or folders (folders are walked recursively).
@@ -131,8 +139,13 @@ def triage_logs(
         bucket: Optional time bucket such as "1min", "5min" or "1h"; chosen
             automatically from the range when empty.
         top_n: How many anomalies to return (1-50).
-        output_path: Optional new file: .csv or .txt gets the full
-            anomalous-entity list, .json the full detail.
+        output_path: New file for the anomalous-entity list: .csv (id and
+            evidence per row), .txt (ids) or .json (full detail). Pass it on
+            the first call when a list is asked for.
+        entity_min_level: Keep only ids named by anomaly templates at this
+            level or above, e.g. "ERROR" for error-bearing templates only.
+        entity_max_share: Leave out anomaly templates that touch more than
+            this share of all entities, e.g. 0.33; 0 keeps every template.
     """
     if isinstance(paths, str):
         paths = [p for p in re.split(r"[\n;]", paths) if p.strip()]
@@ -147,6 +160,8 @@ def triage_logs(
         level_regex=level_regex or None,
         host_regex=host_regex or None,
         entity_regex=entity_regex or None,
+        entity_min_level=entity_min_level or None,
+        entity_max_share=entity_max_share or None,
         bucket=bucket or None,
         top_n=top_n,
     )
@@ -171,6 +186,7 @@ def triage_logs(
             return _not_written(compact, refusal)
         try:
             compact["output"] = {"written": True, **result.write(out)}
+            compact["next_step"] = result.next_step(compact["output"])
         except SkillPermissionError as exc:
             return _not_written(compact, str(exc))
         except FileExistsError:

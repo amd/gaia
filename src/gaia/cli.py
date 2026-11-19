@@ -4706,7 +4706,7 @@ def _handle_schedule(args):
                 f"  gaia schedule add --name {args.name} "
                 + (f'--at "{args.at}"' if args.at else f'--cron "{args.cron}"')
                 + ' --prompt "<text>"\n'
-                "Track progress: https://github.com/amd/gaia/issues/1019",
+                "Track progress: https://github.com/amd/gaia/issues/6470",
                 file=sys.stderr,
             )
             sys.exit(1)

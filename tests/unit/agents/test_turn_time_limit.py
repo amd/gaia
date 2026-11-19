@@ -242,16 +242,16 @@ def test_one_notice_near_the_limit_names_the_missing_file(agent, clock):
 
 
 def test_the_turn_stops_short_of_the_limit_and_still_writes(agent, clock, tmp_path):
-    agent.time_limit_s = 100
-    replies = [_lookup(n) for n in range(1, 8)] + [_write(), _answer("Wrote it.")]
+    agent.time_limit_s = 200
+    replies = [_lookup(n) for n in range(1, 18)] + [_write(), _answer("Wrote it.")]
     chat = _stub_chat(agent, clock, replies, 10)
 
     result = agent.process_query(_REQUEST)
 
-    # A file is still missing, so the stop keeps three typical steps: 100 - 30.
-    assert chat.send_messages.call_count == 9
-    assert "time limit" in chat.sent[7][-1]["content"]
-    assert "time limit" in chat.sent[8][-1]["content"]
+    # A file is still missing, so the stop keeps three typical steps: 200 - 30.
+    assert chat.send_messages.call_count == 19
+    assert "time limit" in chat.sent[17][-1]["content"]
+    assert "time limit" in chat.sent[18][-1]["content"]
     assert (tmp_path / _TARGET).read_text(encoding="utf-8") == "# Changes\n"
     assert result["time_limit_reached"] is True
     assert result["max_steps_reached"] is False
@@ -260,14 +260,15 @@ def test_the_turn_stops_short_of_the_limit_and_still_writes(agent, clock, tmp_pa
 
 
 def test_slow_steps_move_the_stop_earlier(agent, clock):
-    """Boundary: a tenth of a short limit can't hold two slow model calls."""
-    agent.time_limit_s = 60
-    chat = _stub_chat(agent, clock, [_lookup(1), _lookup(2), _answer("Done.")], 15)
+    """Boundary: a twentieth of the limit can't hold two slow model calls."""
+    agent.time_limit_s = 200
+    replies = [_lookup(n) for n in range(1, 9)] + [_answer("Done.")]
+    chat = _stub_chat(agent, clock, replies, 20)
 
     result = agent.process_query("Is the loader in src/ right?")
 
-    # 15s steps: stop once 60 - 30 = 30s are used, after the second step.
-    assert chat.send_messages.call_count == 3
+    # 20s steps: stop once 200 - 40 = 160s are used, after the eighth step.
+    assert chat.send_messages.call_count == 9
     assert result["time_limit_reached"] is True
 
 
@@ -411,7 +412,7 @@ def test_a_zero_or_negative_limit_is_no_limit(agent, clock, limit):
 def test_notices_off_still_stops_at_the_limit(agent, clock, monkeypatch):
     monkeypatch.setenv("GAIA_AGENT_BUDGET_NOTICES", "0")
     agent.time_limit_s = 100
-    chat = _stub_chat(agent, clock, [_lookup(1), _answer("Stopped early.")], 50)
+    chat = _stub_chat(agent, clock, [_lookup(1), _answer("Stopped early.")], 80)
 
     result = agent.process_query("Is the loader in src/ right?")
 
@@ -473,6 +474,49 @@ def test_one_slow_step_does_not_pull_the_stop_forward(agent, clock):
     assert result["time_limit_reached"] is True
     assert 560 <= chat.sent_at[closing] < 600
     assert closing > 30
+
+
+def _closing_index(chat) -> int:
+    return next(
+        i
+        for i, sent in enumerate(chat.sent)
+        if "time limit" in str(sent[-1].get("content"))
+    )
+
+
+def test_a_long_second_step_does_not_stop_the_turn_at_half_its_limit(agent, clock):
+    """Two steps in, one long step was half the "typical" step: the turn
+    stopped with over 40% of its limit unspent."""
+    agent.time_limit_s = 2100
+    replies = [_lookup(n) for n in range(1, 40)]
+    chat = _stub_timed_chat(agent, clock, replies, [400, 721, 60])
+
+    result = agent.process_query("Is the loader in src/ right?")
+
+    assert result["time_limit_reached"] is True
+    assert chat.sent_at[_closing_index(chat)] >= 2100 * 0.9
+
+
+def test_slow_steps_never_keep_back_more_than_a_quarter_of_the_limit(agent, clock):
+    agent.time_limit_s = 1000
+    replies = [_lookup(n) for n in range(1, 10)]
+    chat = _stub_timed_chat(agent, clock, replies, [200])
+
+    agent.process_query("Is the loader in src/ right?")
+
+    # Two 200s steps would keep 400s back; the ceiling keeps 250s.
+    assert chat.sent_at[_closing_index(chat)] == 800
+
+
+def test_the_stop_never_comes_before_the_write_now_notice(agent, clock):
+    agent.time_limit_s = 1000
+    chat = _stub_timed_chat(agent, clock, [_lookup(n) for n in range(1, 10)], [330])
+
+    agent.process_query("Is the loader in src/ right?")
+
+    closing = _closing_index(chat)
+    assert chat.sent_at[closing] >= 1000 * agent_module._TIME_NOTICE_AT
+    assert 1 - agent_module._TIME_RESERVE_MAX >= agent_module._TIME_NOTICE_AT
 
 
 def test_a_long_step_across_the_notice_threshold_still_warns(agent, clock):
@@ -552,12 +596,12 @@ def test_the_closing_steps_call_may_use_the_time_kept_back_for_it(agent, clock):
 @pytest.mark.parametrize("form", ["text", "native"])
 def test_the_closing_step_runs_its_last_write(agent, clock, tmp_path, form):
     """The closing call used to withhold tools, so a last write never ran."""
-    agent.time_limit_s = 30
+    agent.time_limit_s = 100
     closing = (
         _write_markup("verdict.md") if form == "text" else _native_writes("verdict.md")
     )
     chat = _stub_timed_chat(
-        agent, clock, [_lookup(1), closing, _answer("Wrote verdict.md.")], [10]
+        agent, clock, [_lookup(1), closing, _answer("Wrote verdict.md.")], [80, 1]
     )
 
     result = agent.process_query("Is the loader in src/ right?")
@@ -573,12 +617,12 @@ def test_the_closing_step_runs_its_last_write(agent, clock, tmp_path, form):
 
 
 def test_the_closing_step_runs_only_one_call(agent, clock, tmp_path):
-    agent.time_limit_s = 30
+    agent.time_limit_s = 100
     _stub_timed_chat(
         agent,
         clock,
         [_lookup(1), _native_writes("a.md", "b.md"), _answer("Wrote a.md.")],
-        [10],
+        [80, 1],
     )
 
     agent.process_query("Is the loader in src/ right?")
@@ -630,16 +674,67 @@ def test_model_calls_are_capped_by_the_time_left(agent, clock):
     assert second == int((90 - 2) * 40 * agent_module._TIME_TOKEN_MARGIN)
 
 
-def test_the_closing_call_is_capped_by_the_time_left(agent, clock):
-    agent.time_limit_s = 30
+def test_the_closing_call_is_capped_by_half_the_time_left(agent, clock):
+    """Its one tool call and the answer after it need the other half."""
+    agent.time_limit_s = 200
     chat = _stub_timed_chat(
-        agent, clock, [_lookup(1), _answer("Done.")], [10], stats=_RATED
+        agent, clock, [_lookup(1), _answer("Done.")], [160, 1], stats=_RATED
     )
     agent.process_query("Is the loader in src/ right?")
 
     assert chat.kwargs[1]["max_tokens"] == int(
-        (20 - 2) * 40 * agent_module._TIME_TOKEN_MARGIN
+        (40 / 2 - 2) * 40 * agent_module._TIME_TOKEN_MARGIN
     )
+
+
+def test_the_answer_after_a_time_limit_stop_has_a_small_fixed_cap(agent, clock):
+    """With minutes left the forced answer could run for as long as they
+    lasted, re-typing work as prose; it ran longer than the step refused."""
+    agent.time_limit_s = 30000
+    chat = _stub_timed_chat(
+        agent,
+        clock,
+        [_lookup(1), _native_writes("verdict.md"), _answer("Wrote verdict.md.")],
+        [29000, 1],
+        stats=_RATED,
+    )
+
+    agent.process_query("Is the loader in src/ right?")
+
+    margin = agent_module._TIME_TOKEN_MARGIN
+    assert chat.kwargs[1]["max_tokens"] == min(
+        int((1000 / 2 - 2) * 40 * margin), agent._output_token_cap()
+    )
+    assert int((999 - 2) * 40 * margin) > agent_module._CLOSING_ANSWER_MAX_TOKENS
+    assert chat.kwargs[2]["max_tokens"] == agent_module._CLOSING_ANSWER_MAX_TOKENS
+
+
+def test_a_step_cap_answer_with_no_time_limit_keeps_the_usual_cap(agent, clock):
+    chat = _stub_timed_chat(
+        agent, clock, [_lookup(1), _answer("Out of steps.")], [1], stats=_RATED
+    )
+
+    agent.process_query("Is the loader in src/ right?", max_steps=1)
+
+    assert chat.kwargs[1]["max_tokens"] == agent._output_token_cap()
+
+
+def test_the_forced_answer_is_told_to_summarise_not_to_paste_files(agent, clock):
+    agent.time_limit_s = 100
+    chat = _stub_timed_chat(
+        agent,
+        clock,
+        [_lookup(1), _native_writes("verdict.md"), _answer("Wrote verdict.md.")],
+        [80, 1],
+    )
+
+    agent.process_query("Is the loader in src/ right?")
+
+    assert len(chat.sent) == 3
+    for sent in chat.sent[1:]:
+        asked = sent[-1]["content"]
+        assert "where the work stands and the next steps" in asked
+        assert "never paste code or a file's contents" in asked
 
 
 def test_the_cap_never_drops_below_the_floor(agent, clock):

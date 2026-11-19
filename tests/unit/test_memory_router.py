@@ -829,6 +829,19 @@ class TestConsolidateEndpoint:
 # ===========================================================================
 
 
+def _npu_pc(monkeypatch, tmp_path, **keys) -> None:
+    """A PC set up with ``gaia init --profile npu``, plus *keys*."""
+    import json
+
+    from gaia import config as config_mod
+
+    config_file = tmp_path / "npu-config.json"
+    config_file.write_text(
+        json.dumps({"default_device": "npu", **keys}), encoding="utf-8"
+    )
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
+
+
 class TestRebuildEmbeddingsEndpoint:
     """Test POST /api/memory/rebuild-embeddings endpoint."""
 
@@ -864,14 +877,12 @@ class TestRebuildEmbeddingsEndpoint:
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 500
 
-    def test_rebuild_uses_stamped_embedder_not_default(self, client, test_store):
-        """Re-embed with the stamped embedder, not the GGUF default (#1744).
-
-        On the NPU profile the agent stamps the FLM embedder. The dashboard
-        rebuild button must reuse it — embedding with the default would mix vector
-        spaces in one table and reload a Vulkan embedder that evicts the FLM
-        chat model.
-        """
+    def test_an_npu_pc_re_embeds_its_npu_vectors_on_the_gpu(
+        self, client, test_store, monkeypatch, tmp_path
+    ):
+        """Vectors from the NPU embedder are replaced: its search isn't proven,
+        and the two builds' vectors don't match (#6008)."""
+        _npu_pc(monkeypatch, tmp_path)
         test_store.set_embedder_id("embed-gemma-300m-FLM")
         mock_provider = MagicMock()
         mock_provider.embed.return_value = [[0.1] * 768]
@@ -880,7 +891,25 @@ class TestRebuildEmbeddingsEndpoint:
         ) as ctor:
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 200
+        ctor.assert_called_once_with(model="user.embeddinggemma-300m-GGUF")
+        assert test_store.get_embedder_id() == "user.embeddinggemma-300m-GGUF"
+
+    def test_rebuild_replaces_a_stamp_left_by_another_profile(
+        self, client, test_store, monkeypatch, tmp_path
+    ):
+        """The next agent start re-stamps the PC's embedder; rebuilding with the
+        old one would only be cleared again."""
+        _npu_pc(monkeypatch, tmp_path, embedding_device="npu")
+        test_store.set_embedder_id("user.embeddinggemma-300m-GGUF")
+        mock_provider = MagicMock()
+        mock_provider.embed.return_value = [[0.1] * 768]
+        with patch(
+            "gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider
+        ) as ctor:
+            resp = client.post("/api/memory/rebuild-embeddings")
+        assert resp.status_code == 200
         ctor.assert_called_once_with(model="embed-gemma-300m-FLM")
+        assert test_store.get_embedder_id() == "embed-gemma-300m-FLM"
 
     def test_rebuild_falls_back_to_default_embedder_when_unstamped(
         self, client, test_store
@@ -1488,16 +1517,18 @@ class TestDashboardWritesAreEmbedded:
             )
         )
 
-    def test_create_embeds_with_the_stored_embedder(
-        self, client, test_store, fake_embedder
+    def test_create_embeds_with_the_pcs_embedder(
+        self, client, test_store, fake_embedder, monkeypatch, tmp_path
     ):
-        test_store.set_embedder_id("embed-gemma-300m-FLM")
+        # A saved NPU choice still loads; the stamp is from before it.
+        _npu_pc(monkeypatch, tmp_path, embedding_device="npu")
+        test_store.set_embedder_id("user.embeddinggemma-300m-GGUF")
         data = _create_knowledge(client, "The gateway listens on port 8080")
 
         assert data["embedded"] is True
         assert "embed_error" not in data
         assert self._has_vector(test_store, data["knowledge_id"])
-        # Same embedder as the stored vectors, not the module default (#1744).
+        # The embedder every chat on this PC uses, not the stale stamp (#1744).
         fake_embedder.assert_called_with(model="embed-gemma-300m-FLM")
         fake_embedder.instance.embed.assert_called_with(
             ["The gateway listens on port 8080"], model="embed-gemma-300m-FLM"
