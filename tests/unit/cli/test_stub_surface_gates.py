@@ -185,7 +185,8 @@ class TestScheduleAddSkillRejected:
         err = capsys.readouterr().err
         assert "--skill is not supported yet" in err
         assert "--prompt" in err
-        assert "1019" in err  # points at the tracking issue
+        assert "issues/6470" in err  # points at the open tracking issue
+        assert "1019" not in err
         store_add.assert_not_called()
 
     def test_prompt_add_still_works(self, mocker, capsys):

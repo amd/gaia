@@ -482,17 +482,6 @@
     white-space: nowrap;
 }
 
-.mem-sensitive-blur {
-    filter: blur(4px);
-    cursor: pointer;
-    transition: filter var(--duration) var(--ease);
-    user-select: none;
-}
-.mem-sensitive-blur:hover,
-.mem-sensitive-blur.revealed {
-    filter: none;
-}
-
 .mem-sensitive-badge {
     display: inline-flex;
     align-items: center;
@@ -558,6 +547,7 @@
     transition: all var(--duration-fast) var(--ease);
 }
 .mem-row-action-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.mem-row-action-btn:disabled { opacity: 0.45; cursor: not-allowed; background: none; color: var(--text-muted); }
 .mem-row-action-btn.delete:hover,
 .mem-row-action-btn.delete.is-confirm { color: var(--danger); }
 .mem-row-action-btn.is-confirm { width: auto; padding: 0 6px; }

@@ -9,6 +9,8 @@
 # checks (Test Lemonade Embeddings API, RAG Integration). Upstream:
 # llama.cpp #16301 / lemonade #612. A newer GPU driver may close or shorten
 # that window. This workflow lets a maintainer update the driver remotely.
+# Validate a candidate on stx-test first by dispatching Test Lemonade Embeddings
+# (test_embeddings.yml) with runner_label=stx-test.
 #
 # It NEVER runs automatically -- workflow_dispatch only. Default action is
 # "check-only" (report current + available driver, change nothing). Installing

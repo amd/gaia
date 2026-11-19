@@ -27,6 +27,9 @@ from .limits import (
     CLUSTER_WINDOW_FRAC,
     DEFAULT_TIME_BUDGET_S,
     DEFAULT_TOP_N,
+    ENTITY_BASELINE_MIN_SHARE,
+    ENTITY_SHARE_IMPLAUSIBLE,
+    ENTITY_SHARE_MIN_TOTAL,
     ENTITY_SHARE_WARN,
     ESCALATION_FACTOR,
     ESCALATION_MIN_COUNT,
@@ -45,6 +48,7 @@ from .limits import (
     OUT_SAMPLE_CHARS,
     OUT_SAMPLES,
     OUT_TEMPLATE_CHARS,
+    REPLACEMENT_CHAR,
     SHORT_SPAN_PCT,
     SPIKE_FACTOR,
     SPIKE_MIN_LINES,
@@ -148,6 +152,10 @@ class FileReport:
     offsets: Counter = field(default_factory=Counter)
     truncated_at_line: Optional[int] = None
     error: Optional[str] = None
+    encoding: str = "utf-8"
+    undecodable_chars: int = 0
+    undecodable_lines: int = 0
+    undecodable_first_line: Optional[int] = None
     year_inferred: bool = False
     out_of_order: int = 0
 
@@ -161,6 +169,10 @@ class TriageOptions:
     level_regex: Optional[str] = None
     host_regex: Optional[str] = None
     entity_regex: Optional[str] = None
+    #: Keep only anomaly templates at this level or above in the entity list.
+    entity_min_level: Optional[str] = None
+    #: Leave out anomaly templates that touch more than this share of all entities.
+    entity_max_share: Optional[float] = None
     bucket: Optional[str] = None
     top_n: int = DEFAULT_TOP_N
     time_budget_s: float = DEFAULT_TIME_BUDGET_S
@@ -194,6 +206,43 @@ def parse_bucket(text: Optional[str]) -> Optional[float]:
     if seconds <= 0:
         raise ValueError("bucket must be longer than zero.")
     return seconds
+
+
+def parse_min_level(text: Optional[str]) -> Optional[int]:
+    """``entity_min_level`` as a severity number; None when not given.
+
+    Raises:
+        ValueError: the text names no level.
+    """
+    if text is None or not str(text).strip():
+        return None
+    sev = level_severity(str(text))
+    if sev is None:
+        raise ValueError(
+            f"entity_min_level {text!r} is not a level; use one of "
+            f"{', '.join(SEVERITY_NAMES)}."
+        )
+    return sev
+
+
+def parse_max_share(value: Optional[float]) -> Optional[float]:
+    """``entity_max_share`` as a fraction in (0, 1]; None when not given.
+
+    Raises:
+        ValueError: the value is not a number in that range.
+    """
+    if value is None or value == "" or value == 0:
+        return None
+    try:
+        share = float(value)
+    except (TypeError, ValueError):
+        share = -1.0
+    if not 0.0 < share <= 1.0:
+        raise ValueError(
+            f"entity_max_share {value!r} is not a share; use a number above 0 and "
+            "up to 1, such as 0.33."
+        )
+    return share
 
 
 def choose_bucket(span_s: float) -> float:
@@ -235,6 +284,8 @@ class Analyzer:
             (entity_re,) if entity_re is not None else ()
         )
         self.custom_entities = entity_re is not None
+        self.entity_min_sev = parse_min_level(options.entity_min_level)
+        self.entity_max_share = parse_max_share(options.entity_max_share)
         self.probed = False
         self.bucket_s: float = parse_bucket(options.bucket) or 60.0
         self.bucket_fixed = options.bucket not in (None, "")
@@ -377,6 +428,7 @@ class Analyzer:
         n = 0
         try:
             with _open_text(path) as f:
+                report.encoding = f.encoding or report.encoding
                 while True:
                     try:
                         raw, cut = _read_line(f, deadline)
@@ -389,6 +441,11 @@ class Analyzer:
                     n += 1
                     report.lines = n
                     report.long_lines += cut
+                    if REPLACEMENT_CHAR in raw:
+                        report.undecodable_chars += raw.count(REPLACEMENT_CHAR)
+                        report.undecodable_lines += 1
+                        if report.undecodable_first_line is None:
+                            report.undecodable_first_line = n
                     if n % 4096 == 0 and time.monotonic() > deadline:
                         report.truncated_at_line = n
                         self.out_of_time = True
@@ -1202,6 +1259,11 @@ def build_entities(an: Analyzer, anomalies: List[_Tpl]) -> Dict[str, Any]:
     for t in an.tpls.values():
         if id(t) not in anomaly_ids:
             routine.update(t.ents)
+    # The caller's own tightening: error-bearing templates only.
+    below_level: List[str] = []
+    if an.entity_min_sev is not None:
+        below_level = [t.tid for t in anomalies if t.sev < an.entity_min_sev]
+        anomalies = [t for t in anomalies if t.sev >= an.entity_min_sev]
     hits_by_tpl = {t.tid: _template_hits(t) for t in anomalies}
     tpl_by_id = {t.tid: t for t in anomalies}
     kind_total: Counter = Counter(an.ent_kind.values())
@@ -1284,18 +1346,58 @@ def build_entities(an: Analyzer, anomalies: List[_Tpl]) -> Dict[str, Any]:
                 if an.ent_kind.get(e) not in used_set:
                     continue
                 entry = flagged.setdefault(
-                    e, {"templates": [], "kind": an.ent_kind.get(e)}
+                    e,
+                    {
+                        "templates": [],
+                        "kind": an.ent_kind.get(e),
+                        "sev": 0,
+                        "reach": 1.0,
+                        "first": None,
+                        "last": None,
+                        "routine": e in routine,
+                    },
                 )
                 if tid not in entry["templates"] and len(entry["templates"]) < 5:
                     entry["templates"].append(tid)
+                tpl = tpl_by_id[tid]
+                entry["sev"] = max(entry["sev"], tpl.sev)
+                entry["reach"] = min(entry["reach"], reach[tid])
+                window = windows[tid]
+                marks = [
+                    b for b in tpl.ents[e] if b >= 0 and (window is None or b in window)
+                ]
+                if marks:
+                    lo = an.origin + min(marks) * an.bucket_s
+                    hi = an.origin + (max(marks) + 1) * an.bucket_s
+                    entry["first"] = (
+                        lo if entry["first"] is None else min(entry["first"], lo)
+                    )
+                    entry["last"] = (
+                        hi if entry["last"] is None else max(entry["last"], hi)
+                    )
         return flagged
 
+    windows = {t.tid: _anomaly_window(t) for t in anomalies}
+    # How much of the population each anomaly template touches on its own.
+    reach = {
+        tid: sum(1 for e in hits if an.ent_kind.get(e) in used_set) / max(1, total)
+        for tid, hits in hits_by_tpl.items()
+    }
     active = [tid for tid, hits in hits_by_tpl.items() if hits]
+    # The caller's own tightening: templates rare relative to all entities.
+    too_broad: List[str] = []
+    if an.entity_max_share is not None:
+        too_broad = [tid for tid in active if reach[tid] > an.entity_max_share]
+        active = [tid for tid in active if tid not in too_broad]
     flagged = collect(active)
     narrowed: List[str] = []
 
     def routine_heavy(fl: Dict[str, Any]) -> bool:
-        if not fl or total < 20 or len(fl) / total <= ENTITY_SHARE_WARN:
+        if (
+            not fl
+            or total < ENTITY_SHARE_MIN_TOTAL
+            or len(fl) / total <= ENTITY_SHARE_WARN
+        ):
             return False
         return sum(1 for e in fl if e in routine) >= 0.5 * len(fl)
 
@@ -1321,7 +1423,64 @@ def build_entities(an: Analyzer, anomalies: List[_Tpl]) -> Dict[str, Any]:
             "baseline. The list comes from the narrower anomaly templates."
         )
         warnings.append("entity list narrowed: " + note)
-    if routine_heavy(flagged):
+    filters: Dict[str, Any] = {}
+    if an.entity_min_sev is not None:
+        filters["entity_min_level"] = {
+            "level": SEVERITY_NAMES[an.entity_min_sev],
+            "templates_left_out": below_level,
+        }
+    if an.entity_max_share is not None:
+        filters["entity_max_share"] = {
+            "share": an.entity_max_share,
+            "templates_left_out": too_broad,
+        }
+    broadest = None
+    if per_template:
+        tid = max(per_template, key=lambda t: (reach[t], t))
+        broadest = {
+            "id": tid,
+            "severity": SEVERITY_NAMES[tpl_by_id[tid].sev],
+            "entities": per_template[tid],
+            "share": round(reach[tid], 4),
+        }
+    # The share means something only against a population the routine lines
+    # also name: ids seen in anomaly lines alone are all flagged by construction.
+    in_routine = sum(
+        1 for e, k in an.ent_kind.items() if k in used_set and e in routine
+    )
+    population_known = total > 0 and in_routine >= ENTITY_BASELINE_MIN_SHARE * total
+    implausible = None
+    if (
+        population_known
+        and total >= ENTITY_SHARE_MIN_TOTAL
+        and share > ENTITY_SHARE_IMPLAUSIBLE
+    ):
+        below_error = sum(1 for tid in per_template if tpl_by_id[tid].sev < 3)
+        implausible = (
+            f"IMPLAUSIBLE ENTITY LIST: {len(flagged)} of {total} entities ({share:.0%}) "
+            "are flagged. A criterion that matches most entities is not an anomaly "
+            "criterion: it describes normal operation, and real anomalies are usually "
+            "a small minority. Do not deliver this list as the anomalous ones. "
+            "Tighten it with the tool: call again with entity_max_share="
+            f"{ENTITY_SHARE_IMPLAUSIBLE:.2f} to keep only templates that are rare "
+            "relative to all entities"
+            + (
+                f" (the broadest, {broadest['id']}, touches {broadest['share']:.0%})"
+                if broadest
+                else ""
+            )
+            + ', or with entity_min_level="ERROR" to keep error-bearing templates only'
+            + (
+                f" ({below_error} of the {len(per_template)} templates behind the "
+                "list are below ERROR)"
+                if below_error
+                else ""
+            )
+            + ". If the incident really touched this share, report the share as the "
+            "finding, not the list."
+        )
+        warnings.append(implausible)
+    elif routine_heavy(flagged):
         warnings.append(
             f"{len(flagged)} of {total} entities ({share:.0%}) are flagged and most also "
             "appear in routine templates. Real anomalies are usually a small minority; "
@@ -1346,5 +1505,10 @@ def build_entities(an: Analyzer, anomalies: List[_Tpl]) -> Dict[str, Any]:
         "dropped_templates": narrowed,
         "narrowed": note,
         "share": share,
+        "in_routine": in_routine,
+        "population_known": population_known,
+        "filters": filters,
+        "broadest": broadest,
+        "implausible": implausible,
         "warnings": warnings,
     }

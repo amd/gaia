@@ -154,6 +154,78 @@ describe('citations to dropped files and same-named files', () => {
         expect(found[0].text).toBe('2024/plan.pdf');
     });
 
+    describe('paths with spaces in their folders', () => {
+        const SPACED = [
+            at('only', 'summary.pdf', 'C:\\Users\\John Smith\\2023\\summary.pdf'),
+            at('js23', 'plan.pdf', 'C:\\Users\\John Smith\\2023\\plan.pdf'),
+            at('js24', 'plan.pdf', 'C:\\Users\\John Smith\\2024\\plan.pdf'),
+            at('od', 'budget.xlsx', 'C:\\Users\\me\\OneDrive - AMD\\Finance\\budget.xlsx'),
+            at('wide', 'q.md', 'C:\\A  B\\c   d\\q.md'),
+        ];
+        beforeEach(() => useChatStore.setState({ documents: SPACED }));
+
+        /** The rendered text, with each link's label standing in for what it covers. */
+        function shown(markdown: string) {
+            const { container } = render(<RenderedContent content={markdown} />);
+            return stripIsolates(container.textContent ?? '');
+        }
+
+        it('a file no other document shares a name with links the whole path', () => {
+            const text = 'See C:\\Users\\John Smith\\2023\\summary.pdf, page 4.';
+            expect(links(text).map(({ kind, id, page }) => [kind, id, page])).toEqual([['doc', 'only', 4], ['page', 'only', 4]]);
+            expect(shown(text)).toBe('See summary.pdf, page 4.');
+        });
+
+        it.each([
+            ['a period', 'Per C:\\Users\\me\\OneDrive - AMD\\Finance\\budget.xlsx.', 'Per budget.xlsx.'],
+            ['a comma', 'Per C:\\Users\\me\\OneDrive - AMD\\Finance\\budget.xlsx, the total is 9.', 'Per budget.xlsx, the total is 9.'],
+            ['a closing paren', 'Totals (C:\\Users\\me\\OneDrive - AMD\\Finance\\budget.xlsx) match.', 'Totals (budget.xlsx) match.'],
+            ['a semicolon', 'Per C:\\Users\\me\\OneDrive - AMD\\Finance\\budget.xlsx; done', 'Per budget.xlsx; done'],
+        ])('an OneDrive - AMD path followed by %s links only the path', (_, text, expected) => {
+            expect(links(text).map(({ id }) => id)).toEqual(['od']);
+            expect(shown(text)).toBe(expected);
+        });
+
+        it('several spaces in a row inside a folder name', () => {
+            const text = 'Per C:\\A  B\\c   d\\q.md, ok';
+            expect(links(text).map(({ id }) => id)).toEqual(['wide']);
+            expect(shown(text)).toBe('Per q.md, ok');
+        });
+
+        it('two spaced paths in one sentence each link to their own file', () => {
+            const text = 'Compare C:\\Users\\John Smith\\2023\\plan.pdf and C:\\Users\\John Smith\\2024\\plan.pdf for totals.';
+            expect(links(text).map(({ id }) => id)).toEqual(['js23', 'js24']);
+            expect(shown(text)).toBe('Compare 2023/plan.pdf and 2024/plan.pdf for totals.');
+        });
+
+        it('a spaced path not in the library does not swallow the cited path after it', () => {
+            const text = 'in C:\\Docs\\a b.pdf and C:\\Users\\John Smith\\2024\\plan.pdf';
+            expect(links(text).map(({ id }) => id)).toEqual(['js24']);
+            expect(shown(text)).toContain('a b.pdf and 2024/plan.pdf');
+        });
+
+        it('forward slashes and different case still find the stored path', () => {
+            expect(links('See c:/users/john smith/2023/summary.pdf now').map(({ id }) => id)).toEqual(['only']);
+        });
+
+        it('prose around a bare name is not pulled into the link', () => {
+            const text = 'see the notes in my folder and then summary.pdf, page 2.';
+            expect(links(text).map(({ kind, id }) => [kind, id])).toEqual([['doc', 'only'], ['page', 'only']]);
+            expect(shown(text)).toBe(text);
+        });
+
+        it('a folder named in prose before a bare name does not join it into a path', () => {
+            const text = 'My John Smith folder has summary.pdf in it.';
+            expect(links(text).map(({ id, text: label }) => [id, label])).toEqual([['only', 'summary.pdf']]);
+            expect(shown(text)).toBe(text);
+        });
+
+        it('a partial path that only ends like a stored one links nothing extra', () => {
+            const text = 'See D:\\Other Place\\2023\\plan.pdf instead.';
+            expect(links(text)).toEqual([]);
+        });
+    });
+
     it('a bare name two files share links neither, rather than the wrong one', () => {
         useChatStore.setState({ documents: TWINS });
         expect(links('According to report.pdf, page 2.')).toEqual([]);
