@@ -1234,9 +1234,9 @@ def _set_flagship_agent(choice: str) -> None:
     from gaia.config import GaiaConfig
     from gaia.daemon.sidecars import fetch
     from gaia.daemon.sidecars.errors import SidecarError
-    from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.run_manager import run_manager
     from gaia.ui.security import FLAGSHIP_AGENT_ID
+    from gaia.ui.sidecar import daemon_client
 
     saved = GaiaConfig.load().flagship_agent
     if choice == saved:

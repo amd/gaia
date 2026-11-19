@@ -30,7 +30,8 @@ _SIZE_TTL_S = 600.0
 _lock = threading.Lock()
 # One measurement at a time: each is up to three network calls.
 _measuring = threading.Lock()
-_sizes: Dict[str, Any] = {"at": 0.0, "values": {}, "reasons": {}}
+# "at" is None when nothing is cached: 0.0 would read as fresh on a just-booted PC.
+_sizes: Dict[str, Any] = {"at": None, "values": {}, "reasons": {}}
 _job: Dict[str, Any] = {
     "state": "idle",
     "bytes_done": 0,
@@ -71,7 +72,7 @@ def _measure() -> None:
         lasting = False
     with _lock:
         _sizes.update(
-            at=time.monotonic() if lasting else 0.0, values=values, reasons=reasons
+            at=time.monotonic() if lasting else None, values=values, reasons=reasons
         )
 
 
@@ -100,7 +101,8 @@ def _job_view() -> Dict[str, Any]:
 
 def _fresh() -> bool:
     with _lock:
-        return bool(_sizes["values"]) and time.monotonic() - _sizes["at"] <= _SIZE_TTL_S
+        at = _sizes["at"]
+        return at is not None and time.monotonic() - at <= _SIZE_TTL_S
 
 
 def _listing() -> Dict[str, Any]:
@@ -158,7 +160,7 @@ def _run_download() -> None:
     try:
         if fetch.chosen_flagship() == fetch.NATIVE_FLAGSHIP:
             # An update replaces the file the running agent was started from.
-            from gaia.ui.email_sidecar import daemon_client
+            from gaia.ui.sidecar import daemon_client
 
             daemon_client.stop_sidecar(FLAGSHIP_AGENT_ID)
         native_fetch.download(_on_progress)
@@ -169,7 +171,7 @@ def _run_download() -> None:
         return
     with _lock:
         _job.update(state="done", error=None)
-        _sizes["at"] = 0.0
+        _sizes["at"] = None
 
 
 def _require_gaiacpp(program_id: str) -> None:

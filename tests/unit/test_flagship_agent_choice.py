@@ -6,6 +6,7 @@ One key, ``flagship_agent`` in ``~/.gaia/config.json``, decides which program
 the daemon starts as the GAIA agent and whether the Agent UI relays to it.
 """
 
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -124,7 +125,7 @@ def test_the_daemon_starts_gaiacpp_when_it_is_chosen(fake_gaiacpp, monkeypatch):
     assert m.installed_binary_version == "0.1.0"
     # Its token goes by file, as for any installed binary, not the dev-source way.
     assert m.resolved_mode == "user"
-    assert m._resolve_secret_delivery()[0] == "file"
+    assert m._resolve_secret_delivery().startswith("installed binary 0.1.0")
 
 
 def test_a_chosen_gaiacpp_that_is_missing_fails_and_says_how_to_switch_back(
@@ -154,9 +155,11 @@ def test_the_python_agent_is_started_as_before(fake_gaiacpp, monkeypatch):
 
 def test_another_agent_is_not_affected_by_the_choice(fake_gaiacpp, monkeypatch):
     _choose("gaiacpp")
-    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
-    email = mgr.AgentSidecarManager(builtin_specs()["email"])
-    argv, _ = email.build_spawn_command(port=45123)
+    other_spec = dataclasses.replace(
+        builtin_specs()["gaia"], agent_id="other", mode_env_var="GAIA_OTHER_AGENT_MODE"
+    )
+    monkeypatch.setenv("GAIA_OTHER_AGENT_MODE", "dev")
+    argv, _ = mgr.AgentSidecarManager(other_spec).build_spawn_command(port=45123)
     assert str(fake_gaiacpp) not in argv
 
 
@@ -201,7 +204,7 @@ def client():
 @pytest.fixture
 def stops(monkeypatch):
     """Record every sidecar the settings route asks the daemon to stop."""
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     seen = []
     monkeypatch.setattr(
@@ -270,7 +273,7 @@ def test_a_settings_write_that_leaves_the_agent_out_changes_nothing(
 def test_an_agent_that_will_not_stop_is_reported_with_what_was_saved(
     client, fake_gaiacpp, monkeypatch
 ):
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     def _refuse(agent_id="email"):
         raise SidecarError("the daemon did not answer")
@@ -344,6 +347,7 @@ def test_a_downloaded_gaiacpp_that_was_changed_afterwards_is_not_run(
 
     binary = tmp_path / fetch.native_flagship_executable_name()
     binary.write_bytes(b"what was downloaded")
+    binary.chmod(0o755)
     record = {
         "version": "0.26.1",
         "sha256": hashlib.sha256(b"what was downloaded").hexdigest(),

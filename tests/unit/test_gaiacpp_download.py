@@ -25,7 +25,7 @@ def _own_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         native_fetch.plat, "current_platform_key", lambda *a, **k: "win32-x64"
     )
-    agent_programs._sizes.update(at=0.0, values={}, reasons={})
+    agent_programs._sizes.update(at=None, values={}, reasons={})
     agent_programs._job.update(state="idle", bytes_done=0, bytes_total=None, error=None)
 
 
@@ -47,6 +47,12 @@ def release(tmp_path, monkeypatch):
 
 def _target(tmp_path):
     return tmp_path / "home" / "bin" / fetch.native_flagship_executable_name()
+
+
+def _place(target, data):
+    """Put a gaiacpp where it is looked for, executable as an install leaves it."""
+    target.write_bytes(data)
+    target.chmod(0o755)
 
 
 # ---------------------------------------------------------------- which release
@@ -224,7 +230,7 @@ def _wait(client, states, timeout=20.0):
 def test_downloading_through_the_api_installs_it_and_then_it_can_be_chosen(
     client, release, tmp_path, monkeypatch
 ):
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     monkeypatch.setattr(daemon_client, "stop_sidecar", lambda agent_id="email": None)
     refused = client.put("/api/settings", json={"flagship_agent": "gaiacpp"})
@@ -254,7 +260,7 @@ def test_a_failed_download_reports_the_reason(client, release):
 def test_gaiacpp_already_here_is_not_downloaded_again(client, release, tmp_path):
     target = _target(tmp_path)
     target.parent.mkdir(parents=True)
-    target.write_bytes(PAYLOAD)
+    _place(target, PAYLOAD)
     r = client.post("/api/agent-programs/gaiacpp/download")
     assert r.status_code == 409
 
@@ -293,6 +299,8 @@ def test_a_network_failure_is_asked_again_and_a_missing_build_is_remembered(
         calls.append("x")
         raise RuntimeError("could not reach the release")
 
+    # A PC booted moments ago: its monotonic clock is still small.
+    monkeypatch.setattr(agent_programs.time, "monotonic", lambda: 5.0)
     monkeypatch.setattr(native_fetch, "download_info", _unreachable)
     client.get("/api/agent-programs")
     client.get("/api/agent-programs")
@@ -326,7 +334,7 @@ def test_a_gaiacpp_from_an_older_release_can_be_downloaded_again(
 ):
     target = _target(tmp_path)
     target.parent.mkdir(parents=True)
-    target.write_bytes(b"last release")
+    _place(target, b"last release")
     (target.parent / native_fetch.INSTALL_RECORD_NAME).write_text(
         json.dumps({"version": "0.25.9", "sha256": "0" * 64, "tag": "v0.25.9"})
     )
@@ -348,7 +356,7 @@ def test_a_failed_update_leaves_the_working_copy_and_its_record_alone(
 ):
     target = _target(tmp_path)
     target.parent.mkdir(parents=True)
-    target.write_bytes(b"the copy in use")
+    _place(target, b"the copy in use")
     old = {
         "version": "0.25.9",
         "sha256": hashlib.sha256(b"the copy in use").hexdigest(),
@@ -380,7 +388,7 @@ def test_a_failed_update_leaves_the_working_copy_and_its_record_alone(
 def _older_gaiacpp(tmp_path):
     target = _target(tmp_path)
     target.parent.mkdir(parents=True)
-    target.write_bytes(b"last release")
+    _place(target, b"last release")
     (target.parent / native_fetch.INSTALL_RECORD_NAME).write_text(
         json.dumps({"version": "0.25.9", "sha256": "0" * 64, "tag": "v0.25.9"})
     )
