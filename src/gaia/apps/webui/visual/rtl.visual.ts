@@ -504,6 +504,42 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+const SKILL_LIST = [
+    { name: 'pdf', description: 'Make and edit PDF files. Use when the user asks for a report.', version: '1.0.0', tier: 'verified', tools: [], path: 'agent-bundled', source: 'agent-bundled' },
+    { name: 'pptx', description: 'ابنِ عروض الشرائح من ملاحظاتك. استخدمها عند طلب عرض.', version: '1.0.0', tier: 'verified', tools: [], path: 'agent-bundled', source: 'agent-bundled' },
+    { name: 'web-research', description: 'Research a topic on the web and cite every source it uses, with a long description that has to be cut short.', version: '1.0.0', tier: 'verified', tools: [], path: 'user', source: 'user' },
+];
+
+for (const locale of ['en', 'ar']) {
+    test(`typing / lists the skills above the message box (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => p.route((url) => url.pathname === '/api/skills', (route) =>
+            route.fulfill({ json: { skills: SKILL_LIST, invalid: {} } })));
+        const box = page.locator('.new-chat textarea').first();
+        await box.fill('/');
+        const menu = page.locator('.skill-menu');
+        await expect(menu.getByRole('option')).toHaveCount(3);
+        await shot(page, `skill-menu-${locale}`);
+
+        const [menuBox, composerBox] = [(await menu.boundingBox())!, (await page.locator('.new-chat .composer').boundingBox())!];
+        expect(menuBox.y + menuBox.height, 'the list covers the message box').toBeLessThanOrEqual(composerBox.y + 1);
+        expect(menuBox.y, 'the list runs off the top of the window').toBeGreaterThanOrEqual(0);
+
+        // The /name is Latin: it reads left to right and sits on the row's start edge.
+        const row = menu.getByRole('option').first();
+        const [rowBox, nameBox] = [(await row.boundingBox())!, (await row.locator('.skill-menu-name').boundingBox())!];
+        const startGap = locale === 'ar' ? rowBox.x + rowBox.width - (nameBox.x + nameBox.width) : nameBox.x - rowBox.x;
+        expect(startGap, 'the skill name is not at the start of its row').toBeLessThan(16);
+        await expect(row.locator('.skill-menu-name')).toHaveText('/pdf');
+
+        await box.fill('/pp');
+        await expect(menu.getByRole('option')).toHaveCount(1);
+        await box.press('Enter');
+        await expect(box).toHaveValue('/pptx ');
+        await expect(menu).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const BIG_LIBRARY = Array.from({ length: 600 }, (_, i) => ({
     id: `lib-${i}`, filename: `meeting-notes-${i}.txt`, filepath: `C:/library/meeting-notes-${i}.txt`, file_size: 512,
     chunk_count: 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0,

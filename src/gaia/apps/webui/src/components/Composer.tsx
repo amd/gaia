@@ -9,6 +9,8 @@ import { useT } from '../i18n/useT';
 import { middleTruncate } from '../utils/format';
 import { isVideoFile } from '../utils/mediaFiles';
 import { isEditLastKey } from '../utils/editLast';
+import { useSkillCommands } from '../hooks/useSkillCommands';
+import { SKILL_MENU_ID, SkillCommandMenu, skillOptionId } from './SkillCommandMenu';
 import type { Attachment } from '../types';
 import './Composer.css';
 
@@ -67,6 +69,11 @@ export function Composer({
     const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong && !refusedNames && !chipsBlock;
 
     const shownPlaceholder = disabledReason || placeholder || t('composer.placeholder');
+    const skillMenu = useSkillCommands(disabled ? '' : value);
+    const pickSkill = useCallback((name: string) => {
+        onChange(`/${name} `);
+        textareaRef.current?.focus();
+    }, [onChange, textareaRef]);
 
     // Grow with the text, up to a cap; shrink back when it is cleared.
     // Chrome counts the placeholder in scrollHeight, and a narrow first layout
@@ -91,6 +98,28 @@ export function Composer({
     }, [value, shownPlaceholder, textareaRef]);
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (skillMenu.open && !e.nativeEvent.isComposing) {
+            const { matches, selected } = skillMenu;
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                skillMenu.dismiss();
+                return;
+            }
+            if (matches.length > 0 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                e.preventDefault();
+                const step = e.key === 'ArrowDown' ? 1 : -1;
+                skillMenu.select((selected + step + matches.length) % matches.length);
+                return;
+            }
+            // Tab or Enter fills in the name; Enter on a name typed in full sends it.
+            const name = matches[selected]?.name;
+            const typedInFull = name !== undefined && value.toLowerCase() === `/${name}`;
+            if (name && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !typedInFull))) {
+                e.preventDefault();
+                pickSkill(name);
+                return;
+            }
+        }
         if (onEditLast && isEditLastKey(e, value)) {
             e.preventDefault();
             onEditLast();
@@ -100,7 +129,7 @@ export function Composer({
             e.preventDefault();
             if (canSend) onSubmit();
         }
-    }, [canSend, onSubmit, onEditLast, value]);
+    }, [canSend, onSubmit, onEditLast, value, skillMenu, pickSkill]);
 
     const handleDrop = useCallback((e: React.DragEvent) => {
         if (!e.dataTransfer?.files?.length) return;
@@ -148,6 +177,7 @@ export function Composer({
                     })}
                 </ul>
             )}
+            <SkillCommandMenu menu={skillMenu} onPick={pickSkill} />
             <textarea
                 ref={textareaRef}
                 className="composer-input"
@@ -160,6 +190,10 @@ export function Composer({
                 disabled={disabled}
                 autoFocus={autoFocus}
                 aria-label={t('composer.message')}
+                aria-autocomplete="list"
+                aria-expanded={skillMenu.open && skillMenu.matches.length > 0}
+                aria-controls={skillMenu.open && skillMenu.matches.length > 0 ? SKILL_MENU_ID : undefined}
+                aria-activedescendant={skillMenu.open && skillMenu.matches.length > 0 ? skillOptionId(skillMenu.selected) : undefined}
                 dir="auto"
             />
             {tooLong && (

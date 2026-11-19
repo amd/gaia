@@ -614,6 +614,15 @@ collapses the rest to a one-line menu entry (re-activated by calling
 `GAIA_DYNAMIC_SKILLS_TAU=<float>` overrides its threshold; an embedder outage
 disables it for the session and every body renders.
 
+A query that starts with `/<skill-name>`, where the name is an installed skill,
+runs on that skill, as in Claude Code: the agent loads it exactly as
+`load_skill` would (same gates, same refusals), keeps its body in the prompt for
+the turn, and sends the model the rest of the line as the request. Host notes in
+front of the line (one `[…]` line each, then a blank line) are kept. Anything
+else, such as `/tmp/notes.txt`, is sent unchanged. A load that is refused is
+reported to the user with its fix, and the request is not attempted. This holds
+on `/v1/gaia/query`, over stdio and in `process_query`.
+
 A retained session also carries a **project map** — up to 600 prompt tokens of
 directory shape, entry points, installed commands and platform quirks, present
 whenever the agent's working directory resolves to a code repository (a VCS
@@ -808,6 +817,9 @@ changed since its preview is refused, and each preview covers one add — to
 `~/.gaia/skills` at the `experimental` tier and recomposes the prompt so
 the session can use them. Skills that ship code are refused unless the line
 carries `--allow-code`. Each command ends in exactly one `final` or `error` event.
+Bare `/skills`, a successful add and the model-state status ping each carry
+`skills: [{name, description}]`, the installed skills the TUI's `/` palette
+offers as `/<skill-name>`; an agent without the skill library sends `[]`.
 The TUI's `/provider` panel configures credentials directly with local Lemonade;
 keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model

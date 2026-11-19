@@ -57,7 +57,9 @@ newest version (`<name>@<range>` pins one). To remove one, run
 You can also ask the GAIA agent in chat: "find a skill that does X and install
 it". It searches the hub (`search_skill_hub`) and installs (`install_skill`), but
 an installed skill is not active until it is loaded (`load_skill`), which the
-agent does when you ask it to use the skill. The agent will not install a skill
+agent does when you ask it to use the skill. To run one yourself, start a message
+with `/` and its name, as in Claude Code: `/summarize this transcript`. See
+[Skills](/guides/gaia#skills). The agent will not install a skill
 that is unsigned or asks for a dangerous permission; it tells you, and you can
 approve it yourself in a terminal with
 `gaia skill install <name> --allow-experimental` or `--yes`.

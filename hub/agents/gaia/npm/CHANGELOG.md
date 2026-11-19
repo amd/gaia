@@ -10,6 +10,12 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
 ### Changed
 
+- **Start a message with `/` and a skill's name to run that skill**, as in
+  Claude Code: `/pdf turn notes.md into a report`. The agent loads the skill
+  with the same checks as `load_skill` and follows it for the rest of the line.
+  A name that is not an installed skill is sent unchanged. Over stdio, the
+  model-state ping and `/skills` now carry the installed skills (`skills`), so
+  the terminal UI can list them when you type `/`.
 - **A command or snippet that starts a never-ending server is refused before it
   runs.** `run_shell_command`, `run_python` and `execute_python_file` used to
   wait on it until the turn timed out; they now return an error that says so and
