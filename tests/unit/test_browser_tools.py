@@ -979,7 +979,7 @@ class TestWebClientRedirects:
             side_effect=[redirect_response, final_response]
         )
 
-        mock_validate = MagicMock(side_effect=lambda url: url)
+        mock_validate = MagicMock(side_effect=lambda url, **_: url)
         self.client.validate_url = mock_validate
 
         result = self.client.get("https://example.com/old")
@@ -1003,7 +1003,7 @@ class TestWebClientRedirects:
         call_count = [0]
         original_validate = self.client.validate_url
 
-        def validate_side_effect(url):
+        def validate_side_effect(url, **_):
             call_count[0] += 1
             if call_count[0] == 1:
                 return url  # Allow original

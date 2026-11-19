@@ -1020,9 +1020,10 @@ def _granted_only_as_gaias_copy(validator: Any, doc: str) -> bool:
 def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
     """Take the documents attached last turn but not this one out of the index.
 
-    Their grants go too: a grant left behind lets ``query_specific_file``
-    index the file again from disk. GAIA's own copy of a document is refused
-    until it is attached again, since its folder stays granted.
+    Their grants go too, and each is refused until it is attached again: a
+    read needs no grant, so a document left readable lets
+    ``query_specific_file`` index it again from disk. One inside a folder the
+    user granted stays readable through that folder.
     """
     validator = agent.path_validator
     withheld = getattr(agent, "_withheld_documents", set())
@@ -1038,7 +1039,9 @@ def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
     rag = agent.rag
     for doc in sorted(dropped):
         validator.remove_allowed_path(doc)
-        if _granted_only_as_gaias_copy(validator, doc):
+        if not validator.is_path_allowed(
+            doc, prompt_user=False
+        ) or _granted_only_as_gaias_copy(validator, doc):
             validator.withhold_path(doc)
             withheld.add(doc)
         if doc not in agent.indexed_files:

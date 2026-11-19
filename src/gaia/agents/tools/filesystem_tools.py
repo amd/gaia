@@ -1075,9 +1075,9 @@ class FileSystemToolsMixin:
                         "scope to search it on its own."
                     )
                 skipped_note = (
-                    f"{skipped[0]} file(s) GAIA may not read were not searched. "
-                    "If the file may be in a folder outside the allowed ones, ask "
-                    "the user to add that folder rather than searching again."
+                    f"{skipped[0]} file(s) GAIA may not read were not searched: "
+                    "they hold credentials or keys, or are in a folder this "
+                    "session is kept out of. Searching again will not reach them."
                     if skipped[0]
                     else ""
                 )
@@ -1190,7 +1190,16 @@ class FileSystemToolsMixin:
                 reads = file_read_record(mixin)
                 seen = stamp_of(resolved)
 
-                if offset or limit is not None:
+                # A file over MAX_READ_BYTES is never loaded whole: it is read as
+                # its first page. PDFs page through the document on their own.
+                whole_too_large = (
+                    file_size > MAX_READ_BYTES
+                    and ext != ".pdf"
+                    and mode != "preview"
+                    and not offset
+                    and limit is None
+                )
+                if offset or limit is not None or whole_too_large:
                     from gaia.agents.base.artifacts import read_text_page
 
                     page_encoding = encoding
@@ -1207,30 +1216,31 @@ class FileSystemToolsMixin:
                                 match = from_bytes(sample_file.read(65536)).best()
                             if match is not None:
                                 page_encoding = match.encoding
-                    page = read_text_page(
-                        resolved,
-                        offset,
-                        8000 if limit is None else limit,
-                        page_encoding,
-                    )
-                    reads.note(resolved, seen)
-                    return json.dumps(
-                        {**page, "encoding": page_encoding}, ensure_ascii=False
-                    )
-
-                # Size guard: refuse to load files bigger than MAX_READ_BYTES
-                # (50 MB) entirely. ``mode="preview"`` / ``mode="metadata"`` use
-                # streaming / metadata-only paths so they remain available for
-                # the LLM to at least inspect the file. PDFs skip this check
-                # because ``_read_pdf`` pages through the document rather than
-                # reading every byte, and it has its own page cap.
-                if file_size > MAX_READ_BYTES and ext != ".pdf" and mode != "preview":
-                    return (
-                        f"Error: File too large to read in full ({_format_size(file_size)}). "
-                        f"Maximum is {_format_size(MAX_READ_BYTES)}.\n"
-                        f"Use mode='preview' for the first 20 lines, "
-                        f"or read_file(offset=0, limit=8000) for bounded text pages."
-                    )
+                    try:
+                        page = read_text_page(
+                            resolved,
+                            offset,
+                            8000 if limit is None else limit,
+                            page_encoding,
+                        )
+                    except UnicodeDecodeError:
+                        if not whole_too_large:
+                            raise
+                        page = None
+                    if page is not None:
+                        reads.note(resolved, seen)
+                        if whole_too_large and page["next_offset"] is not None:
+                            page["note"] = (
+                                f"Partial: the first {len(page['content']):,} "
+                                f"characters of a {_format_size(file_size)} "
+                                "file, too large to load whole. Continue with "
+                                f"offset={page['next_offset']}."
+                            )
+                        return json.dumps(
+                            {**page, "encoding": page_encoding}, ensure_ascii=False
+                        )
+                    # Not text: the preview reads only the file's head.
+                    mode = "preview"
 
                 # Handle specific file types
 

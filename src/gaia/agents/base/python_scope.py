@@ -38,8 +38,7 @@ LINK = "makes a link to"
 _MAX_SCRIPT_BYTES = 512 * 1024
 
 _ROUTES = {
-    READ: "Use read_file or browse_directory on it instead; they ask the user "
-    "for access.",
+    READ: "Use read_file or browse_directory on it instead.",
     WRITE: "Use write_file or edit_file instead; they ask the user for access.",
     LINK: "Work on the files with read_file, write_file or edit_file instead; "
     "they ask the user for access.",

@@ -1,4 +1,8 @@
-"""A shell line that only reads, inside the allowed folders, runs with nobody asked."""
+"""A shell line that only reads runs with nobody asked, wherever it reads.
+
+A session GAIA_ALLOWED_PATHS confines keeps the older, narrower rule: only
+plain reads inside the allowed folders run unasked.
+"""
 
 import os
 
@@ -22,6 +26,17 @@ def host(tmp_path):
     return Host(tmp_path)
 
 
+@pytest.fixture
+def confined(monkeypatch):
+    """Makes a host whose session GAIA_ALLOWED_PATHS confines to its root."""
+
+    def make(root):
+        monkeypatch.setenv("GAIA_ALLOWED_PATHS", str(root))
+        return Host(root)
+
+    return make
+
+
 def _unasked(host, tmp_path, command):
     return host.skill_grant_covers_call(
         "run_shell_command",
@@ -37,6 +52,19 @@ def _unasked(host, tmp_path, command):
         "git log main --oneline -3 2>$null",
         "git log --oneline 2>/dev/null && git remote -v 2>$null",
         "git branch -a",
+        "git status",
+        "git log -p",
+        "git diff",
+        "git show HEAD",
+        "git blame notes.txt",
+        "du .",
+        "hostname",
+        "where git",
+        "type notes.txt",
+        "findstr TODO notes.txt",
+        "powershell -Command Get-ChildItem",
+        "powershell -Command Get-Item notes.txt",
+        "powershell -Command Get-Content notes.txt",
     ],
 )
 def test_reads_run_unasked(host, tmp_path, command):
@@ -46,26 +74,74 @@ def test_reads_run_unasked(host, tmp_path, command):
 @pytest.mark.parametrize(
     "command",
     [
-        "rm notes.txt",
-        "git branch new-feature",
-        "git push",
-        # A repository's own config can run a program for these.
         "git status",
         "git log -p",
         "git diff",
+        "du .",
+        "powershell -Command Get-ChildItem",
+    ],
+)
+def test_a_confined_session_keeps_the_narrow_list(confined, tmp_path, command):
+    assert not _unasked(confined(tmp_path), tmp_path, command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Not a cmdlet that only reads a file or folder.
+        "powershell -Command Get-Process",
+        "powershell -Command Remove-Item notes.txt",
+        "powershell -Command Get-Content notes.txt -Wait:1",
+        # Lists every environment variable, keys included.
+        "powershell -Command Get-ChildItem Env:",
+        "powershell -File run.ps1",
+        "pwsh -Command Get-ChildItem",
+    ],
+)
+def test_other_powershell_still_asks(host, tmp_path, command):
+    assert not _unasked(host, tmp_path, command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm notes.txt",
+        "git branch new-feature",
+        "git push",
         # The shell could rewrite these before the command sees them.
         "echo $HOME",
         "ls *.py",
-        "powershell -Command Get-ChildItem",
     ],
 )
 def test_anything_else_still_asks(host, tmp_path, command):
     assert not _unasked(host, tmp_path, command)
 
 
-def test_a_read_outside_the_allowed_folders_still_asks(host, tmp_path):
+def test_a_read_outside_the_allowed_folders_runs_unasked(host, tmp_path):
     outside = tmp_path.parent / "elsewhere.txt"
-    assert not _unasked(host, tmp_path, f"cat {outside.as_posix()}")
+    assert _unasked(host, tmp_path, f"cat {outside.as_posix()}")
+    assert _unasked(host, tmp_path.parent, "ls")
+
+
+def test_a_confined_read_outside_the_allowed_folders_does_not_run(confined, tmp_path):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "elsewhere.txt"
+    outside.write_text("x")
+    host = confined(allowed)
+    assert not _unasked(host, allowed, f"cat {outside.as_posix()}")
+    verdict, _ = host._line_verdict(f"cat {outside.as_posix()}", str(allowed))
+    assert verdict["tier"] == st.TIER_REFUSE
+    assert "GAIA_ALLOWED_PATHS" in verdict["error"]
+
+
+def test_a_folder_the_user_removed_is_not_read(host, tmp_path):
+    removed = tmp_path / "removed"
+    removed.mkdir()
+    (removed / "notes.txt").write_text("x")
+    host.path_validator.withhold_path(str(removed))
+    assert not _unasked(host, tmp_path, "cat removed/notes.txt")
+    assert not _unasked(host, tmp_path, "ls removed")
 
 
 def test_only_the_shell_tool_is_exempt(host, tmp_path):
@@ -389,9 +465,11 @@ def outside_link(tmp_path):
         "dir /s",
     ],
 )
-def test_a_link_out_of_the_allowed_folder_still_asks(outside_link, command):
-    host = Host(outside_link)
-    assert not _unasked(host, outside_link, command)
+def test_a_link_out_of_the_allowed_folder_asks_only_when_confined(
+    outside_link, confined, command
+):
+    assert _unasked(Host(outside_link), outside_link, command)
+    assert not _unasked(confined(outside_link), outside_link, command)
 
 
 @pytest.mark.parametrize(
@@ -408,16 +486,18 @@ def test_a_link_out_of_the_allowed_folder_still_asks(outside_link, command):
         "dir /s",
     ],
 )
-def test_a_walk_asks_even_with_no_link_in_it(host, tmp_path, command):
-    """A walk reads files nobody named, so it is never unasked."""
+def test_a_walk_asks_only_when_confined(host, confined, tmp_path, command):
+    """A walk reads files nobody named: a read all the same, unless confined."""
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "notes.txt").write_text("TODO")
     (tmp_path / "notes.txt").write_text("TODO")
-    assert not _unasked(host, tmp_path, command)
+    assert _unasked(host, tmp_path, command)
+    assert not _unasked(confined(tmp_path), tmp_path, command)
 
 
-@pytest.mark.parametrize("command", ["ls ~", "grep -r password ~", "du ."])
-def test_home_and_tree_sizes_still_ask(host, tmp_path, command):
+@pytest.mark.parametrize("command", ["ls ~", "grep -r password ~"])
+def test_a_tilde_still_asks(host, tmp_path, command):
+    """Nothing expands ``~`` for a command run without a shell."""
     assert not _unasked(host, tmp_path, command)
 
 
@@ -427,18 +507,22 @@ def test_home_and_tree_sizes_still_ask(host, tmp_path, command):
         "findstr /si SECRET notes.txt",
         "findstr -s -i SECRET notes.txt",
         "dir /b /s",
-        "dir /a:h",
         "ls out/..",
         "cd out/.. && ls",
         "cd .. && ls",
     ],
 )
-def test_switches_and_climbs_still_ask(outside_link, command):
-    host = Host(outside_link)
-    assert not _unasked(host, outside_link, command)
+def test_switches_and_climbs_ask_only_when_confined(outside_link, confined, command):
+    assert _unasked(Host(outside_link), outside_link, command)
+    assert not _unasked(confined(outside_link), outside_link, command)
 
 
-def test_a_dot_git_file_pointing_outside_still_asks(tmp_path):
+def test_a_switch_with_a_value_still_asks(outside_link):
+    """The value is a path or a pattern file the checks do not read."""
+    assert not _unasked(Host(outside_link), outside_link, "dir /a:h")
+
+
+def test_a_dot_git_file_pointing_outside_runs_unasked(tmp_path):
     allowed = tmp_path / "allowed"
     outside = tmp_path / "outside"
     allowed.mkdir()
@@ -447,6 +531,19 @@ def test_a_dot_git_file_pointing_outside_still_asks(tmp_path):
     (allowed / "wt").mkdir()
     (allowed / "wt" / ".git").write_text(f"gitdir: {(outside / '.git').as_posix()}")
     host = Host(allowed)
+    assert _unasked(host, allowed, "cd wt && git log -1")
+    assert _unasked(host, allowed, "git -C wt log -1")
+
+
+def test_a_confined_dot_git_file_pointing_outside_still_asks(tmp_path, confined):
+    allowed = tmp_path / "allowed"
+    outside = tmp_path / "outside"
+    allowed.mkdir()
+    outside.mkdir()
+    _repo(outside)
+    (allowed / "wt").mkdir()
+    (allowed / "wt" / ".git").write_text(f"gitdir: {(outside / '.git').as_posix()}")
+    host = confined(allowed)
     assert not _unasked(host, allowed, "cd wt && git log -1")
     assert not _unasked(host, allowed, "git -C wt log -1")
 
@@ -632,22 +729,26 @@ def secrets(tmp_path):
         "cat secrets\\.env",
         "cd secrets && cat .env",
         "grep password .env",
-        "head -n 3 .env.staging",
         "cat id_rsa",
+        "ls id_rsa",
         "cat server.pem",
         "grep -r password .",
         "grep -R password",
-        "ls .git",
-        "cd .git && cat config",
     ],
 )
-def test_a_protected_file_asks(host, secrets, command):
+def test_a_credential_file_does_not_run_unasked(host, secrets, command):
     assert not _unasked(host, secrets, command)
 
 
-@pytest.mark.parametrize("name", [".npmrc", ".git-credentials"])
-def test_a_protected_file_named_by_full_path_asks(host, secrets, name):
-    assert not _unasked(host, secrets, f"cat {(secrets / name).as_posix()}")
+@pytest.mark.parametrize("command", ["head -n 3 .env.staging", "ls .git"])
+def test_another_dot_file_asks_only_when_confined(host, confined, secrets, command):
+    """The file tools read these, so the shell does too."""
+    assert _unasked(host, secrets, command)
+    assert not _unasked(confined(secrets), secrets, command)
+
+
+def test_a_credential_file_named_by_full_path_does_not_run_unasked(host, secrets):
+    assert not _unasked(host, secrets, f"cat {(secrets / '.npmrc').as_posix()}")
 
 
 def test_the_secret_folders_ask_even_when_allowed(tmp_path, monkeypatch):
@@ -679,10 +780,6 @@ def test_ordinary_reads_stay_unasked(host, secrets):
 @pytest.mark.parametrize(
     "command",
     [
-        "tail -f notes.txt",
-        "tail -F notes.txt",
-        "tail -n 5 -f notes.txt",
-        "tail --follow notes.txt",
         "cat CON",
         "cat con",
         "cat PRN",
@@ -696,7 +793,7 @@ def test_ordinary_reads_stay_unasked(host, secrets):
         "git log -1 --show-signature",
     ],
 )
-def test_endless_reads_devices_and_signatures_ask(host, tmp_path, command):
+def test_devices_and_signatures_ask(host, tmp_path, command):
     (tmp_path / "notes.txt").write_text("hi\n")
     (tmp_path / "sub").mkdir()
     _repo(tmp_path)
@@ -708,12 +805,33 @@ def test_a_plain_tail_stays_unasked(host, tmp_path):
     assert _unasked(host, tmp_path, "tail -n 5 notes.txt")
 
 
-def test_a_list_of_files_to_read_asks(host, tmp_path):
+@pytest.mark.parametrize(
+    "command",
+    [
+        "tail -f notes.txt",
+        "tail -F notes.txt",
+        "tail -n 5 -f notes.txt",
+        "tail --follow notes.txt",
+    ],
+)
+def test_a_read_that_never_ends_asks_only_when_confined(
+    host, confined, tmp_path, command
+):
+    """Outside a confined session it runs, and the command's time limit ends it."""
+    (tmp_path / "notes.txt").write_text("hi\n")
+    assert _unasked(host, tmp_path, command)
+    assert not _unasked(confined(tmp_path), tmp_path, command)
+
+
+def test_a_list_of_files_to_read_asks_only_when_confined(host, confined, tmp_path):
     # The list can name files outside the allowed folders.
     (tmp_path / "list").write_text("/etc/hostname\0")
-    assert not _unasked(host, tmp_path, "wc --files0-from list")
-    assert not _unasked(host, tmp_path, "wc -l --files0-from list")
+    assert _unasked(host, tmp_path, "wc --files0-from list")
     assert _unasked(host, tmp_path, "wc -l list")
+    held = confined(tmp_path)
+    assert not _unasked(held, tmp_path, "wc --files0-from list")
+    assert not _unasked(held, tmp_path, "wc -l --files0-from list")
+    assert _unasked(held, tmp_path, "wc -l list")
 
 
 @pytest.mark.parametrize(
@@ -730,15 +848,32 @@ def test_a_list_of_files_to_read_asks(host, tmp_path):
         "wc --fi list",
     ],
 )
-def test_a_shortened_long_option_asks_like_the_full_one(host, tmp_path, command):
+def test_a_shortened_long_option_asks_like_the_full_one(
+    host, confined, tmp_path, command
+):
     (tmp_path / "notes.txt").write_text("hi\n")
     (tmp_path / "list").write_text("notes.txt\0")
-    assert not _unasked(host, tmp_path, command)
+    assert _unasked(host, tmp_path, command)
+    assert not _unasked(confined(tmp_path), tmp_path, command)
+
+
+def test_a_shortened_show_signature_asks(host, tmp_path):
+    _repo(tmp_path)
+    assert not _unasked(host, tmp_path, "git log --show-sig")
 
 
 @pytest.mark.parametrize(
     "command", ["git log -U3", "git log --remerge-diff", "git log --binary"]
 )
-def test_a_git_flag_that_implies_a_diff_asks(host, tmp_path, command):
+def test_a_git_flag_that_implies_a_diff_asks_only_when_confined(
+    host, confined, tmp_path, command
+):
     _repo(tmp_path)
+    assert _unasked(host, tmp_path, command)
+    assert not _unasked(confined(tmp_path), tmp_path, command)
+
+
+@pytest.mark.parametrize("command", ["git status", "git diff", "git log -p"])
+def test_a_git_read_still_asks_where_the_repo_names_a_program(host, tmp_path, command):
+    _repo(tmp_path, PLAIN_CONFIG + "[core]\n\tfsmonitor = ./evil\n")
     assert not _unasked(host, tmp_path, command)

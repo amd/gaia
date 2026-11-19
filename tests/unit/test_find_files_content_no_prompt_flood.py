@@ -73,7 +73,21 @@ def test_a_content_search_over_home_asks_nothing(home):
     assert "notes.md" in out
 
 
-def test_it_says_how_many_files_it_could_not_search(home):
+def test_files_outside_the_session_folders_are_searched_too(home):
+    _, inside = home
+    asked = []
+    validator = PathValidator(allowed_paths=[str(inside)])
+    validator.set_access_prompt(lambda path: asked.append(path) or False)
+
+    out = _find_files(validator)("acme auth", search_type="content", scope="home")
+
+    assert asked == []
+    assert "doc0.md" in out and "notes.md" in out
+    assert "not searched" not in out
+
+
+@pytest.mark.usefixtures("confined_reads")
+def test_a_confined_search_says_how_many_files_it_could_not_search(home):
     _, inside = home
     validator = PathValidator(allowed_paths=[str(inside)])
     validator.set_access_prompt(lambda path: False)
@@ -84,7 +98,8 @@ def test_it_says_how_many_files_it_could_not_search(home):
     assert "doc0.md" not in out
 
 
-def test_a_miss_still_says_what_was_skipped(home):
+@pytest.mark.usefixtures("confined_reads")
+def test_a_confined_miss_still_says_what_was_skipped(home):
     _, inside = home
     validator = PathValidator(allowed_paths=[str(inside)])
     validator.set_access_prompt(lambda path: False)
@@ -92,7 +107,7 @@ def test_a_miss_still_says_what_was_skipped(home):
     out = _find_files(validator)("no such phrase", search_type="content", scope="home")
 
     assert out.startswith("No files found matching 'no such phrase'.")
-    assert "ask the user to add that folder" in out
+    assert "Searching again will not reach them" in out
 
 
 def test_nothing_skipped_adds_no_note(home):

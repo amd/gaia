@@ -645,6 +645,7 @@ def test_tool_checks_a_workbook(agent, folders, data_book, no_libreoffice):
     assert "computed_values" not in result
 
 
+@pytest.mark.usefixtures("confined_reads")
 def test_tool_refuses_a_workbook_outside_scope(agent, folders, data_book):
     path = _save(data_book, folders[1])
     with patch.object(workbook_check, "check_workbook") as check:
@@ -973,6 +974,7 @@ def test_verify_document_rejects_other_formats_and_missing_files(agent, folders)
     assert "No file at" in missing["error"]
 
 
+@pytest.mark.usefixtures("confined_reads")
 def test_verify_document_refuses_a_file_outside_scope(agent, folders):
     path = _memo(folders[1] / "memo.docx")
     with patch.object(document_check, "check_document") as check:

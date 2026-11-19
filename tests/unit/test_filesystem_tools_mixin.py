@@ -826,8 +826,10 @@ class TestReadFile:
         assert "2 | line two" in result
         assert "3 | line three" in result
 
-    def test_read_file_refuses_oversized_in_full_mode(self, tmp_path, monkeypatch):
-        """Files >MAX_READ_BYTES in mode='full' return an error, not OOM.
+    def test_read_file_pages_an_oversized_file_in_full_mode(
+        self, tmp_path, monkeypatch
+    ):
+        """Files >MAX_READ_BYTES in mode='full' come back as a first page, not OOM.
 
         Protects against an LLM asking to read ``/dev/zero`` or a multi-GB
         log and crashing the agent process (#495 bulletproofing pass).
@@ -835,12 +837,24 @@ class TestReadFile:
         # Patch the cap down to 1 KB so the test doesn't have to write 50 MB.
         monkeypatch.setattr("gaia.agents.tools.filesystem_tools.MAX_READ_BYTES", 1024)
         f = tmp_path / "huge.txt"
-        f.write_bytes(b"x" * 4096)  # 4 KB > 1 KB cap
+        f.write_bytes(b"x" * 9000)  # past the cap and past one page
+
+        page = json.loads(self.read(file_path=str(f)))
+        assert page["content"] == "x" * 8000
+        assert page["next_offset"] == 8000
+        assert "Partial: the first 8,000 characters of a 8.8 KB file" in page["note"]
+        assert "offset=8000" in page["note"]
+
+    def test_an_oversized_binary_file_is_previewed_not_refused(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("gaia.agents.tools.filesystem_tools.MAX_READ_BYTES", 1024)
+        f = tmp_path / "huge.bin"
+        f.write_bytes(bytes(range(256)) * 16)
 
         result = self.read(file_path=str(f))
-        assert "File too large" in result
-        assert "1.0 KB" in result or "1024" in result  # mentions the cap
-        assert "preview" in result.lower()  # suggests recovery path
+        assert "File too large" not in result
+        assert not result.startswith("Error")
 
     def test_bounded_pages_recover_oversized_file_middle(self, tmp_path, monkeypatch):
         monkeypatch.setattr("gaia.agents.tools.filesystem_tools.MAX_READ_BYTES", 1024)

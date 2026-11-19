@@ -76,6 +76,7 @@ class TestDenialNamesTheScratchDir:
         assert not allowed
         assert str(scratch) in reason
 
+    @pytest.mark.usefixtures("confined_reads")
     def test_read_denial_under_system_temp_names_scratch_dir(self, validator, scratch):
         target = Path(tempfile.gettempdir()) / "gaia-elsewhere.csv"
         allowed, reason = validator.validate_read(str(target), prompt_user=False)
@@ -151,6 +152,7 @@ class TestToolDenialsNameTheScratchDir:
         assert result["status"] == "error"
         assert str(scratch) in result["error"]
 
+    @pytest.mark.usefixtures("confined_reads")
     def test_search_code_denial_names_scratch_dir(
         self, file_io_tools, outside_temp, scratch
     ):
@@ -158,6 +160,7 @@ class TestToolDenialsNameTheScratchDir:
         assert result["status"] == "error"
         assert str(scratch) in result["error"]
 
+    @pytest.mark.usefixtures("confined_reads")
     def test_shell_working_directory_denial_names_scratch_dir(
         self, validator, no_prompt, outside_temp, scratch
     ):

@@ -222,10 +222,10 @@ as `gaia chat` does; piping either one in or out means nobody can answer, so the
 call is denied.
 Skipping permissions answers the prompts but does not widen the shell: a command
 outside `run_shell_command`'s no-prompt list (`pytest`, `go test`, `npm run …`) is
-still refused, and file tools stay in the current directory. `--full-access`
-lifts both: commands outside the list run, and paths outside the current folder
-are granted without asking (secrets and other never-grantable paths stay
-refused). It is announced on stderr and logged. Ask for it only for a run you
+still refused, and file tools write only in the current directory (they read
+anywhere, secrets aside). `--full-access` lifts both: commands outside the list
+run, and writes to paths outside the current folder are granted without asking
+(secrets and other never-grantable paths stay refused). It is announced on stderr and logged. Ask for it only for a run you
 would trust with an unguarded shell. `GAIA_ALLOWED_PATHS` narrows the file scope
 in either mode.
 
@@ -308,7 +308,8 @@ environment, so a project directory can never switch off your prompts.
 
 ### Narrowing file access
 
-The flagship agent can read anything under your home folder by default. To
+The flagship agent can read any file your account can open, secrets aside,
+and writes under your home folder by default. To
 confine one run to particular folders — an evaluation run that must not read the
 graders' answer keys, or a session you want kept to one project — set
 `GAIA_ALLOWED_PATHS` to absolute paths separated by `;` on Windows and `:`
@@ -327,7 +328,8 @@ $env:GAIA_ALLOWED_PATHS = "C:\evals\task-17"; gaia-cli
   nothing, and one outside it (another drive) is ignored with a warning — neither
   grants anything. If no entry overlaps, the agent can reach no files at all
   except its scratch folder. Out-of-scope paths are refused without an approval
-  prompt, and full access does not lift that.
+  prompt, reads included, and full access does not lift that. This is the one
+  setting that holds reads to a list of folders.
 - **One exception: an Agent UI chat with no attached documents.** Its default
   scope is GAIA's documents folder plus the folder the backend started in. When
   no entry overlaps that default, the folders this list names become the chat's
@@ -2027,7 +2029,7 @@ them, and the status bar shows the one that is on:
 
 | Mode | What still asks |
 |---|---|
-| `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
+| `ask` (default) | Every shell command that is not a plain read, every Python run and file write. Reads never ask, wherever the files are |
 | `accept edits` | Shell commands and Python. File edits inside the folder GAIA was started in run unasked, except hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on `PATH`, and on Windows a file that shadows a program. Never the home folder or a drive root |
 | `full access` | Nothing |
 

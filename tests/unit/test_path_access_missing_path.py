@@ -433,3 +433,9 @@ class TestRagTools:
         assert result["status"] == "error"
         assert _is_not_found(result["error"]), result
         assert prompt.asked == []
+
+
+@pytest.fixture(autouse=True)
+def _reads_are_confined(confined_reads):
+    """These tests pin the rule a GAIA_ALLOWED_PATHS session keeps: a read is
+    held to the allowed folders, and asked about outside them."""

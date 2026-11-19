@@ -564,11 +564,14 @@ class TestChatAgentPathValidation:
         assert chat_agent._is_path_allowed(temp_dir)
 
     def test_disallowed_path(self, agent):
-        """Test that disallowed paths are rejected."""
+        """A credential file may not be read, inside the allowed directory or out."""
         chat_agent, temp_dir = agent
-        # Test a path outside the allowed directory
-        disallowed = "/tmp/not_allowed"
-        assert not chat_agent._is_path_allowed(disallowed)
+        assert not chat_agent._is_path_allowed(f"{temp_dir}/.env")
+        assert not chat_agent._is_path_allowed("/tmp/not_allowed/id_rsa")
+
+    def test_a_path_outside_the_allowed_directory_may_be_read(self, agent):
+        chat_agent, temp_dir = agent
+        assert chat_agent._is_path_allowed("/tmp/not_allowed")
 
 
 class TestChatAgentHostAttributeContract:

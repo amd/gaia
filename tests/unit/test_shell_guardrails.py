@@ -2435,6 +2435,8 @@ _REVIEWED_PLAIN_READS = {
     "ver",
     "which",
     "whereis",
+    "where",
+    "type",
     "basename",
     "dirname",
     "echo",

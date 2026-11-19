@@ -1670,7 +1670,7 @@ agent at once, so they take effect on its next step.
     arguments or shell command reach a host other than this PC (for example
     `curl https://…`, `git push`, `pip install`, `npx`), before asking for
     confirmation. This check lets through a web or browser call whose URL is
-    on this PC (the web tools still refuse private addresses on their own) and
+    on this PC (`fetch_page` reads it; the in-app browser refuses private addresses on its own) and
     a plain `curl`/`wget`/`Invoke-WebRequest` whose every destination
     is: `localhost` exactly or a loopback IP (`127.0.0.0/8`, `::1`). Each
     command in a chained shell line is checked on its own. The refusal tells the model the

@@ -865,6 +865,7 @@ def sandboxed_read_tools(tmp_path, monkeypatch):
     return tools, safe_dir, secret_dir
 
 
+@pytest.mark.usefixtures("confined_reads")
 class TestReadToolsSandbox:
     """read tools must enforce the same allowlist that write_file enforces."""
 

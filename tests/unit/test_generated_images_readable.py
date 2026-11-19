@@ -236,8 +236,10 @@ class TestEverythingElseStaysRefused:
         except (OSError, NotImplementedError) as exc:
             pytest.skip(f"cannot create a junction or symlink here: {exc}")
 
-        assert not _readable(validator, tree.images / "photo.png")
-        assert not _readable(validator, elsewhere / "photo.png")
+        assert not validator.is_generated_image(str(tree.images / "photo.png"))
+        # Not GAIA's folder any more: an ordinary file, read like any other.
+        assert _readable(validator, elsewhere / "photo.png")
+        assert validator.outside_folders_note(str(elsewhere / "photo.png"))
 
     def test_a_hard_link_to_a_state_file(self, tree, validator):
         target = tree.state / "keys" / "signing.png"

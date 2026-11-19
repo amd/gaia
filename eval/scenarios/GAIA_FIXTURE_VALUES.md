@@ -528,8 +528,9 @@ hub" above to **seven**; `skills_hub_search` and
 | `date-format` | 1.0.0 | community | yes; hub-only, never pre-installed | 3-line format `DATE-FORMAT v1.0.0` / `<input> = <YYYY-MM-DD>` / `(formatted by date-format)` — `skills_install_from_hub` (not bundled with the flagship, unlike `rss-digest`) |
 
 Other hosts: `http://127.0.0.1:9/` has no listener (`web_unreachable_host`);
-`169.254.169.254`, `localhost`, and `2130706433` are refused by the SSRF guard
-because `GAIA_WEB_ALLOWED_HOSTS` names only the literal `127.0.0.1`
+`169.254.169.254` is refused by the web client, while `localhost` and
+`2130706433` are fetched and labelled as local, because
+`GAIA_WEB_ALLOWED_HOSTS` names only the literal `127.0.0.1`
 (`web_ssrf_blocked`).
 
 Tier tags in these five categories add a second tag to every `t4_adversarial`:

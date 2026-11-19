@@ -267,6 +267,7 @@ def test_multisource_inventory_does_not_satisfy_unread_source(tmp_path):
     assert len(state.gaps()) == 1 and "two.txt" in state.gaps()[0]
 
 
+@pytest.mark.usefixtures("confined_reads")
 def test_safe_snapshot_respects_scope_and_size(tmp_path, monkeypatch):
     p = tmp_path / "source.txt"
     p.write_text("alpha")
@@ -1649,6 +1650,7 @@ def askable(monkeypatch):
     monkeypatch.setattr(PathValidator, "_unaskable_reason", lambda self, path: None)
 
 
+@pytest.mark.usefixtures("confined_reads")
 def test_snapshot_asks_for_an_out_of_scope_source_only_when_told_to(tmp_path, askable):
     source = tmp_path / "outside" / "notes.txt"
     source.parent.mkdir()
@@ -1668,6 +1670,7 @@ def test_snapshot_asks_for_an_out_of_scope_source_only_when_told_to(tmp_path, as
     assert len(asked) == 1
 
 
+@pytest.mark.usefixtures("confined_reads")
 def test_snapshot_refuses_when_the_user_declines(tmp_path, askable):
     source = tmp_path / "outside.txt"
     source.write_text("alpha")
@@ -1698,6 +1701,7 @@ def _outside_source(tmp_path):
 
 
 @pytest.mark.parametrize("approve", [True, False])
+@pytest.mark.usefixtures("confined_reads")
 def test_extraction_tool_asks_before_reading_an_out_of_scope_file(
     agent, tmp_path, askable, approve
 ):
@@ -1727,6 +1731,7 @@ def test_extraction_tool_asks_before_reading_an_out_of_scope_file(
         assert "Access denied" in result["error"]
 
 
+@pytest.mark.usefixtures("confined_reads")
 def test_extraction_tool_reports_a_missing_source_without_asking(
     agent, tmp_path, askable
 ):

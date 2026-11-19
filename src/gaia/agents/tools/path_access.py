@@ -139,14 +139,17 @@ def read_access_error(
 ) -> Optional[Dict[str, Any]]:
     """Refusal for reading or listing *path*, or None when it is allowed.
 
-    Out-of-scope paths go through the validator's approval prompt, exactly as
-    ``read_file`` does. A host with no validator is library use with no
-    sandbox declared, and is not checked.
+    A read is refused only for a secret, a folder the user removed from the
+    chat, or a path outside ``GAIA_ALLOWED_PATHS`` (see
+    ``PathValidator.validate_read``); nobody is asked about any other path. A
+    host with no validator is library use with no sandbox declared, and is not
+    checked.
 
     Args:
         host: The agent (or mixin host) whose validator applies.
         path: The path the tool was given.
-        prompt_user: Ask the user when *path* is out of scope.
+        prompt_user: Only used under ``GAIA_ALLOWED_PATHS``: ask the user about
+            a path inside it that is not yet one of the session's folders.
 
     Returns:
         A tool error dict, or None.
@@ -158,6 +161,21 @@ def read_access_error(
     if allowed:
         return None
     return read_refusal(reason)
+
+
+def with_outside_note(host: Any, path: Any, result: Any) -> Any:
+    """*result* with a warning when it read *path* outside the session's folders.
+
+    The read ran; the warning says only that later changes there ask first.
+    """
+    if not isinstance(result, dict) or result.get("status") != "success":
+        return result
+    note_for = getattr(path_validator_of(host), "outside_folders_note", None)
+    note = note_for(str(path)) if callable(note_for) else ""
+    if not note:
+        return result
+    earlier = result.get("warning")
+    return {**result, "warning": f"{earlier} {note}" if earlier else note}
 
 
 def read_refusal(reason: str) -> Dict[str, Any]:

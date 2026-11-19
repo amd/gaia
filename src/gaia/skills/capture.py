@@ -397,10 +397,9 @@ def _fetch_url(
     except (ValueError, IOError) as exc:
         # ValueError is the WebClient's SSRF/validation refusal; keep it loud.
         raise SkillCaptureError(
-            f"Could not fetch {url}: {exc}. Only public http(s) URLs are "
-            "fetchable (private/loopback addresses are refused unless the "
-            "operator allowlists the host via GAIA_WEB_ALLOWED_HOSTS). Check "
-            "the URL, or download the file and capture the local path instead."
+            f"Could not fetch {url}: {exc}. Only http(s) URLs are fetchable, "
+            "and never a cloud-metadata or link-local address. Check the "
+            "URL, or download the file and capture the local path instead."
         ) from exc
 
     final_url = getattr(response, "url", None)

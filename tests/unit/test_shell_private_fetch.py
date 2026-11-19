@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: MIT
 """A shell command that reaches a local or private address says so on its card.
 
-The web tools refuse loopback and private-network addresses outright. The shell
-tool runs whatever the user approves, so it cannot refuse ``curl`` to them, but
-the approval card has to say that this is somewhere the web tools would not go,
-and that approval covers this one command, never an "always".
+The shell tool runs whatever the user approves, so it cannot refuse ``curl`` to
+a loopback or private-network address, but the approval card has to name the
+address, and approval covers this one command, never an "always". The card adds
+that the web tools refuse the address only when they do: a cloud-metadata or
+link-local one.
 """
 
 from __future__ import annotations
@@ -80,7 +81,11 @@ def test_a_command_reaching_a_private_address_is_asked_once_with_a_note(command,
     assert error is not None, command
     assert error["tier"] == TIER_CONFIRM_ONCE
     assert host in error["risk_note"]
-    assert "web tools" in error["risk_note"]
+    assert "Reaches " in error["risk_note"]
+    # fetch_page reads a local address too; the card says the web tools refuse
+    # only the ones they do: cloud metadata and the unspecified address.
+    refused_by_the_web_tools = host in ("169.254.169.254", "0")
+    assert ("web tools" in error["risk_note"]) is refused_by_the_web_tools
 
 
 @pytest.mark.parametrize(
@@ -442,7 +447,7 @@ def test_the_note_follows_where_the_command_connects(command, noted):
     error, _ = _Host()._line_verdict(command)
     note = str((error or {}).get("risk_note") or "")
 
-    assert ("Reaches " in note and "web tools" in note) is noted, note
+    assert ("Reaches " in note) is noted, note
     if noted:
         assert error["tier"] == TIER_CONFIRM_ONCE
 

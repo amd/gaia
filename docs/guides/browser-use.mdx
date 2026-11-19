@@ -169,10 +169,12 @@ address you signed in at: cookies are context-wide, so a login at
 `accounts.google.com` makes `mail.google.com` gated too. If the browser cannot
 be asked, the call is treated as signed-in and prompts.
 
-**Addresses off the public internet are refused.** The browser gets the same
-SSRF screening `fetch_page` has: no private, loopback, link-local, or reserved
-addresses, so a page cannot steer the agent at a cloud metadata endpoint. To
-drive a local dev server, opt in explicitly:
+**Addresses off the public internet are refused.** The browser opens no
+private, loopback, link-local, or reserved address, so a page cannot steer it
+at a cloud metadata endpoint or a service on your network. This is stricter
+than `fetch_page`, which only reads a page and so fetches an address on this
+PC or your local network, with a warning in its result. To drive a local dev
+server with the browser, opt in explicitly:
 
 ```bash
 export GAIA_BROWSER_ALLOW_PRIVATE=1

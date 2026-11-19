@@ -185,24 +185,29 @@ file; `.epub` is an error naming other ways to read it, and `.doc`,
 `.ppt`, `.xls` and the OpenDocument formats are an error saying to re-save the
 file as `.docx` / `.pptx` / `.xlsx` or PDF.
 
-A document whose text is too long to read in full is an error naming other
-ways to read it, best first: a loaded skill's tool that declares the file type,
-then `index_document`. Only tools the host has are named. Too-long results are
-cached like text, so the file is not re-parsed on every retry. **A too-long
-workbook** read without a line range is not an error: it returns an overview
-instead, deliberately with no `content`, since it is not the file's text. Its
-`note` names the same routes, with `run_python` (for a range of rows) between
-the skill's tool and `index_document`:
+A PDF, workbook or deck with more than 1,000,000 characters of text is read
+up to that point, never refused. Every part of such a read, a line-range read
+included, carries a `partial` note. It says the text is not the whole file and
+where it stops (`page 412 of 980`, `row 48,210 of sheet 'Ledger'`,
+`slide 90 of 300`), that `total_chars` and line totals count only the part
+read, and the ways to read the rest, best first: a loaded skill's tool that
+declares the file type, `run_python` for a range of rows (workbooks only), then
+`index_document`. Only tools the host has are named. A workbook also returns
+`sheet_sizes`, so the unread part can be asked for by sheet and row. A Word
+document is always read whole.
 
 ```python
 {
     "status": "success",
     "file_path": str,
     "file_type": "xlsx",
-    "overview": str,            # per sheet: "[Sheet: name] R rows x C columns" + first rows
+    "content": str,             # the first part of the text that was read
+    "offset": int,
+    "total_chars": int,         # of the part read, not of the whole file
+    "next_offset": int | None,
     "sheets": int,
     "sheet_sizes": [{"sheet": str, "rows": int | None, "columns": int | None}],
-    "note": str,                # says it is not the data, and the other routes
+    "partial": str,             # not the whole file, where it stops, the other routes
 }
 ```
 
@@ -395,9 +400,8 @@ blind; this makes the agent look at what it is about to change.
 The refusal happens before anything is written, and before the confirmation
 prompt, so nobody is asked to approve an edit that is already going to be
 refused. It applies with confirmations bypassed too, because it is about the
-edit being correct, not permitted. A path outside the allowed paths gets the
-usual scope refusal instead, so the check never reveals whether a file exists
-there.
+edit being correct, not permitted. A write to a path outside the allowed paths
+gets the usual scope refusal instead.
 
 **Refusal shape:**
 ```python
@@ -640,12 +644,17 @@ result = agent.edit_file(
 
 ### Path Validation
 
-The allowlist answers "is this in scope". It does **not** answer "is this safe",
-so reads and writes each add a denylist on top of it.
+The allowlist answers "may this be changed here". It does **not** answer "is
+this safe", so reads and writes each have a denylist of their own.
 
-Reads go through `validate_read`, which refuses secrets that happen to sit inside
-an allowed directory — `.env`, `id_rsa`, `credentials.json`, `.netrc`, `.pem`/`.key`
-files, and anything under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`:
+Reads go through `validate_read`. It never asks the user and does not hold a
+read to the allowlist. It refuses four things: secrets, wherever they sit
+(`.env`, `id_rsa`, `credentials.json`, `.netrc`, `.pem`/`.key` files, and
+anything under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`), GAIA's own folder
+(`~/.gaia`) outside the parts the session was given, a folder the user
+removed from the chat, and, when `GAIA_ALLOWED_PATHS` is set, a path outside
+the allowed folders. `read_file` adds a `warning` to the result of a read
+outside the allowlist (`outside_folders_note`):
 
 ```python
 is_allowed, reason = self.path_validator.validate_read(file_path)

@@ -203,8 +203,9 @@ class FileSearchToolsMixin:
 
         Every file passes read_file's gate before any byte of it is opened:
         credentials and keys (.env, id_rsa, *.pem, credentials.json, ...)
-        and links leading outside the allowed folders are skipped and
-        counted, never read. UTF-16/32 text with a BOM is searched as text.
+        are skipped and counted, never read, and so are links leading
+        outside the allowed folders when GAIA_ALLOWED_PATHS is set.
+        UTF-16/32 text with a BOM is searched as text.
 
         Args:
             pattern: Text pattern to find

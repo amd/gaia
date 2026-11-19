@@ -151,6 +151,7 @@ def test_relative_paths_are_refused(tools):
     assert out["status"] == "error"
 
 
+@pytest.mark.usefixtures("confined_reads")
 def test_paths_outside_the_allowed_folders_are_refused(tools, data, tmp_path):
     outside = tmp_path / "elsewhere"
     outside.mkdir()
