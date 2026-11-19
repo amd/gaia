@@ -16,7 +16,7 @@ metadata:
         - lxml>=5.0
         - pillow>=10.0
         - openpyxl>=3.1,<4
-        - pymupdf>=1.24
+        - pypdfium2>=5.0.0,<6
     tools_required:
       - list_files
       - read_file

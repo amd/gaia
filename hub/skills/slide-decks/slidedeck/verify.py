@@ -646,21 +646,22 @@ def render_check(
     pdf: Path, prs, ctx: DeckContext, issues: Issues, render_dir: Optional[Path]
 ) -> Dict[str, Any]:
     """Compare the rendered PDF against the boxes text was meant to stay in."""
-    import pymupdf
+    from .image import open_pdf, page_image, page_words
 
-    doc = pymupdf.open(str(pdf))
+    doc = open_pdf(pdf)
     try:
         pngs = []
-        if doc.page_count != len(prs.slides):
+        page_total = len(doc)
+        if page_total != len(prs.slides):
             issues.add(
                 None,
                 "render",
                 "warning",
-                f"the renderer produced {doc.page_count} pages for {len(prs.slides)} slides.",
+                f"the renderer produced {page_total} pages for {len(prs.slides)} slides.",
             )
-        sx = doc[0].rect.width / pt(ctx.W) if doc.page_count else 1.0
+        sx = doc[0].get_width() / pt(ctx.W) if page_total else 1.0
         for i, (page, slide) in enumerate(zip(doc, prs.slides), 1):
-            words = page.get_text("words")  # x0, y0, x1, y1, word, block, line, n
+            words = page_words(page)  # x0, y0, x1, y1, word
             toks = [
                 (
                     w[0] / sx,
@@ -733,7 +734,7 @@ def render_check(
                     )
             if render_dir is not None:
                 target = render_dir / f"slide_{i:02d}.png"
-                page.get_pixmap(dpi=80).save(str(target))
+                page_image(page, 80 / 72).save(str(target), format="PNG")
                 pngs.append(str(target))
     finally:
         doc.close()

@@ -1,15 +1,18 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Draw rendered slides as PNG or JPEG images."""
+"""Read rendered slides from a PDF: page images and where each word sits."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Sequence
+from typing import Any, List, Sequence, Tuple
 
 from .outline import OutlineError
 
 FORMATS = {"png": "png", "jpeg": "jpeg", "jpg": "jpeg"}
+
+#: A word on a page: left, top, right, bottom in points from the top-left, text.
+Word = Tuple[float, float, float, float, str]
 
 
 def image_format(name: str) -> str:
@@ -22,11 +25,65 @@ def image_format(name: str) -> str:
     return fmt
 
 
-def page_count(pdf: Path) -> int:
-    import pymupdf
+def open_pdf(pdf: Path) -> Any:
+    """The PDF as a pypdfium2 document; the caller closes it."""
+    import pypdfium2 as pdfium
 
-    with pymupdf.open(str(pdf)) as doc:
-        return doc.page_count
+    return pdfium.PdfDocument(str(pdf))
+
+
+def page_count(pdf: Path) -> int:
+    doc = open_pdf(pdf)
+    try:
+        return len(doc)
+    finally:
+        doc.close()
+
+
+def page_image(page: Any, scale: float) -> Any:
+    """*page* drawn as an RGB Pillow image; *scale* 1.0 is one pixel per point."""
+    return page.render(scale=scale).to_pil().convert("RGB")
+
+
+def page_words(page: Any) -> List[Word]:
+    """Every word on *page* in reading order, with the box its glyphs fill."""
+    import pypdfium2.raw as pdfium_c
+
+    height = page.get_height()
+    textpage = page.get_textpage()
+    words: List[Word] = []
+    chars: List[str] = []
+    box: List[float] = []
+
+    def flush() -> None:
+        if chars:
+            words.append((box[0], box[1], box[2], box[3], "".join(chars)))
+        chars.clear()
+        box.clear()
+
+    try:
+        for index in range(textpage.count_chars()):
+            char = chr(pdfium_c.FPDFText_GetUnicode(textpage.raw, index))
+            # PDFium marks a line break it inferred with U+FFFE or U+0002.
+            if char.isspace() or char in "\x00\x02\ufffe":
+                flush()
+                continue
+            left, bottom, right, top = textpage.get_charbox(index, loose=True)
+            y0, y1 = height - top, height - bottom
+            if box:
+                box[:] = [
+                    min(box[0], left),
+                    min(box[1], y0),
+                    max(box[2], right),
+                    max(box[3], y1),
+                ]
+            else:
+                box[:] = [left, y0, right, y1]
+            chars.append(char)
+        flush()
+    finally:
+        textpage.close()
+    return words
 
 
 def save_pages(
@@ -37,15 +94,14 @@ def save_pages(
     A page that renders as one flat colour is an error: the image would claim
     a slide it does not show.
     """
-    import pymupdf
-
     saved = []
-    with pymupdf.open(str(pdf)) as doc:
+    doc = open_pdf(pdf)
+    try:
         for page_no, out in zip(pages, outs):
             page = doc[page_no - 1]
-            zoom = width / page.rect.width
-            pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
-            sample = pix.samples[:: max(1, len(pix.samples) // 5000)]
+            image = page_image(page, width / page.get_width())
+            samples = image.tobytes()
+            sample = samples[:: max(1, len(samples) // 5000)]
             if len(set(sample)) <= 1:
                 raise OutlineError(
                     [
@@ -55,15 +111,17 @@ def save_pages(
                 )
             # The library writes the file, after the caller's check_write.
             if fmt == "jpeg":
-                pix.save(str(out), output="jpeg", jpg_quality=92)
+                image.save(str(out), format="JPEG", quality=92)
             else:
-                pix.save(str(out), output="png")
+                image.save(str(out), format="PNG")
             saved.append(
                 {
                     "slide": page_no,
                     "path": str(out),
-                    "width": pix.width,
-                    "height": pix.height,
+                    "width": image.width,
+                    "height": image.height,
                 }
             )
+    finally:
+        doc.close()
     return saved
