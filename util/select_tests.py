@@ -210,6 +210,7 @@ OS_MODULE_PREFIXES = PLATFORM_MODULE_PREFIXES + (
     "gaia.utils.terminal",
     "gaia.ui.routers.files",
     "gaia.ui.tunnel",
+    "gaia.ui.devices.listener",
     "gaia.mcp.client.mcp_client",
     "gaia.eval.bench.config",
     "gaia.eval.bench.sandbox",
