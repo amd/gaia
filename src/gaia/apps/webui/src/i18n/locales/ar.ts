@@ -165,8 +165,6 @@ const messages: Messages = {
     'row.status.failed': 'فشلت',
     'row.unread': 'غير مقروءة',
     'row.queuePlace': 'رقم {place} في الدور',
-    'row.toSend': 'بانتظار الإرسال: {n}',
-    'row.notSent': 'لم تُرسَل: {n}',
     'row.private': 'محادثة خاصة',
     'row.rename': 'إعادة تسمية',
     'row.renameAria': 'إعادة تسمية {title}',

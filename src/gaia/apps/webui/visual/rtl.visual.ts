@@ -6670,3 +6670,36 @@ for (const locale of ['ar', 'en']) {
         if (locale === 'ar') expect(await untranslated(page, '.skill-link-result')).toEqual([]);
     });
 }
+
+const QUEUED_CHAT = SESSIONS[1].id;
+
+/** A second chat waits for the GPU and holds two messages typed while it waited. */
+async function withQueuedChatAndUnsent(page: Page): Promise<void> {
+    await page.route('**/api/chat/active', (route) =>
+        route.fulfill({ json: { session_ids: [QUEUED_CHAT], queued: [QUEUED_CHAT], awaiting_user: {} } }));
+    await page.addInitScript((id) => window.localStorage.setItem('gaia-chat-message-queues', JSON.stringify({
+        [id]: [{ id: 1, text: 'one more thing', state: 'queued' }, { id: 2, text: 'and another', state: 'queued' }],
+    })), QUEUED_CHAT);
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a queued chat with unsent messages shows both notes in full at 800x500 (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 500 });
+        await open(page, `#${ANSWER_SESSION}`, locale, withQueuedChatAndUnsent);
+        const notes = page.locator('.sb-row-note');
+        await expect(notes).toHaveCount(2);
+        await expect(notes.first()).toContainText(locale === 'ar' ? 'رقم 1 في الدور' : '1st in line');
+        await expect(notes.last()).toContainText('2');
+        const cut = await notes.evaluateAll((els) => els.flatMap((el) => {
+            const row = el.closest('.sb-row-main')!.getBoundingClientRect();
+            const r = el.getBoundingClientRect();
+            const problems: string[] = [];
+            if (el.scrollWidth > el.clientWidth + 1) problems.push(`${el.textContent} is cut`);
+            if (r.left < row.left - 1 || r.right > row.right + 1) problems.push(`${el.textContent} spills out of its row`);
+            return problems;
+        }));
+        expect(cut).toEqual([]);
+        await shot(page, `queued-chat-notes-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}

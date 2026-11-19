@@ -11,6 +11,7 @@ import { useModelStore } from '../../stores/modelStore';
 import { useNotificationStore } from '../../stores/notificationStore';
 import { stripIsolates } from '../../i18n/registry';
 import * as api from '../../services/api';
+import * as messageQueue from '../../utils/messageQueue';
 import type { GaiaNotification } from '../../types/agent';
 import type { Session } from '../../types';
 
@@ -127,6 +128,27 @@ describe('row status', () => {
         } finally {
             act(() => useChatStore.getState().setLocale('en'));
             localStorage.removeItem('gaia-chat-locale');
+        }
+    });
+
+    it("keeps a queued chat's place and its unsent count as two notes, so neither is cut (Arabic)", () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        try {
+            useChatStore.setState({
+                sessions: [chat('b', 'Weekly grocery plan for the family')],
+                runningSessionIds: ['b'], queuedSessionIds: ['b'], messageQueues: {},
+            });
+            useChatStore.getState().updateQueue('b', (q) => messageQueue.enqueue(messageQueue.enqueue(q, 'one', 'queued'), 'two', 'queued'));
+            render(<Sidebar onNewChat={vi.fn()} />);
+            const notes = [...document.querySelectorAll('.sb-row-queue .sb-row-note')].map((n) => stripIsolates(n.textContent!));
+            expect(notes).toHaveLength(2);
+            expect(notes[0]).toContain('رقم 1 في الدور');
+            expect(notes[1]).toContain('2');
+            expect(document.querySelector('.sb-row-queue')!.getAttribute('title')).toContain(notes[1]);
+        } finally {
+            act(() => useChatStore.getState().setLocale('en'));
+            localStorage.removeItem('gaia-chat-locale');
+            useChatStore.setState({ messageQueues: {} });
         }
     });
 

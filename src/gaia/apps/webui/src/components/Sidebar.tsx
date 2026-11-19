@@ -150,7 +150,7 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
     const dot = status === 'done' && !unread ? null : status;
     const place = queuePlace > 0 ? placeInLine(t, 'row.queuePlace', queuePlace) : null;
     const label = dot ? [t(STATUS_LABEL[dot]), place].filter(Boolean).join(', ') : undefined;
-    const waiting = failed > 0 ? t('row.notSent', { n: failed }) : unsent > 0 ? t('row.toSend', { n: unsent }) : null;
+    const waiting = failed > 0 ? `${failed} not sent` : unsent > 0 ? `${unsent} to send` : null;
     const note = [place, waiting].filter(Boolean).join(' · ');
     const snippetText = snippet ? `${snippet.before}${snippet.match}${snippet.after}` : null;
     const title = <span className="sb-row-title" dir="auto">{titleMatch ? <Highlight parts={titleMatch} /> : session.title}</span>;
@@ -199,8 +199,13 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
                         <span className="sb-row-text">
                             {title}
                             {snippet && <span className="sb-row-snippet"><Highlight parts={snippet} /></span>}
-                            {/* Its own line, so the note never cuts a long title short. */}
-                            {note && <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`}>{note}</span>}
+                            {/* Its own line, so the notes never cut a long title short; the second wraps rather than clip. */}
+                            {note && (
+                                <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`} title={note}>
+                                    {place && <span className="sb-row-note">{place}</span>}
+                                    {waiting && <span className="sb-row-note">{waiting}</span>}
+                                </span>
+                            )}
                         </span>
                     ) : title}
                 </button>

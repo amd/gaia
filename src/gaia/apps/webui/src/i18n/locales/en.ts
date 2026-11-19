@@ -165,8 +165,6 @@ export const enMessages = {
     'row.status.failed': 'Failed',
     'row.unread': 'unread',
     'row.queuePlace': '{place} in line',
-    'row.toSend': '{n} to send',
-    'row.notSent': '{n} not sent',
     'row.private': 'Private chat',
     'row.rename': 'Rename',
     'row.renameAria': 'Rename {title}',
