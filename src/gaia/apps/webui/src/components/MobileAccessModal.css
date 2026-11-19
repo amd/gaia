@@ -101,7 +101,7 @@
 }
 
 .tunnel-setup-title {
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
 }
 
@@ -165,7 +165,7 @@
 
 .tunnel-url-area label {
     font-size: var(--fs-label);
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-muted);
 }
 
@@ -228,7 +228,7 @@ button.copy-url-btn.copied {
 .tunnel-password-hint label {
     display: block;
     font-size: var(--fs-label);
-    font-weight: 700;
+    font-weight: 500;
     color: var(--accent-yellow);
     margin-bottom: 6px;
 }
@@ -236,7 +236,7 @@ button.copy-url-btn.copied {
 .tunnel-password-value {
     font-size: 22px;
     font-family: var(--font-mono);
-    font-weight: 700;
+    font-weight: 500;
     color: var(--text-primary);
     letter-spacing: 1px;
     user-select: all;
@@ -284,7 +284,7 @@ button.copy-url-btn.copied {
 
 .mobile-install-hint-title {
     font-size: var(--fs-label);
-    font-weight: 700;
+    font-weight: 500;
     color: var(--text-primary);
     margin-bottom: 4px;
 }

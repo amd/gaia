@@ -47,6 +47,11 @@ SCRIPT = "script"
 #: so it is kept off the ledger and other routes to the effect stay open.
 UNATTENDED_REFUSAL = "unattended_refusal"
 
+#: Set, to the program's name, on a call that could not run because that
+#: program is not installed. Installing it fixes that, so it is kept off the
+#: ledger too: the host the call aimed at was never refused.
+PROGRAM_NOT_FOUND = "program_not_found"
+
 #: A file change whose target the code computes: it could be any denied path.
 COMPUTED_PATH = "a path the code works out when it runs"
 

@@ -123,6 +123,7 @@ def initialize_lemonade_for_agent(
     port: int | None = None,
     base_url: str | None = None,
     model: str | None = None,
+    preload: bool = True,
 ):
     """
     Initialize Lemonade Server for a specific GAIA agent.
@@ -141,6 +142,7 @@ def initialize_lemonade_for_agent(
                   When provided, takes priority over host/port.
         model: Chat model the command will run (e.g. ``--model``); unset means
                this machine's default. A cloud model is never preloaded locally.
+        preload: False only reaches the server: nothing is loaded or downloaded.
 
     Returns:
         Tuple of (success: bool, base_url: str | None)
@@ -192,11 +194,11 @@ def initialize_lemonade_for_agent(
         # seeds an idle server with the default model at its own window.
         if base_url:
             success = LemonadeManager.ensure_ready(
-                quiet=quiet, base_url=base_url, model=model
+                quiet=quiet, base_url=base_url, model=model, preload=preload
             )
         else:
             success = LemonadeManager.ensure_ready(
-                quiet=quiet, host=host, port=port, model=model
+                quiet=quiet, host=host, port=port, model=model, preload=preload
             )
     except LemonadeClientError as e:
         print(f"❌ Error: {_cli_wording(e)}", file=sys.stderr)
@@ -1200,6 +1202,17 @@ def _positive_int(value: str) -> int:
     return number
 
 
+def _tool_patterns(value: str) -> list[str]:
+    """argparse type: comma- or space-separated tool names or globs."""
+    import argparse
+    import re
+
+    names = [n for n in re.split(r"[,\s]+", value) if n]
+    if not names:
+        raise argparse.ArgumentTypeError("expected at least one tool name")
+    return names
+
+
 def build_parser():
     """Build and return the root argparse parser."""
     import argparse
@@ -1323,6 +1336,31 @@ def build_parser():
         help="With -p: full access, as the TUI's /full-access: lifts the shell "
         "guardrails (test runners, build tools run) and grants paths outside the "
         "current folder without asking. Implies --dangerously-skip-permissions",
+    )
+    parser.add_argument(
+        "--disallowed-tools",
+        dest="print_disallowed_tools",
+        type=_tool_patterns,
+        action="extend",
+        default=None,
+        metavar="TOOLS",
+        help="With -p: tools the agent may not see or call, comma- or "
+        "space-separated, with * globs (e.g. 'search_web,browser_*'). A name "
+        "that matches no tool is an error",
+    )
+    parser.add_argument(
+        "--no-web",
+        dest="print_no_web",
+        action="store_true",
+        help="With -p: withhold every tool that searches, reads or downloads from "
+        "the internet. The shell stays available",
+    )
+    parser.add_argument(
+        "--no-skills",
+        dest="print_no_skills",
+        action="store_true",
+        help="With -p: no skill catalogue in the prompt and no tools to find, "
+        "load or learn skills, so the turn runs on the core tools alone",
     )
 
     base_flags_parser = argparse.ArgumentParser(add_help=False)
@@ -3749,6 +3787,11 @@ afterwards (or `swebench <run_dir>` does, later).
 
     skills_cli.add_subparser(subparsers)
 
+    # gaia project trust {list|add|decline|forget}, alias gaia trust
+    from gaia import project_trust_cli
+
+    project_trust_cli.add_subparser(subparsers)
+
     # Local models added from a Hugging Face link (shared with the Agent UI and TUI).
     from gaia.llm import custom_models_cli
 
@@ -4992,6 +5035,9 @@ def main():
         "--attempts": args.print_attempts is not None,
         "--dangerously-skip-permissions": args.print_skip_permissions,
         "--full-access": args.print_full_access,
+        "--disallowed-tools": bool(args.print_disallowed_tools),
+        "--no-web": args.print_no_web,
+        "--no-skills": args.print_no_skills,
     }
     if args.print_prompt is None and any(print_only.values()):
         used = ", ".join(flag for flag, given in print_only.items() if given)
@@ -5038,6 +5084,9 @@ def main():
                 full_access=args.print_full_access,
                 base_url=args.base_url,
                 time_limit=args.print_time_limit,
+                disallowed_tools=args.print_disallowed_tools or (),
+                no_web=args.print_no_web,
+                no_skills=args.print_no_skills,
             )
         )
 
@@ -6228,6 +6277,13 @@ Let me know your answer!
         from gaia.skills import cli as skills_cli  # pylint: disable=reimported
 
         rc = skills_cli.handle(args)
+        sys.exit(rc)
+
+    # Handle Project trust command
+    if args.action in ("project", "trust"):
+        from gaia import project_trust_cli
+
+        rc = project_trust_cli.handle(args)
         sys.exit(rc)
 
     # Handle Diagnostics command

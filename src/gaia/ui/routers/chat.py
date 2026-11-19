@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from gaia.agents.base.tool_grants import grant_scope
+from gaia.browser.picked import page_elements_json, with_page_elements
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
@@ -158,9 +159,10 @@ async def send_message(
     # so a long wait never loses it.
     holds_turn = False
     question_id = None
+    picked = page_elements_json(request.page_elements or [])
     if not request.stream:
         try:
-            question_id = db.begin_turn(sid, request.message)
+            question_id = db.begin_turn(sid, request.message, picked)
             _set_provisional_title(db, sid, request.message)
             if takes_line:
                 await turn_queue.acquire(sid)
@@ -188,9 +190,15 @@ async def send_message(
     # that patch("gaia.ui.server._stream_chat_response") work correctly.
     srv = _server_mod()
 
-    # The transcript keeps the browser link; the agent gets the file's path.
+    # The transcript keeps the browser link; the agent gets the file's path,
+    # and any elements picked in the browser pane as one block of page data.
     agent_request = request.model_copy(
-        update={"message": resolve_upload_links(request.message)}
+        update={
+            "message": resolve_upload_links(
+                with_page_elements(request.message, request.page_elements)
+            ),
+            "page_elements": None,
+        }
     )
 
     try:
@@ -220,7 +228,7 @@ async def send_message(
 
             async def _stream():
                 try:
-                    db.begin_turn(request.session_id, request.message)
+                    db.begin_turn(request.session_id, request.message, picked)
                     _set_provisional_title(db, request.session_id, request.message)
                     # The detached lifecycle owns producer + persistence;
                     # this subscriber only relays buffered and live events.
@@ -270,6 +278,7 @@ async def send_message(
                         response_text,
                         model_messages=model_messages or None,
                         ends_turn=True,
+                        failed=bool(turn_box.get("failed")),
                     )
                     if "recording" in turn_box:
                         turn_box["recording"].link_message(msg_id)
@@ -301,7 +310,7 @@ async def send_message(
                         model_id=turn_box.get("model"),
                     )
                 )
-                run_status = "done"
+                run_status = "failed" if turn_box.get("failed") else "done"
                 return ChatResponse(
                     message_id=msg_id,
                     content=response_text,

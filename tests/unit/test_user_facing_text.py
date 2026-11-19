@@ -149,6 +149,12 @@ NOT_USER_TEXT: dict[str, dict[str, tuple[int, str]]] = {
     "src/gaia/agents/base/tool_grants.py": {
         "pip": (2, "names commands GAIA holds for approval"),
     },
+    "src/gaia/agents/base/project_map.py": {
+        "terminal command": (
+            1,
+            "stderr of a run nobody can answer, such as gaia -p; the apps ask",
+        ),
+    },
     "src/gaia/agents/tools/connect_card.py": {
         "terminal command": (
             1,

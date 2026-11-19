@@ -83,6 +83,8 @@ export interface StreamEvent {
     success?: boolean;
     /** On a `tool_result`: no answer came in time, so a "denied" status is not the user's no. */
     timed_out?: boolean;
+    /** On a `tool_result`: "policy" when GAIA's own rule stopped the call, so "denied" is not the user's no. */
+    denied_by?: string;
     /** On a `tool_result`: "agent" when GAIA turned the call down itself and showed no prompt. */
     declined_by?: string;
     steps?: string[];
@@ -93,8 +95,8 @@ export interface StreamEvent {
     narration?: string;
     /** The skill a turn runs on (skill_use). */
     skill?: string;
-    /** How that skill came to be loaded (skill_use): 'model', 'auto' or 'loaded'. */
-    how?: 'model' | 'auto' | 'loaded';
+    /** How that skill came to be loaded (skill_use): 'model', 'user' (typed /name), 'auto' or 'loaded'. */
+    how?: 'model' | 'user' | 'auto' | 'loaded';
     /** Every skill now loaded in the chat (skill_use). */
     loaded?: string[];
     title?: string;

@@ -260,8 +260,11 @@ def test_a_jump_declares_the_tool_on_the_turn_that_needs_it(flagship):
     assert model.requests[0]["slot"] == FULL_TOOLS_SLOT
 
 
-def test_search_tools_declares_what_it_found_on_the_next_step(flagship):
+def test_search_tools_declares_what_it_found_on_the_next_step(flagship, monkeypatch):
     agent, model = flagship
+    monkeypatch.setattr(
+        agent, "_take_screenshot", lambda output_path="": {"status": "success"}
+    )
     _turn(
         agent,
         model,

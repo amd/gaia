@@ -4,6 +4,7 @@
 /** Types shared across the GAIA Agent UI frontend. */
 
 import type { TurnSummaryResponse } from './api.gen';
+import type { PageElementWire } from '../../services/browser-pane/contract';
 import type { SetupNpuProblem } from './setup';
 
 export * from './setup';
@@ -495,6 +496,8 @@ export interface Message {
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
     turnSummary?: TurnSummary;
+    /** Elements the user picked in the browser pane and sent with this message. */
+    page_elements?: PageElementWire[] | null;
     /** Notices from adding indexed files to the document library. */
     libraryNotices?: string[];
 }
@@ -888,6 +891,8 @@ export interface AgentStep {
     declined?: boolean;
     /** Nobody answered its permission prompt in time, so it never ran (for type='tool'). */
     timedOut?: boolean;
+    /** GAIA's own rule stopped this call; nobody was asked (for type='tool'). */
+    refused?: boolean;
     /** GAIA turned this call down itself without asking, so it never ran (for type='tool'). */
     autoDeclined?: boolean;
     /** Whether this step is currently running. */

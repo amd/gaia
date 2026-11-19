@@ -101,8 +101,12 @@ there is nothing to launch first.
 Where the agent ships as its own program, as in the desktop app, the terminal
 installers and the one-line installer, `gaia -p` and `gaia chat` run it through
 GAIA's background service in the current folder. Confirmation-gated tools are
-refused there, so `--dangerously-skip-permissions`, `--full-access` and
-`--base-url` work only with the agent package installed, as in a source checkout.
+refused there, so `--dangerously-skip-permissions`, `--full-access`,
+`--base-url`, `--disallowed-tools`, `--no-web` and `--no-skills` work only with the
+agent package installed, as in a source checkout.
+There the agent is also told that nobody can answer questions during the run, so
+it settles an open choice from the files it has and says what it assumed, rather
+than ending on a question.
 
 ```bash
 gaia -p "Summarize README.md in three bullets"
@@ -113,15 +117,18 @@ echo "List the Python files here" | gaia -p --output-format json
 | Flag | Description |
 |------|-------------|
 | `-p`, `--print [prompt]` | The prompt. With no text after it, the prompt is read from stdin; an empty stdin or an interactive terminal is an error |
-| `--model <id>` | Model to run (local or cloud, e.g. `amd.DeepSeek-V4.1-Flash`), or `hybrid` to pick a cheap or strong model for the turn ([Hybrid model](/guides/llm-gateway#hybrid-model)). Default: `default_model` from `gaia config`, else the agent's own default |
+| `--model <id>` | Model to run (local or cloud, e.g. `amd.DeepSeek-V4.1-Flash`), or `hybrid` to pick a cheap or strong model for the turn ([Hybrid model](/guides/llm-gateway#hybrid-model)). Default: the model the Agent UI and TUI reopen on (`last_model`), else `default_model` from `gaia config`, else the agent's own default. A local model that is not downloaded is refused, never downloaded |
 | `--output-format text\|json` | `text` (default) prints the answer alone; `json` prints one JSON object (below) |
 | `--verbose` | With `--output-format json`: add the turn's full `conversation` (every model message and tool call) |
 | `--max-steps <n>` | Cap on agent steps for this run, at least 1. Default: the agent's own limit ([Agent step limit](#agent-step-limit)) |
-| `--time-limit <seconds>` | Wall-clock seconds the turn may take, at least 1. The agent is told the limit with the request, and to write a first version of any requested file early. At 70% it is told to write what was asked for. Near the limit (at 90%, or earlier when its steps are slow) it stops working, writes any requested file still missing, and answers. A shell or Python command, a wait or a sleep the agent starts gets a timeout no longer than the time left before that stop, and one with no time left is refused. A turn still busy at the limit is stopped there: a running shell or Python command ends, a model call already sent is waited for, and the answer says the time limit stopped the turn, followed by the agent's latest findings. A turn the limit ended reports `status: incomplete` and exits 1, even when it wrote its file and answered. Counted from the start of the turn, after server start-up, so give a wrapper's own timeout some headroom above it. Can't be combined with `--attempts` yet (a usage error). Default: no limit |
+| `--time-limit <seconds>` | Wall-clock seconds the turn may take, at least 1. The agent is told the limit with the request, and to write a first version of any requested file early. At 25% and 50% it is told the time used. At 70% it is told to write what was asked for and not yet written, to leave a finished file alone, and to keep caveats in its answer rather than in the file; it is always told before it stops, even when one long step jumps past 70%. Near the limit it stops working, keeping back two of its typical steps (three while a requested file is missing, never less than 5% of the limit): it writes any requested file still missing, may make one last tool call that runs (a final write, say), and answers. Each model call is capped to the output the time left allows at the model's measured speed. A shell or Python command, a wait or a sleep the agent starts gets a timeout no longer than the time left before that stop, and one with no time left is refused; the one last tool call may run for half of what is left of the limit. A turn still busy at the limit is stopped there: a running shell or Python command ends, a model call still running 5 seconds past the limit is abandoned, and the answer says the time limit stopped the turn, followed by the agent's latest findings. A turn the limit ended reports `status: incomplete` and exits 1, even when it wrote its file and answered. Counted from the start of the turn, after server start-up, so give a wrapper's own timeout some headroom above it. Can't be combined with `--attempts` yet (a usage error). Default: no limit |
 | `--attempts <n>` | Run `n` (up to 4) independent attempts, then one turn that checks and combines them ([below](#independent-attempts)). Default: 1 |
 | `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking. A request that only hands over quoted text to translate, reword or proofread still has them refused |
 | `--full-access` | Full access, as the TUI's `/full-access`: lifts the shell guardrails, so test runners, build tools and other commands outside the no-prompt list run, and grants paths outside the current folder without asking. Implies `--dangerously-skip-permissions` |
 | `--base-url <url>` | Use a remote Lemonade server instead of the local one |
+| `--disallowed-tools <tools>` | Tools the agent may neither see nor call, comma- or space-separated, with `*` globs (`search_web,browser_*`). Repeatable. `search_tools` never finds a withheld tool, and a tool a skill adds mid-turn is withheld too when a pattern matches it. Each pattern must match a tool the agent has when the turn starts, or the run fails (exit 1) before it begins, so a typo can't leave a tool on |
+| `--no-web` | Withhold GAIA's tools that search, read, download or install from the internet: `search_web`, `fetch_page`, `fetch_webpage`, `download_file`, `open_url`, `browser_*`, `search_documentation`, `search_skill_hub`, `install_skill`, `install_cli` and `transcribe_media`. The shell and connector (MCP) tools stay available; withhold those with `--disallowed-tools`. The agent is also told not to search or fetch from the web through the shell or a script. That is an instruction, not a block: cut the network to enforce it |
+| `--no-skills` | No skill catalogue or suggestions in the prompt, no learned skill changes, and no tools to find, load, install or learn skills. A skill the agent always loads stays loaded |
 
 `-p` takes no subcommand: `gaia -p "hi" chat` is a usage error. The flags above
 apply only to `-p`; given before a subcommand without it (`gaia --model X chat`)
@@ -154,6 +161,7 @@ subcommand instead.
 | `time_limit_reached` | Only when `--time-limit` ended the turn early |
 | `attempts` | Only with `--attempts` above 1: each attempt's `is_error`, `status`, `error` (why it failed), `duration_s`, steps, tool calls and tokens. The top-level counts include them |
 | `conversation` | Only with `--verbose`: the turn's messages and tool calls |
+| `withheld_tools` | Only with `--disallowed-tools`, `--no-web` or `--no-skills`: the tools this turn withheld |
 | `route` | Only with `--model hybrid`: the model the turn ran on and why — `model`, `kind`, `difficulty`, `stakes`, `reason`, `classified` (false when the classifier gave no valid label), `seconds`, `sticky`, `policy` (the `hybrid_policy` in effect), `classifier_format` (`json_object` or `plain`), `fix` (what to change when the classifier failed), `degraded` and `notice` (true, with a message, once the classifier has failed 3 turns in a row) |
 
 **Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other
@@ -2098,6 +2106,56 @@ GAIA_CONFIG_FILE=./project.gaia.json gaia llm "hello"
 
 When both are given, `--config` wins over `GAIA_CONFIG_FILE`, which wins over the
 default `~/.gaia/config.json`.
+
+---
+
+## Project Trust
+
+Manage whether GAIA is allowed to read project guidance (`CLAUDE.md`, `AGENTS.md` and `.claude/skills`) into the model's prompt. Answers are saved in `~/.gaia/project_trust.json`.
+
+```bash
+gaia project trust <subcommand> [OPTIONS]
+```
+
+_Alias:_ `gaia trust <subcommand> [OPTIONS]` — `gaia trust list`, `gaia trust add`, `gaia trust decline` and `gaia trust forget` behave exactly like their `gaia project trust` forms.
+
+Only you can trust a folder. The agent cannot run `gaia trust` or `gaia project trust` from its tools, with or without your approval, and a `trusted` answer saved by an agent, or by a process it started, is refused.
+
+**Subcommands:**
+
+| Subcommand | Description |
+|-----------|-------------|
+| `list` | List saved folder trust decisions with timestamps (`--json` for machine-readable output; marks missing folders) |
+| `add [folder]` | Trust a folder or repository root ahead of time (defaults to the current working directory / enclosing project) |
+| `decline [folder]` | Decline a folder ahead of time (defaults to the current working directory / enclosing project) |
+| `forget [folder]` | Remove a saved answer so GAIA asks again; `--missing` to prune gone folders, or `--all` (`-y` / `--yes` to skip prompt) to clear all saved answers |
+
+**Examples:**
+
+<CodeGroup>
+```bash List saved trust answers
+gaia project trust list
+```
+
+```bash Output JSON for scripts
+gaia project trust list --json
+```
+
+```bash Pre-approve current repository for unattended runs
+gaia project trust add
+```
+
+```bash Never load a folder's guidance
+gaia project trust decline /path/to/repo
+```
+
+```bash Forget an answer or clear missing folders
+gaia project trust forget /path/to/repo
+gaia project trust forget --missing
+```
+</CodeGroup>
+
+See the [Project Map guide](/guides/project-map#trusting-a-folder) for how trust decisions gate prompt composition.
 
 ---
 
@@ -4360,8 +4418,8 @@ API keys and tokens in GAIA's state files (`lemonade/state.json`, `host/instance
 Most commands support these options. They come from a shared parent parser, so
 despite the name they are **not** accepted by `gaia agent`, `gaia cache`,
 `gaia config`, `gaia connectors`, `gaia daemon`, `gaia diagnostics`, `gaia engineering`,
-`gaia gateway`, `gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory`, `gaia model` or
-`gaia skill` — passing one there fails with `unrecognized arguments`.
+`gaia gateway`, `gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory`, `gaia model`,
+`gaia project`, `gaia skill` or `gaia trust` — passing one there fails with `unrecognized arguments`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|

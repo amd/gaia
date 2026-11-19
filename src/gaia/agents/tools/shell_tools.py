@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from gaia import package_manager_errors, program_lookup
 from gaia.agents.base.call_risk import (
     DESTRUCTIVE,
     NEEDS_PERSON_ARG,
@@ -40,6 +41,7 @@ from gaia.agents.base.denied_effects import (
     COMPUTED_PATH,
     NETWORK,
     PATH,
+    PROGRAM_NOT_FOUND,
     UNATTENDED_REFUSAL,
     creates_a_link,
     deletes_a_path,
@@ -667,6 +669,149 @@ def _tier_rank(error: Dict[str, Any]) -> int:
     return _TIER_RANK.get(error.get("tier"), _TIER_RANK[TIER_REFUSE])
 
 
+def _outranks(verdict: Dict[str, Any], other: Dict[str, Any]) -> bool:
+    """True when *verdict* should stand for the line instead of *other*.
+
+    The stricter tier wins. Between two refusals, one about what the command
+    does beats "that program is not installed", which installing would lift.
+    """
+    if _tier_rank(verdict) != _tier_rank(other):
+        return _tier_rank(verdict) > _tier_rank(other)
+    return bool(other.get(PROGRAM_NOT_FOUND)) and not verdict.get(PROGRAM_NOT_FOUND)
+
+
+def _missing_program(binary: str, message: str, installable: bool) -> Dict[str, Any]:
+    """The block for a command whose program is not installed."""
+    if installable:
+        fix = (
+            f"GAIA can install it: call check_cli_setup('{binary}'), then "
+            "install_cli with the command it returns (search_tools finds both), "
+            "as a separate step. Then run this command again."
+        )
+    else:
+        fix = (
+            "Tell the user it is not installed and how to install it. Do not "
+            "pick a package or download source for them."
+        )
+    return {
+        "status": "error",
+        "tier": TIER_REFUSE,
+        "error": message,
+        "has_errors": True,
+        "hint": (
+            f"{fix} If the user says they have installed it, run this command "
+            "again: GAIA looks for newly installed programs each time."
+        ),
+        PROGRAM_NOT_FOUND: binary,
+    }
+
+
+#: On a block for a command outside the no-prompt list: the program it names.
+_UNLISTED_PROGRAM = "unlisted_program"
+
+#: Names a shell runs itself, so there is no executable to find on PATH.
+_SHELL_BUILTINS = frozenset(
+    {
+        # cmd.exe
+        "assoc",
+        "break",
+        "call",
+        "chcp",
+        "chdir",
+        "cls",
+        "color",
+        "copy",
+        "date",
+        "del",
+        "dpath",
+        "erase",
+        "ftype",
+        "keys",
+        "md",
+        "mkdir",
+        "mklink",
+        "move",
+        "path",
+        "pause",
+        "popd",
+        "prompt",
+        "pushd",
+        "rd",
+        "rem",
+        "ren",
+        "rename",
+        "rmdir",
+        "set",
+        "setlocal",
+        "endlocal",
+        "shift",
+        "start",
+        "time",
+        "title",
+        "type",
+        "verify",
+        "vol",
+        # sh
+        ".",
+        "alias",
+        "bg",
+        "command",
+        "eval",
+        "exec",
+        "exit",
+        "export",
+        "fg",
+        "hash",
+        "jobs",
+        "read",
+        "source",
+        "trap",
+        "ulimit",
+        "umask",
+        "unalias",
+        "unset",
+        "wait",
+    }
+)
+
+
+def _is_missing_program(name: str, cwd: str) -> bool:
+    """True when *name* is plainly a program that is not installed.
+
+    Only a bare program name the lookup cannot find. Anything a shell might
+    still run (a built-in, a cmdlet, a script in the folder the command runs
+    in) answers False, so the command is handled as it was before.
+    """
+    lowered = name.lower()
+    if (
+        not name
+        or re.search(r"[\\/:]", name)
+        or "-" in name
+        or lowered in _SHELL_BUILTINS
+        or lowered in _UNIX_TO_WIN
+    ):
+        return False
+    if program_lookup.resolve(name) is not None:
+        return False
+    if os.name == "nt":
+        # cmd.exe looks in the folder a command runs in before PATH.
+        extensions = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";")
+        return not any(
+            os.path.isfile(os.path.join(cwd, name + ext)) for ext in ["", *extensions]
+        )
+    return True
+
+
+def _can_install_here(policy: Any) -> bool:
+    """True when GAIA has a vetted install command for *policy* on this platform."""
+    if getattr(policy, "setup", None) is None:
+        return False
+    # Imported here — gaia.skills pulls in the connector stack.
+    from gaia.skills.binary_setup import install_plan
+
+    return install_plan(policy) is not None
+
+
 def _confirm_once(error: Dict[str, Any], note: str) -> Dict[str, Any]:
     """*error* re-tiered as a one-time approval carrying *note*.
 
@@ -1056,7 +1201,8 @@ def _reads_files(command: str) -> bool:
 
 def _not_approvable(error: Dict[str, Any]) -> Dict[str, Any]:
     """*error* with :data:`NOT_APPROVABLE` closing its hint, when no prompt may run it."""
-    if _reaches_the_prompt(error):
+    if _reaches_the_prompt(error) or error.get(PROGRAM_NOT_FOUND):
+        # A missing program is fixed by installing it, which the user may approve.
         return error
     hint = str(error.get("hint") or "").strip()
     if NOT_APPROVABLE in hint:
@@ -4982,12 +5128,22 @@ def _captured_stderr(mode: str, default: Any) -> Any:
     return default
 
 
+#: Makes git fail at once instead of asking for a password on the terminal.
+#: Git Credential Manager's own sign-in window is left alone: a person at the
+#: desktop can answer that one.
+_NO_SIGN_IN_PROMPT = {"GIT_TERMINAL_PROMPT": "0"}
+
+
 def _segment_env(assignments: Dict[str, str]) -> Dict[str, str]:
     """This process's child environment plus one segment's assignments.
 
     A copy every time: ``os.environ`` itself is never touched, so nothing a
     command sets outlives it or reaches the agent. GAIA's internal credentials
     are left out (see ``gaia.env.child_env``).
+
+    git is told not to ask for a password on the terminal: nobody can type into
+    a command run here, so that prompt would hang until the timeout. A value the user
+    or the command already set wins.
     """
     from gaia.skills.human_only import agent_child_env
 
@@ -4995,6 +5151,8 @@ def _segment_env(assignments: Dict[str, str]) -> Dict[str, str]:
     env = agent_child_env(child_env(assignments))
     # A killed Python child keeps what it printed only if it never buffered it.
     env.setdefault("PYTHONUNBUFFERED", "1")
+    for name, value in _NO_SIGN_IN_PROMPT.items():
+        env.setdefault(name, value)
     return env
 
 
@@ -6085,9 +6243,7 @@ class ShellToolsMixin:
                     granted_binaries=granted,
                     bypass_gates=bypass,
                 )
-                if verdict and (
-                    worst is None or _tier_rank(verdict) > _tier_rank(worst)
-                ):
+                if verdict and (worst is None or _outranks(verdict, worst)):
                     worst = verdict
         if worst is not None and worst.get("tier") == TIER_CONFIRM_ONCE:
             worst = _hard_if_unofferable(worst, command)
@@ -6104,6 +6260,14 @@ class ShellToolsMixin:
                     ),
                     "hint": "Retype the command with plain spaces and characters.",
                 }
+        if (
+            worst is not None
+            and worst.get(PROGRAM_NOT_FOUND)
+            and _final_even_unattended(command)
+        ):
+            # The line also deletes or hides what it runs: that stays a refusal
+            # on record, whatever else on it is not installed.
+            worst = {k: v for k, v in worst.items() if k != PROGRAM_NOT_FOUND}
         # Steps travel with the block: a TIER_CONFIRM one still has to run once
         # approved, and it can only run what was parsed.
         return worst, steps
@@ -6161,9 +6325,35 @@ class ShellToolsMixin:
         command = (tool_args or {}).get("command")
         if not isinstance(command, str):
             return None
-        error, _ = self._line_verdict(
-            command, (tool_args or {}).get("working_directory")
-        )
+        working_directory = (tool_args or {}).get("working_directory")
+        error, steps = self._line_verdict(command, working_directory)
+        if error is not None and error.get(PROGRAM_NOT_FOUND):
+            # It may have been installed since this process read PATH.
+            if program_lookup.refresh_path():
+                error, steps = self._line_verdict(command, working_directory)
+        elif (
+            error is not None
+            and error.get(_UNLISTED_PROGRAM)
+            # One command only: a `cd` earlier on the line moves where a
+            # script would be found, and a pipe has other programs on it.
+            and len(steps) == 1
+            and len(steps[0].segments) == 1
+        ):
+            # Nobody is asked to approve a program that is not there.
+            missing = self._unlisted_program_missing(error, command, working_directory)
+            if missing is not None:
+                error = missing
+        else:
+            # A command that needs no approval still has to find its program,
+            # which the user may have installed since this process started.
+            located = self._call_cwd(working_directory)
+            cwd = located[0] if located else self.shell_session.cwd
+            if any(
+                segment and _is_missing_program(segment[0], cwd)
+                for step in steps
+                for segment in step.segments
+            ):
+                program_lookup.refresh_path()
         if error is None:
             return None
         if tool_name == _WAIT_TOOL and error.get("tier") == TIER_CONFIRM_ONCE:
@@ -6192,6 +6382,33 @@ class ShellToolsMixin:
             error.get("error"),
         )
         return error
+
+    def _unlisted_program_missing(
+        self, error: Dict[str, Any], command: str, working_directory: Any
+    ) -> Optional[Dict[str, Any]]:
+        """The "not installed" block for an unlisted program that is not there.
+
+        None when the program can be found, including one installed since this
+        process read ``PATH``: the command then goes to the user as before. So
+        does a line that deletes or hides what it runs (``rm -rf x`` on
+        Windows): its refusal has to stay on record, or the delete would be
+        free to arrive through another tool.
+        """
+        if _final_even_unattended(command):
+            return None
+        name = str(error[_UNLISTED_PROGRAM])
+        located = self._call_cwd(working_directory)
+        cwd = located[0] if located else self.shell_session.cwd
+        if not _is_missing_program(name, cwd):
+            return None
+        if program_lookup.refresh_path() and not _is_missing_program(name, cwd):
+            return None
+        return {
+            **_missing_program(
+                name, f"'{name}' is not installed here (not on PATH).", False
+            ),
+            **NOT_EXECUTED,
+        }
 
     def _approval_is_blanket_only(self) -> bool:
         """True when no prompt a person answers stands behind this call.
@@ -6310,7 +6527,11 @@ class ShellToolsMixin:
         # A missing-grant hint assumes a prompt; a one-time line's hint says
         # how to write it so that it needs none, which still holds here.
         once = error.get("tier") == TIER_CONFIRM_ONCE
-        dropped = ("examples",) if once else ("hint", "examples")
+        dropped = (
+            ("examples", _UNLISTED_PROGRAM)
+            if once
+            else ("hint", "examples", _UNLISTED_PROGRAM)
+        )
         unasked = {key: value for key, value in error.items() if key not in dropped}
         if final:
             return {**unasked, "tier": TIER_REFUSE, "error": plain}
@@ -6507,8 +6728,12 @@ class ShellToolsMixin:
         A call the pre-flight left for a person (:meth:`_a_person_answers`)
         carries ``NEEDS_PERSON_ARG``, so pre-approval does not answer it.
 
-        Duck-typed, like :meth:`skill_grant_covers_call`.
+        Duck-typed, like :meth:`skill_grant_covers_call`. Another tool's call
+        goes on up the MRO, so a later mixin can add its own fields.
         """
+        if tool_name != _POLICY_GATED_SHELL_TOOL:
+            parent = getattr(super(), "confirmation_args_for_call", None)
+            return parent(tool_name, tool_args) if callable(parent) else tool_args
         shown = self._shown_args(tool_name, tool_args)
         if (
             tool_name == _POLICY_GATED_SHELL_TOOL
@@ -6805,12 +7030,18 @@ class ShellToolsMixin:
         An install into an environment outside the project (the system Python,
         ``npm -g``) is the exception: it is a one-time approval normally, and
         refused under full access, where nobody is asked.
+
+        A server that never exits is refused under every rule: this tool waits
+        for the line to finish, so it would hang the turn.
         """
         # Before full access too: trusting a skill stays a terminal action.
         human_only = _human_only_command(command)
         if human_only:
             logger.warning("Refusing %r: %s is the user's to run", command, human_only)
             return _human_only_refusal(command, human_only), []
+        server = self._server_refusal(command, working_directory)
+        if server is not None:
+            return server, []
         error, steps = self._validate_shell_command(command)
         if error is None or _reaches_the_prompt(error):
             install = self._system_install_block(steps, working_directory)
@@ -6908,6 +7139,33 @@ class ShellToolsMixin:
             if refusal is not None:
                 return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
         return error, steps
+
+    def _server_refusal(
+        self, command: str, working_directory: Any
+    ) -> Optional[Dict[str, Any]]:
+        """The refusal for a line that starts a never-ending server, or None."""
+        from gaia.browser.dev_servers import (
+            dev_server_offered,
+            server_in_command,
+            server_refusal,
+        )
+
+        server = server_in_command(command)
+        if server is None:
+            return None
+        # Read-only: repairing the session folder waits until the call runs.
+        located = self._call_cwd(working_directory) if working_directory else None
+        cwd = located[0] if located else self.shell_session.cwd
+        folder = os.path.normpath(
+            os.path.join(cwd, os.path.expanduser(server.folder or "."))
+        )
+        return {
+            **NOT_EXECUTED,
+            "status": "error",
+            "tier": TIER_REFUSE,
+            "error": server_refusal(server.what, folder, dev_server_offered(self)),
+            "has_errors": True,
+        }
 
     def _system_install_block(
         self, steps: list, working_directory: Any
@@ -7571,7 +7829,18 @@ class ShellToolsMixin:
                     _unwrapped=True,
                 )
                 if inner is not None and _tier_rank(inner) == _TIER_RANK[TIER_REFUSE]:
-                    return inner
+                    if not inner.get(PROGRAM_NOT_FOUND):
+                        return inner
+                    # The launcher's own refusal is about what the line does,
+                    # so it stands ahead of "that program is not installed".
+                    own = ShellToolsMixin._validate_command(
+                        cmd_base,
+                        cmd_parts,
+                        command,
+                        granted_binaries=granted_binaries,
+                        _unwrapped=True,
+                    )
+                    return own if own is not None and _outranks(own, inner) else inner
 
         program = _program_behind(cmd_base)
         if program is not None:
@@ -7643,27 +7912,33 @@ class ShellToolsMixin:
             )
             if decision.outcome != REFUSE:
                 return None
-            tier = TIER_REFUSE
+            never_approvable = granted_decision.outcome == REFUSE and (
+                _destroys(policy_parts) or granted_decision.never_offered
+            )
             # `python -m pytest` starts python, so python is what must exist; a
             # path spelling is not a PATH lookup, and the launch reports it.
             runs = policy.binary
             if policy_parts[0] != cmd_parts[0]:
                 runs = _spelled or cmd_parts[0]
-            missing = not re.search(r"[\\/]", runs) and shutil.which(runs) is None
-            if not granted and missing:
+            missing = (
+                not re.search(r"[\\/]", runs) and program_lookup.resolve(runs) is None
+            )
+            if not granted and not never_approvable and missing:
                 # Not installed is not "load the skill": reloading cannot fix it.
                 if runs == policy.binary:
-                    message = (
-                        f"Command '{binary}' cannot run: {policy.unavailable_note()}"
+                    return _missing_program(
+                        policy.binary,
+                        f"Command '{binary}' cannot run: {policy.unavailable_note()}",
+                        _can_install_here(policy),
                     )
-                else:
-                    message = (
-                        f"Command '{runs}' cannot run: `{runs}` is not installed "
-                        "here (not on PATH). Use a Python that is, or name the "
-                        "interpreter by its full path."
-                    )
-                hint = "Do not retry this command or reload the skill."
-            elif granted_decision.outcome == REFUSE:
+                return _missing_program(
+                    runs,
+                    f"Command '{runs}' cannot run: `{runs}` is not installed "
+                    "here (not on PATH). Use a Python that is, or name the "
+                    "interpreter by its full path.",
+                    False,
+                )
+            if granted_decision.outcome == REFUSE:
                 # Outside what GAIA's checks cover, grant or no grant. The user
                 # may still approve it once, unless it destroys or ends work.
                 logger.debug("%r is outside the %s policy", command, binary)
@@ -7672,30 +7947,26 @@ class ShellToolsMixin:
                     "error": granted_decision.message,
                     "has_errors": True,
                 }
-                if _destroys(policy_parts) or granted_decision.never_offered:
+                if never_approvable:
                     return {**refusal, "tier": TIER_REFUSE, "hint": REFUSED_HINT}
                 return _confirm_once(refusal, _policy_note(policy, policy_parts))
-            else:
-                # Only the missing grant is in the way, and a grant is only
-                # pre-approval: the user at the prompt can approve it instead.
-                logger.debug(
-                    "No skill grants shell:execute:%s, so %r goes to the "
-                    "confirmation prompt",
-                    binary,
-                    command,
-                )
-                tier = TIER_CONFIRM
-                message = decision.message
-                hint = (
-                    "It runs once the user approves it at the prompt. If they "
-                    "decline, do not reach the same result another way."
-                )
+            # Only the missing grant is in the way, and a grant is only
+            # pre-approval: the user at the prompt can approve it instead.
+            logger.debug(
+                "No skill grants shell:execute:%s, so %r goes to the "
+                "confirmation prompt",
+                binary,
+                command,
+            )
             return {
                 "status": "error",
-                "tier": tier,
-                "error": message,
+                "tier": TIER_CONFIRM,
+                "error": decision.message,
                 "has_errors": True,
-                "hint": hint,
+                "hint": (
+                    "It runs once the user approves it at the prompt. If they "
+                    "decline, do not reach the same result another way."
+                ),
             }
 
         # Special handling for wmic - only allow read-only queries
@@ -7993,6 +8264,7 @@ class ShellToolsMixin:
                 "tier": TIER_CONFIRM,
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
                 "has_errors": True,
+                _UNLISTED_PROGRAM: cmd_parts[0],
                 "hint": (
                     "Commands outside the no-prompt list run once the user "
                     "approves them; they are not refused."
@@ -8115,6 +8387,19 @@ class ShellToolsMixin:
         }
         if waited:
             outcome["waited_seconds"] = round(waited, 1)
+        for segment in segments:
+            meaning = (
+                package_manager_errors.explain(segment[0], code) if segment else ""
+            )
+            if not meaning:
+                continue
+            if package_manager_errors.nothing_to_do(segment[0], code):
+                # "Already installed" is not a failed step.
+                outcome["expected_exit"] = meaning
+                outcome["has_errors"] = False
+            else:
+                outcome["exit_code_meaning"] = meaning
+            break
         return attach_check(
             outcome, check_from_command(command, segments, code, raw_out, raw_err)
         )
@@ -8358,9 +8643,13 @@ class ShellToolsMixin:
                             "has_errors": True,
                         }
                     note_untracked("shell", command)
-                    return self._run_approved_once(
+                    outcome = self._run_approved_once(
                         command, cwd, steps, timeout, timeout_class, waited
                     )
+                    if error.get("system_install"):
+                        # What it installed is on PATH for new processes only.
+                        program_lookup.refresh_path(after_install=True)
+                    return outcome
 
                 # Skill grants only: a built-in read grant is read-only by policy.
                 granted = skill_granted_binaries(self)

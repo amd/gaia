@@ -563,7 +563,8 @@ class OutputHandler(ABC):
         *loaded* is every skill now loaded in this chat, in load order. *how*
         is ``"model"`` when the model called ``load_skill``, ``"auto"`` when
         GAIA loaded it because the model called one of its ``loads_with``
-        tools, and ``"loaded"`` when it was already loaded.
+        tools, ``"user"`` when the user typed ``/<name>``, and ``"loaded"``
+        when it was already loaded.
         """
         ...
 
