@@ -53,7 +53,7 @@ def test_one_line_per_server_with_bare_tool_names():
     lines = menu.splitlines()
     assert lines[0] == MCP_MENU_HEADER
     assert "search_tools" in lines[1] and "load_tools" not in menu
-    assert _servers(menu) == ["- files: move, copy", "- calendar: create_event"]
+    assert _servers(menu) == ["- calendar: create_event", "- files: copy, move"]
     assert "read_file" not in menu and "Does a thing" not in menu
 
 
@@ -77,11 +77,13 @@ def test_an_entry_without_a_tool_name_falls_back_to_the_full_name():
     ]
 
 
-def test_the_menu_renders_the_same_bytes_each_time():
+def test_servers_are_in_name_order_whatever_order_they_connected_in():
+    """Servers connect in parallel; a new chat must get the same prompt bytes."""
     registry = _registry(("b", "t1"), ("a", "t2"), ("b", "t3"))
     first = format_unlisted_mcp_tools(registry, [])
-    assert _servers(first) == ["- b: t1, t3", "- a: t2"]
-    assert format_unlisted_mcp_tools(dict(registry), []) == first
+    assert _servers(first) == ["- a: t2", "- b: t1, t3"]
+    reversed_registry = dict(reversed(list(registry.items())))
+    assert format_unlisted_mcp_tools(reversed_registry, []) == first
 
 
 def test_a_withheld_tool_stays_off_the_menu():
@@ -98,10 +100,11 @@ def test_past_the_cap_servers_are_counted_and_the_cut_is_logged(caplog):
     with caplog.at_level(logging.INFO):
         menu = format_unlisted_mcp_tools(_registry(*tools), [])
     lines = _servers(menu)
-    assert lines[1] == "- mid: m0, m1, and 3 more"
-    assert lines[2] == "- late: 2 tools"
+    # Name order: big, late, mid.
     names = sum(len(line.split(": ", 1)[1].split(", ")) for line in lines[:1])
     assert names == MCP_MENU_MAX_TOOLS - 2
+    assert lines[1] == "- late: x, y"
+    assert lines[2] == "- mid: 5 tools"
     total = MCP_MENU_MAX_TOOLS + 5
     assert any(
         f"names {MCP_MENU_MAX_TOOLS} of {total}" in r.getMessage()

@@ -16,7 +16,9 @@ import pytest
 from gaia_agent.chat_agent import ChatAgent
 from test_prompt_prefix_stability import (
     _assert_each_extends_the_last,
+    _assert_same_cached_prefix,
     _assert_same_prefix,
+    _first_request,
     _prefix,
     _tool_names,
     _turn,
@@ -45,6 +47,16 @@ def _system(request) -> str:
     return request[0][0]["content"]
 
 
+def _menu_order(entries: dict, keep=None) -> list[str]:
+    """The names in *entries* (or just *keep*) in menu order: server, then tool."""
+
+    def key(name):
+        tool = entries[name]["_mcp_tool"]
+        return name[len("mcp_") : -len(tool) - 1], tool
+
+    return sorted((n for n in entries if keep is None or n in keep), key=key)
+
+
 def _menu_names(system: str) -> list[str]:
     """Full registry names the menu shows, rebuilt from its per-server lines."""
     menu = system[system.index(MCP_MENU_HEADER) :]
@@ -66,13 +78,32 @@ def test_the_warm_up_primes_the_first_turn_menu_and_all(flagship):
     core, full = _warm_up(agent, model)
 
     assert _system(core).endswith(agent._unlisted_tools_menu())
-    assert _menu_names(_system(core)) == list(entries)
+    assert _menu_names(_system(core)) == _menu_order(entries)
     assert not set(_tool_names(core)) & set(entries)
     # The full list leaves nothing out, so the slot a jump lands on has no menu.
     assert MCP_MENU_HEADER not in _system(full)
 
     _turn(agent, model, "hello", ["Hi."])
     _assert_same_prefix(core, model.requests[-1])
+
+
+def test_new_chats_send_the_same_prefix_whatever_order_servers_connected_in(
+    make_flagship, tmp_path
+):
+    """Servers connect in parallel; the cached prefix across chats must hold (#8120)."""
+    first, first_model, _ = make_flagship(tmp_path / "work-a")
+    entries = convert_mock_servers(first, build_mock_servers(3, 5))
+    first._instance_tools.update(entries)
+    first.rebuild_system_prompt()
+    before = _first_request(first, first_model)
+
+    second, second_model, _ = make_flagship(tmp_path / "work-b")
+    second._instance_tools.update(dict(reversed(list(entries.items()))))
+    second.rebuild_system_prompt()
+    after = _first_request(second, second_model)
+
+    assert MCP_MENU_HEADER in before[0][0]["content"]
+    _assert_same_cached_prefix(before, after)
 
 
 def test_stable_turns_send_the_same_bytes(flagship):
@@ -253,7 +284,7 @@ def test_a_server_that_disconnects_mid_session_leaves_the_menu(flagship):
 
     assert agent.tool_loader.jumped is False
     names = _menu_names(_system(model.requests[-1]))
-    assert names == [n for n in entries if n not in gone]
+    assert names == _menu_order(entries, keep=[n for n in entries if n not in gone])
 
 
 def test_the_cap_holds_on_a_real_session_and_is_logged(flagship, caplog):
@@ -284,7 +315,7 @@ def test_the_doc_profile_gates_mcp_tools_with_its_own_core():
         menu = tool_cost.unlisted_tools_menu(agent, names)
     assert names == agent.tool_loader.offered(agent._tools_registry)
     assert not set(names) & set(entries)
-    assert _menu_names(menu) == list(entries)
+    assert _menu_names(menu) == _menu_order(entries)
 
 
 def test_without_mcp_tools_an_mcp_only_profile_is_byte_identical():
@@ -313,10 +344,15 @@ def test_loading_mcp_tools_registers_search_tools_on_an_mcp_only_profile(
         agent._own_mcp_tools = {"mcp_files_move_file"}
 
     monkeypatch.setattr(ChatAgent, "_load_mcp_tools", load)
-    off = tool_cost.build_doc_agent_skeleton("web", dynamic_tools=True, memory=False)
-    # With memory off nothing changes: search_tools would load the embedder.
-    assert "search_tools" not in off._tools_registry
-    assert off._select_tools_for_turn("hello") is None
+    # With memory off, or a private / memory-off chat in the UI (store kept,
+    # embedder deferred), nothing changes: search_tools would load the embedder.
+    for off in (
+        tool_cost.build_doc_agent_skeleton("web", dynamic_tools=True, memory=False),
+        tool_cost.build_doc_agent_skeleton("web", dynamic_tools=True, incognito=True),
+    ):
+        assert "search_tools" not in off._tools_registry
+        assert off._select_tools_for_turn("hello") is None
+        assert off._thin_tool_schemas() is False
     on = tool_cost.build_doc_agent_skeleton(
         "web", dynamic_tools=True, embed_fn=lexical_embedder()
     )

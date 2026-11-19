@@ -217,6 +217,7 @@ def build_doc_agent_skeleton(
     dynamic_tools: bool = False,
     embed_fn=None,
     memory: bool = True,
+    incognito: bool = False,
 ) -> "ChatAgent":
     """Build a ChatAgent skeleton with the *profile* tools registered.
 
@@ -239,7 +240,8 @@ def build_doc_agent_skeleton(
     additionally carry those tools when their backends are present.
 
     *embed_fn* is the loader's embedder, as in :func:`build_full_agent_skeleton`.
-    ``memory=False`` builds it as with memory off.
+    ``memory=False`` builds it as with memory disabled, ``incognito=True`` as
+    a private or memory-off chat in the Agent UI (store kept, embedder deferred).
     A profile with no loader config (``chat``, ``file``, ``data``, ``web``) gets
     the MCP-only loader the agent builds for it.
 
@@ -279,6 +281,7 @@ def build_doc_agent_skeleton(
                 agent.model_id = "Gemma-4-E4B-it-GGUF"
                 # non-None -> memory tools register
                 agent._memory_store = MagicMock() if memory else None
+                agent._incognito = incognito
                 agent.rag = MagicMock()
                 agent.console = MagicMock()
                 # Satisfy ChatAgent.__del__ so GC of the skeleton stays quiet.

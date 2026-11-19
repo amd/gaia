@@ -83,13 +83,16 @@ def format_unlisted_mcp_tools(
         MCP_MENU_HEADER,
         "Connected MCP servers have these tools too, not yet in your list. If "
         "one fits, call search_tools with what you want to do before you answer "
-        "without a tool.",
+        "without a tool. Full names are mcp_<server>_<tool>.",
     ]
     budget, total, hidden = limit, 0, 0
-    for server, tools in servers.items():
+    # By name: servers connect in parallel, so registry order varies by run,
+    # and a new chat must send the system prompt the last one did.
+    for server, tools in sorted(servers.items()):
         total += len(tools)
         label = server[:MCP_MENU_NAME_CHARS]
-        shown = [t for t in tools if len(t) <= MCP_MENU_NAME_CHARS][: max(budget, 0)]
+        fits = sorted(t for t in tools if len(t) <= MCP_MENU_NAME_CHARS)
+        shown = fits[: max(budget, 0)]
         budget -= len(shown)
         rest = len(tools) - len(shown)
         hidden += rest

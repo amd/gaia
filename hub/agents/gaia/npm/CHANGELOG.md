@@ -25,10 +25,8 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   starts on its most-used tools, so connected MCP tools wait for a turn that
   needs them, and a model that only sees declared tools had no way to know they
   existed. The prompt now ends with one line per server naming them and
-  telling the model to call `search_tools`: 61 to 137 tokens for 1 to 5
+  telling the model to call `search_tools`: 72 to 148 tokens for 1 to 5
   servers of 5 tools (`python -m gaia.eval.tool_cost --mcp`, proxy tokenizer).
-  With memory off nothing changes: every tool is listed and the embedding model
-  is not loaded.
 - **Office files are checked before they are handed over.** The bundled
   `office-docs` skill ships two tools that never write the file.
   `verify_workbook` recalculates a copy of an .xlsx (with LibreOffice when

@@ -1573,11 +1573,20 @@ class ChatAgent(
     def _loader_in_play(self) -> bool:
         """True when this session's list is the loader's to gate.
 
-        Never with memory off: that path must not load the embedder (#4756).
+        An MCP-only loader stays out with memory off, the UI's private and
+        memory-off sessions included: it must not load the embedder (#4756).
         """
         if getattr(self, "_memory_store", None) is None:
             return False
-        return not self.tool_loader.mcp_only or self._mcp_tools_present()
+        if self.tool_loader.mcp_only:
+            return not self._memory_off() and self._mcp_tools_present()
+        return True
+
+    def _memory_off(self) -> bool:
+        """True when memory is disabled or off for this session (incognito)."""
+        return getattr(self, "_memory_store", None) is None or getattr(
+            self, "_incognito", False
+        )
 
     def _tool_docs(self, names: List[str]) -> str:
         """Render *names* as ``[Tool docs: ...]`` blocks and note them as sent."""
@@ -1591,7 +1600,7 @@ class ChatAgent(
         Off-states (any → every tool): loader not built (toggle off), a hosted
         model, embedder session-disabled, an MCP-only loader with no MCP tools,
         or memory disabled (``GAIA_MEMORY_DISABLED`` tears down
-        ``_memory_store``) on an agent with no MCP tools.
+        ``_memory_store``).
         """
         return (
             self._local_loader()
@@ -3980,7 +3989,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             loader is not None
             and loader.mcp_only
             and self._own_mcp_tools
-            and getattr(self, "_memory_store", None) is not None
+            and not self._memory_off()
         ):
             self._register_search_tools()
 
