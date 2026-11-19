@@ -1,0 +1,287 @@
+// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+/** The sidebar's "Local · model" pill and its live status popover. */
+
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ModelStatusPill } from '../ModelStatusPill';
+import { useModelStore } from '../../stores/modelStore';
+import { useChatStore } from '../../stores/chatStore';
+import * as api from '../../services/api';
+import { stripIsolates } from '../../i18n/registry';
+import type { LocalModelStatus, Session, SystemStatus } from '../../types';
+
+vi.mock('../../services/api');
+
+const mockedApi = vi.mocked(api);
+
+const SESSION: Session = {
+    id: 's1', title: 'Chat', created_at: '', updated_at: '', model: '',
+    system_prompt: null, message_count: 0, document_ids: [], inference_remote: false,
+};
+
+const LOADED: LocalModelStatus = {
+    state: 'loaded', active_model: 'Gemma-4-E4B-it-GGUF', active_display_name: 'Gemma 4 E4B', active_remote: false,
+    model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B',
+    placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'reported', warning: null },
+    ctx_size: 65536, memory: { source: 'AMD iGPU', total_gb: 112, free_gb: 80.5, model_gb: 8.2 },
+    memory_error: null, error: null, base_url: 'http://localhost:13305/api/v1', owner: 'gaia', busy: false, restarting: false, restart_error: null,
+};
+
+const STOPPED: LocalModelStatus = {
+    ...LOADED, state: 'stopped', model: null, display_name: null, placement: null, ctx_size: null, memory: null,
+    error: "The model server isn't answering at http://localhost:13305/api/v1. Restart starts it if GAIA runs it.",
+    error_detail: 'The local model server is not reachable at http://localhost:13305/api/v1 (connection refused).',
+};
+
+beforeEach(() => {
+    vi.clearAllMocks();
+    useModelStore.setState({
+        active: {
+            provider: 'local', model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B', label: 'Gemma', remote: false,
+            is_default: true, inference_remote: false,
+        },
+        names: {},
+    });
+    useChatStore.setState({
+        sessions: [SESSION], currentSessionId: SESSION.id, settingsSection: null, locale: 'en',
+        systemStatus: { lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF' } as SystemStatus,
+    });
+    mockedApi.restartLocalModel.mockResolvedValue({ status: 'restarting', model: 'Gemma-4-E4B-it-GGUF', starting_server: false });
+});
+
+async function open() {
+    fireEvent.click(screen.getByRole('button', { name: /Local · Gemma 4 E4B/ }));
+    return screen.findByRole('dialog', { name: 'Model status' });
+}
+
+describe('ModelStatusPill', () => {
+    it('shows the live state at a glance', () => {
+        render(<ModelStatusPill />);
+        expect(screen.getByRole('button', { name: 'Local · Gemma 4 E4B, model loaded' })).toBeInTheDocument();
+        act(() => useChatStore.setState({ systemStatus: { lemonade_running: false, model_loaded: null } as SystemStatus }));
+        expect(screen.getByRole('button', { name: 'Local · Gemma 4 E4B, model stopped' })).toBeInTheDocument();
+    });
+
+    it('does not show loaded while a different model is the one loaded', () => {
+        useModelStore.setState({
+            active: {
+                provider: 'local', model: 'gemma4-it-e4b-FLM', display_name: 'Gemma 4 E4B NPU', label: 'Gemma', remote: false,
+                is_default: false, inference_remote: false,
+            },
+        });
+        render(<ModelStatusPill />);
+        const pill = screen.getByRole('button', { name: 'Local · Gemma 4 E4B NPU, model not loaded' });
+        expect(pill.querySelector('.sb-location-dot')).not.toHaveClass('is-loaded');
+        act(() => useChatStore.setState({ systemStatus: { lemonade_running: true, model_loaded: 'user.GEMMA4-IT-E4B-FLM' } as SystemStatus }));
+        expect(screen.getByRole('button', { name: 'Local · Gemma 4 E4B NPU, model loaded' })).toBeInTheDocument();
+    });
+
+    it('does not show loaded when Lemonade runs with nothing loaded', () => {
+        useChatStore.setState({ systemStatus: { lemonade_running: true, model_loaded: null } as SystemStatus });
+        render(<ModelStatusPill />);
+        const pill = screen.getByRole('button', { name: 'Local · Gemma 4 E4B, model not loaded' });
+        expect(pill.querySelector('.sb-location-dot')).not.toHaveClass('is-loaded');
+    });
+
+    it('does not show loaded before the chat has an active model', () => {
+        useModelStore.setState({ active: null });
+        render(<ModelStatusPill />);
+        const pill = screen.getByRole('button', { name: /model not loaded$/ });
+        expect(pill.querySelector('.sb-location-dot')).not.toHaveClass('is-loaded');
+    });
+
+    it('shows the place and the model on separate lines and keeps the full name in the tooltip', () => {
+        render(<ModelStatusPill />);
+        const pill = screen.getByRole('button', { name: /Local · Gemma 4 E4B/ });
+        expect(pill.querySelector('.sb-location-place')).toHaveTextContent('Local');
+        expect(pill.querySelector('.sb-location-name')).toHaveTextContent('Gemma 4 E4B');
+        expect(pill.title).toMatch(/^Local · Gemma 4 E4B\./);
+    });
+
+    it('opens the live status instead of Settings', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue(LOADED);
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        expect(useChatStore.getState().settingsSection).toBeNull();
+        expect(await within(dialog).findByText('Loaded')).toBeInTheDocument();
+        expect(within(dialog).getByText('GPU · Vulkan')).toBeInTheDocument();
+        expect(within(dialog).getByText('~8.2 GB used by the model · 80.5 GB free')).toBeInTheDocument();
+        expect(within(dialog).getByText('64K tokens')).toBeInTheDocument();
+    });
+
+    it('shows a stopped server and restarts it', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue(STOPPED);
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        expect(await within(dialog).findByText('Model server stopped')).toBeInTheDocument();
+        expect(within(dialog).getByText(/isn't answering/)).toHaveAttribute('title', expect.stringMatching(/connection refused/));
+        const restart = within(dialog).getByRole('button', { name: /Restart/ });
+        expect(restart).toHaveAttribute('title', 'Start the model server and load the model');
+        fireEvent.click(restart);
+        await waitFor(() => expect(mockedApi.restartLocalModel).toHaveBeenCalled());
+    });
+
+    it('does not offer Restart while the model answers', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, busy: true, busy_reason: 'request' });
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        expect(await within(dialog).findByText('Loaded · answering')).toBeInTheDocument();
+        const restart = within(dialog).getByRole('button', { name: /Restart/ });
+        expect(restart).toBeDisabled();
+        expect(restart).toHaveAttribute('title', 'The model is answering a request. Restart it once that finishes.');
+    });
+
+    it('says the model is getting ready during the new-chat warm-up, not that GAIA is answering', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, state: 'warming', busy: true, busy_reason: 'warm_up' });
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        expect(await within(dialog).findByText('Warming up')).toBeInTheDocument();
+        const restart = within(dialog).getByRole('button', { name: /Restart/ });
+        expect(restart).toBeDisabled();
+        expect(restart).toHaveAttribute('title', expect.stringMatching(/getting the model ready/));
+        expect(restart.getAttribute('title')).not.toMatch(/answering/);
+    });
+
+    it('confirms then reloads on the user\'s own Lemonade once the warm-up ends', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, owner: 'user', busy: false, busy_reason: null });
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        const restart = await within(dialog).findByRole('button', { name: /Restart/ });
+        expect(restart).toBeEnabled();
+        fireEvent.click(restart);
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Reload it' }));
+        await waitFor(() => expect(mockedApi.restartLocalModel).toHaveBeenCalledWith(true));
+    });
+
+    it('asks before reloading a model on the user\'s own Lemonade', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, owner: 'user' });
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        fireEvent.click(await within(dialog).findByRole('button', { name: /Restart/ }));
+        expect(mockedApi.restartLocalModel).not.toHaveBeenCalled();
+        expect(within(dialog).getByRole('alert')).toHaveTextContent(
+            'This reloads Gemma 4 E4B on your Lemonade at http://localhost:13305/api/v1. Other apps using it are interrupted',
+        );
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Reload it' }));
+        await waitFor(() => expect(mockedApi.restartLocalModel).toHaveBeenCalledWith(true));
+    });
+
+    it('never offers to start the user\'s own Lemonade', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...STOPPED, owner: 'user' });
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        await within(dialog).findByText('Model server stopped');
+        expect(within(dialog).queryByRole('button', { name: /Restart/ })).not.toBeInTheDocument();
+    });
+
+    it('restarts GAIA\'s own server without asking', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue(LOADED);
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        fireEvent.click(await within(dialog).findByRole('button', { name: /Restart/ }));
+        await waitFor(() => expect(mockedApi.restartLocalModel).toHaveBeenCalledWith(false));
+    });
+
+    it('says Local before the first chat, once setup is done', () => {
+        useChatStore.setState({ sessions: [], currentSessionId: null });
+        render(<ModelStatusPill />);
+        expect(screen.getByRole('button', { name: 'Local · Gemma 4 E4B, model loaded' })).toBeInTheDocument();
+    });
+
+    it('shows why a restart failed', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, restart_error: 'Restarting Gemma 4 E4B failed: out of memory' });
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        expect(await within(dialog).findByText(/out of memory/)).toBeInTheDocument();
+    });
+
+    it('warns when the model fell back to the CPU', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue({
+            ...LOADED,
+            placement: { device: 'cpu', backend: 'cpu', label: 'CPU', source: 'reported', warning: 'Running on the CPU instead of the GPU, so replies will be slow.' },
+        });
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        expect(await within(dialog).findByText(/Running on the CPU instead of the GPU/)).toBeInTheDocument();
+    });
+
+    it('links to Model settings', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue(LOADED);
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        fireEvent.click(within(dialog).getByRole('button', { name: /Model settings/ }));
+        expect(useChatStore.getState().settingsSection).toBe('model');
+    });
+
+    it('reads in Arabic, with each size kept whole and left to right', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, active_remote: true, active_display_name: 'DeepSeek V4' });
+        render(<ModelStatusPill />);
+        fireEvent.click(screen.getByRole('button', { name: /محلي · Gemma 4 E4B/ }));
+        const dialog = await screen.findByRole('dialog', { name: /حالة النموذج/ });
+        await within(dialog).findByText(/محمّل/);
+        const labels = [...dialog.querySelectorAll('dt')].map((dt) => stripIsolates(dt.textContent ?? ''));
+        expect(labels).toEqual([
+            'النموذج (Model)', 'يعمل على (Runs on)', 'الذاكرة (Memory)', 'نافذة السياق (Context window)',
+        ]);
+        const memory = dialog.querySelectorAll('dd')[2].textContent ?? '';
+        expect(memory).toContain('\u2068~8.2 GB\u2069');
+        expect(memory).toContain('\u206880.5 GB\u2069');
+        expect(memory).toContain(' ·\u00A0');
+        expect(memory).not.toContain(' · ');
+        const cloud = dialog.querySelector('.settings-hint')?.textContent ?? '';
+        expect(cloud).toContain('\u2068DeepSeek V4\u2069');
+        expect(stripIsolates(cloud)).toMatch(/^تستخدم الرسائل الجديدة DeepSeek V4 في السحابة\. النموذج المحلي أدناه\./);
+        expect(within(dialog).getByRole('button', { name: /إعدادات النموذج/ })).toBeInTheDocument();
+        expect(within(dialog).getByRole('button', { name: /إعادة التشغيل/ })).toHaveAttribute('title', expect.stringMatching(/^\u2067?إعادة تحميل النموذج/));
+    });
+
+    describe('with the model server not answering', () => {
+        const URL = 'http://localhost:13305/api/v1';
+        // What the backend sends: an English line, and the cause the UI words itself.
+        const down = (owner: LocalModelStatus['owner']): LocalModelStatus => ({
+            ...STOPPED, owner, error_cause: 'model_server_down',
+            error: `The model server isn't answering at ${URL}. `
+                + (owner === 'gaia' ? 'Restart starts it.' : "GAIA doesn't start a server it doesn't run; start it yourself."),
+        });
+
+        async function alertFor(status: LocalModelStatus, locale: 'en' | 'ar') {
+            useChatStore.setState({ locale });
+            mockedApi.getLocalModelStatus.mockResolvedValue(status);
+            render(<ModelStatusPill />);
+            fireEvent.click(screen.getByRole('button', { name: locale === 'ar' ? /محلي · Gemma 4 E4B/ : /Local · Gemma 4 E4B/ }));
+            const dialog = await screen.findByRole('dialog', { name: locale === 'ar' ? /حالة النموذج/ : 'Model status' });
+            const alert = (await within(dialog).findAllByRole('alert'))[0];
+            expect(alert).toHaveAttribute('title', expect.stringMatching(/connection refused|not reachable/));
+            return alert;
+        }
+
+        it.each([
+            ['gaia', "The model server isn't answering at http://localhost:13305/api/v1. Restart starts it."],
+            ['user', "The model server isn't answering at http://localhost:13305/api/v1. GAIA doesn't start a server it doesn't run; start it yourself."],
+        ] as const)('says so in English for a %s server', async (owner, line) => {
+            const alert = await alertFor(down(owner), 'en');
+            expect(stripIsolates(alert.textContent ?? '')).toBe(line);
+            expect(alert.querySelector('bdi[dir="ltr"]')).toHaveTextContent(URL);
+        });
+
+        it.each([
+            ['gaia', 'خادم النماذج لا يستجيب على http://localhost:13305/api/v1. اضغط «إعادة التشغيل» لتشغيله.'],
+            ['user', 'خادم النماذج لا يستجيب على http://localhost:13305/api/v1. لا يشغّل GAIA خادمًا لا يديره، فشغّله بنفسك.'],
+        ] as const)('says so in Arabic for a %s server, the address left to right', async (owner, line) => {
+            const alert = await alertFor(down(owner), 'ar');
+            const gloss = alert.querySelector('.i18n-gloss')?.textContent ?? '';
+            const own = stripIsolates((alert.textContent ?? '').replace(gloss, '')).trim();
+            expect(own).toBe(line);
+            expect(alert.querySelector('bdi[dir="ltr"]')).toHaveTextContent(URL);
+        });
+
+        it('keeps the backend\'s own words for any other failure', async () => {
+            const other: LocalModelStatus = { ...STOPPED, error: 'Lemonade answered /health with HTTP 404.', error_cause: null };
+            const alert = await alertFor(other, 'ar');
+            expect(alert).toHaveTextContent('Lemonade answered /health with HTTP 404.');
+        });
+    });
+});

@@ -7,7 +7,7 @@
     └ msa_acme.docx, nda_beta.docx, sow_gamma.docx, … 1 more
   ● Extract clause terms into a table · 4.0s
     └ Run a 6-line Python script
-    └ ✗ failed: KeyError: 'Term'
+    └ error: KeyError: 'Term'
 
 
 

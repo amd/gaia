@@ -15,6 +15,7 @@ Two things these tests deliberately do NOT mock:
 import os
 import subprocess
 import sys
+import time
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -366,3 +367,128 @@ class TestNoSubprocessInheritsStdin:
         assert (
             not offenders
         ), f"{diarize.__file__} spawns without stdin= at line(s) {offenders}"
+
+
+class TestDecodeStall:
+    """A decode that stops making progress is stopped, not waited on forever.
+
+    ffmpeg had no deadline at all: reading from a drive or share that stopped
+    answering, it held the transcription tool, and the turn, indefinitely. It
+    reports progress about twice a second, so silence is the signal; a long
+    file that keeps progressing is never cut off.
+    """
+
+    def _fake_ffmpeg(self, monkeypatch, script):
+        real_popen = subprocess.Popen
+
+        def popen(cmd, **kwargs):
+            return real_popen([sys.executable, "-c", script], **kwargs)
+
+        monkeypatch.setattr(media.subprocess, "Popen", popen)
+        monkeypatch.setattr(media, "_DECODE_STALL_SECONDS", 1.0)
+
+    def test_silent_ffmpeg_is_killed_with_an_actionable_error(self, monkeypatch):
+        self._fake_ffmpeg(monkeypatch, "import time; time.sleep(60)")
+
+        started = time.monotonic()
+        with pytest.raises(media.MediaError, match="made no progress") as excinfo:
+            media._run_ffmpeg(["ffmpeg", "-i", "in.mp4"], Path("in.mp4"))
+        assert time.monotonic() - started < 20
+        assert "local disk" in str(excinfo.value)
+
+    def test_ffmpeg_that_keeps_reporting_progress_is_not_stopped(self, monkeypatch):
+        # Runs 3x the stall window, reporting every 0.2 s.
+        self._fake_ffmpeg(
+            monkeypatch,
+            "import sys, time\n"
+            "for i in range(15):\n"
+            "    print(f'out_time=00:00:{i:02d}.000000', flush=True)\n"
+            "    time.sleep(0.2)\n",
+        )
+        seen = []
+        media._run_ffmpeg(["ffmpeg"], Path("in.mp4"), 15.0, seen.append)
+        assert seen[-1] == pytest.approx(1.0)
+        assert seen == sorted(seen)
+
+    def test_a_damaged_file_flooding_stderr_is_not_mistaken_for_a_stall(
+        self, monkeypatch
+    ):
+        """A corrupt file logs an error per frame; a full stderr pipe blocked ffmpeg."""
+        self._fake_ffmpeg(
+            monkeypatch,
+            "import sys\n"
+            "for _ in range(5000):\n"
+            "    sys.stderr.write('Error while decoding stream #0:0\\n')\n"
+            "sys.stderr.flush()\n"
+            "print('out_time=00:00:01.000000', flush=True)\n"
+            "sys.exit(1)\n",
+        )
+        with pytest.raises(media.MediaError, match="failed to decode") as excinfo:
+            media._run_ffmpeg(["ffmpeg"], Path("bad.mp3"))
+        assert "Error while decoding stream" in str(excinfo.value)
+
+    def test_stop_during_a_stall_ends_the_decode_promptly(self, monkeypatch):
+        """Stop used to be checked only when progress arrived, so a stalled
+        decode ignored it for the whole stall window."""
+        import threading
+
+        from gaia.tool_cancellation import ToolCancelled, set_tool_cancel_event
+
+        self._fake_ffmpeg(monkeypatch, "import time; time.sleep(60)")
+        monkeypatch.setattr(media, "_DECODE_STALL_SECONDS", 300.0)
+        cancel = threading.Event()
+        set_tool_cancel_event(cancel)
+        try:
+            threading.Timer(0.5, cancel.set).start()
+            started = time.monotonic()
+            with pytest.raises(ToolCancelled):
+                media._run_ffmpeg(["ffmpeg"], Path("in.mp4"), 60.0, lambda _f: None)
+            assert time.monotonic() - started < 2.5
+        finally:
+            set_tool_cancel_event(None)
+
+    def test_an_ffmpeg_that_survives_the_kill_is_reported_with_its_pid(
+        self, monkeypatch
+    ):
+        real_popen = subprocess.Popen
+        children = []
+        kills = []
+
+        class Unkillable(real_popen):
+            def kill(self):
+                kills.append(self.pid)  # the process ignores the kill
+
+        def popen(cmd, **kwargs):
+            proc = Unkillable(
+                [sys.executable, "-c", "import time; time.sleep(60)"], **kwargs
+            )
+            children.append(proc)
+            return proc
+
+        monkeypatch.setattr(media.subprocess, "Popen", popen)
+        monkeypatch.setattr(media, "_DECODE_STALL_SECONDS", 0.5)
+        monkeypatch.setattr(media, "_KILL_WAIT_SECONDS", 0.5, raising=False)
+        started = time.monotonic()
+        try:
+            with pytest.raises(media.MediaError, match="could not be stopped") as e:
+                media._run_ffmpeg(["ffmpeg"], Path("in.mp4"))
+            assert time.monotonic() - started < 5
+            assert str(children[0].pid) in str(e.value)
+            # One kill and one bounded wait, not a second round after it failed.
+            assert kills == [children[0].pid]
+        finally:
+            for proc in children:
+                real_popen.kill(proc)
+                proc.wait(10)
+
+    def test_non_utf8_stderr_does_not_stop_the_drain(self, monkeypatch):
+        self._fake_ffmpeg(
+            monkeypatch,
+            "import sys\n"
+            "for _ in range(5000):\n"
+            "    sys.stderr.buffer.write(b'bad tag \\x81\\x8d\\x8f\\n')\n"
+            "sys.stderr.flush()\n"
+            "sys.exit(1)\n",
+        )
+        with pytest.raises(media.MediaError, match="failed to decode"):
+            media._run_ffmpeg(["ffmpeg"], Path("bad.mp3"))

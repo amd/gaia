@@ -6,5 +6,5 @@
 # run-tui.sh does that for you.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-export PYTHONPATH="$REPO/src:$REPO/hub/agents/gaia/python:$REPO/hub/agents/chat/python"
+export PYTHONPATH="$REPO/src:$REPO/hub/agents/gaia/python"
 exec "${GAIA_DEV_PYTHON:-python}" -m gaia_agent.server "$@"

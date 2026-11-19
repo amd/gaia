@@ -55,3 +55,13 @@ def test_non_numeric_allowlist_is_rejected():
 
     assert result.returncode == 2
     assert "expected comma-separated integers" in result.stderr
+
+
+@pytest.mark.parametrize("token", ["", "   "])
+def test_start_with_an_empty_token_exits_nonzero_with_the_remedy(token):
+    result = _run_cli("--token", token, "--allowed-users", "42")
+
+    assert result.returncode == 2
+    assert "bot token is required" in result.stderr
+    assert "@BotFather" in result.stderr
+    assert "Traceback" not in result.stderr

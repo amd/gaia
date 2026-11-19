@@ -12,31 +12,24 @@ Stored at ``~/.gaia/config.json``.
 import json
 import logging
 import os
-from dataclasses import dataclass, fields
+from contextlib import contextmanager
+from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Callable, ClassVar, Dict, Iterator, List, Optional
+
+# Re-exported: the resolver lives in a leaf module so gaia.logger can use it.
+from gaia.home import (  # noqa: F401  pylint: disable=unused-import
+    default_gaia_home,
+    gaia_home,
+)
+from gaia.utils.file_lock import (
+    FileLockError,
+    file_lock,
+    lock_dir_unwritable,
+    write_text_atomic,
+)
 
 log = logging.getLogger(__name__)
-
-
-def gaia_home() -> Path:
-    """Return the directory that holds GAIA's on-disk state.
-
-    Precedence:
-
-    1. ``GAIA_HOME`` relocates the whole tree.
-    2. ``GAIA_CONFIG_DIR`` keeps the existing config-directory override.
-    3. ``~/.gaia``.
-    """
-    for env_var in ("GAIA_HOME", "GAIA_CONFIG_DIR"):
-        raw = os.environ.get(env_var)
-        if raw is None:
-            continue
-        raw = raw.strip()
-        if not raw:
-            continue
-        return Path(os.path.expandvars(os.path.expanduser(raw)))
-    return Path.home() / ".gaia"
 
 
 def mcp_servers_path() -> Path:
@@ -61,6 +54,19 @@ GAIA_CONFIG_FILE = Path(
     os.getenv("GAIA_CONFIG_FILE", str(GAIA_CONFIG_DIR / "config.json"))
 )
 
+#: Where the image tool saves what it generates, below ``GAIA_CONFIG_DIR``.
+GENERATED_IMAGES_SUBDIR = Path("cache", "sd", "images")
+
+
+def generated_images_dir() -> Path:
+    """Return the folder the image tool saves into, read at call time."""
+    return GAIA_CONFIG_DIR / GENERATED_IMAGES_SUBDIR
+
+
+# Read-aloud speed, as a percentage of Kokoro's normal speed.
+READ_ALOUD_MIN_SPEED = 50
+READ_ALOUD_MAX_SPEED = 200
+
 
 class GaiaConfigError(Exception):
     """Raised when the persistent config exists but cannot be used.
@@ -69,6 +75,31 @@ class GaiaConfigError(Exception):
     but corrupt/unreadable* file is, so it surfaces loudly instead of being
     silently swallowed into defaults.
     """
+
+
+def check_read_aloud_voice(value: Any) -> Optional[str]:
+    """A Kokoro voice id, or None for the default voice; raises on any other value."""
+    from gaia.audio.lemonade_tts import KOKORO_VOICES
+
+    voice = str(value or "").strip()
+    if not voice:
+        return None
+    if voice not in KOKORO_VOICES:
+        raise GaiaConfigError(
+            f"read_aloud_voice must be a Kokoro voice, got {value!r}. "
+            f"Use one of: {', '.join(KOKORO_VOICES)}."
+        )
+    return voice
+
+
+def check_read_aloud_speed(value: int) -> int:
+    """*value* when it is a read-aloud speed GAIA accepts; raises otherwise."""
+    if not READ_ALOUD_MIN_SPEED <= value <= READ_ALOUD_MAX_SPEED:
+        raise GaiaConfigError(
+            "read_aloud_speed is a percentage of normal speed from "
+            f"{READ_ALOUD_MIN_SPEED} to {READ_ALOUD_MAX_SPEED}, got {value}."
+        )
+    return value
 
 
 class UnsafeGaiaHomeError(RuntimeError):
@@ -108,6 +139,14 @@ def unsafe_gaia_home_reason(resolved: Path, user_home: Path) -> Optional[str]:
     return None
 
 
+#: Config keys naming a model for the ``hybrid`` router (see gaia.llm.hybrid).
+HYBRID_MODEL_KEYS = (
+    "hybrid_cheap_model",
+    "hybrid_strong_model",
+    "hybrid_classifier_model",
+)
+
+
 @dataclass
 class GaiaConfig:
     """Persistent GAIA configuration.
@@ -117,6 +156,10 @@ class GaiaConfig:
         default_device: Default inference device ('cpu', 'gpu', 'npu').
             GPU is the default — it's the most broadly available accelerated
             path on AMD hardware.
+        embedding_device: Where every chat embeds documents and memory.
+            ``None`` (the default) is the GPU on every PC; only a device in
+            ``TESTED_EMBEDDING_DEVICES`` can be set. Changing it re-embeds
+            stored memory.
         default_model: Persistent default model ID for model-bearing commands
             (``gaia chat`` / ``gaia llm`` / ``gaia prompt``) and for new
             Agent UI sessions (``ChatDatabase.create_session``). ``None``
@@ -145,15 +188,62 @@ class GaiaConfig:
         lemonade_base_url: The user's Lemonade Server, for ``external`` mode.
         lemonade_api_key_stored: Its API key is in the OS credential store.
             The key itself is never written here.
+        lemonade_env_url_ignored: The ``LEMONADE_BASE_URL`` value the person
+            chose GAIA's own server over in the Agent UI. While the variable
+            still holds it, GAIA ignores the variable (and ``LEMONADE_API_KEY``
+            with it); any other value applies again.
         lemonade_idle_timeout_minutes: Stop GAIA's own Lemonade Server once no
-            GAIA app or command has used it for this many minutes, so its
-            memory goes back to the system. 0 keeps it running until
-            ``gaia daemon stop``. Never applies to a server
+            GAIA process has held it, and it has served no request, for this
+            many minutes, so its memory goes back to the system. 0 keeps it
+            running until ``gaia daemon stop``. Never applies to a server
             ``LEMONADE_BASE_URL`` names.
         llamacpp_backend: The llama.cpp backend (``vulkan``, ``rocm``, ``metal``
             or ``cpu``) GAIA asks Lemonade for when it loads a local chat
             model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
             Takes effect on the next load; the embedding model keeps its own.
+        cloud_reasoning_effort: ``off`` (the default) sends cloud models no
+            ``reasoning_effort``, leaving each at its provider's default.
+            ``low``, ``medium`` or ``high`` turns on a one-time probe per cloud
+            model and sends that effort to each one seen reasoning, at the cost
+            of more tokens and slower replies.
+        context_sizes: Context window, in tokens, the user chose per local
+            model in the Agent UI (model id -> tokens). Every load of that
+            model uses it; a model not listed gets GAIA's automatic size.
+        undo_retention_days: Keep the copies that let a turn's file changes be
+            undone for this many days.
+        undo_max_mb: Keep at most this many megabytes of those copies; the
+            oldest turns go first. The size limit never removes the newest turn.
+        skipped_models: Models the user chose not to download. ``gaia init``
+            and first-run setup leave them out until the user asks for one.
+        vision_model: Model that reads scans and images, when the user chose
+            one in setup. ``None`` uses the chat model if it reads images,
+            else Gemma.
+        project_context: How much of a repository's CLAUDE.md, AGENTS.md and
+            ``.claude/skills`` the agent puts in its prompt: ``full``, ``off``,
+            or ``None`` (set it to ``auto``) to decide per model. See
+            :mod:`gaia.project_context`.
+        read_aloud_voice: The Kokoro voice replies are read aloud in, e.g.
+            ``af_bella``. ``None`` uses the default voice. The Agent UI and the
+            TUI share it.
+        read_aloud_speed: How fast replies are read aloud, as a percentage of
+            normal speed (50-200).
+        read_aloud_auto: Read every finished reply aloud without being asked.
+        dynamic_tools: Start a flagship session on its most-used tools, in short
+            form, and move to every tool at most once, so the first reply reads
+            less and the prompt cache survives. Applies to new sessions.
+            ``GAIA_DYNAMIC_TOOLS`` overrides it.
+        hybrid_cheap_model: Model the ``hybrid`` model id runs a turn on when
+            the classifier judges it routine. ``None`` uses
+            ``amd.DeepSeek-V4.1-Flash``. See :mod:`gaia.llm.hybrid`.
+        hybrid_strong_model: Model ``hybrid`` runs every other turn on.
+            ``None`` uses ``amd.Claude-Opus-5-5``.
+        hybrid_classifier_model: Model that labels each turn for ``hybrid``.
+            ``None`` uses the cheap model.
+        hybrid_classifier_timeout: Seconds ``hybrid`` waits for the label
+            (1-120) before running the turn on the strong model.
+        hybrid_policy: How readily ``hybrid`` uses the cheap model:
+            ``quality`` (default) or ``balanced``, which also sends
+            medium-difficulty code changes to it.
         reduced_motion: Turn off the terminal UI's animations — the shimmer on
             the live status line, a pending prompt's pulse, and the spinner.
             ``GAIA_TUI_REDUCED_MOTION=1`` does the same for one launch.
@@ -161,16 +251,37 @@ class GaiaConfig:
 
     profile: str = "chat"
     default_device: str = "gpu"
+    embedding_device: Optional[str] = None
     default_model: Optional[str] = None
+    vision_model: Optional[str] = None
     full_access: bool = False
     last_provider: Optional[str] = None
     last_model: Optional[str] = None
     lemonade_mode: Optional[str] = None
     lemonade_base_url: Optional[str] = None
     lemonade_api_key_stored: bool = False
+    lemonade_env_url_ignored: Optional[str] = None
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
+    cloud_reasoning_effort: str = "off"
+    context_sizes: Dict[str, int] = field(default_factory=dict)
+    undo_retention_days: int = 7
+    undo_max_mb: int = 500
+    skipped_models: List[str] = field(default_factory=list)
+    project_context: Optional[str] = None
+    read_aloud_voice: Optional[str] = None
+    read_aloud_speed: int = 100
+    read_aloud_auto: bool = False
+    dynamic_tools: bool = True
+    hybrid_cheap_model: Optional[str] = None
+    hybrid_strong_model: Optional[str] = None
+    hybrid_classifier_model: Optional[str] = None
+    hybrid_classifier_timeout: int = 15
+    hybrid_policy: str = "quality"
     reduced_motion: bool = False
+
+    #: Field values as last read from or written to the file (not a field).
+    _loaded: ClassVar[Optional[dict]] = None
 
     #: Strings accepted for a boolean field, and what each means. Anything
     #: else raises — "false" silently meaning True is the exact accident this
@@ -210,6 +321,24 @@ class GaiaConfig:
             return cls._coerce_lemonade_mode(value)
         if key == "lemonade_base_url":
             return cls._coerce_lemonade_url(value)
+        if key == "skipped_models":
+            return cls._coerce_model_list(value)
+        if key == "project_context":
+            return cls._check_project_context(value, "gaia config", "Use one of those.")
+        if key == "read_aloud_voice":
+            return check_read_aloud_voice(value)
+        if key == "read_aloud_speed":
+            return check_read_aloud_speed(cls._whole_number(key, value))
+        if key in HYBRID_MODEL_KEYS:
+            return cls._check_hybrid_model(key, value, "gaia config")
+        if key == "hybrid_classifier_timeout":
+            return cls._check_hybrid_timeout(
+                cls._whole_number(key, value), "gaia config"
+            )
+        if key == "hybrid_policy":
+            return cls._check_hybrid_policy(value, "gaia config")
+        if key == "embedding_device":
+            return cls._check_embedding_device(value, "gaia config", offering=True)
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
@@ -252,6 +381,19 @@ class GaiaConfig:
             raise GaiaConfigError(f"lemonade_base_url: {e}") from e
 
     @staticmethod
+    def _coerce_model_list(value: Any) -> List[str]:
+        """A list of model ids; the CLI passes them comma-separated."""
+        if isinstance(value, str):
+            value = [v for v in (p.strip() for p in value.split(",")) if v]
+        if not isinstance(value, list) or not all(
+            isinstance(v, str) and v.strip() for v in value
+        ):
+            raise GaiaConfigError(
+                f"skipped_models takes model ids, comma-separated, but got {value!r}."
+            )
+        return list(dict.fromkeys(v.strip() for v in value))
+
+    @staticmethod
     def _whole_number(key: str, value: Any) -> int:
         """*value* as a non-negative int, or a GaiaConfigError naming *key*."""
         if isinstance(value, bool):
@@ -272,6 +414,9 @@ class GaiaConfig:
 
     #: Values ``llamacpp_backend`` accepts; ``auto`` (or empty) is stored as None.
     LLAMACPP_BACKEND_CHOICES = ("auto", "vulkan", "rocm", "metal", "cpu")
+    #: The ones GAIA's evals cover, and so the only ones a user may newly choose.
+    #: A file saved with another still loads, so no install stops starting.
+    TESTED_LLAMACPP_BACKENDS = ("vulkan",)
 
     @classmethod
     def _check_llamacpp_backend(cls, value: Any, where: str) -> Optional[str]:
@@ -288,6 +433,124 @@ class GaiaConfig:
                 "Run `gaia config set llamacpp_backend auto` to let Lemonade choose."
             )
         return word
+
+    #: Devices an embedder has a build for. A saved one still loads.
+    EMBEDDING_DEVICE_CHOICES = ("gpu", "npu")
+    #: The ones whose search GAIA has proven, and so the only ones it offers.
+    #: The NPU build (embed-gemma-300m-FLM on FastFlowLM 1.0.7) ranked documents
+    #: no better than chance; add it back once a newer build passes.
+    TESTED_EMBEDDING_DEVICES = ("gpu",)
+
+    @classmethod
+    def _check_embedding_device(
+        cls, value: Any, where: str, *, offering: bool = False
+    ) -> Optional[str]:
+        """Normalise an ``embedding_device`` value; ``auto`` (or empty) is None.
+
+        *offering* refuses a device GAIA hasn't proven, for a new choice; a
+        value already saved is read without it.
+        """
+        if value is None:
+            return None
+        word = str(value).strip().lower()
+        if word in ("", "auto"):
+            return None
+        allowed = (
+            cls.TESTED_EMBEDDING_DEVICES if offering else cls.EMBEDDING_DEVICE_CHOICES
+        )
+        if word not in allowed:
+            raise GaiaConfigError(
+                f"{where}: 'embedding_device' must be "
+                f"{' or '.join(('auto',) + allowed)}, but it is {value!r}. "
+                "Set it to auto to embed on the GPU."
+            )
+        return word
+
+    #: Values ``cloud_reasoning_effort`` accepts; ``off`` sends no effort.
+    CLOUD_REASONING_EFFORT_CHOICES = ("off", "low", "medium", "high")
+
+    @classmethod
+    def _check_cloud_reasoning_effort(cls, value: Any, where: str) -> str:
+        """Normalise a ``cloud_reasoning_effort`` value, raising on anything else."""
+        word = str(value).strip().lower() if isinstance(value, str) else value
+        if word not in cls.CLOUD_REASONING_EFFORT_CHOICES:
+            raise GaiaConfigError(
+                f"{where}: 'cloud_reasoning_effort' must be one of "
+                f"{', '.join(cls.CLOUD_REASONING_EFFORT_CHOICES)}, but it is "
+                f"{value!r}. Run `gaia config set cloud_reasoning_effort off` to "
+                "restore the default."
+            )
+        return word
+
+    @staticmethod
+    def _check_project_context(value: Any, where: str, remedy: str) -> Optional[str]:
+        """``full`` or ``off``; ``auto`` (or empty) is stored as None."""
+        from gaia.project_context import (
+            AUTO,
+            ProjectContextError,
+            normalize_project_context,
+        )
+
+        try:
+            word = normalize_project_context(value, where, remedy)
+        except ProjectContextError as e:
+            raise GaiaConfigError(str(e)) from e
+        return None if word == AUTO else word
+
+    @staticmethod
+    def _check_hybrid_model(key: str, value: Any, where: str) -> Optional[str]:
+        """A hybrid model id; empty means the default (stored as None)."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise GaiaConfigError(
+                f"{where}: '{key}' must be a model id, but it is {value!r}."
+            )
+        value = value.strip()
+        if value.lower() == "hybrid":
+            raise GaiaConfigError(
+                f"{where}: '{key}' can't be 'hybrid', which would route to itself. "
+                f'Set it to a concrete model id, or "" for the default.'
+            )
+        return value or None
+
+    @staticmethod
+    def _check_hybrid_timeout(value: int, where: str) -> int:
+        if not 1 <= value <= 120:
+            raise GaiaConfigError(
+                f"{where}: 'hybrid_classifier_timeout' must be 1-120 seconds, but "
+                f"it is {value}. Run `gaia config set hybrid_classifier_timeout 15` "
+                "for the default."
+            )
+        return value
+
+    @staticmethod
+    def _check_hybrid_policy(value: Any, where: str) -> str:
+        from gaia.llm.hybrid import DEFAULT_POLICY, POLICIES
+
+        word = value.strip().lower() if isinstance(value, str) else value
+        if word not in POLICIES:
+            raise GaiaConfigError(
+                f"{where}: 'hybrid_policy' must be one of {', '.join(POLICIES)}, "
+                f"but it is {value!r}. Run `gaia config set hybrid_policy "
+                f"{DEFAULT_POLICY}` for the default."
+            )
+        return word
+
+    @staticmethod
+    def _check_context_sizes(value: Any, config_file: Path) -> None:
+        if not isinstance(value, dict) or not all(
+            isinstance(k, str)
+            and isinstance(v, int)
+            and not isinstance(v, bool)
+            and v > 0
+            for k, v in value.items()
+        ):
+            raise GaiaConfigError(
+                f"GAIA config at {config_file}: 'context_sizes' must map model ids "
+                f"to a positive number of tokens, but it is {value!r}. Fix it by "
+                "hand, or delete the key to go back to automatic sizes."
+            )
 
     @classmethod
     def field_names(cls) -> List[str]:
@@ -313,16 +576,46 @@ class GaiaConfig:
         an actionable message, not silently degrade to defaults.
         """
         config_file = cls.config_path(path)
+        if not config_file.parent.is_dir():
+            return cls()._snapshot()
         try:
-            text = config_file.read_text(encoding="utf-8")
+            with file_lock(config_file):
+                text = cls._read_text(config_file)
+        except FileLockError as e:
+            if not lock_dir_unwritable(e):
+                raise GaiaConfigError(str(e)) from e
+            # The directory is read-only to this user, so none of their GAIA
+            # processes can replace the file mid-read.
+            text = cls._read_text(config_file)
+        if text is None:
+            return cls()._snapshot()
+        return cls._from_doc(cls._parse_doc(text, config_file), config_file)
+
+    @staticmethod
+    @contextmanager
+    def _locked(config_file: Path) -> Iterator[None]:
+        """Hold the cross-process lock on *config_file*, or raise GaiaConfigError."""
+        try:
+            with file_lock(config_file):
+                yield
+        except FileLockError as e:
+            raise GaiaConfigError(str(e)) from e
+
+    @staticmethod
+    def _read_text(config_file: Path) -> Optional[str]:
+        """The file's text, or None when it does not exist. Caller holds the lock."""
+        try:
+            return config_file.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return cls()
+            return None
         except (OSError, UnicodeDecodeError) as e:
             raise GaiaConfigError(
                 f"Cannot read GAIA config at {config_file}: {e}. "
                 f"Check file permissions, or delete it to reset to defaults."
             ) from e
 
+    @staticmethod
+    def _parse_doc(text: str, config_file: Path) -> dict:
         try:
             data = json.loads(text)
         except json.JSONDecodeError as e:
@@ -337,7 +630,10 @@ class GaiaConfig:
                 f"GAIA config at {config_file} must be a JSON object, "
                 f"got {type(data).__name__}. Delete it to reset to defaults."
             )
+        return data
 
+    @classmethod
+    def _from_doc(cls, data: dict, config_file: Path) -> "GaiaConfig":
         known = set(cls.field_names())
         for key, value in data.items():
             # Strict, as the TUI's reader is: a string is never a true/false
@@ -364,25 +660,145 @@ class GaiaConfig:
                 f'or "external", but it is {mode!r}. Fix or delete that key in '
                 "the file, then retry."
             )
+        if "context_sizes" in data:
+            cls._check_context_sizes(data["context_sizes"], config_file)
+        if "skipped_models" in data:
+            skipped = data["skipped_models"]
+            if not isinstance(skipped, list) or not all(
+                isinstance(v, str) for v in skipped
+            ):
+                raise GaiaConfigError(
+                    f"GAIA config at {config_file}: 'skipped_models' must be a "
+                    f"list of model ids, but it is {skipped!r}. Fix it by hand, "
+                    "or delete the key to download every model setup needs."
+                )
+        if "custom_models" in data:
+            from gaia.llm.custom_models import validate_entries
+
+            validate_entries(data["custom_models"], config_file)
         kwargs = {k: v for k, v in data.items() if k in known}
         if "llamacpp_backend" in kwargs:
             kwargs["llamacpp_backend"] = cls._check_llamacpp_backend(
                 kwargs["llamacpp_backend"], f"GAIA config at {config_file}"
             )
-        return cls(**kwargs)
+        if "cloud_reasoning_effort" in kwargs:
+            kwargs["cloud_reasoning_effort"] = cls._check_cloud_reasoning_effort(
+                kwargs["cloud_reasoning_effort"], f"GAIA config at {config_file}"
+            )
+        if "embedding_device" in kwargs:
+            kwargs["embedding_device"] = cls._check_embedding_device(
+                kwargs["embedding_device"], f"GAIA config at {config_file}"
+            )
+        where = f"GAIA config at {config_file}"
+        for key in HYBRID_MODEL_KEYS:
+            if key in kwargs:
+                kwargs[key] = cls._check_hybrid_model(key, kwargs[key], where)
+        if "hybrid_classifier_timeout" in kwargs:
+            kwargs["hybrid_classifier_timeout"] = cls._check_hybrid_timeout(
+                kwargs["hybrid_classifier_timeout"], where
+            )
+        if "hybrid_policy" in kwargs:
+            kwargs["hybrid_policy"] = cls._check_hybrid_policy(
+                kwargs["hybrid_policy"], where
+            )
+        if "project_context" in kwargs:
+            kwargs["project_context"] = cls._check_project_context(
+                kwargs["project_context"],
+                f"GAIA config at {config_file}",
+                "Fix or delete that key in the file, then retry.",
+            )
+        return cls(**kwargs)._snapshot()
+
+    def _snapshot(self) -> "GaiaConfig":
+        """Record the values as read, so :meth:`save` writes only what changed."""
+        # Per-instance on purpose; the ClassVar keeps it out of fields().
+        self._loaded = {  # type: ignore[misc]
+            f.name: getattr(self, f.name) for f in fields(self)
+        }
+        return self
+
+    def _changed(self) -> dict:
+        loaded = self._loaded
+        current = {f.name: getattr(self, f.name) for f in fields(self)}
+        if loaded is None:
+            return current
+        return {k: v for k, v in current.items() if loaded.get(k) != v}
+
+    @staticmethod
+    def _write_doc(config_file: Path, doc: dict) -> None:
+        """Atomically replace *config_file* with *doc*. Caller holds the lock."""
+        write_text_atomic(config_file, json.dumps(doc, indent=2) + "\n")
+
+    @classmethod
+    def update(
+        cls,
+        mutate: Callable[["GaiaConfig"], None],
+        path: Optional[Path] = None,
+        *,
+        on_unreadable: Optional[Callable[[GaiaConfigError], None]] = None,
+    ) -> "GaiaConfig":
+        """Apply *mutate* to the config on disk as one locked read-modify-write.
+
+        The file is re-read under the lock, so a key another process saved
+        since this one last loaded survives, and so do keys this class does not
+        declare. Every declared field is then written. Returns the result.
+
+        Args:
+            on_unreadable: When given, an unreadable or invalid file is reported
+                to it and replaced by defaults instead of raising. Only
+                ``gaia init``, the recovery path, passes it.
+        """
+        config_file = cls.config_path(path)
+        with cls._locked(config_file):
+            try:
+                text = cls._read_text(config_file)
+                doc = {} if text is None else cls._parse_doc(text, config_file)
+                config = cls._from_doc(doc, config_file)
+            except GaiaConfigError as e:
+                if on_unreadable is None:
+                    raise
+                on_unreadable(e)
+                doc, config = {}, cls()
+            mutate(config)
+            doc.update({f.name: getattr(config, f.name) for f in fields(config)})
+            cls._write_doc(config_file, doc)
+        log.info(f"Saved GAIA config to {config_file}")
+        return config._snapshot()
+
+    @classmethod
+    def edit_doc(
+        cls, mutate: Callable[[dict], None], path: Optional[Path] = None
+    ) -> "GaiaConfig":
+        """Apply *mutate* to the raw JSON document as one locked read-modify-write.
+
+        Unlike :meth:`update`, only the keys *mutate* touches change; the
+        result is validated before it is written. Returns the new config.
+        """
+        config_file = cls.config_path(path)
+        with cls._locked(config_file):
+            text = cls._read_text(config_file)
+            doc = {} if text is None else cls._parse_doc(text, config_file)
+            mutate(doc)
+            config = cls._from_doc(doc, config_file)
+            cls._write_doc(config_file, doc)
+        log.info(f"Saved GAIA config to {config_file}")
+        return config
 
     def save(self, path: Optional[Path] = None) -> None:
-        """Write config to the resolved config file."""
-        config_file = self.config_path(path)
-        # Create the file's own parent — the path can be overridden via the
-        # --config flag or GAIA_CONFIG_FILE, independent of GAIA_CONFIG_DIR.
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        payload = {f.name: getattr(self, f.name) for f in fields(self)}
-        config_file.write_text(
-            json.dumps(payload, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        log.info(f"Saved GAIA config to {config_file}")
+        """Write the fields changed since this config was loaded.
+
+        Fields left as loaded take whatever the file holds now, so a key
+        another process saved in the meantime survives. A config not read from
+        a file (``GaiaConfig()``) writes every field.
+        """
+        values = self._changed()
+
+        def _apply(config: "GaiaConfig") -> None:
+            for name, value in values.items():
+                setattr(config, name, value)
+
+        self.update(_apply, path)
+        self._snapshot()
 
     @classmethod
     def save_key(
@@ -390,21 +806,26 @@ class GaiaConfig:
     ) -> "GaiaConfig":
         """Set one key in the config file, keeping every other key in it.
 
-        Unlike :meth:`save`, keys this class does not declare (written by a
-        newer GAIA or by the TUI) survive. Returns the reloaded config.
+        Keys this class does not declare (written by a newer GAIA or by the
+        TUI) survive, and so does every other declared key exactly as the file
+        holds it. Returns the reloaded config.
         """
-        config = cls.load(path)
-        config.set(key, value)
+        return cls.save_keys({key: value}, path)
+
+    @classmethod
+    def save_keys(cls, values: dict, path: Optional[Path] = None) -> "GaiaConfig":
+        """Set several keys in one locked read-modify-write; see :meth:`save_key`."""
         config_file = cls.config_path(path)
-        try:
-            doc = json.loads(config_file.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            doc = {}
-        doc[key] = getattr(config, key)
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        config_file.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-        log.info(f"Saved {key} to GAIA config at {config_file}")
-        return config
+        with cls._locked(config_file):
+            text = cls._read_text(config_file)
+            doc = {} if text is None else cls._parse_doc(text, config_file)
+            config = cls._from_doc(doc, config_file)
+            for key, value in values.items():
+                config.set(key, value)
+                doc[key] = getattr(config, key)
+            cls._write_doc(config_file, doc)
+        log.info(f"Saved {', '.join(values)} to GAIA config at {config_file}")
+        return config._snapshot()
 
     def get(self, key: str) -> Any:
         """Return the value of a config field, raising on an unknown key."""
@@ -423,8 +844,30 @@ class GaiaConfig:
                 f"Valid keys: {', '.join(self.field_names())}."
             )
         if key == "llamacpp_backend":
-            setattr(self, key, self._check_llamacpp_backend(value, "gaia config"))
+            backend = self._check_llamacpp_backend(value, "gaia config")
+            if backend is not None and backend not in self.TESTED_LLAMACPP_BACKENDS:
+                raise GaiaConfigError(
+                    f"gaia config: llama.cpp's '{backend}' backend isn't one GAIA has "
+                    f"tested. Choose {', '.join(self.TESTED_LLAMACPP_BACKENDS)}, or "
+                    "auto to let Lemonade pick."
+                )
+            setattr(self, key, backend)
             return
+        if key == "cloud_reasoning_effort":
+            setattr(self, key, self._check_cloud_reasoning_effort(value, "gaia config"))
+            return
+        if key == "embedding_device":
+            setattr(
+                self,
+                key,
+                self._check_embedding_device(value, "gaia config", offering=True),
+            )
+            return
+        if key == "context_sizes":
+            raise GaiaConfigError(
+                "context_sizes is set per model: choose a context size in the "
+                "Agent UI under Settings › Model, or edit config.json by hand."
+            )
         setattr(self, key, self._coerce(key, value))
 
     def resolve_model(

@@ -422,3 +422,58 @@ def test_delete_claims_turn_lock_and_closes_outside_registry_lock(
     assert registry.delete("idle") is True
     assert observed == [None]
     assert session.run_lock.locked()
+
+
+def test_checkout_takes_the_turn_atomically_with_eviction(monkeypatch):
+    """A checked-out session is locked before any newcomer can evict it."""
+    monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _FakeAgent(**kw))
+    reg = sr._SessionRegistry(max_sessions=1)
+    try:
+        session, took = reg.checkout("mine")
+        assert took and session.run_lock.locked()
+        with pytest.raises(RuntimeError, match="already active"):
+            reg.get_or_create("newcomer")
+
+        again, took_again = reg.checkout("mine")
+        assert again is session and not took_again
+    finally:
+        session.run_lock.release()
+        reg.clear()
+
+
+class _SkilledAgent(_FakeAgent):
+    """A fake whose Settings can change under it and that loads skills, one broken."""
+
+    settings_changed = False
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.conversation_history = []
+
+    def built_settings_changed(self):
+        return _SkilledAgent.settings_changed
+
+    def load_skill(self, name):
+        if name == "broken":
+            raise RuntimeError("skill files are gone")
+        self.loaded_skills[name] = object()
+
+
+def test_changed_settings_rebuild_the_agent_with_its_skills(monkeypatch):
+    monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _SkilledAgent(**kw))
+    monkeypatch.setattr(_SkilledAgent, "settings_changed", False)
+    reg = sr._SessionRegistry()
+    session, _ = reg.checkout("a", use_claude=True, claude_model="claude-x")
+    old = session.agent
+    old.loaded_skills.update({"coding": object(), "broken": object()})
+    assert session.follow_settings() is False
+
+    monkeypatch.setattr(_SkilledAgent, "settings_changed", True)
+    assert session.follow_settings(model_id="ignored") is True
+    new = session.agent
+    assert old.closed is True
+    assert new.kwargs == {"use_claude": True, "claude_model": "claude-x"}
+    # A skill that can't load again is left out, not fatal to the turn.
+    assert set(new.loaded_skills) == {"coding"}
+    session.run_lock.release()
+    reg.clear()

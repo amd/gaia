@@ -1153,3 +1153,128 @@ TEST(ToolSchemaTest, AllParamTypesMapToJsonSchemaTypes) {
     EXPECT_EQ(props["a"]["type"], "array");
     EXPECT_EQ(props["o"]["type"], "object");
 }
+
+// ---------------------------------------------------------------------------
+// Loop detection with a bounded call window (issue #367)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string nativeEcho(const std::string& msg, int id) {
+    return toolCallsResponse(R"([{"id":"call_)" + std::to_string(id) +
+                             R"(","type":"function","function":{"name":"echo","arguments":"{\"message\":\")" +
+                             msg + R"(\"}"}}])");
+}
+
+std::string promptJsonEcho(const std::string& msg) {
+    return R"({"choices":[{"message":{"content":"{\"thought\":\"t\",\"goal\":\"g\",\"tool\":\"echo\",\"tool_args\":{\"message\":\")" +
+           msg + R"(\"}}"}}]})";
+}
+
+const char* kLoopStopped = "Task stopped due to repeated tool call loop.";
+
+} // namespace
+
+TEST(LoopDetectionTest, NativeLoopStillCaughtAfterLongDistinctHistory) {
+    bench::MockLlmServer mock;
+    int id = 0;
+    for (int i = 0; i < 30; ++i) mock.pushResponse(nativeEcho("m" + std::to_string(i), ++id));
+    for (int i = 0; i < 4; ++i) mock.pushResponse(nativeEcho("same", ++id));
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 50;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 50);
+
+    EXPECT_EQ(result["result"], kLoopStopped);
+    // 30 distinct + 3 identical run; the 4th identical one is refused.
+    EXPECT_EQ(agent.executed.size(), 33u);
+}
+
+TEST(LoopDetectionTest, PromptJsonLoopStillCaughtAfterLongDistinctHistory) {
+    bench::MockLlmServer mock;
+    for (int i = 0; i < 30; ++i) mock.pushResponse(promptJsonEcho("m" + std::to_string(i)));
+    for (int i = 0; i < 4; ++i) mock.pushResponse(promptJsonEcho("same"));
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kNonToolCallingModel);
+    cfg.maxSteps = 50;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 50);
+
+    EXPECT_EQ(result["result"], kLoopStopped);
+    EXPECT_EQ(agent.executed.size(), 33u);
+}
+
+TEST(LoopDetectionTest, InterruptedRunIsNotALoop) {
+    // A A A B A A A: never four identical in a row, so every call runs.
+    bench::MockLlmServer mock;
+    int id = 0;
+    for (const char* m : {"a", "a", "a", "b", "a", "a", "a"}) mock.pushResponse(nativeEcho(m, ++id));
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 20;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 20);
+
+    EXPECT_EQ(result["result"], "All done.");
+    EXPECT_EQ(agent.executed.size(), 7u);
+}
+
+TEST(LoopDetectionTest, SameToolDifferentArgsIsNotALoop) {
+    bench::MockLlmServer mock;
+    int id = 0;
+    for (int i = 0; i < 8; ++i) mock.pushResponse(nativeEcho("v" + std::to_string(i % 2), ++id));
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 20;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 20);
+
+    EXPECT_EQ(result["result"], "All done.");
+    EXPECT_EQ(agent.executed.size(), 8u);
+}
+
+TEST(LoopDetectionTest, SmallestThresholdStopsOnSecondIdenticalCall) {
+    bench::MockLlmServer mock;
+    int id = 0;
+    mock.pushResponse(nativeEcho("x", ++id));
+    mock.pushResponse(nativeEcho("y", ++id));
+    mock.pushResponse(nativeEcho("y", ++id));
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 10;
+    cfg.maxConsecutiveRepeats = 2;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 10);
+
+    EXPECT_EQ(result["result"], kLoopStopped);
+    EXPECT_EQ(agent.executed.size(), 2u);
+}
+
+TEST(LoopDetectionTest, LargeThresholdNeedsTheFullRun) {
+    // With maxConsecutiveRepeats = 6 the window keeps 5 calls; 5 identical
+    // calls are allowed and only the 6th is refused.
+    bench::MockLlmServer mock;
+    int id = 0;
+    for (int i = 0; i < 6; ++i) mock.pushResponse(nativeEcho("z", ++id));
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 10;
+    cfg.maxConsecutiveRepeats = 6;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 10);
+
+    EXPECT_EQ(result["result"], kLoopStopped);
+    EXPECT_EQ(agent.executed.size(), 5u);
+}

@@ -43,7 +43,7 @@ Admin tools (eval-only, gated by `GAIA_MEMORY_ADMIN=1`):
 - `memory_clear(scope)` — `scope` ∈ `"all"` / `"knowledge"` / `"conversations"`
 - `memory_seed(items)` — items: list of `{content, category?, context?, domain?, entity?, sensitive?, confidence?}`
 
-**Per-scenario memory reset:** immediately after `create_session()` and BEFORE turn 1, do NOT call `memory_clear`. Let memory accumulate across scenarios so the system is tested with growing state. If the scenario YAML has `setup.memory_seed`, call `memory_seed(items=<that list>)` directly.
+**Per-scenario memory reset:** the runner has already cleared memory before this scenario started (unless its `setup.memory_clear` is `false`), so the store holds nothing from earlier scenarios. Do not call `memory_clear` unless a turn objective tells you to. If the scenario YAML has `setup.memory_seed`, call `memory_seed(items=<that list>)` immediately after `create_session()` and BEFORE turn 1.
 
 **During turns these tools are READ-ONLY for the simulator.** Never write or modify memory on the agent's behalf — the agent under test must do its own writing. Use the read tools only to verify state for `VERIFY VIA MCP:` clauses in `success_criteria`.
 
@@ -134,8 +134,7 @@ Note: a turn where the agent gave no response at all (completeness=0) will also 
 
 ## PERFORMANCE DATA COLLECTION (mandatory)
 
-Every `send_message()` call returns a `stats` object with LLM inference metrics.
-Every assistant message from `get_messages()` includes a `stats` field.
+Every assistant message from `get_messages()` includes a `stats` field with LLM inference metrics.
 You MUST record these for every turn.
 
 **Fields to capture per turn:**
@@ -145,9 +144,8 @@ You MUST record these for every turn.
 - `output_tokens` (int): Completion token count
 
 **How to capture:**
-1. After each `send_message()`, check the response for a `stats` key and record the values
-2. In Phase 3 (`get_messages`), cross-reference persisted stats with what you recorded live
-3. If `stats` is missing or all zeros, record `null` — do NOT invent numbers
+1. After each turn, read the `stats` key of the last assistant message from `get_messages()` and record the values
+2. If `stats` is missing or all zeros, record `null` — do NOT invent numbers
 
 **Performance flags (informational — do NOT affect pass/fail):**
 - `no_stats`: stats missing or all zeros (Lemonade may be offline or using a non-Lemonade provider)

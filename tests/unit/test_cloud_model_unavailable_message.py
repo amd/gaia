@@ -24,12 +24,11 @@ from gaia.llm.lemonade_client import (
     _cloud_request_error,
 )
 from gaia.llm.providers.lemonade import (
-    AGENT_UI_MODEL_SWITCH_HINT,
-    TUI_MODEL_SWITCH_HINT,
     LemonadeCloudAccountError,
     LemonadeCloudModelUnavailableError,
     classify_lemonade_exception,
 )
+from gaia.llm.surface_hints import AGENT_UI_MODEL_SWITCH_HINT, TUI_MODEL_SWITCH_HINT
 from gaia.ui._chat_helpers import _agent_ui_wording, _classify_chat_exception
 from gaia.ui.database import ChatDatabase
 from gaia.ui.models import ChatRequest
@@ -116,6 +115,20 @@ def test_agent_ui_wording_replaces_only_the_tui_hint():
     assert shown.endswith(AGENT_UI_MODEL_SWITCH_HINT)
     assert shown.startswith(f"`{MODEL}` isn't available on the AMD LLM Gateway")
     assert _agent_ui_wording(shown) == shown
+
+
+def test_agent_ui_wording_points_a_local_only_refusal_at_the_app_setting():
+    from gaia.llm.local_only import SETTINGS_HINT
+
+    blocked = (
+        "Local only is on, so 'othercloud.big-model' was blocked: it is a cloud "
+        f"model. Pick a local model. {SETTINGS_HINT}"
+    )
+    shown = _agent_ui_wording(blocked)
+    assert "gaia config" not in shown
+    assert shown.endswith("turn off Local only under Settings > Privacy.")
+    # The CLI keeps its command.
+    assert "gaia config set network_policy cloud_allowed" in SETTINGS_HINT
 
 
 @pytest.mark.parametrize("text", ["", "All done.", "Use /model in the TUI to pick"])

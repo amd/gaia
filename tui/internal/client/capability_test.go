@@ -11,7 +11,7 @@ import (
 
 // SubprocessClient always knows the answer immediately: nothing to probe.
 func TestSubprocessSupportsMemoryUnconditionally(t *testing.T) {
-	c := NewSubprocessClient("", nil)
+	c := NewSubprocessClient("", nil, false)
 	defer c.Close()
 
 	supported, known := c.Supports(CapabilityMemory)
@@ -21,7 +21,7 @@ func TestSubprocessSupportsMemoryUnconditionally(t *testing.T) {
 }
 
 func TestSubprocessProbeCapabilitiesIsANoOp(t *testing.T) {
-	c := NewSubprocessClient("", nil)
+	c := NewSubprocessClient("", nil, false)
 	defer c.Close()
 
 	if err := c.ProbeCapabilities(context.Background()); err != nil {
@@ -241,13 +241,13 @@ func TestSSEAgentVersionEmptyWhenPeerOmitsIt(t *testing.T) {
 }
 
 // A sidecar numbering its own contract past the memory floor does NOT thereby
-// gain a memory route. `email` reports 2.14 today and has none, so a
+// gain a memory route. another sidecar can report 2.14 and have none, so a
 // version-only gate would offer /memory there and then 404 — the
 // advertised-then-refused shape #3978 exists to remove.
 func TestSupportsMemoryIsScopedToTheAgentThatHasTheRoute(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.14" // numerically past the memory floor
-	c := f.clientFor(t, "email")
+	c := f.clientFor(t, "notes")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -270,7 +270,7 @@ func TestSupportsMemoryIsScopedToTheAgentThatHasTheRoute(t *testing.T) {
 func TestFetchMemoryOnAnAgentWithoutAStoreIsNotAContractComplaint(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.14"
-	c := f.clientFor(t, "email")
+	c := f.clientFor(t, "notes")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -304,7 +304,7 @@ func TestSupportsAnUnknownCapabilityIsUnknownNotUnsupported(t *testing.T) {
 		t.Fatalf("ProbeCapabilities: %v", err)
 	}
 
-	sub := NewSubprocessClient("", nil)
+	sub := NewSubprocessClient("", nil, false)
 	defer sub.Close()
 
 	for name, c := range map[string]CapabilityReporter{"sse": sse, "subprocess": sub} {
@@ -315,7 +315,7 @@ func TestSupportsAnUnknownCapabilityIsUnknownNotUnsupported(t *testing.T) {
 }
 
 // The two sidecars spell the release version differently: gaia's
-// /v1/gaia/version says "version", email's says "agentVersion". Decoding one
+// /v1/gaia/version says "version", the top-level /version says "agentVersion". Decoding one
 // leaves the header permanently blank for the other.
 func TestAgentVersionAcceptsBothWireSpellings(t *testing.T) {
 	for _, tc := range []struct{ name, body string }{
@@ -346,7 +346,7 @@ func TestAgentVersionAcceptsBothWireSpellings(t *testing.T) {
 func TestFetchMemoryOnAnAgentWithoutAStoreCostsNoRoundTrip(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.14"
-	c := f.clientFor(t, "email")
+	c := f.clientFor(t, "notes")
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

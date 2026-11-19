@@ -167,7 +167,13 @@ func (m ChatModel) applyLaunchFullAccess() ChatModel {
 
 	reason := "Launched with --full-access"
 	undo := "Type /full-access off to turn it off for this session."
-	if preflight.ReadFullAccess().Enabled {
+	savedConfig := preflight.ReadFullAccess()
+	if savedConfig.Err != nil {
+		m.messages = append(m.messages, Message{
+			Role:    RoleError,
+			Content: "Could not read the saved full-access setting: " + savedConfig.Err.Error(),
+		})
+	} else if savedConfig.Enabled {
 		reason = "Full access is ON for every session (full_access in your GAIA config)"
 		undo = "Type /full-access off for this session, or /full-access never to stop it coming back."
 	}
@@ -176,12 +182,6 @@ func (m ChatModel) applyLaunchFullAccess() ChatModel {
 		Content: "[!] " + reason + ": " + m.agentName + " runs tools without asking.\n    " + undo,
 	})
 	return m
-}
-
-// fullAccessHelpLine documents the command wherever the TUI lists what it can do.
-func fullAccessHelpLine() string {
-	return "/full-access — let the agent run tools without asking (off by default);\n" +
-		"              add `always` to keep it on for every session, `never` to stop"
 }
 
 // isFullAccessCommand reports whether a composed line is one of the full-access

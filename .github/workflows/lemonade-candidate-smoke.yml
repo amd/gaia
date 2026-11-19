@@ -156,27 +156,33 @@ jobs:
       # filing it as one would cry wolf in a thread people are meant to trust.
       - name: Report a broken contract
         if: failure() && steps.contract.outcome == 'failure'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.pick.outputs.tag }}
-        run: |
-          RUN_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          BODY="The Lemonade candidate **${TAG}** does not match the contract GAIA depends on.
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: report
+          key: lemonade-candidate-contract
+          legacy-title-prefix: "⚠️ Lemonade candidate contract check failed"
+          title: "⚠️ Lemonade candidate contract check failed (${{ steps.pick.outputs.tag }})"
+          labels: |
+            bug
+            devops
+          assignees: kovtcharov-amd
+          body: |
+            The Lemonade candidate **${{ steps.pick.outputs.tag }}** does not match the contract GAIA depends on.
 
-          This is a *candidate*, so nothing is broken for users yet — that is the point of catching it here. It usually becomes the stable release about a week later, and \`lemonade-version-bump.yml\` will then propose pinning it.
+            This is a *candidate*, so nothing is broken for users yet — that is the point of catching it here. It usually becomes the stable release about a week later, and `lemonade-version-bump.yml` will then propose pinning it.
 
-          What to do: read the failing step for which check tripped — the version string no longer parsing through GAIA's gates, or \`/health\` dropping a field GAIA reads — and decide whether GAIA adapts or the change should be raised upstream first.
+            What to do: read the failing step for which check tripped — the version string no longer parsing through GAIA's gates, or `/health` dropping a field GAIA reads — and decide whether GAIA adapts or the change should be raised upstream first. The issue closes itself once a later candidate passes.
 
-          - Failing run: $RUN_URL
-          - Checker: \`util/check_lemonade_contract.py\`
+            - Failing run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - Checker: `util/check_lemonade_contract.py`
 
-          cc @kovtcharov-amd"
+            cc @kovtcharov-amd
 
-          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search 'in:title "Lemonade candidate contract"' --json number --jq '.[0].number // empty')
-          if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body "$BODY"
-          else
-            gh issue create --title "⚠️ Lemonade candidate contract check failed (${TAG})" \
-              --body "$BODY" --label bug --label devops --assignee kovtcharov-amd
-          fi
+      - name: Close the contract issue once a candidate passes
+        if: success() && steps.contract.outcome == 'success'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key: lemonade-candidate-contract
+          legacy-title-prefix: "⚠️ Lemonade candidate contract check failed"
+          note: "Lemonade candidate `${{ steps.pick.outputs.tag }}` passes the contract check in run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Closing automatically; reopen if it breaks again."

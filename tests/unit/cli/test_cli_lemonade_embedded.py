@@ -112,6 +112,19 @@ class TestDispatch:
         assert exc.value.code == 1
         assert "❌" in capsys.readouterr().out
 
+    def test_unknown_subaction_exits_non_zero(self, monkeypatch, capsys, tmp_path):
+        # argparse rejects unknown verbs itself; this guards the handler's own branch.
+        from types import SimpleNamespace
+
+        from gaia.cli import handle_lemonade_embedded_command
+
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+
+        with pytest.raises(SystemExit) as exc:
+            handle_lemonade_embedded_command(SimpleNamespace(embedded_action="bogus"))
+        assert exc.value.code == 1
+        assert "❌ Unknown embedded action: bogus" in capsys.readouterr().out
+
     def test_manager_errors_exit_non_zero_with_the_message(
         self, monkeypatch, capsys, tmp_path
     ):
@@ -189,3 +202,28 @@ class TestStatusOutput:
         assert "Installed: no" in out
         assert "Running:   no" in out
         assert "Backends:  none" in out
+
+    def test_a_busy_server_reads_as_running_not_stalled(self, capsys, tmp_path):
+        from gaia.cli import _print_embedded_status
+
+        class _Manager:
+            dist_dir = tmp_path
+            log_path = tmp_path / "lemond.log"
+            cache_dir = tmp_path
+
+            def status(self):
+                return lemonade_embedded.EmbeddedStatus(
+                    installed=True,
+                    running=True,
+                    version="x",
+                    port=13399,
+                    pid=4321,
+                    base_url="http://localhost:13399/api/v1",
+                    busy=True,
+                )
+
+        _print_embedded_status(_Manager())
+        out = capsys.readouterr().out
+        assert "Running:   yes" in out
+        assert "busy" in out
+        assert "embedded stop" not in out

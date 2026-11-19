@@ -203,7 +203,8 @@ def test_json_string_failed_write_is_not_completion_evidence(clear_tool_registry
         CLAIM,
     )
     assert outcome["status"] == "incomplete"
-    assert CLAIM not in outcome["result"]
+    assert outcome["result"].startswith(CLAIM)
+    assert "I couldn't confirm all of this" in outcome["result"]
     assert any("No successful write" in _contents(batch) for batch in sent[1:])
 
 

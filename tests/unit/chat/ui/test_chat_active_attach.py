@@ -51,7 +51,7 @@ class _FakeRun:
 def test_active_empty_by_default(client):
     resp = client.get("/api/chat/active")
     assert resp.status_code == 200
-    assert resp.json() == {"session_ids": []}
+    assert resp.json() == {"session_ids": [], "queued": [], "awaiting_user": {}}
 
 
 def test_active_reports_running_sessions(client):
@@ -102,9 +102,18 @@ def test_delete_session_cancels_active_run(client, session_id):
     import threading
 
     fake = _FakeRun(session_id)
-    fake.handler = type("H", (), {"cancelled": threading.Event()})()
+    closed = []
+    fake.handler = type(
+        "H",
+        (),
+        {
+            "cancelled": threading.Event(),
+            "close_active_relay_response": lambda self: closed.append(True),
+        },
+    )()
     run_manager._runs[session_id] = fake
 
     resp = client.delete(f"/api/sessions/{session_id}")
     assert resp.status_code == 200
     assert fake.handler.cancelled.is_set()
+    assert closed == [True]

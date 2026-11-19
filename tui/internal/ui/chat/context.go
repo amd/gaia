@@ -19,10 +19,13 @@ import (
 // contextNearFull is the fill at which the meter outranks the scroll hints.
 const contextNearFull = 80
 
-// contextMeter is the agent's latest context report.
+// contextMeter is the agent's latest context_usage report.
 type contextMeter struct {
-	report event.ContextReport
+	report event.CanonicalContextUsageEvent
 	known  bool
+	// atRisk is how many turns the last report named at risk, so the warning
+	// is said once per step closer to the limit, not after every answer.
+	atRisk int
 	// warning waits for the turn to settle, so it lands under the answer.
 	warning string
 }
@@ -31,12 +34,12 @@ type contextMeter struct {
 // the history budget. The rest of the window is room for the answer.
 func (c contextMeter) capacity() int {
 	r := c.report
-	return r.System + r.Tools + r.HistoryBudget
+	return r.System + r.ToolDefinitions + r.HistoryBudget
 }
 
 func (c contextMeter) used() int {
 	r := c.report
-	return r.System + r.Tools + r.Conversation + r.ToolResults
+	return r.System + r.ToolDefinitions + r.HistoryUsed
 }
 
 // percent is how full the view is, 0-100.
@@ -48,26 +51,26 @@ func (c contextMeter) percent() int {
 	return min(max(c.used()*100/capacity, 0), 100)
 }
 
-// takeContextReport records a report, and the warning it carries.
-func (m *ChatModel) takeContextReport(r event.ContextReport) {
+// takeContextUsage records a report, and warns when more turns are at risk.
+func (m *ChatModel) takeContextUsage(r event.CanonicalContextUsageEvent) {
 	m.ctxMeter.report = r
 	m.ctxMeter.known = true
 	m.ctxMeter.warning = ""
-	if d := r.Dropping; d != nil && d.Turns > 0 {
-		m.ctxMeter.warning = droppingWarning(*d)
+	if n := len(r.AtRisk); n > m.ctxMeter.atRisk {
+		m.ctxMeter.warning = atRiskWarning(r.AtRisk)
 	}
+	m.ctxMeter.atRisk = len(r.AtRisk)
 }
 
-func droppingWarning(d event.ContextDropping) string {
-	first := truncateRunes(clean(d.First), 48)
+func atRiskWarning(atRisk []string) string {
 	what := "the oldest turn"
-	if d.Turns > 1 {
-		what = fmt.Sprintf("the oldest %d turns", d.Turns)
+	if len(atRisk) > 1 {
+		what = fmt.Sprintf("the oldest %d turns", len(atRisk))
 	}
-	if first != "" {
+	if first := truncateRunes(clean(atRisk[0]), 48); first != "" {
 		what += fmt.Sprintf(", from %q", first)
 	}
-	return "[!] Context is full: your next message pushes " + what +
+	return "[!] Context is nearly full: the next messages push " + what +
 		" out of the model's view. It stays saved, and GAIA can recall it if you ask."
 }
 
@@ -102,9 +105,10 @@ func (m ChatModel) contextBreakdown() string {
 	r := c.report
 	rows := [][2]string{
 		{"instructions", thousands(r.System)},
-		{"tool definitions", thousands(r.Tools)},
-		{"conversation", thousands(r.Conversation)},
-		{"files, pages and tool results", thousands(r.ToolResults)},
+		{"tool definitions", thousands(r.ToolDefinitions)},
+		{"conversation", thousands(r.History)},
+		{"files and pages", thousands(r.Documents)},
+		{"other tool calls and results", thousands(max(r.Tools-r.ToolDefinitions, 0))},
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Context for your next message: %s of %s tokens (%d%%)\n",

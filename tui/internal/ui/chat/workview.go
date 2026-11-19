@@ -24,7 +24,7 @@ import (
 //	  └ msa_acme.docx, nda_beta.docx, … 6 more
 //	● Install formulas library to verify workbook · 12s         (the agent's goal)
 //	  └ python -m pip install formulas --quiet
-//	  └ ✗ failed: No module named pip — carried on
+//	  └ error, retried: No module named pip
 //
 // A green dot is done, a grey one is neutral, a red one a failure that ended
 // the work. The words carry the state too, so nothing rests on colour alone.
@@ -164,6 +164,7 @@ func isOpen(it ActivityItem) bool {
 // (finished), every step is a bullet — including one that never got a result,
 // which is often the one that explains how the turn ended.
 func buildEntries(items []ActivityItem, expanded, finished bool) []workEntry {
+	items = settleFailures(items, finished)
 	live := -1
 	for i := len(items) - 1; i >= 0 && !finished; i-- {
 		if isStep(items[i]) {
@@ -280,7 +281,7 @@ func entryElapsed(e workEntry) time.Duration {
 }
 
 // entryState is how a bullet ended: "ok", "fail" (a failure that mattered),
-// "calm" (failed, but the agent carried on), or "live".
+// "calm" (failed, but a later run of the same call succeeded), or "live".
 func entryState(e workEntry, recovered bool) string {
 	last := e.items[len(e.items)-1]
 	switch {
@@ -304,7 +305,7 @@ func entryState(e workEntry, recovered bool) string {
 func (m ChatModel) renderEntries(entries []workEntry, finished bool) []string {
 	width := m.logWidth()
 	var lines []string
-	for i, e := range entries {
+	for _, e := range entries {
 		switch e.kind {
 		case "fold":
 			lines = append(lines, "    "+foldLineStyle.Render(truncateRunes(e.text, width)))
@@ -318,7 +319,7 @@ func (m ChatModel) renderEntries(entries []workEntry, finished bool) []string {
 		case "stage":
 			lines = append(lines, "    "+stageStyle.Render(truncateRunes(e.text, width)))
 		case "act":
-			lines = append(lines, m.renderAct(e, finished, laterSuccess(entries[i+1:]), width)...)
+			lines = append(lines, m.renderAct(e, finished, retried(e), width)...)
 		}
 	}
 	return lines
@@ -331,20 +332,10 @@ func (m ChatModel) sayRows() int {
 	return 2
 }
 
-// laterSuccess reports whether anything after a failure went through — the
-// sign the agent carried on rather than stopping on it.
-func laterSuccess(rest []workEntry) bool {
-	for _, e := range rest {
-		if e.kind != "act" {
-			continue
-		}
-		for _, it := range e.items {
-			if it.Done && !failedItem(it) {
-				return true
-			}
-		}
-	}
-	return false
+// retried reports whether a later run of the bullet's failed call — the same
+// file, or the same command — succeeded (settleFailures decides).
+func retried(e workEntry) bool {
+	return len(e.items) > 0 && e.items[len(e.items)-1].Recovery == recoveryRetried
 }
 
 // renderAct draws one action bullet. A failure is calm (dim, never red) while
@@ -372,7 +363,14 @@ func (m ChatModel) renderAct(e workEntry, finished, recovered bool, width int) [
 	case "calm", "live", "open":
 		dot = dotLiveStyle
 	}
-	head := wrapLog(entryText(e), "", width-2-displayWidth(suffix), 1)[0]
+	// The repeat count rides through the cut, so a long headline keeps its "x14".
+	text, count := entryText(e), ""
+	if n := len(e.items); n > 1 {
+		if c := fmt.Sprintf(" x%d", n); strings.HasSuffix(text, c) {
+			text, count = strings.TrimSuffix(text, c), c
+		}
+	}
+	head := wrapLog(text, count, width-2-displayWidth(suffix), 1)[0]
 	lines := []string{"  " + dot.Render(glyphDot) + " " + headStyle.Render(head) + detailStyle.Render(suffix)}
 
 	if m.expandWork {
@@ -380,9 +378,10 @@ func (m ChatModel) renderAct(e workEntry, finished, recovered bool, width int) [
 	}
 
 	var details []string
+	failure := ""
 	if state == "fail" || state == "calm" {
-		if f := failureLine(last, state == "calm" && finished); f != "" {
-			details = append(details, f)
+		if failure = failureLine(last, state == "fail"); failure != "" {
+			details = append(details, failure)
 		}
 	}
 	if what := whatLine(e); what != "" {
@@ -398,11 +397,11 @@ func (m ChatModel) renderAct(e workEntry, finished, recovered bool, width int) [
 	}
 	for _, d := range details {
 		style := detailStyle
-		if state == "fail" && strings.HasPrefix(d, glyphFail) {
+		if state == "fail" && d == failure {
 			style = failStyle
 		}
 		rows := 1
-		if strings.HasPrefix(d, glyphFail) && (state == "fail" || !finished) {
+		if d == failure && (state == "fail" || last.Recovery == recoveryPending) {
 			// A failure that ended the work, or one the agent has not moved
 			// past yet, keeps its tail: that is the remedy.
 			rows = logDetailRows
@@ -483,23 +482,17 @@ func namesList(items []ActivityItem) string {
 	return strings.Join(names, ", ")
 }
 
-// failureLine is "✗ failed: <reason>", and for a failure the agent moved past,
-// says so — that is what makes it calm rather than alarming.
-func failureLine(it ActivityItem, calm bool) string {
+// failureLine is "✗ failed: <reason>" for a failure that stands. One that is
+// not settled yet reads "error: <reason>", and one a later run of the same call
+// recovered reads "error, retried: <reason>" (calmDetail).
+func failureLine(it ActivityItem, standing bool) string {
 	if strings.HasPrefix(it.Approval, "denied") {
 		return ""
 	}
-	reason := clean(it.Detail)
-	if reason == "" {
-		reason = "failed"
+	if !standing && it.Recovery != "" {
+		return calmDetail(it.Detail, it.Recovery)
 	}
-	if !strings.HasPrefix(strings.ToLower(reason), "failed") {
-		reason = "failed: " + reason
-	}
-	if calm {
-		return glyphFail + " " + reason + " — carried on"
-	}
-	return glyphFail + " " + reason
+	return glyphFail + " " + calmDetail(it.Detail, "failed")
 }
 
 // renderActExpanded is Ctrl+O's view of one bullet: every call in it, what

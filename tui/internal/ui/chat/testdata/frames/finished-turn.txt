@@ -7,7 +7,7 @@
     └ msa_acme.docx, nda_beta.docx, sow_gamma.docx, … 1 more
   ● Extract clause terms into a table · 4.0s
     └ Run a 6-line Python script
-    └ ✗ failed: KeyError: 'Term' — carried on
+    └ ✗ failed: KeyError: 'Term'
   ● Run a 4-line Python script that writes contract_review.xlsx · 9.0s
   ● Write summary.md · 1.0s
     └ Added 8 lines
@@ -37,4 +37,4 @@
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 › Ask anything — Enter to send, Alt+Enter for a new line
-  ● agent gaia connected   ask mode (shift+tab) · ↑↓/wheel scroll · Ctrl+G open file · Ctrl+C quit
+  ● agent gaia connected            /connectors · ↑↓/wheel scroll · Ctrl+F open file · Ctrl+C quit

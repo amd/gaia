@@ -100,11 +100,6 @@ const ALLOWED: Array<{ path: string; literal: string; why: string }> = [
     literal: '#000000',
     why: '<meta name="theme-color"> cannot read a custom property; pinned to --g-bg by tokens.contrast.test.ts',
   },
-  {
-    path: '/src/pages/hub/[id].astro',
-    literal: 'bg-black/',
-    why: 'fullscreen lightbox scrim — pure black over any page, not a palette colour',
-  },
 ];
 
 /** Drop this file's allowlisted strings from a line before checking it. */

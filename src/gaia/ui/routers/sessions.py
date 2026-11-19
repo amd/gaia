@@ -10,16 +10,24 @@ and session-document attachments.
 import asyncio
 import json
 import logging
+import sqlite3
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
+from gaia.llm.hybrid import is_hybrid_model
+from gaia.llm.lemonade_client import cloud_model_provider
+from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT
 
+from .. import answer_retry, followups
 from .. import permissions as session_permissions
+from .. import session_environment
 from .._chat_helpers import (
-    _SIDECAR_AGENT_TYPES,
     _agent_type_unknown,
     evict_session_agent,
+    forget_relayed_context,
     get_agent_registry,
     resolve_device_model,
     resolve_session_model,
@@ -32,18 +40,20 @@ from ..database import (
     resolved_default_model,
 )
 from ..dependencies import get_db
-from ..email_sidecar.profiles import profile_for
 from ..models import (
     AttachDocumentRequest,
     CreateSessionRequest,
     MessageListResponse,
     SessionListResponse,
+    SessionPinRequest,
     SessionResponse,
+    SessionSearchResponse,
     UpdateSessionRequest,
 )
 from ..run_manager import run_manager
 from ..security import flagship_only
-from ..utils import message_to_response, session_to_response
+from ..utils import UPLOAD_LINK_RE, message_to_response, session_to_response
+from .memory import _get_store as get_memory_store
 
 logger = logging.getLogger(__name__)
 
@@ -175,30 +185,39 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     registry = get_agent_registry()
     if not _agent_type_unknown(agent_type, registry):
         return
-    # Every id _agent_type_unknown accepts, legacy aliases aside. Only the
-    # ALWAYS-relay sidecars are added unconditionally: since #4161 the others
-    # must resolve in the registry like any agent, so listing every sidecar id
-    # here told the user 'gaia' was both unknown and registered.
-    valid_ids = sorted(
-        {reg.id for reg in registry.list()}
-        | {"chat"}
-        | {aid for aid in _SIDECAR_AGENT_TYPES if profile_for(aid).always_relay}
-    )
+    # Every id _agent_type_unknown accepts, legacy aliases aside. Sidecars
+    # must resolve in the registry like any agent.
+    valid_ids = sorted(reg.id for reg in registry.list())
     load_error = registry.get_load_error(agent_type)
     reason = f" It failed to load: {load_error}." if load_error else ""
+    # The app lists only registered agents, so an unknown non-gaia id comes
+    # from an API caller, who can install it from the Agent Hub on the host.
+    install = (
+        f" To install the GAIA agent: {AGENT_UI_SETUP_HINT}"
+        if agent_type == "gaia"
+        else (
+            " Or install it from the Agent Hub on the GAIA host with "
+            f"`gaia hub install {agent_type} --trust`, then try again."
+        )
+    )
     raise HTTPException(
         status_code=422,
         detail=(
             f"Unknown agent_type '{agent_type}'.{reason} Registered agent ids: "
-            f"{', '.join(valid_ids)}. Pick one of these, or install the agent "
-            "from the Agent Hub (`gaia hub`) and try again."
+            f"{', '.join(valid_ids)}. Pick one of these.{install}"
         ),
     )
 
 
+# An offset past SQLite's integer range can't reach the query: it would 500.
+SQLITE_INT_MAX = 2**63 - 1
+
+
 @router.get("/api/sessions", response_model=SessionListResponse)
 async def list_sessions(
-    limit: int = 50, offset: int = 0, db: ChatDatabase = Depends(get_db)
+    limit: int = 50,
+    offset: int = Query(0, le=SQLITE_INT_MAX),
+    db: ChatDatabase = Depends(get_db),
 ):
     """List all chat sessions."""
     limit = max(1, min(limit, 200))
@@ -221,6 +240,16 @@ async def create_session(
     request.agent_type = flagship_only(http_request, request.agent_type)
     _reject_unknown_agent_type(request.agent_type)
     try:
+        # Off the loop: a relayed agent is asked over the daemon.
+        await asyncio.to_thread(
+            session_environment.check_new_chat_folders,
+            request.agent_type,
+            request.folders,
+        )
+    except session_environment.EnvironmentChangeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    session = None
+    try:
         # Read before the chat exists, so a bad config leaves no chat behind.
         start_mode = session_permissions.default_mode()
         session = db.create_session(
@@ -234,8 +263,25 @@ async def create_session(
             mail_provider=request.mail_provider,
         )
         session_permissions.seed_new_session(session["id"], start_mode)
+        for folder in request.folders:
+            session_environment.grant_folder(db, session["id"], folder)
         return await _session_response(db, session)
     except Exception as e:
+        if session is not None:
+            # A chat is made whole or not at all.
+            try:
+                db.delete_session(session["id"])
+            except Exception as cleanup_err:  # the original error stays the answer
+                logger.error(
+                    "Could not remove half-made chat %s: %s",
+                    session["id"],
+                    cleanup_err,
+                    exc_info=True,
+                )
+            finally:
+                session_permissions.forget_session(session["id"])
+        if isinstance(e, session_environment.EnvironmentChangeError):
+            raise HTTPException(status_code=400, detail=str(e)) from e
         logger.error("Failed to create session: %s", e, exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -244,7 +290,7 @@ async def create_session(
                 if _is_gaia_config_error(e)
                 else "Failed to create session. Check server logs for details."
             ),
-        )
+        ) from e
 
 
 @router.get("/api/sessions/events")
@@ -270,6 +316,27 @@ async def session_events():
             await _system_emitter.unsubscribe(q)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# Declared before /api/sessions/{session_id}, which would otherwise claim "search".
+@router.get("/api/sessions/search", response_model=SessionSearchResponse)
+async def search_sessions(
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = 20,
+    include_automated: bool = False,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Find chats by title or message text, ignoring case and accents.
+
+    Eval and scheduled chats are left out unless *include_automated*, as the
+    sidebar leaves them out. Private chats are included: the search runs on
+    this PC and its results go only to the local UI that already lists them.
+    """
+    limit = max(1, min(limit, 50))
+    results, truncated = await asyncio.to_thread(
+        db.search_sessions, q, limit, include_automated
+    )
+    return SessionSearchResponse(query=q, results=results, truncated=truncated)
 
 
 @router.post("/api/sessions/{session_id}/activate", status_code=200)
@@ -327,8 +394,9 @@ async def update_session(
         existing = db.get_session(session_id)
         agent_type = request.agent_type or (existing or {}).get("agent_type") or "chat"
         resolved, _ = resolve_device_model(agent_type, request.device)
-        if resolved:
-            current_model = (existing or {}).get("model")
+        current_model = (existing or {}).get("model")
+        # A device only picks among local models; hybrid routes to its own.
+        if resolved and not is_hybrid_model(current_model):
             try:
                 configured_default = resolved_default_model()
             except Exception as e:
@@ -369,6 +437,56 @@ async def update_session(
     return await _session_response(db, session)
 
 
+def _end_sidecar_session(session_id: str, agent_type: str) -> None:
+    """End the chat's session in its running sidecar, stopping its MCP servers.
+
+    Never starts, stops or restarts a sidecar to do it. The chat is already
+    gone, so a failure is logged, not raised: the sidecar still closes the
+    session once it idles out.
+    """
+    from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
+
+    from ..sidecar import daemon_client
+    from ..sidecar.profiles import end_session_supported, profile_for
+    from ..sidecar.proxy import SidecarTimeoutError
+
+    profile = profile_for(agent_type)
+    if profile is None or profile.min_end_session_api_version is None:
+        return
+    agent = profile.display_name
+    try:
+        handle = daemon_client.running_handle(profile.agent_id)
+        if handle is None or not end_session_supported(profile, handle.api_version):
+            return
+        handle.proxy().end_session(session_id)
+    except SidecarHTTPError as e:
+        if e.status_code == 404:  # the sidecar never had this chat
+            return
+        if e.status_code == 409:  # deleted mid-answer: the turn still holds it
+            _log_unended(logger.warning, session_id, agent, "it is still answering", e)
+        elif e.status_code == 503:  # stopped or wedged after it was listed
+            _log_unended(
+                logger.warning, session_id, agent, "it is not running or answering", e
+            )
+        else:
+            _log_unended(logger.error, session_id, agent, "the agent refused", e)
+    except SidecarTimeoutError as e:
+        _log_unended(logger.warning, session_id, agent, "it did not answer", e)
+    except SidecarError as e:
+        _log_unended(logger.error, session_id, agent, "the call failed", e)
+
+
+def _log_unended(log, session_id: str, agent: str, reason: str, error) -> None:
+    log(
+        "Could not end deleted chat %s in the %s agent (%s); its MCP servers run "
+        "until the session idles out: %s",
+        session_id,
+        agent,
+        reason,
+        error,
+    )
+
+
 @router.delete("/api/sessions/{session_id}")
 async def delete_session(
     session_id: str,
@@ -381,17 +499,44 @@ async def delete_session(
     for it to finish: the turn is still using the session's agent and will
     persist its answer to the session row.
     """
-    if db.get_session(session_id) is None:
+    session = db.get_session(session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     run_manager.cancel(session_id)
     session_locks = http_request.app.state.session_locks
     # Every turn and goal tick holds this lock for its whole run.
     async with session_locks.setdefault(session_id, asyncio.Lock()):
+        # First, so a failure leaves the chat in place to delete again.
+        try:
+            await asyncio.to_thread(get_memory_store().delete_session, session_id)
+        except (sqlite3.Error, OSError) as e:
+            logger.error("Could not delete the memory of %s: %s", session_id, e)
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"The chat was not deleted: its conversation in Memory "
+                    f"could not be removed ({e}). Try again; the GAIA log has "
+                    f"the details."
+                ),
+            ) from e
         if not db.delete_session(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         session_locks.pop(session_id, None)
         evict_session_agent(session_id)
+        forget_relayed_context(session_id)
         session_permissions.forget_session(session_id)
+        followups.forget(session_id)
+        answer_retry.forget(session_id)
+        session_environment.forget_session(session_id)
+        if session_environment.relayed(session):
+            await asyncio.to_thread(
+                _end_sidecar_session, session_id, session.get("agent_type")
+            )
+    try:
+        await asyncio.to_thread(file_snapshots.delete_session, session_id)
+    except OSError as e:
+        # The chat is gone; its undo copies expire with the retention limit.
+        logger.error("Could not remove undo history of %s: %s", session_id, e)
     return {"deleted": True}
 
 
@@ -409,6 +554,26 @@ async def toggle_session_privacy(
     return await _session_response(db, updated)
 
 
+@router.put("/api/sessions/{session_id}/pin", response_model=SessionResponse)
+async def pin_session(
+    session_id: str,
+    request: SessionPinRequest,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Pin a chat to the top of the list, or unpin it (#5221)."""
+    if not db.set_session_pinned(session_id, request.pinned):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return await _session_response(db, db.get_session(session_id))
+
+
+@router.post("/api/sessions/{session_id}/read", response_model=SessionResponse)
+async def mark_session_read(session_id: str, db: ChatDatabase = Depends(get_db)):
+    """Clear a chat's unread mark; the UI calls this when the chat is opened (#5221)."""
+    if not db.mark_session_read(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return await _session_response(db, db.get_session(session_id))
+
+
 # ── Messages ─────────────────────────────────────────────────────────────────
 
 
@@ -416,7 +581,7 @@ async def toggle_session_privacy(
 async def get_messages(
     session_id: str,
     limit: int = 100,
-    offset: int = 0,
+    offset: int = Query(0, le=SQLITE_INT_MAX),
     db: ChatDatabase = Depends(get_db),
 ):
     """Get messages for a session."""
@@ -471,6 +636,30 @@ async def delete_messages_from(
 # ── Export ───────────────────────────────────────────────────────────────────
 
 
+def _answer_model(msg: dict) -> str | None:
+    """The model recorded as having written ``msg``, or None if none was saved."""
+    stats = msg.get("inference_stats")
+    return stats.get("model") if isinstance(stats, dict) else None
+
+
+def _model_label(model: str) -> str:
+    """The model as the app shows it: no cloud provider prefix, no catalogue path."""
+    if cloud_model_provider(model):
+        model = model.partition(".")[2]
+    return model.rsplit("/", 1)[-1]
+
+
+def _local_time(stamp: str) -> str:
+    """A stored UTC timestamp as local time, e.g. "November 12, 2026, 2:21 PM"."""
+    t = datetime.fromisoformat(stamp).astimezone()
+    return f"{t:%B} {t.day}, {t.year}, {t.hour % 12 or 12}:{t:%M} {t:%p}"
+
+
+def _plain_attachments(content: str) -> str:
+    """Name each attachment instead of linking a file that exists only inside the app."""
+    return UPLOAD_LINK_RE.sub(lambda m: f"Attached: {m['label']}", content)
+
+
 @router.get("/api/sessions/{session_id}/export")
 async def export_session(
     session_id: str,
@@ -483,26 +672,48 @@ async def export_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    messages = db.get_messages(session_id, limit=10000)
-
-    if export_format == "markdown":
-        lines = [f"# {session['title']}\n"]
-        lines.append(f"*Created: {session['created_at']}*\n")
-        lines.append(f"*Model: {session['model']}*\n\n---\n")
-
-        for msg in messages:
-            role_label = "User" if msg["role"] == "user" else "Assistant"
-            lines.append(f"**{role_label}:**\n\n{msg['content']}\n\n---\n")
-
-        content = "\n".join(lines)
-        return {"content": content, "format": "markdown"}
-    elif export_format == "json":
-        return {"session": session, "messages": messages, "format": "json"}
-    else:
+    if export_format not in ("markdown", "json"):
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported format: {export_format}",
         )
+
+    messages = db.get_messages(session_id, limit=10000)
+    # The stored model stays at the install default when a custom model answers.
+    effective_model = (await _session_response(db, session)).effective_model
+
+    if export_format == "markdown":
+        answer_models = [
+            _answer_model(msg) for msg in messages if msg["role"] == "assistant"
+        ]
+        if answer_models and all(answer_models):
+            used = list(dict.fromkeys(_model_label(m) for m in answer_models))
+            label = "Models" if len(used) > 1 else "Model"
+            model_line = f"*{label}: {', '.join(used)}*"
+        else:
+            # An answer saved before its model was recorded can't say what wrote it.
+            model_line = f"*Model (current setting): {_model_label(effective_model)}*"
+
+        lines = [f"# {session['title']}\n"]
+        lines.append(f"*Created: {_local_time(session['created_at'])}*\n")
+        lines.append(f"{model_line}\n\n---\n")
+
+        for msg in messages:
+            role_label = "User" if msg["role"] == "user" else "Assistant"
+            answer_model = _answer_model(msg)
+            if answer_model:
+                role_label = f"{role_label} ({_model_label(answer_model)})"
+            lines.append(
+                f"**{role_label}:**\n\n{_plain_attachments(msg['content'])}\n\n---\n"
+            )
+
+        content = "\n".join(lines)
+        return {"content": content, "format": "markdown"}
+    return {
+        "session": {**session, "effective_model": effective_model},
+        "messages": messages,
+        "format": "json",
+    }
 
 
 # ── Session-Document Attachments ─────────────────────────────────────────────
@@ -523,7 +734,14 @@ async def attach_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    db.attach_document(session_id, request.document_id)
+    if not db.attach_document(session_id, request.document_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The chat or the document was removed while attaching, so nothing "
+                "was attached. Refresh the document library and try again."
+            ),
+        )
     return {"attached": True}
 
 

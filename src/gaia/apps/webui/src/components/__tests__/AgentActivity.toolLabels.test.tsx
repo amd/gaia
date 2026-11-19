@@ -15,23 +15,47 @@ function step(tool: string, active = false, success = true): AgentStep {
 it.each([
     ['search_web', 'Searched web'],
     ['request_user_input', 'Asked you'],
-    ['recall', 'Recalled memory'],
-    ['remember', 'Saved to memory'],
     ['find_files', 'Found files'],
     ['search_past_conversations', 'Searched past chats'],
+    ['index_documents', 'Added documents'],
 ])('names the GAIA agent\'s %s step instead of "Used tool"', (tool, label) => {
-    render(<AgentActivity steps={[step(tool)]} isActive={false} variant="summary" />);
+    render(<AgentActivity steps={[step(tool)]} isActive={false} />);
 
     expect(screen.getByText(label)).toBeInTheDocument();
     expect(screen.queryByText('Used tool')).toBeNull();
 });
 
+it.each(['remember', 'recall', 'update_memory', 'forget'])(
+    'keeps a successful %s step out of the activity list',
+    (tool) => {
+        const steps = [step(tool), { ...step('find_files'), id: 2 }];
+        render(<AgentActivity steps={steps} isActive={false} />);
+
+        expect(screen.getByText('Found files')).toBeInTheDocument();
+        expect(screen.queryByText(/memory/i)).toBeNull();
+    },
+);
+
+it('shows nothing when memory was the only activity', () => {
+    const { container } = render(
+        <AgentActivity steps={[step('remember')]} isActive={false} />,
+    );
+
+    expect(container).toBeEmptyDOMElement();
+});
+
+it('still shows a memory step that failed', () => {
+    render(<AgentActivity steps={[step('remember', false, false)]} isActive={false} />);
+
+    expect(screen.getByText(/memory/i)).toBeInTheDocument();
+});
+
 it.each([
     ['write_file', 'Writing file failed', 'Wrote file'],
     ['read_file', 'Reading file failed', 'Read file'],
-    ['some_unknown_tool', 'Using tool failed', 'Used tool'],
+    ['some_unknown_tool', 'Using some unknown tool failed', 'Used some unknown tool'],
 ])('does not give a failed or denied %s step the done label', (tool, label, doneLabel) => {
-    render(<AgentActivity steps={[step(tool, false, false)]} isActive={false} variant="inline" />);
+    render(<AgentActivity steps={[step(tool, false, false)]} isActive={false} />);
 
     expect(screen.getByText(label)).toBeInTheDocument();
     expect(screen.queryByText(doneLabel)).toBeNull();
@@ -39,7 +63,7 @@ it.each([
 
 it('does not say a step stopped before its result "Wrote file"', () => {
     const stopped: AgentStep = { id: 1, type: 'tool', label: 'Using write_file', tool: 'write_file', active: false, timestamp: 1 };
-    render(<AgentActivity steps={[stopped]} isActive={false} variant="inline" />);
+    render(<AgentActivity steps={[stopped]} isActive={false} />);
 
     expect(screen.getByText("Writing file didn't finish")).toBeInTheDocument();
     expect(screen.queryByText('Wrote file')).toBeNull();
@@ -47,13 +71,142 @@ it('does not say a step stopped before its result "Wrote file"', () => {
 
 it('keeps the done label for a finished step saved without a success flag', () => {
     const legacy: AgentStep = { id: 1, type: 'tool', label: 'Using write_file', tool: 'write_file', active: false, result: 'success', timestamp: 1 };
-    render(<AgentActivity steps={[legacy]} isActive={false} variant="inline" />);
+    render(<AgentActivity steps={[legacy]} isActive={false} />);
 
     expect(screen.getByText('Wrote file')).toBeInTheDocument();
 });
 
 it('names a running GAIA agent step in the present tense', () => {
-    render(<AgentActivity steps={[step('request_user_input', true)]} isActive={true} variant="inline" />);
+    render(<AgentActivity steps={[step('request_user_input', true)]} isActive={true} />);
 
     expect(screen.getByText('Asking you')).toBeInTheDocument();
+});
+
+it('leaves hidden memory steps out of a folded summary', () => {
+    const steps = [step('remember'), { ...step('find_files'), id: 2 }, { ...step('read_file'), id: 3 }];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByRole('button', { name: /^Found files, read file$/ })).toBeInTheDocument();
+});
+
+it('names a tool it has no label for, rather than "Used tool"', () => {
+    render(<AgentActivity steps={[step('frobnicate_widget')]} isActive={false} />);
+
+    expect(screen.getByText('Used frobnicate widget')).toBeInTheDocument();
+    expect(screen.queryByText('Used tool')).toBeNull();
+});
+
+it.each([
+    ['run_python', true, 'Running Python'],
+    ['request_user_input', true, 'Asking you'],
+    ['answer_question_about_image', false, 'Looking at image failed'],
+    ['generate_image', false, 'Made image'],
+])('gives the flagship\'s %s step a plain label', (tool, active, label) => {
+    const failed = label.endsWith('failed');
+    render(<AgentActivity steps={[step(tool, active, !failed)]} isActive={active} />);
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+});
+
+it('says the user declined a call, not that it failed, even with a narration', () => {
+    const declined: AgentStep = {
+        ...step('run_python', false, false), declined: true, narration: 'Running Python',
+        result: "Error: Tool 'run_python' was denied by the user.",
+    };
+    const { container } = render(<AgentActivity steps={[declined]} isActive={false} />);
+
+    expect(screen.getByText('You declined: Running Python')).toBeInTheDocument();
+    expect(screen.queryByText(/failed|denied by the user/)).toBeNull();
+    expect(container.querySelector('.flow-tool')).not.toHaveClass('error');
+});
+
+it('says GAIA did not run a call its own rule stopped, not that the user declined', () => {
+    const refused: AgentStep = {
+        ...step('run_shell_command', false, false), refused: true, narration: 'Running git clone',
+        result: 'Not run: this reaches github.com, and `git clone` was refused earlier in this request.',
+    };
+    const { container } = render(<AgentActivity steps={[refused]} isActive={false} />);
+
+    expect(screen.getByText('Blocked by GAIA: Running command')).toBeInTheDocument();
+    expect(screen.queryByText(/failed|declined/i)).toBeNull();
+    expect(container.querySelector('.flow-tool')).not.toHaveClass('error');
+});
+
+it('names a call GAIA did not run in a folded summary, not as a decline', () => {
+    const steps: AgentStep[] = [
+        { ...step('read_file'), id: 1, detail: 'a' },
+        { ...step('run_shell_command', false, false), id: 2, refused: true },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    const summary = screen.getByRole('button', { name: /^Read file, a step was blocked by GAIA$/ });
+    expect(summary.querySelector('.lucide-ban')).not.toBeNull();
+});
+
+it('says how many of a folded run of calls failed, not only how many ran', () => {
+    const steps: AgentStep[] = [
+        { ...step('run_shell_command'), id: 1, detail: 'a' },
+        { ...step('run_shell_command', false, false), id: 2, detail: 'b' },
+        { ...step('run_shell_command'), id: 3, detail: 'c' },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByRole('button', { name: /^Ran command ×3 \(1 failed\)$/ })).toBeInTheDocument();
+});
+
+it('says a call nobody answered timed out and never ran', () => {
+    const timedOut: AgentStep = {
+        ...step('run_shell_command', false, false), timedOut: true, narration: 'Running ls',
+        result: "Nobody answered the confirmation for 'run_shell_command' within 600 s, so it did not run.",
+    };
+    const { container } = render(<AgentActivity steps={[timedOut]} isActive={false} />);
+
+    expect(screen.getByText('Timed out, nothing ran: Running command')).toBeInTheDocument();
+    expect(screen.queryByText(/failed|declined|Nobody answered/)).toBeNull();
+    expect(container.querySelector('.flow-tool')).not.toHaveClass('error');
+});
+
+it('says GAIA skipped a call it turned down unasked, not that the user declined', () => {
+    const skipped: AgentStep = {
+        ...step('run_shell_command', false, false), autoDeclined: true, narration: 'Running echo',
+        result: 'Not run: this request hands over text to translate, reword or proofread.',
+    };
+    const { container } = render(<AgentActivity steps={[skipped]} isActive={false} />);
+
+    expect(screen.getByText('Not run, not needed for this request: Running command')).toBeInTheDocument();
+    expect(screen.queryByText(/You declined|failed/)).toBeNull();
+    expect(container.querySelector('.flow-tool')).not.toHaveClass('error');
+});
+
+it("names a call GAIA turned down in a folded summary, not as the user's decline", () => {
+    const steps: AgentStep[] = [
+        { ...step('read_file'), id: 1, detail: 'a' },
+        { ...step('run_shell_command', false, false), id: 2, autoDeclined: true },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByRole('button', { name: /^Read file, skipped a step that wasn't needed$/ })).toBeInTheDocument();
+    expect(screen.queryByText(/declined/)).toBeNull();
+});
+
+it('names a timed-out call in a folded summary, not as a decline', () => {
+    const steps: AgentStep[] = [
+        { ...step('read_file'), id: 1, detail: 'a' },
+        { ...step('run_shell_command', false, false), id: 2, timedOut: true },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByRole('button', { name: /^Read file, a step timed out$/ })).toBeInTheDocument();
+});
+
+it('names a declined call in a folded summary', () => {
+    const steps: AgentStep[] = [
+        { ...step('read_file'), id: 1, detail: 'a' },
+        { ...step('run_python', false, false), id: 2, declined: true },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    const summary = screen.getByRole('button', { name: /^Read file, you declined a step$/ });
+    expect(summary.querySelector('.lucide-ban')).not.toBeNull();
+    expect(summary.querySelector('.lucide-circle-check')).toBeNull();
 });

@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _spec = importlib.util.spec_from_file_location(
     "stage_eval_env", REPO_ROOT / "tests" / "fixtures" / "gaia" / "stage_eval_env.py"
@@ -27,7 +29,11 @@ def staged(tmp_path_factory):
     stale = home / "gaia-eval" / "stale.txt"
     stale.parent.mkdir()
     stale.write_text("left from an earlier run")
-    skills_root = stage_eval_env.stage(home)
+    # Never the checkout's fixture_hub/_prepared: xdist workers would share it.
+    # Module scope runs before the function-scoped user_terminal fixture.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.delenv("GAIA_AGENT_CHILD", raising=False)
+        skills_root = stage_eval_env.stage(home, hub_out=home / "fixture-hub")
     return home, skills_root
 
 
@@ -39,6 +45,26 @@ def test_home_is_required():
 def test_missing_home_is_refused(tmp_path):
     with pytest.raises(SystemExit, match="not a directory"):
         stage_eval_env.stage(tmp_path / "nope")
+
+
+def _skill_files(root):
+    return {
+        p.relative_to(root).as_posix(): p.read_bytes()
+        for p in root.rglob("*")
+        if p.is_file() and "__pycache__" not in p.parts
+    }
+
+
+@pytest.mark.parametrize("name", sorted(stage_eval_env.NOT_PRE_INSTALLED))
+def test_fixture_hub_copy_matches_the_shipped_skill(name):
+    # The eval installs these from the fixture hub, so an edit to only the
+    # hub/skills copy never reaches the scenarios that score it.
+    shipped = REPO_ROOT / "hub" / "skills" / name
+    fixture = REPO_ROOT / "tests" / "fixtures" / "gaia" / "fixture_hub" / "sources"
+    fixture = fixture / name
+    assert shipped.is_dir() and fixture.is_dir()
+    drift = f"{fixture} has drifted from {shipped}; apply the same edit to both"
+    assert _skill_files(fixture) == _skill_files(shipped), drift
 
 
 def test_stages_fixtures_skills_and_a_trusted_fixture_hub(staged):
@@ -60,6 +86,7 @@ def test_stages_fixtures_skills_and_a_trusted_fixture_hub(staged):
     assert hub_skills - stage_eval_env.NOT_PRE_INSTALLED <= installed
     assert not stage_eval_env.NOT_PRE_INSTALLED & installed
     assert (skills_root / "trusted-keys.json").is_file()
+    assert (home / "fixture-hub" / "index.json").is_file()
 
     # The git workspaces are built into the staged copy, never the checkout.
     assert (staged / "tiers_resilience" / "journal" / ".git").is_dir()
@@ -126,8 +153,22 @@ def test_restaging_clears_read_only_files_and_built_repositories(staged):
     marker = journal_git / "left-from-the-first-staging"
     marker.write_text("x")
 
-    stage_eval_env.stage(home)
+    stage_eval_env.stage(home, hub_out=home / "fixture-hub")
 
     assert not locked.exists()
     assert journal_git.is_dir() and not marker.exists()
+    assert (home / "gaia-eval" / "csv" / "sales.csv").is_file()
+
+
+def test_skills_and_trust_go_to_an_isolated_gaia_home(tmp_path):
+    """Under GAIA_HOME the agent reads skills from <gaia-home>/skills, not ~/.gaia."""
+    home = tmp_path / "home"
+    home.mkdir()
+    gaia_home = tmp_path / "gaia-home"
+
+    skills_root = stage_eval_env.stage(home, gaia_home, hub_out=tmp_path / "hub")
+
+    assert skills_root == gaia_home / "skills"
+    assert (skills_root / "trusted-keys.json").is_file()
+    assert not (home / ".gaia").exists(), "nothing may land in the real ~/.gaia"
     assert (home / "gaia-eval" / "csv" / "sales.csv").is_file()

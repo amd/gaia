@@ -20,7 +20,7 @@ The memory store is redirected to a throwaway file: a measurement must never
 write learned deltas into the developer's real ``~/.gaia/memory.db``.
 
 Usage (from the repository root):
-    PYTHONPATH="src;hub/agents/chat/python;hub/agents/gaia/python" \
+    PYTHONPATH="src;hub/agents/gaia/python" \
         python .perf/overlay_prefill.py
 """
 

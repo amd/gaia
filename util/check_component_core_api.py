@@ -25,21 +25,22 @@ would not have caught it: the tree already has the new API. The break is between
 the tree and a *published* artifact, so the check has to reason about what each
 core release actually shipped.
 
-Two modes, deliberately
------------------------
-Offline (the default) answers from the pinned ``RELEASED_DAEMON_API`` table
-below, so unit tests and PR CI stay deterministic and network-free.
+Where "released" comes from
+---------------------------
+PyPI, every run. The versions ``amd-gaia`` publishes decide what is released,
+and each published version's ``DAEMON_API_VERSION`` is read out of its wheel.
+There is no hand-kept table of releases: one used to live here, and it went
+stale for v0.23.1, v0.24.0 and v0.24.1 because nobody remembered to edit it.
 
-``--verify-released`` audits that table against PyPI — every pinned row is
-re-read out of the published wheel, and ``LATEST_CORE_RELEASE`` is checked
-against the versions PyPI actually serves. That audit runs over the table
-itself, NOT only over whatever version a manifest happens to name: a component
-pinned to an unreleased version has nothing to fetch, so a manifest-driven check
-would quietly do no work in exactly the release where the table went stale.
+If PyPI cannot be reached, or answers with something that is not a release
+index, the check fails. It never guesses from this tree, because the tree is
+ahead of every release — that skew is the whole point of the check.
+
+There is no "predates the daemon" shortcut either: a minimum older than any
+release with a wheel fails with "no unyanked wheel" rather than passing.
 
 Usage:
     python util/check_component_core_api.py
-    python util/check_component_core_api.py --verify-released
     python util/check_component_core_api.py --release-version 0.23.0
 
 Exit codes:
@@ -77,26 +78,6 @@ WHEEL_MEMBER = "gaia/daemon/constants.py"
 
 _FETCH_ATTEMPTS = 3
 _FETCH_BACKOFF_SECONDS = 2
-
-# What each published core release actually shipped as DAEMON_API_VERSION.
-#
-# Verified by installing each amd-gaia wheel from PyPI and reading
-# gaia/daemon/constants.py: 0.21.2 and every release before it have no
-# gaia/daemon package at all, and 0.22.0 — the first release with a daemon —
-# shipped "1"; 0.23.0 shipped "1.1", which is what this tree still serves.
-#
-# Maintenance: after cutting a core release, add its row and bump
-# LATEST_CORE_RELEASE. Forgetting makes the offline mode fall back to trusting
-# this tree for a version that has since shipped something else — the exact
-# drift this guard exists to catch — which is why --verify-released audits both
-# against PyPI before any publish.
-FIRST_CORE_RELEASE_WITH_DAEMON = (0, 22, 0)
-RELEASED_DAEMON_API: dict[tuple[int, ...], str] = {
-    (0, 22, 0): "1",
-    (0, 23, 0): "1.1",
-    (0, 24, 1): "1.1",
-}
-LATEST_CORE_RELEASE = (0, 24, 1)
 
 # Which daemon host API each hub component needs. "tui" reads the floor from the
 # Go constants the terminal hub enforces at runtime, so the guard cannot drift
@@ -230,14 +211,14 @@ def _fetch(url: str, timeout: int) -> bytes:
             # A status code is upstream's answer, not a blip - retrying is noise.
             raise CheckError(
                 f"PyPI returned HTTP {exc.code} for {url}: {exc.reason}. "
-                f"--verify-released reads what each core release actually shipped; "
+                f"This check reads what each core release actually shipped; "
                 f"a 404 here means that artifact is not published."
             ) from exc
         except urllib.error.URLError as exc:
             if isinstance(exc.reason, socket.gaierror):
                 raise CheckError(
                     f"could not resolve {urlparse(url).hostname} for {url}: "
-                    f"{exc.reason}. --verify-released needs DNS and network access "
+                    f"{exc.reason}. This check needs DNS and network access "
                     f"to read what each core release actually shipped."
                 ) from exc
             last_exc = exc
@@ -247,31 +228,55 @@ def _fetch(url: str, timeout: int) -> bytes:
             time.sleep(_FETCH_BACKOFF_SECONDS * (attempt + 1))
     raise CheckError(
         f"could not reach PyPI at {url} after {_FETCH_ATTEMPTS} attempts: "
-        f"{last_exc}. --verify-released needs network access to read what each "
+        f"{last_exc}. This check needs network access to read what each "
         f"core release actually shipped."
     ) from last_exc
 
 
-def _pypi_index() -> dict:
-    return json.loads(_fetch(PYPI_JSON_URL, timeout=60))
+def load_pypi_index() -> dict:
+    """Read the amd-gaia release index from PyPI. Fails loudly, never returns empty."""
+    raw = _fetch(PYPI_JSON_URL, timeout=60)
+    try:
+        index = json.loads(raw)
+    except ValueError as exc:
+        raise CheckError(
+            f"PyPI returned something that is not JSON for {PYPI_JSON_URL}: {exc}"
+        ) from exc
+    releases = index.get("releases") if isinstance(index, dict) else None
+    if not isinstance(releases, dict) or not releases:
+        raise CheckError(
+            f"PyPI's index at {PYPI_JSON_URL} lists no releases for {PYPI_PROJECT}. "
+            f"Refusing to treat every version as unreleased — that would answer "
+            f"from this tree, which is ahead of what shipped."
+        )
+    return index
 
 
-def released_versions(index: dict | None = None) -> set[tuple[int, int, int]]:
-    """Every version published to PyPI — ground truth for "is this released yet"."""
-    index = _pypi_index() if index is None else index
-    return {
-        parse_version(raw)
-        for raw, files in index.get("releases", {}).items()
-        if re.fullmatch(r"\d+(\.\d+)*", raw) and files
-    }
+def released_versions(index: dict) -> dict[tuple[int, int, int], str]:
+    """Map each final release on PyPI to its index key.
 
-
-def fetch_released_daemon_api(version: str) -> str | None:
-    """Read DAEMON_API_VERSION out of a published wheel. None if it has no daemon.
-
-    Ground truth for what a release shipped, as opposed to what this tree has.
+    Pre-releases (``0.25.0rc1``) and releases with no installable file — never
+    uploaded, or every file yanked — do not count: a user cannot get them with
+    ``pip install amd-gaia>=X``.
     """
-    files = _pypi_index().get("releases", {}).get(version)
+    published: dict[tuple[int, int, int], str] = {}
+    for raw, files in index["releases"].items():
+        # More than three parts would collide with its three-part prefix.
+        if not re.fullmatch(r"\d+(\.\d+){0,2}", raw):
+            continue
+        if any(not f.get("yanked") for f in files or []):
+            published[parse_version(raw)] = raw
+    if not published:
+        raise CheckError(
+            f"PyPI lists no installable final release of {PYPI_PROJECT}. Check "
+            f"{PYPI_JSON_URL} — the guard cannot tell what shipped without one."
+        )
+    return published
+
+
+def fetch_released_daemon_api(version: str, index: dict) -> str | None:
+    """Read DAEMON_API_VERSION out of a published wheel. None if it has no daemon."""
+    files = index["releases"].get(version)
     if not files:
         raise CheckError(f"PyPI has no release {version} for {PYPI_PROJECT}")
     wheels = sorted(
@@ -293,88 +298,40 @@ def fetch_released_daemon_api(version: str) -> str | None:
     return _extract_daemon_api(source, f"the {version} wheel")
 
 
-def audit_released_table(
-    *,
-    cutting: tuple[int, int, int] | None = None,
-    published: set[tuple[int, int, int]] | None = None,
-    fetcher=fetch_released_daemon_api,
-    released_api: dict[tuple[int, ...], str] | None = None,
-    latest_release: tuple[int, ...] = LATEST_CORE_RELEASE,
-) -> None:
-    """Prove the pinned table still matches what PyPI serves.
-
-    Runs over the table itself rather than over whatever a manifest names, so a
-    component pinned to an unreleased version cannot make this a no-op.
-    """
-    table = RELEASED_DAEMON_API if released_api is None else released_api
-    published = released_versions() if published is None else published
-
-    ahead = sorted(v for v in published if v > latest_release and v != cutting)
-    if ahead:
-        raise CheckError(
-            f"LATEST_CORE_RELEASE is stale: it says {format_version(latest_release)} "
-            f"but PyPI has {', '.join(format_version(v) for v in ahead)}. Bump it and "
-            f"add the matching RELEASED_DAEMON_API row(s) — until then this guard "
-            f"resolves those versions from this tree instead of from what shipped."
-        )
-
-    for version, pinned in sorted(table.items()):
-        fetched = fetcher(format_version(version))
-        if pinned != fetched:
-            raise CheckError(
-                f"RELEASED_DAEMON_API is wrong for {format_version(version)}: it pins "
-                f"{pinned!r} but the published wheel ships {fetched!r}. Correct the table."
-            )
-
-
 def resolve_daemon_api(
     min_gaia_version: str,
     *,
     tree_api: str,
-    verify_released: bool = False,
-    released_api: dict[tuple[int, ...], str] | None = None,
-    latest_release: tuple[int, ...] = LATEST_CORE_RELEASE,
-    fetcher=fetch_released_daemon_api,
-    published: set[tuple[int, int, int]] | None = None,
+    published: dict[tuple[int, int, int], str],
+    fetcher,
+    cutting: tuple[int, int, int] | None = None,
 ) -> tuple[str | None, str]:
     """Resolve the daemon API a given core version ships.
 
     Returns (api_version_or_None, provenance). None means that release has no
-    daemon at all.
+    daemon at all. ``published`` maps each released version to its PyPI key;
+    ``fetcher`` reads a published wheel's DAEMON_API_VERSION by that key.
     """
-    table = RELEASED_DAEMON_API if released_api is None else released_api
     version = parse_version(min_gaia_version)
 
-    if verify_released:
-        # Let PyPI, not a hand-maintained constant, decide what is released.
-        if published is None:
-            published = released_versions()
-        if version not in published:
-            return tree_api, "this tree (PyPI has no such release yet)"
-        return (
-            fetcher(min_gaia_version),
-            f"the published {PYPI_PROJECT}=={min_gaia_version} wheel",
-        )
+    if version in published:
+        raw = published[version]
+        return fetcher(raw), f"the published {PYPI_PROJECT}=={raw} wheel"
 
-    if version > latest_release:
-        # Not released yet, so it can only be cut from this tree.
+    latest = max(published)
+    if version > latest or version == cutting:
+        # Not on PyPI yet, so it can only be cut from this tree.
         return (
             tree_api,
-            f"this tree ({CORE_DAEMON_CONSTANTS.relative_to(PROJECT_ROOT)})",
+            f"this tree ({CORE_DAEMON_CONSTANTS.relative_to(PROJECT_ROOT)}; "
+            f"PyPI has no such release yet)",
         )
 
-    if version < FIRST_CORE_RELEASE_WITH_DAEMON:
-        return None, f"the published {min_gaia_version} release (predates the daemon)"
-
-    if version in table:
-        return table[version], f"the published {min_gaia_version} release"
-
     raise CheckError(
-        f"{min_gaia_version} is at or below the newest core release on record "
-        f"({format_version(latest_release)}) but has no row in RELEASED_DAEMON_API. "
-        f"Add one — read DAEMON_API_VERSION out of that release's wheel, or re-run "
-        f"with --verify-released. Do not guess from this tree; the tree is ahead of "
-        f"what shipped, which is exactly the skew this guard catches."
+        f"{min_gaia_version} is older than the newest published core release "
+        f"({format_version(latest)}) but PyPI has no installable {min_gaia_version}: "
+        f"a tag that never became a release, a yanked release, or a typo. Point "
+        f"min_gaia_version at a release users can install — see {PYPI_JSON_URL}."
     )
 
 
@@ -398,7 +355,6 @@ def check_component(
     *,
     floor: HostAPIFloor | None,
     tree_api: str,
-    verify_released: bool = False,
     release_version: str | None = None,
     **resolve_kwargs,
 ) -> ComponentCheck:
@@ -427,10 +383,7 @@ def check_component(
         return result
 
     api, provenance = resolve_daemon_api(
-        min_gaia_version,
-        tree_api=tree_api,
-        verify_released=verify_released,
-        **resolve_kwargs,
+        min_gaia_version, tree_api=tree_api, **resolve_kwargs
     )
     result.resolution = (
         f"{component_id}: min_gaia_version {min_gaia_version} ships daemon host API "
@@ -466,12 +419,16 @@ def load_manifest(path: Path) -> dict:
 
 def run(
     *,
-    verify_released: bool = False,
     release_version: str | None = None,
     components_dir: Path = COMPONENTS_DIR,
-    **resolve_kwargs,
+    published: dict[tuple[int, int, int], str] | None = None,
+    fetcher=None,
 ) -> CheckResult:
-    """Check every hub component."""
+    """Check every hub component against what PyPI says has shipped.
+
+    ``published`` and ``fetcher`` replace the PyPI reads; both default to the
+    live index, loaded once.
+    """
     tree_api = read_tree_daemon_api()
     tui_floor = read_tui_host_api_floor()
 
@@ -484,11 +441,17 @@ def run(
             f"control plane, None if it does not."
         )
 
-    if verify_released:
-        audit_released_table(
-            cutting=parse_version(release_version) if release_version else None,
-            **resolve_kwargs,
-        )
+    index = None
+    if published is None or fetcher is None:
+        index = load_pypi_index()
+    if published is None:
+        published = released_versions(index)
+    if fetcher is None:
+
+        def fetcher(version: str) -> str | None:
+            return fetch_released_daemon_api(version, index)
+
+    cutting = parse_version(release_version) if release_version else None
 
     result = CheckResult()
     for component_id, source in sorted(COMPONENT_HOST_API_SOURCE.items()):
@@ -500,9 +463,10 @@ def run(
             load_manifest(manifest_path),
             floor=resolve_floor(component_id, source, tui_floor),
             tree_api=tree_api,
-            verify_released=verify_released,
             release_version=release_version,
-            **resolve_kwargs,
+            published=published,
+            fetcher=fetcher,
+            cutting=cutting,
         )
         result.problems.extend(component.problems)
         if component.resolution:
@@ -513,12 +477,8 @@ def run(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Check that each hub component's min_gaia_version names a core "
-        "release that can serve the daemon host API that component requires."
-    )
-    parser.add_argument(
-        "--verify-released",
-        action="store_true",
-        help="audit the pinned release table against PyPI (needs network access)",
+        "release that can serve the daemon host API that component requires. "
+        "Reads what each release shipped from PyPI, so it needs network access."
     )
     parser.add_argument(
         "--release-version",
@@ -528,10 +488,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        result = run(
-            verify_released=args.verify_released,
-            release_version=args.release_version,
-        )
+        result = run(release_version=args.release_version)
     except CheckError as exc:
         print(f"::error::{exc}")
         return 1

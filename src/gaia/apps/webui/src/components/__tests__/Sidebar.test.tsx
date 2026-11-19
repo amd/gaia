@@ -1,13 +1,14 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
 import type { Session } from '../../types';
+import * as messageQueue from '../../utils/messageQueue';
 
 vi.mock('../../services/api');
 
@@ -32,13 +33,14 @@ beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date(2026, 8, 29, 12));
     mockedApi.deleteSession.mockResolvedValue(undefined);
+    mockedApi.searchSessions.mockResolvedValue({ query: '', results: [] });
     useModelStore.setState({
         active: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma', remote: false, is_default: true },
     });
     useChatStore.setState({
         sessions: SESSIONS, currentSessionId: null, runningSessionIds: [], pendingDeleteIds: [],
         sidebarOpen: true, sidebarCollapsed: false, settingsSection: null,
-        showMemoryDashboard: false, showSchedules: false,
+        showMemoryDashboard: false, showSchedules: false, messageQueues: {}, locale: 'en',
     });
 });
 
@@ -58,8 +60,32 @@ describe('Sidebar', () => {
     it('filters chats by search', () => {
         render(<Sidebar onNewChat={vi.fn()} />);
         fireEvent.change(screen.getByRole('searchbox', { name: /Search chats/ }), { target: { value: 'trip' } });
-        expect(screen.getByText('Plan the trip')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Plan the trip' })).toBeInTheDocument();
         expect(screen.queryByText('Fix the build')).not.toBeInTheDocument();
+    });
+
+    it('Connectors opens the connectors settings pane', () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Connectors' }));
+        expect(useChatStore.getState().settingsSection).toBe('connectors');
+    });
+
+    it('puts search above New chat, expanded and collapsed', () => {
+        const above = (a: HTMLElement, b: HTMLElement) =>
+            !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+        const { unmount } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(above(
+            screen.getByRole('searchbox', { name: /Search chats/ }),
+            screen.getByRole('button', { name: 'New chat' }),
+        )).toBe(true);
+        unmount();
+
+        useChatStore.setState({ sidebarCollapsed: true });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(above(
+            screen.getByRole('button', { name: 'Search chats' }),
+            screen.getByRole('button', { name: /New chat/ }),
+        )).toBe(true);
     });
 
     it('New chat calls onNewChat', () => {
@@ -67,6 +93,12 @@ describe('Sidebar', () => {
         render(<Sidebar onNewChat={onNewChat} />);
         fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
         expect(onNewChat).toHaveBeenCalledOnce();
+    });
+
+    it('Skills opens the skills settings, beside Memory and Scheduled tasks', () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: /Skills/ }));
+        expect(useChatStore.getState().settingsSection).toBe('skills');
     });
 
     it('opens a chat', () => {
@@ -81,6 +113,14 @@ describe('Sidebar', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Plan the trip' }));
         expect(useChatStore.getState().currentSessionId).toBe('b');
         expect(useChatStore.getState().showMemoryDashboard).toBe(false);
+    });
+
+    it('marks only Memory as selected while it replaces the chat', () => {
+        useChatStore.setState({ currentSessionId: 'a', showMemoryDashboard: true });
+        const { container } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(container.querySelectorAll('.sb-row.is-active, .sb-nav-item.is-active')).toHaveLength(1);
+        expect(container.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+        expect(container.querySelector('.sb-nav-item.is-active')).toHaveAccessibleName('Memory');
     });
 
     it('clicking the open chat leaves the Memory dashboard too', () => {
@@ -101,6 +141,64 @@ describe('Sidebar', () => {
         await waitFor(() => expect(screen.queryByText('Tax questions')).not.toBeInTheDocument());
     });
 
+    it('keeps the delete confirmation while the pointer rests on it', () => {
+        // Reverting under the pointer swaps the wide label for Pin, so the confirming click pins.
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        const button = screen.getByRole('button', { name: 'Delete Tax questions' });
+        fireEvent.pointerEnter(button);
+        fireEvent.click(button);
+        act(() => { vi.advanceTimersByTime(10_000); });
+        expect(screen.getByRole('button', { name: 'Confirm delete Tax questions' })).toBeInTheDocument();
+
+        fireEvent.pointerLeave(button);
+        act(() => { vi.advanceTimersByTime(3_000); });
+        expect(screen.getByRole('button', { name: 'Delete Tax questions' })).toBeInTheDocument();
+    });
+
+    it('shows a chat still holding messages to send, and flags one that failed', () => {
+        useChatStore.getState().updateQueue('b', (q) => messageQueue.enqueue(messageQueue.enqueue(q, 'one', 'queued'), 'two', 'queued'));
+        useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(q, 'bad', 'failed'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(screen.getByText('2 to send')).toBeInTheDocument();
+        expect(screen.getByText('1 not sent')).toBeInTheDocument();
+    });
+
+    it("says a delete takes the chat's unsent messages with it, and does", async () => {
+        useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(messageQueue.enqueue(q, 'one', 'queued'), 'two', 'failed'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Delete Tax questions' }));
+        expect(screen.getByText('Delete 2 unsent?')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm delete Tax questions and its 2 unsent messages' }));
+        await waitFor(() => expect(mockedApi.deleteSession).toHaveBeenCalledExactlyOnceWith('c'));
+        await waitFor(() => expect(useChatStore.getState().messageQueues.c).toBeUndefined());
+    });
+
+    it('reads the unsent-message delete confirmation in Arabic', () => {
+        useChatStore.setState({ locale: 'ar' });
+        useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(messageQueue.enqueue(q, 'one', 'queued'), 'two', 'queued'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        const plain = (s: string | null) => (s ?? '').replace(/[\u2066-\u2069]/g, '');
+        const button = (name: string) => screen.getAllByRole('button').find((b) => plain(b.getAttribute('aria-label')).startsWith(name))!;
+        fireEvent.click(button('حذف Tax questions'));
+        const confirm = button('تأكيد حذف Tax questions');
+        expect(plain(confirm.getAttribute('aria-label'))).toContain('تأكيد حذف Tax questions ورسائلها غير المُرسلة (2)');
+        expect(plain(confirm.getAttribute('title'))).toContain('انقر مرة أخرى لحذف هذه المحادثة ورسائلها غير المُرسلة (2)');
+        expect(plain(confirm.textContent)).toContain('حذف الرسائل غير المُرسلة (2)؟');
+    });
+
+    it('keeps the unsent messages when the delete fails', async () => {
+        mockedApi.deleteSession.mockRejectedValue(new Error('Database is locked'));
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(q, 'keep me', 'queued'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Delete Tax questions' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm delete Tax questions and its 1 unsent message' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked');
+        expect(useChatStore.getState().messageQueues.c.map((m) => m.text)).toEqual(['keep me']);
+    });
+
     it('keeps the chat and says why when delete fails', async () => {
         mockedApi.deleteSession.mockRejectedValue(new Error('Database is locked'));
         vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -111,16 +209,17 @@ describe('Sidebar', () => {
         expect(screen.getByText('Tax questions')).toBeInTheDocument();
     });
 
-    it('shows where the model runs', () => {
+    it('shows where the model runs, and opens its live status', async () => {
+        mockedApi.getLocalModelStatus.mockReturnValue(new Promise(() => {}));
         render(<Sidebar onNewChat={vi.fn()} />);
-        const location = screen.getByRole('button', { name: 'Local · Gemma-4-E4B-it-GGUF' });
+        const location = screen.getByRole('button', { name: /^Local · Gemma-4-E4B-it-GGUF/ });
         fireEvent.click(location);
-        expect(useChatStore.getState().settingsSection).toBe('model');
+        expect(await screen.findByRole('dialog', { name: 'Model status' })).toBeInTheDocument();
     });
 
     it('shows a cloud location for a cloud model', () => {
         useModelStore.setState({
-            active: { provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi-k2', label: 'Kimi', remote: true, is_default: false },
+            active: { provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi-k2', label: 'Kimi', remote: true, is_default: false, provider_name: 'Fireworks AI' },
         });
         render(<Sidebar onNewChat={vi.fn()} />);
         expect(screen.getByRole('button', { name: 'Fireworks AI · kimi-k2' })).toBeInTheDocument();
@@ -129,7 +228,7 @@ describe('Sidebar', () => {
     it('does not claim Local when the backend cannot tell where chat runs', () => {
         useChatStore.setState({ sessions: SESSIONS.map((s) => ({ ...s, inference_remote: null })) });
         render(<Sidebar onNewChat={vi.fn()} />);
-        const location = screen.getByRole('button', { name: 'Gemma-4-E4B-it-GGUF' });
+        const location = screen.getByRole('button', { name: /^Gemma-4-E4B-it-GGUF/ });
         expect(location.textContent).not.toMatch(/local/i);
     });
 
@@ -139,5 +238,57 @@ describe('Sidebar', () => {
         });
         render(<Sidebar onNewChat={vi.fn()} />);
         expect(screen.getByRole('button', { name: 'Fireworks AI · Gemma-4-E4B-it-GGUF' })).toBeInTheDocument();
+    });
+});
+
+describe('Sidebar width', () => {
+    beforeEach(() => localStorage.removeItem('gaia-chat-sidebar-width'));
+
+    const handle = () => screen.getByRole('separator', { name: 'Resize sidebar' });
+    const width = () => screen.getByRole('complementary', { name: 'Chats' }).style.width;
+
+    it('resizes from the keyboard and remembers the width', () => {
+        const { unmount } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(handle()).toHaveAttribute('aria-valuenow', '260');
+        fireEvent.keyDown(handle(), { key: 'ArrowRight' });
+        expect(width()).toBe('276px');
+        fireEvent.keyDown(handle(), { key: 'End' });
+        expect(handle()).toHaveAttribute('aria-valuenow', '420');
+        unmount();
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(width()).toBe('420px');
+    });
+
+    it('double-click resets to the default width', () => {
+        localStorage.setItem('gaia-chat-sidebar-width', '380');
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(width()).toBe('380px');
+        fireEvent.doubleClick(handle());
+        expect(width()).toBe('260px');
+    });
+
+    it('dragging narrow collapses the sidebar to its rail', () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.pointerDown(handle(), { button: 0, clientX: 260, pointerId: 1 });
+        fireEvent.pointerMove(handle(), { clientX: 100, pointerId: 1 });
+        fireEvent.pointerUp(handle(), { clientX: 100, pointerId: 1 });
+        expect(useChatStore.getState().sidebarCollapsed).toBe(true);
+    });
+
+    it('dragging resizes within the limits', () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.pointerDown(handle(), { button: 0, clientX: 260, pointerId: 1 });
+        fireEvent.pointerMove(handle(), { clientX: 900, pointerId: 1 });
+        fireEvent.pointerUp(handle(), { clientX: 900, pointerId: 1 });
+        expect(width()).toBe('420px');
+        expect(localStorage.getItem('gaia-chat-sidebar-width')).toBe('420');
+    });
+
+    it('keeps the GAIA icon when collapsed, with no handle', () => {
+        useChatStore.setState({ sidebarCollapsed: true });
+        const { container } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(container.querySelector('.sb-brand img')).not.toBeNull();
+        expect(screen.queryByText('GAIA')).not.toBeInTheDocument();
+        expect(screen.queryByRole('separator', { name: 'Resize sidebar' })).not.toBeInTheDocument();
     });
 });

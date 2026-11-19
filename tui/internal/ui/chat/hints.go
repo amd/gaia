@@ -70,6 +70,9 @@ const (
 	// the next message may push turns out of view.
 	rankContext     = 35
 	rankContextFull = 75
+	// The Connectors entry: the TUI's toolbar button, so it outlives the
+	// scroll and mouse hints but yields to anything about the current state.
+	rankToolbar = 50
 )
 
 // statusHints builds the hint list for the current state, in display order.
@@ -80,6 +83,11 @@ func (m ChatModel) statusHints() []hint {
 	// the one row that is always drawn.
 	if m.fullAccess {
 		hints = append(hints, hint{text: "/full-access off", rank: rankFullAccess})
+	}
+	// A /models download running in the background, so the user can keep
+	// chatting and still see how far it is.
+	if dl := m.downloadHint(); dl != "" {
+		hints = append(hints, hint{text: dl, rank: rankMode + 1})
 	}
 	// A mode the user switched into outranks the scroll hints; the default one
 	// only takes a column nothing else wanted.
@@ -112,6 +120,9 @@ func (m ChatModel) statusHints() []hint {
 	// earlier turns; a user who does not know that concludes history is gone.
 	// The warm-up stage has no transcript to scroll or select — it replaces
 	// the transcript entirely.
+	if m.connectorsHintShown() {
+		hints = append(hints, hint{text: connectorsHint, rank: rankToolbar})
+	}
 	if !(m.warming && !m.warmHidden) {
 		hints = append(hints, hint{text: "↑↓/wheel scroll", rank: rankAffordance})
 		// The terminal's drag-select stops at the window's edge; Ctrl+T is the
@@ -133,10 +144,14 @@ func (m ChatModel) statusHints() []hint {
 			hints = append(hints, hint{text: text, rank: rankSecondary})
 		}
 		// One key to the result, offered only once there is one to open.
-		if !m.streaming && m.confirmation == nil {
-			if _, ok := m.lastDeliverable(); ok {
-				hints = append(hints, hint{text: "Ctrl+G open file", rank: rankAffordance})
+		if _, ok := m.newerDeliverable(); ok {
+			if !m.streaming && m.confirmation == nil {
+				hints = append(hints, hint{text: "Ctrl+F open file", rank: rankAffordance})
 			}
+		} else if _, ok := m.latestMediaCandidate(); ok {
+			hints = append(hints,
+				hint{text: "Ctrl+F open · Ctrl+G reveal", rank: rankSecondary},
+			)
 		}
 	}
 
@@ -163,6 +178,12 @@ func (m ChatModel) statusHints() []hint {
 			hint{text: "type ahead", rank: rankAffordance},
 			hint{text: "Esc show chat", rank: rankInterrupt},
 		)
+	} else if m.startup.inFlight && m.startup.kind == StartupRestore {
+		// Say what the wait is; Esc still cancels a streaming restore turn.
+		hints = append(hints, hint{text: "restoring " + m.startup.model + "…", rank: rankAffordance})
+		if m.streaming {
+			hints = append(hints, hint{text: "Esc cancel", rank: rankInterrupt})
+		}
 	} else if m.streaming {
 		// Worth advertising exactly when it applies: someone who believes the
 		// composer is frozen never tries it.

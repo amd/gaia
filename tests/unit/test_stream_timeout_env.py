@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""GAIA_STREAM_TIMEOUT parsing for the Agent UI streaming-turn deadline."""
+"""GAIA_STREAM_TIMEOUT parsing for the Agent UI turn's no-progress limit."""
 
 import os
 import subprocess
@@ -22,7 +22,7 @@ def test_unset_or_blank_uses_default(monkeypatch, raw):
         monkeypatch.delenv(ENV, raising=False)
     else:
         monkeypatch.setenv(ENV, raw)
-    assert _stream_timeout_from_env() == 600
+    assert _stream_timeout_from_env() == 4500
 
 
 @pytest.mark.parametrize("raw,expected", [("1800", 1800), (" 1 ", 1), ("86400", 86400)])

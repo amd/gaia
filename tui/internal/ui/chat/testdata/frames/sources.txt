@@ -27,4 +27,4 @@
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 › Ask anything — Enter to send, Alt+Enter for a new line
-  ● agent gaia connected     ask mode (shift+tab) · ↑↓/wheel scroll · Ctrl+O details · Ctrl+C quit
+  ● agent gaia connected        ask mode (shift+tab) · /connectors · ↑↓/wheel scroll · Ctrl+C quit

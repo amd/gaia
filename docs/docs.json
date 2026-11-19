@@ -6,11 +6,11 @@
     "og:site_name": "GAIA SDK",
     "og:title": "Build AI PC agents",
     "og:description": "Open-source Python & C++ SDK. Build free, private, AMD-accelerated AI PC agents.",
-    "og:image": "https://amd-gaia.ai/assets/logo/dark.png",
+    "og:image": "https://amd-gaia.ai/docs/assets/logo/dark.png",
     "twitter:card": "summary_large_image",
     "twitter:title": "Build AI PC agents",
     "twitter:description": "Open-source Python & C++ SDK. Build free, private, AMD-accelerated AI PC agents.",
-    "twitter:image": "https://amd-gaia.ai/assets/logo/dark.png"
+    "twitter:image": "https://amd-gaia.ai/docs/assets/logo/dark.png"
   },
   "colors": {
     "primary": "#A87B2D",
@@ -41,6 +41,19 @@
             ]
           },
           {
+            "group": "Desktop app",
+            "pages": [
+              "guides/agent-ui",
+              "guides/agent-ui/getting-started",
+              "guides/agent-ui/chat",
+              "guides/agent-ui/documents",
+              "guides/agent-ui/control",
+              "guides/agent-ui/extend",
+              "guides/agent-ui/desktop",
+              "guides/agent-ui/settings"
+            ]
+          },
+          {
             "group": "C++ Framework",
             "pages": [
               "cpp/setup",
@@ -68,8 +81,7 @@
               "guides/install",
               "setup",
               "quickstart",
-              "guides/agent-ui",
-              "guides/terminal-hub",
+              "guides/tui",
               "guides/memory",
               {
                 "group": "User Guides",
@@ -93,7 +105,8 @@
                       "guides/browser-use",
                       "guides/harness-engineering",
                       "guides/talk",
-                      "guides/transcription"
+                      "guides/transcription",
+                      "guides/audio-generation"
                     ]
                   },
                   {
@@ -107,6 +120,8 @@
                     "group": "Connected Agents",
                     "pages": [
                       "guides/email",
+                      "guides/discord",
+                      "guides/automations",
                       "guides/slack",
                       "guides/telegram-adapter"
                     ]
@@ -115,9 +130,9 @@
                     "group": "Build & Extend",
                     "pages": [
                       "guides/starter-skills",
+                      "guides/building-skills",
                       "guides/custom-agent",
-                      "guides/composing-skills",
-                      "guides/hub-publishing"
+                      "guides/composing-skills"
                     ]
                   },
                   {
@@ -125,7 +140,6 @@
                     "pages": [
                       "guides/mcp/agent-ui",
                       "guides/mcp/tui",
-                      "guides/mcp/client",
                       "guides/mcp/windows-system-health"
                     ]
                   }
@@ -139,6 +153,12 @@
                   "connectors/microsoft",
                   "connectors/github",
                   "connectors/tavily",
+                  "connectors/git",
+                  "connectors/memory",
+                  "connectors/slack",
+                  "connectors/discord",
+                  "connectors/notion",
+                  "connectors/brave-search",
                   "security/connections",
                   "security/connectors"
                 ]
@@ -316,12 +336,6 @@
             ]
           },
           {
-            "group": "Packaging",
-            "pages": [
-              "spec/electron-integration"
-            ]
-          },
-          {
             "group": "Agents & Apps",
             "pages": [
               "spec/mcp-agent",
@@ -408,11 +422,16 @@
             "group": "Agent UI",
             "pages": [
               "plans/gaia-ui-redesign",
+              "plans/session-panel-context",
+              "plans/voice",
+              "plans/phone-calls",
               "plans/security-model",
               "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
+              "plans/discord-integration",
               "plans/daemon-convergence",
-              "plans/autonomy-engine"
+              "plans/autonomy-engine",
+              "plans/goal-mode"
             ]
           },
           {
@@ -420,7 +439,6 @@
             "pages": [
               "plans/flagship-installer",
               "plans/embedded-onboarding",
-              "spec/agent-hub-restructure",
               "spec/agent-skills",
               "plans/skill-format",
               "plans/skill-synthesis",
@@ -437,10 +455,13 @@
               "plans/cua",
               "plans/docker-containers",
               "plans/mcp-docs",
+              "plans/codebase-knowledge-index",
               "plans/desktop-installer",
               "plans/tool-loader",
               "plans/nightly-benchmarks",
-              "plans/eval-hillclimbing"
+              "plans/eval-hillclimbing",
+              "plans/release-train",
+              "plans/release-eval-hardening"
             ]
           },
           {
@@ -458,6 +479,13 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.27.0",
+              "releases/v0.26.1",
+              "releases/v0.26.0",
+              "releases/v0.25.4",
+              "releases/v0.25.3",
+              "releases/v0.25.2",
+              "releases/v0.25.1",
               "releases/v0.25.0",
               "releases/v0.24.1",
               "releases/v0.23.0",
@@ -520,7 +548,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.25.0 \u00b7 Lemonade 2026.40.0",
+        "label": "v0.27.0 \u00b7 Lemonade 2026.44.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {
@@ -554,6 +582,30 @@
     "copyright": "Copyright \u00a9 2024-2026 Advanced Micro Devices, Inc."
   },
   "redirects": [
+    {
+      "source": "/spec/electron-integration",
+      "destination": "/sdk/sdks/agent-ui"
+    },
+    {
+      "source": "/plans/email-triage-agent",
+      "destination": "/guides/email"
+    },
+    {
+      "source": "/plans/email-agent-packaging",
+      "destination": "/guides/email"
+    },
+    {
+      "source": "/plans/email-calendar-integration",
+      "destination": "/guides/email"
+    },
+    {
+      "source": "/guides/hub-publishing",
+      "destination": "/guides/custom-agent"
+    },
+    {
+      "source": "/guides/terminal-hub",
+      "destination": "/guides/tui"
+    },
     {
       "source": "/cpp",
       "destination": "/cpp/quickstart"

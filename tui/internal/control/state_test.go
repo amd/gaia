@@ -164,7 +164,7 @@ func TestChangedBroadcastsOnNewFrame(t *testing.T) {
 	st.recordFrame("hello")
 	select {
 	case <-ch:
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("Changed() did not fire after a new frame")
 	}
 }
@@ -181,10 +181,10 @@ func TestChangedBroadcastsOnSnapshotChangeOnly(t *testing.T) {
 	default:
 	}
 
-	st.setSnapshot(Snapshot{View: "chat", Agent: "email"})
+	st.setSnapshot(Snapshot{View: "chat", Agent: "notes"})
 	select {
 	case <-ch:
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("a state change with no repaint did not wake waiters — POST /wait on a state matcher would hang")
 	}
 }

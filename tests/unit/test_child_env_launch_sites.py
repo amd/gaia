@@ -133,27 +133,15 @@ def test_native_agent_launch_is_trimmed(monkeypatch, tmp_path, extra):
 # ---------------------------------------------------------------------------
 
 
-def test_ffmpeg_decode_is_trimmed(monkeypatch):
-    from gaia.audio import media
-
-    run = Recorder(result=_completed())
-    monkeypatch.setattr(media.subprocess, "run", run)
-
-    media._run_ffmpeg(["ffmpeg", "-i", "in.mp3"], Path("in.mp3"))
-
-    assert_trimmed(run.env)
-
-
-def test_ffmpeg_decode_with_progress_is_trimmed(monkeypatch):
+@pytest.mark.parametrize("callback", [None, lambda _f: None], ids=["plain", "progress"])
+def test_ffmpeg_decode_is_trimmed(monkeypatch, callback):
     from gaia.audio import media
 
     popen = Recorder(raises=OSError("stop here"))
     monkeypatch.setattr(media.subprocess, "Popen", popen)
 
     with pytest.raises(media.MediaError):
-        media._run_ffmpeg_with_progress(
-            ["ffmpeg", "-i", "in.mp3"], Path("in.mp3"), 1.0, lambda _f: None
-        )
+        media._run_ffmpeg(["ffmpeg", "-i", "in.mp3"], Path("in.mp3"), 1.0, callback)
 
     assert_trimmed(popen.env)
 
@@ -194,6 +182,7 @@ def test_diarization_engine_install_is_trimmed(monkeypatch):
     run = Recorder(raises=subprocess.CalledProcessError(1, ["pip"]))
     monkeypatch.setattr(diarize, "_package_installed", lambda: False)
     monkeypatch.delattr(diarize.sys, "frozen", raising=False)
+    monkeypatch.setattr("gaia.agents.install_hints._pip_available", lambda: True)
     monkeypatch.setattr(diarize.subprocess, "run", run)
 
     with pytest.raises(diarize.DiarizationError):
@@ -290,12 +279,12 @@ def test_daemon_supervised_lemonade_is_trimmed(monkeypatch, tmp_path):
     sup = lemonade_supervisor.LemonadeSupervisor(log_dir=tmp_path)
 
     try:
-        sup._spawn(StartSpec(argv=["lemond"], env={"LEMONADE_CTX_SIZE": "65536"}))
+        sup._spawn(StartSpec(argv=["lemond"], env={"GAIA_SPEC_VAR": "65536"}))
     finally:
         sup._close_log()
 
     assert_trimmed(popen.env)
-    assert popen.env["LEMONADE_CTX_SIZE"] == "65536"
+    assert popen.env["GAIA_SPEC_VAR"] == "65536"
 
 
 def test_client_launched_lemonade_is_trimmed(monkeypatch):
@@ -314,7 +303,7 @@ def test_client_launched_lemonade_is_trimmed(monkeypatch):
     monkeypatch.setattr(
         lemonade_client,
         "build_start_command",
-        lambda _t, _c: StartSpec(argv=["lemond"], env={"LEMONADE_CTX_SIZE": "1"}),
+        lambda _t: StartSpec(argv=["lemond"], env={"GAIA_SPEC_VAR": "1"}),
     )
     monkeypatch.setattr(lemonade_client.subprocess, "Popen", popen)
 
@@ -322,7 +311,7 @@ def test_client_launched_lemonade_is_trimmed(monkeypatch):
         client.launch_server(background="terminal")
 
     assert_trimmed(popen.env)
-    assert popen.env["LEMONADE_CTX_SIZE"] == "1"
+    assert popen.env["GAIA_SPEC_VAR"] == "1"
 
 
 def test_embedded_lemonade_start_is_trimmed(monkeypatch, tmp_path):

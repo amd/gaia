@@ -1,11 +1,13 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Which GAIA front ends are using GAIA's Lemonade, and when to free its memory.
+"""Which GAIA processes are using GAIA's Lemonade, and when to free its memory.
 
-Every GAIA front end that runs on the local server registers here: the Agent UI
-backend (Electron app and ``npx @amd-gaia/agent-ui``), the TUI, and each
-``gaia`` CLI command that needs a model. A registration names the processes it
-lives as long as, and ends when they all exit or the client releases it.
+Every GAIA process that uses the local server leases it here: the Agent UI
+backend (Electron app and ``npx @amd-gaia/agent-ui``), the TUI, each ``gaia``
+command, and any process whose ``LemonadeClient`` is aimed at it, under any
+``GAIA_HOME``. A lease names the processes it lives as long as and is renewed
+every 30 seconds. It ends when they all exit, when the client releases it, or
+when it goes :data:`LEASE_TTL` without a renewal.
 
 The policy, in two rules:
 
@@ -15,13 +17,26 @@ The policy, in two rules:
    server start but reloads the model. A CLI command (``kind="cli"``) keeps the
    models resident while it runs but never unloads on its own exit, so a run of
    ``gaia llm`` calls does not reload the model every time.
-2. **Nobody here, the server goes.** Once no client has been registered for
-   ``lemonade_idle_timeout_minutes`` (``gaia config``; 0 turns it off), GAIA's
-   server is stopped outright. The next client to register starts it again.
+2. **Nobody here, the server goes.** Once no lease has been held *and* the
+   server has served no request for ``lemonade_idle_timeout_minutes``
+   (``gaia config``; 0 turns it off), GAIA's server is stopped outright. The
+   next client starts it again, and a client that finds it stopped mid-request
+   restarts it and sends the request once more.
 
-A running sidecar agent counts as a client for both rules. Neither rule ever
-touches a server ``LEMONADE_BASE_URL`` names -- that is the user's -- because
-both act only through :class:`~gaia.daemon.lemonade.EmbeddedLemonadeOwner`.
+Leases are not the only evidence of use. A process too old to lease still sends
+its requests to this server, so both rules also read the server's own
+``/health``: a model marked busy, or a ``last_use`` that moved since the last
+look, is traffic. No unload or stop happens while a request is in flight, and
+each re-reads the server as its last step, so a request that lands mid-decision
+wins.
+
+A sidecar agent the daemon runs is not a client of its own: it serves the apps
+and commands above, so the lease its own process takes is noted but held by
+nobody. A turn relayed to it is: while one is open, neither rule acts. When the
+last app leaves, the idle sidecars are stopped along with the models, and the
+next turn starts them again. Neither rule ever touches a server
+``LEMONADE_BASE_URL`` names -- that is the user's -- because both act only
+through :class:`~gaia.daemon.lemonade.EmbeddedLemonadeOwner`.
 """
 
 from __future__ import annotations
@@ -31,9 +46,12 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Collection, Dict, List, Optional, Tuple
 
 from gaia.logger import get_logger
+
+if TYPE_CHECKING:
+    from gaia.daemon.lemonade import LemonadeActivity
 
 logger = get_logger(__name__)
 
@@ -44,6 +62,13 @@ SWEEP_INTERVAL = 5.0
 STOP_JOIN_TIMEOUT = 1.0
 
 CLIENT_KINDS = ("app", "cli")
+
+#: A lease not renewed for this long is dropped. Clients renew every 30 s.
+LEASE_TTL = 120.0
+
+#: An unload put off because the server was serving someone else waits for
+#: this long a quiet spell, so it does not land between that caller's requests.
+UNLOAD_QUIET_SECONDS = 60.0
 
 #: What :func:`secrets.token_urlsafe` produces, and nothing a log could abuse.
 _CLIENT_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")
@@ -60,6 +85,36 @@ def process_identity(pid: int) -> Optional[ProcessIdentity]:
         return pid, psutil.Process(pid).create_time()
     except psutil.NoSuchProcess:
         return None
+
+
+def ancestor_pids(pid: int) -> List[int]:
+    """The pids of *pid*'s parent, its parent's parent, and so on.
+
+    ``psutil`` only names a parent started before the child, so a recycled
+    Windows parent pid is never mistaken for the real one. A walk cut short
+    keeps the ancestors found so far and is logged: a lease it misses holds
+    the models as if a user held it.
+    """
+    import psutil
+
+    found: List[int] = []
+    try:
+        proc = psutil.Process(pid).parent()
+        while proc is not None:
+            found.append(proc.pid)
+            proc = proc.parent()
+    except psutil.NoSuchProcess:
+        pass
+    except psutil.Error as e:
+        logger.warning(
+            "lemonade clients: could not read the parents of pid %d past %s: %s. "
+            "If it runs inside a sidecar agent, its lease keeps the models "
+            "loaded until it exits.",
+            pid,
+            found or "itself",
+            e,
+        )
+    return found
 
 
 def idle_timeout_seconds() -> Optional[float]:
@@ -81,6 +136,9 @@ class _Client:
     kind: str
     name: str
     processes: List[ProcessIdentity]
+    renewed_at: float = 0.0
+    # Runs inside a sidecar agent, so it holds nothing open on its own.
+    agent: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -88,6 +146,7 @@ class _Client:
             "kind": self.kind,
             "name": self.name,
             "pids": [pid for pid, _ in self.processes],
+            "agent": self.agent,
         }
 
 
@@ -102,7 +161,15 @@ class LemonadeClients:
         owner: The :class:`~gaia.daemon.lemonade.EmbeddedLemonadeOwner` whose
             server this frees.
         busy: True while something outside this registry needs the server,
-            e.g. a running sidecar agent.
+            e.g. a turn relayed to a sidecar agent.
+        agent_pids: The pids of the sidecar agents the daemon runs. A lease
+            taken from one of them, or a process under one, is the agent's.
+        stop_agents: Stops the sidecar agents nobody is using. Called when the
+            last app leaves, just before the models are unloaded.
+        ancestors: Returns a process's ancestor pids.
+        activity: Reads what the server is doing
+            (:meth:`~gaia.daemon.lemonade.EmbeddedLemonadeOwner.activity`);
+            None when it is not running. Defaults to the owner's.
         timeout: Returns the idle timeout in seconds, or None when it is off.
         identity: Returns a process's identity, or None when it is gone.
         clock: Monotonic seconds.
@@ -113,12 +180,20 @@ class LemonadeClients:
         owner,
         *,
         busy: Callable[[], bool] = lambda: False,
+        agent_pids: Callable[[], Collection[int]] = frozenset,
+        stop_agents: Callable[[], None] = lambda: None,
+        ancestors: Callable[[int], List[int]] = ancestor_pids,
+        activity: Optional[Callable[[], Optional["LemonadeActivity"]]] = None,
         timeout: Callable[[], Optional[float]] = idle_timeout_seconds,
         identity: Callable[[int], Optional[ProcessIdentity]] = process_identity,
         clock: Callable[[], float] = time.monotonic,
     ):
         self._owner = owner
         self._busy = busy
+        self._agent_pids = agent_pids
+        self._stop_agents = stop_agents
+        self._ancestors = ancestors
+        self._activity = activity or owner.activity
         self._timeout = timeout
         self._identity = identity
         self._clock = clock
@@ -130,6 +205,14 @@ class LemonadeClients:
         # An app left while another client was still here; unload once the
         # last one goes.
         self._unload_pending = False
+        # That unload was put off because the server was serving someone.
+        self._unload_deferred = False
+        # The server's activity marker at the last look, and when it was last
+        # seen working.
+        self._marker: Optional[tuple] = None
+        self._active_at: Optional[float] = None
+        self._looked = False
+        self._last_sweep = clock()
         self._empty_since: Optional[float] = clock()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -152,8 +235,9 @@ class LemonadeClients:
                 that has since restarted is known to the new one too.
 
         Returns:
-            ``client_id``, how many ``clients`` are connected, and whether this
-            call ``added`` the client (False when it was already registered).
+            ``client_id``, how many ``clients`` hold the server open (a sidecar
+            agent's own lease is not one), and whether this call ``added`` the
+            client (False when it was already registered).
 
         Raises:
             ClientRejected: *kind* or *client_id* is malformed, or a pid is not
@@ -163,9 +247,10 @@ class LemonadeClients:
             raise ClientRejected(f"Malformed client id {client_id!r}.")
         with self._lock:
             if client_id in self._clients:
+                self._clients[client_id].renewed_at = self._clock()
                 return {
                     "client_id": client_id,
-                    "clients": len(self._clients),
+                    "clients": len(self._users()),
                     "added": False,
                 }
         if kind not in CLIENT_KINDS:
@@ -188,16 +273,21 @@ class LemonadeClients:
             kind=kind,
             name=name or kind,
             processes=processes,
+            renewed_at=self._clock(),
+            # Decided once: a sidecar's pid is known from its spawn, before it can lease.
+            agent=self._in_agent([pid for pid, _ in processes]),
         )
         with self._lock:
             self._clients[client.client_id] = client
-            self._generation += 1
-            self._empty_since = None
-            count = len(self._clients)
+            if not client.agent:
+                self._generation += 1
+                self._empty_since = None
+            count = len(self._users())
         logger.info(
-            "lemonade clients: %s registered (%s, pids %s); %d connected",
+            "lemonade clients: %s registered (%s%s, pids %s); %d connected",
             client.name,
             kind,
+            ", inside a sidecar agent" if client.agent else "",
             [p for p, _ in processes],
             count,
         )
@@ -211,26 +301,44 @@ class LemonadeClients:
         """
         with self._lock:
             client = self._clients.pop(client_id)
-            if client.kind == "app":
+            if client.kind == "app" and not client.agent:
                 self._unload_pending = True
         logger.info("lemonade clients: %s released", client.name)
         return self._after_departure()
 
     def sweep(self) -> None:
-        """Drop clients whose processes exited, then apply both rules."""
+        """Drop clients whose processes exited or whose lease lapsed, then
+        apply both rules."""
+        now = self._clock()
         with self._lock:
-            gone = [
+            if now - self._last_sweep > LEASE_TTL / 2:
+                # This daemon was not running (the machine slept): no client
+                # could renew, so none has lapsed.
+                for client in self._clients.values():
+                    client.renewed_at = now
+            self._last_sweep = now
+            exited = [
                 c
                 for c in self._clients.values()
                 if any(self._identity(pid) != (pid, t) for pid, t in c.processes)
             ]
-            for client in gone:
+            lapsed = [
+                c
+                for c in self._clients.values()
+                if c not in exited and now - c.renewed_at > LEASE_TTL
+            ]
+            for client in exited + lapsed:
                 del self._clients[client.client_id]
-                if client.kind == "app":
+                if client.kind == "app" and not client.agent:
                     self._unload_pending = True
-        for client in gone:
+        for client in exited:
             logger.info(
                 "lemonade clients: %s exited without releasing; dropped",
+                client.name,
+            )
+        for client in lapsed:
+            logger.info(
+                "lemonade clients: %s stopped renewing its lease; dropped",
                 client.name,
             )
         self._after_departure()
@@ -241,37 +349,125 @@ class LemonadeClients:
         with self._lock:
             clients = [c.to_dict() for c in self._clients.values()]
             empty_since = self._empty_since
-        idle = None if empty_since is None else self._clock() - empty_since
+            active_at = self._active_at
+        now = self._clock()
+        idle = None if empty_since is None else now - empty_since
         return {
             "clients": clients,
             "idle_seconds": idle,
+            "seconds_since_request": None if active_at is None else now - active_at,
             "idle_timeout_error": self._timeout_error,
         }
 
     # -- the two rules -----------------------------------------------------
 
+    def _users(self) -> List[_Client]:
+        """The clients holding the server open. Call with the lock held."""
+        return [c for c in self._clients.values() if not c.agent]
+
+    def _in_agent(self, pids: List[int]) -> bool:
+        """Every one of *pids* is a sidecar agent or runs under one.
+
+        A one-file frozen sidecar is a bootloader whose child does the work, so
+        the pid that leases is the child of the one the daemon started.
+        """
+        agents = set(self._agent_pids())
+        if not agents:
+            return False
+        return all(
+            pid in agents or agents.intersection(self._ancestors(pid)) for pid in pids
+        )
+
+    def _stop_idle_agents(self, generation: int) -> None:
+        """Stop the sidecar agents, unless someone arrived or a turn opened."""
+        from gaia.daemon.sidecars.errors import SidecarError
+
+        if not self._unchanged_since(generation) or self._busy():
+            return
+        try:
+            self._stop_agents()
+        except SidecarError as e:
+            logger.error(
+                "lemonade clients: last GAIA app closed, but a sidecar agent "
+                "could not be stopped: %s",
+                e,
+            )
+
+    def _observe(self) -> Optional["LemonadeActivity"]:
+        """Read the server's activity, noting when it was last seen working."""
+        seen = self._activity()
+        now = self._clock()
+        with self._lock:
+            # The first look is a baseline; the idle clock already covers
+            # everything before it.
+            moved = self._looked and seen is not None and seen.marker != self._marker
+            if seen is not None and (seen.busy or moved):
+                self._active_at = now
+            self._marker = None if seen is None else seen.marker
+            self._looked = True
+        return seen
+
+    def _still_quiet(self, marker: tuple) -> bool:
+        """Nothing in flight, and no request since the server read *marker*."""
+        seen = self._observe()
+        return seen is None or (not seen.busy and seen.marker == marker)
+
     def _after_departure(self) -> dict:
         from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
 
         with self._lock:
-            remaining = len(self._clients)
+            remaining = len(self._users())
             if remaining == 0 and self._empty_since is None:
                 self._empty_since = self._clock()
-            unload = remaining == 0 and self._unload_pending and not self._busy()
-            if unload:
-                self._unload_pending = False
+            owed = remaining == 0 and self._unload_pending and not self._busy()
+            deferred = self._unload_deferred
             generation = self._generation
         result = {"clients": remaining, "unloaded": False}
-        if not unload:
+        if not owed:
             return result
+        seen = self._observe()
+        if seen is not None and seen.busy:
+            with self._lock:
+                if not self._unload_deferred:
+                    logger.info(
+                        "lemonade clients: last GAIA app closed, but Lemonade is "
+                        "%s; unloading once it has been quiet for %gs",
+                        seen.detail or "busy",
+                        UNLOAD_QUIET_SECONDS,
+                    )
+                self._unload_deferred = True
+            return result
+        if deferred:
+            with self._lock:
+                quiet_for = self._clock() - (self._active_at or 0.0)
+            if quiet_for < UNLOAD_QUIET_SECONDS:
+                return result
+        with self._lock:
+            self._unload_pending = False
+            self._unload_deferred = False
+        # First, so an agent left running cannot load a model straight back.
+        self._stop_idle_agents(generation)
+        called_off_by_traffic = []
+
+        def _still_wanted() -> bool:
+            if not self._unchanged_since(generation):
+                return False
+            if seen is not None and not self._still_quiet(seen.marker):
+                called_off_by_traffic.append(True)
+                return False
+            return True
+
         try:
-            result["unloaded"] = self._owner.unload_models(
-                still_wanted=lambda: self._unchanged_since(generation)
-            )
+            result["unloaded"] = self._owner.unload_models(still_wanted=_still_wanted)
         except EmbeddedLemonadeError as e:
             logger.error("lemonade clients: could not unload models: %s", e)
             result["unload_error"] = str(e)
             return result
+        if called_off_by_traffic:
+            # A request landed mid-decision: it wins, and the unload waits.
+            with self._lock:
+                self._unload_pending = True
+                self._unload_deferred = True
         if result["unloaded"]:
             logger.info(
                 "lemonade clients: last GAIA app closed; unloaded every model "
@@ -285,12 +481,18 @@ class LemonadeClients:
 
         now = self._clock()
         with self._lock:
-            if self._clients:
+            if self._users():
                 return
             if self._busy():
                 self._empty_since = now
                 return
+        seen = self._observe()
+        if seen is None:
+            # Not running, or not GAIA's to stop: nothing to time out.
+            return
+        with self._lock:
             empty_since = self._empty_since
+            active_at = self._active_at
             generation = self._generation
         try:
             timeout = self._timeout()
@@ -304,7 +506,10 @@ class LemonadeClients:
             self._timeout_error = str(e)
             return
         self._timeout_error = None
-        if timeout is None or empty_since is None or now - empty_since < timeout:
+        if timeout is None or empty_since is None:
+            return
+        idle_since = max(empty_since, active_at or empty_since)
+        if now - idle_since < timeout:
             return
         with self._lock:
             # Restart the clock either way, so a failed stop is not retried
@@ -312,8 +517,12 @@ class LemonadeClients:
             self._empty_since = now
         try:
             stopped = self._owner.stop(
-                reason=f"no GAIA client connected for {timeout / 60:g} minutes",
-                still_wanted=lambda: self._unchanged_since(generation),
+                reason=(
+                    "no GAIA client connected and no request served for "
+                    f"{timeout / 60:g} minutes"
+                ),
+                still_wanted=lambda: self._unchanged_since(generation)
+                and self._still_quiet(seen.marker),
             )
         except EmbeddedLemonadeError as e:
             logger.error("lemonade clients: idle stop failed: %s", e)
@@ -324,7 +533,7 @@ class LemonadeClients:
     def _unchanged_since(self, generation: int) -> bool:
         """No client registered since *generation*, and none is connected."""
         with self._lock:
-            return self._generation == generation and not self._clients
+            return self._generation == generation and not self._users()
 
     # -- background sweep --------------------------------------------------
 

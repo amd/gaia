@@ -153,7 +153,7 @@ func TestShiftTabOverAPromptUpdatesItsModeLine(t *testing.T) {
 
 // A transport that cannot carry the mode says so and leaves the mode alone.
 func TestShiftTabWithoutAControlChannelChangesNothing(t *testing.T) {
-	m := NewChatModel(&nullClient{}, "email", "")
+	m := NewChatModel(&nullClient{}, "notes", "")
 	m.width, m.height = 100, 30
 	m.resize()
 	m = shiftTab(t, m)
@@ -172,7 +172,7 @@ func TestATimedOutPromptIsSentAsATimeout(t *testing.T) {
 	m.streaming = true
 	m = feed(t, m, issueTestRunCall())
 
-	c2, cmd := m.confirmation.ResolveTimeout(components.ConfirmationTimeoutMsg{RunID: "run-1"})
+	c2, cmd := m.confirmation.ResolveTimeout(m.confirmation.ExpiryMsg())
 	m.confirmation = &c2
 	decided := cmd().(components.ConfirmationDecidedMsg)
 	updated, deliver := m.Update(decided)

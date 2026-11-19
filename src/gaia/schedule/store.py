@@ -1,3 +1,6 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """Schedule persistence: read/write ``~/.gaia/schedules.toml``.
 
 The store is the single source of truth so schedules survive daemon restarts.
@@ -7,11 +10,21 @@ The file is intentionally human-readable and hand-editable.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Protocol, runtime_checkable
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    Protocol,
+    runtime_checkable,
+)
 
 # tomllib is stdlib on 3.11+; fall back to tomli on 3.10 (python_requires>=3.10).
 try:
@@ -22,16 +35,115 @@ except ModuleNotFoundError:  # pragma: no cover - exercised only on 3.10
 import tomli_w
 
 from gaia.schedule.lock import store_lock
+from gaia.utils.file_lock import replace_retrying
 
 DEFAULT_STORE_PATH = Path(os.path.expanduser("~/.gaia/schedules.toml"))
 
 
+#: States of a one-time schedule. Only ``pending`` ever fires.
+ONE_SHOT_PENDING = "pending"
+ONE_SHOT_RUNNING = "running"
+ONE_SHOT_COMPLETED = "completed"
+ONE_SHOT_FAILED = "failed"
+ONE_SHOT_STATES = (
+    ONE_SHOT_PENDING,
+    ONE_SHOT_RUNNING,
+    ONE_SHOT_COMPLETED,
+    ONE_SHOT_FAILED,
+)
+
+_RELATIVE_AT = re.compile(r"\+((?:\d+[dhm])+)")
+_RELATIVE_PART = re.compile(r"(\d+)([dhm])")
+_UNIT_SECONDS = {"d": 86400, "h": 3600, "m": 60}
+#: Longest number a relative ``--at`` part may have; more is past the limit.
+_MAX_DELAY_DIGITS = 12
+_AT_EXAMPLES = (
+    "an ISO datetime like 2026-11-02T09:00 or a delay like +30m, +2h or +1d12h"
+)
+
+
+def _latest_at(now: datetime) -> datetime:
+    """100 calendar years after *now*: the furthest ahead ``--at`` reaches."""
+    try:
+        return now.replace(year=now.year + 100)
+    except ValueError:
+        # Feb 29 in a year whose +100 is not a leap year.
+        return now.replace(year=now.year + 100, day=28)
+
+
+def parse_at(value: str, now: Optional[datetime] = None) -> datetime:
+    """Turn an ``--at`` value into an aware UTC datetime strictly after *now*.
+
+    Accepts an ISO datetime (no offset means local time) or a relative
+    ``+<n><unit>`` with units ``d``, ``h``, ``m`` (``+2h``, ``+1h30m``).
+    Raises :class:`ValueError` for anything unreadable or not in the future.
+    """
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    text = value.strip()
+    too_far = f"--at {value!r} is more than 100 years away; give {_AT_EXAMPLES}"
+    latest = _latest_at(now)
+    relative = _RELATIVE_AT.fullmatch(text)
+    if relative:
+        parts = _RELATIVE_PART.findall(relative.group(1))
+        # Checked before int(): Python refuses to parse very long digit strings.
+        if any(len(n.lstrip("0")) > _MAX_DELAY_DIGITS for n, _ in parts):
+            raise ValueError(too_far)
+        seconds = sum(int(n) * _UNIT_SECONDS[unit] for n, unit in parts)
+        if seconds <= 0:
+            raise ValueError(
+                f"--at {value!r} is not in the future; give {_AT_EXAMPLES}"
+            )
+        if seconds > (latest - now).total_seconds():
+            raise ValueError(too_far)
+        return (now + timedelta(seconds=seconds)).replace(microsecond=0)
+    # A date alone would silently mean midnight.
+    if text.startswith("+") or not re.search(r"\d[T ]\d", text):
+        raise ValueError(
+            f"--at {value!r} is not a time GAIA can read; give {_AT_EXAMPLES}"
+        )
+    try:
+        moment = datetime.fromisoformat(
+            text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
+        )
+    except ValueError as e:
+        raise ValueError(
+            f"--at {value!r} is not a time GAIA can read; give {_AT_EXAMPLES}"
+        ) from e
+    # Decided by year first: OSes disagree on converting years near 1 or 9999.
+    if moment.year > now.year + 100:
+        raise ValueError(too_far)
+    if moment.year < now.year - 1:
+        raise ValueError(
+            f"--at {value!r} is in the past; give a future time, {_AT_EXAMPLES}"
+        )
+    try:
+        # No offset means the user's wall clock.
+        moment = (moment if moment.tzinfo else moment.astimezone()).astimezone(
+            timezone.utc
+        )
+    except (ValueError, OverflowError, OSError) as e:
+        # Linux says ValueError, Windows OSError, for a year it can't convert.
+        raise ValueError(
+            f"--at {value!r} is outside the dates this PC can schedule; "
+            f"give {_AT_EXAMPLES}"
+        ) from e
+    if moment <= now:
+        raise ValueError(
+            f"--at {value!r} is in the past (it is now "
+            f"{now.astimezone():%Y-%m-%d %H:%M %Z}); give a future time"
+        )
+    if moment > latest:
+        raise ValueError(too_far)
+    return moment
+
+
 @dataclass
 class Schedule:
-    """One scheduled job. Exactly one of ``skill`` or ``prompt`` must be set."""
+    """One scheduled job. Exactly one of ``skill`` or ``prompt`` must be set,
+    and exactly one of ``cron`` (repeats) or ``at`` (runs once)."""
 
     name: str
-    cron: str
+    cron: Optional[str] = None
     skill: Optional[str] = None
     prompt: Optional[str] = None
     sink: str = "stdout"
@@ -41,6 +153,26 @@ class Schedule:
     next_run: Optional[str] = None
     session_ref: Optional[str] = None
     created_at: str = ""
+    #: Runs that came due while nothing could run them, and the latest one.
+    missed_count: int = 0
+    last_missed: Optional[str] = None
+    #: ``missed_count`` is a lower bound: one stretch passed the count cap.
+    missed_at_least: bool = False
+    #: When it was last resumed: runs due while it was paused are not missed.
+    resumed_at: Optional[str] = None
+    #: Since when missed runs are counted. Unset on a schedule saved before
+    #: they were, whose old ``next_run`` cannot be trusted to count from.
+    missed_since: Optional[str] = None
+    #: A one-time schedule's due time (ISO, UTC). Unset on a cron schedule.
+    at: Optional[str] = None
+    #: A one-time schedule's state, one of ``ONE_SHOT_STATES``.
+    state: Optional[str] = None
+    #: A recurring schedule's runs that failed since its last successful one,
+    #: and the latest failure: when (ISO, UTC) and its error. A run that
+    #: succeeds clears them; ``last_run`` stays the last successful run.
+    failed_runs: int = 0
+    last_failed: Optional[str] = None
+    last_error: Optional[str] = None
 
     def __post_init__(self) -> None:
         if bool(self.skill) == bool(self.prompt):
@@ -48,16 +180,55 @@ class Schedule:
                 f"schedule {self.name!r}: set exactly one of --skill or --prompt "
                 f"(got skill={self.skill!r}, prompt={self.prompt!r})"
             )
+        if bool(self.cron) == bool(self.at):
+            raise ValueError(
+                f"schedule {self.name!r}: set exactly one of --cron or --at "
+                f"(got cron={self.cron!r}, at={self.at!r})"
+            )
+        if self.at and self.state is None:
+            self.state = ONE_SHOT_PENDING
+        if self.at and self.state not in ONE_SHOT_STATES:
+            raise ValueError(
+                f"schedule {self.name!r} has an unknown state {self.state!r}; "
+                f"expected one of {', '.join(ONE_SHOT_STATES)}"
+            )
         if not self.created_at:
             self.created_at = datetime.now(timezone.utc).isoformat()
 
+    @property
+    def one_shot(self) -> bool:
+        return bool(self.at)
+
+    def due_at(self) -> datetime:
+        """A one-time schedule's due time as an aware UTC datetime."""
+        unreadable = (
+            f"schedule {self.name!r} has an unreadable at {self.at!r} in the "
+            "schedule store; write it as a quoted ISO datetime, like "
+            'at = "2027-01-01T09:00:00", or delete the whole '
+            f"[schedules.{self.name}] entry in schedules.toml, or run "
+            f"`gaia schedule remove {self.name}`"
+        )
+        # An unquoted TOML datetime loads as a datetime, not a string.
+        if not isinstance(self.at, str):
+            raise ValueError(unreadable)
+        try:
+            due = datetime.fromisoformat(self.at)
+            # No offset means local time, as ``parse_at`` reads ``--at``.
+            return (due if due.tzinfo else due.astimezone()).astimezone(timezone.utc)
+        except (ValueError, OverflowError, OSError) as e:
+            raise ValueError(unreadable) from e
+
     def to_toml_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
-            "cron": self.cron,
             "sink": self.sink,
             "enabled": self.enabled,
             "created_at": self.created_at,
         }
+        if self.cron:
+            d["cron"] = self.cron
+        if self.at:
+            d["at"] = self.at
+            d["state"] = self.state
         if self.skill:
             d["skill"] = self.skill
         if self.prompt:
@@ -70,13 +241,31 @@ class Schedule:
             d["next_run"] = self.next_run
         if self.session_ref:
             d["session_ref"] = self.session_ref
+        if self.missed_count:
+            d["missed_count"] = self.missed_count
+        if self.last_missed:
+            d["last_missed"] = self.last_missed
+        if self.missed_at_least:
+            d["missed_at_least"] = True
+        if self.resumed_at:
+            d["resumed_at"] = self.resumed_at
+        if self.missed_since:
+            d["missed_since"] = self.missed_since
+        if self.failed_runs:
+            d["failed_runs"] = self.failed_runs
+        if self.last_failed:
+            d["last_failed"] = self.last_failed
+        if self.last_error:
+            d["last_error"] = self.last_error
         return d
 
     @classmethod
     def from_toml_dict(cls, name: str, data: Dict[str, Any]) -> "Schedule":
         return cls(
             name=name,
-            cron=data["cron"],
+            cron=data.get("cron"),
+            at=data.get("at"),
+            state=data.get("state"),
             skill=data.get("skill"),
             prompt=data.get("prompt"),
             sink=data.get("sink", "stdout"),
@@ -86,7 +275,26 @@ class Schedule:
             next_run=data.get("next_run"),
             session_ref=data.get("session_ref"),
             created_at=data.get("created_at", ""),
+            missed_count=int(data.get("missed_count", 0)),
+            last_missed=data.get("last_missed"),
+            missed_at_least=bool(data.get("missed_at_least", False)),
+            resumed_at=data.get("resumed_at"),
+            missed_since=data.get("missed_since"),
+            failed_runs=int(data.get("failed_runs", 0)),
+            last_failed=data.get("last_failed"),
+            last_error=data.get("last_error"),
         )
+
+
+class MissedRuns(NamedTuple):
+    """What one check found: due times nothing ran (ISO, oldest first), the
+    next run the daemon expects, and since when misses are counted."""
+
+    missed: List[str]
+    next_run: Optional[str]
+    since: Optional[str] = None
+    #: The count stopped at its cap: there were at least that many.
+    at_least: bool = False
 
 
 @runtime_checkable
@@ -112,6 +320,22 @@ class ScheduleStore(Protocol):
 
     def mark_run(
         self, name: str, last_run: str, next_run: Optional[str] = None
+    ) -> Schedule: ...
+
+    def mark_failed(
+        self, name: str, failed_at: str, error: str, next_run: Optional[str] = None
+    ) -> Schedule: ...
+
+    def account_missed(
+        self, name: str, decide: Callable[[Schedule], Optional[MissedRuns]]
+    ) -> Optional[Schedule]: ...
+
+    def claim_one_shot(
+        self, name: str, now: datetime, *, due_only: bool = True
+    ) -> Optional[Schedule]: ...
+
+    def finish_one_shot(
+        self, claimed: Schedule, finished_at: str, ok: bool
     ) -> Schedule: ...
 
 
@@ -148,12 +372,18 @@ class TomlScheduleStore:
                 # zero-length store.
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(pending, self.path)
+            # Readers load without the store lock; on Windows an open reader
+            # refuses the rename for a moment.
+            replace_retrying(pending, self.path)
         finally:
             if pending is not None:
                 pending.unlink(missing_ok=True)
 
     def add(self, schedule: Schedule) -> None:
+        # A new schedule counts the runs it misses from the moment it exists;
+        # a one-time schedule never misses a run, it runs late.
+        if not schedule.one_shot:
+            schedule.missed_since = schedule.missed_since or schedule.created_at
         with store_lock(self.path):
             schedules = self.load()
             if schedule.name in schedules:
@@ -192,6 +422,9 @@ class TomlScheduleStore:
                     f"no schedule named {name!r} in {self.path}; "
                     f"run `gaia schedule list` to see registered schedules"
                 )
+            if enabled and not schedules[name].enabled:
+                schedules[name].resumed_at = datetime.now(timezone.utc).isoformat()
+                schedules[name].next_run = None
             schedules[name].enabled = enabled
             self.save(schedules)
             return schedules[name]
@@ -209,5 +442,110 @@ class TomlScheduleStore:
             schedules[name].last_run = last_run
             if next_run is not None:
                 schedules[name].next_run = next_run
+            schedules[name].failed_runs = 0
+            schedules[name].last_failed = None
+            schedules[name].last_error = None
             self.save(schedules)
             return schedules[name]
+
+    def mark_failed(
+        self, name: str, failed_at: str, error: str, next_run: Optional[str] = None
+    ) -> Schedule:
+        """Record a recurring run of *name* that failed with *error*.
+
+        ``last_run`` keeps the last successful run. ``next_run`` moves on as
+        it does after a success, so the failed run is not later counted as
+        missed.
+        """
+        with store_lock(self.path):
+            schedules = self.load()
+            if name not in schedules:
+                raise KeyError(
+                    f"no schedule named {name!r} in {self.path}; "
+                    f"run `gaia schedule list` to see registered schedules"
+                )
+            schedule = schedules[name]
+            schedule.failed_runs += 1
+            schedule.last_failed = failed_at
+            schedule.last_error = error
+            if next_run is not None:
+                schedule.next_run = next_run
+            self.save(schedules)
+            return schedule
+
+    def account_missed(
+        self, name: str, decide: Callable[[Schedule], Optional[MissedRuns]]
+    ) -> Optional[Schedule]:
+        """Apply what *decide* says the schedule missed, under the store lock.
+
+        *decide* sees the schedule as it is on disk now and returns the runs
+        it missed, or None to leave it alone. Returns the updated schedule, or
+        None when there is no such schedule any more.
+        """
+        with store_lock(self.path):
+            schedules = self.load()
+            schedule = schedules.get(name)
+            if schedule is None:
+                return None
+            outcome = decide(schedule)
+            if outcome is None:
+                return schedule
+            if outcome.missed:
+                schedule.missed_count += len(outcome.missed)
+                schedule.last_missed = outcome.missed[-1]
+                schedule.missed_at_least = schedule.missed_at_least or outcome.at_least
+            schedule.next_run = outcome.next_run
+            schedule.missed_since = schedule.missed_since or outcome.since
+            self.save(schedules)
+            return schedule
+
+    def claim_one_shot(
+        self, name: str, now: datetime, *, due_only: bool = True
+    ) -> Optional[Schedule]:
+        """Move a pending one-time schedule to ``running``, under the store lock.
+
+        Returns it when this caller won the claim and must run it, or None when
+        it is gone, already claimed, or (with *due_only*) paused or not yet due.
+        The claim is what keeps a one-time schedule from ever running twice.
+        """
+        with store_lock(self.path):
+            schedules = self.load()
+            schedule = schedules.get(name)
+            if (
+                schedule is None
+                or not schedule.one_shot
+                or schedule.state != ONE_SHOT_PENDING
+            ):
+                return None
+            if due_only and (not schedule.enabled or schedule.due_at() > now):
+                return None
+            schedule.state = ONE_SHOT_RUNNING
+            self.save(schedules)
+            return schedule
+
+    def finish_one_shot(
+        self, claimed: Schedule, finished_at: str, ok: bool
+    ) -> Schedule:
+        """Record how the *claimed* one-time schedule's only run ended.
+
+        Raises :class:`KeyError` when that entry is gone: removed, or removed
+        and added again under the same name, which must stay untouched.
+        """
+        name = claimed.name
+        with store_lock(self.path):
+            schedules = self.load()
+            schedule = schedules.get(name)
+            if (
+                schedule is None
+                or schedule.state != ONE_SHOT_RUNNING
+                or (schedule.created_at, schedule.at)
+                != (claimed.created_at, claimed.at)
+            ):
+                raise KeyError(
+                    f"the one-time schedule {name!r} that ran is no longer in "
+                    f"{self.path}; it was removed while its run was in progress"
+                )
+            schedule.last_run = finished_at
+            schedule.state = ONE_SHOT_COMPLETED if ok else ONE_SHOT_FAILED
+            self.save(schedules)
+            return schedule

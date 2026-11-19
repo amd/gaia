@@ -54,7 +54,7 @@ func TestClearConversationAcrossSubprocessTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := NewCanonicalSubprocessClient(self, []string{"-test.run=^TestClearWireHelper$"})
+	c := NewCanonicalSubprocessClient(self, []string{"-test.run=^TestClearWireHelper$"}, false)
 	defer c.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -103,7 +103,7 @@ func TestClearConversationRequiresAcknowledgment(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			c := NewCanonicalSubprocessClient(self, []string{"-test.run=^TestClearWireHelper$"})
+			c := NewCanonicalSubprocessClient(self, []string{"-test.run=^TestClearWireHelper$"}, false)
 			defer c.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()

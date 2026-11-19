@@ -9,7 +9,7 @@
 .DESCRIPTION
     Self-hosted (stx / strix-halo) runners reuse the same machine across jobs, so
     a crashed or leaked Lemonade Server from a prior job keeps listening on the
-    port. The next job's ``lemonade-server serve`` / ``LemonadeServer.exe`` then
+    port. The next job's Lemonade Server launch (``LemonadeServer.exe``) then
     dies with ``[Errno 10048] only one usage of each socket address`` (a bind
     collision on the port, IPv4 or IPv6), and any leaked ``llama-server`` backend
     child keeps a model resident so the next ``/load`` returns

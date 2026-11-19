@@ -16,25 +16,28 @@
 //              (b) the generated .desktop entry launches with --no-sandbox
 //              (linux.executableArgs), covering the AppArmor-restricted
 //              userns case on Ubuntu 24.04.1+.
-//   - AC4    : asserts bundled uv binary is present, executable, and under
-//              the expected extraResources layout (T3).
+//   - AC4    : asserts the frozen `gaia` core is present, executable, and
+//              starts, under the expected extraResources layout.
 //   - AC3    : asserts the pre-built React dist/ is shipped (no user
 //              `npm run build` required).
 //   - AC9    : asserts no stray .env, sourcemaps, or dotfiles shipped in
 //              the app.asar (defence-in-depth for future browser-mode wheel).
+//   - #5268  : asserts the Linux tray icon inside app.asar is the GAIA logo,
+//              not a flat placeholder square.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
-import {
-  assertUvBinary,
-  backendInstallerPath,
-  bundledUvPath,
-} from "./_helpers/installer-smoke.mjs";
+import { assertCoreBinary, bundledCorePath } from "./_helpers/installer-smoke.mjs";
+
+const { assertTrayLogoPng } = createRequire(import.meta.url)(
+  "./_helpers/tray-icon-png.cjs"
+);
 
 const APPIMAGE = process.env.GAIA_APPIMAGE;
 const PLATFORM_KEY = "linux-x64";
@@ -98,6 +101,19 @@ if (!APPIMAGE) {
         );
       });
 
+      // GAIA ships no GPL/LGPL code; scripts/strip-appimage-copyleft.cjs
+      // removes these from electron-builder's bundled usr/lib.
+      test("licence: usr/lib has no GPL/LGPL desktop-integration libraries", () => {
+        const libDir = path.join(squashRoot, "usr", "lib");
+        const present = fs.existsSync(libDir) ? fs.readdirSync(libDir) : [];
+        const forbidden = present.filter((name) =>
+          ["libindicator", "libappindicator", "libgconf", "libnotify"].some((p) =>
+            name.startsWith(p),
+          ),
+        );
+        assert.deepEqual(forbidden, [], `copyleft libraries shipped in usr/lib: ${forbidden}`);
+      });
+
       // ── AC2 / T2b: .desktop Exec= MUST pass --no-sandbox ─────────────
       // linux.executableArgs propagates into the generated .desktop file.
       // This covers the AppArmor-restricted userns case on 24.04.1+ for
@@ -125,24 +141,10 @@ if (!APPIMAGE) {
         );
       });
 
-      // ── AC4 / T3: bundled uv binary present and executable ──────────
-      // Implementation lives in tests/electron/_helpers/installer-smoke.mjs
-      // and is shared with dmg-smoke.test.mjs (issue #941). Two named test
-      // blocks preserved for output stability with prior CI logs.
+      // ── AC4: the frozen core ships and starts ───────────────────────
       const resourcesDir = path.join(squashRoot, "resources");
-      const uvPath = bundledUvPath(resourcesDir, PLATFORM_KEY);
-      const installerPath = backendInstallerPath(import.meta.url);
-
-      test("AC4/T3: bundled uv binary is present under extraResources", () => {
-        // Existence + mode-bit assertions live in assertUvBinary (T3b).
-        // Block kept for CI-log name stability; see _helpers/installer-smoke.mjs.
-        assert.ok(fs.existsSync(uvPath), `expected bundled uv at ${uvPath}`);
-      });
-
-      // Runtime ensureUv() hashes the extracted ELF and rejects any mismatch,
-      // so catch packaging/hash drift at smoke time instead of on user launch.
-      test("AC4/T3b: bundled uv SHA256 matches BUNDLED_UV_SHA256[linux-x64]", () => {
-        assertUvBinary(uvPath, PLATFORM_KEY, installerPath);
+      test("AC4: the frozen gaia core is present, executable, and starts", () => {
+        assertCoreBinary(bundledCorePath(resourcesDir, PLATFORM_KEY), PLATFORM_KEY);
       });
 
       // ── AC3: pre-built React dist/ ships with the AppImage ──────────
@@ -157,6 +159,41 @@ if (!APPIMAGE) {
           fs.existsSync(indexHtml),
           `expected pre-built dist at ${indexHtml} so users do not need to run npm run build`
         );
+      });
+
+      test("licence: third-party notices ship in resources", () => {
+        for (const notice of [
+          "THIRD_PARTY_NOTICES.md",
+          "licenses/LGPL-2.1.txt",
+          "licenses/GCC-exception-3.1.txt",
+        ]) {
+          const file = path.join(squashRoot, "resources", notice);
+          assert.ok(fs.existsSync(file), `expected licence notice at ${file}`);
+        }
+      });
+
+      // ── #5268: the Linux tray icon is packed and is the real logo ───
+      // tray-manager.cjs loads assets/tray-icon.png (+@2x) from inside
+      // app.asar; a missing or placeholder file shows as a blank/red square.
+      test("#5268: app.asar ships the GAIA logo as the Linux tray icon", () => {
+        const asarPath = path.join(squashRoot, "resources", "app.asar");
+        for (const [file, size] of [
+          ["tray-icon.png", 32],
+          ["tray-icon@2x.png", 64],
+        ]) {
+          const outDir = fs.mkdtempSync(path.join(workdir, "tray-"));
+          execFileSync(
+            "npx",
+            ["--yes", "asar", "extract-file", asarPath, `assets/${file}`],
+            { cwd: outDir, encoding: "utf8", timeout: 60000 }
+          );
+          const extracted = path.join(outDir, file);
+          assert.ok(
+            fs.existsSync(extracted),
+            `expected assets/${file} inside ${asarPath}`
+          );
+          assertTrayLogoPng(fs.readFileSync(extracted), size, `app.asar:assets/${file}`);
+        }
       });
 
       // ── AC9: no stray .env/sourcemaps/dotfiles in app.asar ──────────

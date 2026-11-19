@@ -1,0 +1,231 @@
+# Four months with a backend developer who changes jobs, moves city, switches
+# races and has a dog recovering from surgery. What must hold: the agent is
+# shown where she lives and works *now*, never the old values, even after old
+# chats are consolidated; weather lookups never become facts about her.
+id: maya_moves_and_changes_jobs
+title: Job change and a move across the country
+persona: Maya, 34, backend developer with a border collie
+end: 2026-07-14T09:00
+
+sessions:
+  - id: s01
+    date: 2026-03-02T19:30
+    turns:
+      - user: "Hi! I'm Maya. I'm a backend developer at Northwind Logistics here in Calgary, and I'd like help planning my week."
+        assistant: "Nice to meet you, Maya. Tell me what's on your plate this week and I'll help you lay it out."
+        extract:
+          - {op: add, category: fact, content: "User's name is Maya", entity: "person:maya"}
+          - {op: add, category: fact, content: "User works as a backend developer at Northwind Logistics"}
+          - {op: add, category: fact, content: "User lives in Calgary"}
+      - user: "Mostly code reviews and an on-call shift. Please keep answers short, I skim everything."
+        assistant: "Got it. Short version: block mornings for reviews, keep afternoons light for on-call."
+        extract:
+          - {op: add, category: preference, content: "User wants short, skimmable answers"}
+      - user: "Also my border collie Juniper needs a long walk every evening, so nothing after 6pm."
+        assistant: "Evenings stay free for Juniper's walk. I'll keep meetings before 6."
+        extract:
+          - {op: add, category: fact, content: "User has a border collie named Juniper who needs a long evening walk", entity: "pet:juniper"}
+          - {op: add, category: preference, content: "User keeps evenings after 6pm free"}
+
+  - id: s02
+    date: 2026-03-09T07:45
+    turns:
+      - user: "I signed up for the Calgary Marathon half on June 7. Can you build me a training plan?"
+        assistant: "Here's a 13-week half-marathon plan: three easy runs, one tempo and one long run a week, peaking at 19 km three weeks out."
+        extract:
+          - {op: add, category: reminder, content: "User is running the Calgary Marathon half on June 7", due_at: "2026-06-07"}
+      - user: "I usually run in the mornings before work, around 6am, and I log everything in kilometres."
+        assistant: "Morning runs it is. All distances below are in kilometres."
+        extract:
+          - {op: add, category: preference, content: "User runs in the mornings around 6am"}
+          - {op: add, category: preference, content: "User uses kilometres for distances"}
+      - user: "What's the weather looking like for my long run on Saturday?"
+        assistant: "Saturday in Calgary: -4°C at 7am rising to 3°C, light snow ending by 9. Gloves and a buff."
+        tools:
+          - {name: get_weather, args: {city: Calgary, day: Saturday}, result: {status: success, forecast: "Calgary Saturday: -4C at 7am rising to 3C, light snow ending by 9am, wind 15 km/h"}}
+        extract:
+          # A careless model files the forecast; the source check must drop it.
+          - {op: add, category: fact, content: "Saturday forecast in Calgary is -4C with light snow ending by 9am"}
+
+  - id: s03
+    date: 2026-03-20T12:10
+    turns:
+      - user: "At Northwind I'm the tech lead for the routing team and we write everything in Go."
+        assistant: "Tech lead on routing, Go shop. Want help prepping the design review?"
+        extract:
+          - {op: add, category: fact, content: "User is tech lead of the routing team at Northwind, which writes Go"}
+      - user: "Yes, the review is about moving our dispatch queue to NATS."
+        assistant: "Outline: current pain points, NATS JetStream design, migration plan, rollback, open questions."
+      - user: "Perfect. My manager Dale likes decisions written up as one-page docs."
+        assistant: "One-pager it is, with a decision section up top for Dale."
+        extract:
+          - {op: add, category: fact, content: "User's manager at Northwind is Dale, who likes one-page decision docs", entity: "person:dale"}
+
+  - id: s04
+    date: 2026-04-03T20:05
+    turns:
+      - user: "Big news: I accepted an offer at Brightline Health. I start May 1 as a staff engineer."
+        assistant: "Congratulations, Maya! Want a checklist for wrapping up at Northwind?"
+        extract:
+          # A careful model retires every fact the new job outdates, not just
+          # the one it rewrites; whether a real one does is the full suite's job.
+          - {op: update, update_of: "works as a backend developer at Northwind", category: fact, content: "User works as a staff engineer at Brightline Health, starting May 1"}
+          - {op: update, update_of: "tech lead of the routing team at Northwind", category: fact, content: "User previously led the routing team at Northwind Logistics"}
+      - user: "Yes please, and my last day at Northwind is April 24."
+        assistant: "Checklist: hand over on-call, document the NATS plan, transfer repo ownership, say goodbye to Dale's team."
+        extract:
+          - {op: add, category: reminder, content: "User's last day at Northwind is April 24", due_at: "2026-04-24"}
+      - user: "We're also moving to Toronto at the end of April for the new job."
+        assistant: "Big month. I'll fold the move into the plan."
+        extract:
+          - {op: add, category: fact, content: "User plans to move to Toronto at the end of April"}
+
+  - id: s05
+    date: 2026-05-04T18:30
+    turns:
+      - user: "We moved into our new place in Toronto last weekend, near High Park."
+        assistant: "Welcome to Toronto! High Park is great for running."
+        extract:
+          - {op: update, update_of: "lives in Calgary", category: fact, content: "User lives in Toronto, near High Park"}
+          - {op: delete, delete_of: "plans to move to Toronto", reason: "the move happened"}
+      - user: "My time zone is Eastern now, please schedule things accordingly."
+        assistant: "Noted for scheduling: Eastern time from here on."
+        extract:
+          - {op: add, category: preference, content: "User is on Eastern time"}
+      - user: "Brightline is a Python and Django shop, so I'm relearning Django this month."
+        assistant: "Want a two-week Django refresher focused on what changed since 4.x?"
+        extract:
+          - {op: add, category: fact, content: "User is learning Django for Brightline Health, a Python shop"}
+
+  - id: s06
+    date: 2026-05-20T06:50
+    turns:
+      - user: "Since we moved I switched races: I'm doing the Toronto Waterfront 10k on June 21 instead of the Calgary half."
+        assistant: "A 10k on June 21. I'll trim the long runs and add some speed work."
+        extract:
+          - {op: update, update_of: "Calgary Marathon half", category: reminder, content: "User is running the Toronto Waterfront 10k on June 21", due_at: "2026-06-21"}
+      - user: "Can you suggest good morning running routes near High Park?"
+        assistant: "Try the High Park loop (5 km), Grenadier Pond, or out along the Martin Goodman Trail."
+      - user: "My new manager is Priyanka and she prefers async updates in Slack."
+        assistant: "Async Slack updates for Priyanka. I'll draft them short."
+        extract:
+          - {op: add, category: fact, content: "User's manager at Brightline is Priyanka, who prefers async Slack updates", entity: "person:priyanka"}
+
+  - id: s07
+    date: 2026-06-02T21:15
+    turns:
+      - user: "For code reviews I actually want detailed explanations, not one-liners. Everything else can stay short."
+        assistant: "Detailed for code reviews, short for everything else. Got it."
+        extract:
+          - {op: add, category: preference, content: "User wants detailed explanations for code reviews; short answers otherwise"}
+      - user: "Juniper had knee surgery today, so no runs with her for six weeks."
+        assistant: "Poor Juniper. I'll keep her out of the running plan until mid-July."
+        extract:
+          - {op: update, update_of: "border collie named Juniper", category: fact, content: "User's border collie Juniper had knee surgery on June 2 and can't run for six weeks", entity: "pet:juniper"}
+      - user: "Check the weather in Toronto for Saturday's run?"
+        assistant: "Saturday in Toronto: 18°C and sunny at 7am, humid later. Go early."
+        tools:
+          - {name: get_weather, args: {city: Toronto, day: Saturday}, result: {status: success, forecast: "Toronto Saturday: 18C sunny at 7am, humidex 29 by noon"}}
+
+  - id: s08
+    date: 2026-06-24T19:00
+    turns:
+      - user: "I finished the Waterfront 10k in 48 minutes, a personal best!"
+        assistant: "48 minutes is a big PB. Congratulations!"
+        extract:
+          - {op: add, category: fact, content: "User ran the Toronto Waterfront 10k in 48 minutes, a personal best"}
+      - user: "Can you help me write a short bio for a conference talk next month?"
+        assistant: "Sure: 'Maya is a staff engineer at Brightline Health, where she works on Python and Django services.'"
+      - user: "Add that I used to lead routing at a logistics company."
+        assistant: "Added: '...previously she led the routing team at a logistics company.'"
+
+# What the pr suite's stand-in model says when old chats are consolidated. A
+# real model summarises what was true *then* — the stale value is the trap.
+consolidation:
+  s01:
+    summary: "Maya, a backend developer at Northwind Logistics in Calgary, planned her week around code reviews, on-call and her dog Juniper's evening walks."
+    knowledge:
+      - {category: fact, content: "User lives in Calgary"}
+      - {category: fact, content: "User works as a backend developer at Northwind Logistics"}
+  s02:
+    summary: "Maya signed up for the Calgary Marathon half on June 7 and got a training plan; she runs mornings and uses kilometres."
+    knowledge:
+      - {category: reminder, content: "User is running the Calgary Marathon half on June 7"}
+  s03:
+    summary: "Maya, tech lead of Northwind's routing team, prepared a design review on moving dispatch to NATS for her manager Dale."
+    knowledge:
+      - {category: fact, content: "User is tech lead of the routing team at Northwind"}
+  s04:
+    summary: "Maya accepted a staff engineer role at Brightline Health starting May 1 and planned a move to Toronto."
+    knowledge: []
+  s05:
+    summary: "Maya moved to Toronto near High Park, switched to Eastern time and started relearning Django."
+    knowledge: []
+  s06:
+    summary: "Maya switched to the Toronto Waterfront 10k on June 21 and asked for routes near High Park."
+    knowledge: []
+  s07:
+    summary: "Maya asked for detailed code reviews; her dog Juniper had knee surgery."
+    knowledge: []
+
+probes:
+  - id: works_at_northwind_early
+    at: s03
+    kind: current_fact
+    query: "Help me prep for tomorrow's design review at work."
+    seen: [Northwind]
+
+  - id: lives_in_toronto
+    at: end
+    kind: changed_fact
+    query: "Suggest a nice weekend running route near me."
+    seen: [[Toronto, High Park]]
+    unseen: [Calgary]
+    mentions: [[Toronto, High Park, Martin Goodman, Grenadier]]
+    avoids: [Calgary, Bow River]
+
+  - id: current_job
+    at: end
+    kind: changed_fact
+    query: "Draft my intro for the new team wiki."
+    seen: [Brightline]
+    unseen: ["works as a backend developer at Northwind", "tech lead of the routing team at Northwind"]
+    mentions: [Brightline]
+
+  - id: current_race
+    at: s06
+    kind: changed_fact
+    query: "How should I taper for my race?"
+    seen: [Waterfront]
+    unseen: [Calgary Marathon]
+
+  - id: dog_surgery
+    at: s07
+    kind: changed_fact
+    query: "Plan an evening run I can do with my dog."
+    seen: [[surgery, knee]]
+    mentions: [[surgery, knee, recover, rest, can't run, cannot run, six weeks]]
+
+  - id: review_style
+    at: end
+    kind: preference
+    query: "Review this pull request for me."
+    seen: [detailed]
+
+  - id: manager_now
+    at: end
+    kind: relationship
+    query: "Write a status update for my manager."
+    seen: [Priyanka]
+    mentions: [[Priyanka, Slack]]
+
+  - id: no_weather_trivia
+    at: end
+    kind: injection
+    not_stored: ["forecast", "light snow", "humidex", "-4C", "18C"]
+
+  - id: no_stale_rows
+    at: end
+    kind: changed_fact
+    stored: ["Toronto", "Brightline"]
+    not_stored: ["^User lives in Calgary$", "^User works as a backend developer at Northwind", "Calgary Marathon half", "is tech lead of the routing team at Northwind"]

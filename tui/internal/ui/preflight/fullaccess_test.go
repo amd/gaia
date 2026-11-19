@@ -5,8 +5,10 @@ package preflight
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,6 +46,19 @@ func TestReadFullAccessOffWhenNothingSaysOtherwise(t *testing.T) {
 				t.Errorf("%s must not read as permission, got Enabled=true", name)
 			}
 		})
+	}
+}
+
+func TestReadFullAccessReportsAConfigReadFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	p := probeWith(path)
+	p.readConfig = func(string) ([]byte, error) { return nil, errors.New("lock timed out") }
+	got := readFullAccess(p)
+	if got.Enabled {
+		t.Fatal("a config read failure must not enable full access")
+	}
+	if got.Err == nil || !strings.Contains(got.Err.Error(), "lock timed out") {
+		t.Fatalf("read error was not preserved: %v", got.Err)
 	}
 }
 

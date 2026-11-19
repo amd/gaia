@@ -21,12 +21,18 @@ import subprocess
 
 import pytest
 
+from gaia.daemon.lemonade import EmbeddedLemonadeOwner, EnsuredLemonade
 from gaia.llm import lemonade_client as lc
 from gaia.llm import lemonade_launcher, lemonade_supervisor
 from gaia.llm.lemonade_embedded import EmbeddedLemonade
-from gaia.llm.lemonade_launcher import LemonadeTooling, gaia_runs_lemonade
+from gaia.llm.lemonade_launcher import (
+    LemonadeTooling,
+    describe_upgrade_hint,
+    gaia_runs_lemonade,
+)
 from gaia.llm.lemonade_manager import LemonadeManager
 from gaia.llm.lemonade_supervisor import LemonadeStartError, LemonadeSupervisor
+from gaia.version import LEMONADE_VERSION
 
 EMBEDDED_PORT = 45678
 EMBEDDED_URL = f"http://localhost:{EMBEDDED_PORT}/api/v1"
@@ -123,7 +129,9 @@ def machine(tmp_path, monkeypatch):
         return m.embedded_up and client.port == EMBEDDED_PORT
 
     def get_status(self):
-        status = lc.LemonadeStatus(url=self.base_url, running=answers(self))
+        status = lc.LemonadeStatus(
+            version=LEMONADE_VERSION, url=self.base_url, running=answers(self)
+        )
         if status.running:
             status.context_size = 65536
             status.loaded_models = [{"id": "Gemma-4-E4B-it-GGUF", "type": "llm"}]
@@ -165,7 +173,53 @@ class TestResolver:
 
     def test_no_embedded_install_means_system(self, machine):
         machine.embedded.daemon_path.unlink()
+        machine.embedded.dist_dir.rmdir()
         assert gaia_runs_lemonade() is False
+
+    def test_an_install_missing_lemond_is_still_gaias_own(self, machine):
+        machine.embedded.daemon_path.unlink()
+        assert gaia_runs_lemonade() is True
+
+    def _only_this_version_on_disk(self, machine, version: str):
+        machine.embedded.daemon_path.unlink()
+        machine.embedded.dist_dir.rmdir()
+        (machine.embedded.root / "dist" / version).mkdir()
+
+    def test_an_older_embedded_install_is_still_gaias_own(self, machine):
+        # After a GAIA upgrade only the older dist dir exists; the daemon
+        # upgrades it on start, so no path may treat it as a user's server.
+        self._only_this_version_on_disk(machine, "10.2.0")
+        assert gaia_runs_lemonade() is True
+        assert gaia_runs_lemonade(STOPPED_DEFAULT_URL) is True
+        assert "GAIA updates its own" in describe_upgrade_hint()
+        assert "lemonade-server.ai" not in describe_upgrade_hint()
+
+    @pytest.mark.embedded_start
+    def test_a_stopped_older_install_is_started_through_the_daemon(self, machine):
+        self._only_this_version_on_disk(machine, "10.2.0")
+        assert LemonadeManager.start_embedded_if_stopped() is True
+        _assert_started_gaias_own(machine)
+
+    def test_only_a_newer_install_is_still_gaias_own(self, machine):
+        # A newer build is repaired back to the pinned one on start (#6794).
+        self._only_this_version_on_disk(machine, "2999.1.0")
+        assert gaia_runs_lemonade() is True
+        assert "GAIA updates its own" in describe_upgrade_hint()
+
+    def test_an_unparseable_install_is_not_gaias_own(self, machine):
+        self._only_this_version_on_disk(machine, "not-a-version")
+        assert gaia_runs_lemonade() is False
+        assert "lemonade-server.ai" in describe_upgrade_hint()
+
+    def test_an_older_install_does_not_override_lemonade_base_url(
+        self, machine, monkeypatch
+    ):
+        self._only_this_version_on_disk(machine, "10.2.0")
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://gpu-box:13305")
+        assert gaia_runs_lemonade() is False
+        assert "lemonade-server.ai" in describe_upgrade_hint(
+            "http://gpu-box:13305/api/v1"
+        )
 
 
 @pytest.mark.embedded_start
@@ -266,24 +320,42 @@ class TestClientAutoStart:
         assert machine.spawned == []
 
 
-class FakeOwner:
-    """The daemon's EmbeddedLemonadeOwner, at its ``ensure`` boundary."""
+class FakeOwner(EmbeddedLemonadeOwner):
+    """The daemon's EmbeddedLemonadeOwner, with only ``ensure`` replaced.
+
+    A subclass, so the supervisor sees the real interface: an attribute the
+    real owner lacks raises here as it does in the daemon. Test bookkeeping
+    is underscored; ``test_the_fake_owner_has_only_the_real_interface``
+    holds it to that.
+    """
 
     def __init__(self, error=None):
-        self.error = error
-        self.calls = 0
-        self.started_pid = None
+        super().__init__(factory=lambda: None, owner_pid=4241)
+        self._fake_error = error
+        self._fake_calls = 0
 
     def ensure(self):
-        from gaia.daemon.lemonade import EnsuredLemonade
-
-        self.calls += 1
-        if self.error is not None:
-            raise self.error
-        self.started_pid = 4242
+        self._fake_calls += 1
+        if self._fake_error is not None:
+            raise self._fake_error
         return EnsuredLemonade(
-            base_url=EMBEDDED_URL, port=EMBEDDED_PORT, version="v", started=True
+            base_url=EMBEDDED_URL,
+            port=EMBEDDED_PORT,
+            version="v",
+            started=True,
+            pid=4242,
         )
+
+
+def _public_names(obj) -> set:
+    return {name for name in dir(obj) if not name.startswith("_")}
+
+
+def test_the_fake_owner_has_only_the_real_interface():
+    real = EmbeddedLemonadeOwner(factory=lambda: None, owner_pid=4241)
+    extra = _public_names(FakeOwner()) - _public_names(real)
+    assert not extra, f"FakeOwner exposes what the real owner lacks: {extra}"
+    assert "started_pid" not in _public_names(real)
 
 
 class TestDaemonSupervisor:
@@ -295,7 +367,7 @@ class TestDaemonSupervisor:
             ctx_size=65536
         )
 
-        assert owner.calls == 1
+        assert owner._fake_calls == 1
         assert state.base_url == EMBEDDED_URL
         assert state.started is True and state.owned is True and state.pid == 4242
         assert machine.system_launcher_lookups == 0

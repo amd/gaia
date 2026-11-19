@@ -175,7 +175,7 @@ func TestALivePromptIsBoundedButNotRushed(t *testing.T) {
 	m.streaming = true
 	m = feed(t, m, gatedShellCall())
 
-	updated, cmd := m.Update(components.ConfirmationTimeoutMsg{RunID: "run-1"})
+	updated, cmd := m.Update(m.confirmation.ExpiryMsg())
 	m = updated.(ChatModel)
 	if cmd == nil {
 		t.Fatal("the tick must resolve the prompt — an unbounded turn can never end")

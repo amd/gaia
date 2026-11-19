@@ -3,6 +3,8 @@
 
 /** Notification types, and the slice of the Electron preload API the UI uses. */
 
+import type { GaiaBrowserPaneAPI } from '../../services/browser-pane/contract';
+
 // ── Notification Types ───────────────────────────────────────────────────
 
 export type NotificationType =
@@ -34,10 +36,16 @@ export interface GaiaNotification {
   confirmId?: string;
   /** What "always allow" would grant, e.g. `gh issue list`; absent means it is not offered. */
   alwaysScope?: string;
+  /** `alwaysScope` in plain words, e.g. "editing notes.txt". */
+  alwaysLabel?: string;
+  /** The tool in plain words, e.g. "writing file". */
+  toolLabel?: string;
   /** What the call does (read / write / execute / destructive), from the backend's call_risk. */
   risk?: string;
   /** The agent's own one-line description of the call, shown when no args came with it. */
   summary?: string;
+  /** A path-access prompt backing the call just allowed, so it reads as a follow-up. */
+  pathFollowUp?: boolean;
   /** For policy_alert type. */
   decision?: string;
   reason?: string;
@@ -46,6 +54,8 @@ export interface GaiaNotification {
   receiptId?: string;
   actions?: string[];
   timeoutSeconds?: number;
+  /** When the prompt times out, in ms since the epoch. */
+  expiresAt?: number;
   /** Response (after user action). */
   response?: 'allow' | 'deny';
   respondedAt?: number;
@@ -53,18 +63,174 @@ export interface GaiaNotification {
 
 // ── Electron Preload API ─────────────────────────────────────────────────
 
+/** Desktop-app settings saved by the tray (services/tray-manager.cjs). */
+export interface TraySettings {
+  /** Closing the window hides it; GAIA keeps running in the tray. */
+  minimizeToTray: boolean;
+  /** Every launch starts with the window hidden. */
+  startMinimized: boolean;
+  /** GAIA starts when the user signs in. */
+  startOnLogin: boolean;
+}
+
+/** Whether this desktop shows tray icons (stock GNOME doesn't); checked once at startup. */
+export interface TrayHost {
+  available: boolean;
+  reason: null | 'checking' | 'no-host' | 'check-failed';
+}
+
+export interface TrayConfig {
+  tray: TraySettings;
+  host: TrayHost;
+}
+
+export interface TrayChatRef {
+  id: string;
+  title: string;
+}
+
+/** What GAIA is doing, sent to the tray (validated by services/tray-state.cjs). */
+export interface TrayActivity {
+  backendConnected: boolean;
+  /** null until the first status read answers. */
+  modelServerRunning: boolean | null;
+  /** The loaded chat model; `where` is GPU/NPU/CPU, or "cloud" for a hosted model. */
+  model: { name: string; where: string | null } | null;
+  /** What the model is doing while the answer waits on it, e.g. "Loading X into memory". */
+  waitingOnModel: string | null;
+  running: TrayChatRef[];
+  needsYou: Array<TrayChatRef & { reason: 'approval' | 'answer' }>;
+  recent: TrayChatRef[];
+}
+
+/** A tray menu action for the window to carry out. */
+export type TrayCommand =
+  | { type: 'open-chat'; sessionId: string }
+  | { type: 'new-chat' }
+  | { type: 'open-settings'; section: 'general' }
+  | { type: 'refresh-status' };
+
+/** services/backend-supervisor.cjs state, plus the API base for its port. */
+export interface BackendLifecycle {
+  status: 'running' | 'restarting' | 'stopped';
+  port: number | null;
+  /** When this outage began (ms epoch), or null while running. */
+  since: number | null;
+  attempt: number;
+  maxRestarts: number;
+  /** When the next try starts, or null while one is starting. */
+  nextAttemptAt: number | null;
+  lastExit: { code: number | null; signal: string | null } | null;
+  lastError: string | null;
+  apiBase: string | null;
+}
+
 /** The part of window.gaiaAPI (preload.cjs) the UI calls. Present only in Electron. */
 export interface GaiaElectronAPI {
   notification: {
-    onPermissionRequest: (cb: (data: GaiaNotification) => void) => void;
+    /** Each `on*` returns its unsubscribe. */
+    onPermissionRequest: (cb: (data: GaiaNotification) => void) => () => void;
     respondPermission: (id: string, action: 'allow' | 'deny', remember: boolean) => Promise<void>;
-    onNotification: (cb: (data: GaiaNotification) => void) => void;
+    onNotification: (cb: (data: GaiaNotification) => void) => () => void;
+    /** OS banner for a chat event; resolves false when the OS has no notifications. */
+    show: (payload: { title: string; body: string; sessionId: string }) => Promise<boolean>;
+    /** Flash the taskbar button until the window is focused. */
+    flash: () => Promise<boolean>;
+    /** Chats needing the user, shown on the tray / dock badge. */
+    setAttentionCount: (count: number) => Promise<void>;
+  };
+  power: {
+    setKeepAwake: (on: boolean) => Promise<boolean>;
+  };
+  dialog: {
+    /** The OS folder picker. Resolves the chosen absolute path, or null when cancelled. */
+    pickFolder: (defaultPath?: string) => Promise<string | null>;
+  };
+  /** GAIA's backend process, as services/backend-supervisor.cjs sees it. */
+  backend: {
+    getState: () => Promise<BackendLifecycle>;
+    /** Restart GAIA: start the backend now, with a fresh restart budget. */
+    restart: () => Promise<BackendLifecycle>;
+    /** Returns an unsubscribe function. */
+    onState: (cb: (state: BackendLifecycle) => void) => () => void;
+  };
+  tray: {
+    getConfig: () => Promise<TrayConfig>;
+    /** Resolves with the saved config; rejects with why it couldn't be saved. */
+    setConfig: (cfg: { tray: Partial<TraySettings> }) => Promise<TrayConfig>;
+    setActivity: (activity: TrayActivity) => Promise<void>;
+    /** Returns an unsubscribe function. */
+    onCommand: (cb: (command: TrayCommand) => void) => () => void;
+    /** `session:<id>` when an OS banner for that chat is clicked. */
+    onNavigate: (cb: (target: string) => void) => () => void;
   };
 }
 
 // Augment Window to include gaiaAPI when running in Electron
+/** window.gaiaWindow (preload.cjs): how the desktop app's window frame is drawn. */
+export interface GaiaWindowFrame {
+  titleBar: 'mac' | 'overlay' | 'native';
+  setColors: (colors: { color: string; symbolColor: string }) => Promise<boolean>;
+}
+
+/** FAILURE_REASONS in services/backend-installer.cjs. */
+export type EngineInstallReason = 'disk' | 'network' | 'tls' | 'locked' | 'daemon';
+
+export interface EngineInstallError {
+  stage: string | null;
+  reason: EngineInstallReason | null;
+  /** The installer's own first line, in English. */
+  message: string;
+  logTail: string[];
+  /** After a failed update: the version GAIA can go back to. */
+  previousVersion?: string | null;
+  /** After a 'locked' failure on Windows: the programs holding GAIA's files, or null when unknown. */
+  lockedBy?: EngineLockHolder[] | null;
+}
+
+/** services/lock-holders.cjs summarizeHolders(): one program holding GAIA's files open. */
+export interface EngineLockHolder {
+  pid: number;
+  /** Executable name, e.g. "gaia.exe". */
+  name: string | null;
+  /** Executable path; null when Windows won't say (another user's or an elevated process). */
+  path: string | null;
+  /** The folder holding its `.gaia`, else its own folder. */
+  folder: string | null;
+  /** A GAIA process outside this app, which the app may close when asked. */
+  isGaia: boolean;
+}
+
+/** services/engine-install.cjs: where the backend install has got to. */
+export interface EngineInstallStatus {
+  phase: 'running' | 'failed';
+  stage: string | null;
+  /** 0-100, or null for a stage with no percent to report. */
+  percent: number | null;
+  message: string;
+  error: EngineInstallError | null;
+}
+
+/** window.gaiaInstall (preload.cjs). */
+export interface GaiaInstallBridge {
+  onProgress: (cb: (status: EngineInstallStatus) => void) => () => void;
+  status: () => Promise<EngineInstallStatus>;
+  /** Resolves false when no failed install is waiting. */
+  retry: () => Promise<boolean>;
+  /** Past a failed agent update only; resolves false for any other failure. */
+  continueWithoutAgentUpdate: () => Promise<boolean>;
+  /** Installs the version before a failed update; the app restarts into it. */
+  revert: () => Promise<boolean>;
+  /** Ends the GAIA processes in error.lockedBy and installs again; false when that isn't on offer. */
+  closeLockingPrograms: () => Promise<boolean>;
+  openLogFile: () => Promise<{ ok: boolean; message: string | null }>;
+}
+
 declare global {
   interface Window {
     gaiaAPI?: GaiaElectronAPI;
+    gaiaWindow?: GaiaWindowFrame;
+    gaiaBrowserPane?: GaiaBrowserPaneAPI;
+    gaiaInstall?: GaiaInstallBridge;
   }
 }

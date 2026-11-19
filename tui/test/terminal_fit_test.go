@@ -42,12 +42,12 @@ func TestNoLaunchFrameOverflowsItsTerminal(t *testing.T) {
 	agent := catalog.NewCatalog().Get(catalog.FlagshipID)
 
 	// The first frame, drawn before any size is known.
-	m := root.NewFlagshipModel(*agent)
+	m := root.NewFlagshipModel(*agent, false)
 	assertFits(t, "pre-resize splash", m.View(), assumedCols, assumedRows)
 
 	for _, size := range terminalSizes {
 		w, h := size[0], size[1]
-		m := root.NewFlagshipModel(*agent).
+		m := root.NewFlagshipModel(*agent, false).
 			WithLocalPreflight(preflight.LocalOptions{Binary: "gaia-agent-absent-fixture"})
 		updated, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		assertFits(t, "splash", updated.(root.FlagshipModel).View(), w, h)

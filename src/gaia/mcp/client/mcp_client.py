@@ -5,9 +5,10 @@
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from gaia.logger import get_logger
+from gaia.mcp.protocol import MCP_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
 
 from .transports.base import MCPTransport
 from .transports.stdio import StdioTransport
@@ -285,6 +286,14 @@ def mcp_tool_error(result: Any) -> Optional[str]:
     return "\n".join(t for t in texts if t) or "The MCP tool reported an error."
 
 
+#: ``_meta`` key through which an MCP tool declares its ``@tool(dedup_key=...)``.
+MCP_DEDUP_KEY_META = "ai.amd-gaia/dedup_key"
+
+
+class MCPToolDeclarationError(ValueError):
+    """An MCP server declared tool metadata GAIA cannot honor."""
+
+
 @dataclass
 class MCPTool:
     """Represents an MCP tool with its schema.
@@ -296,12 +305,43 @@ class MCPTool:
         annotations: MCP tool annotations (``readOnlyHint``, ``destructiveHint``,
             …). Server-supplied and therefore advisory — see
             :func:`mcp_tool_requires_confirmation` for how far they are trusted.
+        meta: The tool's ``_meta`` object, where servers put metadata the
+            MCP spec does not define (e.g. ``ai.amd-gaia/dedup_key``).
     """
 
     name: str
     description: str
     input_schema: Dict[str, Any]
     annotations: Dict[str, Any] = field(default_factory=dict)
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+    def declared_dedup_key(self, server_name: str) -> Optional[Tuple[str, ...]]:
+        """The argument names this tool's ``_meta`` gives the repeat-call guard.
+
+        Returns:
+            The validated names, or ``None`` when the tool declares none.
+
+        Raises:
+            MCPToolDeclarationError: The declaration is malformed or names an
+                argument the tool does not take.
+        """
+        declared = self.meta.get(MCP_DEDUP_KEY_META)
+        if declared is None:
+            return None
+        # Deferred: the tools module pulls in the agent stack, which only a
+        # server that opts in should pay for.
+        from gaia.agents.base.tools import validate_dedup_key
+
+        properties = self.input_schema.get("properties", {})
+        try:
+            return validate_dedup_key(self.name, declared, properties)
+        except (TypeError, ValueError) as e:
+            raise MCPToolDeclarationError(
+                f"MCP server {server_name!r} declares a bad "
+                f"{MCP_DEDUP_KEY_META} {declared!r}: {e} None of its "
+                "tools were registered; fix the declaration in the "
+                "server's tool _meta."
+            ) from e
 
     def to_gaia_format(
         self, prefix: str, raw_server_name: Optional[str] = None
@@ -332,6 +372,8 @@ class MCPTool:
                 "required": param_name in required_list,
                 "description": param_schema.get("description", ""),
             }
+            if "items" in param_schema:
+                gaia_params[param_name]["items"] = param_schema["items"]
 
         return {
             "name": f"mcp_{prefix}_{self.name}",
@@ -350,7 +392,38 @@ class MCPTool:
             # mcp_servers.json key so routing back to a client still
             # works after sanitisation changes the prefix.
             "_mcp_server": raw_server_name,
+            # The server's own tool name, so the UI never splits the prefixed one.
+            "_mcp_tool": self.name,
         }
+
+
+#: The longest wait a server's config may ask for. Beyond it, a hung server
+#: freezes the turn for good; and the OS rejects the wait past ~49 days.
+MAX_SERVER_TIMEOUT_S = 600
+
+
+def server_timeout(name: str, config: Dict[str, Any], default: float) -> float:
+    """The server's own ``timeout`` (seconds) from its config, else *default*.
+
+    Raises:
+        ValueError: If ``timeout`` is set but is not a positive number.
+    """
+    value = config.get("timeout")
+    if value is None:
+        return default
+    # A comparison, not math.isfinite: it refuses NaN and infinity, and an
+    # integer too large for a float, which isfinite would raise on.
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not 0 < value <= MAX_SERVER_TIMEOUT_S
+    ):
+        raise ValueError(
+            f"MCP server '{name}' has timeout {value!r} in its config; it must be "
+            f"a positive number of seconds, at most {MAX_SERVER_TIMEOUT_S}. "
+            "Fix it in mcp_servers.json."
+        )
+    return float(value)
 
 
 class MCPClient:
@@ -372,6 +445,7 @@ class MCPClient:
         self.transport = transport
         self.debug = debug
         self.server_info: Dict[str, Any] = {}
+        self.protocol_version: Optional[str] = None
         self._tools: Optional[List[MCPTool]] = None
         self.last_error: Optional[str] = None
 
@@ -396,7 +470,7 @@ class MCPClient:
             ValueError: If ``command`` contains shell syntax, which would not be
                 interpreted. Pass the program and its arguments separately.
         """
-        transport = StdioTransport(command, timeout=timeout, debug=debug)
+        transport = StdioTransport(command, timeout=timeout, debug=debug, name=name)
         return cls(name, transport, debug=debug)
 
     @classmethod
@@ -431,19 +505,49 @@ class MCPClient:
             command=config["command"],
             args=config.get("args"),
             env=resolved_env or None,
-            timeout=timeout,
+            timeout=server_timeout(name, config, timeout),
             debug=debug,
+            name=name,
         )
         return cls(name, transport, debug=debug)
+
+    def _redact(self, value: Any) -> Any:
+        """A server's own reply value, with its launch secrets removed.
+
+        A server can echo the options it was started with back in an error.
+        Structured values are cleaned before anything turns them into text.
+        """
+        # Only a stdio server has a command line and env to echo.
+        if isinstance(self.transport, StdioTransport):
+            return self.transport.redact_value(value)
+        return value
 
     def connect(self) -> bool:
         """Connect to the MCP server and initialize.
 
-        On failure, stores the error message in ``self.last_error``.
+        A server started through ``npx`` that dies before its first answer is
+        started once more: GAIA's own starts are serialized, but an npx run
+        from outside GAIA (another app, an older GAIA) may still have been
+        installing the same package. On failure, stores the error message in
+        ``self.last_error``.
 
         Returns:
             bool: True if connection and initialization successful
         """
+        if self._connect_once():
+            return True
+        package = getattr(self.transport, "died_installing", None)
+        if not isinstance(package, str):
+            return False
+        logger.info(
+            "MCP server '%s' exited on its first start through npx (%s); "
+            "starting it once more",
+            self.name,
+            package,
+        )
+        return self._connect_once()
+
+    def _connect_once(self) -> bool:
         self.last_error = None
         logger.debug(f"Connecting to MCP server '{self.name}'...")
 
@@ -464,7 +568,7 @@ class MCPClient:
             response = self.transport.send_request(
                 "initialize",
                 {
-                    "protocolVersion": "1.0.0",
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
                     "clientInfo": {
                         "name": "GAIA MCP Client",
                         "version": "0.15.2",
@@ -476,16 +580,36 @@ class MCPClient:
             if "error" in response:
                 error = response["error"]
                 self.last_error = (
-                    f"Initialization failed: {error.get('message', 'Unknown error')}"
+                    "Initialization failed: "
+                    f"{self._redact(error.get('message', 'Unknown error'))!s}"
                 )
                 logger.debug(f"MCP server '{self.name}': {self.last_error}")
+                # A server that refused to initialise must not keep running.
+                self.disconnect()
                 return False
 
             result = response.get("result", {})
+            version = result.get("protocolVersion")
+            if (
+                not isinstance(version, str)
+                or version not in SUPPORTED_PROTOCOL_VERSIONS
+            ):
+                self.last_error = (
+                    f"MCP server '{self.name}' answered initialize with protocol "
+                    f"version {self._redact(version)!r}, which GAIA does not speak "
+                    f"(it supports {', '.join(sorted(SUPPORTED_PROTOCOL_VERSIONS))}). "
+                    "Update the server, or pin a release that speaks one of these."
+                )
+                logger.debug(f"MCP server '{self.name}': {self.last_error}")
+                self.disconnect()
+                return False
+            self.protocol_version = version
             self.server_info = result.get("serverInfo", {})
+            self.transport.send_notification("notifications/initialized")
 
             logger.debug(
-                f"Connected to '{self.name}' - {self.server_info.get('name', 'Unknown')}"
+                f"Connected to '{self.name}' - "
+                f"{self._redact(self.server_info.get('name', 'Unknown'))}"
             )
             return True
 
@@ -527,7 +651,10 @@ class MCPClient:
 
         if "error" in response:
             error = response["error"]
-            logger.error(f"Failed to list tools: {error.get('message', 'Unknown')}")
+            logger.error(
+                "Failed to list tools: %s",
+                self._redact(error.get("message", "Unknown")),
+            )
             return []
 
         result = response.get("result", {})
@@ -545,6 +672,7 @@ class MCPClient:
                     if isinstance(tool.get("annotations"), dict)
                     else {}
                 ),
+                meta=tool["_meta"] if isinstance(tool.get("_meta"), dict) else {},
             )
             for tool in tools_data
         ]
@@ -579,7 +707,8 @@ class MCPClient:
             error_msg,
             "",
             "Expected tool schema:",
-            json.dumps(tool_def.input_schema, indent=2),
+            # The schema is the server's text, so it is cleaned like any other.
+            json.dumps(self._redact(tool_def.input_schema), indent=2),
             "",
             "Your arguments:",
             json.dumps(arguments, indent=2),
@@ -614,7 +743,7 @@ class MCPClient:
 
         if "error" in response:
             error = response["error"]
-            error_msg = error.get("message", "Unknown error")
+            error_msg = str(self._redact(error.get("message", "Unknown error")))
 
             # Enhance validation errors with schema context
             if error.get("code") == -32602:  # JSON-RPC invalid params error
@@ -629,7 +758,7 @@ class MCPClient:
 
         if self.debug:
             logger.debug(f"Tool {tool_name} completed successfully")
-            logger.debug(f"  Response: {json.dumps(result, indent=2)}")
+            logger.debug("  Response: %s", json.dumps(self._redact(result), indent=2))
 
         return result
 
@@ -647,6 +776,11 @@ class MCPClient:
         """
 
         def wrapper(**kwargs: Any) -> Dict[str, Any]:
+            if mcp_tool_requires_confirmation(tool.name, tool.annotations):
+                # Lazy: the MCP client must not pull in the agent framework.
+                from gaia.agents.base.file_snapshots import note_untracked
+
+                note_untracked("mcp", f"{self.name}: {tool.name}")
             return self.call_tool(tool.name, kwargs)
 
         return wrapper

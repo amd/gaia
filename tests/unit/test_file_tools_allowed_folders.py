@@ -356,9 +356,9 @@ def background_jobs(monkeypatch):
     queued = []
     real = rag_tools._index_within_budget
 
-    def spy(rag, path, budget=None):
+    def spy(rag, path, budget=None, **kwargs):
         queued.append(path)
-        return real(rag, path, budget)
+        return real(rag, path, budget, **kwargs)
 
     monkeypatch.setattr(rag_tools, "_index_within_budget", spy)
     return queued

@@ -4,9 +4,6 @@
 /** Seconds of one silent model phase before the indicator says it is still waiting. */
 export const MODEL_WAIT_HINT_S = 45;
 
-export const MODEL_WAIT_HINT =
-    'Still waiting on the model — nothing has come back yet. A hosted model that stays silent is retried, then stopped with an error. Press Stop to end it now.';
-
 /** Phases where GAIA is waiting on the model itself, not running a tool or counting its output. */
 export function isModelWaitLabel(label: string | null | undefined): boolean {
     if (!label) return true;

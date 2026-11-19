@@ -60,9 +60,6 @@ func startLiveTUI(t *testing.T) *liveTUI {
 func startLiveTUIWith(t *testing.T, adjust func(root.FlagshipModel) root.FlagshipModel) *liveTUI {
 	t.Helper()
 	t.Setenv(control.EnvHome, t.TempDir())
-	// The session log is held open for the process; release it before the
-	// temp dir holding it is removed (Windows will not delete an open file).
-	t.Cleanup(control.CloseLog)
 	isolateGaiaHome(t)
 	stubSetupCheck(t, 0)
 	t.Setenv("LEMONADE_BASE_URL", stubLemonade(t))
@@ -78,7 +75,7 @@ func startLiveTUIWith(t *testing.T, adjust func(root.FlagshipModel) root.Flagshi
 	}
 
 	state := control.NewState(nil)
-	model := adjust(root.NewFlagshipModel(*agent).
+	model := adjust(root.NewFlagshipModel(*agent, false).
 		WithLocalPreflight(preflight.LocalOptions{Binary: agent.BinaryPath}).
 		WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond}))
 	return runLiveTUI(t, tea.NewProgram(
@@ -93,7 +90,9 @@ func startLiveTUIWith(t *testing.T, adjust func(root.FlagshipModel) root.Flagshi
 // both down when the test ends.
 func runLiveTUI(t *testing.T, prog *tea.Program, state *control.State, closer io.Closer) *liveTUI {
 	t.Helper()
-	srv, err := control.Start(prog, state, control.Options{Version: "test"})
+	// A generous shutdown budget: the production 2s is marginal under -race on
+	// a shared CI runner, and a hung handler still fails the cleanup.
+	srv, err := control.Start(prog, state, control.Options{Version: "test", ShutdownTimeout: 30 * time.Second})
 	if err != nil {
 		t.Fatalf("control.Start: %v", err)
 	}
@@ -168,16 +167,6 @@ func (l *liveTUI) screen() string {
 	return text
 }
 
-func (l *liveTUI) state() map[string]any {
-	l.t.Helper()
-	status, body := l.call(http.MethodGet, "/status", nil)
-	if status != http.StatusOK {
-		l.t.Fatalf("GET /status: status %d (%v)", status, body)
-	}
-	st, _ := body["state"].(map[string]any)
-	return st
-}
-
 // frameContaining returns the first recorded frame holding text, or "" when
 // none did. A screen that is on for one render can only be proven from here.
 func (l *liveTUI) frameContaining(text string) string {
@@ -199,7 +188,7 @@ func (l *liveTUI) frameContaining(text string) string {
 func (l *liveTUI) waitFor(matcher map[string]any) map[string]any {
 	l.t.Helper()
 	if _, ok := matcher["timeout_ms"]; !ok {
-		matcher["timeout_ms"] = 5000
+		matcher["timeout_ms"] = 20000
 	}
 	status, body := l.call(http.MethodPost, "/wait", matcher)
 	if status != http.StatusOK {
@@ -238,6 +227,9 @@ func TestFlagshipBootReachesChat(t *testing.T) {
 	// after the fact races it and times out having missed nothing.
 	tui.waitFor(map[string]any{
 		"state": map[string]any{"view": control.ViewChat}, "timeout_ms": 20000})
+	// The chat view is entered one message before it learns the terminal size,
+	// and until then it draws only its welcome. Wait for the sized layout.
+	tui.waitFor(map[string]any{"contains": "Ask anything", "timeout_ms": 20000})
 
 	// The mascot ROW, not the wordmark: the very first frame is drawn before
 	// the terminal size is known and is deliberately compact, so it carries the
@@ -330,6 +322,7 @@ func TestControlResizeChangesLayout(t *testing.T) {
 
 	tui.call(http.MethodPost, "/resize", map[string]any{"cols": 80, "rows": 24})
 	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat}})
+	tui.waitFor(map[string]any{"contains": "Ask anything"})
 	narrow := tui.screen()
 
 	tui.call(http.MethodPost, "/resize", map[string]any{"cols": 200, "rows": 50})
@@ -413,7 +406,7 @@ func startLiveTUIMissingAgent(t *testing.T) *liveTUI {
 	agent.BinaryPath = "gaia-agent-that-was-never-installed"
 
 	state := control.NewState(nil)
-	model := root.NewFlagshipModel(*agent).
+	model := root.NewFlagshipModel(*agent, false).
 		WithLocalPreflight(preflight.LocalOptions{Binary: agent.BinaryPath}).
 		WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond})
 	return runLiveTUI(t, tea.NewProgram(

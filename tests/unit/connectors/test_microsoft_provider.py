@@ -33,7 +33,6 @@ and the CLI rather than ``providers.get()`` alone, per plan amendment A1.
 
 from __future__ import annotations
 
-import importlib
 import zlib
 
 import pytest
@@ -99,7 +98,7 @@ class TestRegistry:
         # Actionable error names the env vars and points at the setup form.
         assert "GAIA_MICROSOFT_CLIENT_ID" in msg
         assert "Settings" in msg
-        assert "Connections" in msg
+        assert "Connectors" in msg
 
     def test_console_steps_do_not_diverge_from_the_guided_walkthrough(
         self, monkeypatch
@@ -629,11 +628,24 @@ class TestMicrosoftWorkCatalog:
 
 
 class TestNoImportSideEffects:
-    def test_importing_microsoft_module_does_not_register(self, monkeypatch):
+    def test_importing_microsoft_module_does_not_register(
+        self, monkeypatch, reload_module
+    ):
         # Mirror A-Crit-3 from the Google work: providers/microsoft.py must
         # have NO side effects on import — registration is lazy via get().
         from gaia.connectors.providers import microsoft as ms_mod
 
         monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_ID", raising=False)
-        importlib.reload(ms_mod)
+        reload_module(ms_mod)
         assert "microsoft" not in providers._registry  # type: ignore[attr-defined]
+
+
+class TestTenantIdHelp:
+    def test_help_has_no_issue_numbers_or_developer_terms(self):
+        from gaia.connectors.catalog.microsoft import MICROSOFT_WORK_SPEC
+
+        field = next(
+            f for f in MICROSOFT_WORK_SPEC.oauth_setup_fields if f.key == "tenant_id"
+        )
+        for banned in ("#2616", "daemon", "environment variable", "loudly"):
+            assert banned not in field.help_md

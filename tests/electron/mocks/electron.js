@@ -13,7 +13,8 @@ class MockBrowserWindow extends EventEmitter {
     super();
     this.options = options;
     this._isDestroyed = false;
-    
+    this.setOverlayIcon = jest.fn();
+
     this.webContents = {
       send: jest.fn(),
       on: jest.fn(),
@@ -24,10 +25,19 @@ class MockBrowserWindow extends EventEmitter {
       openDevTools: jest.fn(),
       closeDevTools: jest.fn(),
       isDevToolsOpened: jest.fn(() => false),
+      getZoomFactor: jest.fn(() => 1),
       session: {
         clearCache: jest.fn((callback) => callback()),
       },
     };
+    this.contentView = {
+      children: [],
+      addChildView: jest.fn((view) => this.contentView.children.push(view)),
+      removeChildView: jest.fn((view) => {
+        this.contentView.children = this.contentView.children.filter((v) => v !== view);
+      }),
+    };
+    this.getContentBounds = jest.fn(() => ({ x: 0, y: 0, width: 1200, height: 800 }));
   }
 
   loadFile(path) {
@@ -222,12 +232,83 @@ class MockIpcRenderer extends EventEmitter {
   }
 }
 
+/** A page's webContents: emits Electron's events when a test calls emit(). */
+class MockWebContents extends EventEmitter {
+  constructor() {
+    super();
+    this._url = '';
+    this._destroyed = false;
+    this._devTools = false;
+    this.windowOpenHandler = null;
+    this.navigationHistory = {
+      canGoBack: jest.fn(() => false),
+      canGoForward: jest.fn(() => false),
+      goBack: jest.fn(),
+      goForward: jest.fn(),
+      clear: jest.fn(),
+      getAllEntries: jest.fn(() => (this._url ? [{ url: this._url, title: this._url }] : [])),
+      getActiveIndex: jest.fn(() => 0),
+      restore: jest.fn(({ entries, index }) => {
+        this._url = entries[index].url;
+        return Promise.resolve();
+      }),
+    };
+    this.loadURL = jest.fn((url) => {
+      this._url = url;
+      return Promise.resolve();
+    });
+    this.getURL = jest.fn(() => this._url);
+    this.getTitle = jest.fn(() => this._url);
+    this.reload = jest.fn();
+    this.stop = jest.fn();
+    this.close = jest.fn(() => { this._destroyed = true; });
+    this.isDestroyed = jest.fn(() => this._destroyed);
+    this.setWindowOpenHandler = jest.fn((handler) => { this.windowOpenHandler = handler; });
+    this.openDevTools = jest.fn(() => { this._devTools = true; });
+    this.closeDevTools = jest.fn(() => { this._devTools = false; });
+    this.isDevToolsOpened = jest.fn(() => this._devTools);
+    this.capturePage = jest.fn(() => Promise.resolve({ toDataURL: () => 'data:image/png;base64,frame' }));
+    this.isLoading = jest.fn(() => false);
+    this.focus = jest.fn();
+    // webContents.debugger: attach, sendCommand, and 'message' events a test can emit.
+    const dbg = new EventEmitter();
+    dbg.attach = jest.fn();
+    dbg.sendCommand = jest.fn(() => Promise.resolve({}));
+    this.debugger = dbg;
+    // Electron's own handler for page boxes (lib/browser/api/web-contents.ts), which the pane replaces.
+    this.on('-run-dialog', jest.fn());
+    this.mainFrame = {
+      url: '',
+      processId: 1,
+      routingId: 1,
+      parent: null,
+      framesInSubtree: [],
+      executeJavaScript: jest.fn(() => Promise.resolve(null)),
+    };
+    this.mainFrame.framesInSubtree = [this.mainFrame];
+  }
+}
+
+class MockWebContentsView {
+  constructor(options = {}) {
+    this.options = options;
+    this.webContents = new MockWebContents();
+    this.bounds = null;
+    this.visible = true;
+    this.setBounds = jest.fn((b) => { this.bounds = b; });
+    this.setVisible = jest.fn((v) => { this.visible = v; });
+    MockWebContentsView.instances.push(this);
+  }
+}
+MockWebContentsView.instances = [];
+
 const mockApp = new MockApp();
 const mockIpcMain = new MockIpcMain();
 const mockIpcRenderer = new MockIpcRenderer();
 
 module.exports = {
   BrowserWindow: MockBrowserWindow,
+  WebContentsView: MockWebContentsView,
   app: mockApp,
   ipcMain: mockIpcMain,
   ipcRenderer: mockIpcRenderer,
@@ -242,7 +323,7 @@ module.exports = {
   
   Menu: {
     setApplicationMenu: jest.fn(),
-    buildFromTemplate: jest.fn(() => ({})),
+    buildFromTemplate: jest.fn((template) => ({ _template: template })),
   },
   
   // A usable fake, not a bare jest.fn(): TrayManager calls setToolTip/
@@ -256,24 +337,49 @@ module.exports = {
     this._handlers = {};
     this.setToolTip = jest.fn(function (text) { this._toolTip = text; });
     this.setContextMenu = jest.fn(function (menu) { this._contextMenu = menu; });
+    this.setImage = jest.fn(function (image) { this._icon = image; });
     this.on = jest.fn(function (event, fn) { this._handlers[event] = fn; });
     this.destroy = jest.fn(function () { this._destroyed = true; });
     this.isDestroyed = jest.fn(function () { return this._destroyed; });
   }),
 
+  // Images carry a square size and an opaque grey bitmap, enough for the
+  // tray to resize, read and redraw them; createEmpty() collects the
+  // representations added to it.
   nativeImage: {
-    createFromPath: jest.fn((p) => ({
-      _path: p,
+    createFromPath: jest.fn(function createFromPath(p, size = 32) {
+      return {
+        _path: p,
+        _isTemplate: false,
+        _size: size,
+        isEmpty: () => false,
+        getSize() {
+          return { width: this._size, height: this._size };
+        },
+        resize({ width }) {
+          return createFromPath(p, width);
+        },
+        toBitmap() {
+          return Buffer.alloc(this._size * this._size * 4, 0x80);
+        },
+        setTemplateImage(flag) {
+          this._isTemplate = flag;
+        },
+      };
+    }),
+    createEmpty: jest.fn(() => ({
+      _path: null,
       _isTemplate: false,
-      isEmpty: () => false,
+      _reps: [],
+      isEmpty() {
+        return this._reps.length === 0;
+      },
+      addRepresentation(rep) {
+        this._reps.push(rep);
+      },
       setTemplateImage(flag) {
         this._isTemplate = flag;
       },
-    })),
-    createEmpty: jest.fn(() => ({
-      _path: null,
-      isEmpty: () => true,
-      setTemplateImage: jest.fn(),
     })),
   },
 

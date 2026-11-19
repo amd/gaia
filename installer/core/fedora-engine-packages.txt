@@ -1,0 +1,17 @@
+# What a Fedora desktop has and lemond or its llama.cpp backend link.
+# One package per line; build_core.yml and posix-journey.sh both install these.
+# No mesa-vulkan-drivers: with no GPU it offers a software Vulkan device, and
+# the chat check runs on the CPU backend these runners proved.
+tar
+gzip
+findutils
+which
+procps-ng
+libatomic
+openssl-libs
+libdrm
+libzstd
+zlib-ng-compat
+libstdc++
+libgomp
+vulkan-loader

@@ -18,12 +18,16 @@ from gaia.ui.run_manager import DONE, Run, RunManager
 
 
 class _FakeHandler:
-    """Minimal stand-in for SSEOutputHandler — only ``cancelled`` is used."""
+    """Minimal stand-in for SSEOutputHandler's cancel surface."""
 
     def __init__(self):
         import threading
 
         self.cancelled = threading.Event()
+        self.relay_closed = False
+
+    def close_active_relay_response(self):
+        self.relay_closed = True
 
 
 async def _drain(q: asyncio.Queue) -> list:
@@ -35,6 +39,10 @@ async def _drain(q: asyncio.Queue) -> list:
             break
         out.append(item)
     return out
+
+
+def _data_lines(frames: list) -> list:
+    return [frame.split("\n", 1)[0] for frame in frames]
 
 
 async def test_run_completes_and_deregisters():
@@ -106,7 +114,8 @@ async def test_late_subscriber_gets_full_replay():
     release.set()
     events = await _drain(q)
 
-    assert events == ["data: 1\n\n", "data: 2\n\n", "data: 3\n\n"]
+    # Replayed frames come back padded so the browser flushes them at once.
+    assert _data_lines(events) == ["data: 1", "data: 2", "data: 3"]
     await run.task
 
 
@@ -121,7 +130,7 @@ async def test_subscribe_after_done_terminates_immediately():
 
     q = run.subscribe()
     events = await _drain(q)
-    assert events == ["data: only\n\n"]
+    assert _data_lines(events) == ["data: only"]
     # No lingering registration for a finished run.
     assert run.subscribers == []
 
@@ -155,6 +164,7 @@ async def test_cancel_sets_handler_flag():
 
     assert mgr.cancel("sess-6") is True
     assert run.handler.cancelled.is_set()
+    assert run.handler.relay_closed
 
     release.set()
     await run.task

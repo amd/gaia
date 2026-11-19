@@ -47,10 +47,12 @@ from gaia.logger import get_logger
 from gaia.skills.audit.findings import content_digest
 from gaia.skills.errors import SkillDriftError, SkillError
 from gaia.skills.format import SKILL_FILENAME, Skill, parse_skill_metadata
+from gaia.skills.human_only import require_user_terminal
 from gaia.skills.lock import (
     LOCK_FILENAME,
     SOURCE_HUB,
     SOURCE_LOCAL,
+    UNVERSIONED,
     LockEntry,
     SkillLock,
     lock_path,
@@ -192,18 +194,19 @@ def _read_metadata(directory: Path) -> tuple[Optional[Skill], str]:
 
 def _version_drift(entry: LockEntry, skill: Skill, directory: Path) -> Optional[Drift]:
     actual = skill.version or ""
-    if not entry.version or actual == entry.version:
+    # An unversioned manifest has nothing to compare; the edit surfaces as content drift.
+    if not entry.version or not actual or actual == entry.version:
         return None
     fatal = _attested(entry)
     return Drift(
         skill=entry.name,
         kind=DRIFT_VERSION,
         expected=entry.version,
-        actual=actual or "(unversioned)",
+        actual=actual,
         fatal=fatal,
         summary=(
             f"{LOCK_FILENAME} records version {entry.version}, but the installed "
-            f"{SKILL_FILENAME} declares {actual or '(unversioned)'}."
+            f"{SKILL_FILENAME} declares {actual}."
         ),
         remediation=_remediation(entry, fatal),
         path=str(directory),
@@ -469,9 +472,10 @@ def check_drift(skills_root: Path | str) -> DriftReport:
                     "not track it, so nothing can tell whether it has changed."
                 ),
                 remediation=(
-                    "Expected if you created, imported, or migrated it. Start "
-                    "tracking it with 'gaia skill lock --relock'; if you did not "
-                    f"put it there, remove it with 'gaia skill remove {name}'."
+                    "Expected if you created it; until it is tracked it is held to "
+                    f"the '{LOWEST_TIER}' permission ceiling. Start tracking it "
+                    "with 'gaia skill lock --relock'; if you did not put it "
+                    f"there, remove it with 'gaia skill remove {name}'."
                 ),
                 path=str(directory),
             )
@@ -554,8 +558,14 @@ def relock(skills_root: Path | str) -> RelockResult:
             :meth:`gaia.skills.lock.SkillLock.load`); relock will not start over
             from scratch and silently discard provenance.
     """
+    require_user_terminal("gaia skill lock --relock")
     root = Path(skills_root)
-    lock = SkillLock.load(root)
+    # Held throughout, so an install that lands mid-relock is not dropped by it.
+    with SkillLock.locked(root) as lock:
+        return _relock_locked(root, lock)
+
+
+def _relock_locked(root: Path, lock: SkillLock) -> RelockResult:
     updated: list[str] = []
     added: list[str] = []
     removed: list[str] = []
@@ -611,7 +621,7 @@ def relock(skills_root: Path | str) -> RelockResult:
         lock.record(
             LockEntry(
                 name=name,
-                version=skill.version or "",
+                version=skill.version or UNVERSIONED,
                 requested="",
                 source=SOURCE_LOCAL,
                 content_digest=content_digest(directory),

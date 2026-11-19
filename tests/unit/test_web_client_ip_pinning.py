@@ -9,6 +9,20 @@ import requests
 from gaia.web.client import PinnedIPAdapter, WebClient
 
 
+def _transport(response, sent):
+    """Stand-in for HTTPAdapter.send that records the request as dialed.
+
+    The adapter restores the original URL once send returns, so the pinned
+    form is only observable while the transport holds the request.
+    """
+
+    def fake_send(request, *args, **kwargs):
+        sent.append(request.copy())
+        return response
+
+    return fake_send
+
+
 def test_ip_pinning_blocks_rebind_to_private_ip(monkeypatch):
     """PinnedIPAdapter resolves and caches the IP on first request, so a
     DNS-rebind that returns a different IP on the second resolution has
@@ -34,11 +48,16 @@ def test_ip_pinning_blocks_rebind_to_private_ip(monkeypatch):
     mock_response._content = b"ok"
     mock_response.request = req
 
-    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_response):
+    sent = []
+    with patch.object(
+        PinnedIPAdapter.__bases__[0],
+        "send",
+        side_effect=_transport(mock_response, sent),
+    ):
         resp = adapter.send(req)
 
     # Adapter should have rewritten the URL to use the first resolved IP
-    assert "8.8.8.8" in req.url
+    assert "8.8.8.8" in sent[0].url
     assert resp.status_code == 200
 
     # Cache should store the resolved IP
@@ -66,19 +85,24 @@ def test_ip_pinning_prevents_dns_rebind(monkeypatch):
     mock_response.status_code = 200
     mock_response._content = b"ok"
 
-    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_response):
+    sent = []
+    with patch.object(
+        PinnedIPAdapter.__bases__[0],
+        "send",
+        side_effect=_transport(mock_response, sent),
+    ):
         # First request pins 8.8.8.8
         r1_req = requests.Request("GET", "http://example.local/first").prepare()
         mock_response.request = r1_req
         adapter.send(r1_req)
-        assert "8.8.8.8" in r1_req.url
+        assert "8.8.8.8" in sent[-1].url
 
         # Second request — getaddrinfo would return 127.0.0.1,
         # but adapter uses cached 8.8.8.8
         r2_req = requests.Request("GET", "http://example.local/second").prepare()
         mock_response.request = r2_req
         adapter.send(r2_req)
-        assert "8.8.8.8" in r2_req.url
+        assert "8.8.8.8" in sent[-1].url
 
 
 def test_https_pinning_preserves_tls_hostname(monkeypatch):
@@ -99,15 +123,20 @@ def test_https_pinning_preserves_tls_hostname(monkeypatch):
     mock_response._content = b"ok"
     mock_response.request = req
 
-    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_response):
+    sent = []
+    with patch.object(
+        PinnedIPAdapter.__bases__[0],
+        "send",
+        side_effect=_transport(mock_response, sent),
+    ):
         adapter.send(req)
 
     # URL should contain userinfo with original hostname
-    assert "example.com@93.184.216.34:443" in req.url
+    assert "example.com@93.184.216.34:443" in sent[0].url
 
     # The pool is keyed on the pinned IP but names the real host in TLS.
     host_params, pool_kwargs = adapter.build_connection_pool_key_attributes(
-        req, True, None
+        sent[0], True, None
     )
     assert host_params["host"] == "93.184.216.34"
     assert pool_kwargs["server_hostname"] == "example.com"
@@ -130,12 +159,17 @@ def test_http_pinning_does_not_set_tls_hostname(monkeypatch):
     mock_response._content = b"ok"
     mock_response.request = req
 
-    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_response):
+    sent = []
+    with patch.object(
+        PinnedIPAdapter.__bases__[0],
+        "send",
+        side_effect=_transport(mock_response, sent),
+    ):
         adapter.send(req)
 
     # HTTP URL should NOT have userinfo
-    assert "@" not in req.url
-    assert "93.184.216.34:80" in req.url
+    assert "@" not in sent[0].url
+    assert "93.184.216.34:80" in sent[0].url
 
 
 @pytest.mark.parametrize(("scheme", "port"), [("http", 80), ("https", 443)])
@@ -158,10 +192,15 @@ def test_ip_pinning_brackets_ipv6_literals(monkeypatch, scheme, port):
     req = requests.Request("GET", f"{scheme}://example.com/path").prepare()
     mock_response = requests.Response()
 
-    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_response):
+    sent = []
+    with patch.object(
+        PinnedIPAdapter.__bases__[0],
+        "send",
+        side_effect=_transport(mock_response, sent),
+    ):
         adapter.send(req)
 
-    parsed = urlparse(req.url)
+    parsed = urlparse(sent[0].url)
     assert f"[{pinned_ip}]:{port}" in parsed.netloc
     assert parsed.hostname == pinned_ip
     assert parsed.port == port
@@ -188,12 +227,15 @@ def test_concurrent_https_requests_use_correct_tls_hostname(monkeypatch):
     mock_resp.status_code = 200
     mock_resp._content = b"ok"
 
+    sent = []
+
     def make_request(hostname):
         try:
             req = requests.Request("GET", f"https://{hostname}/path").prepare()
             adapter.send(req)
+            (dialed,) = [r for r in sent if r.headers["Host"] == hostname]
             _, pool_kwargs = adapter.build_connection_pool_key_attributes(
-                req, True, None
+                dialed, True, None
             )
             results[hostname] = pool_kwargs["server_hostname"]
         except Exception as exc:
@@ -202,7 +244,9 @@ def test_concurrent_https_requests_use_correct_tls_hostname(monkeypatch):
     # Install the transport patch ONCE around both threads. Patching a shared
     # class method inside each thread races on install/teardown and can leak a
     # real network call; a single install is safe.
-    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_resp):
+    with patch.object(
+        PinnedIPAdapter.__bases__[0], "send", side_effect=_transport(mock_resp, sent)
+    ):
         threads = [
             threading.Thread(target=make_request, args=("alpha.example.com",)),
             threading.Thread(target=make_request, args=("beta.example.com",)),
@@ -237,6 +281,8 @@ def test_concurrent_same_ip_different_hosts(monkeypatch):
     mock_resp.status_code = 200
     mock_resp._content = b"ok"
 
+    sent = []
+
     def make_request(hostname):
         try:
             req = requests.Request("GET", f"https://{hostname}/path").prepare()
@@ -245,8 +291,9 @@ def test_concurrent_same_ip_different_hosts(monkeypatch):
             # Synchronize so both threads resolve the pool key concurrently.
             barrier.wait()
 
+            (dialed,) = [r for r in sent if r.headers["Host"] == hostname]
             _, pool_kwargs = adapter.build_connection_pool_key_attributes(
-                req, True, None
+                dialed, True, None
             )
             results[hostname] = pool_kwargs["server_hostname"]
         except Exception as exc:
@@ -254,7 +301,9 @@ def test_concurrent_same_ip_different_hosts(monkeypatch):
 
     # Single install of the patch (see sibling test): per-thread context
     # managers race on teardown and can leak a real connection.
-    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_resp):
+    with patch.object(
+        PinnedIPAdapter.__bases__[0], "send", side_effect=_transport(mock_resp, sent)
+    ):
         threads = [
             threading.Thread(target=make_request, args=("site-a.example.com",)),
             threading.Thread(target=make_request, args=("site-b.example.com",)),
@@ -421,9 +470,12 @@ def _pinned_https_request(monkeypatch, hostname, ip):
     )
     adapter = PinnedIPAdapter()
     req = requests.Request("GET", f"https://{hostname}/page").prepare()
-    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=MagicMock()):
+    sent = []
+    with patch.object(
+        PinnedIPAdapter.__bases__[0], "send", side_effect=_transport(MagicMock(), sent)
+    ):
         adapter.send(req)
-    return adapter, req
+    return adapter, sent[0]
 
 
 def test_https_pool_kwargs_set_sni_server_hostname(monkeypatch):
@@ -457,11 +509,14 @@ def test_http_pool_kwargs_have_no_tls_hostname(monkeypatch):
     )
     adapter = PinnedIPAdapter()
     req = requests.Request("GET", "http://example.com/page").prepare()
-    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=MagicMock()):
+    sent = []
+    with patch.object(
+        PinnedIPAdapter.__bases__[0], "send", side_effect=_transport(MagicMock(), sent)
+    ):
         adapter.send(req)
 
     host_params, pool_kwargs = adapter.build_connection_pool_key_attributes(
-        req, True, None
+        sent[0], True, None
     )
     assert host_params["host"] == "93.184.216.34"
     assert "server_hostname" not in pool_kwargs
@@ -483,11 +538,14 @@ def test_same_ip_different_hosts_get_separate_pools(monkeypatch):
             lambda host, port, *a, **k: [(socket.AF_INET, 1, 6, "", (shared_ip, port))],
         )
         req = requests.Request("GET", f"https://{hostname}/").prepare()
+        sent = []
         with patch.object(
-            PinnedIPAdapter.__bases__[0], "send", return_value=MagicMock()
+            PinnedIPAdapter.__bases__[0],
+            "send",
+            side_effect=_transport(MagicMock(), sent),
         ):
             adapter.send(req)
-        pools[hostname] = adapter.get_connection_with_tls_context(req, True)
+        pools[hostname] = adapter.get_connection_with_tls_context(sent[0], True)
 
     assert pools["alpha.example"] is not pools["beta.example"]
     assert pools["alpha.example"].conn_kw["server_hostname"] == "alpha.example"
@@ -588,3 +646,182 @@ class TestLoopbackAllowlist:
         monkeypatch.setenv("GAIA_WEB_ALLOWED_HOSTS", "fixtures.local")
         with pytest.raises(ValueError, match="unparseable"):
             client._assert_ip_allowed("not-an-ip", "fixtures.local")
+
+
+# ---------------------------------------------------------------------------
+# User-visible URLs: the pinned host@ip form steers the connection only. Error
+# text and result URLs must name the page the user asked for, or a 404 reads
+# like a phishing link ("https://www.nps.gov@143.204.160.88:443/...").
+# ---------------------------------------------------------------------------
+
+_PINNED_IP = "143.204.160.88"
+
+
+class _FakeOrigin:
+    """Replaces the urllib3 pool so requests' real HTTPAdapter.send runs.
+
+    ``routes`` maps a path to ``(status, reason, headers, body)``. Every dialed
+    request is recorded with its URL and TLS pool kwargs.
+    """
+
+    def __init__(self, routes):
+        self.routes = routes
+        self.dialed = []
+
+    def install(self, monkeypatch):
+        origin = self
+
+        def get_connection_with_tls_context(
+            self, request, verify, proxies=None, cert=None
+        ):
+            _, pool_kwargs = self.build_connection_pool_key_attributes(
+                request, verify, cert
+            )
+            origin.dialed.append((request.url, pool_kwargs.get("server_hostname")))
+            conn = MagicMock()
+            conn.urlopen.side_effect = lambda **kw: origin._respond(request.path_url)
+            return conn
+
+        monkeypatch.setattr(
+            PinnedIPAdapter,
+            "get_connection_with_tls_context",
+            get_connection_with_tls_context,
+        )
+        monkeypatch.setattr(
+            socket,
+            "getaddrinfo",
+            lambda host, port=None, *a, **k: [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", (_PINNED_IP, port or 0))
+            ],
+        )
+
+    def _respond(self, path):
+        import io
+
+        from urllib3 import HTTPResponse
+
+        status, reason, headers, body = self.routes[path]
+        return HTTPResponse(
+            body=io.BytesIO(body),
+            headers=headers,
+            status=status,
+            reason=reason,
+            preload_content=False,
+        )
+
+
+def _assert_no_pinned_form(text):
+    assert "@" + _PINNED_IP not in text
+    assert _PINNED_IP not in text
+
+
+def _fetch_page_tool(client):
+    from gaia.agents.tools.browser_tools import BrowserToolsMixin
+
+    class _Host(BrowserToolsMixin):
+        def __init__(self):
+            self._web_client = client
+            self._path_validator = None
+            self._tools = {}
+
+    tools = {}
+
+    def capture_tool(atomic=True):
+        def decorator(func):
+            tools[func.__name__] = func
+            return func
+
+        return decorator
+
+    with patch("gaia.agents.base.tools.tool", capture_tool):
+        _Host().register_browser_tools()
+    return tools["fetch_page"]
+
+
+def test_http_error_names_the_requested_url_not_the_pinned_ip(monkeypatch):
+    url = "https://www.nps.gov/rain/learn/nature/weather.htm"
+    origin = _FakeOrigin(
+        {"/rain/learn/nature/weather.htm": (404, "Not Found", {}, b"missing")}
+    )
+    origin.install(monkeypatch)
+    client = WebClient()
+    try:
+        with patch.object(client, "_rate_limit_wait"):
+            resp = client.get(url)
+            with pytest.raises(requests.HTTPError) as excinfo:
+                resp.raise_for_status()
+            tool_result = _fetch_page_tool(client)(url)
+    finally:
+        client.close()
+
+    assert str(excinfo.value) == f"404 Client Error: Not Found for url: {url}"
+    assert resp.url == url
+    assert resp.request.url == url
+    assert f"for url: {url}" in tool_result
+    _assert_no_pinned_form(tool_result)
+    # Pinning and SNI are unchanged: the pinned IP is dialed, the host named.
+    assert origin.dialed[0] == (
+        f"https://www.nps.gov@{_PINNED_IP}:443/rain/learn/nature/weather.htm",
+        "www.nps.gov",
+    )
+
+
+def test_redirect_result_names_the_requested_urls_not_the_pinned_ip(monkeypatch):
+    url = "https://www.nps.gov/old"
+    origin = _FakeOrigin(
+        {
+            "/old": (301, "Moved Permanently", {"Location": "/new"}, b""),
+            "/new": (200, "OK", {"Content-Type": "text/plain"}, b"rain today"),
+        }
+    )
+    origin.install(monkeypatch)
+    client = WebClient()
+    try:
+        with patch.object(client, "_rate_limit_wait"):
+            resp = client.get(url)
+            tool_result = _fetch_page_tool(client)(url)
+    finally:
+        client.close()
+
+    assert resp.status_code == 200
+    assert resp.url == "https://www.nps.gov/new"
+    assert "rain today" in tool_result
+    _assert_no_pinned_form(tool_result)
+    assert [d[0] for d in origin.dialed[:2]] == [
+        f"https://www.nps.gov@{_PINNED_IP}:443/old",
+        f"https://www.nps.gov@{_PINNED_IP}:443/new",
+    ]
+
+
+def test_download_http_error_names_the_requested_url(monkeypatch, tmp_path):
+    url = "https://files.example.com/report.pdf"
+    _FakeOrigin({"/report.pdf": (404, "Not Found", {}, b"")}).install(monkeypatch)
+    client = WebClient()
+    try:
+        with patch.object(client, "_rate_limit_wait"):
+            with pytest.raises(requests.HTTPError) as excinfo:
+                client.download(url, str(tmp_path))
+    finally:
+        client.close()
+
+    assert str(excinfo.value) == f"404 Client Error: Not Found for url: {url}"
+
+
+def test_request_url_restored_when_transport_raises(monkeypatch):
+    """A connection failure must not leave the pinned form on the request."""
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, port, *a, **k: [(socket.AF_INET, 1, 6, "", (_PINNED_IP, port))],
+    )
+    adapter = PinnedIPAdapter()
+    req = requests.Request("GET", "https://www.nps.gov/page").prepare()
+    with patch.object(
+        PinnedIPAdapter.__bases__[0],
+        "send",
+        side_effect=requests.ConnectionError("refused"),
+    ):
+        with pytest.raises(requests.ConnectionError):
+            adapter.send(req)
+
+    assert req.url == "https://www.nps.gov/page"

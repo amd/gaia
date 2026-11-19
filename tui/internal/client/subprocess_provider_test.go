@@ -23,7 +23,7 @@ func TestSetModelBeforeStartReplacesOnlyInferenceFlags(t *testing.T) {
 		{"--json-events", "--dev", "--use-claude=true", "--claude-model=claude-sonnet-5", "--full-access", "--model=old-model"},
 	} {
 		original := append([]string(nil), args...)
-		c := NewCanonicalSubprocessClient("unused", args)
+		c := NewCanonicalSubprocessClient("unused", args, true)
 		if !c.SetModelBeforeStart("fireworks.gemma-4-31b-it") {
 			t.Fatal("catalog selection was refused before startup")
 		}
@@ -50,7 +50,7 @@ func TestSetModelBeforeStartRefusesRunningLegacyAndEmptySelections(t *testing.T)
 		{"empty selection", "  ", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := NewSubprocessClient("unused", []string{"--model", "existing"})
+			c := NewSubprocessClient("unused", []string{"--model", "existing"}, false)
 			c.canonical, c.started = tc.canonical, tc.started
 			if c.SetModelBeforeStart(tc.model) || c.ModelAtLaunch() != "existing" {
 				t.Fatal("unsupported switch changed the launch arguments")
@@ -60,7 +60,7 @@ func TestSetModelBeforeStartRefusesRunningLegacyAndEmptySelections(t *testing.T)
 }
 
 func TestLaunchModelSettersAndGettersAreSafeTogether(t *testing.T) {
-	c := NewCanonicalSubprocessClient("unused", []string{"--use-claude", "--claude-model", "claude-sonnet-5", "--full-access"})
+	c := NewCanonicalSubprocessClient("unused", []string{"--use-claude", "--claude-model", "claude-sonnet-5", "--full-access"}, false)
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
@@ -123,7 +123,7 @@ func TestPendingCloudSelectionLaunchesAgainstEmbeddedEndpoint(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c := NewCanonicalSubprocessClient(buildMockAgent(t), []string{"--json-events", "--use-claude"})
+	c := NewCanonicalSubprocessClient(buildMockAgent(t), []string{"--json-events", "--use-claude"}, false)
 	if !c.SetModelBeforeStart("fireworks.gemma-4-31b-it") {
 		t.Fatal("could not select cloud before launch")
 	}
@@ -162,6 +162,33 @@ func TestPendingCloudSelectionLaunchesAgainstEmbeddedEndpoint(t *testing.T) {
 	}
 	if c.SetModelBeforeStart("amd.gpt-4.1") {
 		t.Fatal("already-started child accepted a startup-only change")
+	}
+}
+
+// GAIA's own, chosen in the Agent UI over LEMONADE_BASE_URL: the child is
+// pinned to GAIA's server and told it is GAIA's, like the Python agent.
+func TestSubprocessFollowsGAIAsOwnOverAnIgnoredLemonadeBaseURL(t *testing.T) {
+	dir := isolateSubprocessConnection(t)
+	t.Setenv("GAIA_CONFIG_FILE", "")
+	t.Setenv("GAIA_CONFIG_DIR", "")
+	t.Setenv("GAIA_LEMONADE_EMBEDDED", "")
+	cfg := `{"lemonade_mode":"gaia","lemonade_env_url_ignored":"http://127.0.0.1:59999/api/v1"}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(dir, "lemonade")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "state.json"), []byte(`{"port":63207,"api_key":"k"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+	if got := detectLemonadeURL(); got != "http://localhost:63207/api/v1" {
+		t.Fatalf("the child would be pinned to %q, want GAIA's own", got)
+	}
+	if !markEmbedded() {
+		t.Fatal("the child would treat GAIA's own endpoint as a chosen server")
 	}
 }
 

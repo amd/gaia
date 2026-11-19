@@ -67,17 +67,31 @@ no fallback to stale or substitute content — the error surfaces.
 
 ## Caching
 
-Railway's `serve` emits `ETag` but no `Cache-Control`, and Worker subrequests to a
-third-party hostname are not edge-cached by default — so every byte round-tripped
-to Railway. The Worker sets `cf.cacheEverything` on GET requests to Railway:
-`/_astro/*` for a year (filenames are content-hashed, so this is safe) and 60s for
-everything else, so an HTML change goes live within a minute.
+Railway's `serve` emits `ETag` but no `Cache-Control`, so the router sets the
+policy itself on every GET it proxies to Railway — the header reaches browsers and
+any downstream cache, not just Cloudflare's edge:
 
-TTLs are set per status (`cacheTtlByStatus`), never as a blanket `cacheTtl` — 404s
-get 1s and 5xx are not cached at all. Railway restarts on deploy, and a blanket TTL
-would let an asset 404 served during that window stick at the edge for a year.
+| Response | `Cache-Control` |
+|----------|-----------------|
+| 2xx under `/_astro/*` (content-hashed, so safe) | `public, max-age=31536000, immutable` |
+| other 2xx (HTML) | `public, max-age=60` — an HTML change goes live within a minute |
+| 4xx / 5xx | `no-store` |
+| 3xx | left as Railway sent it |
+
+A full `200` is also stored in the edge cache with the Cache API (`caches.default`),
+keyed on the public `amd-gaia.ai` URL (query string included, so a zone purge
+clears it), so a repeat request within its TTL is served without a round-trip to
+Railway. A cache hit answers every GET with the full `200`, ignoring `Range` and
+`If-None-Match` — valid HTTP, but a browser gets no `304` for a cached page.
+`fetch()`'s `cf.cacheEverything` is not used: on this third-party origin it left HTML
+uncached (`cf-cache-status: DYNAMIC`). Errors and 404s are never cached — Railway
+restarts on deploy, and a cached 404 for an asset would outlive the restart.
+Non-GET requests bypass the cache untouched.
 
 `/docs*` is left uncached — its behaviour is unchanged.
+
+The caching contract is covered by `npm test` (`node --test`, no dependencies),
+which CI runs on every change to this directory (`website_router_ci.yml`).
 
 ## Notes
 

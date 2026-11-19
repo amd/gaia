@@ -29,6 +29,7 @@ from gaia.agents.base.agent import (
     tool_execution_timeout,
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+from gaia.tool_cancellation import ToolCancelled, raise_if_cancelled
 
 
 @pytest.fixture(autouse=True)
@@ -257,6 +258,62 @@ class TestProducerCancellation:
 
         assert not thread.is_alive(), "producer thread outlived the request"
         assert agent.chat.send_messages.call_count == 1
+
+
+class TestStopReachesARunningTool:
+    def test_a_tool_that_polls_stops_when_the_user_stops_the_turn(self):
+        """Regression: only a timeout set this flag, so Stop waited for the tool."""
+        agent = _make_agent()
+        agent._cancel_event = threading.Event()
+        entered = threading.Event()
+
+        def long_tool():
+            entered.set()
+            for _ in range(600):
+                raise_if_cancelled()
+                time.sleep(0.05)
+            return "finished"
+
+        threading.Thread(
+            target=lambda: (entered.wait(5), agent._cancel_event.set()), daemon=True
+        ).start()
+
+        started = time.monotonic()
+        with pytest.raises(ToolCancelled):
+            agent._call_tool_bounded(long_tool, {}, "long_tool")
+
+        assert time.monotonic() - started < 5
+
+    def test_the_ui_stop_reaches_the_tool_without_the_grace_period(self):
+        """The chat's Stop sets console.cancelled well before the event fires."""
+        agent = _make_agent()
+        agent._cancel_event = threading.Event()
+        cancelled = threading.Event()
+        agent.console = MagicMock(cancelled=cancelled)
+        entered = threading.Event()
+
+        def long_tool():
+            entered.set()
+            for _ in range(600):
+                raise_if_cancelled()
+                time.sleep(0.05)
+
+        threading.Thread(
+            target=lambda: (entered.wait(5), cancelled.set()), daemon=True
+        ).start()
+
+        started = time.monotonic()
+        with pytest.raises(ToolCancelled):
+            agent._call_tool_bounded(long_tool, {}, "long_tool")
+
+        assert time.monotonic() - started < 5
+
+    def test_a_tool_that_does_not_poll_still_finishes(self):
+        agent = _make_agent()
+        agent._cancel_event = threading.Event()
+        agent._cancel_event.set()
+
+        assert agent._call_tool_bounded(lambda: "done", {}, "quick") == "done"
 
 
 # ──────────────────── a call's own requested run time ────────────────────────

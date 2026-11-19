@@ -87,7 +87,8 @@ def _fake_transport(sent):
     """Stand in for the socket layer *below* PinnedIPAdapter, recording requests."""
 
     def send(adapter, request, **kwargs):
-        sent.append(request)
+        # Copy: PinnedIPAdapter restores the original URL once send returns.
+        sent.append(request.copy())
         resp = requests.Response()
         resp.status_code = 200
         resp.headers["Content-Type"] = "text/html; charset=utf-8"
@@ -169,6 +170,13 @@ def test_open_url_opens_a_public_url(full_profile_tools):
         result = _tool(registry, "open_url")("https://example.com/")
     assert result["status"] == "success"
     opener.assert_called_once_with("https://example.com/")
+
+
+def test_open_url_docstring_defers_to_the_policy_check(full_profile_tools):
+    _, registry = full_profile_tools
+    description = _tool(registry, "open_url").__doc__
+    assert "Call this tool for a URL the user supplied" in description
+    assert "do not refuse it based on this description alone" in description
 
 
 @pytest.mark.parametrize(

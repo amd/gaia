@@ -23,7 +23,7 @@ const gatewayModel = "amd.Gemma-4-31B"
 
 func TestRelayedFlagshipRestoresACloudModelWithoutAModelTurn(t *testing.T) {
 	agent := relayedFlagship()
-	m := NewFlagshipModel(agent).
+	m := NewFlagshipModel(agent, false).
 		WithSavedModel(preflight.LastModel{Provider: "amd", Model: gatewayModel})
 
 	updated, _ := m.launchAgent(agent, true)
@@ -38,7 +38,7 @@ func TestRelayedFlagshipRestoresACloudModelWithoutAModelTurn(t *testing.T) {
 func TestRelayedFlagshipRemembersAModelPickedAtTheGate(t *testing.T) {
 	agent := relayedFlagship()
 	var saved []string
-	m := NewFlagshipModel(agent).
+	m := NewFlagshipModel(agent, false).
 		WithModelMemory(func(provider, model string) error {
 			saved = append(saved, provider+"/"+model)
 			return nil
@@ -61,12 +61,11 @@ func TestRelayedFlagshipRemembersAModelPickedAtTheGate(t *testing.T) {
 func TestSubprocessFlagshipStillConfirmsTheRestoreWithTheAgent(t *testing.T) {
 	agent := fixtureAgent(t, catalog.FlagshipID)
 	var saved []string
-	m := NewFlagshipModel(agent).
+	m := NewFlagshipModel(agent, false).
 		WithModelMemory(func(_, model string) error { saved = append(saved, model); return nil }).
 		WithSavedModel(preflight.LastModel{Provider: "amd", Model: gatewayModel})
 
-	updated, _ := m.launchAgent(agent, true)
-	m = updated.(FlagshipModel)
+	m.launchAgent(agent, true)
 
 	if len(saved) != 0 {
 		t.Fatalf("a restore was saved before the agent confirmed it: %v", saved)

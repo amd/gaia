@@ -18,7 +18,7 @@ user-observable impact first, never a raw commit dump. No Claude attribution any
 
 - Bumping version in `src/gaia/version.py` (or wherever versioning lives — verify first)
 - Generating a changelog for a release tag
-- Authoring or debugging release CI (`publish.yml`, `pypi.yml`, `build-installers.yml`, `build-electron-apps.yml`, `update-release-branch.yml`)
+- Authoring or debugging release CI (`publish.yml`, `pypi.yml`, `build-installers.yml`, `update-release-branch.yml`)
 - Drafting GitHub release notes from the commit log
 - Coordinating an end-to-end release (tag → installers → PyPI → release notes)
 
@@ -36,12 +36,11 @@ user-observable impact first, never a raw commit dump. No Claude attribution any
 | PyPI build-check (PR only) | `.github/workflows/pypi.yml` (does *not* publish) |
 | Windows installer | `.github/workflows/build-installers.yml` |
 | Release branch sync | `.github/workflows/update-release-branch.yml` |
-| Electron apps | `.github/workflows/build-electron-apps.yml` |
 | GitHub release | Tag + generated notes |
 
 Verify current workflow names with `ls .github/workflows/` — CI scaffolding changes.
 
-**Agent packages release separately:** GAIA agent sidecars (e.g. the email agent) publish on their own `agent-pkg-*` tag namespace via `release_agent_email.yml` / `build_agent_package.yml` — distinct from the core `v*` release tag.
+**Agent packages release separately:** The flagship agent sidecar publishes on its own `agent-pkg-gaia-*` tag namespace via `release_agent_gaia.yml` (see the `agent-hub-release` skill) — distinct from the core `v*` release tag.
 
 ## Standard release checklist
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/amd/gaia/tui/internal/gaiainit"
 	"net/http"
 	"strings"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
 )
 
@@ -60,8 +62,7 @@ func (d Diagnosis) String() string {
 
 // Ladder maps a failed call to a Diagnosis, most specific cause first.
 //
-// Ported from the email agent's playground `diagnose` (playground_html.py) and
-// extended with the daemon's own typed errors, which the browser never sees. The
+// It covers the daemon's own typed errors as well as relayed bodies. The
 // ordering is the point: "Lemonade is not running" and "the model is missing"
 // both surface as a 502 with a body, and answering "the call timed out" to
 // either sends the user down the wrong path.
@@ -84,6 +85,18 @@ func (l Ladder) agentCommand(verb, fallback string) string {
 		return fallback
 	}
 	return verb + " " + l.AgentID
+}
+
+// unregisteredAgentRemedy answers a background service that has no agent by
+// this id. It reads its agent list from the installed GAIA once, when it
+// starts, so an install made outside it is invisible until it restarts.
+func unregisteredAgentRemedy(agentID string) Remedy {
+	return Remedy{
+		Action: fmt.Sprintf("Install it with `%s` if you have not, then restart the background "+
+			"service — it reads its agent list only when it starts.", catalog.InstallCommand(agentID)),
+		Command: "gaia daemon restart",
+		Where:   daemonLog(),
+	}
 }
 
 // daemonLog is the daemon's own log path, resolved for embedding in a remedy.
@@ -124,10 +137,11 @@ func (l Ladder) Error(op string, err error) Diagnosis {
 				version.Have, version.Want, version.Reason),
 			// The version comes from the installed core, so a restart relaunches
 			// the same one; saying so stops the user looping on it.
-			Remedy: "Upgrade the installed GAIA core so it matches this app, or re-run " +
-				"the installer from https://amd-gaia.ai. A restart brings the same version back.",
-			Command: "pip install --upgrade amd-gaia",
-			Where:   daemonLog(),
+			Remedy: "Update GAIA so its core matches this app: re-run the installer " +
+				"from https://amd-gaia.ai/#install. A restart brings the same version back.",
+			Command:    gaiainit.InstallCommand,
+			PowerShell: gaiainit.InstallPowerShellCommand,
+			Where:      daemonLog(),
 		}
 	}
 	// Without this an absent route read as "<op> failed: <the whole skew
@@ -135,10 +149,12 @@ func (l Ladder) Error(op string, err error) Diagnosis {
 	var missing *daemon.RouteMissingError
 	if errors.As(err, &missing) {
 		return Diagnosis{
-			Cause:   "GAIA's background service is out of date.",
-			Remedy:  "Upgrade the installed GAIA core, then press r. A restart brings the same version back.",
-			Command: "pip install --upgrade amd-gaia",
-			Where:   daemonLog(),
+			Cause: "GAIA's background service is out of date.",
+			Remedy: "Update GAIA from https://amd-gaia.ai/#install, then press r. " +
+				"A restart brings the same version back.",
+			Command:    gaiainit.InstallCommand,
+			PowerShell: gaiainit.InstallPowerShellCommand,
+			Where:      daemonLog(),
 		}
 	}
 	var stale *daemon.StaleError
@@ -243,13 +259,18 @@ func (l Ladder) Status(op string, status int, body string) Diagnosis {
 			Where:   daemonLog(),
 		}
 	case http.StatusNotFound:
-		return Diagnosis{
-			Cause: fmt.Sprintf("The background service does not know the agent %q.", l.agent()),
-			Remedy: "Install it, then check it is registered. " +
-				detailSuffix(trimmed),
-			Command: l.agentCommand("gaia hub install", "gaia daemon agents"),
-			Where:   daemonLog(),
+		cause := fmt.Sprintf("The background service does not know the agent %q.", l.agent())
+		if l.AgentID == "" {
+			return Diagnosis{
+				Cause:   cause,
+				Remedy:  "Check which agents it has registered. " + detailSuffix(trimmed),
+				Command: "gaia daemon agents",
+				Where:   daemonLog(),
+			}
 		}
+		d := withRemedy(cause, unregisteredAgentRemedy(l.AgentID))
+		d.Remedy = strings.TrimSpace(d.Remedy + " " + detailSuffix(trimmed))
+		return d
 	case http.StatusServiceUnavailable:
 		// The sidecar's own not-ready answer. Its hint is the best remedy there
 		// is, so run the text ladder over it rather than inventing wording.
@@ -296,9 +317,7 @@ func (l Ladder) Status(op string, status int, body string) Diagnosis {
 	return l.Text(op, trimmed)
 }
 
-// Text is the message ladder itself: specific causes before generic ones,
-// mirroring the email playground's `diagnose` so the TUI and the browser never
-// disagree about what a given failure means.
+// Text is the message ladder itself: specific causes before generic ones.
 func (l Ladder) Text(op, text string) Diagnosis {
 	body := strings.ToLower(text)
 

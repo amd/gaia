@@ -89,8 +89,17 @@ def run_setup(
     if open_browser:
         _open_browser(emit, url)
 
-    app_token = prompt("App-level token (xapp-…): ").strip()
-    bot_token = prompt("Bot user OAuth token (xoxb-…): ").strip()
+    try:
+        app_token = prompt("App-level token (xapp-…): ").strip()
+        bot_token = prompt("Bot user OAuth token (xoxb-…): ").strip()
+    except EOFError:
+        # Nothing to type into: a script, a CI step, a launcher with stdin closed.
+        emit(
+            "\n❌ gaia slack setup needs a terminal to paste the tokens into. Run it "
+            "in a terminal, or pipe the app-level token and then the bot token, one "
+            "per line, to `gaia slack connect`."
+        )
+        return 1
 
     try:
         manifest.validate_tokens(bot_token, app_token)
@@ -161,10 +170,13 @@ def run_start(
         SlackAdapter,
         SlackAllowlistError,
         SlackDependencyError,
+        slack_restart_hint,
     )
+    from gaia.stream_timeout import stream_timeout_from_env
 
     try:
         allowed = parse_allowed_users(allowed_users)
+        stream_timeout_from_env()  # a bad GAIA_STREAM_TIMEOUT fails here, cleanly
     except ValueError as e:
         emit(f"❌ {e}")
         return 2
@@ -189,6 +201,7 @@ def run_start(
             agent_argv=agent_argv,
             deny_gated_tools=deny_gated_tools,
             upload_roots=upload_roots,
+            restart_hint=slack_restart_hint(background),
         )
     except SlackAllowlistError as e:
         emit(f"❌ {e}")

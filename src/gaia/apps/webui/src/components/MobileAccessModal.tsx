@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Smartphone, Copy, Check } from 'lucide-react';
+import { X, Smartphone, Copy, Check, ExternalLink, RotateCw } from 'lucide-react';
 import type { TunnelStatus } from '../types';
 import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import { log } from '../utils/logger';
+import { useT } from '../i18n/useT';
 import './MobileAccessModal.css';
 
 // QRCode loaded lazily via dynamic import
@@ -18,14 +21,27 @@ interface MobileAccessModalProps {
     /** Explicitly stop the tunnel (shown only while the tunnel is active). */
     onStop?: () => void;
     error?: string | null;
+    /** Set when ngrok is not installed; the commands are for the CLI, never shown here. */
+    setupCommands?: string[] | null;
+    /** Try starting the tunnel again, e.g. after installing ngrok. */
+    onRetry?: () => void;
 }
 
-export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAccessModalProps) {
+const NGROK_DOWNLOAD_URL = 'https://ngrok.com/download';
+
+export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommands, onRetry }: MobileAccessModalProps) {
     const [status, setStatus] = useState<TunnelStatus | null>(null);
     const [copied, setCopied] = useState(false);
+    const t = useT();
+    const needsSetup = Array.isArray(setupCommands);
+    // Nothing to poll for or scan while the tunnel cannot start.
+    const halted = !!error || needsSetup;
     const [qrError, setQrError] = useState<string | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     useEscapeToClose(isOpen, onClose);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useFocusTrap(dialogRef, isOpen);
+    useDialogFocus(dialogRef, isOpen);
 
     // Fetch current tunnel status using centralized API client
     const fetchStatus = useCallback(async () => {
@@ -41,7 +57,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
 
     // Poll for tunnel status when modal is open
     useEffect(() => {
-        if (!isOpen || error) return;
+        if (!isOpen || halted) return;
 
         // Fetch immediately
         fetchStatus();
@@ -55,7 +71,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
         }, 2000);
 
         return () => clearInterval(interval);
-    }, [isOpen, error, fetchStatus]);
+    }, [isOpen, halted, fetchStatus]);
 
     // Generate QR code when URL is available
     useEffect(() => {
@@ -135,14 +151,14 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
         : '';
 
     return (
-        <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Mobile Access">
+        <div ref={dialogRef} className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={t('sidebar.mobileAccess')}>
             <div className="modal-panel mobile-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
                     <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <Smartphone size={18} />
-                        Mobile Access
+                        {t('sidebar.mobileAccess')}
                     </h3>
-                    <button className="btn-icon" onClick={onClose} aria-label="Close">
+                    <button className="btn-icon" onClick={onClose} aria-label={t('mobile.close')}>
                         <X size={18} />
                     </button>
                 </div>
@@ -151,46 +167,58 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                     {/* Status indicator */}
                     <div className="tunnel-status">
                         <span className={`status-dot ${
-                            status?.active ? 'active' :
-                            error ? 'error' :
-                            'starting'
+                            status?.active ? 'is-active' :
+                            needsSetup ? 'is-setup' :
+                            error ? 'is-error' :
+                            'is-starting'
                         }`} />
                         <span>
                             {status?.active
                                 ? 'Tunnel active'
-                                : error
-                                    ? 'Connection failed'
-                                    : 'Starting tunnel...'}
+                                : needsSetup
+                                    ? t('mobile.ngrokRequired')
+                                    : error
+                                        ? "Couldn't start mobile access"
+                                        : 'Starting tunnel...'}
                         </span>
-                        {!status?.active && !error && <span className="tunnel-spinner" />}
+                        {!status?.active && !halted && <span className="tunnel-spinner" />}
                     </div>
 
+                    {/* Missing prerequisite: a setup step, not a failure. */}
+                    {needsSetup && (
+                        <div className="tunnel-setup">
+                            <div className="tunnel-setup-title">{t('mobile.setupTitle')}</div>
+                            <p>{t('mobile.setupIntro')}</p>
+                            <a href={NGROK_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" className="tunnel-setup-link">
+                                {t('mobile.downloadPage')} <ExternalLink size={11} />
+                            </a>
+                        </div>
+                    )}
+
                     {/* Error message */}
-                    {error && (
+                    {error && !needsSetup && (
                         <div className="tunnel-error">
                             {error}
                         </div>
                     )}
 
-                    {/* QR Code */}
-                    <div className="qr-code-area">
-                        {status?.active ? (
-                            <>
-                                {/* Stays mounted while errored so a later retry still has its ref. */}
-                                <canvas ref={canvasRef} hidden={!!qrError} />
-                                {qrError && <div className="qr-placeholder error">{qrError}</div>}
-                            </>
-                        ) : error ? (
-                            <div className="qr-placeholder error">
-                                Failed to connect
-                            </div>
-                        ) : (
-                            <div className="qr-placeholder">
-                                <div className="placeholder-spinner" />
-                                <span>Connecting...</span>
-                            </div>
-                        )}
-                    </div>
+                    {/* QR Code: nothing to scan, and no steps to follow, once it failed. */}
+                    {!halted && (
+                        <div className="qr-code-area">
+                            {status?.active ? (
+                                <>
+                                    {/* Stays mounted while errored so a later retry still has its ref. */}
+                                    <canvas ref={canvasRef} hidden={!!qrError} />
+                                    {qrError && <div className="qr-placeholder error">{qrError}</div>}
+                                </>
+                            ) : (
+                                <div className="qr-placeholder">
+                                    <div className="placeholder-spinner" />
+                                    <span>Connecting...</span>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* URL display */}
                     {status?.active && mobileUrl && (
@@ -214,7 +242,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                     {status?.active && status?.publicIp && status?.url &&
                      !status.url.includes('ngrok-free.app') && (
                         <div className="tunnel-password-hint">
-                            <label>Tunnel Password</label>
+                            <label>Tunnel password</label>
                             <div className="tunnel-password-value">{status.publicIp}</div>
                             <span className="tunnel-password-note">
                                 Enter this when the tunnel page asks for a password
@@ -223,20 +251,30 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                     )}
 
                     {/* Instructions */}
-                    <div className="mobile-instructions">
-                        <ol>
-                            <li>
-                                {qrError
-                                    ? 'Open the mobile URL above on your phone'
-                                    : "Scan the QR code with your phone's camera"}
-                            </li>
-                            {status?.url && !status.url.includes('ngrok-free.app') && (
-                                <li>Enter the tunnel password shown above when prompted</li>
-                            )}
-                            <li>Chat with GAIA from your mobile device</li>
-                            <li>Your data stays secure via encrypted tunnel</li>
-                        </ol>
-                    </div>
+                    {!halted && (
+                        <div className="mobile-instructions">
+                            <ol>
+                                <li>
+                                    {qrError
+                                        ? 'Open the mobile URL above on your phone'
+                                        : "Scan the QR code with your phone's camera"}
+                                </li>
+                                {status?.url && !status.url.includes('ngrok-free.app') && (
+                                    <li>Enter the tunnel password shown above when prompted</li>
+                                )}
+                                <li>Chat with GAIA from your mobile device</li>
+                                <li>Your data stays secure via encrypted tunnel</li>
+                            </ol>
+                        </div>
+                    )}
+
+                    {status?.active && !error && (
+                        <div className="mobile-install-hint">
+                            <div className="mobile-install-hint-title">{t('mobileAccess.installTitle')}</div>
+                            <p>{t('mobileAccess.installSteps')}</p>
+                            <p>{t('mobileAccess.linkLifetime')}</p>
+                        </div>
+                    )}
 
                     {/* Actions */}
                     <div className="mobile-access-actions">
@@ -246,10 +284,15 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                                 onClick={onStop}
                                 title="Close the tunnel and revoke the mobile URL"
                             >
-                                Stop Tunnel
+                                Stop tunnel
                             </button>
                         )}
-                        <button className="btn-secondary" onClick={onClose}>Close</button>
+                        {needsSetup && onRetry && (
+                            <button className="btn-primary" onClick={onRetry}>
+                                <RotateCw size={13} /> {t('mobile.retry')}
+                            </button>
+                        )}
+                        <button className="btn-secondary" onClick={onClose}>{t('mobile.close')}</button>
                     </div>
                 </div>
             </div>

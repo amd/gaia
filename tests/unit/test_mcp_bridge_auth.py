@@ -50,7 +50,7 @@ class StubBridge:
         self.tools = {"gaia.query": {"name": "gaia.query", "description": "stub"}}
         self.executed = []
 
-    def execute_tool(self, tool_name, arguments):
+    def execute_tool(self, tool_name, arguments, client_gone=None):
         self.executed.append((tool_name, arguments))
         return {"success": True, "result": "stub"}
 
@@ -413,14 +413,11 @@ class TestConfigurationContract:
                 captured["auth_token"] = kwargs.get("auth_token")
 
         class FakeServer:
-            def __init__(self, *args, **kwargs):
-                pass
-
             def serve_forever(self):
                 raise KeyboardInterrupt
 
         monkeypatch.setattr(bridge_mod, "GAIAMCPBridge", FakeBridge)
-        monkeypatch.setattr(bridge_mod, "HTTPServer", FakeServer)
+        monkeypatch.setattr(bridge_mod, "create_server", lambda *_a: FakeServer())
 
         bridge_mod.start_server(host="localhost", port=0)
 

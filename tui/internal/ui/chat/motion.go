@@ -15,6 +15,7 @@ import (
 	"github.com/muesli/termenv"
 	xterm "golang.org/x/term"
 
+	"github.com/amd/gaia/tui/internal/filelock"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -97,7 +98,8 @@ var realMotionProbe = motionProbe{
 		if path == "" {
 			return nil
 		}
-		raw, err := os.ReadFile(path) // #nosec G304 -- the user's own ~/.gaia/config.json
+		// Under the shared lock, like every other config.json reader.
+		raw, err := filelock.ReadFile(path)
 		if err != nil {
 			return nil
 		}

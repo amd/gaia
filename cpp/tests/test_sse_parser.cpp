@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include <gaia/sse_parser.h>
 
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -149,6 +150,142 @@ TEST(SseParserTest, MalformedJson) {
 
     EXPECT_NO_THROW(feedString(parser, "data: {not valid json\n"));
     EXPECT_TRUE(tokens.empty());
+    EXPECT_EQ(parser.malformedEventCount(), 1u);
+    EXPECT_EQ(parser.firstMalformedEvent(), "{not valid json");
+}
+
+TEST(SseParserTest, MalformedEventsAreCountedNotHidden) {
+    std::vector<std::string> tokens;
+    SseParser parser([&](const std::string& tok) { tokens.push_back(tok); });
+
+    feedString(parser,
+        "data: {\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n"
+        "data: {\"choices\":[{\"delta\":{\"cont\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"B\"}}]}\n"
+        "data: garbage\n");
+
+    // Good events around a bad one still flow; the bad ones are recorded.
+    ASSERT_EQ(tokens.size(), 2u);
+    EXPECT_EQ(parser.malformedEventCount(), 2u);
+    EXPECT_EQ(parser.firstMalformedEvent(), "{\"choices\":[{\"delta\":{\"cont");
+}
+
+TEST(SseParserTest, WrongTypedContentIsMalformed) {
+    std::vector<std::string> tokens;
+    SseParser parser([&](const std::string& tok) { tokens.push_back(tok); });
+
+    feedString(parser, "data: {\"choices\":[{\"delta\":{\"content\":42}}]}\n");
+
+    EXPECT_TRUE(tokens.empty());
+    EXPECT_FALSE(parser.hasTokens());
+    EXPECT_EQ(parser.malformedEventCount(), 1u);
+}
+
+TEST(SseParserTest, MalformedSnippetIsTruncated) {
+    SseParser parser([](const std::string&) {});
+    feedString(parser, "data: {" + std::string(5000, 'x') + "\n");
+
+    EXPECT_EQ(parser.malformedEventCount(), 1u);
+    EXPECT_LT(parser.firstMalformedEvent().size(), 300u);
+}
+
+TEST(SseParserTest, WellFormedStreamHasNoMalformedEvents) {
+    SseParser parser([](const std::string&) {});
+    feedString(parser,
+        ": keep-alive\n"
+        "event: message\n"
+        "data: {\"choices\":[]}\n"
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n"
+        "data: {\"usage\":{\"prompt_tokens\":3}}\n"
+        "data: [DONE]\n");
+
+    EXPECT_EQ(parser.malformedEventCount(), 0u);
+    EXPECT_FALSE(parser.hasError());
+}
+
+// ---------------------------------------------------------------------------
+// Error events are captured, not mistaken for an empty answer
+// ---------------------------------------------------------------------------
+
+TEST(SseParserTest, ErrorEventIsCaptured) {
+    std::vector<std::string> tokens;
+    SseParser parser([&](const std::string& tok) { tokens.push_back(tok); });
+
+    feedString(parser, "data: {\"error\":{\"message\":\"boom\"}}\n\n");
+
+    EXPECT_TRUE(tokens.empty());
+    ASSERT_TRUE(parser.hasError());
+    EXPECT_EQ(parser.errorEvent()["error"]["message"], "boom");
+    EXPECT_EQ(parser.malformedEventCount(), 0u);
+}
+
+TEST(SseParserTest, FirstErrorEventWins) {
+    SseParser parser([](const std::string&) {});
+    feedString(parser,
+        "data: {\"error\":\"first\"}\n"
+        "data: {\"error\":\"second\"}\n");
+
+    ASSERT_TRUE(parser.hasError());
+    EXPECT_EQ(parser.errorEvent()["error"], "first");
+}
+
+TEST(SseParserTest, ErrorAfterTokensIsStillCaptured) {
+    std::vector<std::string> tokens;
+    SseParser parser([&](const std::string& tok) { tokens.push_back(tok); });
+
+    feedString(parser,
+        "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n"
+        "data: {\"error\":{\"message\":\"died mid-stream\"}}\n");
+
+    EXPECT_TRUE(parser.hasTokens());
+    EXPECT_TRUE(parser.hasError());
+}
+
+// ---------------------------------------------------------------------------
+// finish() processes an unterminated final line
+// ---------------------------------------------------------------------------
+
+TEST(SseParserTest, FinishProcessesUnterminatedErrorEvent) {
+    SseParser parser([](const std::string&) {});
+    feedString(parser, "data: {\"error\":{\"message\":\"no newline\"}}");
+    EXPECT_FALSE(parser.hasError());
+
+    parser.finish();
+    EXPECT_TRUE(parser.hasError());
+}
+
+TEST(SseParserTest, FinishProcessesUnterminatedToken) {
+    std::vector<std::string> tokens;
+    SseParser parser([&](const std::string& tok) { tokens.push_back(tok); });
+    feedString(parser, "data: {\"choices\":[{\"delta\":{\"content\":\"T\"}}]}\r");
+
+    parser.finish();
+    ASSERT_EQ(tokens.size(), 1u);
+    EXPECT_EQ(tokens[0], "T");
+}
+
+TEST(SseParserTest, FinishFlagsTruncatedFinalEvent) {
+    SseParser parser([](const std::string&) {});
+    feedString(parser, "data: {\"choices\":[{\"delta\":{\"content\":\"cut");
+
+    parser.finish();
+    EXPECT_EQ(parser.malformedEventCount(), 1u);
+}
+
+TEST(SseParserTest, FinishIsIdempotentAndNoopAfterDone) {
+    std::vector<std::string> tokens;
+    SseParser parser([&](const std::string& tok) { tokens.push_back(tok); });
+    feedString(parser, "data: [DONE]\n");
+
+    parser.finish();
+    parser.finish();
+    EXPECT_TRUE(tokens.empty());
+    EXPECT_EQ(parser.malformedEventCount(), 0u);
+
+    SseParser empty([](const std::string&) {});
+    empty.finish();
+    EXPECT_EQ(empty.malformedEventCount(), 0u);
+    EXPECT_FALSE(empty.hasError());
 }
 
 // ---------------------------------------------------------------------------
@@ -284,4 +421,36 @@ TEST(SseParserTest, NonDataFieldsIgnored) {
 
     ASSERT_EQ(tokens.size(), 1u);
     EXPECT_EQ(tokens[0], "Z");
+}
+
+TEST(SseParserTest, NullErrorFieldIsNotAnError) {
+    std::vector<std::string> tokens;
+    SseParser parser([&](const std::string& tok) { tokens.push_back(tok); });
+
+    feedString(parser, "data: {\"error\":null,\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n");
+
+    EXPECT_FALSE(parser.hasError());
+    ASSERT_EQ(tokens.size(), 1u);
+    EXPECT_EQ(tokens[0], "ok");
+}
+
+TEST(SseParserTest, EmptyDataFieldIsNotMalformed) {
+    std::vector<std::string> tokens;
+    SseParser parser([&](const std::string& tok) { tokens.push_back(tok); });
+
+    feedString(parser,
+        "data:\n"
+        "data: \n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n");
+
+    EXPECT_EQ(parser.malformedEventCount(), 0u);
+    ASSERT_EQ(tokens.size(), 1u);
+}
+
+TEST(SseParserTest, CallbackExceptionPropagates) {
+    SseParser parser([](const std::string&) { throw std::logic_error("stop"); });
+
+    EXPECT_THROW(feedString(parser, "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n"),
+                 std::logic_error);
+    EXPECT_EQ(parser.malformedEventCount(), 0u);
 }

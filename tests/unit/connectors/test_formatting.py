@@ -4,8 +4,8 @@
 Tests for ``gaia.connectors.formatting.format_connector_error``.
 
 Guards the public formatter against silent re-inlining (e.g. someone
-copy-pasting the body back into ``connectors_demo/agent.py`` without
-realising the email agent now imports from this module).
+copy-pasting the body into an agent without realising the email agent
+imports from this module).
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def test_format_connector_error_public_api():
     not_granted = AuthRequiredError(
         AuthRequiredError.Reason.AGENT_NOT_GRANTED,
         provider="google",
-        agent_id="installed:connectors-demo",
+        agent_id="installed:my-agent",
         missing_scopes=["scope-a"],
     )
     assert "AGENT_NOT_GRANTED" in format_connector_error(not_granted)
@@ -70,13 +70,8 @@ def test_format_connector_error_public_api():
     assert "ValueError" in format_connector_error(plain)
 
 
-def test_format_connector_error_email_agent_grant_migration():
-    """
-    A user whose Google grant predates #962 (no ``gmail.modify``) sees a
-    re-grant message tailored to the email agent — generic
-    ``AGENT_NOT_GRANTED`` wording would not tell them which scopes to
-    grant or that "Reconnect" is the path.
-    """
+def test_the_removed_email_agent_has_no_message_of_its_own():
+    """A grant gap for the removed agent reads like any other agent's."""
     err = AuthRequiredError(
         AuthRequiredError.Reason.AGENT_NOT_GRANTED,
         provider="google",
@@ -84,33 +79,9 @@ def test_format_connector_error_email_agent_grant_migration():
         missing_scopes=["https://www.googleapis.com/auth/gmail.modify"],
     )
     msg = format_connector_error(err)
-    assert "Email agent" in msg
+    assert msg.startswith("AGENT_NOT_GRANTED:")
+    assert "Email agent" not in msg
     assert "gmail.modify" in msg
-    assert "Reconnect" in msg
-
-
-def test_format_connector_error_email_agent_microsoft_falls_through():
-    """
-    A Microsoft grant gap for ``installed:email`` must NOT show the Google
-    "Reconnect" migration text (issue #1751). The override is keyed by
-    ``(agent_id, provider)``, so a Microsoft failure falls through to the
-    generic provider-aware branch — naming Microsoft and the missing Graph
-    scopes, not Google.
-    """
-    err = AuthRequiredError(
-        AuthRequiredError.Reason.AGENT_NOT_GRANTED,
-        provider="microsoft",
-        agent_id="installed:email",
-        missing_scopes=["Mail.ReadWrite", "Mail.Send"],
-    )
-    msg = format_connector_error(err)
-    assert "AGENT_NOT_GRANTED" in msg
-    assert "microsoft" in msg
-    assert "Mail.ReadWrite" in msg
-    assert "Mail.Send" in msg
-    # The Google migration string must not leak onto a Microsoft failure.
-    assert "Google" not in msg
-    assert "gmail.modify" not in msg
 
 
 def test_format_connector_error_rate_limited_is_actionable_not_generic():
@@ -137,6 +108,22 @@ def test_format_connector_error_unknown_agent_falls_back_to_generic():
     msg = format_connector_error(err)
     assert "AGENT_NOT_GRANTED" in msg
     assert "scope-x" in msg
+
+
+def test_flagship_grant_gap_never_borrows_the_email_agents_remedy():
+    """The email agent's migration text asks for gmail.modify + send. The
+    read-only flagship must get the scope it actually lacks instead."""
+    readonly = "https://www.googleapis.com/auth/gmail.readonly"
+    err = AuthRequiredError(
+        AuthRequiredError.Reason.AGENT_NOT_GRANTED,
+        provider="google",
+        agent_id="installed:gaia",
+        missing_scopes=[readonly],
+    )
+    msg = format_connector_error(err)
+    assert readonly in msg
+    assert "gmail.send" not in msg
+    assert "gmail.modify" not in msg
 
 
 @pytest.mark.parametrize(

@@ -169,6 +169,25 @@ def inbox_dir() -> Path:
     return root / "slack" / "inbox"
 
 
+#: How to bring the bridge back once its agent has been given up on. A second
+#: `gaia slack start` while this one runs would open a second connection.
+def slack_restart_hint(background: bool = False) -> str:
+    """How to restart this bridge, matching how it was started."""
+    if background:
+        return (
+            "Stop the Slack bridge with `gaia slack stop`, then start it again "
+            "with `gaia slack start --allowed-users <your member id> "
+            "--background`."
+        )
+    return (
+        "Stop the Slack bridge with Ctrl+C, then start it again with "
+        "`gaia slack start --allowed-users <your member id>`."
+    )
+
+
+SLACK_RESTART_HINT = slack_restart_hint()
+
+
 class SlackAllowlistError(ValueError):
     """The adapter was asked to run without an allowlist.
 
@@ -179,6 +198,10 @@ class SlackAllowlistError(ValueError):
 
 class SlackDependencyError(RuntimeError):
     """``slack_sdk`` is not installed."""
+
+
+class SlackPostError(RuntimeError):
+    """Slack did not accept a message GAIA tried to post."""
 
 
 @dataclass
@@ -267,6 +290,7 @@ class SlackAdapter:
         channel_factory: Optional[Callable[..., AgentChannel]] = None,
         web_client: Any = None,
         confirm_timeout: float = CONFIRM_TIMEOUT_SECONDS,
+        restart_hint: str = SLACK_RESTART_HINT,
     ) -> None:
         # Refused here rather than in start(): an adapter that should serve
         # nobody must never exist, so no later caller can reach a permissive one.
@@ -288,6 +312,7 @@ class SlackAdapter:
         self.team_id = team_id
         self.deny_gated_tools = deny_gated_tools
         self.confirm_timeout = confirm_timeout
+        self.restart_hint = restart_hint
         # Default to the same scope the agent itself reads from, so a file the
         # user asked the agent to write can be handed back without extra setup.
         self.upload_roots = [
@@ -376,6 +401,7 @@ class SlackAdapter:
             on_event=self._on_agent_event,
             argv=self._agent_argv,
             on_busy=self._on_busy,
+            restart_hint=self.restart_hint,
         )
         self._channel.start()
         if connect:
@@ -521,7 +547,17 @@ class SlackAdapter:
             return
 
         target = ReplyTarget(channel=channel, thread_ts=ts)
-        target.reply_ts = self._post(channel, "_Thinking…_", thread_ts=ts)
+        try:
+            target.reply_ts = self._post(channel, "_Thinking…_", thread_ts=ts)
+        except SlackPostError as e:
+            # Its answer could not be shown either, so the turn is not started.
+            self._post(
+                channel,
+                f":warning: GAIA could not start a reply, so it did not run "
+                f"your message. Send it again. ({e})",
+                thread_ts=ts,
+            )
+            raise
         target.throttle = StreamThrottle(
             flush=lambda body: self._update(target, body),
             interval=EDIT_INTERVAL,
@@ -712,6 +748,9 @@ class SlackAdapter:
             self._ask_confirmation(target, event)
         elif etype == "needs_input":
             self._refuse_question(target, event)
+        elif etype == "reasoning":
+            # Only sent to a client that asks for it; Slack posts the answer, not the thinking.
+            pass
         elif etype == "final":
             self._finish(target, str(event.get("answer") or ""))
         elif etype == "error":
@@ -755,17 +794,24 @@ class SlackAdapter:
                 # click resolves whatever confirmation replaced the one it was
                 # typed for.
                 element["value"] = confirm_id
-        ts = self._post(
-            target.channel,
-            f"GAIA wants to {action}",
-            thread_ts=target.thread_ts,
-            blocks=blocks,
-        )
-        if not ts or not confirm_id:
+        try:
+            ts = self._post(
+                target.channel,
+                f"GAIA wants to {action}",
+                thread_ts=target.thread_ts,
+                blocks=blocks,
+            )
+        except SlackPostError as e:
             # Nobody can press a button that never posted, and the agent waits
             # forever — deny rather than block every later message.
-            audit.warning("Denied %r: the approval prompt could not be shown", action)
+            audit.warning(
+                "Denied %r: the approval prompt failed to post: %s", action, e
+            )
             self._agent().decide(DECISION_DENY, confirm_id or None)
+            return
+        if not confirm_id:
+            audit.warning("Denied %r: the approval request carried no id", action)
+            self._agent().decide(DECISION_DENY, None)
             return
         timer = threading.Timer(
             self.confirm_timeout, self._expire_confirmation, args=(confirm_id,)
@@ -794,8 +840,10 @@ class SlackAdapter:
             )
         else:
             lines.append("_Reply with your answer and GAIA will continue from there._")
-        self._post(target.channel, "\n".join(lines), thread_ts=target.thread_ts)
-        self._agent().cancel()
+        try:
+            self._post(target.channel, "\n".join(lines), thread_ts=target.thread_ts)
+        finally:
+            self._agent().cancel()
 
     def _remember_written_file(self, target: ReplyTarget, tool: str, args: Any) -> None:
         """Note the path a file-writing tool was asked to write."""
@@ -883,7 +931,11 @@ class SlackAdapter:
         thread_ts: str = "",
         blocks: Optional[List[dict]] = None,
     ) -> str:
-        """Post a message, returning its timestamp (empty string on failure)."""
+        """Post a message and return its timestamp.
+
+        Raises:
+            SlackPostError: Slack refused the post or returned no timestamp.
+        """
         web = self._build_web_client()
         kwargs: Dict[str, Any] = {"channel": channel, "text": _truncate(text)}
         if thread_ts:
@@ -892,11 +944,19 @@ class SlackAdapter:
             kwargs["blocks"] = blocks
         try:
             response = web.chat_postMessage(**kwargs)
-        except Exception as e:  # noqa: BLE001 - a failed post must not kill the turn
-            log.warning("Could not post to Slack channel %s: %s", channel, e)
-            return ""
+        except Exception as e:  # noqa: BLE001 - re-raised with the channel below
+            raise SlackPostError(
+                f"Slack refused a post to channel {channel}: {e}. Check the bot "
+                "is still installed and has the chat:write scope."
+            ) from e
         data = response.data if hasattr(response, "data") else response
-        return str(data.get("ts") or "")
+        ts = str(data.get("ts") or "")
+        if not ts:
+            raise SlackPostError(
+                f"Slack accepted a post to channel {channel} but returned no "
+                "message timestamp, so the reply cannot be updated."
+            )
+        return ts
 
     def _edit(
         self,
@@ -922,33 +982,3 @@ class SlackAdapter:
             )
             return
         self._edit(target.channel, target.reply_ts, text)
-
-
-def run_slack(
-    bot_token: str,
-    app_token: str,
-    allowed_users: Optional[Set[str]] = None,
-    *,
-    team_id: Optional[str] = None,
-    agent_argv: Optional[Sequence[str]] = None,
-    deny_gated_tools: bool = False,
-    upload_roots: Optional[Sequence[str]] = None,
-) -> SlackAdapter:
-    """Build and start a Slack adapter.
-
-    Raises:
-        SlackAllowlistError: if ``allowed_users`` is empty. Every member of a
-            workspace can DM a bot, so an empty allowlist would offer the local
-            agent to all of them.
-    """
-    adapter = SlackAdapter(
-        bot_token=bot_token,
-        app_token=app_token,
-        allowed_users=allowed_users,
-        team_id=team_id,
-        agent_argv=agent_argv,
-        deny_gated_tools=deny_gated_tools,
-        upload_roots=upload_roots,
-    )
-    adapter.start()
-    return adapter
