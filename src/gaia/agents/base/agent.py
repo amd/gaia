@@ -2379,14 +2379,23 @@ def _with_replaced_answer(reply: str, replaced: str) -> Optional[str]:
 _SELF_CHECK_FULL_STEPS = 3
 
 
-def _answer_after_self_check(reply: str, earlier: str) -> Tuple[str, str]:
+def _answer_after_self_check(
+    reply: str, earlier: str, worked: bool = False
+) -> Tuple[str, str]:
     """``(answer, verdict)`` once the model has replied to the self-check.
 
     A pass keeps *earlier* as it was. A miss the model could not fix is added
     to it in one plain line. Anything else is a new answer, unless it is only
-    a short acknowledgement of the check.
+    a short acknowledgement of the check. When tools ran after the check
+    (*worked*), the reply describes the fixed work and is the answer whatever
+    verdict line it ends with.
     """
     verdict = read_verdict(reply)
+    if worked and verdict.rest:
+        answer = _with_replaced_answer(verdict.rest, earlier) or verdict.rest
+        if verdict.result == "miss":
+            return f"{answer.rstrip()}\n\n{miss_note(verdict.miss)}", "miss"
+        return answer, "new answer"
     if verdict.result == "pass":
         return earlier, "pass"
     if verdict.result == "miss":
@@ -12158,16 +12167,18 @@ Do NOT wrap conversational replies in JSON.
         out, and stays. Whatever code still sees wrong is said in the answer,
         whether or not the model agreed. Logs what the check cost.
         """
+        records = getattr(self, "_turn_tool_executions", None) or []
         if reply is None:
             answer, verdict = opened["answer"], "unanswered"
         else:
-            answer, verdict = _answer_after_self_check(reply, opened["answer"])
+            answer, verdict = _answer_after_self_check(
+                reply, opened["answer"], worked=len(records) > opened["tools"]
+            )
         left = []
         if verdict != "miss":
             left = (self._self_check_plan() or {}).get("findings") or []
         if left:
             answer = f"{answer.rstrip()}\n\n" + "\n".join(miss_note(f) for f in left)
-        records = getattr(self, "_turn_tool_executions", None) or []
         logger.info(
             "%s done verdict=%s seconds=%.1f model_steps=%d tool_calls=%d "
             "code_findings_left=%d",

@@ -412,6 +412,49 @@ def test_a_fix_after_the_check_brings_no_second_check(agent, tmp_path, caplog):
     assert "model_steps=3 tool_calls=2" in _log_lines(caplog)[-1]
 
 
+@pytest.mark.parametrize(
+    "verdict, note",
+    [
+        ("RESULT: PASS", None),
+        ("RESULT: MISS - the region column is not in totals.csv", "region column"),
+    ],
+)
+def test_a_fix_whose_reply_ends_with_a_verdict_is_the_answer(
+    agent, tmp_path, verdict, note
+):
+    _sales(tmp_path)
+    stale = "I totalled sales.csv into totals.csv: 2 rows in, total 3."
+    fixed = "I totalled sales.csv into totals.csv: 2 rows in, total 30 (corrected)."
+    _script(
+        agent,
+        _call("read_file", file_path="sales.csv"),
+        _call("write_file", file_path="totals.csv", content="total\n3\n"),
+        _call("read_file", file_path="totals.csv"),
+        {"answer": stale},
+        _call("write_file", file_path="totals.csv", content="total\n30\n"),
+        _call("read_file", file_path="totals.csv"),
+        {"answer": f"{fixed}\n{verdict}"},
+    )
+
+    result = agent.process_query(REQUEST, max_steps=12)
+
+    assert result["result"].startswith(fixed), result["result"]
+    assert "total 3." not in result["result"]
+    if note:
+        assert f"Not as requested: {verdict.split(' - ', 1)[1]}." in result["result"]
+    else:
+        assert "Not as requested" not in result["result"]
+
+
+def test_a_pass_with_no_work_after_the_check_keeps_the_answer(agent, tmp_path):
+    _sales(tmp_path)
+    _script(agent, *WORK, {"answer": "Looks right to me.\nRESULT: PASS"})
+
+    result = agent.process_query(REQUEST, max_steps=12)
+
+    assert result["result"] == ANSWER
+
+
 def test_a_short_acknowledgement_keeps_the_answer(agent, tmp_path):
     _sales(tmp_path)
     _script(agent, *WORK, {"answer": "All met."})
