@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <regex>
@@ -59,8 +60,13 @@ std::string decodeXmlEntities(std::string s) {
 // Paragraph text of a .docx: <w:t> runs, <w:p> ends become newlines.
 std::string docxText(const std::string& path) {
 #ifdef _WIN32
-    // Windows ships no unzip; its tar reads zip archives.
-    const std::string extract = "tar -xOf " + shellQuote(path) + " word/document.xml";
+    // Windows ships no unzip; its own tar reads zip archives. Named in full: a GNU tar earlier on
+    // PATH (Git's) does not read them, and takes C: for a remote host.
+    const char* root = std::getenv("SystemRoot");
+    const std::string tar = std::string(root != nullptr && *root != '\0' ? root : "C:\\Windows") + "\\System32\\tar.exe";
+    // Quoted only when it must be: cmd.exe drops the quotes of a command that starts with one.
+    const std::string extract = (tar.find(' ') == std::string::npos ? tar : shellQuote(tar)) + " -xOf " +
+                                shellQuote(path) + " word/document.xml";
     const char* tool = "tar";
 #else
     const std::string extract = "unzip -p " + shellQuote(path) + " word/document.xml";

@@ -784,6 +784,40 @@ TEST_F(ShellSessionTest, ACancelEndsTheSessionCommandAndLeavesNoTempFiles) {
     }
 }
 
+TEST_F(ShellSessionTest, CommandsRunWhenTheTempFolderNameHoldsAnAmpersand) {
+    const fs::path odd = dirB_ / "R&D ^tmp";
+    fs::create_directories(odd);
+#ifdef _WIN32
+    const char* names[] = {"TMP", "TEMP"};
+#else
+    const char* names[] = {"TMPDIR"};
+#endif
+    std::vector<std::pair<std::string, std::string>> saved;
+    for (const char* name : names) {
+        const char* old = std::getenv(name);
+        saved.emplace_back(name, old != nullptr ? old : "");
+#ifdef _WIN32
+        _putenv_s(name, odd.string().c_str());
+#else
+        setenv(name, odd.string().c_str(), 1);
+#endif
+    }
+    for (const std::string& shell : sessionShells()) {
+        ShellSession session(dirB_.string(), shell);
+        const auto result = session.run("echo still_works", 30000);
+        EXPECT_EQ(result.exitCode, 0) << shell << ": " << result.stderr_output;
+        EXPECT_NE(result.stdout_output.find("still_works"), std::string::npos) << shell << ": " << result.stdout_output;
+    }
+    for (const auto& [name, value] : saved) {
+#ifdef _WIN32
+        _putenv_s(name.c_str(), value.c_str());
+#else
+        if (value.empty()) unsetenv(name.c_str());
+        else setenv(name.c_str(), value.c_str(), 1);
+#endif
+    }
+}
+
 TEST_F(ShellSessionTest, CommandsRunInFoldersWithNonAsciiNames) {
     for (const std::string& shell : sessionShells()) {
         const fs::path base = freshDir("gaia-utf8-");

@@ -311,12 +311,46 @@ struct StdioTransport::Impl {
         }
         SetHandleInformation(childStdoutRead, HANDLE_FLAG_INHERIT, 0);
 
-        STARTUPINFOA si = {};
-        si.cb = sizeof(si);
+        // The server's stderr is this process's, through a copy that can be inherited; with none
+        // (a windowed host) it is the null device.
+        HANDLE childStderr = nullptr;
+        const HANDLE ownStderr = GetStdHandle(STD_ERROR_HANDLE);
+        if (ownStderr == nullptr || ownStderr == INVALID_HANDLE_VALUE ||
+            !DuplicateHandle(GetCurrentProcess(), ownStderr, GetCurrentProcess(), &childStderr, 0, TRUE,
+                             DUPLICATE_SAME_ACCESS)) {
+            childStderr = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING,
+                                      FILE_ATTRIBUTE_NORMAL, nullptr);
+        }
+        if (childStderr == nullptr || childStderr == INVALID_HANDLE_VALUE) {
+            CloseHandle(childStdinRead);
+            CloseHandle(childStdoutWrite);
+            return false;
+        }
+
+        STARTUPINFOEXA six;
+        ZeroMemory(&six, sizeof(six));
+        STARTUPINFOA& si = six.StartupInfo;
+        si.cb = sizeof(six);
         si.hStdInput = childStdinRead;
         si.hStdOutput = childStdoutWrite;
-        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        si.hStdError = childStderr;
         si.dwFlags |= STARTF_USESTDHANDLES;
+
+        // These three and no others: any other handle it inherited (another server's pipe, the
+        // host's own) would stay open for as long as the server lives.
+        HANDLE inherited[3] = {childStdinRead, childStdoutWrite, childStderr};
+        SIZE_T attrSize = 0;
+        InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
+        std::vector<char> attrBuf(attrSize);
+        six.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
+        if (!InitializeProcThreadAttributeList(six.lpAttributeList, 1, 0, &attrSize) ||
+            !UpdateProcThreadAttribute(six.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited,
+                                       sizeof(inherited), nullptr, nullptr)) {
+            CloseHandle(childStdinRead);
+            CloseHandle(childStdoutWrite);
+            CloseHandle(childStderr);
+            return false;
+        }
 
         // Build merged environment block if overrides provided
         std::string envBlock;
@@ -368,13 +402,15 @@ struct StdioTransport::Impl {
             nullptr,
             mutableCmd.data(),
             nullptr, nullptr,
-            TRUE, 0,
+            TRUE, EXTENDED_STARTUPINFO_PRESENT,
             lpEnv, nullptr,
             &si, &procInfo
         );
 
+        DeleteProcThreadAttributeList(six.lpAttributeList);
         CloseHandle(childStdinRead);
         CloseHandle(childStdoutWrite);
+        CloseHandle(childStderr);
 
         if (!ok) return false;
         running = true;

@@ -1260,8 +1260,14 @@ ProcessResult runSessionScript(const std::function<std::string(const std::string
     }
     temps.add(scriptFile);
 
+#ifdef _WIN32
+    // The line goes through cmd /c, which drops the first and last quote of a line holding & or ^
+    // and then splits it there. An outer pair of quotes is the pair it drops, and the path stays whole.
     const std::string invocation =
-        posixScript ? shell + " " + posixQuote(genericPath(scriptFile)) : "\"" + scriptFile + "\"";
+        "\"" + (posixScript ? shell + " \"" + genericPath(scriptFile) + "\"" : "\"" + scriptFile + "\"") + "\"";
+#else
+    const std::string invocation = shell + " " + posixQuote(genericPath(scriptFile));
+#endif
 
     // No cwd/env arguments: the script applies both inside the child, so the
     // calling process is never mutated and concurrent sessions cannot collide.
