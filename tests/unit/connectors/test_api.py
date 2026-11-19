@@ -213,6 +213,9 @@ class TestPublicSurface:
             "revoke_supported": True,
             "revoked_remotely": True,
             "revoke_error": None,
+            "account_id": "default",
+            "account_email": "alice@example.com",
+            "remaining_accounts": 0,
         }
 
     @respx.mock
@@ -357,7 +360,7 @@ class TestTenantMismatchThreading:
                 provider="microsoft",
                 scopes=["https://graph.microsoft.com/Mail.ReadWrite"],
                 agent_id=None,
-                account_email="default",
+                slot="default",
             )
         assert exc.value.reason is AuthRequiredError.Reason.TENANT_MISMATCH
 

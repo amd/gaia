@@ -23,6 +23,18 @@ AR_SENTENCES = [
     f"بلغت إيرادات الفرع رقم {n} في الربع الأخير نحو {n * 37} مليون ريال بزيادة واضحة؟"
     for n in range(1, 120)
 ]
+RU_SENTENCES = [
+    f"Филиал номер {n} сообщил о выручке в {n * 37} тысяч евро за прошлый квартал."
+    for n in range(1, 120)
+]
+EL_SENTENCES = [
+    f"Το υποκατάστημα αριθμός {n} ανέφερε έσοδα {n * 37} χιλιάδων ευρώ το περασμένο τρίμηνο."
+    for n in range(1, 120)
+]
+EN_SENTENCES = [
+    f"Branch number {n} reported revenue of {n * 37} thousand euros last quarter."
+    for n in range(1, 120)
+]
 
 
 def _sdk(**overrides):
@@ -61,6 +73,7 @@ def test_japanese_keyword_search_matches_kanji_and_kana_words():
         pytest.param("هذه الجملة الأولى. هل هذه الثانية؟ وهذه الثالثة.", 3, id="ar"),
         pytest.param("یہ پہلا جملہ ہے۔ یہ دوسرا ہے۔", 2, id="ur"),
         pytest.param("यह पहला वाक्य है। यह दूसरा है।", 2, id="hi"),
+        pytest.param("Սա առաջին նախադասությունն է։ Սա երկրորդն է։", 2, id="hy"),
     ],
 )
 def test_sentences_end_at_non_latin_punctuation(text, count):
@@ -88,6 +101,27 @@ def test_joining_keeps_spaces_in_korean_and_drops_them_only_in_chinese():
     assert join_pieces(["sales", "rose."]) == "sales rose."
 
 
+@pytest.mark.parametrize(
+    ("text", "count"),
+    [
+        pytest.param("Это первое предложение. Вот второе. Т. е. третье.", 3, id="ru"),
+        pytest.param("Αυτή είναι η πρώτη. Ωραία, η δεύτερη.", 2, id="el"),
+        pytest.param("Élan vital. Łódź leży w Polsce. İstanbul büyük.", 3, id="latin"),
+        pytest.param("Это, т. е. пример, одно предложение.", 1, id="lowercase"),
+    ],
+)
+def test_sentences_starting_with_a_non_ascii_capital_split(text, count):
+    assert len(_sdk()._split_into_sentences(text)) == count
+
+
+def test_english_split_counts_are_unchanged():
+    sdk = _sdk(chunk_size=200, chunk_overlap=40)
+    paragraph = " ".join(EN_SENTENCES)
+
+    assert len(sdk._split_into_sentences(paragraph)) == 119
+    assert len(sdk._split_text_into_chunks(paragraph)) == 13
+
+
 def test_english_abbreviations_still_do_not_split():
     sentences = _sdk()._split_into_sentences("Dr. Smith met Mr. Jones. They agreed.")
 
@@ -96,7 +130,13 @@ def test_english_abbreviations_still_do_not_split():
 
 @pytest.mark.parametrize(
     "sentences",
-    [pytest.param(ZH_SENTENCES, id="zh"), pytest.param(AR_SENTENCES, id="ar")],
+    [
+        pytest.param(ZH_SENTENCES, id="zh"),
+        pytest.param(AR_SENTENCES, id="ar"),
+        pytest.param(RU_SENTENCES, id="ru"),
+        pytest.param(EL_SENTENCES, id="el"),
+        pytest.param(EN_SENTENCES, id="en"),
+    ],
 )
 def test_long_paragraph_is_cut_at_sentences_with_overlap(sentences):
     sdk = _sdk(chunk_size=200, chunk_overlap=40)
@@ -107,7 +147,7 @@ def test_long_paragraph_is_cut_at_sentences_with_overlap(sentences):
     assert len(chunks) > 2
     assert all(len(chunk) <= EMBED_MAX_CHARS for chunk in chunks)
     for chunk in chunks[:-1]:
-        assert chunk.rstrip()[-1] in "。؟", chunk[-30:]
+        assert chunk.rstrip()[-1] in "。؟.", chunk[-30:]
     for before, after in zip(chunks, chunks[1:]):
         first_sentence = sentences[[s in after for s in sentences].index(True)]
         assert first_sentence in before, "consecutive chunks share no sentence"
@@ -170,3 +210,13 @@ def test_long_chinese_document_is_summarized_in_several_sections():
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(saved)
+
+
+def test_no_overlap_repeats_nothing_between_chunks():
+    assert last_tokens("one two three four five", 0) == ""
+    sentences = [f"Sentence number {n} sits in its own place." for n in range(200)]
+    sdk = _sdk(chunk_size=40, chunk_overlap=0)
+    chunks = sdk._split_text_into_chunks(" ".join(sentences))
+    assert len(chunks) > 5
+    for sentence in sentences:
+        assert sum(sentence in chunk for chunk in chunks) == 1, sentence

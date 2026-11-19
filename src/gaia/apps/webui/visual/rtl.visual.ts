@@ -37,6 +37,12 @@ async function withArabicEnvironment(page: Page): Promise<void> {
     );
 }
 
+/** The model server is reported up but still can't embed, so the auto-retry leaves the row waiting. */
+async function failReindex(page: Page): Promise<void> {
+    await page.route('**/api/documents/*/reindex', (route) =>
+        route.fulfill({ status: 500, json: { detail: 'Reindex failed; see server logs for details' } }));
+}
+
 let unhandled: string[] = [];
 
 /** A 501 from mockApi that reached the screen; the screen shows a fixture gap, not the app. */
@@ -63,8 +69,13 @@ async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) 
 }
 
 /** Every rule break on the page, as readable lines. */
-const audit = (page: Page): Promise<string[]> =>
-    page.evaluate(() => {
+// A cut text's fade follows a scroll timeline, which picks up new text on the next frame.
+const nextFrames = (page: Page) =>
+    page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+
+const audit = async (page: Page): Promise<string[]> => {
+    await nextFrames(page);
+    return page.evaluate(() => {
         const problems: string[] = [];
         const label = (el: Element) =>
             `<${el.tagName.toLowerCase()} class="${String(el.className).slice(0, 40)}"> "${(el.textContent ?? '').trim().slice(0, 40)}"`;
@@ -119,18 +130,29 @@ const audit = (page: Page): Promise<string[]> =>
                 // Aligned to its end, the last line's "…" lands past the edge and is clipped: "preparation a."
                 const toEnd = style.textAlign === 'end' || style.textAlign === (style.direction === 'rtl' ? 'left' : 'right');
                 if (toEnd) problems.push(`clamped text aligned to its end hides its "…": ${label(el)}`);
+                // A fade down the block is taller than one line, so a one-line clamp would dim all of it.
+                const mask = style.maskImage || style.getPropertyValue('-webkit-mask-image');
+                const oneLine = el.clientHeight < 2 * (parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2);
+                if (oneLine && mask !== 'none' && !/to (left|right)/.test(mask)) problems.push(`one-line clamp faded top to bottom: ${label(el)}`);
             }
 
             const text = el.textContent?.trim() ?? '';
             if (el.querySelector(':scope > :not(i18n-label)') || !text) continue;
 
+            // Cut text fades out at its end; a "…" is the old look, and a hard cut hides that more exists.
+            const faded = (style.maskImage || style.getPropertyValue('-webkit-mask-image')) !== 'none';
+            const cut = !srOnly && box.width > 2 && style.whiteSpace === 'nowrap' && style.overflowX === 'hidden'
+                && el.scrollWidth > el.clientWidth + 1;
+            if (style.textOverflow === 'ellipsis') problems.push(`ends in "…" instead of fading: ${label(el)}`);
+            else if (cut && !faded) problems.push(`cut off with no fade: ${label(el)}`);
+
             // A long name that shrinks to nothing tells the reader nothing.
-            if (style.textOverflow === 'ellipsis' && box.width < 40 && el.scrollWidth > box.width + 1) {
+            if (cut && box.width < 40) {
                 problems.push(`text squeezed to ${Math.round(box.width)}px: ${label(el)}`);
             }
 
             // An English name cut off in rtl keeps its end and loses its start.
-            if (style.textOverflow === 'ellipsis' && style.direction === 'rtl' && latin.test(text) && !arabic.test(text)) {
+            if (cut && style.direction === 'rtl' && latin.test(text) && !arabic.test(text)) {
                 problems.push(`Latin text truncates from its start: ${label(el)}`);
             }
 
@@ -341,6 +363,7 @@ const audit = (page: Page): Promise<string[]> =>
         }
         return [...new Set(problems)];
     });
+};
 
 // A reply that never ends, so the card stays up for the screenshot.
 const RECORDING_EVENTS = [
@@ -504,6 +527,42 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+const SKILL_LIST = [
+    { name: 'pdf', description: 'Make and edit PDF files. Use when the user asks for a report.', version: '1.0.0', tier: 'verified', tools: [], path: 'agent-bundled', source: 'agent-bundled' },
+    { name: 'pptx', description: 'ابنِ عروض الشرائح من ملاحظاتك. استخدمها عند طلب عرض.', version: '1.0.0', tier: 'verified', tools: [], path: 'agent-bundled', source: 'agent-bundled' },
+    { name: 'web-research', description: 'Research a topic on the web and cite every source it uses, with a long description that has to be cut short.', version: '1.0.0', tier: 'verified', tools: [], path: 'user', source: 'user' },
+];
+
+for (const locale of ['en', 'ar']) {
+    test(`typing / lists the skills above the message box (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => p.route((url) => url.pathname === '/api/skills', (route) =>
+            route.fulfill({ json: { skills: SKILL_LIST, invalid: {} } })));
+        const box = page.locator('.new-chat textarea').first();
+        await box.fill('/');
+        const menu = page.locator('.skill-menu');
+        await expect(menu.getByRole('option')).toHaveCount(3);
+        await shot(page, `skill-menu-${locale}`);
+
+        const [menuBox, composerBox] = [(await menu.boundingBox())!, (await page.locator('.new-chat .composer').boundingBox())!];
+        expect(menuBox.y + menuBox.height, 'the list covers the message box').toBeLessThanOrEqual(composerBox.y + 1);
+        expect(menuBox.y, 'the list runs off the top of the window').toBeGreaterThanOrEqual(0);
+
+        // The /name is Latin: it reads left to right and sits on the row's start edge.
+        const row = menu.getByRole('option').first();
+        const [rowBox, nameBox] = [(await row.boundingBox())!, (await row.locator('.skill-menu-name').boundingBox())!];
+        const startGap = locale === 'ar' ? rowBox.x + rowBox.width - (nameBox.x + nameBox.width) : nameBox.x - rowBox.x;
+        expect(startGap, 'the skill name is not at the start of its row').toBeLessThan(16);
+        await expect(row.locator('.skill-menu-name')).toHaveText('/pdf');
+
+        await box.fill('/pp');
+        await expect(menu.getByRole('option')).toHaveCount(1);
+        await box.press('Enter');
+        await expect(box).toHaveValue('/pptx ');
+        await expect(menu).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const BIG_LIBRARY = Array.from({ length: 600 }, (_, i) => ({
     id: `lib-${i}`, filename: `meeting-notes-${i}.txt`, filepath: `C:/library/meeting-notes-${i}.txt`, file_size: 512,
     chunk_count: 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0,
@@ -578,6 +637,17 @@ for (const locale of ['en', 'ar']) {
         const menu = page.getByRole('dialog');
         await expect(menu.locator('.popover-item')).toHaveCount(2);
         await shot(page, `memory-menu-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`the keyboard shortcuts sheet (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        await page.locator('textarea').first().focus();
+        await page.keyboard.press('Control+/');
+        await expect(page.locator('.shortcuts-dialog')).toBeVisible();
+        await shot(page, `shortcuts-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -848,6 +918,38 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         await page.locator('.msg-assistant').hover();
         await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`failed-answer-${locale}.png`) });
+    });
+}
+
+/** A turn that ran two winget commands Undo cannot reverse. */
+async function withUntrackedCommands(page: Page): Promise<void> {
+    await withFailedAnswer(page);
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/changes`, (route) =>
+        route.fulfill({
+            json: {
+                turns: [{
+                    turn_id: 't1', session_id: ANSWER_SESSION, message_id: 2, started_at: NOW.toISOString(),
+                    finished_at: NOW.toISOString(), restored_at: null, files: [], incomplete: true,
+                    untracked: [
+                        { kind: 'shell', detail: 'winget install --id Git.Git --exact', paths: [] },
+                        { kind: 'shell', detail: 'winget install --id Git.Git --exact --source winget', paths: [] },
+                    ],
+                }],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the undo footer says what Undo cannot reverse, in the UI language (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withUntrackedCommands);
+        const warning = page.locator('.turn-changes-warning');
+        await expect(warning).toContainText(locale === 'en' ? 'GAIA ran 2 commands. Undo only restores' : 'التراجع يعيد فقط');
+        await expect(warning).not.toContainText("can't track");
+        expect(await audit(page)).toEqual([]);
+        await warning.screenshot({ path: info.outputPath(`undo-footer-${locale}.png`) });
+        const dir = process.env.GAIA_VISUAL_SHOTS;
+        if (dir) await warning.screenshot({ path: `${dir}/undo-footer-${locale}.png` });
     });
 }
 
@@ -1200,6 +1302,78 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+async function withFormula(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'How much does a columnar scan save?', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: 'The scan amplification is\n\n$$R = \\frac{C_{\\text{row}}}{C_{\\text{col}}} \\approx \\frac{W}{w}$$\n\nWith 50 columns and 4 read, $R \\approx 12.5$, and the bill drops from $5 to $0.40.',
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a formula in an answer is drawn, left to right (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFormula);
+        const answer = page.locator('.msg-assistant').last();
+        await expect(answer.locator('.md-math math')).toHaveCount(2);
+        await expect(answer).toContainText('from $5 to $0.40');
+        await expect(answer.locator('.md-math').first()).toHaveAttribute('dir', 'ltr');
+        expect(await audit(page)).toEqual([]);
+        await answer.screenshot({ path: info.outputPath(`formula-${locale}.png`) });
+    });
+}
+
+const LONG_SUM = `$$${Array.from({ length: 30 }, (_, i) => `a_{${i + 1}}`).join(' + ')} = S$$`;
+const LONG_FORMULA_TEXT = `The quadratic formula is $$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$ inline, and a very long one ${LONG_SUM} in the same paragraph.\n\n$$A = P\\left(1 + \\frac{r}{n}\\right)^{nt}$$`;
+
+async function withLongFormula(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: LONG_FORMULA_TEXT, created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: LONG_FORMULA_TEXT, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const theme of ['light', 'dark'] as const) {
+    test(`a formula wider than its line scrolls in its own box, and one that fits has no scrollbar (${theme})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, 'en', withLongFormula, theme);
+        const list = page.locator('.messages-scroll');
+        await expect(page.locator('.md-math-wide')).toHaveCount(2);
+        expect(await list.evaluate((el) => el.scrollWidth - el.clientWidth), 'the chat scrolls sideways').toBeLessThanOrEqual(1);
+        for (const bubble of ['.msg-user', '.msg-assistant']) {
+            const spill = await page.locator(bubble).last().evaluate((el) => {
+                const edge = el.getBoundingClientRect().right;
+                const math = el.querySelector('.md-math-wide')!.getBoundingClientRect();
+                return math.right - edge;
+            });
+            expect(spill, `${bubble}: the formula's box runs past its message`).toBeLessThanOrEqual(1);
+        }
+        // The short formulas stay as they were: in the line, and with nothing to scroll.
+        const fits = await page.locator('.msg-assistant').last().evaluate((el) =>
+            [...el.querySelectorAll('.md-math:not(.md-math-wide)')].map((m) => ({
+                display: m.classList.contains('md-math-display'),
+                scrollsDown: m.scrollHeight > m.clientHeight && getComputedStyle(m).overflowY !== 'hidden',
+            })));
+        expect(fits).toEqual([{ display: false, scrollsDown: false }, { display: true, scrollsDown: false }]);
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.messages-column').screenshot({ path: info.outputPath(`formula-long-${theme}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
@@ -1507,6 +1681,17 @@ test('resource usage strip', async ({ page }) => {
     await page.screenshot({ path: 'visual/test-results/resource-strip-ar.png' });
 });
 
+test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`);
+    await page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' }).getByRole('button').click();
+    const note = page.locator('.resource-hidden-note');
+    await expect(note).toContainText('أيقونة النبض');
+    await expect(note.getByRole('button')).toBeVisible();
+    await expectClearOfPanel(page);
+    expect(await audit(page)).toEqual([]);
+    await page.screenshot({ path: 'visual/test-results/resource-strip-ar-closed.png' });
+});
+
 test('resource usage strip with no GPU counters keeps CPU and memory', async ({ page }) => {
     await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
         await p.route('**/api/system/resources', (route) =>
@@ -1586,6 +1771,27 @@ test('document being indexed', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    // A long library: one-line drop zone, a filter, and which chats each document is in.
+    test(`a long document library says where each document is used (${locale})`, async ({ page }) => {
+        const docs = ['q3-board.pdf', 'lease-agreement-final.pdf', 'garden-notes.txt', 'تقرير الميزانية.xlsx', 'meeting-notes.md', 'recipes.docx', 'taxes-2025.pdf']
+            .map((filename, i) => ({ id: `d${i}`, filename, filepath: `C:/docs/${filename}`, file_size: 4096 * (i + 1), chunk_count: i + 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: i % 3 }));
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => route.fulfill({ json: { documents: docs, total: docs.length, total_size_bytes: 1, total_chunks: 1 } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-usage')).toHaveCount(docs.length);
+        await expect(page.locator('.doc-filter-input')).toBeVisible();
+        await page.locator('.doc-row').nth(1).hover();
+        await shot(page, `documents-${locale}-long-library`);
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.doc-filter-input').fill('notes');
+        await expect(page.locator('.doc-row:visible')).toHaveCount(2);
+        await shot(page, `documents-${locale}-filtered`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
     // The dialog was centred on its content, so its title and path box jumped as rows came and went.
     test(`the document library stays put as rows arrive, and long names keep their end (${locale})`, async ({ page }) => {
         const names = [
@@ -1618,6 +1824,10 @@ for (const locale of ['en', 'ar']) {
         const tail = page.locator('.doc-name-tail').first();
         await expect(tail).toHaveText(/finance\)\.pdf$/);
         await expect(tail).toBeInViewport();
+        // A cut name fades at its own end: the right for an English name, the left for an Arabic one, in either UI.
+        const fades = await page.locator('.doc-name-head').evaluateAll((els) =>
+            els.map((el) => getComputedStyle(el).getPropertyValue('--fade-to').trim()));
+        expect(fades).toEqual(['right', 'left']);
         // A name in the other script still starts at the UI's own edge.
         const other = page.locator('.doc-name-split').nth(locale === 'ar' ? 0 : 1);
         const [textBox, infoBox] = await other.evaluate((el) => {
@@ -1677,6 +1887,7 @@ for (const locale of ['en', 'ar']) {
     // A down model server was blamed on the file, with the raw connection error.
     test(`a document that failed because the model server was down (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
+            await failReindex(p);
             await p.route('**/api/documents', (route) => route.fulfill({ json: {
                 documents: [
                     { id: 'd1', filename: 'third.md', filepath: 'C:/third.md', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'model_server_down', last_error: "RAG indexing failed for third.md: Lemonade Server is not reachable: HTTPConnectionPool(host='127.0.0.1', port=59999): Max retries exceeded", indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 },
@@ -1688,6 +1899,7 @@ for (const locale of ['en', 'ar']) {
         const row = page.locator('.doc-failure');
         await expect(row).toBeVisible();
         await expect(row).not.toContainText('HTTPConnectionPool');
+        await expect(row.locator('.doc-status-waiting')).toContainText(locale === 'ar' ? 'قيد الانتظار' : 'Waiting');
         if (locale === 'ar') expect(await untranslated(page, '.doc-failure', 'bdi')).toEqual([]);
         // The count above the list agrees with the row: the file isn't unreadable.
         const stats = page.locator('.doc-stats');
@@ -1706,6 +1918,7 @@ for (const locale of ['en', 'ar']) {
             { id: 'd3', filename: 'garden-notes.txt', filepath: 'C:/garden-notes.txt', file_size: 7270, chunk_count: 7, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
         ];
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await failReindex(p);
             await p.route((url) => url.pathname === '/api/documents', (route) =>
                 route.fulfill({ json: { documents: docs, total: docs.length, total_size_bytes: 9318, total_chunks: 7 } }));
             const sessions = SESSIONS.map((s) => (s.id === ANSWER_SESSION ? { ...s, document_ids: docs.map((d) => d.id) } : s));
@@ -2066,6 +2279,18 @@ test.describe('English', () => {
         await expectClearOfPanel(page);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: 'visual/test-results/resource-strip-en.png' });
+    });
+
+    test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, 'en');
+        await page.getByRole('button', { name: 'Hide resource usage' }).click();
+        const note = page.locator('.resource-hidden-note');
+        await expect(note).toContainText('pulse icon');
+        await expectClearOfPanel(page);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: 'visual/test-results/resource-strip-en-closed.png' });
+        await note.getByRole('button', { name: 'Show resource usage' }).click();
+        await expect(page.getByRole('region', { name: 'Resource usage on this PC' })).toBeVisible();
     });
 
     test('resource usage strip on a wide window is one row', async ({ page }) => {
@@ -2555,6 +2780,57 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+// Opening and switching ease in on purpose; with reduced motion asked for, nothing moves.
+test.describe('arrivals ease in (en)', () => {
+    const openSkills = async (page: Page, motion: 'no-preference' | 'reduce') => {
+        await open(page, '', 'en', withSettingsPanes);
+        await page.emulateMedia({ reducedMotion: motion });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        await expect(page.locator('.settings-pane-title')).toBeVisible();
+    };
+
+    // The section's height on each of the 20 frames after its summary is clicked.
+    const openFrames = (page: Page) => page.locator('.settings-pane details:not([open])').first().evaluate((el) =>
+        new Promise<number[]>((done) => {
+            const heights: number[] = [];
+            (el.querySelector('summary') as HTMLElement).click();
+            const tick = () => {
+                heights.push(el.getBoundingClientRect().height);
+                if (heights.length < 20) requestAnimationFrame(tick);
+                else done(heights);
+            };
+            requestAnimationFrame(tick);
+        }));
+
+    test('a section grows open over several frames instead of jumping', async ({ page }) => {
+        await openSkills(page, 'no-preference');
+        const heights = await openFrames(page);
+        const full = heights[heights.length - 1];
+        const between = heights.filter((h) => h > heights[0] + 1 && h < full - 1);
+        expect(between.length, `heights: ${heights.map(Math.round).join(' ')}`).toBeGreaterThanOrEqual(3);
+    });
+
+    test('with reduced motion a section opens at once', async ({ page }) => {
+        await openSkills(page, 'reduce');
+        const heights = await openFrames(page);
+        // It may snap a frame late under load, but never passes through a height in between.
+        const full = heights[heights.length - 1];
+        const between = heights.filter((h) => h > heights[0] + 1 && h < full - 1);
+        expect(between, `heights: ${heights.map(Math.round).join(' ')}`).toEqual([]);
+    });
+
+    test('a Settings tab fades in when picked', async ({ page }) => {
+        await openSkills(page, 'no-preference');
+        await page.locator('.settings-pane').evaluate((el) => el.setAttribute('data-was', 'skills'));
+        await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+        // A new pane element, so its entry animation plays again, and that animation is the fade.
+        const pane = page.locator('.settings-pane');
+        await expect(pane).not.toHaveAttribute('data-was', 'skills');
+        expect(await pane.evaluate((el) => getComputedStyle(el).animationName)).toBe('fadeIn');
+    });
+});
+
 for (const locale of ['en', 'ar']) {
     test(`the model menu leads with the provider in use and asks before a download (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
@@ -2579,6 +2855,16 @@ for (const locale of ['en', 'ar']) {
         expect((await audit(page)).filter((p) => !p.startsWith('popover opens scrolled'))).toEqual([]);
     });
 }
+
+/** A Google connector holding these accounts, as GET /api/connectors sends it. */
+const MULTI_ACCOUNT_GOOGLE = (accounts: Array<{ account_id: string; email: string; status: string; is_default: boolean }>) => ({
+    id: 'google', display_name: 'Google', type: 'oauth_pkce', icon: null, category: 'email', tier: 'core',
+    description: 'Connect GAIA to your Google account for Gmail, Calendar, Drive, and more.', product_url: 'https://example.com', docs_url: null,
+    configured: accounts.some((a) => a.status === 'ok'), configurable: true, enabled: true,
+    account_id: accounts.find((a) => a.is_default && a.status === 'ok')?.email ?? null, accounts,
+    scopes: ['openid'], default_scopes: [], available_scopes: [], mcp_env_keys: [], oauth_setup_fields: [], supports_device_code: false,
+    oauth_client: { source: 'env', client_id: 'example-client', has_secret: false },
+});
 
 for (const locale of ['ar', 'en']) {
     test.describe(`settings connectors (${locale})`, () => {
@@ -2662,7 +2948,7 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
-        test('a keyed server shows its label, help and setup link', async ({ page }) => {
+        test('a keyed server walks through its setup in steps', async ({ page }) => {
             await openConnectors(page, [{
                 id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', description: 'Read channels, threads, and DMs in your Slack workspace.',
                 configured: false, configurable: true, enabled: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [],
@@ -2674,11 +2960,13 @@ for (const locale of ['ar', 'en']) {
             }]);
             await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
-            await expect(page.locator('.connector-setup-link')).toBeVisible();
-            await expect(page.locator('.mcp-key-help code')).toBeVisible();
+            // The steps carry the catalog link; the long hint and the separate button would repeat them.
+            await expect(page.locator('.connector-guide .setup-step')).toHaveCount(4);
+            await expect(page.locator('.setup-step-link')).toHaveAttribute('href', /api\.slack\.com\/apps/);
+            await expect(page.locator('.connector-setup-link')).toHaveCount(0);
+            await expect(page.locator('.mcp-key-help')).toHaveCount(0);
             await expect(page.locator('.mcp-key-input')).toHaveAttribute('dir', 'ltr');
-            await expect(page.locator('.mcp-key-help')).toHaveAttribute('dir', 'auto');
-            await page.locator('.mcp-key-help').scrollIntoViewIfNeeded();
+            await page.locator('.connector-guide').scrollIntoViewIfNeeded();
             await shot(page, `connectors-${locale}-mcp-setup`);
             expect(await audit(page)).toEqual([]);
         });
@@ -2753,6 +3041,83 @@ for (const locale of ['ar', 'en']) {
             await shot(page, `connectors-${locale}-check-slow`);
             expect(await audit(page)).toEqual([]);
             if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
+        });
+
+        test('several accounts: a row each, one expired, a long address, and the disconnect question', async ({ page }) => {
+            const accounts = [
+                { account_id: 'a1', email: 'jane.with.a.rather.long.name@example.com', status: 'ok', is_default: true },
+                { account_id: 'a2', email: 'jane.work@example.com', status: 'ok', is_default: false },
+                { account_id: 'a3', email: 'jane@outlook-example.com', status: 'reauth_required', is_default: false },
+            ];
+            await openConnectors(page, [MULTI_ACCOUNT_GOOGLE(accounts)]);
+            const tile = page.locator('.connector-tile', { hasText: 'Google' });
+            await expect(tile.locator('.connector-status.failed')).toBeVisible();
+            await tile.locator('.connector-tile-header').click();
+            await expect(tile.locator('.connector-account')).toHaveCount(3);
+            await tile.locator('.connector-accounts').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-accounts-open`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
+            // Each address keeps to the start edge of its row, cut in its middle, whole on hover.
+            const address = tile.locator('.account-address').first();
+            await expect(address).toHaveAttribute('title', accounts[0].email);
+            await expect(address).toHaveText(/…@example\.com$/);
+            const edge = await tile.locator('.connector-account').first().evaluate((row) => {
+                const a = row.querySelector('.account-address')!.getBoundingClientRect();
+                const r = row.getBoundingClientRect();
+                return getComputedStyle(row).direction === 'rtl' ? r.right - a.right : a.left - r.left;
+            });
+            expect(edge, 'the address drifted off the start edge').toBeLessThan(16);
+            // Long Arabic labels push the actions to a second line rather than over the address.
+            const spilled = await tile.locator('.connector-account').evaluateAll((rows) => rows.flatMap((row) => {
+                const r = row.getBoundingClientRect();
+                return [...row.querySelectorAll('.connector-account-who, .account-address, .connector-status, button')].filter((el) => {
+                    const b = el.getBoundingClientRect();
+                    const range = document.createRange();
+                    range.selectNodeContents(el);
+                    const text = range.getBoundingClientRect();
+                    return Math.min(b.left, text.left) < r.left - 1 || Math.max(b.right, text.right) > r.right + 1
+                        || (el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0);
+                }).map((el) => `${el.className || el.tagName}: ${el.textContent}`);
+            }));
+            expect(spilled, 'an account row spills out of its box').toEqual([]);
+
+            await tile.locator('.connector-account').nth(1).locator('.connector-account-actions .btn-secondary').last().click();
+            const ask = page.locator('.confirm-sheet');
+            await expect(ask).toContainText('jane.work@example.com');
+            await shot(page, `connectors-${locale}-accounts-disconnect`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('one account: unchanged, plus a quiet link to add another', async ({ page }) => {
+            await openConnectors(page, [MULTI_ACCOUNT_GOOGLE([{ account_id: 'a1', email: 'jane@example.com', status: 'ok', is_default: true }])]);
+            const tile = page.locator('.connector-tile', { hasText: 'Google' });
+            await tile.locator('.connector-tile-header').click();
+            await expect(tile.locator('.connector-add-account')).toBeVisible();
+            await expect(tile.locator('.connector-account')).toHaveCount(0);
+            await tile.locator('.configure-actions').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-accounts-one`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a Disconnect that finds several accounts names them all and asks first', async ({ page }) => {
+            await openConnectors(page, [MULTI_ACCOUNT_GOOGLE([{ account_id: 'a1', email: 'jane@example.com', status: 'ok', is_default: true }])]);
+            // Another window added sam@ since this tile loaded, so the server refuses a plain disconnect.
+            await page.route('**/api/connectors/google', (route) => (route.request().method() === 'DELETE' ? route.fulfill({
+                status: 409,
+                json: { detail: {
+                    error: 'account_choice_required', connector_id: 'google', choices: ['jane@example.com', 'sam@example.com'],
+                    message: 'google has 2 connected accounts (jane@example.com, sam@example.com). Choose one to disconnect, or disconnect them all.',
+                } },
+            }) : route.fallback()));
+            const tile = page.locator('.connector-tile', { hasText: 'Google' });
+            await tile.locator('.connector-tile-header').click();
+            await tile.locator('.configure-actions .btn-secondary').click();
+            const ask = page.getByRole('alertdialog');
+            await expect(ask.locator('.confirm-accounts li')).toHaveCount(2);
+            await shot(page, `connectors-${locale}-disconnect-all`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.confirm-sheet', 'bdi')).toEqual([]);
         });
 
         test('phone width: a long account stays on screen', async ({ page }) => {
@@ -3359,6 +3724,15 @@ for (const locale of ['ar', 'en']) {
             await check(page, 'form-valid');
         });
 
+        // A schedule couldn't be changed: you deleted it and typed it in again.
+        test('editing a schedule', async ({ page }) => {
+            await openSchedules(page);
+            await page.locator('.schedule-card').first().getByRole('button', { name: locale === 'ar' ? /تعديل/ : /^Edit$/ }).click();
+            await expect(page.locator('.schedule-form-title')).toBeVisible();
+            await expect(page.locator('.schedule-nl-input')).toHaveValue('Weekdays at 8:00 AM');
+            await check(page, 'form-edit');
+        });
+
         test('new schedule with a "when" GAIA cannot read', async ({ page }) => {
             await openSchedules(page);
             await page.locator('.schedule-modal .btn-primary').click();
@@ -3423,6 +3797,8 @@ test.describe('clamped English in Arabic ends with its own "…"', () => {
         await shot(page, 'clamped-skill-ar');
         expect(await clampedBlocks(page)).toContain('skill-row-desc ltr');
         expect(await audit(page)).toEqual([]);
+        // English in the Arabic UI fades at its own end, the right.
+        expect(await page.locator('.skill-row-desc').first().evaluate((el) => getComputedStyle(el).maskImage)).toContain('to right');
     });
 
     test('a schedule prompt', async ({ page }) => {
@@ -3811,6 +4187,11 @@ for (const locale of ['ar', 'en']) {
         const row = page.locator('.status-row--has-hint').first();
         await expect(row).toBeVisible();
         await expect(row).not.toContainText(/gaia init|Cloud providers still work/);
+        // The backend's sentence is worded in the app's language, in the row and in the banner.
+        if (locale === 'ar') {
+            await expect(row).toContainText('لا يشغّل خادم النماذج هذا');
+            await expect(page.locator('.connection-banner')).toContainText('لا يشغّل خادم النماذج هذا');
+        }
         await expect(page.getByRole('dialog').locator('.settings-card .btn-primary')).toHaveCount(0);
         await expect(page.locator('.connection-banner')).not.toContainText('gaia init');
         await shot(page, `advanced-${locale}-server-down`);
@@ -4867,6 +5248,32 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+const REFUSED_STEPS = [
+    { type: 'tool_start', tool: 'run_shell_command', narration: 'Running git clone' },
+    {
+        type: 'tool_result', success: false, status: 'denied', denied_by: 'policy',
+        summary: 'Not run: this reaches github.com, and `git clone` was refused earlier in this request.',
+    },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'request_user_input', narration: 'Asking you a question' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a call GAIA blocked is not shown as the user's no (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, REFUSED_STEPS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('clone the repo');
+        await page.keyboard.press('Enter');
+        const rows = page.locator('.flow-steps.live .flow-tool');
+        await expect(rows).toHaveCount(2);
+        await expect(rows.nth(0)).toHaveClass(/declined/);
+        if (locale === 'en') await expect(rows.nth(0).locator('.flow-tool-label')).toHaveText('Blocked by GAIA: Running command');
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') await expect(rows.nth(0).locator('.flow-tool-label')).toContainText('حظرها GAIA');
+        await shot(page, `refused-step-${locale}`);
+    });
+}
+
 // A call GAIA turned down itself, for a request that only asked to translate.
 const AUTO_DECLINED_STEPS = [
     { type: 'tool_start', tool: 'run_shell_command', narration: 'Running a command' },
@@ -5260,7 +5667,8 @@ test('the library path row fits a phone', async ({ page }) => {
 });
 
 test('each line of an email being approved takes its own direction', async ({ page }) => {
-    const text = 'To: dana@example.com\nSubject: Hello\n\nمرحبا، هذا اختبار.';
+    // The header becomes labelled rows; the body keeps a line per direction.
+    const text = 'To: dana@example.com\nSubject: Hello\n\nHello Dana,\nمرحبا، هذا اختبار.';
     const event = { type: 'permission_request', tool: 'send_now', args: { _exact_text: text }, confirm_id: 'c1' };
     // The prompt lasts only while its stream is open, which a routed response can't do.
     await open(page, `#${ANSWER_SESSION}`, 'ar', (p) =>
@@ -5297,6 +5705,33 @@ test('each line of an email being approved takes its own direction', async ({ pa
     expect(gaps.english).toBeLessThan(40);
     expect(gaps.arabic).toBeLessThan(40);
 });
+
+for (const locale of ['en', 'ar']) {
+    test(`an email being approved names its sending account on its own row (${locale})`, async ({ page }) => {
+        const text = 'From: jane.work@example.com\nTo: priya@example.com\nSubject: The deck\n\nHi Priya, the deck is attached.';
+        const event = { type: 'permission_request', tool: 'send_now', args: { _exact_text: text }, confirm_id: 'c1' };
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.addInitScript((line) => {
+                const realFetch = window.fetch;
+                window.fetch = (input, init) =>
+                    String(input).endsWith('/chat/send')
+                        ? Promise.resolve(new Response(new ReadableStream({
+                            start: (controller) => controller.enqueue(new TextEncoder().encode(line)),
+                        }), { headers: { 'Content-Type': 'text/event-stream' } }))
+                        : realFetch(input, init);
+            }, `data: ${JSON.stringify(event)}\n\n`),
+        );
+        await page.locator('textarea').last().fill('send it');
+        await page.keyboard.press('Enter');
+        const header = page.getByTestId('perm-mail-header');
+        await expect(header).toBeVisible();
+        await expect(header.locator('.perm-mail-from bdi')).toHaveAttribute('dir', 'ltr');
+        if (locale === 'ar') await expect(header.locator('dt').first()).toContainText('من');
+        await page.locator('.perm-card').scrollIntoViewIfNeeded();
+        await shot(page, `approval-from-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 /** The desktop app's updater in a given state; the browser preview has none. */
 function withUpdater(update: Record<string, unknown>) {

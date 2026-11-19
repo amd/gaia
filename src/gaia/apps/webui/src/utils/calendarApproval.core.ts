@@ -242,7 +242,8 @@ export function calendarWhen(start: string, end: string, locale: string): Calend
     return { text: shown, allDay: false };
 }
 
-export type CalendarFactValue = { kind: 'text'; text: string } | { kind: 'when'; when: CalendarWhen };
+/** `ltr` marks an address, which reads left to right in any language. */
+export type CalendarFactValue = { kind: 'text'; text: string; ltr?: boolean } | { kind: 'when'; when: CalendarWhen };
 
 export interface CalendarFacts {
     rows: Array<{ label: string; value: CalendarFactValue }>;
@@ -263,17 +264,21 @@ export function calendarFacts(tool: string, args: Record<string, unknown>, t: Tr
     };
     const when = (label: string, start: unknown, end: unknown) =>
         rows.push({ label, value: { kind: 'when', when: calendarWhen(text(start), text(end), t.locale) } });
+    const account = () => {
+        const shown = text(args.calendar_account);
+        if (shown) rows.push({ label: t('permission.calendar.account'), value: { kind: 'text', text: shown, ltr: true } });
+    };
 
     if (tool === 'calendar/create_calendar_event') {
         named(t('permission.calendar.title'), args.title);
         when(t('permission.calendar.when'), args.start, args.end);
-        named(t('permission.calendar.account'), args.calendar_account);
+        account();
         named(t('permission.calendar.location'), args.location);
         named(t('permission.calendar.description'), args.description, true);
     } else {
         named(t('permission.calendar.event'), args.expected_title);
         when(t('permission.calendar.when'), args.expected_start, '');
-        named(t('permission.calendar.account'), args.calendar_account);
+        account();
         named(t('permission.calendar.newTitle'), args.new_title);
         if (text(args.new_start)) when(t('permission.calendar.newTime'), args.new_start, args.new_end);
         named(t('permission.calendar.newLocation'), args.new_location);

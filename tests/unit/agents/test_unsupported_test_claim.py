@@ -1337,22 +1337,29 @@ _PYTEST_ARGV = "subprocess.run([sys.executable, '-m', 'pytest'])\n"
 _PYTEST_IN_A_DEF = "def run_tests():\n    " + _PYTEST_ARGV
 
 
-def _scan_seconds(source: str) -> float:
+def _scan_seconds(source: str, repeats: int = 1) -> float:
     # Times the walk only: CPython's own parse of the f-string storm is itself
     # super-linear, and the walk is where the n**2 / 2 bug lived.
     tree = ast.parse(source)
     with patch("gaia.agents.base.checks.ast.parse", return_value=tree):
-        return _detect_seconds(source)[1]
+        started = time.perf_counter()
+        for _ in range(repeats):
+            _detect_test_runner(source)
+        return time.perf_counter() - started
+
+
+_GROWTH = 8
 
 
 def _growth_seconds(small: str, big: str) -> tuple[float, float]:
-    # Interleaved best-of-5 with GC paused, so neither a load spike nor a
-    # collection can land on one size only.
+    # The small snippet runs _GROWTH times per sample so both samples last about
+    # as long: a busy runner then preempts each alike, rather than sparing the
+    # few-ms one. Interleaved best-of-5 with GC paused.
     small_best = big_best = float("inf")
     gc.disable()
     try:
         for _ in range(5):
-            small_best = min(small_best, _scan_seconds(small))
+            small_best = min(small_best, _scan_seconds(small, _GROWTH))
             big_best = min(big_best, _scan_seconds(big))
     finally:
         gc.enable()
@@ -1360,9 +1367,10 @@ def _growth_seconds(small: str, big: str) -> tuple[float, float]:
 
 
 def _assert_grows_linearly(make_source) -> None:
-    # 8x the launches: linear is ~6-16x the time, the unbounded n**2 / 2 is ~64x.
-    small, big = _growth_seconds(make_source(500), make_source(4000))
-    assert big < 24 * small + 0.02, (small, big)
+    # 8x the launches against 8 runs of the small one: linear is ~1-2x the
+    # time, the unbounded n**2 / 2 is ~8x.
+    small, big = _growth_seconds(make_source(500), make_source(500 * _GROWTH))
+    assert big < 3 * small + 0.02, (small, big)
 
 
 @pytest.mark.parametrize(

@@ -77,7 +77,8 @@ describe('connector catalog text in Arabic', () => {
         for (const key of [
             'connectors.microsoft_work.description',
             'connectors.microsoft_work.client_id.label',
-            'connectors.microsoft_work.client_id.help',
+            'guide.microsoft.register',
+            'guide.microsoftWork.pasteBody',
             'connectors.microsoft_work.tenant_id.label',
             'connectors.microsoft_work.tenant_id.help',
         ] as const) {
@@ -115,7 +116,18 @@ describe('connector catalog text in Arabic', () => {
 describe('connector catalog text in English', () => {
     it('is the catalog text, unchanged', async () => {
         await openTile(workRow());
-        expect(shown()).toContain(enMessages['connectors.microsoft_work.client_id.help']);
-        expect(shown()).not.toContain(arMessages['connectors.microsoft_work.client_id.help']);
+        expect(shown()).toContain(enMessages['connectors.microsoft_work.tenant_id.help']);
+        expect(shown()).not.toContain(arMessages['connectors.microsoft_work.tenant_id.help']);
+    });
+
+    it('walks through the setup in steps instead of the long field hints', async () => {
+        await openTile(workRow());
+        for (const key of ['guide.microsoft.register', 'guide.microsoft.redirect', 'guide.microsoftWork.paste'] as const) {
+            expect(shown()).toContain(enMessages[key]);
+        }
+        expect(screen.getByRole('link', { name: /Open Azure/ })).toHaveAttribute('href', expect.stringContaining('portal.azure.com'));
+        // The step covers the client ID; the tenant ID's hint says which of three IDs to copy, so it stays.
+        expect(shown()).not.toContain(enMessages['connectors.microsoft_work.client_id.help']);
+        expect(shown()).toContain(enMessages['connectors.microsoft_work.tenant_id.help']);
     });
 });

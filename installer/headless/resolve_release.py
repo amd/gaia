@@ -9,6 +9,10 @@ and say which installers it carries.
 
 Writes ``release.json`` and, under Actions, the same keys to $GITHUB_OUTPUT.
 
+Set GAIA_GITHUB_FIXTURE to a checked-in response to read releases from disk
+instead of the API. PR CI uses tests/fixtures/github/releases.json; tag and
+dispatch runs leave it unset and fetch live.
+
 An empty --tag picks the newest release by version (a final sorts after its own
 candidates) whose assets are all attached, and names any newer one it skipped.
 
@@ -26,6 +30,7 @@ installers as broken that simply are not there yet.
 from __future__ import annotations
 
 import argparse
+import email.utils
 import json
 import os
 import re
@@ -37,6 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 API = "https://api.github.com/repos/amd/gaia"
+FIXTURE_ENV = "GAIA_GITHUB_FIXTURE"
 TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?$")
 # The first release candidate publish.yml attaches the terminal .pkg/.deb/.rpm
 # to. Older candidates carry none, and their packages are rebuilt in the run.
@@ -142,22 +148,176 @@ def required(tag: str) -> List[str]:
     return ids
 
 
+_RETRY_STATUSES = (403, 429)
+_RETRY_LIMIT_MAX = 5
+_RETRY_WAIT_CAP_S = 30.0
+_RETRY_WAIT_BUDGET_S = 30.0
+
+
+def _fixture_releases() -> Optional[List[Dict[str, Any]]]:
+    """The checked-in releases fixture, or None when GAIA_GITHUB_FIXTURE is unset."""
+    raw_path = os.environ.get(FIXTURE_ENV, "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise SystemExit(f"error: could not read {FIXTURE_ENV}={path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"error: {FIXTURE_ENV}={path} is not valid JSON: {exc}"
+        ) from exc
+
+    releases = data.get("releases") if isinstance(data, dict) else None
+    if not isinstance(releases, list) or not all(
+        isinstance(release, dict) for release in releases
+    ):
+        raise SystemExit(
+            f"error: {FIXTURE_ENV}={path} must be a JSON object with a 'releases' array"
+        )
+    for release in releases:
+        if not isinstance(release.get("tag_name"), str):
+            raise SystemExit(
+                f"error: {FIXTURE_ENV}={path} has a release without a string tag_name"
+            )
+        assets = release.get("assets", [])
+        if not isinstance(assets, list):
+            raise SystemExit(
+                f"error: {FIXTURE_ENV}={path} has a release whose assets is not a list"
+            )
+        for asset in assets:
+            if not (
+                isinstance(asset, dict)
+                and isinstance(asset.get("name"), str)
+                and isinstance(asset.get("browser_download_url"), str)
+            ):
+                raise SystemExit(
+                    f"error: {FIXTURE_ENV}={path} has an asset without a string "
+                    "name and browser_download_url"
+                )
+    return releases
+
+
+def _retry_limit() -> int:
+    """GITHUB_FETCH_RETRIES, default 0; invalid or out-of-range values fail."""
+    raw = os.environ.get("GITHUB_FETCH_RETRIES", "").strip()
+    if not raw:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        raise SystemExit(
+            f"error: GITHUB_FETCH_RETRIES must be an integer from 0 to "
+            f"{_RETRY_LIMIT_MAX}, got {raw!r}"
+        ) from None
+    if not 0 <= value <= _RETRY_LIMIT_MAX:
+        raise SystemExit(
+            f"error: GITHUB_FETCH_RETRIES must be from 0 to {_RETRY_LIMIT_MAX}, "
+            f"got {value}"
+        )
+    return value
+
+
+def _clamp_wait(seconds: float) -> float:
+    return max(0.0, min(seconds, _RETRY_WAIT_CAP_S))
+
+
+def _retry_delay(exc: urllib.error.HTTPError, attempt: int) -> float:
+    """How long to wait before the next attempt, never more than 30 s."""
+    headers = getattr(exc, "headers", None)
+    retry_after = headers.get("Retry-After") if headers else None
+    if retry_after:
+        text = str(retry_after).strip()
+        try:
+            return _clamp_wait(float(text))
+        except ValueError:
+            pass
+        try:
+            when = email.utils.parsedate_to_datetime(text)
+        except (TypeError, ValueError):
+            when = None
+        if when is not None:
+            return _clamp_wait(when.timestamp() - time.time())
+    reset = headers.get("X-RateLimit-Reset") if headers else None
+    if reset:
+        try:
+            return _clamp_wait(float(reset) - time.time())
+        except (TypeError, ValueError):
+            pass
+    return _clamp_wait(0.5 * 2 ** (attempt - 1))
+
+
 def _get(url: str) -> Any:
-    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.load(resp)
+    retries = _retry_limit()
+    attempt = 1
+    waited = 0.0
+    while True:
+        req = urllib.request.Request(
+            url, headers={"Accept": "application/vnd.github+json"}
+        )
+        token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in _RETRY_STATUSES or attempt > retries:
+                if attempt > 1:
+                    if exc.code in _RETRY_STATUSES:
+                        hint = (
+                            "GH_TOKEN/GITHUB_TOKEN is set, so this is a GitHub "
+                            "API rate limit or an exhausted workflow-token "
+                            "hourly quota"
+                            if token
+                            else "set GH_TOKEN or GITHUB_TOKEN"
+                        )
+                    else:
+                        hint = "this status is not retried"
+                    raise RuntimeError(
+                        f"{url} returned HTTP {exc.code} after {attempt} attempt(s) "
+                        f"with GITHUB_FETCH_RETRIES={retries}; {hint}. Nothing was tested."
+                    ) from exc
+                raise
+            delay = _retry_delay(exc, attempt)
+            remaining = _RETRY_WAIT_BUDGET_S - waited
+            # A wait that lands exactly on the budget is allowed; one that would
+            # take the total past it is not, so the cumulative wait never
+            # exceeds 30 s.
+            if delay > remaining:
+                raise RuntimeError(
+                    f"{url} returned HTTP {exc.code} after {attempt} attempt(s); "
+                    f"the next retry would wait {delay:.1f}s and take the total "
+                    f"past the {_RETRY_WAIT_BUDGET_S:.0f}s wait budget "
+                    f"(GITHUB_FETCH_RETRIES={retries}). Nothing was tested."
+                ) from exc
+            print(
+                f"{url}: HTTP {exc.code}, retrying in {delay:.1f}s "
+                f"(attempt {attempt} of {retries})",
+                flush=True,
+            )
+            time.sleep(delay)
+            waited += delay
+            attempt += 1
 
 
 def list_releases() -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    for page in range(1, 4):
-        batch = _get(f"{API}/releases?per_page=100&page={page}")
-        out += batch
-        if len(batch) < 100:
-            break
+    fixture = _fixture_releases()
+    if fixture is not None:
+        print(
+            f"::notice::using checked-in release fixture "
+            f"{os.environ[FIXTURE_ENV]} ({len(fixture)} releases)",
+            flush=True,
+        )
+        out = fixture
+    else:
+        out = []
+        for page in range(1, 4):
+            batch = _get(f"{API}/releases?per_page=100&page={page}")
+            out += batch
+            if len(batch) < 100:
+                break
     return [
         r for r in out if not r.get("draft") and TAG_RE.match(r.get("tag_name", ""))
     ]
@@ -204,6 +364,15 @@ def previous_stable(
 
 def release_assets(tag: str) -> Optional[Dict[str, str]]:
     """Asset name -> download URL, or None when the release does not exist yet."""
+    fixture = _fixture_releases()
+    if fixture is not None:
+        for rel in fixture:
+            if rel.get("tag_name") == tag:
+                return {
+                    asset["name"]: asset["browser_download_url"]
+                    for asset in rel.get("assets", [])
+                }
+        return None
     try:
         rel = _get(f"{API}/releases/tags/{tag}")
     except urllib.error.HTTPError as exc:
@@ -223,6 +392,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--out", required=True)
     args = ap.parse_args(argv)
 
+    _retry_limit()
     releases = list_releases()
     tag = args.tag.strip() or pick_default(releases)
     parse_tag(tag)

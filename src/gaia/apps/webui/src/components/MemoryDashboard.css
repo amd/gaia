@@ -40,7 +40,7 @@
     display: flex; align-items: center; gap: 12px;
 }
 .memory-dashboard-header h1 {
-    font-size: 15px; font-weight: 600; font-family: var(--font-sans);
+    font-size: 15px; font-weight: 500; font-family: var(--font-sans);
     color: var(--text-primary);
 }
 .memory-dashboard-header-actions {
@@ -68,7 +68,7 @@
 
 .mem-section-title {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     letter-spacing: 0;
     color: var(--text-secondary);
@@ -102,7 +102,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-full);
     font-size: 10px;
-    font-weight: 700;
+    font-weight: 500;
     color: var(--text-muted);
     letter-spacing: 0;
     font-family: var(--font-sans);
@@ -111,7 +111,7 @@
     display: inline-flex; align-items: center; gap: 5px;
     padding: 4px 10px;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     letter-spacing: 0.5px;
     border-radius: var(--radius-md);
@@ -137,7 +137,7 @@
 .mem-range-tab {
     padding: 3px 10px;
     font-size: 10px;
-    font-weight: 700;
+    font-weight: 500;
     font-family: var(--font-sans);
     letter-spacing: 0.5px;
     border: none;
@@ -174,7 +174,7 @@
 
 .mem-stat-value {
     font-size: 28px;
-    font-weight: 700;
+    font-weight: 500;
     font-family: var(--font-display);
     color: var(--text-primary);
     line-height: 1.1;
@@ -321,7 +321,7 @@
 .mem-category-pill {
     padding: 4px 11px;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     letter-spacing: 0.5px;
     border-radius: var(--radius-full);
@@ -407,7 +407,7 @@
     text-align: start;
     padding: 8px 12px;
     font-size: 10px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     letter-spacing: 0;
     color: var(--text-muted);
@@ -440,7 +440,7 @@
     display: inline-block;
     padding: 2px 8px;
     font-size: 10px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     letter-spacing: 0.5px;
     border-radius: var(--radius-full);
@@ -476,7 +476,9 @@
 .mem-content-cell {
     max-width: 320px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -559,7 +561,7 @@
 .mem-row-action-btn.delete:hover,
 .mem-row-action-btn.delete.is-confirm { color: var(--danger); }
 .mem-row-action-btn.is-confirm { width: auto; padding: 0 6px; }
-.mem-row-delete-label { font-size: 11px; font-weight: 600; }
+.mem-row-delete-label { font-size: 11px; font-weight: 500; }
 
 /* Pagination */
 .mem-pagination {
@@ -604,7 +606,7 @@
     text-align: start;
     padding: 8px 12px;
     font-size: 10px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     letter-spacing: 0;
     color: var(--text-muted);
@@ -633,7 +635,7 @@
 }
 
 .mem-success-rate {
-    font-weight: 600;
+    font-weight: 500;
 }
 .mem-success-rate.high { color: var(--accent-green); }
 .mem-success-rate.medium { color: var(--accent-yellow); }
@@ -644,7 +646,9 @@
     vertical-align: top;
     max-width: 260px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
     color: var(--text-muted);
     font-size: 11px;
@@ -704,7 +708,7 @@
 }
 .mem-delete-confirm-label {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--danger);
     font-family: var(--font-sans);
     white-space: nowrap;
@@ -738,14 +742,18 @@
     font-weight: 500;
     color: var(--text-primary);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 .mem-conv-preview {
     font-size: 12px;
     color: var(--text-muted);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
     margin-top: 2px;
 }
@@ -810,7 +818,7 @@
 }
 .mem-conv-turn-role {
     font-size: 10px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     letter-spacing: 0;
     margin-bottom: 4px;
@@ -939,7 +947,7 @@
 }
 .mem-inline-form-row label {
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     letter-spacing: 0;
     color: var(--text-muted);
@@ -1009,7 +1017,7 @@
 }
 .mem-detail-label {
     font-size: 10px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     letter-spacing: 0;
     color: var(--text-muted);
@@ -1255,7 +1263,7 @@
 }
 .mem-setting-label {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
 }
 .mem-setting-desc {
@@ -1270,7 +1278,7 @@
     padding: 5px 12px;
     border-radius: 6px;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     border: 1px solid var(--danger);
     color: var(--danger);
     background: transparent;
@@ -1346,7 +1354,7 @@
 }
 .mem-profile-card-title {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     color: var(--text-primary);
     display: flex;
@@ -1434,7 +1442,7 @@
 }
 .mem-review-header {
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     letter-spacing: 0;
     color: var(--text-muted);
@@ -1471,7 +1479,9 @@
     font-size: 12px;
     color: var(--text-primary);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -1498,7 +1508,7 @@
     flex-shrink: 0;
     font-size: 10px;
     font-family: var(--font-sans);
-    font-weight: 600;
+    font-weight: 500;
     padding: 2px 8px;
     border-radius: var(--radius-sm);
 }
@@ -1617,7 +1627,7 @@
     font-size: 12px; font-weight: 500;
     background: var(--bg-hover); border: 1px solid var(--border);
 }
-.mem-goals-stat-n { font-size: 16px; font-weight: 700; }
+.mem-goals-stat-n { font-size: 16px; font-weight: 500; }
 .mem-goals-stat-label { opacity: 0.7; text-transform: capitalize; }
 
 /* Status colors */
@@ -1637,7 +1647,7 @@
 }
 .mem-goals-approval-title {
     display: flex; align-items: center; gap: 6px;
-    font-size: 12px; font-weight: 600; opacity: 0.85;
+    font-size: 12px; font-weight: 500; opacity: 0.85;
 }
 .mem-goals-approval-item {
     display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
@@ -1647,7 +1657,7 @@
     border-radius: var(--radius-md);
 }
 .mem-goals-approval-text { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
-.mem-goals-approval-text strong { font-weight: 600; }
+.mem-goals-approval-text strong { font-weight: 500; }
 .mem-goals-approval-text span { opacity: 0.7; font-size: 12px; }
 .mem-goals-approval-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
@@ -1724,8 +1734,8 @@ textarea.mem-input { resize: vertical; }
 .mem-goal-status-dot.status-failed      { background: var(--danger); }
 
 .mem-goal-title {
-    font-size: 13px; font-weight: 600;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 13px; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: clip; animation: fade-cut-inline both; animation-timeline: scroll(self inline);
 }
 .mem-goal-priority {
     font-size: 11px; padding: 1px 6px; border-radius: 10px; font-weight: 500; flex-shrink: 0;
@@ -1790,13 +1800,13 @@ textarea.mem-input { resize: vertical; }
 .mem-task-dot.status-blocked     { background: var(--accent-purple); }
 .mem-task-desc { flex: 1; }
 .mem-task-status-label { font-size: 10px; opacity: 0.5; flex-shrink: 0; text-transform: capitalize; }
-.mem-task-result { font-size: 11px; opacity: 0.6; flex-shrink: 0; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-task-result { font-size: 11px; opacity: 0.6; flex-shrink: 0; max-width: 200px; overflow: hidden; text-overflow: clip; animation: fade-cut-inline both; animation-timeline: scroll(self inline); white-space: nowrap; }
 
 /* Tab badge (pending approval count) */
 .mem-tab-badge {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 16px; height: 16px; padding: 0 4px;
-    border-radius: 8px; font-size: 10px; font-weight: 700;
+    border-radius: 8px; font-size: 10px; font-weight: 500;
     background: var(--accent-yellow); color: var(--text-inverse);
     margin-inline-start: 2px;
 }
@@ -1825,7 +1835,7 @@ textarea.mem-input { resize: vertical; }
 /* ── About you: what GAIA knows about the user ─────────────────────── */
 .mem-about-title {
     font-size: 20px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
     margin: 4px 0 6px;
 }
@@ -1855,7 +1865,7 @@ textarea.mem-input { resize: vertical; }
 }
 .mem-about-group-title {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     letter-spacing: 0.5px;
     color: var(--text-muted);
     margin: 0 0 8px;
@@ -1960,7 +1970,7 @@ textarea.mem-input { resize: vertical; }
     border: none;
     padding: 0;
     font: inherit;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--accent);
     cursor: pointer;
     white-space: nowrap;

@@ -9,7 +9,7 @@
 
 .update-chip {
     position: fixed;
-    inset-inline-end: 16px;
+    inset-inline-end: calc(16px + var(--browser-pane-inset));
     bottom: 16px;
     z-index: 1200;
 
@@ -46,7 +46,9 @@
 
 .update-chip__label {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 
 .update-chip__action {

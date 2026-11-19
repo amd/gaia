@@ -9,9 +9,6 @@
  */
 
 import type { ComponentType } from 'react';
-import { EmailPreScanCard } from '../email/EmailPreScanCard';
-import { isPreScanPayload, resolvePreScanPayload } from '../../utils/emailPreScan.core';
-import { UnsupportedCard } from './UnsupportedCard';
 import { TableCard } from './TableCard';
 import { KeyValueCard } from './KeyValueCard';
 import { ListCard } from './ListCard';
@@ -26,23 +23,7 @@ import { CalculatorCard } from './calculator/CalculatorCard';
 
 export type CardComponent = ComponentType<{ data: unknown }>;
 
-/**
- * Adapter for the `email_pre_scan` render key. Contract-TARGET shapes only:
- * today's live wire still emits a {summary, success} stub for
- * `pre_scan_inbox` until #2109 lands the `result_data` population fix, so
- * this tolerates both the bare target shape and the `{ok, data}` envelope
- * without needing to change again once #2109 ships.
- */
-function EmailPreScanAdapter({ data }: { data: unknown }) {
-    const payload = resolvePreScanPayload(data);
-    if (!isPreScanPayload(payload)) {
-        return <UnsupportedCard variant="invalid" render="email_pre_scan" data={data} />;
-    }
-    return <EmailPreScanCard payload={payload} />;
-}
-
 export const CARD_REGISTRY: Record<string, CardComponent> = {
-    email_pre_scan: EmailPreScanAdapter,
     table: TableCard,
     key_value: KeyValueCard,
     list: ListCard,

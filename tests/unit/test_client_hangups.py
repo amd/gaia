@@ -11,6 +11,7 @@ a traceback, though nothing went wrong on this side.
 
 import asyncio
 import logging
+import threading
 
 import pytest
 
@@ -119,7 +120,34 @@ def test_the_daemon_installs_it_when_it_starts(caplog):
     assert seen["levels"] == [logging.INFO]
 
 
-def test_the_agent_ui_server_installs_it_when_it_starts(caplog):
+@pytest.fixture
+def ui_startup_without_boot_work(monkeypatch):
+    """The Agent UI's startup with its boot jobs and keychain sweep left out.
+
+    Those run on threads that outlive the app; on Windows CI one of them took
+    down the xdist worker during the next test (#8481). The process-wide state
+    the startup sets is put back afterwards.
+    """
+    from gaia.daemon import broker_client
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui import dispatch, server
+
+    dispatched = []
+    monkeypatch.setattr(
+        dispatch.DispatchQueue,
+        "dispatch",
+        lambda _self, name, *_a, **_k: dispatched.append(name) or name,
+    )
+    monkeypatch.setattr(server, "_tripwire_sweep", lambda: None)
+    monkeypatch.setattr(broker_client, "_discovery_enabled", False)
+    monkeypatch.setattr(helpers, "_agent_registry", None)
+    monkeypatch.setattr(dispatch, "BOOT_QUEUE", None)
+    return dispatched
+
+
+def test_the_agent_ui_server_installs_it_when_it_starts(
+    caplog, ui_startup_without_boot_work
+):
     from fastapi.testclient import TestClient
 
     from gaia.ui.server import create_app
@@ -129,9 +157,14 @@ def test_the_agent_ui_server_installs_it_when_it_starts(caplog):
             {"message": "m", "exception": ConnectionResetError(10054, "reset")}
         )
 
+    threads_before = set(threading.enumerate())
     with TestClient(create_app(db_path=":memory:")) as client:
         with caplog.at_level(logging.DEBUG, logger="gaia.client_hangups"):
             client.portal.call(report_a_hangup)
 
     hangups = [r for r in caplog.records if r.name == "gaia.client_hangups"]
     assert [r.levelno for r in hangups] == [logging.INFO]
+    # The stub really kept the boot jobs (Lemonade probe, faiss import) off.
+    assert "Checking LLM server" in ui_startup_without_boot_work
+    leaked = [t.name for t in threading.enumerate() if t not in threads_before]
+    assert not leaked, f"threads outlived the app: {leaked}"

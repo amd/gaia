@@ -79,6 +79,40 @@ EXECUTED_KEY = "executed"
 #: Spread into a tool's pre-execution refusal: ``{**NOT_EXECUTED, "status": …}``.
 NOT_EXECUTED: Dict[str, Any] = {EXECUTED_KEY: False}
 
+#: What a tool returns instead of starting a run the turn's time limit has no
+#: room for.
+OUT_OF_TIME: Dict[str, Any] = {
+    **NOT_EXECUTED,
+    "status": "error",
+    "error": (
+        "Nothing ran: this turn's time limit is nearly up. Write the result "
+        "you have now instead of starting another run."
+    ),
+    "has_errors": True,
+    "out_of_time": True,
+}
+
+#: Replaces "raise the timeout" advice on a run the time limit cut short.
+TIME_LIMIT_CUT_RUN = (
+    "The turn's time limit cut this run short, so a longer timeout is not "
+    "available. Write the result you have now."
+)
+
+
+def time_capped(host: Any, seconds: int) -> int:
+    """*seconds* cut to the time *host*'s turn has left; 0 means start nothing.
+
+    A host that is not an Agent has no turn and no time limit.
+    """
+    cap = getattr(host, "time_capped_run_seconds", None)
+    return cap(seconds) if callable(cap) else seconds
+
+
+def cut_by_time_limit(host: Any) -> bool:
+    """True when a run that just timed out was stopped by the turn's time limit."""
+    return time_capped(host, 1) == 0
+
+
 #: On a result that looked on disk and found the path missing: nothing ran,
 #: but the absence was checked, which is what a "doesn't exist" claim needs.
 CHECKED_ABSENT_KEY = "checked_absent"

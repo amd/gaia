@@ -15,7 +15,7 @@ import { SaveAllLogs } from '../LogsDialog';
 import { useLogsStore } from '../../stores/logsStore';
 import type { SystemStatus, MCPServerStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
-import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
+import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton, startInstructionText } from './ErrorNotice';
 import { customModelNote } from '../../utils/modelServer.core';
 import { ModelServerPanel } from './ModelServerPanel';
 import { SettingsDisclosure } from './SettingsDisclosure';
@@ -183,7 +183,7 @@ export function AdvancedSettings() {
                                 hint={!status.lemonade_running
                                     ? (needsLocalSetup(status) ? t('settings.advanced.notInstalledHint')
                                         : status.lemonade_error ? t('settings.advanced.queryFailed', { reason: status.lemonade_error })
-                                        : status.start_instruction && !namesSetupCommand(status.start_instruction) ? status.start_instruction : t('settings.advanced.notRunningHint'))
+                                        : status.start_instruction && !namesSetupCommand(status.start_instruction) ? startInstructionText(t, status.start_instruction) ?? undefined : t('settings.advanced.notRunningHint'))
                                     : undefined}
                             />
                             {needsLocalSetup(status) && <SetUpLocalButton className="btn-primary" />}
