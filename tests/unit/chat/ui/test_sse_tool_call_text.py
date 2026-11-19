@@ -423,7 +423,7 @@ class TestNativeEnvelopeNeverStreams:
     def test_native_envelope_with_content_shows_only_the_content(self, handler):
         envelope = _native_envelope("Reconciling the two files now.")
         assert _shown(_feed(handler, _pieces(envelope, 5))) == (
-                        "Reconciling the two files now."
+            "Reconciling the two files now."
         )
 
     def test_protocol_envelope_before_a_native_one_still_splits_first(self, handler):
@@ -431,6 +431,37 @@ class TestNativeEnvelopeNeverStreams:
         text = "Checking the files.\n" + protocol + " Then " + _native_envelope()
         assert _shown(_feed(handler, _pieces(text, 6))).strip() == (
             "Checking the files.\nThen"
+        )
+
+    @pytest.mark.parametrize(
+        "chunks,expected",
+        [
+            (['{"_ _'], '{"_ _'),
+            (['Use {"\n'], 'Use {"\n'),
+            (['{" ', 'key": 1}'], '{" key": 1}'),
+            (['See {"__tool_ calls', " here."], 'See {"__tool_ calls here.'),
+        ],
+    )
+    def test_lookalike_partial_opener_is_prose_not_a_hang(
+        self, handler, chunks, expected
+    ):
+        # A tail that merely looks like the opener's start (a space or a
+        # newline after {", or a truncated key) is ordinary text. Holding it
+        # as a partial opener hung the stream: the buffer never shrank while
+        # the head kept classifying as no envelope.
+        assert _shown(_feed(handler, chunks)) == expected
+
+    def test_split_native_opener_is_still_held(self, handler):
+        # The guard above must not give up a real opener split across
+        # chunks: the envelope still drops and only its content shows.
+        assert (
+            _shown(
+                _feed(
+                    handler,
+                    ['Then {"__to', 'ol_calls__": [], "content": "hi"}'],
+                )
+            )
+            == "Then hi"
         )
 
     def test_prose_quoting_the_envelope_prefix_still_shows(self, handler):
