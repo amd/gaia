@@ -229,6 +229,14 @@ class TestInsertData:
         assert "Inserted 1 row(s) into 'inventory'" in result
         self.agent._scratchpad.insert_rows.assert_called_once_with("inventory", data)
 
+    def test_result_states_the_rows_the_table_now_holds(self):
+        """Rows a batch or an earlier session left show up in the total."""
+        self.agent._scratchpad.insert_rows.return_value = 2
+        self.agent._scratchpad.row_count.return_value = 14
+        result = self.tools["insert_data"]("sales", [{"a": 1}, {"a": 2}])
+        assert result == "Inserted 2 row(s) into 'sales'; it now holds 14 row(s)."
+        self.agent._scratchpad.row_count.assert_called_once_with("sales")
+
     def test_invalid_json_string(self):
         """insert_data returns error for malformed JSON string."""
         result = self.tools["insert_data"]("test", "{not valid json")

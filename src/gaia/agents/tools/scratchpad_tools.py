@@ -147,7 +147,12 @@ class ScratchpadToolsMixin:
                         )
 
                 count = mixin._scratchpad.insert_rows(table_name, parsed)
-                return f"Inserted {count} row(s) into '{table_name}'."
+                # The total shows rows an earlier batch or session left there.
+                held = mixin._scratchpad.row_count(table_name)
+                return (
+                    f"Inserted {count} row(s) into '{table_name}'; "
+                    f"it now holds {held} row(s)."
+                )
 
             except ValueError as e:
                 return f"Error: {e}"
