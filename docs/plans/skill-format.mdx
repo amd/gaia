@@ -594,6 +594,8 @@ def search_web(query: str, max_results: int = 5) -> dict:
 | A parameter's declared `type` contradicts the annotation | Only checked when the decorator could infer a type — an un-inferable annotation has nothing to contradict. |
 | `tools` declared but no `tools.py` on disk | Either add the module or drop `tools` to make it instruction-only. |
 | `tools.py` fails to import | The error names the exception and points at `requirements.dependencies`. |
+| A package in `requirements.dependencies` is not installed | Not a refusal: GAIA installs it when it may (see [Agent Skills](/spec/agent-skills)); otherwise the skill loads without its tools and the result names the package and the command to run. |
+| `requirements.dependencies` holds a URL, a path or an installer option | Only a package name with version specifiers is installed. |
 
 Every failure restores `_TOOL_REGISTRY` (and `sys.modules`) byte-for-byte — there
 is **no partial load**, as [Agent Skills](/spec/agent-skills#scoping-into-an-agent)

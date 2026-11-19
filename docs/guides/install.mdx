@@ -432,6 +432,8 @@ gaia init --data-libraries --check   # list each library and skill, install noth
 gaia init --no-data-libraries        # set up without them, and remember that
 ```
 
+A bundled skill that needs a package you don't have yet installs it when it loads, unless you turned these libraries off; then it loads without its tools and tells you the command.
+
 Saying no, or a download that fails, does not stop setup. `gaia init` says so at that step and again at the end, and `gaia init --check` warns while any are missing. Without them the agent still works: it falls back to slower standard-library code and tells you the command above.
 
 Setting these exact versions can change a library you already have. On a fresh install it replaces the newest numpy with 2.2.6, the last line that also supports Python 3.10.

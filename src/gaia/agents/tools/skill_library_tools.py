@@ -271,6 +271,8 @@ class SkillLibraryToolsMixin:
         from gaia.skills.capture import code_is_deferred
 
         deferred = code_is_deferred(skill)
+        packages = getattr(self, "skill_package_checks", {}).get(skill.name)
+        packages_missing = packages is not None and not packages.ok
 
         payload: Dict[str, Any] = {
             "status": "success",
@@ -290,7 +292,7 @@ class SkillLibraryToolsMixin:
             ),
             "registered_tools": (
                 []
-                if deferred
+                if deferred or packages_missing
                 else [skill.namespaced_tool_name(t) for t in skill.tool_names]
             ),
             "loaded_skills": sorted(self.loaded_skills),
@@ -332,6 +334,13 @@ class SkillLibraryToolsMixin:
                 f"stays inert until they run {deferred_remedy(skill)} in "
                 "a terminal — do not claim it works."
             )
+
+        if packages is not None and packages.installed and not already_loaded:
+            payload["installed_packages"] = list(packages.installed)
+        if packages_missing:
+            payload["missing_packages"] = list(packages.missing)
+            payload["unavailable_tools"] = list(skill.tool_names)
+            payload["warning"] = packages.note
 
         # tools_required is advisory at load time — the base loader logs the
         # gap and loads anyway, so surface it here or the model discovers it

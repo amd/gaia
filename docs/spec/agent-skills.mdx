@@ -214,6 +214,25 @@ explicit `--allow-experimental`, and so does importing one that ships code), no 
 GAIA features incrementally; nothing is required to make an existing standard
 skill load.
 
+**Python packages a skill declares.** A skill lists what its tools import under
+`metadata.gaia.requirements.dependencies`, for example `openpyxl>=3.1,<4`. When the
+skill loads, GAIA checks that list against its own Python:
+
+- Everything is installed: nothing happens.
+- Something is missing, the skill ships with GAIA or was installed from the hub at
+  `verified`, and you have full access on or have not turned the recommended libraries
+  off (`data_libraries`): GAIA installs it from PyPI and the load result lists what was
+  installed. A package GAIA pins for `gaia init --data-libraries` is installed at that
+  version.
+- Any other case, or a download that fails: the skill's instructions load, its tools do
+  not, and the load result names the missing packages and the command that installs
+  them. Run it, then load the skill again. GAIA never installs packages on its own for
+  a skill you wrote or imported.
+
+Only a package name with version specifiers is accepted. A URL, a path, a git
+reference, an extra or an installer option such as `--index-url` refuses the load. The
+desktop app bundles its packages and installs nothing.
+
 <Note>
 **Division of authority:** this spec owns the **integration surface** (discovery,
 scoping, progressive disclosure); [Skill Format](/plans/skill-format) owns the

@@ -182,17 +182,16 @@ def _installed_version(name: str) -> Optional[str]:
         return None
 
 
-def library_status(
-    skills: Optional[Dict[str, List[str]]] = None,
+def requirement_status(
+    declared: Dict[str, List[str]], pins: Dict[str, str], include_pins: bool = True
 ) -> List[LibraryStatus]:
-    """Every library setup installs: GAIA's pins, then the bundled skills' own.
+    """Status of GAIA's *pins* (unless left out) and of what *declared* adds.
 
-    A package a skill declares that GAIA also pins is installed at the pin.
+    *declared* maps a skill name to its requirements. A package GAIA also pins
+    is checked, and installed, at the pin.
     """
     # A package installed since the last look is invisible until caches reset.
     importlib.invalidate_caches()
-    pins = pinned_libraries()
-    declared = skill_dependencies() if skills is None else skills
     users: Dict[str, List[str]] = {}
     extra: Dict[str, Tuple[str, str]] = {}
     pinned_keys = {_key(name) for name in pins}
@@ -211,12 +210,21 @@ def library_status(
             tuple(users.get(_key(name), ())),
         )
         for name, version in pins.items()
+        if include_pins or _key(name) in users
     ]
     status += [
         LibraryStatus(name, spec, None, _installed_version(name), tuple(users[key]))
         for key, (name, spec) in extra.items()
     ]
     return status
+
+
+def library_status(
+    skills: Optional[Dict[str, List[str]]] = None,
+) -> List[LibraryStatus]:
+    """Every library setup installs: GAIA's pins, then the bundled skills' own."""
+    declared = skill_dependencies() if skills is None else skills
+    return requirement_status(declared, pinned_libraries())
 
 
 def skill_status(status: List[LibraryStatus]) -> Dict[str, List[str]]:
@@ -271,8 +279,13 @@ def remember_choice(wanted: bool) -> None:
     GaiaConfig.edit_doc(mutate)
 
 
-def install(say: Callable[[str], None] = lambda _message: None) -> List[LibraryStatus]:
+def install(
+    say: Callable[[str], None] = lambda _message: None,
+    status_of: Callable[[], List[LibraryStatus]] = library_status,
+) -> List[LibraryStatus]:
     """Install every library this Python lacks; return the final status.
+
+    *status_of* names the libraries; by default everything setup installs.
 
     Installs nothing when all are present. Success is what the interpreter
     holds afterwards, never the installer's exit code alone.
@@ -281,7 +294,7 @@ def install(say: Callable[[str], None] = lambda _message: None) -> List[LibraryS
         DataLibrariesError: something is still missing; the message names it
             and how to retry.
     """
-    before = library_status()
+    before = status_of()
     wanted = [s for s in before if not s.ok]
     if not wanted:
         return before
@@ -324,7 +337,7 @@ def install(say: Callable[[str], None] = lambda _message: None) -> List[LibraryS
             f"Check your network connection and the error above. {retry}"
         )
 
-    status = library_status()
+    status = status_of()
     still = [s.describe() for s in status if not s.ok]
     if still:
         raise DataLibrariesError(
