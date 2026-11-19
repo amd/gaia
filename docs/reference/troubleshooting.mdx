@@ -749,6 +749,17 @@ error. To run the chat model in the cloud instead, see
     - **Judge access**: the judge uses your Claude Code login (`claude`, then `/login`) first, then `ANTHROPIC_API_KEY` from the environment, then from a `.env` file, and prints which one. If it errors with `No Claude credential for the eval`, log in to the `claude` CLI or export the key.
   </Accordion>
 
+  <Accordion title="The agent says pandas (or another library) is not installed" icon="table">
+    On a `pip` or `uv` install, the agent's scripts run in GAIA's own Python. If a library such as pandas, numpy, matplotlib or openpyxl is missing there, the agent falls back to slower standard-library code. This happens when the libraries were declined during `gaia init`, when their download failed, or when setup ran from the Agent UI or terminal UI, which never install Python packages.
+
+    **Fix:**
+    ```bash
+    gaia init --data-libraries
+    ```
+
+    `gaia init --data-libraries --check` lists each library and its version. If the command reports `amd-gaia declares no extra`, your install predates this step: reinstall GAIA first (`uv pip install -e .` in a source checkout), then run it again. The desktop app bundles its libraries and needs nothing.
+  </Accordion>
+
   <Accordion title="Dependency compatibility issues" icon="cubes">
     If you encounter numpy/pandas/sklearn import errors:
 

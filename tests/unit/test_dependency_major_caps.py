@@ -83,6 +83,9 @@ def test_pypdfium2_is_floored_at_5_and_capped_below_6() -> None:
     assert {where for where, _ in declared} >= {"[rag]", "[ui]"}
     for where, req in declared:
         assert req.marker is None, f"{where} declares '{req}' with a marker"
+        if where == "[data-libraries]":
+            # One exact pin; test_data_libraries holds it inside these ranges.
+            continue
         assert req.specifier.contains(Version("5.14.0")), f"{where}: '{req}'"
         assert not req.specifier.contains(Version("4.30.0")), f"{where}: '{req}'"
         assert not req.specifier.contains(Version("6.0")), f"{where}: '{req}'"

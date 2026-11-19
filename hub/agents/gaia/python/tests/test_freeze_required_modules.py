@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import sys
 import types
 from pathlib import Path
@@ -158,6 +159,17 @@ def test_every_library_the_tools_advertise_is_bundled():
 
     missing = set(BUNDLED_LIBRARIES.values()) - set(freeze.SCRIPT_LIBRARIES)
     assert not missing, f"advertised to the model but not bundled: {missing}"
+
+
+def test_setup_pins_every_library_the_binary_bundles():
+    """Setup gives a source install every library the desktop app bundles."""
+    pytest.importorskip("gaia_agent")
+    from gaia_agent.python_runner import BUNDLED_LIBRARIES
+
+    setup_py = (PACKAGING.parents[4] / "setup.py").read_text(encoding="utf-8")
+    block = setup_py.split('"data-libraries": [', 1)[1].split("]", 1)[0]
+    pinned = set(re.findall(r'"([A-Za-z0-9._-]+)==', block))
+    assert not set(BUNDLED_LIBRARIES) - pinned
 
 
 def test_smoke_test_uses_the_runner_flag():

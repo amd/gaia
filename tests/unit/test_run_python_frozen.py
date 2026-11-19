@@ -842,6 +842,35 @@ def test_a_bundled_library_keeps_its_own_hint(monkeypatch):
     assert "system Python" not in result["error"]
 
 
+def test_a_missing_bundled_library_names_the_setup_command(monkeypatch):
+    """A source install can add the library; the model is told the command."""
+    from gaia.installer.data_libraries import SETUP_COMMAND
+
+    assert chat_agent.DATA_LIBRARIES_SETUP_COMMAND == SETUP_COMMAND
+    monkeypatch.setattr(chat_agent, "is_frozen", lambda: False)
+    hint = chat_agent._missing_library_hint("No module named 'pandas'")
+    assert "Retry now without it, using csv" in hint
+    assert f"`{SETUP_COMMAND}`" in hint
+
+
+def test_a_setup_only_library_names_the_setup_command(monkeypatch):
+    """duckdb is installed by setup but not bundled or advertised."""
+    monkeypatch.setattr(chat_agent, "is_frozen", lambda: False)
+    hint = chat_agent._missing_library_hint("No module named 'duckdb'")
+    assert "Retry now without it" in hint
+    assert "`gaia init --data-libraries`" in hint
+    monkeypatch.setattr(chat_agent, "is_frozen", lambda: True)
+    assert chat_agent._missing_library_hint("No module named 'duckdb'") is None
+
+
+def test_a_frozen_build_names_no_setup_command(monkeypatch):
+    """Nothing can be installed into the binary, so no command is offered."""
+    monkeypatch.setattr(chat_agent, "is_frozen", lambda: True)
+    hint = chat_agent._missing_library_hint("No module named 'pandas'")
+    assert "Retry now without it" in hint
+    assert "gaia init" not in hint
+
+
 def test_the_description_says_whose_python_this_is():
     from gaia_agent.chat_agent import _lists_script_libraries
 

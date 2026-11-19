@@ -211,6 +211,10 @@ class GaiaConfig:
             oldest turns go first. The size limit never removes the newest turn.
         skipped_models: Models the user chose not to download. ``gaia init``
             and first-run setup leave them out until the user asks for one.
+        data_libraries: Let ``gaia init`` download the recommended Python
+            libraries for scripts and skills (pandas, openpyxl, ...). ``False``
+            once the user declines them; ``gaia init --data-libraries`` turns
+            it back on.
         vision_model: Model that reads scans and images, when the user chose
             one in setup. ``None`` uses the chat model if it reads images,
             else Gemma.
@@ -260,6 +264,7 @@ class GaiaConfig:
     undo_retention_days: int = 7
     undo_max_mb: int = 500
     skipped_models: List[str] = field(default_factory=list)
+    data_libraries: bool = True
     project_context: Optional[str] = None
     read_aloud_voice: Optional[str] = None
     read_aloud_speed: int = 100
