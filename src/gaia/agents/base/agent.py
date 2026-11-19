@@ -388,6 +388,25 @@ def _skill_prompt_body(agent, skill) -> str:
     return f"{body}\n\nOn this machine: {notes}"
 
 
+def _skill_package_checks(agent: Any) -> Dict[str, Any]:
+    """Per agent: loaded skill name -> its ``gaia.skills.packages.PackageCheck``."""
+    checks = getattr(agent, "_skill_package_checks", None)
+    if checks is None:
+        checks = {}
+        agent._skill_package_checks = checks
+    return checks
+
+
+def _held_packages_arrived(agent: Any, name: str) -> bool:
+    """True when a skill loaded without its tools now has its packages."""
+    held = _skill_package_checks(agent).get(name)
+    if held is None or held.ok:
+        return False
+    from gaia.skills.packages import package_status
+
+    return all(s.ok for s in package_status(agent.loaded_skills[name]))
+
+
 def _skill_folder_access(agent, skill, *, grant: bool) -> None:
     """Make *skill*'s own folder readable (or not) through *agent*'s file tools.
 
@@ -5820,6 +5839,11 @@ Do NOT wrap conversational replies in JSON.
             self._granted_binaries = BinaryGrants()
         return self._granted_binaries
 
+    @property
+    def skill_package_checks(self) -> Dict[str, Any]:
+        """Loaded skill name -> what its load found about its declared packages."""
+        return _skill_package_checks(self)
+
     def load_skill(
         self, name: str, *, manager: Optional["SkillManager"] = None
     ) -> "Skill":
@@ -5869,6 +5893,10 @@ Do NOT wrap conversational replies in JSON.
 
         resolver = manager if manager is not None else self.skill_manager
 
+        if name in self.loaded_skills and _held_packages_arrived(self, name):
+            # Installed since it loaded: load again so its tools register.
+            self.unload_skill(name)
+
         if name in self.loaded_skills:
             logger.debug("Skill '%s' is already loaded for this agent", name)
             # Explicit reactivation escape hatch: an already-loaded skill whose
@@ -5909,7 +5937,19 @@ Do NOT wrap conversational replies in JSON.
         from gaia.skills.capture import code_is_deferred, deferred_remedy
 
         code_deferred = code_is_deferred(skill)
-        if code_deferred:
+        from gaia.skills.packages import PackageCheck, ensure_packages
+
+        # Deferred code is never imported, so it needs no packages yet.
+        packages = (
+            PackageCheck()
+            if code_deferred
+            else ensure_packages(skill, getattr(self, "console", None))
+        )
+        if not packages.ok:
+            # Importing tools.py without its packages would refuse the whole load.
+            registered = {}
+            logger.warning(packages.note)
+        elif code_deferred:
             registered = {}
             logger.warning(
                 "Skill '%s' is not yet trusted: %d tool(s) (%s) deferred — "
@@ -5951,6 +5991,7 @@ Do NOT wrap conversational replies in JSON.
                 )
 
             self.loaded_skills[name] = skill
+            _skill_package_checks(self)[name] = packages
             _skill_folder_access(self, skill, grant=True)
             self._note_skill_active(name)
             self.rebuild_system_prompt()
@@ -5961,6 +6002,7 @@ Do NOT wrap conversational replies in JSON.
             unregister_skill_tools(skill.name)
             self.granted_binaries.revoke_skill(skill.name)
             self.loaded_skills.pop(name, None)
+            _skill_package_checks(self).pop(name, None)
             _skill_folder_access(self, skill, grant=False)
             raise
 
@@ -6110,6 +6152,7 @@ Do NOT wrap conversational replies in JSON.
                 self._instance_tools.pop(key, None)
         revoked = self.granted_binaries.revoke_skill(name)
         skill = self.loaded_skills.pop(name, None)
+        _skill_package_checks(self).pop(name, None)
         _skill_folder_access(self, skill, grant=False)
         still_needed = {
             tool

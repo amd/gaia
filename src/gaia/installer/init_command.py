@@ -52,7 +52,7 @@ from gaia.agents.install_hints import (
     resolve_pip_frontend,
 )
 from gaia.frozen import is_frozen
-from gaia.installer import model_choice
+from gaia.installer import data_libraries, model_choice
 from gaia.installer._stdin import stdin_is_tty
 from gaia.llm.model_fit import MachineCapacity, format_gb
 from gaia.logger import get_logger
@@ -885,6 +885,16 @@ def check_setup_status(
             reason = f"The GAIA agent is not installed -- run: {command}"
             reasons.append(f"{reason}. {unknown}" if unknown else reason)
 
+    if profile_config.get("pip_extras") and not is_frozen():
+        # A warning, not a reason: they are optional, and the apps' first-run
+        # setup never pip-installs.
+        try:
+            libraries = data_libraries.missing_summary(data_libraries.library_status())
+        except (RuntimeError, ValueError) as e:
+            libraries = str(e)
+        if libraries:
+            warnings.append(libraries)
+
     if reasons:
         # Sizes let a caller say what the download will cost before it starts;
         # ``downloaded`` lets it leave out models the server already has.
@@ -1421,6 +1431,7 @@ class InitCommand:
         remote: bool = False,
         skip_webui_build: bool = False,
         skip_pip_extras: bool = False,
+        no_data_libraries: bool = False,
         skip_chat_model: bool = False,
         progress_callback: Optional[Callable[[InitProgress], None]] = None,
         lemonade_url: Optional[str] = None,
@@ -1448,6 +1459,8 @@ class InitCommand:
                 same effect as setting GAIA_SKIP_WEBUI_BUILD)
             skip_pip_extras: Install no Python packages; the desktop app ships
                 its own, and the Agent UI's setup never pip-installs
+            no_data_libraries: Don't download the recommended Python libraries,
+                and save that choice
             skip_chat_model: Skip the profile's chat LLM (e.g. Gemma-4-E4B-it-GGUF)
                 while still downloading any embedding model it declares. For a
                 session whose inference runs on Anthropic's Claude API instead of
@@ -1492,6 +1505,8 @@ class InitCommand:
         self.skip_webui_build = skip_webui_build
         # The frozen app bundles its packages and has no pip to add more.
         self.skip_pip_extras = skip_pip_extras or is_frozen()
+        self.no_data_libraries = no_data_libraries
+        self._data_libraries_note: Optional[str] = None
         self.force_reinstall = force_reinstall
         self.force_models = force_models
         self.yes = yes
@@ -1762,6 +1777,44 @@ class InitCommand:
         self._print_success(f"Installed [{extras_str}] dependencies")
         return True
 
+    def _offer_data_libraries(self) -> None:
+        """Download the recommended Python libraries unless the user says no.
+
+        Optional: a decline, a skip or a failed download is reported and kept
+        for the closing summary, and never fails setup.
+        """
+        later = f"To install them later, run: {data_libraries.SETUP_COMMAND}"
+        try:
+            if self.no_data_libraries:
+                data_libraries.remember_choice(False)
+            if data_libraries.declined():
+                self._data_libraries_note = (
+                    f"Skipped the recommended Python libraries, as you chose. {later}"
+                )
+                self._print_warning(self._data_libraries_note)
+                return
+            status = data_libraries.library_status()
+            if not all(s.ok for s in status):
+                self._print(f"   {data_libraries.offer_text(status)}")
+                if not self._prompt_yes_no("Download them now?", default=True):
+                    data_libraries.remember_choice(False)
+                    self._data_libraries_note = (
+                        f"Skipped the recommended Python libraries. {later}"
+                    )
+                    self._print_warning(self._data_libraries_note)
+                    return
+                status = data_libraries.install(self._print_success)
+        except Exception as e:  # noqa: BLE001 - optional step; reported, not fatal
+            self._data_libraries_note = (
+                "The recommended Python libraries were NOT installed; scripts "
+                f"and skills that need them will say so. {e}"
+            )
+            self._print_error(self._data_libraries_note)
+            return
+        self._print_success(
+            "Python libraries ready: " + ", ".join(s.describe() for s in status)
+        )
+
     def run(self) -> int:
         """
         Execute the initialization workflow.
@@ -1881,6 +1934,7 @@ class InitCommand:
                 if not self._install_pip_extras():
                     self._component("packages", "failed")
                     return self._fail_before_agent(has_hub_agent_check)
+                self._offer_data_libraries()
                 self._component("packages", "done")
 
             # Ensure the profile's hub agent (chat's standalone wheel) is
@@ -1990,7 +2044,10 @@ class InitCommand:
                 self._print_error("Agent UI frontend build failed -- see above.")
                 return 1
 
-            return 0 if self._print_completion() else 1
+            completed = self._print_completion()
+            if self._data_libraries_note:
+                self._print_warning(self._data_libraries_note)
+            return 0 if completed else 1
 
         except KeyboardInterrupt:
             self._print("")
@@ -4239,6 +4296,7 @@ def run_init(
     remote: bool = False,
     skip_webui_build: bool = False,
     skip_pip_extras: bool = False,
+    no_data_libraries: bool = False,
     skip_chat_model: bool = False,
     lemonade_url: Optional[str] = None,
     gaia_lemonade: bool = False,
@@ -4261,6 +4319,7 @@ def run_init(
         remote: Use the Lemonade Server LEMONADE_BASE_URL names
         skip_webui_build: Skip the Agent UI frontend build step entirely
         skip_pip_extras: Install no Python packages; the desktop app ships its own
+        no_data_libraries: Don't download the recommended Python libraries
         skip_chat_model: Skip the profile's chat LLM, keep any embedding model
             (see InitCommand's docstring — for a Claude-backed session)
         lemonade_url: Use (and save) the Lemonade Server the user runs here
@@ -4285,6 +4344,7 @@ def run_init(
             remote=remote,
             skip_webui_build=skip_webui_build,
             skip_pip_extras=skip_pip_extras,
+            no_data_libraries=no_data_libraries,
             skip_chat_model=skip_chat_model,
             lemonade_url=lemonade_url,
             gaia_lemonade=gaia_lemonade,

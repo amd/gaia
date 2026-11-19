@@ -141,6 +141,19 @@ def _isolate_gaia_config(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_data_libraries(monkeypatch):
+    """Setup under test has no Python libraries to read or install.
+
+    Without this every ``gaia init`` test would read this environment's real
+    packages and could run pip. ``test_data_libraries`` sets its own.
+    """
+    from gaia.installer import data_libraries
+
+    monkeypatch.setattr(data_libraries, "gaia_extra_requirements", lambda extras: [])
+    monkeypatch.setattr(data_libraries, "bundled_skill_roots", lambda: [])
+
+
+@pytest.fixture(autouse=True)
 def _stub_daemon_scheduler_notifications(request, monkeypatch):
     """Keep unit tests from opening real desktop notifications."""
     if request.node.get_closest_marker("real_sinks"):

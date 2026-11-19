@@ -420,6 +420,24 @@ The installer above is for using GAIA. To build agents, work on GAIA itself, or 
 | Either front end from source | [Development guide](/reference/dev); the terminal builds with `cd tui && make build`, the desktop installers as in [Packaging & Distribution](/deployment/ui) |
 | A Windows build of your own branch to hand to someone | [Shareable build](/deployment/shareable-build). Uninstall it before running the GAIA installer, which refuses to install beside it. |
 
+### Python libraries for the agent's scripts
+
+When the agent analyses a spreadsheet or builds a chart, it writes a short Python script and runs it in GAIA's own Python. The desktop app bundles the libraries those scripts use. On a `pip` or `uv` install, `gaia init` offers to download them from PyPI at fixed versions (about 90 MB, 315 MB installed): pandas, numpy, matplotlib, openpyxl, xlsxwriter, python-docx, python-pptx, pypdf, pypdfium2, reportlab, duckdb and pyarrow, plus anything else a bundled skill declares. It is optional and recommended: `gaia init` asks once with yes as the default, and `gaia init --yes` downloads them.
+
+To add them to an install you already have, to see what is there, or to opt out:
+
+```bash
+gaia init --data-libraries           # install what is missing
+gaia init --data-libraries --check   # list each library and skill, install nothing
+gaia init --no-data-libraries        # set up without them, and remember that
+```
+
+A bundled skill that needs a package you don't have yet installs it when it loads, unless you turned these libraries off; then it loads without its tools and tells you the command.
+
+Saying no, or a download that fails, does not stop setup. `gaia init` says so at that step and again at the end, and `gaia init --check` warns while any are missing. Without them the agent still works: it falls back to slower standard-library code and tells you the command above.
+
+Setting these exact versions can change a library you already have. On a fresh install it replaces the newest numpy with 2.2.6, the last line that also supports Python 3.10.
+
 ## Next steps
 
 - [Quickstart](/quickstart) — your first conversation with a GAIA agent

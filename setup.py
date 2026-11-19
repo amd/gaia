@@ -342,6 +342,28 @@ setup(
             "openpyxl>=3.1.0",
             "reportlab>=4.0.0",
         ],
+        # The optional, recommended libraries `gaia init` offers to download:
+        # what a run_python script and the bundled skills import. Exact pins,
+        # and the only place they live: `gaia init` reads them from the
+        # installed metadata, so every install runs scripts on the same
+        # versions. Downloaded from PyPI at setup; GAIA does not ship them.
+        # numpy 2.2 and pandas 2.3 are the last lines with Python 3.10 wheels.
+        # Pillow, python-dateutil and charset-normalizer are core requirements
+        # above, so they are always present and are not pinned again here.
+        "data-libraries": [
+            "pandas==2.3.3",
+            "numpy==2.2.6",
+            "matplotlib==3.10.9",
+            "openpyxl==3.1.5",
+            "xlsxwriter==3.3.1",
+            "python-docx==1.2.0",
+            "python-pptx==1.0.2",
+            "pypdf==7.1.1",
+            "pypdfium2==5.15.2",
+            "reportlab==5.1.0",
+            "duckdb==1.5.6",
+            "pyarrow==25.0.1",
+        ],
         "lint": [
             "black",
             "pylint",
