@@ -68,9 +68,18 @@ class _ScriptedAgent:
     #: agent thread, exactly as the base loop does for a gated tool.
     gated_call = None
 
+    #: When set, the loop calls this (tool, result) before answering, the way
+    #: the base loop reports a tool's result to the console.
+    tool_call = None
+
     def process_query(self, query, max_steps=None):
         if self.block is not None:
             self.block.wait(timeout=10)
+        if self.tool_call is not None:
+            tool, result = self.tool_call
+            self.console.print_tool_usage(tool)
+            self.console.pretty_print_json({}, title="Arguments")
+            self.console.pretty_print_json(result, title="Result")
         if self.gated_call is not None:
             tool, args = self.gated_call
             self.approved = self.console.confirm_tool_execution(tool, args)
@@ -362,6 +371,25 @@ def test_one_terminal_event_per_run(built):
 # not cut a model call short. test_relayed_answer_streams.py drives the whole
 # hop on a real socket; these pin the route's side of it.
 # ---------------------------------------------------------------------------
+
+
+def test_a_render_tool_result_carries_its_card_type(built, monkeypatch):
+    """The sidecar's translator once had no render map, so no card ever drew."""
+    client, _ = built
+    card = {"kind": "guide", "guideType": "checklist", "title": "Camping"}
+    monkeypatch.setattr(
+        _ScriptedAgent,
+        "tool_call",
+        ("guides/show_checklist", {"ok": True, "data": card}),
+    )
+
+    r = client.post("/v1/gaia/query", json=_body())
+
+    assert r.status_code == 200, r.text
+    (result,) = [e for e in _events(r) if e["type"] == "tool_result"]
+    assert result["tool"] == "guides/show_checklist"
+    assert result["render"] == "guide"
+    assert result["data"] == card
 
 
 @pytest.mark.parametrize("session_id", [None, "s-stream"])
@@ -1240,9 +1268,13 @@ class _RecordingHandler:
         self.auto_approve_gated_tools = False
         self.confirm_timeout_seconds = 60.0
         self._grants = set()
+        self._scopes = {}
 
     def session_grants(self):
         return self._grants
+
+    def session_grant_scopes(self):
+        return self._scopes
 
 
 def test_a_gated_tool_runs_once_the_decision_arrives(built):
@@ -1308,6 +1340,30 @@ def test_a_one_shot_still_refuses_a_gated_tool(built):
     final = [e for e in events if e.get("type") == "final"]
     assert final, events
     assert "needs your explicit approval" in final[-1].get("answer", "")
+
+
+def test_a_refused_gated_tool_ends_failed_with_what_the_turn_spent(built):
+    """`gaia -p` read the stop as a free, zero-step success (#8034)."""
+    client, _ = built
+
+    class _Spent(_ScriptedAgent):
+        def process_query(self, query, max_steps=None):
+            self.console.confirm_tool_execution("allow_path_access", {"path": "x"})
+            return {
+                "status": "cancelled",
+                "result": "",
+                "steps_taken": 1,
+                "input_tokens": 5120,
+                "output_tokens": 48,
+            }
+
+    with mock.patch.object(server_mod, "build_query_agent", _Spent):
+        response = client.post("/v1/gaia/query", json=_body(can_answer_questions=False))
+
+    [final] = [e for e in _events(response) if e.get("type") == "final"]
+    assert final["failed"] is True
+    assert final["usage"] == {"steps": 1, "input_tokens": 5120, "tokens": 48}
+    assert "needs your explicit approval" in final["answer"]
 
 
 def test_a_caller_that_cannot_answer_is_never_asked(built):

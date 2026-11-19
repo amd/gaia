@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -91,5 +92,44 @@ func TestPaletteQueryDrawsABlockCursor(t *testing.T) {
 	}
 	if cells := control.CursorCells(strings.Join(lines, "\n")); len(cells) != 1 {
 		t.Fatalf("want exactly one cursor cell in the palette, got %d: %+v", len(cells), cells)
+	}
+}
+
+// Through the chat view, on a short terminal: arrows reach the prompt, nothing
+// clips it, and y does nothing until the mail's last line has been on screen.
+func TestALongEmailInTheChatViewMustBeReadBeforeYApproves(t *testing.T) {
+	m := newTestChat(t)
+	m.width, m.height = 80, 16
+	var body strings.Builder
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&body, "line-%d\n", i)
+	}
+	body.WriteString("LAST-LINE")
+	cm := components.NewConfirmationModel("r", "send_now", body.String(), "").WithLiveChannel("c", "")
+	m.confirmation = &cm
+	m.resize()
+	m.updateViewport()
+
+	press := func(msg tea.KeyMsg) {
+		t.Helper()
+		next, _ := m.Update(msg)
+		m = next.(ChatModel)
+	}
+	press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if !m.confirmation.Pending() {
+		t.Fatal("y approved a mail nobody could have read")
+	}
+	if strings.Contains(m.View(), "more lines hidden") {
+		t.Error("the mail was clipped rather than scrolled")
+	}
+	for i := 0; i < 80 && !strings.Contains(m.View(), "LAST-LINE"); i++ {
+		press(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if !strings.Contains(m.View(), "LAST-LINE") {
+		t.Fatal("arrow keys never reached the end of the mail")
+	}
+	press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if m.confirmation != nil && m.confirmation.Pending() {
+		t.Fatal("y did not approve once everything was read")
 	}
 }

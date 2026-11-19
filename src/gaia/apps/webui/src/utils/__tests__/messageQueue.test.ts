@@ -13,6 +13,14 @@ describe('message queue', () => {
         expect(q.nextToSend(items)?.text).toBe('first');
     });
 
+    it('puts a message the reply refused back in line, saying why, until it is offered again', () => {
+        const items = q.enqueue([], 'more', 'sending');
+        const refused = q.steerRefused(items, items[0].id);
+        expect(refused[0]).toMatchObject({ state: 'queued', note: q.STEER_REFUSED_NOTE });
+        expect(q.nextToSend(refused)?.text).toBe('more');
+        expect(q.promote(refused, items[0].id, 'queued', 'sending')[0].note).toBeUndefined();
+    });
+
     it('sends nothing as a new turn while one is still being offered to the reply', () => {
         let items = q.enqueue([], 'offered', 'sending');
         items = q.enqueue(items, 'later', 'queued');

@@ -30,6 +30,8 @@ from gaia.skills.lock import SkillLock
 from gaia.skills.tiers import enforce_skill_tier_ceiling, held_tier
 from tests.unit.skills_helpers import isolated_manager
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 _TOOLS = (
     "from gaia.agents.base.tools import tool\n"
     "\n"

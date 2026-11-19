@@ -221,11 +221,11 @@ def test_a_plan_budget_stop_alone_never_marks_the_turn_answered(tmp_path, monkey
 
         agent.chat = MagicMock()
         agent.chat.send_messages.side_effect = send
-        # The plan cap binds once half the step budget is spent.
+        # The plan cap binds with 8 of 16 steps left (half a small budget).
         result = agent.process_query("What does a CM5 8GB cost?", max_steps=16)
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(snapshot)
-    assert any("Maximum plan iterations" in str(m["content"]) for m in sent[-1])
+    assert any("No room for another plan" in str(m["content"]) for m in sent[-1])
     assert "$95" in result["result"]
     assert agent._turn_scope.answered is False

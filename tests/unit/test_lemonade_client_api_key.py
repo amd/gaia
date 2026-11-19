@@ -4,11 +4,14 @@
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 import responses
 
 from gaia.llm import lemonade_client as lc
+from gaia.llm import lemonade_embedded
+from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
 
 @pytest.fixture
@@ -28,6 +31,30 @@ def embedded_state(tmp_path, monkeypatch):
 
     monkeypatch.setattr(lc, "EMBEDDED_LEMONADE_STATE", tmp_path / "state.json")
     return _write
+
+
+def test_root_conftest_redirects_default_embedded_paths_from_real_home(monkeypatch):
+    """The unit suite must not read the caller's import-time Lemonade state path."""
+    real_home = Path.home().resolve()
+    monkeypatch.delenv("GAIA_HOME", raising=False)
+
+    real_state = real_home / ".gaia" / "lemonade" / "state.json"
+    if os.environ.get("GAIA_REQUIRE_SD") == "1":
+        assert lc.EMBEDDED_LEMONADE_STATE == real_state
+        assert lemonade_embedded.gaia_home() == real_home / ".gaia"
+    else:
+        assert lc.EMBEDDED_LEMONADE_STATE != real_state
+        assert lemonade_embedded.gaia_home() != real_home / ".gaia"
+    assert EmbeddedLemonade().root == lemonade_embedded.gaia_home() / "lemonade"
+
+
+def test_root_conftest_preserves_explicit_embedded_gaia_home(tmp_path, monkeypatch):
+    """Tests that opt into GAIA_HOME keep one reader/writer state location."""
+    home = tmp_path / "gaia-home"
+    monkeypatch.setenv("GAIA_HOME", str(home))
+
+    assert lemonade_embedded.gaia_home() == home.resolve()
+    assert EmbeddedLemonade().root == home.resolve() / "lemonade"
 
 
 class TestResolveLemonadeApiKey:

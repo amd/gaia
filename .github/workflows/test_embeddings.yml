@@ -11,7 +11,7 @@ on:
       - '.github/workflows/test_embeddings.yml'
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -47,12 +47,12 @@ on:
       - 'tests/integration/test_lemonade_health_schema.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - '.github/workflows/test_embeddings.yml'
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -138,7 +138,7 @@ jobs:
             # v10.5 and no longer exists on the runner), captures stdout/stderr
             # to logs, waits for health (dumping the logs on failure), and sets
             # LEMONADE_PROCESS_ID for cleanup.
-            .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+            .\installer\scripts\ensure-lemonade-running.ps1 -JobScoped -Port 13305 -NoModel
             if ($LASTEXITCODE -ne 0) { throw "Lemonade server failed to start" }
 
             # Register + load + verify the embedding model THROUGH GAIA's

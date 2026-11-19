@@ -1,0 +1,59 @@
+{
+  "kind": "turn",
+  "finding": "F80 (amd/gaia#7293)",
+  "why": "A file the turn's own script wrote beside the input the request named exists; the answer must not be told it was never written.",
+  "request": "Turn {ws}/kx/reconciliation.md into a spreadsheet: make recon_tables.xlsx with one sheet per category.",
+  "files": {
+    "kx/reconciliation.md": "# Recon\n\n## Travel\n\n| Item | Cost |\n|---|---|\n| Taxi | 12 |\n"
+  },
+  "model": [
+    {
+      "tool": "read_file",
+      "args": {
+        "file_path": "{ws}/kx/reconciliation.md"
+      },
+      "result": {
+        "status": "success",
+        "file_path": "{ws}/kx/reconciliation.md",
+        "content": "# Recon\n\n## Travel\n\n| Item | Cost |\n|---|---|\n| Taxi | 12 |\n"
+      }
+    },
+    {
+      "tool": "write_file",
+      "args": {
+        "file_path": "{ws}/build.py",
+        "content": "print('done')\n"
+      },
+      "creates": {
+        "{ws}/build.py": "print('done')\n"
+      },
+      "result": {
+        "status": "success",
+        "file_path": "{ws}/build.py"
+      }
+    },
+    {
+      "tool": "execute_python_file",
+      "args": {
+        "file_path": "{ws}/build.py"
+      },
+      "creates": {
+        "{ws}/kx/recon_tables.xlsx": "PK"
+      },
+      "result": {
+        "status": "success",
+        "return_code": 0,
+        "stdout": "done"
+      }
+    },
+    {
+      "answer": "recon_tables.xlsx is in kx, with one sheet per category."
+    }
+  ],
+  "expect": {
+    "model_calls": 4,
+    "answer_lacks": [
+      "No successful write to `recon_tables.xlsx`"
+    ]
+  }
+}

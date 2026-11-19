@@ -17,6 +17,7 @@ from gaia.messaging.slack.adapter import (
     ReplyTarget,
     SlackAdapter,
     SlackAllowlistError,
+    SlackPostError,
     confirmation_blocks,
 )
 
@@ -171,6 +172,27 @@ def test_an_allowlisted_member_reaches_the_agent(adapter):
     a, web, channel = adapter
     a._handle_event(dm_event())
     assert [t.text for t in channel.turns] == ["hello"]
+    assert channel.turns[0].context.reply_ts == web.posted[0]["ts"]
+
+
+def test_a_failed_thinking_post_reports_the_error_and_runs_no_turn(adapter):
+    a, web, channel = adapter
+    post = web.chat_postMessage
+    calls = []
+
+    def fail_first(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise RuntimeError("ratelimited")
+        return post(**kwargs)
+
+    web.chat_postMessage = fail_first
+    with pytest.raises(SlackPostError, match="ratelimited"):
+        a._handle_event(dm_event())
+
+    assert channel.turns == []
+    assert "could not start a reply" in web.posted[-1]["text"]
+    assert "ratelimited" in web.posted[-1]["text"]
 
 
 def test_a_stranger_never_reaches_the_agent(adapter):

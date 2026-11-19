@@ -142,13 +142,39 @@ def test_the_environment_check_reads_a_weakened_expression(workflow):
 
 
 def test_a_dispatch_never_waits_hours_for_a_missing_release(workflow):
-    steps = workflow["jobs"]["github-release-installers"]["steps"]
-    find = next(s for s in steps if s.get("name") == "Find the GitHub release")
-    assert 'if [ "${EVENT}" = "workflow_dispatch" ]' in find["run"]
-    dispatch_branch = find["run"].split('if [ "${EVENT}" = "workflow_dispatch" ]')[1]
-    dispatch_branch = dispatch_branch.split("exit 0", 1)[0]
-    assert "sleep" not in dispatch_branch
+    job = workflow["jobs"]["github-release-installers"]
+    # Dispatch only: on a tag publish.yml attaches the installers itself.
+    assert "github.event_name == 'workflow_dispatch'" in job["if"]
+    find = next(s for s in job["steps"] if s.get("name") == "Find the GitHub release")
+    assert "gh release view" in find["run"]
+    assert "sleep" not in find["run"]
     attach = next(
-        s for s in steps if s.get("name") == "Attach the installers and their checksums"
+        s
+        for s in job["steps"]
+        if s.get("name") == "Attach the installers and their checksums"
     )
     assert "steps.release.outputs.exists == 'true'" in attach["if"]
+
+
+def test_windows_setup_is_skipped_without_a_github_release(workflow):
+    version = workflow["jobs"]["version"]
+    assert version["outputs"]["release_exists"] == "${{ steps.release.outputs.exists }}"
+
+    check = next(step for step in version["steps"] if step.get("id") == "release")
+    assert "gh release view" in check["run"]
+    assert "workflow_dispatch" in check["run"]
+
+    for job_id in ("windows-setup", "windows-setup-missing"):
+        condition = str(workflow["jobs"][job_id].get("if", ""))
+        assert (
+            "needs.version.outputs.release_exists == 'true'" in condition
+        ), f"{job_id} must not run before the GitHub release exists"
+
+    summary = next(
+        step
+        for step in version["steps"]
+        if step.get("name") == "Note the skipped Windows setup"
+    )
+    assert "steps.release.outputs.exists != 'true'" in summary["if"]
+    assert "GITHUB_STEP_SUMMARY" in summary["run"]
+    assert "no GitHub release" in summary["run"]

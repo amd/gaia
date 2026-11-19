@@ -21,6 +21,7 @@ import pytest
 
 from gaia.agents.base.agent import Agent
 from gaia.security import PathValidator
+from gaia.skills import parse_skill_file
 from gaia.skills.context import SkillContextError
 from gaia.skills.manager import SkillManager
 
@@ -431,14 +432,9 @@ def test_the_skill_registers_verify_workbook_under_its_namespace(tmp_path):
     from gaia.agents.base.tools import _TOOL_REGISTRY
     from gaia.skills.loader import register_skill_tools, unregister_skill_tools
 
-    root = tmp_path / "skills"
-    shutil.copytree(SKILL_DIR, root / "office-docs")
-    manager = SkillManager(
-        user_skills_root=root, claude_skill_dirs=[tmp_path / "claude-skills"]
-    )
     before = dict(_TOOL_REGISTRY)
     try:
-        registered = register_skill_tools(manager.load("office-docs"))
+        registered = register_skill_tools(parse_skill_file(SKILL_DIR))
 
         assert set(registered) == {"office-docs/verify_workbook"}
         entry = registered["office-docs/verify_workbook"]

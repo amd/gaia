@@ -26,6 +26,10 @@ class ConfigurationError(ConnectorsError):
     """Required configuration (env var, runbook entry) is missing."""
 
 
+class InvalidConfigValueError(ConnectorsError):
+    """A value the user typed into a connector's configure form is not usable."""
+
+
 class OAuthClientNotConfiguredError(ConfigurationError):
     """An ``oauth_pkce`` connector has no OAuth *client* credentials configured.
 
@@ -247,6 +251,63 @@ class ConnectionBusyError(ConnectorsError):
         )
 
 
+class ProfileRefusedError(ConnectorsError):
+    """The provider refused to show the signed-in account's profile (HTTP 401
+    or 403): the token lacks the profile permission, so asking again won't help."""
+
+
+class UnknownAccountError(ConnectorsError):
+    """An account name that matches none, or more than one, of a connector's
+    stored accounts. ``choices`` lists the addresses the caller can name."""
+
+    def __init__(
+        self,
+        connector_id: str,
+        account: str,
+        choices: list[str],
+        *,
+        ambiguous: bool = False,
+    ):
+        self.connector_id = connector_id
+        self.account = account
+        self.choices = list(choices)
+        listed = ", ".join(self.choices) if self.choices else "none"
+        what = "matches more than one" if ambiguous else "is not one"
+        super().__init__(
+            f"{account!r} {what} of the connected {connector_id} accounts "
+            f"({listed}). Name one by its address or account id, as listed by "
+            f"`gaia connectors list {connector_id}`."
+        )
+
+
+class AccountChoiceRequiredError(ConnectorsError):
+    """The request needs one account and several are connected."""
+
+    def __init__(self, connector_id: str, choices: list[str], *, action: str):
+        self.connector_id = connector_id
+        self.choices = list(choices)
+        self.action = action
+        super().__init__(
+            f"{connector_id} has {len(self.choices)} connected accounts "
+            f"({', '.join(self.choices)}), so {action} needs to know which one. "
+            "Name it with --account <address>, or pass --all for every account."
+        )
+
+    def http_detail(self) -> dict:
+        """The body of the HTTP 409 for this error: the choices, and a message
+        without CLI flags."""
+        return {
+            "error": "account_choice_required",
+            "connector_id": self.connector_id,
+            "choices": self.choices,
+            "message": (
+                f"{self.connector_id} has {len(self.choices)} connected accounts "
+                f"({', '.join(self.choices)}). Choose one to {self.action}, or "
+                f"{self.action} them all."
+            ),
+        }
+
+
 class ScopeMismatchError(ConnectorsError):
     """Stored connection lacks scopes required by the request."""
 
@@ -325,7 +386,7 @@ class ConsentDeniedError(ConnectorsError):
 
 
 class FlowTimeoutError(ConnectorsError):
-    """OAuth flow exceeded its 120-second callback timeout."""
+    """OAuth flow's browser sign-in window lapsed before the callback."""
 
 
 class FlowInProgressError(ConnectorsError):
@@ -376,7 +437,7 @@ class UnknownAgentError(ConnectorsError):
         self.agent_ids = list(agent_ids)
         super().__init__(
             f"Unknown agent id(s): {', '.join(self.agent_ids)}. Check the "
-            "namespaced agent id (e.g. 'installed:email') via `gaia connectors "
+            "namespaced agent id (e.g. 'installed:gaia') via `gaia connectors "
             "grants list` or the Agent UI's agent picker."
         )
 

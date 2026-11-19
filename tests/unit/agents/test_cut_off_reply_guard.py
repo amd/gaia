@@ -14,7 +14,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gaia import cli_agent
 from gaia.agents.base.agent import (
+    _CUT_OFF_ALL_THINKING_PROMPT,
+    _CUT_OFF_CONTINUE_PROMPT,
     _CUT_OFF_FAILURE_ANSWER,
     _MAX_CUT_OFF_CONTINUATIONS,
     Agent,
@@ -99,6 +102,18 @@ class _DummyAgent(Agent):
         from gaia.agents.base.console import AgentConsole
 
         return AgentConsole()
+
+
+@pytest.fixture(autouse=True)
+def _no_edit_verification(monkeypatch):
+    """Opt out of the post-edit read-back.
+
+    ``_register_edit_file`` below is a stub that records a path and writes
+    nothing, so the read-back would correctly report that file missing and
+    spend a repair step on it. These tests pin the loop's exact model-call
+    count for the cut-off guard, which that extra call would move.
+    """
+    monkeypatch.setenv("GAIA_AGENT_VERIFY_EDITS", "0")
 
 
 @pytest.fixture
@@ -235,6 +250,92 @@ def test_complete_streamed_reply_is_not_reprompted(agent):
     assert _final(result) == answer
 
 
+def test_empty_cut_off_reply_is_continued(agent):
+    # Claude returns "" with finish_reason "length" when thinking used the budget.
+    sent = _stub_chat(
+        agent,
+        ("", "length"),
+        ("gfx90a is the MI200 series.", "stop"),
+    )
+
+    result = agent.process_query("What about gfx90a?", max_steps=10)
+
+    assert len(sent) == 2
+    assert "cut off at the output-token limit" in sent[1][-1]["content"]
+    assert _final(result) == "gfx90a is the MI200 series."
+
+
+def _stub_thinking_chat(agent, *replies):
+    """``replies`` are ``(text, finish_reason, reasoning, stats)``, served in order."""
+    replies = list(replies)
+    sent = []
+
+    def _send(messages, *_, **__):
+        sent.append([dict(m) for m in messages])
+        text, finish_reason, reasoning, stats = replies.pop(0)
+        resp = MagicMock()
+        resp.text = text
+        resp.stats = stats
+        resp.reasoning = reasoning
+        resp.finish_reason = finish_reason
+        return resp
+
+    agent.chat = MagicMock()
+    agent.chat.send_messages = MagicMock(side_effect=_send)
+    return sent
+
+
+_DONE = ("gfx90a is the MI200 series.", "stop", None, {})
+
+
+@pytest.mark.parametrize(
+    "reasoning, stats",
+    [
+        ("Let me work out every case first...", {}),
+        (None, {"reasoning_tokens": 32768}),  # counted, text not returned
+    ],
+)
+def test_a_reply_that_was_all_thinking_is_told_to_act_not_to_continue(
+    agent, reasoning, stats
+):
+    """Thinking is not carried over, so "continue" restarts it and it runs out again.
+
+    Two real turns ended this way: three replies in a row spent all 32,768
+    output tokens on reasoning, and the turn failed with nothing done.
+    """
+    sent = _stub_thinking_chat(agent, ("", "length", reasoning, stats), _DONE)
+
+    agent.process_query("What about gfx90a?", max_steps=10)
+
+    nudge = sent[1][-1]["content"]
+    assert nudge == _CUT_OFF_ALL_THINKING_PROMPT
+    assert "whole limit went on thinking" in nudge
+    assert "make one tool call now" in nudge
+
+
+def test_an_empty_cut_off_with_no_thinking_is_not_blamed_on_thinking(agent):
+    """A full context window also ends a reply empty at finish_reason=length."""
+    sent = _stub_thinking_chat(
+        agent, ("", "length", None, {"reasoning_tokens": 0}), _DONE
+    )
+
+    agent.process_query("What about gfx90a?", max_steps=10)
+
+    assert sent[1][-1]["content"] == _CUT_OFF_CONTINUE_PROMPT
+
+
+def test_a_reply_cut_off_mid_text_is_still_asked_to_continue(agent):
+    sent = _stub_chat(
+        agent,
+        (TR8319_CB_REPLY, "length"),
+        ("Added trigger_test_label_only to gfx90a.", "stop"),
+    )
+
+    agent.process_query("Fix gfx90a PR testing", max_steps=20)
+
+    assert sent[1][-1]["content"] == _CUT_OFF_CONTINUE_PROMPT
+
+
 def test_repeated_cut_offs_end_with_an_honest_failure(agent):
     replies = [(TR8319_CB_REPLY, "length")] * (_MAX_CUT_OFF_CONTINUATIONS + 3)
     sent = _stub_chat(agent, *replies)
@@ -242,7 +343,7 @@ def test_repeated_cut_offs_end_with_an_honest_failure(agent):
     result = agent.process_query("Fix gfx90a PR testing", max_steps=20)
 
     assert len(sent) == _MAX_CUT_OFF_CONTINUATIONS + 1
-    assert _final(result) == _CUT_OFF_FAILURE_ANSWER
+    assert _final(result).startswith(_CUT_OFF_FAILURE_ANSWER)
 
 
 def test_cut_off_on_the_last_step_is_an_honest_failure(agent):
@@ -251,7 +352,129 @@ def test_cut_off_on_the_last_step_is_an_honest_failure(agent):
     result = agent.process_query("Fix gfx90a PR testing", max_steps=1)
 
     assert len(sent) == 1
-    assert _final(result) == _CUT_OFF_FAILURE_ANSWER
+    assert _final(result).startswith(_CUT_OFF_FAILURE_ANSWER)
+
+
+def _cut_off_after_work(agent, usage):
+    """One edit, then every reply cut off: the long-horizon run's shape."""
+    _register_edit_file(agent)
+    edit = json.loads(EDIT_CALL)
+    edit["thought"] = "Rows 1-200 checked: 3 are short."
+    replies = [(json.dumps(edit), "tool_calls")] + [(TR8319_CB_REPLY, "length")] * (
+        _MAX_CUT_OFF_CONTINUATIONS + 1
+    )
+    sent = _stub_chat(agent, *replies)
+    agent.chat.send_messages.side_effect = _with_usage(
+        agent.chat, agent.chat.send_messages.side_effect, usage
+    )
+    agent.console.print_final_answer = MagicMock()
+    return sent
+
+
+def _with_usage(chat, send, usage):
+    """Replies carry *usage*, and each call is timed as the chat SDK times it."""
+
+    def _send(*args, **kwargs):
+        resp = send(*args, **kwargs)
+        resp.stats = dict(usage)
+        chat.llm_call_sink(
+            {
+                "seconds": 1.0,
+                "finish_reason": resp.finish_reason,
+                "completion_tokens": usage.get("completion_tokens"),
+            }
+        )
+        return resp
+
+    return _send
+
+
+def test_the_give_up_speaks_in_app_terms(agent):
+    _cut_off_after_work(agent, {})
+
+    result = agent.process_query("Inventory every file", max_steps=20)
+
+    answer = _final(result)
+    assert "max_tokens" not in answer
+    assert "output-token limit" not in answer
+    assert "smaller parts" in answer
+
+
+def test_the_give_up_keeps_what_was_done(agent):
+    _cut_off_after_work(agent, {})
+
+    result = agent.process_query("Inventory every file", max_steps=20)
+
+    answer = _final(result)
+    assert "edit_file: 1x" in answer
+    # The model's last finished words, so its progress isn't lost; never the
+    # cut-off fragments themselves.
+    assert "Rows 1-200 checked: 3 are short." in answer
+    assert "Now I understand the structure." not in answer
+
+
+def test_the_give_up_is_shown_with_the_turns_token_counts(agent):
+    usage = {"prompt_tokens": 30000, "completion_tokens": 8192}
+    _cut_off_after_work(agent, usage)
+
+    result = agent.process_query("Inventory every file", max_steps=20)
+
+    calls = _MAX_CUT_OFF_CONTINUATIONS + 2
+    agent.console.print_final_answer.assert_called_once()
+    printed = agent.console.print_final_answer.call_args
+    assert printed.kwargs["input_tokens"] == 30000 * calls
+    assert printed.kwargs["total_tokens"] == 8192 * calls
+    assert result["input_tokens"] == 30000 * calls
+    assert result["model_failed"] is True
+
+
+def test_repeated_cut_offs_fail_the_turn_and_the_live_gate(agent):
+    _stub_chat(agent, *[(TR8319_CB_REPLY, "length")] * (_MAX_CUT_OFF_CONTINUATIONS + 3))
+
+    result = agent.process_query("Fix gfx90a PR testing", max_steps=20)
+
+    assert result["model_failed"] is True
+    reason, remedy = cli_agent._failed_response(result)
+    assert "cut off at the output-token limit" in reason
+    assert remedy == cli_agent._UNUSABLE_REMEDY
+
+
+def test_a_recovered_cut_off_passes_the_live_gate(agent):
+    _stub_chat(agent, (TR8319_CB_REPLY, "length"), ("gfx90a is MI200.", "stop"))
+
+    result = agent.process_query("What about gfx90a?", max_steps=10)
+
+    assert result["model_failed"] is False
+    assert cli_agent._failed_response(result) is None
+
+
+BAD_TOOL_CALL = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
+
+
+def test_unparsable_replies_the_agent_gave_up_on_fail_the_live_gate(agent):
+    _stub_chat(agent, *[(BAD_TOOL_CALL, "stop")] * 3)
+
+    result = agent.process_query("test", max_steps=10)
+
+    reason, _ = cli_agent._failed_response(result)
+    assert reason.startswith("the model never gave a usable reply")
+
+
+def test_an_unparsable_reply_that_was_retried_passes_the_live_gate(agent):
+    good = json.dumps({"thought": "Done.", "answer": "All good."})
+    _stub_chat(agent, (BAD_TOOL_CALL, "stop"), (good, "stop"))
+
+    result = agent.process_query("test", max_steps=10)
+
+    assert cli_agent._failed_response(result) is None
+
+
+def test_a_parse_error_before_the_step_cap_answer_passes_the_live_gate(agent):
+    good = json.dumps({"thought": "Done.", "answer": "gfx90a is MI200."})
+    _stub_chat(agent, (BAD_TOOL_CALL, "stop"), (good, "stop"))
+    result = agent.process_query("test", max_steps=1)
+    assert result["max_steps_reached"] is True
+    assert cli_agent._failed_response(result) is None
 
 
 CONTROLS = [

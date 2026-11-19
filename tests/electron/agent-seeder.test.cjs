@@ -341,16 +341,17 @@ describe("agent-seeder", () => {
   });
 });
 
-// ── Marker-based deletion honoring + legacy zoo-agent cleanup ────────────
+// ── Marker-based deletion honoring + legacy demo-agent cleanup ───────────
 //
 // Contract under test (issue #1908):
 //   - A per-agent marker file at `<home>/.gaia/seeder/<id>.seeded` records
 //     "this machine seeded <id> once". Its EXISTENCE is the signal — content
 //     is informational only and never asserted on here.
 //   - Marker present → never re-seed, even after the user deletes the agent.
-//   - A legacy `~/.gaia/agents/zoo-agent` left by older installs is cleaned
-//     up once (guarded: sentinel required, no user modifications, never
-//     through a symlink) and reported via the new additive `cleaned` array.
+//   - A legacy `~/.gaia/agents/zoo-agent` or `example-agent` left by older
+//     installs is cleaned up once (guarded: sentinel required, no user
+//     modifications, never through a symlink, never while still bundled) and
+//     reported via the additive `cleaned` array.
 
 describe("marker-based deletion honoring + legacy cleanup", () => {
   afterEach(() => {
@@ -382,14 +383,14 @@ describe("marker-based deletion honoring + legacy cleanup", () => {
   }
 
   /**
-   * Plant a legacy seeded zoo-agent at `<home>/.gaia/agents/zoo-agent` with
-   * a valid `.seeded` sentinel whose `seededAt` lies one hour in the past.
-   * Every file's mtime is pinned to `seededAt` (unmodified-since-seed shape).
+   * Plant a legacy seeded agent at `<home>/.gaia/agents/<id>` with a valid
+   * `.seeded` sentinel whose `seededAt` lies one hour in the past. Every
+   * file's mtime is pinned to `seededAt` (unmodified-since-seed shape).
    * Returns { dir, seededAt }.
    */
-  function createLegacyZooAgent(fakeHome) {
+  function createLegacySeededAgent(fakeHome, id) {
     const seededAt = new Date(Date.now() - 60 * 60 * 1000);
-    const dir = agentDirPath(fakeHome, "zoo-agent");
+    const dir = agentDirPath(fakeHome, id);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "agent.py"), "print('zoo')\n");
     fs.writeFileSync(path.join(dir, "manifest.json"), "{}");
@@ -404,41 +405,41 @@ describe("marker-based deletion honoring + legacy cleanup", () => {
     return { dir, seededAt };
   }
 
-  test("AC1 fresh install — seeds example-agent, writes sentinel and marker", async () => {
+  test("AC1 fresh install — seeds a bundled agent, writes sentinel and marker", async () => {
     const { fakeHome, fakeResources } = makeSandbox();
-    createBundledAgent(fakeResources, "example-agent", {
-      "agent.py": "class ExampleAgent: pass\n",
+    createBundledAgent(fakeResources, "oem-agent", {
+      "agent.py": "class OemAgent: pass\n",
     });
 
     const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
     const result = await seeder.seedBundledAgents();
 
-    expect(result.seeded).toEqual(["example-agent"]);
+    expect(result.seeded).toEqual(["oem-agent"]);
     expect(result.errors).toEqual([]);
 
-    const target = agentDirPath(fakeHome, "example-agent");
+    const target = agentDirPath(fakeHome, "oem-agent");
     expect(fs.existsSync(path.join(target, "agent.py"))).toBe(true);
     expect(fs.existsSync(path.join(target, ".seeded"))).toBe(true);
-    expect(fs.existsSync(markerPath(fakeHome, "example-agent"))).toBe(true);
+    expect(fs.existsSync(markerPath(fakeHome, "oem-agent"))).toBe(true);
   });
 
   test("AC2 deletion honored — deleted agent is never re-seeded while marker survives", async () => {
     const { fakeHome, fakeResources } = makeSandbox();
-    createBundledAgent(fakeResources, "example-agent");
+    createBundledAgent(fakeResources, "oem-agent");
 
     const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
     const first = await seeder.seedBundledAgents();
-    expect(first.seeded).toEqual(["example-agent"]);
+    expect(first.seeded).toEqual(["oem-agent"]);
 
     // User deletes the seeded agent (marker left in place).
-    const target = agentDirPath(fakeHome, "example-agent");
+    const target = agentDirPath(fakeHome, "oem-agent");
     fs.rmSync(target, { recursive: true, force: true });
 
     const second = await seeder.seedBundledAgents();
     expect(second.seeded).toEqual([]);
-    expect(second.skipped).toContain("example-agent");
+    expect(second.skipped).toContain("oem-agent");
     expect(fs.existsSync(target)).toBe(false);
-    expect(fs.existsSync(markerPath(fakeHome, "example-agent"))).toBe(true);
+    expect(fs.existsSync(markerPath(fakeHome, "oem-agent"))).toBe(true);
   });
 
   test("AC3 back-fill — pre-marker install gets a marker, then deletion is honored", async () => {
@@ -527,7 +528,7 @@ describe("marker-based deletion honoring + legacy cleanup", () => {
   test("AC6 legacy cleanup — unmodified seeded zoo-agent is removed exactly once", async () => {
     const { fakeHome, fakeResources } = makeSandbox();
     ensureBundleRoot(fakeResources); // zoo-agent is NOT bundled anymore
-    const { dir } = createLegacyZooAgent(fakeHome);
+    const { dir } = createLegacySeededAgent(fakeHome, "zoo-agent");
 
     const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
     const first = await seeder.seedBundledAgents();
@@ -543,7 +544,7 @@ describe("marker-based deletion honoring + legacy cleanup", () => {
   test("legacy cleanup — regenerated __pycache__ does not count as a user modification", async () => {
     const { fakeHome, fakeResources } = makeSandbox();
     ensureBundleRoot(fakeResources);
-    const { dir } = createLegacyZooAgent(fakeHome);
+    const { dir } = createLegacySeededAgent(fakeHome, "zoo-agent");
 
     // The agent registry exec_module-loads agent.py on every backend
     // startup, regenerating __pycache__ with a fresh mtime — that is not
@@ -563,7 +564,7 @@ describe("marker-based deletion honoring + legacy cleanup", () => {
   test("AC7 legacy cleanup — user-modified zoo-agent is preserved", async () => {
     const { fakeHome, fakeResources } = makeSandbox();
     ensureBundleRoot(fakeResources);
-    const { dir, seededAt } = createLegacyZooAgent(fakeHome);
+    const { dir, seededAt } = createLegacySeededAgent(fakeHome, "zoo-agent");
 
     // One file modified well past seededAt + 5s slack → user's work now.
     const late = new Date(seededAt.getTime() + 60 * 1000);
@@ -611,7 +612,7 @@ describe("marker-based deletion honoring + legacy cleanup", () => {
   test("AC9 cleanup failure isolation — EPERM on rmSync does not block seeding", async () => {
     const { fakeHome, fakeResources } = makeSandbox();
     createBundledAgent(fakeResources, "goodagent");
-    const { dir } = createLegacyZooAgent(fakeHome);
+    const { dir } = createLegacySeededAgent(fakeHome, "zoo-agent");
 
     // Simulate a Windows-style file lock: rmSync throws only for zoo-agent
     // paths; every other call falls through to the real implementation.
@@ -639,32 +640,32 @@ describe("marker-based deletion honoring + legacy cleanup", () => {
     ).toBe(true);
   });
 
-  test("AC10 upgrade in one pass — zoo cleaned AND example-agent seeded in a single run", async () => {
+  test("AC10 upgrade in one pass — zoo cleaned AND bundled agent seeded in a single run", async () => {
     const { fakeHome, fakeResources } = makeSandbox();
-    createBundledAgent(fakeResources, "example-agent", {
-      "agent.py": "class ExampleAgent: pass\n",
+    createBundledAgent(fakeResources, "oem-agent", {
+      "agent.py": "class OemAgent: pass\n",
     });
-    const { dir: zooDir } = createLegacyZooAgent(fakeHome);
+    const { dir: zooDir } = createLegacySeededAgent(fakeHome, "zoo-agent");
 
     const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
     const result = await seeder.seedBundledAgents();
 
     expect(result.cleaned).toEqual(["zoo-agent"]);
-    expect(result.seeded).toEqual(["example-agent"]);
+    expect(result.seeded).toEqual(["oem-agent"]);
     expect(fs.existsSync(zooDir)).toBe(false);
 
-    const target = agentDirPath(fakeHome, "example-agent");
+    const target = agentDirPath(fakeHome, "oem-agent");
     expect(fs.existsSync(path.join(target, ".seeded"))).toBe(true);
-    expect(fs.existsSync(markerPath(fakeHome, "example-agent"))).toBe(true);
+    expect(fs.existsSync(markerPath(fakeHome, "oem-agent"))).toBe(true);
   });
 
   test("AC11 reset semantics — agents/ wipe stays deleted; seeder/ wipe re-seeds", async () => {
     const { fakeHome, fakeResources } = makeSandbox();
-    createBundledAgent(fakeResources, "example-agent");
+    createBundledAgent(fakeResources, "oem-agent");
 
     const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
     const first = await seeder.seedBundledAgents();
-    expect(first.seeded).toEqual(["example-agent"]);
+    expect(first.seeded).toEqual(["oem-agent"]);
 
     // Wipe ~/.gaia/agents entirely — markers live outside it and survive.
     fs.rmSync(path.join(fakeHome, ".gaia", "agents"), {
@@ -674,8 +675,8 @@ describe("marker-based deletion honoring + legacy cleanup", () => {
 
     const second = await seeder.seedBundledAgents();
     expect(second.seeded).toEqual([]);
-    expect(second.skipped).toContain("example-agent");
-    expect(fs.existsSync(agentDirPath(fakeHome, "example-agent"))).toBe(false);
+    expect(second.skipped).toContain("oem-agent");
+    expect(fs.existsSync(agentDirPath(fakeHome, "oem-agent"))).toBe(false);
 
     // Deleting the marker root is the documented recovery path.
     fs.rmSync(path.join(fakeHome, ".gaia", "seeder"), {
@@ -684,13 +685,97 @@ describe("marker-based deletion honoring + legacy cleanup", () => {
     });
 
     const third = await seeder.seedBundledAgents();
-    expect(third.seeded).toEqual(["example-agent"]);
+    expect(third.seeded).toEqual(["oem-agent"]);
     expect(
-      fs.existsSync(path.join(agentDirPath(fakeHome, "example-agent"), ".seeded"))
+      fs.existsSync(path.join(agentDirPath(fakeHome, "oem-agent"), ".seeded"))
     ).toBe(true);
   });
 
-  test("AC12 identity — bundled example-agent exists and no zoo persona remains", () => {
+  test("AC13 legacy cleanup — unmodified seeded example-agent is removed with zoo-agent", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    ensureBundleRoot(fakeResources);
+    const { dir: zooDir } = createLegacySeededAgent(fakeHome, "zoo-agent");
+    const { dir: exampleDir } = createLegacySeededAgent(fakeHome, "example-agent");
+    writeMarker(fakeHome, "example-agent");
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const first = await seeder.seedBundledAgents();
+
+    expect(first.cleaned.sort()).toEqual(["example-agent", "zoo-agent"]);
+    expect(fs.existsSync(zooDir)).toBe(false);
+    expect(fs.existsSync(exampleDir)).toBe(false);
+
+    const second = await seeder.seedBundledAgents();
+    expect(second.cleaned).toEqual([]);
+    expect(second.seeded).toEqual([]);
+    expect(fs.existsSync(exampleDir)).toBe(false);
+  });
+
+  test("AC14 legacy cleanup — user-modified example-agent is preserved", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    ensureBundleRoot(fakeResources);
+    const { dir, seededAt } = createLegacySeededAgent(fakeHome, "example-agent");
+
+    const late = new Date(seededAt.getTime() + 60 * 1000);
+    fs.writeFileSync(path.join(dir, "notes.md"), "my edits");
+    fs.utimesSync(path.join(dir, "notes.md"), late, late);
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const result = await seeder.seedBundledAgents();
+
+    expect(result.cleaned).toEqual([]);
+    expect(fs.readFileSync(path.join(dir, "notes.md"), "utf8")).toBe("my edits");
+  });
+
+  test("AC15 legacy cleanup — example-agent without a sentinel is user-authored and kept", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    ensureBundleRoot(fakeResources);
+    const dir = agentDirPath(fakeHome, "example-agent");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "agent.py"), "class Mine: pass\n");
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const result = await seeder.seedBundledAgents();
+
+    expect(result.cleaned).toEqual([]);
+    expect(fs.existsSync(path.join(dir, "agent.py"))).toBe(true);
+  });
+
+  test("AC16 a retired id this build still bundles is never cleaned, across launches", async () => {
+    // A custom installer built from the old playbook bundles its own
+    // example-agent. Cleaning it would leave a marker that blocks the
+    // re-seed, so the agent would vanish after the first launch.
+    const { fakeHome, fakeResources } = makeSandbox();
+    createBundledAgent(fakeResources, "example-agent", {
+      "agent.py": "class OemExample: pass\n",
+    });
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const first = await seeder.seedBundledAgents();
+    expect(first.seeded).toEqual(["example-agent"]);
+    expect(first.cleaned).toEqual([]);
+
+    // Age the seeded copy so it looks exactly like an unmodified legacy seed.
+    const target = agentDirPath(fakeHome, "example-agent");
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    fs.writeFileSync(
+      path.join(target, ".seeded"),
+      JSON.stringify({ seededAt: old.toISOString(), source: "test" })
+    );
+    for (const name of ["agent.py", ".seeded"]) {
+      fs.utimesSync(path.join(target, name), old, old);
+    }
+
+    for (let run = 0; run < 2; run += 1) {
+      const next = await seeder.seedBundledAgents();
+      expect(next.cleaned).toEqual([]);
+      expect(fs.readFileSync(path.join(target, "agent.py"), "utf8")).toBe(
+        "class OemExample: pass\n"
+      );
+    }
+  });
+
+  test("AC12 identity — the stock installer bundles no agents and no retired persona", () => {
     const bundledRoot = path.join(
       __dirname,
       "..",
@@ -703,15 +788,14 @@ describe("marker-based deletion honoring + legacy cleanup", () => {
       "bundled-agents"
     );
 
-    const agentPy = path.join(bundledRoot, "example-agent", "agent.py");
-    expect(fs.existsSync(agentPy)).toBe(true);
+    // The staging dir stays (electron-builder's extraResources reads it, and
+    // custom installers drop agents into it) but ships no agent of its own.
+    const agentDirs = fs
+      .readdirSync(bundledRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    expect(agentDirs).toEqual([]);
 
-    const content = fs.readFileSync(agentPy, "utf8");
-    expect(content).toContain("class ExampleAgent");
-    expect(content).toContain('AGENT_ID = "example-agent"');
-    expect(content).toContain('AGENT_NAME = "Example Agent"');
-
-    // No file anywhere under bundled-agents/ may carry the zoo persona.
     function walkFiles(root) {
       const out = [];
       for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
@@ -723,7 +807,7 @@ describe("marker-based deletion honoring + legacy cleanup", () => {
     }
 
     const offenders = walkFiles(bundledRoot).filter((p) =>
-      /zoo/i.test(fs.readFileSync(p, "utf8"))
+      /zoo|example-agent/i.test(fs.readFileSync(p, "utf8"))
     );
     expect(offenders).toEqual([]);
   });

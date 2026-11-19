@@ -15,20 +15,17 @@ _NON_BACKEND_COMMANDS = [
     ["download"],
     ["stats"],
     ["test", "--test-type", "tts-preprocessing"],
-    ["youtube"],
-    ["report"],
+    ["youtube", "--download-transcript", "u"],
     ["perf-vis", "server.log"],
     ["schedule"],
     ["telegram"],
     ["slack"],
     ["mcp"],
     ["mcp", "start"],
-    ["install"],
     ["uninstall"],
     ["eval"],
     ["llm", "hi"],
     ["api", "status"],
-    ["email"],
 ]
 
 _CLAUDE_AND_LOOP_FLAGS = [
@@ -68,7 +65,7 @@ def test_non_agent_commands_reject_backend_flags(argv, flag, capsys):
         ["kill", "--port", "1", "--base-url", "http://h:1/api/v1"],
         ["download", "--model", "m"],
         ["eval", "--model", "m"],
-        ["report", "--trace"],
+        ["perf-vis", "server.log", "--trace"],
         ["mcp", "--base-url", "http://h:1/api/v1"],
     ],
     ids=" ".join,
@@ -108,7 +105,6 @@ def test_agent_loop_flags_rejected_outside_chat(argv, capsys):
         ),
         (["talk", "--use-claude", "--model", "m"], {"use_claude": True, "model": "m"}),
         (["llm", "hi", "--model", "m", "--base-url", "u"], {"model": "m"}),
-        (["email", "--model", "m", "--base-url", "u", "--trace"], {"trace": True}),
         (["api", "start", "--base-url", "u"], {"base_url": "u"}),
         (["mcp", "start", "--base-url", "u"], {"base_url": "u"}),
         (["stats", "--base-url", "u"], {"base_url": "u"}),
@@ -164,7 +160,6 @@ _LLM_BACKEND_COMMANDS = [
     ["prompt", "hi"],
     ["talk"],
     ["llm", "hi"],
-    ["email"],
 ]
 
 

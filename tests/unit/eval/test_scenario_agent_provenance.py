@@ -66,11 +66,11 @@ def test_agreement_records_both_ids_and_preserves_status():
 def test_dropped_kwarg_is_caught_and_fails_the_scenario():
     # The driver was told to create a `gaia` session and didn't; the backend
     # default answered instead. Scoring that as a `gaia` PASS is the bug.
-    result = _stamp(_passing_result(), {"id": "s"}, "gaia", observed="chat")
+    result = _stamp(_passing_result(), {"id": "s"}, "gaia", observed="email")
     assert result["status"] == "INFRA_ERROR"
     assert result["agent_type_requested"] == "gaia"
-    assert result["agent_type_observed"] == "chat"
-    assert "gaia" in result["error"] and "chat" in result["error"]
+    assert result["agent_type_observed"] == "email"
+    assert "gaia" in result["error"] and "email" in result["error"]
 
 
 def test_a_stray_scenario_agent_type_does_not_override_the_run():
@@ -132,14 +132,14 @@ def test_unverifiable_does_not_overwrite_a_more_specific_status():
 
 
 def test_a_mismatch_overrides_even_a_more_specific_status():
-    # "the architecture blocks gaia" is a false claim if chat answered.
+    # "the architecture blocks gaia" is a false claim if email answered.
     result = {
         "scenario_id": "s",
         "status": "BLOCKED_BY_ARCHITECTURE",
         "session_id": "sess-1",
         "turns": [{"turn": 1}],
     }
-    _stamp(result, {"id": "s"}, "gaia", observed="chat")
+    _stamp(result, {"id": "s"}, "gaia", observed="email")
     assert result["status"] == "INFRA_ERROR"
 
 
@@ -257,6 +257,8 @@ def test_read_back_raises_on_an_http_error(monkeypatch):
 
 
 def test_canonical_agent_type_resolves_aliases_without_discovery():
-    assert _canonical_agent_type("doc-lite") == "doc"
+    # ChatAgent's ids fold into the flagship (#6099).
+    assert _canonical_agent_type("doc-lite") == "gaia"
+    assert _canonical_agent_type("chat") == "gaia"
     assert _canonical_agent_type("gaia") == "gaia"
     assert _canonical_agent_type(None) is None

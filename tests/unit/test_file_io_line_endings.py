@@ -237,3 +237,102 @@ def test_replace_function_does_not_mix_line_endings_in_a_crlf_file(agent, tmp_pa
     assert result["status"] == "success"
     _crlf, lone_lf = _eols(target)
     assert lone_lf == 0, "replace_function left the file with mixed line endings"
+
+
+def test_a_direct_match_does_not_mix_line_endings_in_a_crlf_file(agent, tmp_path):
+    """A single-line ``old_content`` matches a CRLF file as-is, with no retry.
+    The multi-line LF replacement must still be converted to CRLF."""
+    target = tmp_path / "crlf.py"
+    _write(target, CRLF_SOURCE)
+    _tool("read_file")(file_path=str(target))
+
+    result = _tool("edit_file")(
+        file_path=str(target),
+        old_content="    return 1",
+        new_content="    x = 1\n    return x",
+    )
+
+    assert result["status"] == "success"
+    crlf, lone_lf = _eols(target)
+    assert lone_lf == 0, "the direct-match edit left the file with mixed endings"
+    assert crlf == CRLF_SOURCE.count("\r\n") + 1
+    assert b"    x = 1\r\n    return x\r\n" in target.read_bytes()
+
+
+# ------------------------------------------------------------- generate_diff
+
+
+def test_generate_diff_of_a_crlf_file_shows_only_the_changed_line(agent, tmp_path):
+    """The model's text is LF; diffing it against a CRLF file must not report
+    every line as deleted and re-added."""
+    target = tmp_path / "crlf.py"
+    _write(target, CRLF_SOURCE)
+
+    result = _tool("generate_diff")(
+        file_path=str(target), new_content=LF_SOURCE.replace("return 1", "return 11")
+    )
+
+    assert result["status"] == "success"
+    assert result["additions"] == 1
+    assert result["deletions"] == 1
+
+
+def test_generate_diff_of_an_unchanged_crlf_file_has_no_changes(agent, tmp_path):
+    target = tmp_path / "crlf.py"
+    _write(target, CRLF_SOURCE)
+
+    result = _tool("generate_diff")(file_path=str(target), new_content=LF_SOURCE)
+
+    assert result["status"] == "success"
+    assert result["has_changes"] is False
+
+
+def test_a_deliberate_crlf_to_lf_edit_is_kept(agent, tmp_path):
+    """An ``old_content`` that spells out CRLF is a deliberate line-ending
+    edit; converting the LF replacement back would make it a silent no-op."""
+    target = tmp_path / "mixed.txt"
+    _write(target, "a\r\nb\n")
+    _tool("read_file")(file_path=str(target))
+
+    result = _tool("edit_file")(
+        file_path=str(target), old_content="a\r\n", new_content="a\n"
+    )
+
+    assert result["status"] == "success"
+    assert target.read_bytes() == b"a\nb\n"
+
+
+MIXED_SOURCE = "header\r\ndef f():\n    a = 1\n    return a\n"
+
+
+@pytest.mark.parametrize(
+    "old_content, new_content, expected",
+    [
+        (
+            "    a = 1\n    return a",
+            "    a = 2\n    return a",
+            "header\r\ndef f():\n    a = 2\n    return a\n",
+        ),
+        (
+            "    return a",
+            "    b = 2\n    return b",
+            "header\r\ndef f():\n    a = 1\n    b = 2\n    return b\n",
+        ),
+    ],
+    ids=["multi-line", "single-line"],
+)
+def test_an_lf_edit_in_a_mostly_lf_file_stays_lf(
+    agent, tmp_path, old_content, new_content, expected
+):
+    """One stray CRLF line must not turn edits to the LF lines into CRLF: the
+    replacement follows the matched region's endings, not the whole file's."""
+    target = tmp_path / "mixed.py"
+    _write(target, MIXED_SOURCE)
+    _tool("read_file")(file_path=str(target))
+
+    result = _tool("edit_file")(
+        file_path=str(target), old_content=old_content, new_content=new_content
+    )
+
+    assert result["status"] == "success"
+    assert target.read_bytes() == expected.encode("utf-8")

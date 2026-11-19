@@ -5,14 +5,14 @@ icon: "folder-magnifying-glass"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/code_index/`](https://github.com/amd/gaia/blob/main/src/gaia/code_index/) and [`src/gaia/agents/code_index/tools/mixin.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code_index/tools/mixin.py)
+  **Source Code:** [`src/gaia/code_index/`](https://github.com/amd/gaia/blob/main/src/gaia/code_index/) and [`src/gaia/agents/tools/code_index_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/code_index_tools.py)
 </Info>
 
 <Note>
   **Looking for the API?** See the [Code Index SDK Reference](/sdk/sdks/code-index) for `CodeIndexSDK`, `CodeIndexConfig`, and `CodeIndexToolsMixin`.
 </Note>
 
-GAIA's Code Index gives you fast semantic search over a repository without sending source to the cloud. It parses files into symbol-level chunks, embeds them via Lemonade Server on AMD NPU/GPU hardware, and stores them in a local FAISS index for sub-second queries.
+GAIA's Code Index gives you fast semantic search over a repository without sending source to the cloud. It parses files into symbol-level chunks, embeds them via Lemonade Server on your GPU (CPU fallback), and stores them in a local FAISS index for sub-second queries.
 
 The index is exposed two ways:
 
@@ -25,8 +25,8 @@ The index is exposed two ways:
 
 | Aspect | Details |
 |--------|---------|
-| **Languages parsed** | Python (AST), JavaScript, TypeScript, Go, Rust, Java, C, C++ |
-| **Embeddings** | Local AMD NPU/GPU via Lemonade Server (`user.embeddinggemma-300m-GGUF` — EmbeddingGemma 300M, 768-dim — by default) |
+| **Languages parsed** | Python (AST), JavaScript, TypeScript, Go, Rust, Java, C, C++, Verilog, SystemVerilog, VHDL |
+| **Embeddings** | Local GPU (CPU fallback) via Lemonade Server (`user.embeddinggemma-300m-GGUF` — EmbeddingGemma 300M, 768-dim — by default) |
 | **Vector store** | FAISS `IndexFlatL2` |
 | **Cache** | `~/.gaia/code_index/<repo-hash>/` (atomic writes; incremental on file-hash) |
 | **Privacy** | All processing local; sensitive files (`.env`, `.pem`, `.key`, …) auto-excluded |
@@ -41,11 +41,15 @@ uv pip install -e '.[rag]'
 
 Embeddings are generated locally by Lemonade. If you haven't installed it yet, `gaia init` installs the server and pulls the model — `gaia daemon` starts and supervises it from there.
 
+<Warning>
+**Requires Lemonade Server v2026.44.1 or newer**, the oldest version GAIA supports for everything, not just the code index. `gaia init` refuses an older server and names the version it found. Upgrade as described in the [install guide](/guides/install).
+</Warning>
+
 <Note>
 The embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M). A cached index (under `~/.gaia/code_index/`) records the model it was built with, so an index built before v0.22.0 with `nomic-embed-text-v2-moe-GGUF` fails loudly with a model-mismatch error naming both models. Re-index to rebuild it with EmbeddingGemma.
 </Note>
 
-If FAISS or numpy are missing at runtime you'll see exactly:
+GAIA checks for FAISS and numpy before it reads or embeds repository files. If either is missing, it stops with:
 
 ```
 code_index dependencies missing. Install with: pip install -e '.[rag]'
@@ -125,7 +129,7 @@ See the [Code Index SDK Reference](/sdk/sdks/code-index) for the full `CodeIndex
     └── index.faiss      # FAISS IndexFlatL2 vectors
 ```
 
-Both files are written atomically (temp file + rename). The cache is keyed by the resolved repo path. If you switch embedding models the metadata mismatch is detected and `search()` raises a `ValueError` naming both models until you re-index (call `index_repository()`, or `clear_index()` first).
+Both files are written atomically (temp file + rename), and the metadata records a SHA-256 of the index file it was written with. If the two ever stop matching (an interrupted write, or a file copied from another index), `search()` raises `CodeIndexCacheError` and `get_status()` reports `indexed: False` with the reason. Re-index to rebuild. The cache is keyed by the resolved repo path. If you switch embedding models the metadata mismatch is detected and `search()` raises a `ValueError` naming both models until you re-index (call `index_repository()`, or `clear_index()` first).
 
 ## Privacy
 
@@ -138,22 +142,22 @@ The code-index stack has unit-test coverage in `tests/unit/test_code_index*.py` 
 Run them with:
 
 ```bash
-uv run python -m pytest tests/unit/test_code_index.py tests/unit/test_code_index_sdk.py tests/unit/test_code_index_mixin.py tests/unit/test_code_index_parsers.py -xvs
+python -m pytest tests/unit/test_code_index.py tests/unit/test_code_index_sdk.py tests/unit/test_code_index_mixin.py tests/unit/test_code_index_parsers.py -xvs
 ```
 
 Retrieval-quality benchmarks (precision/recall against curated queries) are tracked under [#868](https://github.com/amd/gaia/issues/868).
 
 ## Real-world benchmark
 
-Indexing the gaia repo itself against Lemonade Server's `user.embeddinggemma-300m-GGUF` embedding model:
+Indexing the gaia repo itself against Lemonade Server's `user.embeddinggemma-300m-GGUF` embedding model. The repo grows with every release, so treat the counts as a snapshot and re-run the snippet below for your checkout:
 
 | Metric | Value |
 |--------|-------|
-| Source files discovered | 973 |
-| Semantic chunks indexed | 23,974 |
+| Source files discovered | ~2,500 (2,544 in November 2026) |
+| Semantic chunks indexed | ~75,000 (75,112 in November 2026) |
 | Languages parsed | Python, JavaScript, TypeScript, Go, Rust, Java, C/C++ |
 | Embedding model | `user.embeddinggemma-300m-GGUF` (via Lemonade Server) |
-| Wall-clock (remote, ngrok) | ~51 min |
+| Wall-clock (remote, ngrok) | ~51 min, measured when the repo had 973 files and 23,974 chunks; expect longer now |
 
 ```python
 from gaia.code_index.sdk import CodeIndexConfig, CodeIndexSDK
@@ -162,10 +166,9 @@ sdk = CodeIndexSDK(CodeIndexConfig(repo_path=".", embedding_model="user.embeddin
 sdk.index_repository()
 ```
 
-The 51-minute figure is **network-bound** (embeddings sent to a remote Lemonade Server over an ngrok tunnel). On a local Ryzen AI setup the embedding step runs on the NPU and is substantially faster. For retrieval-quality metrics see [#868](https://github.com/amd/gaia/issues/868).
+The 51-minute figure predates the repo's growth and is **network-bound** (embeddings sent to a remote Lemonade Server over an ngrok tunnel). On a local setup the embedding model (a GGUF model run through llama.cpp) runs on the GPU, with a CPU fallback, so there is no network hop and it is substantially faster. For retrieval-quality metrics see [#868](https://github.com/amd/gaia/issues/868).
 
 ## Roadmap
 
 - [#869](https://github.com/amd/gaia/issues/869) — MCP server wrapper, so external code assistants can drive the index.
 - [#870](https://github.com/amd/gaia/issues/870) — Multi-repo indexing in a single namespace.
-- [#871](https://github.com/amd/gaia/issues/871) — Verilog / VHDL parsers for hardware-design codebases.

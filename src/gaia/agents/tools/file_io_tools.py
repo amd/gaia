@@ -2,7 +2,7 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-File I/O tools mixin for code agents.
+File I/O tools mixin.
 
 This module provides a mixin class with file I/O operations that can be
 inherited by agents that need file manipulation capabilities.
@@ -10,6 +10,7 @@ inherited by agents that need file manipulation capabilities.
 
 import ast
 import difflib
+import json
 import os
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -29,17 +30,28 @@ from gaia.agents.tools.document_text import (
 )
 from gaia.agents.tools.edit_impact import edit_impact
 from gaia.agents.tools.file_edit import (
+    after_excerpt,
     apply_unique_replacement,
     file_read_record,
+    masked_secret_refusal,
     read_first_preflight,
     stamp_of,
+    turn_of,
 )
-from gaia.agents.tools.path_access import missing_file_error, readable_entry
+from gaia.agents.tools.file_outline import outline_entries, render_outline
+from gaia.agents.tools.path_access import (
+    locked_file_error,
+    missing_file_error,
+    read_permission_error,
+    read_refusal,
+    readable_entry,
+)
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
 from gaia.agents.tools.workspace_paths import (
     _project_target_for,
     _resolve_target,
     _workspace_default,
+    _workspace_target,
 )
 from gaia.logger import get_logger
 from gaia.security import BackupError
@@ -105,10 +117,6 @@ def _python_syntax_error(path: Path, content: str) -> Optional[str]:
         # a successful write into a reported failure.
         return f"{e} — the file was saved but will not run. Fix it before answering."
     return None
-
-
-def _gaia_md_target(args: Dict[str, Any]) -> str:
-    return os.path.join(args.get("project_root", "."), "GAIA.md")
 
 
 def _directory_path_error(file_path: str) -> Dict[str, Any]:
@@ -319,6 +327,57 @@ def _line_window(
     return window
 
 
+def _outlined_if_oversized(host: Any, result: Dict[str, Any]) -> Optional[Dict]:
+    """A whole-file read too large for one tool result, as an outline plus its head.
+
+    ``None`` when the result fits the host's tool-result cap, the host has no
+    cap, or not even the first line fits; the caller's result stands then.
+    """
+    budget = getattr(host, "_truncation_budget", None)
+    if not callable(budget):
+        return None
+    threshold, target = budget()
+    if len(json.dumps(result, ensure_ascii=False, default=str)) <= threshold:
+        return None
+    # A file this turn wrote keeps the archived form: its pages prove a read-back.
+    evidence = getattr(host, "_completion_evidence", None)
+    files = getattr(evidence, "files", None) or {}
+    if files:
+        item = files.get(evidence.key(result["file_path"]))
+        if item is not None and item.written:
+            return None
+    content = result["content"]
+    lines = content.splitlines()
+    outline = render_outline(
+        outline_entries(content, str(result.get("file_type") or "")), target // 3
+    )
+    base = {k: v for k, v in result.items() if k not in ("content", "symbols")}
+    room = target - len(json.dumps(base, ensure_ascii=False)) - len(outline) - 600
+    while room >= 200:
+        window = _line_window(lines, 1, None, room)
+        end = window["end_line"]
+        shown = {
+            **base,
+            "outline": outline,
+            **{k: v for k, v in window.items() if k != "note"},
+            "note": (
+                f"Too large for one result ({len(content):,} chars, {len(lines)} "
+                f"lines): this is lines 1-{end}"
+                + (
+                    " and an outline of the whole file with line numbers"
+                    if outline
+                    else ""
+                )
+                + ". Read the part you need with start_line/end_line (up to "
+                f"{MAX_READ_LINES} lines per call); search_file_content finds a name."
+            ),
+        }
+        if len(json.dumps(shown, ensure_ascii=False, default=str)) <= target:
+            return shown
+        room //= 2
+    return None
+
+
 _PATH_VALIDATOR_HINT = "Set self.path_validator = <PathValidator instance>."
 _PATH_VALIDATOR_DOC_ANCHOR = "docs/spec/file-io-tools-mixin.mdx#host-agent-contract"
 
@@ -354,7 +413,7 @@ def _missing_path_validator_write_error(host: Any) -> Dict[str, Any]:
 
 
 class FileIOToolsMixin:
-    """Mixin class providing file I/O tools for code agents.
+    """Mixin class providing file I/O tools.
 
     This class provides a collection of file I/O operations as tools that can be
     registered and used by agents. It includes reading, writing, editing, searching,
@@ -428,7 +487,9 @@ class FileIOToolsMixin:
         def target_of(args: Dict[str, Any]) -> Path:
             return _project_target_for(self, args)
 
-        @tool
+        # read_file, write_file and edit_file replace FileSearchToolsMixin's
+        # (and FileSystemToolsMixin's read_file) when both are composed.
+        @tool(override=True)
         def read_file(
             file_path: str,
             offset: int = 0,
@@ -463,12 +524,15 @@ class FileIOToolsMixin:
                 # a private key safe to read into the conversation.
                 is_allowed, reason = path_validator.validate_read(file_path)
                 if not is_allowed:
-                    return {**NOT_EXECUTED, "status": "error", "error": reason}
+                    return read_refusal(reason)
 
                 if not os.path.exists(file_path):
                     return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
+                locked = locked_file_error(file_path)
+                if locked:
+                    return locked
 
                 unreadable = index_only_error(file_path)
                 if unreadable:
@@ -610,8 +674,13 @@ class FileIOToolsMixin:
                 else:
                     result["file_type"] = ext[1:] if ext else "text"
 
-                return result
+                return _outlined_if_oversized(self, result) or result
 
+            except PermissionError as e:
+                return read_permission_error(file_path) or {
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
@@ -672,7 +741,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path, "overwriting")
+                refusal = reads.refusal(
+                    file_path, "overwriting"
+                ) or masked_secret_refusal(file_path, {"content": content})
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -747,12 +818,13 @@ class FileIOToolsMixin:
 
             old_content must match exactly one location. Zero or several matches
             are errors that carry the file's current content, so a retry does not
-            need a separate read.
+            need a separate read. Repeating an edit already applied this turn
+            is refused.
 
             Args:
                 file_path: Path to the file to edit
                 old_content: Content to find and replace; must be unique in the file
-                new_content: New content to insert
+                new_content: Text that replaces old_content only, not the whole file
                 backup: Whether to create a backup
                 dry_run: Whether to only simulate the edit
 
@@ -809,7 +881,16 @@ class FileIOToolsMixin:
                     return _directory_path_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path)
+                refusal = (
+                    reads.refusal(file_path)
+                    or reads.repeat_refusal(
+                        file_path, old_content, new_content, turn_of(self)
+                    )
+                    or masked_secret_refusal(
+                        file_path,
+                        {"old_content": old_content, "new_content": new_content},
+                    )
+                )
                 if refusal is not None:
                     return refusal
 
@@ -867,6 +948,7 @@ class FileIOToolsMixin:
                 with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(modified_content)
                 reads.note(file_path)
+                reads.note_edit(file_path, old_content, new_content, turn_of(self))
 
                 # Audit successful edit
                 detail = (
@@ -928,7 +1010,7 @@ class FileIOToolsMixin:
                 Dictionary with search results
             """
             path_validator = _require_path_validator(self)
-            directory = os.path.expanduser(directory)
+            directory = str(_workspace_target(self, directory))
             try:
                 is_allowed, reason = path_validator.validate_read(directory)
                 if not is_allowed:
@@ -1008,6 +1090,10 @@ class FileIOToolsMixin:
                 new_content: New content to compare
                 context_lines: Number of context lines in diff
 
+            Both sides are compared with LF line endings, so a change that
+            only converts CRLF to LF (or back) reports ``has_changes: False``
+            even though writing ``new_content`` would change the file's bytes.
+
             Returns:
                 Dictionary with diff information
             """
@@ -1019,12 +1105,16 @@ class FileIOToolsMixin:
                 if not is_allowed:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
-                # Read original content
+                # Read original content. A diff is a preview, not a write round
+                # trip, so both sides are compared with LF endings: otherwise a
+                # CRLF file diffed against the model's LF text shows every line
+                # as changed.
                 if os.path.exists(file_path):
-                    with open(file_path, "r", encoding="utf-8", newline="") as f:
+                    with open(file_path, "r", encoding="utf-8") as f:
                         original_content = f.read()
                 else:
                     original_content = ""
+                new_content = new_content.replace("\r\n", "\n")
 
                 # Generate unified diff
                 diff = list(
@@ -1099,7 +1189,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path, "overwriting")
+                refusal = reads.refusal(
+                    file_path, "overwriting"
+                ) or masked_secret_refusal(file_path, {"content": content})
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -1159,7 +1251,10 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, target_of, "overwriting"))
+        @tool(
+            preflight=read_first_preflight(self, target_of, "overwriting"),
+            override=True,
+        )
         def write_file(
             file_path: str,
             content: str,
@@ -1202,7 +1297,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(path, "overwriting")
+                refusal = reads.refusal(path, "overwriting") or masked_secret_refusal(
+                    path, {"content": content}
+                )
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -1282,7 +1379,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, target_of))
+        @tool(preflight=read_first_preflight(self, target_of), override=True)
         def edit_file(
             file_path: str,
             old_content: str,
@@ -1296,12 +1393,14 @@ class FileIOToolsMixin:
             Requires a prior read_file. edit_python_file refuses a
             syntax-breaking edit. old_content must match exactly one
             location; zero or several matches return the current content,
-            so a retry needs no re-read.
+            so a retry needs no re-read. Repeating an edit already applied
+            this turn is refused.
 
             Args:
                 file_path: Path to the file to edit.
                 old_content: Exact text to replace; must be unique in the file.
-                new_content: Text to put in its place.
+                new_content: Only the text that replaces old_content, never
+                    the whole file; for that, use write_file.
                 project_dir: Project root for resolving a relative file_path.
             """
             try:
@@ -1351,7 +1450,15 @@ class FileIOToolsMixin:
                     return missing_file_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(path)
+                refusal = (
+                    reads.refusal(path)
+                    or reads.repeat_refusal(
+                        path, old_content, new_content, turn_of(self)
+                    )
+                    or masked_secret_refusal(
+                        path, {"old_content": old_content, "new_content": new_content}
+                    )
+                )
                 if refusal is not None:
                     return refusal
 
@@ -1371,9 +1478,11 @@ class FileIOToolsMixin:
                 # Backup before editing
                 backup_path = path_validator.create_backup(str(path))
 
-                # Generate diff before writing
+                # Generate diff before writing. keepends lets a line-ending-only
+                # change still diff; stripping it terminates each line once.
                 diff = "\n".join(
-                    difflib.unified_diff(
+                    line.rstrip("\r\n")
+                    for line in difflib.unified_diff(
                         current_content.splitlines(keepends=True),
                         updated_content.splitlines(keepends=True),
                         fromfile=f"a/{os.path.basename(str(path))}",
@@ -1386,6 +1495,7 @@ class FileIOToolsMixin:
                 # Write updated content
                 _write_exact(path, updated_content)
                 reads.note(path)
+                reads.note_edit(path, old_content, new_content, turn_of(self))
 
                 console = getattr(self, "console", None)
                 if diff.strip():
@@ -1429,6 +1539,7 @@ class FileIOToolsMixin:
                         if (syntax_error := _python_syntax_error(path, updated_content))
                         else {}
                     ),
+                    **after_excerpt(current_content, updated_content),
                     "diff": diff,
                 }
                 if backup_path:
@@ -1453,7 +1564,14 @@ class FileIOToolsMixin:
                     path_validator.audit_write("edit", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _gaia_md_target, "overwriting"))
+        def _workspace_gaia_md_target(args: Dict[str, Any]) -> Path:
+            return _workspace_target(self, args.get("project_root", ".")) / "GAIA.md"
+
+        @tool(
+            preflight=read_first_preflight(
+                self, _workspace_gaia_md_target, "overwriting"
+            )
+        )
         def update_gaia_md(
             project_root: str = ".",
             project_name: str = None,
@@ -1475,34 +1593,15 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with update results
             """
-            path_validator = _require_path_validator(self)
+            # Report missing setup instead of writing without a check.
+            path_validator = getattr(self, "path_validator", None)
+            if path_validator is None:
+                return _missing_path_validator_write_error(self)
+            gaia_path = "GAIA.md"
             try:
                 from datetime import datetime
 
-                gaia_path = os.path.join(os.path.expanduser(project_root), "GAIA.md")
-
-                is_blocked, reason = path_validator.is_write_blocked(gaia_path)
-                if is_blocked:
-                    return {**NOT_EXECUTED, "status": "error", "error": reason}
-                if not path_validator.is_path_allowed(gaia_path):
-                    return {
-                        **NOT_EXECUTED,
-                        "status": "error",
-                        "error": f"Access denied: {gaia_path} is not in allowed paths."
-                        f"{path_validator.scratch_hint(gaia_path)}",
-                    }
-
-                reads = file_read_record(self)
-                refusal = reads.refusal(gaia_path, "overwriting")
-                if refusal is not None:
-                    path_validator.audit_write(
-                        "write",
-                        gaia_path,
-                        0,
-                        "denied",
-                        refusal.get("error_type", "read_required"),
-                    )
-                    return refusal
+                gaia_path = str(_workspace_target(self, project_root) / "GAIA.md")
 
                 # Start building content
                 content = "# GAIA.md\n\n"
@@ -1548,22 +1647,63 @@ class FileIOToolsMixin:
                 content += "- Use Black formatter for consistent style\n"
                 content += "- Ensure proper error handling\n\n"
 
+                content_size = len(content.encode("utf-8"))
+                is_allowed, reason = path_validator.validate_write(
+                    gaia_path, content_size=content_size
+                )
+                if not is_allowed:
+                    path_validator.audit_write(
+                        "write", gaia_path, content_size, "denied", reason
+                    )
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(
+                    gaia_path, "overwriting"
+                ) or masked_secret_refusal(gaia_path, {"content": content})
+                if refusal is not None:
+                    path_validator.audit_write(
+                        "write",
+                        gaia_path,
+                        content_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
+                    return refusal
+
                 before_change(gaia_path, "update_gaia_md")
                 # Check existence BEFORE writing for accurate created/updated msg
                 is_new_file = not os.path.exists(gaia_path)
+                backup_path = (
+                    None if is_new_file else path_validator.create_backup(gaia_path)
+                )
 
-                # Write the file
                 with open(gaia_path, "w", encoding="utf-8", newline="") as f:
                     f.write(content)
                 reads.note(gaia_path)
 
-                return {
+                path_validator.audit_write(
+                    "write",
+                    gaia_path,
+                    content_size,
+                    "success",
+                    f"backup={backup_path}" if backup_path else "",
+                )
+                result = {
                     "status": "success",
                     "file_path": gaia_path,
                     "created": is_new_file,
                     "message": f"GAIA.md {'created' if is_new_file else 'updated'} at {gaia_path}",
                 }
+                if backup_path:
+                    result["backup_path"] = backup_path
+                return result
+            except BackupError as e:
+                # Nothing was written, so this must not become a durable lesson.
+                path_validator.audit_write("write", gaia_path, 0, "denied", str(e))
+                return {**NOT_EXECUTED, "status": "error", "error": str(e)}
             except Exception as e:
+                path_validator.audit_write("write", gaia_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
         @tool(preflight=read_first_preflight(self, target_of))
@@ -1640,7 +1780,9 @@ class FileIOToolsMixin:
                     return _directory_path_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path)
+                refusal = reads.refusal(file_path) or masked_secret_refusal(
+                    file_path, {"new_implementation": new_implementation}
+                )
                 if refusal is not None:
                     path_validator.audit_write(
                         "edit",

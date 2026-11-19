@@ -23,14 +23,20 @@ these functions act for that agent and that skill::
   argument whose name says it is a path (``path``, ``file_path``,
   ``output_dir`` …, see :func:`is_path_argument`) is read-checked before the
   tool body runs, so a skill tool cannot be pointed outside the scope by
-  default. A tool that writes calls :func:`check_write` itself.
+  default. A tool that writes calls :func:`check_write` (or :func:`open_write`)
+  itself.
+- **Files.** :func:`open_read`, :func:`open_write` and :func:`list_readable`
+  open, create and list files behind those same checks, so a skill that
+  streams the user's files needs no ``open()`` or ``os.walk`` of its own.
 - **Programs.** :func:`run_program` starts one executable the manifest names
   (``program:run:<name>``): no shell, stdin closed, an environment holding
   only what a program needs to start (no API keys or tokens), and a timeout.
-  It does not stop the program reaching the network.
+  It is killed when the agent stops waiting for the tool call. It does not
+  stop the program reaching the network.
 - **Temporary files.** :func:`temp_dir`, :func:`write_temp_file` and
   :func:`copy_to_temp` work inside a fresh folder per tool call
-  (``scratch:write``), deleted when the call returns.
+  (``scratch:write``), deleted when the call returns (after a timeout, when
+  the abandoned tool body finishes).
 - **Preferences.** :func:`preferences` reads and writes this skill's saved
   preferences (:mod:`gaia.skills.preferences`).
 
@@ -45,16 +51,19 @@ did not declare.
 from __future__ import annotations
 
 import contextvars
+import functools
 import os
 import platform
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import IO, Any, Callable, Dict, Iterator, List, Optional, Sequence
 
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillPermissionError
@@ -63,11 +72,15 @@ from gaia.skills.preferences import (
     SkillPreferenceStore,
     load_schema,
 )
+from gaia.tool_cancellation import ToolCancelled, current_cancel_event
 
 log = get_logger(__name__)
 
 #: Longest a skill may let one program run.
 MAX_PROGRAM_TIMEOUT_S = 900
+
+#: How often a running program checks whether the agent stopped waiting.
+_PROGRAM_POLL_S = 0.25
 
 #: Environment variables passed to a program, when set. Everything else —
 #: API keys, tokens, proxies with credentials — stays in the agent.
@@ -124,6 +137,9 @@ class SkillCall:
     agent: Any
     skill: Any
     _temp_root: Optional[Path] = field(default=None, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _in_flight: bool = field(default=False, repr=False)
+    _released: bool = field(default=False, repr=False)
 
     @property
     def skill_name(self) -> str:
@@ -146,6 +162,56 @@ class SkillCall:
                 "SKILL.md, then reload the skill."
             )
 
+    def wrap(self, tool: Callable[..., Any]) -> Callable[..., Any]:
+        """*tool*, deleting the temporary folder itself if :func:`bind` gave up.
+
+        The worker that runs the tool outlives a timed-out call, so the folder
+        is deleted by whichever finishes last: :func:`bind` or the worker.
+        """
+        with self._lock:
+            self._in_flight = True
+
+        @functools.wraps(tool)
+        def run(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return tool(*args, **kwargs)
+            finally:
+                with self._lock:
+                    self._in_flight = False
+                    abandoned = self._released
+                if abandoned:
+                    self._delete_temp()
+
+        return run
+
+    def _release(self) -> None:
+        """End the call: delete its temporary folder, or leave that to the worker."""
+        with self._lock:
+            self._released = True
+            still_running = self._in_flight
+        if not still_running:
+            self._delete_temp()
+        elif self._temp_root is not None:
+            log.warning(
+                "Skill '%s' timed out; its temporary folder %s is deleted when "
+                "the abandoned call finishes.",
+                self.skill_name,
+                self._temp_root,
+            )
+
+    def _delete_temp(self) -> None:
+        if self._temp_root is None:
+            return
+        try:
+            shutil.rmtree(self._temp_root)
+        except OSError as e:
+            log.warning(
+                "Could not delete skill '%s' temporary folder %s: %s",
+                self.skill_name,
+                self._temp_root,
+                e,
+            )
+
 
 _ACTIVE: contextvars.ContextVar[Optional[SkillCall]] = contextvars.ContextVar(
     "gaia_skill_call", default=None
@@ -156,39 +222,18 @@ _ACTIVE: contextvars.ContextVar[Optional[SkillCall]] = contextvars.ContextVar(
 def bind(agent: Any, skill: Any) -> Iterator[SkillCall]:
     """Make *agent* and *skill* the context of the tool call inside the block.
 
-    Used by ``Agent._execute_tool``. The call's temporary folder is deleted on
-    the way out, unless the call timed out: its worker may still be using it.
+    Used by ``Agent._execute_tool``, which runs the tool through
+    :meth:`SkillCall.wrap`. The call's temporary folder is deleted on the way
+    out or, when the call timed out and its worker still runs, as soon as that
+    worker finishes.
     """
     call = SkillCall(agent=agent, skill=skill)
     token = _ACTIVE.set(call)
-    timed_out = False
     try:
         yield call
-    except BaseException as exc:
-        from gaia.agents.base.agent import ToolExecutionTimeout
-
-        timed_out = isinstance(exc, ToolExecutionTimeout)
-        raise
     finally:
         _ACTIVE.reset(token)
-        if call._temp_root is not None:
-            if timed_out:
-                log.warning(
-                    "Skill '%s' timed out; leaving its temporary folder %s for "
-                    "the still-running call.",
-                    call.skill_name,
-                    call._temp_root,
-                )
-            else:
-                try:
-                    shutil.rmtree(call._temp_root)
-                except OSError as e:
-                    log.warning(
-                        "Could not delete skill '%s' temporary folder %s: %s",
-                        call.skill_name,
-                        call._temp_root,
-                        e,
-                    )
+        call._release()
 
 
 def current() -> SkillCall:
@@ -265,6 +310,165 @@ def check_write(path: str | os.PathLike, *, content_size: int = 0) -> Path:
     return resolved
 
 
+_READ_MODES = ("r", "rt", "rb")
+_WRITE_MODES = ("w", "wt", "wb", "x", "xt", "xb", "a", "at", "ab")
+
+
+def _open_checked(
+    target: Path,
+    mode: str,
+    encoding: Optional[str],
+    errors: Optional[str],
+    newline: Optional[str],
+) -> IO[Any]:
+    if "b" in mode:
+        if encoding is not None or errors is not None or newline is not None:
+            raise ValueError(
+                f"Mode {mode!r} is binary: drop encoding, errors and newline, or "
+                "open in text mode."
+            )
+        return open(target, mode)  # pylint: disable=consider-using-with
+    # Never the locale's encoding: a skill must read the same bytes the same way
+    # on every machine.
+    return open(  # pylint: disable=consider-using-with
+        target, mode, encoding=encoding or "utf-8", errors=errors, newline=newline
+    )
+
+
+def open_read(
+    path: str | os.PathLike,
+    mode: str = "r",
+    *,
+    encoding: Optional[str] = None,
+    errors: Optional[str] = None,
+    newline: Optional[str] = None,
+) -> IO[Any]:
+    """Open a file the agent may read, for reading only.
+
+    The file is opened at the path :func:`check_read` resolved, so a symlink
+    or junction is followed once, by the check, and refused when it lands
+    outside the allowed folders. The caller closes it, normally in a ``with``.
+
+    Args:
+        path: The file.
+        mode: ``"r"`` (text, the default) or ``"rb"`` (bytes).
+        encoding: Text mode only. Defaults to UTF-8, never the locale's.
+        errors: Text mode only, as for ``open`` (e.g. ``"replace"``).
+        newline: Text mode only, as for ``open`` (``""`` for ``csv``).
+
+    Raises:
+        ValueError: *mode* would write, or a text option with a binary mode.
+        SkillPermissionError: outside the agent's allowed folders, or a secret.
+        OSError: the file cannot be opened.
+    """
+    if mode not in _READ_MODES:
+        raise ValueError(
+            f"open_read opens files for reading; mode {mode!r} is not one of "
+            f"{', '.join(_READ_MODES)}. To write, use open_write."
+        )
+    return _open_checked(check_read(path), mode, encoding, errors, newline)
+
+
+def open_write(
+    path: str | os.PathLike,
+    mode: str = "w",
+    *,
+    encoding: Optional[str] = None,
+    errors: Optional[str] = None,
+    newline: Optional[str] = None,
+    content_size: int = 0,
+) -> IO[Any]:
+    """Create, replace or append to a file the agent may write.
+
+    :func:`check_write` runs first, with ``write_file``'s refusals (outside the
+    allowed folders, protected locations) and its overwrite confirmation.
+    Missing parent folders of the checked path are created.
+
+    Args:
+        path: The file.
+        mode: ``"w"`` (the default), ``"x"`` (fail if it exists) or ``"a"``,
+            each with ``"b"`` for bytes.
+        encoding: Text mode only. Defaults to UTF-8, never the locale's.
+        errors: Text mode only, as for ``open``.
+        newline: Text mode only, as for ``open`` (``""`` for ``csv``).
+        content_size: Bytes about to be written, when known, for the
+            validator's size check.
+
+    Raises:
+        ValueError: *mode* is not a write mode, or a text option with a
+            binary mode.
+        SkillPermissionError: outside the allowed folders, a protected
+            location, or the user declined the overwrite.
+        OSError: the file cannot be created.
+    """
+    if mode not in _WRITE_MODES:
+        raise ValueError(
+            f"open_write mode {mode!r} is not one of {', '.join(_WRITE_MODES)}. "
+            "To read, use open_read."
+        )
+    target = check_write(path, content_size=content_size)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return _open_checked(target, mode, encoding, errors, newline)
+
+
+def _is_link(entry: os.DirEntry) -> bool:
+    # A real folder under a resolved root resolves to itself; a symlink or a
+    # Windows junction does not.
+    return os.path.normcase(os.path.realpath(entry.path)) != os.path.normcase(
+        os.path.abspath(entry.path)
+    )
+
+
+def list_readable(
+    root: str | os.PathLike,
+    *,
+    recursive: bool = True,
+    include_hidden: bool = False,
+) -> List[Path]:
+    """Files under a folder the agent may read, sorted.
+
+    *root* goes through :func:`check_read`, approval prompt included. Files
+    found inside never prompt: one that is a secret, or a link that resolves
+    outside the allowed folders, is left out, as the agent's own folder walks
+    do. Linked folders (symlinks, junctions) are not entered.
+
+    Args:
+        root: The folder.
+        recursive: Walk subfolders too.
+        include_hidden: Keep names starting with ``.``.
+
+    Raises:
+        SkillPermissionError: *root* is outside the agent's allowed folders.
+        NotADirectoryError: *root* is not a folder.
+    """
+    from gaia.agents.tools.path_access import readable_entry
+
+    call = current()
+    base = check_read(root)
+    if not base.is_dir():
+        raise NotADirectoryError(
+            f"{base} is not a folder. Pass a folder, or open the file with open_read."
+        )
+
+    def shown(name: str) -> bool:
+        return include_hidden or not name.startswith(".")
+
+    found: List[Path] = []
+    pending = [base]
+    while pending:
+        folder = pending.pop()
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                if not shown(entry.name):
+                    continue
+                if entry.is_dir():
+                    if recursive and not _is_link(entry):
+                        pending.append(Path(entry.path))
+                elif entry.is_file():
+                    found.append(Path(entry.path))
+    return sorted(p for p in found if readable_entry(call.agent, p))
+
+
 # ----------------------------------------------------------------------
 # Temporary files
 # ----------------------------------------------------------------------
@@ -277,7 +481,8 @@ def _temp_root(call: SkillCall) -> Path:
 
         base = gaia_home() / "skill-temp" / call.skill_name
         base.mkdir(parents=True, exist_ok=True)
-        call._temp_root = Path(tempfile.mkdtemp(prefix="call-", dir=base))
+        # Resolved, so _inside compares like with like when GAIA_HOME is a link.
+        call._temp_root = Path(tempfile.mkdtemp(prefix="call-", dir=base)).resolve()
     return call._temp_root
 
 
@@ -374,6 +579,8 @@ def run_program(
         SkillPermissionError: ``program:run:<name>`` is not declared.
         FileNotFoundError: the program is not installed.
         subprocess.TimeoutExpired: it ran past *timeout* and was killed.
+        ToolCancelled: the agent stopped waiting for the tool call; the
+            program was killed rather than left running unobserved.
     """
     call = current()
     call.require(f"program:run:{name}", f"run '{name}'")
@@ -408,17 +615,56 @@ def run_program(
         len(args),
         timeout,
     )
+    argv = [executable, *args]
+    cancel = current_cancel_event()
     # No shell: the executable is the declared program, resolved to a path.
-    return subprocess.run(
-        [executable, *args],
+    # POSIX gets a private session so the kill reaches helpers such as
+    # LibreOffice's soffice.bin without touching the agent. Windows uses
+    # taskkill /T in terminate_process_tree to reach descendants.
+    with subprocess.Popen(
+        argv,
         cwd=str(workdir) if workdir is not None else None,
         env=env,
         stdin=subprocess.DEVNULL,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout,
-        check=False,
-    )
+        start_new_session=os.name != "nt",
+    ) as proc:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                stdout, stderr = proc.communicate(
+                    timeout=max(0.0, min(deadline - time.monotonic(), _PROGRAM_POLL_S))
+                )
+                break
+            except subprocess.TimeoutExpired:
+                cancelled = cancel is not None and cancel.is_set()
+                if not cancelled and time.monotonic() < deadline:
+                    continue
+                _terminate_program_tree(proc)
+                if cancelled:
+                    raise ToolCancelled(
+                        f"Skill '{call.skill_name}' stopped '{name}': the agent "
+                        "stopped waiting for this tool call."
+                    ) from None
+                raise subprocess.TimeoutExpired(argv, timeout) from None
+            except BaseException:
+                # Ctrl-C no longer reaches a POSIX child in its own session.
+                _terminate_program_tree(proc)
+                raise
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+
+def _terminate_program_tree(proc: subprocess.Popen) -> tuple[str, str]:
+    """Lazily load the shared tree killer for a program this skill started.
+
+    Importing the tools package at module load would eagerly load unrelated
+    browser, RAG, and audio mixins into every skill invocation.
+    """
+    from gaia.agents.tools.command_timeouts import terminate_process_tree
+
+    return terminate_process_tree(proc)
 
 
 # ----------------------------------------------------------------------
@@ -438,15 +684,15 @@ class SkillPreferences:
         return self._store.get(self._call.skill_name)
 
     def _skipped(self) -> Optional[PreferenceWrite]:
-        agent = self._call.agent
-        if not getattr(agent, "_incognito", False):
-            return None
-        from gaia.agents.base.memory import memory_off_reason
+        from gaia.agents.base.memory_privacy import memory_writes_refused
 
+        reason = memory_writes_refused(self._call.agent)
+        if reason is None:
+            return None
         return PreferenceWrite(
             saved=False,
             preferences=self.get(),
-            note=f"{memory_off_reason(agent)} The preference was not saved.",
+            note=f"{reason} The preference was not saved.",
         )
 
     def update(self, changes: Dict[str, Any]) -> PreferenceWrite:
@@ -484,6 +730,9 @@ __all__: List[str] = [
     "current",
     "find_program",
     "is_path_argument",
+    "list_readable",
+    "open_read",
+    "open_write",
     "preferences",
     "run_program",
     "temp_dir",

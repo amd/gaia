@@ -111,3 +111,33 @@ def test_accept_edits_notice_names_no_tool(tmp_path):
         "Accept edits is on, so GAIA didn't ask first. Editing file: "
     )
     assert "edit_file" not in messages[0]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"path": "C:/Users/me/sales.csv", "kind": "file"},
+        {"path": "C:/Users/me/reports", "kind": "folder"},
+        {"path": "C:/Users/me/new.txt"},
+    ],
+)
+def test_path_prompt_carries_the_fields_the_ui_words_it_from(args):
+    # The Agent UI words the question in its own language from path and kind.
+    event = _permission_request("allow_path_access", dict(args))
+    assert event["tool"] == "allow_path_access"
+    assert event["args"] == args
+
+
+def test_relayed_path_prompt_keeps_fields_and_english_question():
+    from gaia.ui.sse_translation import CanonicalTranslator
+
+    args = {"path": "C:/Users/me/reports", "kind": "folder"}
+    [out] = CanonicalTranslator("run-1", agent_id="gaia").translate(
+        {"type": "permission_request", "tool": "allow_path_access", "args": args}
+    )
+    assert out["args"] == args
+    # Front-ends without their own wording (TUI, CLI) still get the English question.
+    assert out["summary"] == (
+        "Allow GAIA to use the folder C:/Users/me/reports and everything in it"
+        " for this session?"
+    )

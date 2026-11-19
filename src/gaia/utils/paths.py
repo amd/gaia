@@ -19,13 +19,13 @@ from __future__ import annotations
 
 from pathlib import PureWindowsPath
 
-__all__ = ["UnsafePathSegment", "safe_path_segment"]
+__all__ = ["WINDOWS_DEVICE_NAMES", "UnsafePathSegment", "safe_path_segment"]
 
 #: Longest segment most filesystems accept.
 MAX_SEGMENT_LENGTH = 255
 
 #: NT device names. ``open("NUL")`` succeeds on Windows in any directory.
-_WINDOWS_DEVICE_NAMES = frozenset(
+WINDOWS_DEVICE_NAMES = frozenset(
     {"con", "prn", "aux", "nul"}
     | {f"com{i}" for i in range(1, 10)}
     | {f"lpt{i}" for i in range(1, 10)}
@@ -86,7 +86,7 @@ def safe_path_segment(value: str, *, what: str = "filename", origin: str = "") -
         raise refuse(
             "it has leading/trailing whitespace or a trailing dot, which Windows strips"
         )
-    if value.split(".", 1)[0].lower() in _WINDOWS_DEVICE_NAMES:
+    if value.split(".", 1)[0].lower() in WINDOWS_DEVICE_NAMES:
         raise refuse("it names a Windows device")
 
     # Belt and braces: whatever the character-level rules missed, pathlib must

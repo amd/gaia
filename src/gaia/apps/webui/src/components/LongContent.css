@@ -11,6 +11,17 @@
     mask-image: linear-gradient(to bottom, black calc(100% - 3.5em), transparent);
 }
 
+/* A long message collapsed to its first and last lines, with the count between. */
+.msg-excerpt-lines {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.msg-excerpt-gap {
+    margin: 4px 0;
+    color: var(--text-muted);
+    font-size: var(--fs-label);
+}
+
 /* ~9 lines of the message. */
 .msg-collapsible.is-collapsed {
     max-height: calc(9 * 1.65em);
@@ -33,7 +44,8 @@
     gap: 4px;
     max-width: 100%;
     margin-top: 4px;
-    padding: 2px 8px 2px 4px;
+    padding-block: 2px;
+    padding-inline: 4px 8px;
     border: 1px solid transparent;
     border-radius: var(--radius-xs);
     font-family: var(--font-sans);
@@ -51,7 +63,7 @@
 }
 
 .msg-expand-toggle {
-    margin-left: -4px;
+    margin-inline-start: -4px;
 }
 
 /* On the code surface: a full-width footer in the code palette. */
@@ -79,7 +91,7 @@
 }
 
 .step-expand-toggle {
-    margin-left: -4px;
+    margin-inline-start: -4px;
 }
 
 .detail-result-note {

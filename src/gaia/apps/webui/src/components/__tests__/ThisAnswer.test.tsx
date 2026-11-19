@@ -193,6 +193,25 @@ describe('ThisAnswer', () => {
         expect(screen.getByText('Not known')).toBeInTheDocument();
     });
 
+    it("says a stopped answer's cost wasn't reported, without blaming the model (#6541)", () => {
+        const messages = turn(summary({ model: CLOUD_MODEL, cost: { kind: 'unreported' } }));
+        messages[1] = { ...messages[1], stopState: 'stopped' };
+        render(<Host messages={messages} />);
+        expect(screen.getByText('Not reported, as the answer was stopped')).toBeInTheDocument();
+        expect(screen.queryByText('Not known for this model')).not.toBeInTheDocument();
+    });
+
+    it('says a turn no reply came from is left out of spending, not that it was stopped', () => {
+        render(<Host messages={turn(summary({ model: CLOUD_MODEL, cost: { kind: 'no_reply', usd: null } }))} />);
+        expect(screen.getByText('Not counted: no reply came')).toBeInTheDocument();
+        expect(screen.queryByText(/Not reported/)).not.toBeInTheDocument();
+    });
+
+    it("says a priced turn's cost wasn't reported when no usage came back", () => {
+        render(<Host messages={turn(summary({ model: CLOUD_MODEL, cost: { kind: 'unreported' } }))} />);
+        expect(screen.getByText('Not reported for this answer')).toBeInTheDocument();
+    });
+
     it('opens a written file or shows it in its folder', async () => {
         render(<Host messages={turn(summary({
             files: [

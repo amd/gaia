@@ -91,6 +91,21 @@ class TestServersForAgent:
         assert manager.servers_for_agent("builtin:chat") == ["github"]
 
 
+class TestFailedServersForAgent:
+    def test_only_failures_activated_for_the_agent(self, fake_home):
+        manager = MCPClientManager()
+        manager._failed = {"weatherbox": "not found", "other": "timed out"}
+        activate_agent("weatherbox", "builtin:chat")
+        assert manager.failed_servers_for_agent("builtin:chat") == {
+            "weatherbox": "not found"
+        }
+
+    def test_none_agent_id_sees_every_failure(self, fake_home):
+        manager = MCPClientManager()
+        manager._failed = {"weatherbox": "not found"}
+        assert manager.failed_servers_for_agent(None) == {"weatherbox": "not found"}
+
+
 class TestToolsForAgent:
     def test_tools_for_agent_returns_per_server_lists(self, fake_home):
         manager = _stub_manager_with_servers("github", "filesystem")

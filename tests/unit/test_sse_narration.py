@@ -43,6 +43,13 @@ class TestDeriveNarration:
         [
             # Curated override for a phrase the generic deriver reads badly.
             ("list_skills", {}, "Checking your installed skills"),
+            # The trust prompt asks; nothing is read until the user says yes.
+            ("trust_project_folder", {}, "Asking to trust this folder"),
+            (
+                "trust_project_folder",
+                {"folder": "/w/repo", "files": ["CLAUDE.md"]},
+                "Asking to trust this folder: /w/repo",
+            ),
             # Generic verb_object conjugation + salient argument.
             ("load_skill", {"name": "github-triage"}, "Loading skill: github-triage"),
             ("read_file", {"file_path": "src/app.py"}, "Reading file: src/app.py"),
@@ -305,14 +312,13 @@ class TestTranslatorNarration:
 
     def test_render_map_result_still_gets_a_preview(self):
         """``data`` is the card payload for a render tool; preview comes from the source."""
-        translator = CanonicalTranslator(
-            RUN_ID, agent_id="gaia", render_tool_map={"draw_chart": "chart"}
-        )
+        translator = _tr()
         translator.translate({"type": "tool_start", "tool": "draw_chart"})
         translator.translate({"type": "tool_args", "args": {}})
         (result,) = translator.translate(
             {
                 "type": "tool_result",
+                "render": "chart",
                 "result_data": {"type": "chart", "points": [1, 2]},
                 "summary": "chart rendered",
                 "latency_ms": 8,
@@ -321,6 +327,22 @@ class TestTranslatorNarration:
         assert result["render"] == "chart"
         assert result["data"] == {"type": "chart", "points": [1, 2]}
         assert result["preview"] == "chart rendered · 8ms"
+
+    def test_a_card_name_without_a_card_payload_stays_a_plain_result(self):
+        """A named card with no verified payload must not draw a broken card."""
+        translator = _tr()
+        translator.translate({"type": "tool_start", "tool": "generate_image"})
+        translator.translate({"type": "tool_args", "args": {}})
+        (result,) = translator.translate(
+            {
+                "type": "tool_result",
+                "render": "media",
+                "summary": "image output is no longer available",
+                "success": True,
+            }
+        )
+        assert "render" not in result
+        assert result["data"]["summary"] == "image output is no longer available"
 
     def test_synthesized_result_from_bare_tool_end_has_a_preview(self):
         translator = _tr()
@@ -534,8 +556,8 @@ class TestCommentary:
         assert "commentary" not in [e["type"] for e in _drain(handler)]
 
     def test_a_relayed_turn_gets_the_same_commentary(self):
-        from gaia.ui.email_sidecar import relay
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
         handler = SSEOutputHandler()
         relay._dispatch_one(
@@ -617,8 +639,8 @@ class TestRelayedNarration:
     """A relayed call reaches the window in the same plain words as an in-process one."""
 
     def test_the_relay_passes_the_sidecars_narration_on(self):
-        from gaia.ui.email_sidecar import relay
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
         handler = SSEOutputHandler()
         relay._dispatch_one(
@@ -637,8 +659,8 @@ class TestRelayedNarration:
         assert events["tool_args"]["narration"] == "Searching the web: seattle weather"
 
     def test_an_older_sidecar_without_narration_still_gets_plain_words(self):
-        from gaia.ui.email_sidecar import relay
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
         handler = SSEOutputHandler()
         relay._dispatch_one(
@@ -671,8 +693,8 @@ class TestRelayedPhase:
     """A relayed turn's live line names the model's phase, as an in-process one does."""
 
     def test_the_relay_keeps_the_phase_and_its_counts(self):
-        from gaia.ui.email_sidecar import relay
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
         handler = SSEOutputHandler()
         relay._dispatch_one(
@@ -692,8 +714,8 @@ class TestRelayedPhase:
         assert event["message"] == "Reading your request (18,641 tokens)"
 
     def test_a_plain_status_stays_plain(self):
-        from gaia.ui.email_sidecar import relay
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
         handler = SSEOutputHandler()
         relay._dispatch_one(

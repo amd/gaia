@@ -11,7 +11,6 @@ import copy
 import hashlib
 import json
 import logging
-import os
 import re
 import time
 from collections import OrderedDict
@@ -26,7 +25,10 @@ except ImportError:
     anthropic = None  # type: ignore[assignment]
 
 from ..base_client import LLMClient
-from .lemonade import _NATIVE_TC_KEY
+from ..lemonade_client import is_provider_context_overflow
+from ..local_only import assert_provider_permitted
+from ..surface_hints import TUI_MODEL_SWITCH_HINT
+from .lemonade import _NATIVE_TC_KEY, LemonadeContextOverflowError
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +77,10 @@ _THINKING_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
 #: (a server tool block, say) is not kept, since it can't be rebuilt faithfully.
 _REPLAYABLE_BLOCK_TYPES = _THINKING_BLOCK_TYPES | {"text", "tool_use"}
 
-#: Tool turns whose original blocks are kept for replay. Older turns go back
-#: without their thinking, which the API accepts.
-_MAX_REPLAY_TURNS = 256
+#: Turns whose original blocks are kept for replay. Older turns go back
+#: without their thinking, which the API accepts. Every turn counts, with or
+#: without thinking, so this is sized for long sessions.
+_MAX_REPLAY_TURNS = 1024
 
 #: OpenAI ``tool_choice`` strings with a direct Anthropic equivalent.
 _TOOL_CHOICE_MAP = {"none": {"type": "none"}, "auto": {"type": "auto"}}
@@ -88,6 +91,163 @@ _FINISH_REASON_MAP = {
     "stop_sequence": "stop",
     "max_tokens": "length",
 }
+
+
+#: Tool results that must reach the model exactly as the tool returned them.
+_VERBATIM_TOOL_RESULTS = frozenset({"read_tool_output"})
+
+#: Control characters other than tab, newline and carriage return.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+#: A list of scalars this short stays on one line, as JSON.
+_INLINE_LIST_CHARS = 120
+
+#: Nesting below this depth stays one line of JSON, so recursion is bounded.
+_MAX_RENDER_DEPTH = 32
+
+
+#: First characters of a string that might read as a JSON number, literal,
+#: array, object or quoted string when written plain.
+_JSON_LOOKALIKE_START = frozenset('-0123456789tfnNI[{"')
+
+
+def _reads_as_json(value: str) -> bool:
+    if value[:1] not in _JSON_LOOKALIKE_START:
+        return False
+    try:
+        json.loads(value)
+    except (ValueError, RecursionError):
+        return False
+    return True
+
+
+def _scalar_text(value: Any) -> str:
+    """A scalar as the model reads it: plain when unambiguous, else JSON."""
+    if isinstance(value, str) and (
+        value
+        and value == value.strip()
+        and "\n" not in value
+        and not _CONTROL_CHARS.search(value)
+        and not _reads_as_json(value)
+    ):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _key_text(key: str) -> str:
+    """A key as a label: plain unless it could pass for a value or a new field."""
+    text = _scalar_text(key)
+    if text == key and (":" in key or key.startswith(("-", "<", ">"))):
+        return json.dumps(key, ensure_ascii=False)
+    return text
+
+
+def _is_block_text(value: Any) -> bool:
+    """Multi-line text that can go out raw: nothing in it closes the block."""
+    return (
+        isinstance(value, str)
+        and "\n" in value
+        and not _CONTROL_CHARS.search(value)
+        and ">>>" not in value.splitlines()
+    )
+
+
+def _render_value(label: str, value: Any, depth: int, lines: List[str]) -> None:
+    indent = "  " * depth
+    if depth >= _MAX_RENDER_DEPTH:
+        lines.append(f"{indent}{label} {json.dumps(value, ensure_ascii=False)}")
+    elif _is_block_text(value):
+        # Raw between markers: no escaping, no indent added to the text itself.
+        lines.append(f"{indent}{label} <<<\n{value}\n>>>")
+    elif isinstance(value, dict) and value:
+        lines.append(f"{indent}{label}")
+        for key, item in value.items():
+            _render_value(f"{_key_text(key)}:", item, depth + 1, lines)
+    elif isinstance(value, list) and value:
+        inline = json.dumps(value, ensure_ascii=False)
+        if len(inline) <= _INLINE_LIST_CHARS and not any(
+            isinstance(item, (dict, list)) or _is_block_text(item) for item in value
+        ):
+            lines.append(f"{indent}{label} {inline}")
+            return
+        lines.append(f"{indent}{label}")
+        for item in value:
+            _render_value("-", item, depth + 1, lines)
+    elif isinstance(value, (dict, list)):
+        lines.append(f"{indent}{label} {json.dumps(value)}")  # empty
+    else:
+        lines.append(f"{indent}{label} {_scalar_text(value)}")
+
+
+def _readable_tool_text(text: str) -> str:
+    """A JSON-object tool result as indented ``key: value`` lines.
+
+    JSON escaping spends tokens on every newline, quote and backslash of file
+    contents and command output, on every call that re-reads the history.
+    Multi-line strings go out raw between ``<<<`` and ``>>>``. Anything that is
+    not a JSON object is returned unchanged. Deterministic, so the cached
+    prefix stays byte-identical across calls.
+    """
+    if not text.startswith("{"):
+        return text
+    try:
+        parsed = json.loads(text)
+    except (ValueError, RecursionError):
+        return text  # not an object this renders; it goes out as the tool wrote it
+    if not isinstance(parsed, dict) or not parsed:
+        return text
+    lines: List[str] = []
+    for key, value in parsed.items():
+        _render_value(f"{_key_text(key)}:", value, 0, lines)
+    return "\n".join(lines)
+
+
+def _readable_tool_content(content: Any) -> Any:
+    if isinstance(content, str):
+        return _readable_tool_text(content)
+    if isinstance(content, list):
+        return [
+            (
+                {**block, "text": _readable_tool_text(block["text"])}
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+                else block
+            )
+            for block in content
+        ]
+    return content
+
+
+def _check_empty_reply(stop_reason: str, api_blocks: List[dict]) -> None:
+    """Explain a reply that has neither answer text nor a tool call.
+
+    A ``max_tokens`` stop is logged and left to the agent's cut-off recovery,
+    which reads ``finish_reason == "length"``. Any other empty reply raises,
+    because returning ``""`` would hide the API evidence needed to diagnose it.
+    """
+    block_types = [str(block.get("type") or "unknown") for block in api_blocks]
+    reported_stop_reason = stop_reason or "not reported"
+    logger.warning(
+        "Claude reply contained no text or tool call: stop_reason=%s block_types=%s",
+        reported_stop_reason,
+        ", ".join(block_types) or "none",
+    )
+    if stop_reason == "max_tokens":
+        return
+    thinking_only = bool(block_types) and all(
+        block_type in _THINKING_BLOCK_TYPES for block_type in block_types
+    )
+    if thinking_only:
+        raise RuntimeError(
+            "Claude returned only thinking blocks "
+            f"(stop_reason={reported_stop_reason}) and produced no answer text or "
+            "tool call. Retry the request."
+        )
+    raise RuntimeError(
+        "Claude returned no answer text or tool call "
+        f"(stop_reason={reported_stop_reason}; blocks={', '.join(block_types) or 'none'})."
+    )
 
 
 def _require_anthropic():
@@ -303,11 +463,28 @@ def _api_block(block: Any) -> dict:
 
 @dataclass
 class _ReplayTurn:
-    """A tool turn exactly as Claude produced it, thinking blocks included."""
+    """A turn as Claude produced it: its blocks when they carry thinking, else
+    only what verifies it is unchanged."""
 
-    blocks: List[dict]
-    view: _TurnView
+    blocks: Optional[List[dict]]
+    view_digest: str
     prefix_digest: str
+
+
+def _view_digest(view: _TurnView) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            [view[0], [[i, n, a.decode("utf-8")] for i, n, a in view[1]]],
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _replay_key(view: _TurnView, prefix_digest: str) -> tuple:
+    """Tool turns by their tool_use ids, which Anthropic makes unique; a text
+    turn by where it sits, so two identical answers never share an entry."""
+    ids = tuple(call[0] for call in view[1])
+    return ids if ids else ("text", prefix_digest)
 
 
 def _cache_last_tool(tools: List[dict]) -> List[dict]:
@@ -323,6 +500,11 @@ def _cache_last_tool(tools: List[dict]) -> List[dict]:
 class ClaudeProvider(LLMClient):
     """Claude (Anthropic) provider."""
 
+    #: Where requests go, as named in the Local only refusal.
+    _DESTINATION = "Anthropic Claude"
+
+    caches_prompt_prefix = True
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -332,14 +514,42 @@ class ClaudeProvider(LLMClient):
         timeout: float = 300.0,
         **_kwargs,
     ):
+        assert_provider_permitted(self._DESTINATION)
         sdk = _require_anthropic()
+        self._anthropic = sdk
+        self._model = self._initial_model(model)
+        self._client = self._make_client(sdk, api_key, max_retries, timeout)
+        self._system_prompt = system_prompt
+        self._last_usage: Optional[dict] = None
+        self._last_finish_reason: Optional[str] = None
+        self._last_ttft_seconds: Optional[float] = None
+        # Keyed by _replay_key.
+        self._replay_turns: "OrderedDict[tuple, _ReplayTurn]" = OrderedDict()
+        # Sanitized-name → GAIA-name; rebuilt per request by _to_anthropic_tools.
 
+    @staticmethod
+    def _initial_model(model: Optional[str]) -> str:
+        resolved = (
+            model if model and model.startswith("claude-") else DEFAULT_CLAUDE_MODEL
+        )
+        if model and not model.startswith("claude-"):
+            logger.warning(
+                "Ignoring non-Claude model id %r for the Claude provider; using %s",
+                model,
+                resolved,
+            )
+        return resolved
+
+    def _make_client(
+        self, sdk: Any, api_key: Optional[str], max_retries: int, timeout: float
+    ) -> Any:
         # The repo keeps ANTHROPIC_API_KEY in .env — same load as gaia.eval.claude.
-        from gaia.env import load_env  # pylint: disable=import-outside-toplevel
+        # pylint: disable-next=import-outside-toplevel
+        from gaia.env import credential, load_env
 
         load_env()
 
-        key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        key = api_key or credential("ANTHROPIC_API_KEY")
         if not key:
             raise ValueError(
                 "ANTHROPIC_API_KEY not found in environment.\n\n"
@@ -359,25 +569,7 @@ class ClaudeProvider(LLMClient):
             client_kwargs["default_headers"] = {"anthropic-beta": "oauth-2025-04-20"}
         else:
             client_kwargs["api_key"] = key
-
-        self._anthropic = sdk
-        self._client = sdk.Anthropic(**client_kwargs)
-        self._model = (
-            model if model and model.startswith("claude-") else DEFAULT_CLAUDE_MODEL
-        )
-        if model and not model.startswith("claude-"):
-            logger.warning(
-                "Ignoring non-Claude model id %r for the Claude provider; using %s",
-                model,
-                self._model,
-            )
-        self._system_prompt = system_prompt
-        self._last_usage: Optional[dict] = None
-        self._last_finish_reason: Optional[str] = None
-        self._last_ttft_seconds: Optional[float] = None
-        # Keyed by the turn's tool_use ids, which Anthropic makes unique.
-        self._replay_turns: "OrderedDict[tuple, _ReplayTurn]" = OrderedDict()
-        # Sanitized-name → GAIA-name; rebuilt per request by _to_anthropic_tools.
+        return sdk.Anthropic(**client_kwargs)
 
     @property
     def provider_name(self) -> str:
@@ -583,10 +775,13 @@ class ClaudeProvider(LLMClient):
         tool_call_id = message.get("tool_call_id")
         if not tool_call_id:
             raise ValueError("Claude tool results require a tool_call_id.")
+        content = message.get("content") or "[tool returned no output]"
+        if message.get("name") not in _VERBATIM_TOOL_RESULTS:
+            content = _readable_tool_content(content)
         block = {
             "type": "tool_result",
             "tool_use_id": tool_call_id,
-            "content": message.get("content") or "[tool returned no output]",
+            "content": content,
         }
         if (
             cleaned
@@ -686,9 +881,12 @@ class ClaudeProvider(LLMClient):
         digest: the API chains each block to the previous one rather than binding
         it as prefix, so dropping the oldest turns' thinking first stays valid.
 
-        Any assistant turn whose thinking can't be restored (a final answer, a
-        cut-off stream, an edited turn) ends the run: every older turn goes back
-        without its thinking, so the kept blocks never have a gap.
+        Every turn Claude produced is stored, with or without thinking, so a
+        turn that simply had no thinking is verified as-is and never ends the
+        run. A turn that can't be verified (a cut-off stream, an edited turn,
+        one from before this provider) does: every older turn goes back without
+        its thinking, so the kept blocks never have a gap. Ending the run
+        rewrites every later byte, which re-bills the cached history.
 
         A turn that isn't restored enters the digest as GAIA rebuilt it, which
         can differ from Claude's original, so later turns' thinking is dropped
@@ -703,10 +901,12 @@ class ClaudeProvider(LLMClient):
         assistant_turns: List[Tuple[int, Optional[bool]]] = []
         for message in cleaned:
             if message["role"] == "assistant":
-                restored = self._with_original_blocks(message, digest.hexdigest())
+                restored, verified = self._with_original_blocks(
+                    message, digest.hexdigest()
+                )
                 # None: the caller sent its own thinking, which is left alone.
                 kept: Optional[bool]
-                if restored is not message:
+                if verified:
                     kept = True
                 elif _has_thinking(message):
                     kept = None
@@ -729,54 +929,53 @@ class ClaudeProvider(LLMClient):
                 dropped += 1
         if dropped:
             logger.debug(
-                "Not replaying thinking for %d older tool turn(s): a later "
-                "assistant turn has no stored thinking, and a gap would be rejected",
+                "Not replaying thinking for %d older turn(s): a later "
+                "assistant turn could not be verified, and a gap would be rejected",
                 dropped,
             )
         return out, digest.hexdigest()
 
-    def _with_original_blocks(self, message: dict, prefix_digest: str) -> dict:
-        """The turn with its stored original blocks, or ``message`` itself when
-        they can't be restored."""
+    def _with_original_blocks(
+        self, message: dict, prefix_digest: str
+    ) -> Tuple[dict, bool]:
+        """``(turn to send, verified)``; verified means unchanged since Claude
+        produced it. A verified turn without thinking goes out as GAIA built it,
+        so a request with no thinking anywhere is unchanged byte for byte."""
         content = message.get("content")
-        if not isinstance(content, list):
-            return message
-        ids = tuple(
-            b.get("id")
-            for b in content
-            if isinstance(b, dict) and b.get("type") == "tool_use"
-        )
-        turn = self._replay_turns.get(ids) if ids else None
-        if turn is None:
-            return message
+        if isinstance(content, str):
+            blocks: List[Any] = [{"type": "text", "text": content}]
+        elif isinstance(content, list):
+            blocks = content
+        else:
+            return message, False
         if _has_thinking(message):
-            return message  # the caller already sent Anthropic-shaped thinking
-        if _turn_view(content) != turn.view:
+            return message, False  # the caller already sent Anthropic-shaped thinking
+        view = _turn_view(blocks)
+        key = _replay_key(view, prefix_digest)
+        turn = self._replay_turns.get(key)
+        if turn is None:
+            return message, False
+        if _view_digest(view) != turn.view_digest:
             logger.debug(
-                "Not replaying thinking for tool turn %s: its text or tool calls "
-                "were edited since Claude produced it",
-                list(ids),
+                "Not replaying thinking for a turn: its text or tool calls "
+                "were edited since Claude produced it"
             )
-            return message
+            return message, False
         if prefix_digest != turn.prefix_digest:
             logger.debug(
-                "Not replaying thinking for tool turn %s: the system prompt, tools "
-                "or earlier messages changed since Claude produced it",
-                list(ids),
+                "Not replaying thinking for a turn: the system prompt, tools "
+                "or earlier messages changed since Claude produced it"
             )
-            return message
-        return {**message, "content": copy.deepcopy(turn.blocks)}
+            return message, False
+        if turn.blocks is None:
+            return message, True
+        return {**message, "content": copy.deepcopy(turn.blocks)}, True
 
     def _remember_turn(
         self, blocks: List[dict], name_map: Dict[str, str], prefix_digest: str
     ) -> None:
-        """Keep a tool turn that carries thinking so the next request can send
-        it back verbatim. ``blocks`` are in the API's order and shape."""
-        if not any(b["type"] in _THINKING_BLOCK_TYPES for b in blocks):
-            return
-        ids = tuple(b["id"] for b in blocks if b["type"] == "tool_use")
-        if not ids:
-            return
+        """Keep a turn so later requests can send it back verbatim, thinking
+        included. ``blocks`` are in the API's order and shape."""
         unreplayable = sorted(
             {b["type"] for b in blocks if b["type"] not in _REPLAYABLE_BLOCK_TYPES}
         )
@@ -787,8 +986,8 @@ class ClaudeProvider(LLMClient):
         )
         if unreplayable or unsigned:
             logger.debug(
-                "Not keeping thinking for tool turn %s: %s",
-                list(ids),
+                "Not keeping turn %s: %s",
+                [b.get("id") for b in blocks if b["type"] == "tool_use"],
                 (
                     f"it holds {unreplayable} blocks"
                     if unreplayable
@@ -799,8 +998,14 @@ class ClaudeProvider(LLMClient):
         view = _turn_view(
             blocks, restore=lambda name: self._restore_tool_name(name_map, name)
         )
-        self._replay_turns[ids] = _ReplayTurn(blocks, view, prefix_digest)
-        self._replay_turns.move_to_end(ids)
+        if not view[0] and not view[1]:
+            return  # thinking only: GAIA's history keeps nothing of it
+        key = _replay_key(view, prefix_digest)
+        thinks = any(b["type"] in _THINKING_BLOCK_TYPES for b in blocks)
+        self._replay_turns[key] = _ReplayTurn(
+            blocks if thinks else None, _view_digest(view), prefix_digest
+        )
+        self._replay_turns.move_to_end(key)
         while len(self._replay_turns) > _MAX_REPLAY_TURNS:
             self._replay_turns.popitem(last=False)
 
@@ -828,8 +1033,16 @@ class ClaudeProvider(LLMClient):
 
     # ── error translation ───────────────────────────────────────────────
 
+    def _raise_if_overflow(self, exc: Exception) -> None:
+        """A too-long prompt becomes the typed overflow the agent trims and retries."""
+        if isinstance(exc, self._anthropic.APIStatusError) and (
+            is_provider_context_overflow(exc.status_code, getattr(exc, "body", None))
+        ):
+            raise LemonadeContextOverflowError() from exc
+
     def _raise_actionable(self, exc: Exception) -> None:
         anthropic = self._anthropic
+        self._raise_if_overflow(exc)
         if isinstance(exc, anthropic.AuthenticationError):
             raise RuntimeError(
                 "Anthropic rejected the credential (401). Check ANTHROPIC_API_KEY "
@@ -893,6 +1106,7 @@ class ClaudeProvider(LLMClient):
         if stream:
             return self._stream_chat(params, name_map, prefix_digest)
 
+        assert_provider_permitted(self._DESTINATION)
         start = time.monotonic()
         try:
             response = self._client.messages.create(**params)
@@ -949,11 +1163,17 @@ class ClaudeProvider(LLMClient):
                     "content": "".join(text_parts) or None,
                 }
             )
-        return "".join(text_parts)
+        text = "".join(text_parts)
+        if not text:
+            _check_empty_reply(stop_reason, api_blocks)
+        else:
+            self._remember_turn(api_blocks, name_map, prefix_digest)
+        return text
 
     def _stream_chat(
         self, params: dict, name_map: Dict[str, str], prefix_digest: str
     ) -> Iterator[str]:
+        assert_provider_permitted(self._DESTINATION)
         start = time.monotonic()
         try:
             events = self._client.messages.create(**params, stream=True)
@@ -965,11 +1185,13 @@ class ClaudeProvider(LLMClient):
         tool_slots: Dict[int, dict] = {}
         api_blocks: Dict[int, dict] = {}
         stop_reason = ""
+        saw_message_start = False
         usage_totals = _UsageTotals()
         try:
             for event in events:
                 etype = event.type
                 if etype == "message_start":
+                    saw_message_start = True
                     # The only event carrying the cache counters; message_delta
                     # then supersedes output_tokens with the final figure.
                     usage_totals.absorb(getattr(event.message, "usage", None))
@@ -1037,6 +1259,12 @@ class ClaudeProvider(LLMClient):
                     "content": "".join(text_parts) or None,
                 }
             )
+        elif text_parts:
+            self._remember_turn(
+                [api_blocks[i] for i in sorted(api_blocks)], name_map, prefix_digest
+            )
+        elif saw_message_start:
+            _check_empty_reply(stop_reason, list(api_blocks.values()))
 
     def _capture_usage(self, usage: Any, elapsed: float) -> None:
         """Record one call's usage, cache counters included.
@@ -1056,6 +1284,8 @@ class ClaudeProvider(LLMClient):
             "prompt_tokens": prompt_tokens,
             "completion_tokens": output_tokens,
             "total_tokens": prompt_tokens + output_tokens,
+            # The OpenAI-shaped name the agent's turn totals sum.
+            "cached_tokens": cache_read,
             "cache_read_input_tokens": cache_read,
             "cache_creation_input_tokens": cache_write,
             "uncached_input_tokens": uncached,
@@ -1109,3 +1339,151 @@ class ClaudeProvider(LLMClient):
         return result if isinstance(result, str) else "".join(result)
 
     # load_model() / unload_model() inherited from ABC - raise NotSupportedError
+
+
+class GatewayClaudeProvider(ClaudeProvider):
+    """Claude through the AMD LLM gateway's Anthropic Messages route.
+
+    Lemonade reaches the gateway's OpenAI-style route, which drops
+    ``cache_control``, so every call re-bills the whole prompt. This route keeps
+    the markers ``ClaudeProvider`` places, so the fixed prefill and the history
+    are read from cache.
+    """
+
+    _DESTINATION = "AMD LLM Gateway"
+
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        max_retries: int = 3,
+        timeout: float = 300.0,
+        **_kwargs,
+    ):
+        # Lemonade's own kwargs (base_url, its api_key) arrive here too and are
+        # ignored: neither belongs on a request to the gateway.
+        from gaia.llm import gateway  # pylint: disable=import-outside-toplevel
+
+        if gateway.gateway_claude_upstream_id(model) is None:
+            raise ValueError(
+                f"{model!r} is not an AMD gateway Claude model: its id must "
+                f"start with '{gateway.GATEWAY_PROVIDER}.Claude-'. "
+                f"{TUI_MODEL_SWITCH_HINT}"
+            )
+        # Before the base URL, so Local only is what a blocked user is told.
+        assert_provider_permitted(self._DESTINATION)
+        self._gateway_model = model
+        self._gateway_token_source = None
+        self._timeout = timeout
+        self._base_url = gateway.gateway_anthropic_base_url()
+        super().__init__(
+            model=model,
+            system_prompt=system_prompt,
+            max_retries=max_retries,
+            timeout=timeout,
+        )
+
+    @staticmethod
+    def _initial_model(model: Optional[str]) -> str:
+        from gaia.llm.gateway import (  # pylint: disable=import-outside-toplevel
+            gateway_claude_upstream_id,
+        )
+
+        return gateway_claude_upstream_id(model) or ""
+
+    def _make_client(
+        self, sdk: Any, api_key: Optional[str], max_retries: int, timeout: float
+    ) -> Any:
+        from gaia.llm import gateway  # pylint: disable=import-outside-toplevel
+
+        token, self._gateway_token_source = gateway.resolve_gateway_token_with_source()
+        gateway.warn_if_claude_token_may_drift(self._gateway_token_source)
+        return sdk.Anthropic(
+            # Explicit, so the SDK reads no ANTHROPIC_* credential from the
+            # environment. _build_params omits the header it would carry.
+            api_key=token,
+            base_url=self._base_url,
+            max_retries=max_retries,
+            timeout=timeout,
+            default_headers={
+                gateway.DEFAULT_AUTH_HEADER_NAME: (
+                    f"{gateway.DEFAULT_AUTH_HEADER_PREFIX}{token}"
+                )
+            },
+        )
+
+    @property
+    def provider_name(self) -> str:
+        return "AMD LLM Gateway (Claude)"
+
+    def _build_params(self, *args, **kwargs):
+        params, name_map, prefix_digest = super()._build_params(*args, **kwargs)
+        # The gateway authenticates on its APIM header alone; no Anthropic
+        # credential header goes with it. Per request, where the SDK honours it.
+        omit = self._anthropic.Omit
+        params["extra_headers"] = {"X-Api-Key": omit(), "Authorization": omit()}
+        return params, name_map, prefix_digest
+
+    def _resolve_model(self, model: Optional[str]) -> str:
+        """The caller's gateway Claude id when it passes one, else this client's.
+
+        Callers pass the agent's ``amd.*`` id; anything else (a local id
+        threaded through a shared kwarg) is not a model this route serves.
+        """
+        from gaia.llm.gateway import (  # pylint: disable=import-outside-toplevel
+            gateway_claude_upstream_id,
+        )
+
+        return gateway_claude_upstream_id(model) or self._model
+
+    def _raise_actionable(self, exc: Exception) -> None:
+        sdk = self._anthropic
+        where = f"the AMD LLM gateway at {self._base_url}"
+        # APITimeoutError subclasses APIConnectionError; a slow gateway isn't off-VPN.
+        if isinstance(exc, sdk.APITimeoutError):
+            raise RuntimeError(
+                f"{where} did not answer within {self._timeout:g}s, so the request "
+                "timed out. The gateway was reached but is slow or overloaded; "
+                "retry in a minute."
+            ) from exc
+        if isinstance(exc, sdk.APIConnectionError):
+            raise RuntimeError(
+                f"Could not reach {where}: {str(exc).rstrip('.')}. It needs "
+                "AMD's network or VPN; connect, then retry."
+            ) from exc
+        if not isinstance(exc, sdk.APIStatusError):
+            raise exc
+        self._raise_if_overflow(exc)
+        status = exc.status_code
+        if status in (401, 403):
+            from gaia.llm import gateway  # pylint: disable=import-outside-toplevel
+
+            try:
+                gateway_status = gateway.GatewayManager().status(
+                    timeout=gateway.STATUS_PROBE_TIMEOUT
+                )
+            except gateway.GatewayError as gateway_error:  # keep the original 401
+                logger.debug(
+                    "Could not inspect Lemonade gateway auth state: %s", gateway_error
+                )
+                gateway_status = None
+            raise RuntimeError(
+                f"{where} rejected the token (HTTP {status}). "
+                + gateway.explain_rejected_token(
+                    self._gateway_token_source, gateway_status
+                )
+            ) from exc
+        if status == 429:
+            raise RuntimeError(
+                f"{where} is rate limiting requests (HTTP 429): {exc.message}. "
+                "Wait a minute, then retry."
+            ) from exc
+        if status in (400, 404) and "not found" in str(exc.message).lower():
+            raise RuntimeError(
+                f"{where} has no deployment of {self._gateway_model} "
+                f"(HTTP {status}): {exc.message}. {TUI_MODEL_SWITCH_HINT}"
+            ) from exc
+        raise RuntimeError(
+            f"{where} returned HTTP {status}: {exc.message}. Retry in a minute; "
+            "if it persists, see https://amd-gaia.ai/docs/guides/llm-gateway."
+        ) from exc

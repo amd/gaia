@@ -43,7 +43,7 @@ jobs:
           node-version: '22'
 
       - name: Install Mintlify CLI
-        run: npm install -g mintlify
+        run: npm install -g mintlify@4.2.1199
 
       - name: Validate docs with Mintlify
         working-directory: docs

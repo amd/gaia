@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from gaia.config import gaia_home
 from gaia.database.mixin import DatabaseMixin
+from gaia.database.sql_safety import validate_identifier
 from gaia.logger import get_logger
 from gaia.utils.sqlite_wal import enable_wal
 
@@ -43,6 +44,19 @@ _VALID_SQL_TYPES = {
 }
 _COLUMN_DEF_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+_TABLE_NAME_RULE = (
+    "Table names may use only letters, digits and underscores, and must not "
+    "start with a digit (pattern [A-Za-z_][A-Za-z0-9_]*)."
+)
+
+
+def _suggest_name(name: Any) -> str:
+    """Return a valid table name close to *name*, for an error message."""
+    clean = re.sub(r"[^A-Za-z0-9_]", "_", str(name))
+    if clean[0].isdigit():
+        clean = f"t_{clean}"
+    return clean[:64]
+
 
 def _norm_type(col_type: str) -> str:
     """Declared types that differ only by case or spacing count as the same."""
@@ -73,6 +87,7 @@ class ScratchpadService(DatabaseMixin):
     MAX_TABLES = 100
     MAX_ROWS_PER_TABLE = 1_000_000
     MAX_TOTAL_SIZE_BYTES = 100 * 1024 * 1024  # 100MB
+    MAX_NAME_LENGTH = 64
 
     def __init__(self, db_path: Optional[str] = None):
         """Initialize scratchpad service.
@@ -136,7 +151,8 @@ class ScratchpadService(DatabaseMixin):
         """Create a prefixed scratchpad table.
 
         Args:
-            name: Table name (will be prefixed with 'scratch_').
+            name: Table name matching [A-Za-z_][A-Za-z0-9_]*, stored with a
+                'scratch_' prefix. Invalid names are rejected, not rewritten.
             columns: Column definitions in SQLite syntax,
                      e.g., "date TEXT, amount REAL, description TEXT"
 
@@ -146,7 +162,7 @@ class ScratchpadService(DatabaseMixin):
         Raises:
             ValueError: If table limit exceeded or name is invalid.
         """
-        safe_name = self._sanitize_name(name)
+        safe_name = self._validate_name(name)
         full_name = f"{self.TABLE_PREFIX}{safe_name}"
 
         # Check table limit
@@ -197,7 +213,7 @@ class ScratchpadService(DatabaseMixin):
         Raises:
             ValueError: If table does not exist or row limit would be exceeded.
         """
-        safe_name = self._sanitize_name(table)
+        safe_name = self._validate_name(table)
         full_name = f"{self.TABLE_PREFIX}{safe_name}"
 
         if not self.table_exists(full_name):
@@ -352,7 +368,7 @@ class ScratchpadService(DatabaseMixin):
         Returns:
             Confirmation message.
         """
-        safe_name = self._sanitize_name(name)
+        safe_name = self._validate_name(name)
         full_name = f"{self.TABLE_PREFIX}{safe_name}"
 
         if not self.table_exists(full_name):
@@ -384,8 +400,9 @@ class ScratchpadService(DatabaseMixin):
         if count > 0:
             try:
                 self._db.execute("VACUUM")
-            except Exception as exc:
-                log.debug("VACUUM after clear_all failed (%s); non-critical", exc)
+            except sqlite3.Error as exc:
+                # The size cap ignores freed pages, so only disk use is affected.
+                log.warning("VACUUM after clear_all failed: %s", exc)
 
         log.info(f"Cleared {count} scratchpad tables")
         return f"Dropped {count} scratchpad table(s)."
@@ -429,31 +446,29 @@ class ScratchpadService(DatabaseMixin):
         finally:
             scratch.close()
 
-    def _sanitize_name(self, name: str) -> str:
-        """Sanitize table/column names to prevent SQL injection.
+    def _validate_name(self, name: str) -> str:
+        """Return *name* unchanged if it is a valid table name, else raise.
 
-        Only allows alphanumeric and underscore characters.
-        Prepends 't_' if name starts with a digit.
-
-        Args:
-            name: Raw table name.
-
-        Returns:
-            Sanitized name safe for use in SQL identifiers.
+        Names are never rewritten: two names that differ only in punctuation
+        would otherwise land in the same table.
 
         Raises:
-            ValueError: If name is empty or None.
+            ValueError: Naming the rule and a valid name to use instead.
         """
         if not name:
-            raise ValueError("Table name cannot be empty.")
-
-        clean = re.sub(r"[^a-zA-Z0-9_]", "_", name)
-        if not clean or clean[0].isdigit():
-            clean = f"t_{clean}"
-        # Truncate to reasonable length
-        if len(clean) > 64:
-            clean = clean[:64]
-        return clean
+            raise ValueError(f"Table name cannot be empty. {_TABLE_NAME_RULE}")
+        if isinstance(name, str) and len(name) > self.MAX_NAME_LENGTH:
+            raise ValueError(
+                f"Table name {name[:20]!r}... is {len(name)} characters; the "
+                f"limit is {self.MAX_NAME_LENGTH}. Choose a shorter name."
+            )
+        try:
+            return validate_identifier(name, "table name", "scratchpad")
+        except ValueError as e:
+            raise ValueError(
+                f"Invalid table name {name!r}. {_TABLE_NAME_RULE} "
+                f"For example: '{_suggest_name(name)}'."
+            ) from e
 
     def _count_tables(self) -> int:
         """Count existing scratchpad tables."""
