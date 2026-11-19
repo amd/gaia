@@ -93,8 +93,8 @@ export interface StreamEvent {
     narration?: string;
     /** The skill a turn runs on (skill_use). */
     skill?: string;
-    /** How that skill came to be loaded (skill_use): 'model', 'auto' or 'loaded'. */
-    how?: 'model' | 'auto' | 'loaded';
+    /** How that skill came to be loaded (skill_use): 'model', 'user' (typed /name), 'auto' or 'loaded'. */
+    how?: 'model' | 'user' | 'auto' | 'loaded';
     /** Every skill now loaded in the chat (skill_use). */
     loaded?: string[];
     title?: string;

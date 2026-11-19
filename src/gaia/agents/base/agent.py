@@ -5663,8 +5663,9 @@ Do NOT wrap conversational replies in JSON.
     def _announce_skill(self, name: str, how: str) -> None:
         """Tell the console a turn runs on *name*, once per skill per turn.
 
-        *how* is ``"model"`` (the model called ``load_skill``), ``"auto"`` (GAIA
-        loaded it for a ``loads_with`` tool) or ``"loaded"`` (already loaded).
+        *how* is ``"model"`` (the model called ``load_skill``), ``"user"`` (the
+        user typed ``/<name>``), ``"auto"`` (GAIA loaded it for a ``loads_with``
+        tool) or ``"loaded"`` (already loaded).
         """
         seq = getattr(self, "_turn_seq", 0)
         if self._skills_announced is None or self._skills_announced_turn != seq:
@@ -5682,7 +5683,7 @@ Do NOT wrap conversational replies in JSON.
     def describe_skills(self) -> List[Dict[str, str]]:
         """``[{"name", "how"}]`` for each loaded skill, in load order.
 
-        *how* is ``"model"`` or ``"auto"`` as in :meth:`_announce_skill`, or
+        *how* is ``"model"``, ``"user"`` or ``"auto"`` as in :meth:`_announce_skill`, or
         ``"always"`` for a skill the agent loads on its own at startup.
         """
         origins = self._skill_origins or {}
@@ -6078,6 +6079,10 @@ Do NOT wrap conversational replies in JSON.
             self._active_skill_filter = [
                 n for n in self._active_skill_filter if n != name
             ]
+        # A later load reports who asked then, not who asked the first time.
+        origins = getattr(self, "_skill_origins", None)
+        if origins:
+            origins.pop(name, None)
         self.rebuild_system_prompt()
         logger.info(
             "Unloaded skill '%s'%s",
@@ -12113,6 +12118,7 @@ Do NOT wrap conversational replies in JSON.
                     self._console_cancelled if stoppable else None,
                 ),
             ):
+                user_input = self._expand_skill_command(user_input)
                 return self._process_query_impl(user_input, max_steps, trace, filename)
         finally:
             # The impl re-raises on purpose (the wrong-ctx reload its caller
@@ -12125,6 +12131,38 @@ Do NOT wrap conversational replies in JSON.
             # backdate the next one.
             self._pre_turn_spans = None
             self._run_turn_end_hooks()
+
+    def _expand_skill_command(self, user_input: Any) -> Any:
+        """Run ``/<skill-name> request`` on that skill, as Claude Code does.
+
+        A message that does not start with an installed skill's name is
+        returned unchanged, so a path like ``/tmp`` still reads as text. Only an
+        agent with the skill library (``activate_skill``) takes commands.
+        """
+        activate = getattr(self, "activate_skill", None)
+        if not callable(activate) or not isinstance(user_input, str):
+            return user_input
+        from gaia.agents.base.history import (
+            MEMORY_CONTEXT_FOOTER,
+            MEMORY_CONTEXT_HEADER,
+        )
+        from gaia.skills.command import parse_skill_command, skill_command_message
+
+        # MemoryMixin puts its per-turn block before the user's text; keep it.
+        memory, typed = "", user_input
+        fence = MEMORY_CONTEXT_FOOTER + "\n\n"
+        if user_input.startswith(MEMORY_CONTEXT_HEADER) and fence in user_input:
+            head, _, typed = user_input.partition(fence)
+            memory = head + fence
+        command = parse_skill_command(typed)
+        if command is None:
+            return user_input
+        # Rescanned: the user may have added the skill since this chat began.
+        if command.name not in self.skill_manager.discover(force=True):
+            return user_input
+        return memory + skill_command_message(
+            command, activate(command.name, how="user")
+        )
 
     def _flush_post_turn_record(self) -> None:
         """Write the post-answer spans and stop routing waits to this turn."""

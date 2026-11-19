@@ -78,6 +78,15 @@ type CanonicalStatusEvent struct {
 	// HistoryCut is set when older turns just left the model's view; Message
 	// then carries the line to keep in the transcript.
 	HistoryCut *HistoryCut `json:"history_cut,omitempty"`
+	// Skills are the installed skills the user can run by typing /<name>. Sent
+	// with the model ping and after /skills; nil means "not reported".
+	Skills []SkillCommand `json:"skills,omitempty"`
+}
+
+// SkillCommand is one installed skill as the "/" palette lists it.
+type SkillCommand struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 // HistoryCut sizes the turns no longer replayed to the model.

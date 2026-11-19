@@ -21,6 +21,7 @@ import { useT } from '../../i18n/useT';
 
 const ORIGIN_LABEL: Record<SkillOrigin, MessageKey> = {
     model: 'skills.how.model',
+    user: 'skills.how.user',
     auto: 'skills.how.auto',
     always: 'skills.how.always',
 };
