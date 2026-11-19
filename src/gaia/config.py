@@ -54,6 +54,15 @@ GAIA_CONFIG_FILE = Path(
     os.getenv("GAIA_CONFIG_FILE", str(GAIA_CONFIG_DIR / "config.json"))
 )
 
+#: Where the image tool saves what it generates, below ``GAIA_CONFIG_DIR``.
+GENERATED_IMAGES_SUBDIR = Path("cache", "sd", "images")
+
+
+def generated_images_dir() -> Path:
+    """Return the folder the image tool saves into, read at call time."""
+    return GAIA_CONFIG_DIR / GENERATED_IMAGES_SUBDIR
+
+
 # Read-aloud speed, as a percentage of Kokoro's normal speed.
 READ_ALOUD_MIN_SPEED = 50
 READ_ALOUD_MAX_SPEED = 200

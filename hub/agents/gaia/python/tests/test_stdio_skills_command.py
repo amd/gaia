@@ -51,6 +51,37 @@ def test_bare_skills_lists_what_is_installed():
     assert "`bro`, `deslop`" in events[-1]["answer"]
 
 
+def test_skills_tells_the_tui_what_it_can_offer_as_slash_commands():
+    class _Skill:
+        def __init__(self, description):
+            self.description = description
+
+    class _RunnableAgent(_Agent):
+        def activate_skill(self, name, how="model"):
+            raise AssertionError("listing must not load anything")
+
+    agent = _RunnableAgent()
+    agent.skill_manager.discover = lambda: {
+        "deslop": _Skill("Tidy code."),
+        "bro": _Skill(None),
+    }
+
+    status = _events(agent, "/skills")[0]
+
+    assert status == {
+        "type": "status",
+        "message": "",
+        "skills": [
+            {"name": "bro", "description": ""},
+            {"name": "deslop", "description": "Tidy code."},
+        ],
+    }
+
+
+def test_an_agent_that_cannot_run_skills_offers_none():
+    assert _events(_Agent(), "/skills")[0]["skills"] == []
+
+
 def test_add_without_confirm_previews_and_warns_but_adds_nothing(monkeypatch):
     preview = link.LinkPreview(
         link="acme/skills",

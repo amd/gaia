@@ -349,7 +349,7 @@ def list_knowledge(
         pattern="^(updated_at|confidence|created_at|category|context|content|use_count)$",
     ),
     order: str = Query("desc", pattern="^(asc|desc)$"),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=2**63 - 1),
     limit: int = Query(50, ge=1, le=200),
     about_user: bool = Query(
         False,

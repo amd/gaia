@@ -1170,7 +1170,7 @@ export function MemoryDashboard() {
                         >
                             <ArrowLeft size={18} />
                         </button>
-                        <h1>{t('mem.title')} <span className="mem-beta" style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginInlineStart: 8, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{t('mem.beta')}</span></h1>
+                        <h1>{t('mem.title')} <span className="mem-beta" style={{ fontSize: 11, fontWeight: 500, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginInlineStart: 8, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{t('mem.beta')}</span></h1>
                     </div>
                     <div className="memory-dashboard-header-actions">
                         {activeTab === 'advanced' && <>
@@ -2121,7 +2121,7 @@ export function MemoryDashboard() {
                             {/* ── Settings ─────────────────────── */}
                             <div className="mem-section">
                                 <div className="mem-section-title">
-                                    <Shield size={14} /> {t('mem.settings.title')} <span className="mem-beta" style={{ fontSize: 10, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '1px 6px', borderRadius: 4, marginInlineStart: 6, verticalAlign: 'middle' }}>{t('mem.beta')}</span>
+                                    <Shield size={14} /> {t('mem.settings.title')} <span className="mem-beta" style={{ fontSize: 10, fontWeight: 500, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '1px 6px', borderRadius: 4, marginInlineStart: 6, verticalAlign: 'middle' }}>{t('mem.beta')}</span>
                                 </div>
                                 <div className="mem-setting-row">
                                     <div className="mem-setting-info">
@@ -2227,11 +2227,11 @@ export function MemoryDashboard() {
                                         >
                                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
                                                 <span className="mem-beta" style={{
-                                                    fontSize: 11, fontWeight: 700, color: 'var(--accent-yellow)',
+                                                    fontSize: 11, fontWeight: 500, color: 'var(--accent-yellow)',
                                                     background: 'var(--accent-yellow-dim)', padding: '3px 10px',
                                                     borderRadius: 4,
                                                 }}>{t('mem.beta')}</span>
-                                                <h2 id="mem-beta-confirm-title" style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>
+                                                <h2 id="mem-beta-confirm-title" style={{ fontSize: 16, fontWeight: 500, color: 'var(--text-primary)' }}>
                                                     {t(cfg.title)}
                                                 </h2>
                                             </div>
@@ -2264,7 +2264,7 @@ export function MemoryDashboard() {
                                                         }
                                                     }}
                                                     style={{
-                                                        padding: '8px 24px', fontSize: 13, fontWeight: 600,
+                                                        padding: '8px 24px', fontSize: 13, fontWeight: 500,
                                                         borderRadius: 6, border: 'none', cursor: 'pointer',
                                                         background: 'var(--accent-fill)',
                                                         color: 'var(--accent-fill-text)',

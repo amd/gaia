@@ -67,6 +67,12 @@ class RAGConfig:
     vlm_model: str = "Gemma-4-E4B-it-GGUF"
     use_vlm: bool = True  # False: never read PDF/PPTX images, even if the VLM is installed; image files then fail to index
 
+    # Optional reranking through Lemonade /rerank (off by default)
+    enable_reranking: bool = False
+    reranking_model: Optional[str] = None  # None: first downloaded `reranking` model
+    reranking_candidate_multiplier: int = 3  # vector candidates = max_chunks * this
+    reranking_timeout: int = 30  # seconds per rerank call
+
     # Security
     allowed_paths: Optional[List[str]] = None
 

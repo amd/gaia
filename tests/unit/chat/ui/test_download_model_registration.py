@@ -11,6 +11,7 @@ import asyncio
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from gaia.llm import lemonade_client as lc
 from gaia.ui.routers import system
@@ -348,3 +349,322 @@ def test_progress_follows_the_model_once_lemonade_drops_the_user_prefix(monkeypa
     assert system._get_download_progress(listed)["percent"] == 40
     assert system._get_download_progress(lc.GPT_OSS_20B_MODEL_NAME)["percent"] == 40
     assert system._get_download_progress("gpt-oss-20b-mxfp4-GGUF") is None
+
+
+def _broken_stream(monkeypatch, exc):
+    """A pull whose SSE stream breaks as soon as it is read."""
+
+    class _Broken:
+        status_code = 200
+
+        async def aiter_text(self):
+            raise exc
+            yield ""  # pragma: no cover
+
+    class _Stream:
+        async def __aenter__(self):
+            return _Broken()
+
+        async def __aexit__(self, *exc_args):
+            return False
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_args):
+            return False
+
+        def stream(self, method, url, json=None, headers=None):
+            return _Stream()
+
+        async def get(self, url, params=None, headers=None):
+            return httpx.Response(
+                200, json={"data": []}, request=httpx.Request("GET", url)
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+
+async def _keep(_model_name):
+    return None
+
+
+def test_an_empty_stream_error_still_names_what_happened(monkeypatch):
+    """A dropped httpx stream often has no message; a blank reason is not one."""
+    monkeypatch.setattr(system, "_download_progress", {})
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    _broken_stream(monkeypatch, httpx.ReadError(""))
+
+    asyncio.run(system._stream_lemonade_pull("Some-Unknown-GGUF", False))
+
+    progress = system._get_download_progress("Some-Unknown-GGUF")
+    assert progress["state"] == "error"
+    assert progress["message"] == (
+        "Download stream interrupted: the connection to the model server closed"
+    )
+
+
+def test_a_stream_error_keeps_its_own_message(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    _broken_stream(monkeypatch, httpx.ReadError("connection reset by peer"))
+
+    asyncio.run(system._stream_lemonade_pull("Some-Unknown-GGUF", False))
+
+    message = system._get_download_progress("Some-Unknown-GGUF")["message"]
+    assert message == "Download stream interrupted: connection reset by peer"
+
+
+def test_a_failed_download_outlives_the_terminal_window(monkeypatch):
+    """The failure has to survive Settings closing and a hidden window's poll."""
+    monkeypatch.setattr(system, "_DOWNLOAD_PROGRESS_TTL", 0)
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress(
+        "Some-GGUF", {"state": "error", "model_name": "Some-GGUF", "message": "boom"}
+    )
+
+    asyncio.run(system._evict_progress_after_ttl("Some-GGUF"))
+
+    assert system._get_download_progress("Some-GGUF")["message"] == "boom"
+
+
+def test_a_completed_download_still_retires_after_the_terminal_window(monkeypatch):
+    monkeypatch.setattr(system, "_DOWNLOAD_PROGRESS_TTL", 0)
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress(
+        "Some-GGUF", {"state": "complete", "model_name": "Some-GGUF"}
+    )
+
+    asyncio.run(system._evict_progress_after_ttl("Some-GGUF"))
+
+    assert system._get_download_progress("Some-GGUF") is None
+
+
+def test_the_terminal_window_does_not_clear_a_retry(monkeypatch):
+    monkeypatch.setattr(system, "_DOWNLOAD_PROGRESS_TTL", 0)
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress(
+        "Some-GGUF", {"state": "downloading", "model_name": "Some-GGUF"}
+    )
+
+    asyncio.run(system._evict_progress_after_ttl("Some-GGUF"))
+
+    assert system._get_download_progress("Some-GGUF")["state"] == "downloading"
+
+
+def _progress(model_name: str, state: str) -> dict:
+    return {"state": state, "model_name": model_name}
+
+
+def test_status_surfaces_a_download_of_a_model_other_than_the_active_one(monkeypatch):
+    """A Settings download of any model, not only the chat's, reaches the chrome."""
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress("default-GGUF", _progress("default-GGUF", "complete"))
+    system._set_download_progress(
+        "settings-GGUF", _progress("settings-GGUF", "downloading")
+    )
+
+    surfaced = system._surface_download_progress("default-GGUF")
+
+    assert surfaced["model_name"] == "settings-GGUF"
+
+
+def test_status_prefers_the_active_models_own_download(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress(
+        "settings-GGUF", _progress("settings-GGUF", "downloading")
+    )
+    system._set_download_progress(
+        "default-GGUF", _progress("default-GGUF", "downloading")
+    )
+
+    assert (
+        system._surface_download_progress("default-GGUF")["model_name"]
+        == "default-GGUF"
+    )
+
+
+def test_status_surfaces_a_failure_for_a_model_other_than_the_active_one(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress("default-GGUF", _progress("default-GGUF", "complete"))
+    system._set_download_progress("settings-GGUF", _progress("settings-GGUF", "error"))
+
+    assert system._surface_download_progress("default-GGUF")["state"] == "error"
+
+
+def test_status_hides_a_finished_download(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress("Some-GGUF", _progress("Some-GGUF", "complete"))
+
+    assert system._surface_download_progress("Some-GGUF") is None
+
+
+def test_status_uses_the_most_recent_of_two_other_downloads(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress("first-GGUF", _progress("first-GGUF", "downloading"))
+    system._set_download_progress(
+        "second-GGUF", _progress("second-GGUF", "downloading")
+    )
+
+    assert (
+        system._surface_download_progress("other-GGUF")["model_name"] == "second-GGUF"
+    )
+
+
+def _stream_of(monkeypatch, *blocks):
+    """A pull whose SSE stream yields *blocks* and then closes cleanly."""
+
+    class _Body:
+        status_code = 200
+
+        async def aiter_text(self):
+            for block in blocks:
+                yield block
+
+    class _Stream:
+        async def __aenter__(self):
+            return _Body()
+
+        async def __aexit__(self, *exc_args):
+            return False
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_args):
+            return False
+
+        def stream(self, method, url, json=None, headers=None):
+            return _Stream()
+
+        async def get(self, url, params=None, headers=None):
+            return httpx.Response(
+                200, json={"data": []}, request=httpx.Request("GET", url)
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+
+_HALFWAY = (
+    'event: progress\ndata: {"file": "a.gguf", "bytes_downloaded": 5, '
+    '"bytes_total": 10, "total_download_size": 10, "file_index": 1, '
+    '"total_files": 1}\n\n'
+)
+
+
+@pytest.mark.parametrize("blocks", [(), (_HALFWAY,)])
+def test_a_stream_that_just_ends_is_a_failure_not_a_download_forever(
+    monkeypatch, blocks
+):
+    """Only "complete" retires, so a silent close must not stay "downloading"."""
+    monkeypatch.setattr(system, "_download_progress", {})
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    _stream_of(monkeypatch, *blocks)
+
+    asyncio.run(system._stream_lemonade_pull("Some-Unknown-GGUF", False))
+
+    progress = system._get_download_progress("Some-Unknown-GGUF")
+    assert progress["state"] == "error"
+    assert progress["message"] == (
+        "Download stream interrupted: the model server ended the download "
+        "before it finished"
+    )
+    assert system._surface_download_progress(None)["state"] == "error"
+
+
+def test_a_stream_that_completes_and_closes_stays_complete(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    _stream_of(
+        monkeypatch,
+        _HALFWAY,
+        'event: complete\ndata: {"file_index": 1, "total_files": 1}\n\n',
+    )
+
+    asyncio.run(system._stream_lemonade_pull("Some-Unknown-GGUF", False))
+
+    assert system._get_download_progress("Some-Unknown-GGUF")["state"] == "complete"
+
+
+def test_a_stream_error_event_keeps_its_message_after_the_close(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    _stream_of(monkeypatch, _HALFWAY, 'event: error\ndata: {"error": "disk full"}\n\n')
+
+    asyncio.run(system._stream_lemonade_pull("Some-Unknown-GGUF", False))
+
+    assert system._get_download_progress("Some-Unknown-GGUF")["message"] == (
+        "disk full"
+    )
+
+
+def _dismiss(model_name: str):
+    return asyncio.run(
+        system.dismiss_download_failure(
+            system.DismissDownloadRequest(model_name=model_name)
+        )
+    )
+
+
+def test_dismiss_clears_only_the_failed_entry_for_that_model(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress("settings-GGUF", _progress("settings-GGUF", "error"))
+    system._set_download_progress("other-GGUF", _progress("other-GGUF", "error"))
+    system._set_download_progress(
+        "active-GGUF", _progress("active-GGUF", "downloading")
+    )
+
+    assert _dismiss("settings-GGUF") == {
+        "status": "dismissed",
+        "model": "settings-GGUF",
+    }
+    assert system._get_download_progress("settings-GGUF") is None
+    assert system._get_download_progress("other-GGUF")["state"] == "error"
+    assert system._get_download_progress("active-GGUF")["state"] == "downloading"
+
+
+def test_a_dismissed_failure_is_gone_from_the_next_status_read(monkeypatch):
+    """The dismissal lives on the server, so a reload's status poll stays clean."""
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress("settings-GGUF", _progress("settings-GGUF", "error"))
+
+    _dismiss("settings-GGUF")
+
+    assert system._surface_download_progress(None) is None
+
+
+def test_dismiss_matches_the_name_lemonade_lists_without_the_user_prefix(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress(
+        lc.GPT_OSS_20B_MODEL_NAME,
+        _progress(lc.GPT_OSS_20B_MODEL_NAME, "error"),
+    )
+
+    listed = lc.GPT_OSS_20B_MODEL_NAME[len("user.") :]
+    assert _dismiss(listed)["status"] == "dismissed"
+    assert system._get_download_progress(listed) is None
+
+
+def test_dismiss_never_clears_an_active_download_of_the_same_model(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress(
+        "retrying-GGUF", _progress("retrying-GGUF", "downloading")
+    )
+
+    assert _dismiss("retrying-GGUF")["status"] == "unchanged"
+    assert system._get_download_progress("retrying-GGUF")["state"] == "downloading"
+
+
+def test_dismiss_requires_a_model_name():
+    with pytest.raises(HTTPException) as err:
+        _dismiss("   ")
+
+    assert err.value.status_code == 400

@@ -442,14 +442,16 @@ def test_checkout_takes_the_turn_atomically_with_eviction(monkeypatch):
 
 
 class _SkilledAgent(_FakeAgent):
-    """A fake built on one embedder that can load skills, one of them broken."""
+    """A fake whose Settings can change under it and that loads skills, one broken."""
 
-    embedder = "embed-gemma-300m-FLM"
+    settings_changed = False
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._embedding_model = _SkilledAgent.embedder
         self.conversation_history = []
+
+    def built_settings_changed(self):
+        return _SkilledAgent.settings_changed
 
     def load_skill(self, name):
         if name == "broken":
@@ -457,22 +459,17 @@ class _SkilledAgent(_FakeAgent):
         self.loaded_skills[name] = object()
 
 
-def test_a_moved_embedder_rebuilds_the_agent_with_its_skills(monkeypatch):
+def test_changed_settings_rebuild_the_agent_with_its_skills(monkeypatch):
     monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _SkilledAgent(**kw))
-    monkeypatch.setattr(
-        "gaia.agents.registry.machine_embedding_model", lambda: _SkilledAgent.embedder
-    )
+    monkeypatch.setattr(_SkilledAgent, "settings_changed", False)
     reg = sr._SessionRegistry()
     session, _ = reg.checkout("a", use_claude=True, claude_model="claude-x")
     old = session.agent
     old.loaded_skills.update({"coding": object(), "broken": object()})
-    assert session.follow_embedder() is False
+    assert session.follow_settings() is False
 
-    monkeypatch.setattr(
-        "gaia.agents.registry.machine_embedding_model",
-        lambda: "user.embeddinggemma-300m-GGUF",
-    )
-    assert session.follow_embedder(model_id="ignored") is True
+    monkeypatch.setattr(_SkilledAgent, "settings_changed", True)
+    assert session.follow_settings(model_id="ignored") is True
     new = session.agent
     assert old.closed is True
     assert new.kwargs == {"use_claude": True, "claude_model": "claude-x"}

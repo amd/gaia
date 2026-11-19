@@ -5,7 +5,7 @@ import { useEffect, useRef } from 'react';
 import { AlertTriangle, X, AlertCircle, Bug } from 'lucide-react';
 import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../utils/mediaFiles';
 import { useT } from '../i18n/useT';
-import { serverFailureText } from '../utils/documentFailure';
+import { serverFailureText, serverNotAddedText } from '../utils/documentFailure';
 import './UnsupportedFeature.css';
 
 const GITHUB_NEW_ISSUE_URL = 'https://github.com/amd/gaia/issues/new';
@@ -290,7 +290,7 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
         Icon = AlertTriangle;
     } else if (serverFailureText(kind, t)) {
         // The file is fine; the model server didn't answer.
-        title = t('docs.notAddedServer', { name: filename });
+        title = serverNotAddedText(kind, filename, t) ?? t('docs.notAddedServer', { name: filename });
         detail = serverFailureText(kind, t) ?? error;
         issueUrl = null;
         Icon = AlertTriangle;

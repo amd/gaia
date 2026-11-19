@@ -203,12 +203,12 @@ def test_an_open_chat_follows_an_embedder_moved_in_settings(server, tmp_path):
         old = session.agent
         assert old._embedding_model == NPU_EMBEDDER
         old.conversation_history = [{"role": "user", "content": "hello"}]
-        assert session.follow_embedder(**kwargs) is False
+        assert session.follow_settings(**kwargs) is False
         assert session.agent is old
 
         GaiaConfig.save_key("embedding_device", "auto")
         # A later turn names no model: the chat keeps the one it is on.
-        assert session.follow_embedder(allowed_paths=kwargs["allowed_paths"])
+        assert session.follow_settings(allowed_paths=kwargs["allowed_paths"])
         assert session.agent is not old
         assert session.agent._embedding_model == EMBEDDER
         assert session.agent.model_id == NPU
@@ -233,7 +233,7 @@ def test_an_open_chat_follows_an_embedder_moved_in_settings(server, tmp_path):
             ),
             encoding="utf-8",
         )
-        assert session.follow_embedder(allowed_paths=kwargs["allowed_paths"])
+        assert session.follow_settings(allowed_paths=kwargs["allowed_paths"])
         moved = session.agent
         assert moved is not agent and moved._embedding_model == NPU_EMBEDDER
         assert moved.internet_off is True
@@ -243,3 +243,29 @@ def test_an_open_chat_follows_an_embedder_moved_in_settings(server, tmp_path):
         session.run_lock.release()
     finally:
         registry.clear()
+
+
+def test_only_a_moved_embedder_counts_as_changed(monkeypatch):
+    """The check behind every chat's rebuild, in the sidecar and the Agent UI.
+
+    An agent that recorded no embedder never rebuilds; an unreadable config
+    fails the turn loudly rather than quietly keeping the old embedder.
+    """
+    from gaia_agent import chat_agent as ca
+
+    from gaia.config import GaiaConfigError
+
+    agent = object.__new__(ca.ChatAgent)
+    monkeypatch.setattr(ca, "machine_embedding_model", lambda: EMBEDDER)
+    assert agent.embedder_changed() is False
+    agent._embedder_at_build = EMBEDDER
+    assert agent.embedder_changed() is False
+    agent._embedder_at_build = NPU_EMBEDDER
+    assert agent.embedder_changed() is True
+
+    def unreadable():
+        raise GaiaConfigError("config.json is not valid JSON")
+
+    monkeypatch.setattr(ca, "machine_embedding_model", unreadable)
+    with pytest.raises(GaiaConfigError):
+        agent.embedder_changed()
