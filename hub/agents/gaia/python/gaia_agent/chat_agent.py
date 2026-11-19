@@ -3216,10 +3216,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "files."
                     )
                 notes.append(_tool_import_hint(r.stderr, tool_names))
+                from gaia.agents.base.artifacts import retain_excerpt
+
                 result = _python_run_result(
                     r,
-                    r.stdout[:8000],
-                    r.stderr[:2000],
+                    retain_excerpt(self, r.stdout, 8000),
+                    retain_excerpt(self, r.stderr, 2000),
                     time.monotonic() - start,
                     " ".join(n for n in notes if n) or None,
                     system_python_runs=_shell_runs_any_python(self),
