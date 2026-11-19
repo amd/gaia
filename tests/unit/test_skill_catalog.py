@@ -77,8 +77,7 @@ def test_every_installed_skill_is_listed_with_its_description(starter_pack):
 
 def test_starter_pairs_name_only_skills_or_known_pending_ones(starter_pack):
     """A typo in pairs_with is silently inert at runtime, so catch it here."""
-    # Ship separately; each pair lights up once its skill lands.
-    pending = {"office-docs", "slide-decks"}
+    pending = {"slide-decks"}  # ships separately; the pair lights up once it lands
     for skill in starter_pack.values():
         unknown = set(skill.gaia.pairs_with) - set(starter_pack) - pending
         assert not unknown, f"{skill.name} pairs with unknown skill(s) {unknown}"
