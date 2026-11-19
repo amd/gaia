@@ -156,6 +156,10 @@ class GaiaConfig:
         default_device: Default inference device ('cpu', 'gpu', 'npu').
             GPU is the default — it's the most broadly available accelerated
             path on AMD hardware.
+        embedding_device: Where every chat embeds documents and memory.
+            ``None`` (the default) is the GPU on every PC; only a device in
+            ``TESTED_EMBEDDING_DEVICES`` can be set. Changing it re-embeds
+            stored memory.
         default_model: Persistent default model ID for model-bearing commands
             (``gaia chat`` / ``gaia llm`` / ``gaia prompt``) and for new
             Agent UI sessions (``ChatDatabase.create_session``). ``None``
@@ -244,6 +248,7 @@ class GaiaConfig:
 
     profile: str = "chat"
     default_device: str = "gpu"
+    embedding_device: Optional[str] = None
     default_model: Optional[str] = None
     vision_model: Optional[str] = None
     full_access: bool = False
@@ -328,6 +333,8 @@ class GaiaConfig:
             )
         if key == "hybrid_policy":
             return cls._check_hybrid_policy(value, "gaia config")
+        if key == "embedding_device":
+            return cls._check_embedding_device(value, "gaia config", offering=True)
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
@@ -420,6 +427,38 @@ class GaiaConfig:
                 f"{where}: 'llamacpp_backend' must be one of "
                 f"{', '.join(cls.LLAMACPP_BACKEND_CHOICES)}, but it is {value!r}. "
                 "Run `gaia config set llamacpp_backend auto` to let Lemonade choose."
+            )
+        return word
+
+    #: Devices an embedder has a build for. A saved one still loads.
+    EMBEDDING_DEVICE_CHOICES = ("gpu", "npu")
+    #: The ones whose search GAIA has proven, and so the only ones it offers.
+    #: The NPU build (embed-gemma-300m-FLM on FastFlowLM 1.0.7) ranked documents
+    #: no better than chance; add it back once a newer build passes.
+    TESTED_EMBEDDING_DEVICES = ("gpu",)
+
+    @classmethod
+    def _check_embedding_device(
+        cls, value: Any, where: str, *, offering: bool = False
+    ) -> Optional[str]:
+        """Normalise an ``embedding_device`` value; ``auto`` (or empty) is None.
+
+        *offering* refuses a device GAIA hasn't proven, for a new choice; a
+        value already saved is read without it.
+        """
+        if value is None:
+            return None
+        word = str(value).strip().lower()
+        if word in ("", "auto"):
+            return None
+        allowed = (
+            cls.TESTED_EMBEDDING_DEVICES if offering else cls.EMBEDDING_DEVICE_CHOICES
+        )
+        if word not in allowed:
+            raise GaiaConfigError(
+                f"{where}: 'embedding_device' must be "
+                f"{' or '.join(('auto',) + allowed)}, but it is {value!r}. "
+                "Set it to auto to embed on the GPU."
             )
         return word
 
@@ -642,6 +681,10 @@ class GaiaConfig:
             kwargs["cloud_reasoning_effort"] = cls._check_cloud_reasoning_effort(
                 kwargs["cloud_reasoning_effort"], f"GAIA config at {config_file}"
             )
+        if "embedding_device" in kwargs:
+            kwargs["embedding_device"] = cls._check_embedding_device(
+                kwargs["embedding_device"], f"GAIA config at {config_file}"
+            )
         where = f"GAIA config at {config_file}"
         for key in HYBRID_MODEL_KEYS:
             if key in kwargs:
@@ -808,6 +851,13 @@ class GaiaConfig:
             return
         if key == "cloud_reasoning_effort":
             setattr(self, key, self._check_cloud_reasoning_effort(value, "gaia config"))
+            return
+        if key == "embedding_device":
+            setattr(
+                self,
+                key,
+                self._check_embedding_device(value, "gaia config", offering=True),
+            )
             return
         if key == "context_sizes":
             raise GaiaConfigError(

@@ -562,6 +562,44 @@ class SidecarRegistry:
                 self._managers[agent_id] = holder
             return holder
 
+    def process_ids(self) -> "set[int]":
+        """The pid the daemon started for each running sidecar."""
+        with self._lock:
+            managers = [manager for manager, _ in self._managers.values()]
+        return {m.pid for m in managers if m.is_running and m.pid is not None}
+
+    def stop_idle(self) -> "list[str]":
+        """Stop every running sidecar that is not being started, stopped or
+        installed right now; return the ids stopped.
+
+        Never waits on an agent's lock: whoever holds it wants that agent.
+
+        Raises:
+            StopFailedError: A sidecar survived its tree-kill. The others are
+                still stopped first.
+        """
+        with self._lock:
+            holders = list(self._managers.items())
+        stopped, failures = [], []
+        for agent_id, (_, agent_lock) in holders:
+            if not agent_lock.acquire(blocking=False):
+                continue
+            try:
+                with self._lock:
+                    manager = self._managers[agent_id][0]
+                if not manager.is_running:
+                    continue
+                logger.info("registry: stopping idle %s sidecar", agent_id)
+                self._stop_locked(agent_id, manager)
+                stopped.append(agent_id)
+            except StopFailedError as e:
+                failures.append(str(e))
+            finally:
+                agent_lock.release()
+        if failures:
+            raise StopFailedError(" ".join(failures))
+        return stopped
+
     def shutdown_all(self) -> None:
         """Tree-kill every running sidecar (daemon shutdown path)."""
         with self._lock:

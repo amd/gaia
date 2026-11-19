@@ -19,42 +19,41 @@ Auto-load is the opt-in exception (:meth:`SkillSuggester.select`): local models
 often ignore even a correct suggestion, so a host may ask for the matches far
 above the suggestion floor, and clearly ahead of every other skill, to load
 before the turn. Skills that pair with the best match (``pairs_with``) are
-expected to score close to it, so they do not count as a rival, and one of
-them may load with it. Everything below that bar is only suggested.
+expected to score close to it, so they do not count as a rival. Pairing loads
+nothing: a companion loads only when it clears the floor and leads every
+remaining skill itself; otherwise it is named after the loaded skill as
+available. Everything below that bar is only suggested.
 
-Cheap by construction: each skill's ``"name: first line of description"`` is
-embedded once and cached by content, and a turn costs one query embedding. When
-the embedder is unavailable the turn simply gets no suggestion — the catalogue
-is still there — and selection backs off for a minute instead of retrying on
-every turn.
+What is embedded: each skill's description under EmbeddingGemma's document
+prompt (:data:`DOC_PROMPT`) and the request under its classification prompt
+(:data:`QUERY_PROMPT`). The skill's name is left out: a question that merely
+mentions it ("what does a source watch mean?") matched the name.
+
+Cheap by construction: each description is embedded once and cached by
+content, and a turn costs one query embedding. When the embedder is
+unavailable the turn simply gets no suggestion — the catalogue is still there
+— and selection backs off for a minute instead of retrying on every turn.
 
 Calibration set: ``tests/fixtures/skills/skill_suggestion_cases.json`` holds
 invented requests labelled with the hub skills they should suggest; a request
-with no label should match nothing. It has grown since the numbers below were
-taken and now covers every hub skill; ``tests/unit/test_skill_suggester.py``
-reads it as it is.
+with no label should match nothing. ``tests/unit/test_skill_suggester.py``
+splits it in two by a hash of the request: prompts and defaults are chosen on
+the tuning half and reported on the held-out half. The
+measured numbers, and the bar the defaults are held to, are ``AUTOLOAD_BAR``
+and ``SUGGEST_BAR`` in that test.
 
-Old measurement, not repeated on the current set: 54 requests over 20 hub
-skills, 12 of them negatives (5 near misses such as "what is a pivot
-table?"), with ``embeddinggemma-300m``. The best match on a positive request
-scored 0.30-0.67. The suggestion defaults below measured precision 0.84 and
-recall 0.93, and 3 of the 12 negatives got a suggestion — all near misses,
-which score as high as real requests (0.35-0.44), so no threshold separates
-them without losing recall.
+The auto-loads on a request that needs no skill are questions *about* a
+skill's topic ("what is RSS?"): they score as high as real requests, so no
+floor removes them without losing recall. A wrong load costs context, not
+correctness: at most :data:`MAX_AUTOLOADS_PER_TURN` skills load, under the
+host's share-of-context cap.
 
 Companions from ``pairs_with`` are added only when they score
 :data:`DEFAULT_COMPANION_THRESHOLD` against the request themselves. Pairing is
-mutual, so a hub skill like ``office-docs`` pairs with five others; added
-unconditionally, companions dropped precision to 0.52. Scores are
-embedder-specific: another embedding model needs its own calibration.
-
-Auto-load, also an old measurement: on an earlier 71-request set (26
-negatives) with the same embedder, :data:`DEFAULT_AUTOLOAD_THRESHOLD` and
-:data:`DEFAULT_AUTOLOAD_MARGIN` picked 11 skills on 10 requests, none outside
-a request's labels and none on a negative, for recall 0.21. That was before
-companions stopped counting as rivals, and it has not been re-measured on the
-current set, which is why auto-load is off by default. The opt-in calibration
-test prints a threshold-by-margin table for choosing new defaults.
+mutual, so a hub skill can pair with five others; added unconditionally,
+companions cost a third of the precision. Scores are embedder-specific:
+another embedding model needs its own prompts and its own calibration, which
+is why a host only auto-loads on the calibrated embedder.
 """
 
 from __future__ import annotations
@@ -76,7 +75,6 @@ from typing import (
 import numpy as np
 
 from gaia.agents.base.skill_catalog import CATALOG_PAIRS_SHOWN, companions, listed
-from gaia.agents.base.skill_loader import skill_doc_text
 from gaia.logger import get_logger
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -95,9 +93,9 @@ AUTOLOAD_ENV = "GAIA_SKILL_AUTOLOAD"
 AUTOLOAD_THRESHOLD_ENV = "GAIA_SKILL_AUTOLOAD_TAU"
 AUTOLOAD_MARGIN_ENV = "GAIA_SKILL_AUTOLOAD_MARGIN"
 
-#: Inclusive cosine floor a skill must reach to be suggested: the lowest best
-#: match on a positive request in the calibration set.
-DEFAULT_SUGGEST_THRESHOLD = 0.30
+#: Inclusive cosine floor a skill must reach to be suggested. Chosen on the
+#: tuning half: 0.30 suggested a skill on twice as many requests needing none.
+DEFAULT_SUGGEST_THRESHOLD = 0.35
 
 #: A skill is only suggested when it scores within this much of the best match.
 #: 0.05 measured precision 0.77 against 0.84 at 0.02, for 0.05 more recall.
@@ -111,8 +109,8 @@ DEFAULT_COMPANION_THRESHOLD = 0.40
 DEFAULT_SUGGEST_TOP_K = 3
 
 #: Inclusive cosine floor for loading a skill before the turn, when a host
-#: opts in. The highest negative measured scored 0.524.
-DEFAULT_AUTOLOAD_THRESHOLD = 0.55
+#: opts in. Chosen on the tuning half: 0.45 gave up a fifth of the loads.
+DEFAULT_AUTOLOAD_THRESHOLD = 0.40
 
 #: The best auto-load must lead every skill it does not pair with, loaded or
 #: not, by this much: two unrelated skills scoring alike means the request is
@@ -129,6 +127,24 @@ MAX_AUTOLOADS_PER_TURN = 2
 #: The request is cut to this many characters before embedding. A pasted
 #: document should not blow the embedder's context; the ask usually leads.
 QUERY_CHARS = 4000
+
+#: EmbeddingGemma's prompts for a document with no title and for a text to
+#: classify. On the tuning half, unprefixed text loaded half as many right
+#: skills at the same precision, and its retrieval query prompt fewer still.
+DOC_PROMPT = "title: none | text: "
+QUERY_PROMPT = "task: classification | query: "
+
+
+def skill_match_text(skill: "Skill") -> str:
+    """The text embedded for a skill: its description, or its name without one.
+
+    Only the first non-blank line of the description, like
+    :func:`gaia.agents.base.skill_loader.skill_doc_text`.
+    """
+    for line in (skill.description or "").splitlines():
+        if line.strip():
+            return DOC_PROMPT + line.strip()
+    return DOC_PROMPT + skill.name
 
 
 def _env_flag(name: str) -> Optional[bool]:
@@ -184,7 +200,7 @@ class SkillMatches:
     suggest: List[str] = field(default_factory=list)
 
 
-def render_suggestion(names: Sequence[str]) -> str:
+def render_suggestion(names: Sequence[str], after_autoload: bool = False) -> str:
     """The turn-context line naming *names*, or ``""`` when there are none.
 
     It goes into the user's message, never the system prompt: the system prompt
@@ -192,9 +208,16 @@ def render_suggestion(names: Sequence[str]) -> str:
 
     The best match is an instruction, because a small local model passes over
     a line that only offers names. The rest keep their order and stay an offer.
+    With *after_autoload* the best match is already loaded, so every name is
+    an offer.
     """
     if not names:
         return ""
+    if after_autoload:
+        return (
+            f"Also available: {', '.join(names)}. Call load_skill for one only "
+            "if this request needs it."
+        )
     line = (
         f"Call load_skill('{names[0]}') before you start: it covers this kind "
         "of request."
@@ -302,7 +325,9 @@ class SkillSuggester:
         if not candidates:
             return {}
         vectors = self._skill_vectors(candidates)
-        qvec = np.asarray(self._embed_fn(query[:QUERY_CHARS]), dtype=np.float32)
+        qvec = np.asarray(
+            self._embed_fn(QUERY_PROMPT + query[:QUERY_CHARS]), dtype=np.float32
+        )
         return {name: float(np.dot(qvec, vec)) for name, vec in vectors.items()}
 
     def suggest(
@@ -341,8 +366,9 @@ class SkillSuggester:
 
         The best match scoring at least :attr:`autoload_threshold` becomes an
         auto-load when it leads every skill it does not pair with, loaded or
-        not, by :attr:`autoload_margin`. Its best-scoring companion that also
-        clears :attr:`autoload_threshold` loads with it, up to
+        not, by :attr:`autoload_margin`. Its best-scoring companion loads with
+        it only when it clears :attr:`autoload_threshold` and leads every
+        remaining skill by :attr:`autoload_margin` itself, up to
         :attr:`max_autoloads`. The rest stay suggestions, in the same order.
         With no :attr:`autoload_threshold` nothing is ever an auto-load.
         """
@@ -370,7 +396,8 @@ class SkillSuggester:
 
         A companion of the leader is expected to score close to it, so it is
         not a rival: only skills the leader does not pair with are held to the
-        margin.
+        margin. Pairing never loads the companion: it must clear the floor and
+        lead every skill but the leader on its own score.
         """
         if self.autoload_threshold is None or self.max_autoloads == 0:
             return []
@@ -393,8 +420,15 @@ class SkillSuggester:
         if scored[leader] - runner_up + AUTOLOAD_LEAD_EPSILON < self.autoload_margin:
             return []
         # At most one companion: a second body is a lot of prompt to add unasked.
-        mate = [name for name in eligible[1:] if name in mates][:1]
-        return ([leader] + mate)[: self.max_autoloads]
+        for mate in (name for name in eligible[1:] if name in mates):
+            rest = max(
+                (s for name, s in scored.items() if name not in (leader, mate)),
+                default=float("-inf"),
+            )
+            if scored[mate] - rest + AUTOLOAD_LEAD_EPSILON >= self.autoload_margin:
+                return [leader, mate][: self.max_autoloads]
+            break
+        return [leader]
 
     def _match(
         self,
@@ -446,7 +480,7 @@ class SkillSuggester:
         return result, scored
 
     def _skill_vectors(self, skills: Dict[str, "Skill"]) -> Dict[str, "np.ndarray"]:
-        docs = {name: skill_doc_text(skill) for name, skill in skills.items()}
+        docs = {name: skill_match_text(skill) for name, skill in skills.items()}
         missing = [name for name, doc in docs.items() if (name, doc) not in self._cache]
         if missing:
             texts = [docs[name] for name in missing]
@@ -475,7 +509,10 @@ __all__ = [
     "DEFAULT_SUGGEST_MARGIN",
     "DEFAULT_SUGGEST_THRESHOLD",
     "DEFAULT_SUGGEST_TOP_K",
+    "DOC_PROMPT",
     "MAX_AUTOLOADS_PER_TURN",
+    "QUERY_CHARS",
+    "QUERY_PROMPT",
     "SUGGEST_ENV",
     "SkillMatches",
     "SkillSuggester",
@@ -484,5 +521,6 @@ __all__ = [
     "autoload_threshold_env_override",
     "render_autoloaded",
     "render_suggestion",
+    "skill_match_text",
     "suggest_env_override",
 ]
