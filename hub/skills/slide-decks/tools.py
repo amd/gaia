@@ -104,6 +104,55 @@ def _owner() -> str:
     return token
 
 
+def _request(call: Any) -> str:
+    """The user message the agent is answering, or "" outside a turn.
+
+    Without the memory context the agent prepends: that is earlier chats'
+    text, not what the user asked now.
+    """
+    agent = call.agent
+    return str(
+        getattr(agent, "_original_user_input", None)
+        or getattr(agent, "_current_query", "")
+        or ""
+    )
+
+
+def _sources(call: Any) -> List[str]:
+    """What the user said and what other tools returned this conversation.
+
+    This skill's own tool results, its loaded instructions and reads of its
+    folder are left out: their example values are not facts.
+    """
+    request = _request(call)
+    seen = getattr(call.agent, "seen_sources", None)
+    if seen is None:
+        return [request] if request else []
+    own = f"{call.skill_name}/"
+
+    def norm(text: str) -> str:
+        return re.sub(r"[\\/]+", "/", text).lower()
+
+    folder = norm(str(getattr(call.skill, "directory", "") or ""))
+    out = []
+    for source, args, text in seen():
+        if source.startswith(own) or source == "load_skill":
+            continue
+        if folder and folder in norm(json.dumps(args, default=str)):
+            continue
+        out.append(text)
+    return out
+
+
+def _user_messages(call: Any) -> List[str]:
+    """What the user said this conversation, oldest first."""
+    request = _request(call)
+    seen = getattr(call.agent, "seen_sources", None)
+    if seen is None:
+        return [request] if request else []
+    return [text for source, _args, text in seen() if source == "user"]
+
+
 def _agent_key() -> int:
     try:
         return id(current().agent)
@@ -235,7 +284,7 @@ def _axis_from(listed: List[str]) -> str:
 def _missing_axis(slides: List[Dict[str, Any]]) -> Optional[str]:
     """Why the slides do not show what the user listed as growing across the stages."""
     try:
-        listed = _grows_list(current().request)
+        listed = _grows_list(_request(current()))
     except SkillContextError:
         return None
     if not listed:
@@ -413,17 +462,17 @@ def _invented_numbers(slides: List[Dict[str, Any]]) -> Optional[str]:
         call = current()
     except SkillContextError:
         return None
-    if not call.request:
+    if not _request(call):
         # No user message to check against: a library call, not a chat turn.
         return None
-    said = call.user_messages()
+    said = _user_messages(call)
     hidden = _hidden_in_notes(slides, said)
     if hidden:
         return hidden
-    known = [v for text in call.sources() for _t, v in _numbers_in(text)]
+    known = [v for text in _sources(call) for _t, v in _numbers_in(text)]
     known += _derived([v for text in said for _t, v in _numbers_in(text)])
     this_year = datetime.date.today().year
-    invited = bool(_INVENTED.search(call.request))
+    invited = bool(_INVENTED.search(_request(call)))
     problems: List[str] = []
     for i, s in enumerate(slides, 1):
         shown: List[Tuple[str, float, str]] = []
@@ -476,9 +525,9 @@ def _figures_from_user(slides: List[Dict[str, Any]]) -> List[int]:
         call = current()
     except SkillContextError:
         return []
-    if not call.request:
+    if not _request(call):
         return []
-    given = [v for text in call.user_messages() for _t, v in _numbers_in(text)]
+    given = [v for text in _user_messages(call) for _t, v in _numbers_in(text)]
     known = given + _derived(given)
     out = []
     for i, s in enumerate(slides, 1):
@@ -506,7 +555,7 @@ def _dropped_bases(slides: List[Dict[str, Any]]) -> Optional[str]:
         call = current()
     except SkillContextError:
         return None
-    if not call.request:
+    if not _request(call):
         return None
     shown_text = json.dumps(
         [{k: v for k, v in s.items() if k != "notes"} for s in slides],
@@ -515,7 +564,7 @@ def _dropped_bases(slides: List[Dict[str, Any]]) -> Optional[str]:
     kept = set(_PART_OF.findall(shown_text))
     bare = {t for t, _v in _numbers_in(shown_text)}
     lost = []
-    for text in call.user_messages():
+    for text in _user_messages(call):
         for a, b in _PART_OF_WORDS.findall(text):
             if (a, b) not in kept and a in bare and a != b:
                 lost.append(f"{a} of {b}")
@@ -536,7 +585,7 @@ _EMOJI = re.compile("[🀀-🫿☀-➿🇦-🇿️]")
 def _stray_emoji(slides: List[Dict[str, Any]]) -> Optional[str]:
     """Emoji on the slides that the user did not use themselves."""
     try:
-        request = current().request
+        request = _request(current())
     except SkillContextError:
         return None
     shown = json.dumps(
@@ -580,7 +629,7 @@ def _hold_slide_count(expected: int) -> int:
     the message, ``expected`` is the model's choice.
     """
     try:
-        request = current().request
+        request = _request(current())
     except SkillContextError:
         return expected
     asked, phrase = _asked_count(request)
@@ -1221,7 +1270,8 @@ def update_deck_prefs(feedback: str = "", changes: Optional[dict] = None) -> dic
 
     Args:
         feedback: The user's words; clear requests are turned into preferences.
-        changes: Optional explicit preference changes (keys as in preferences.schema.json).
+        changes: Optional explicit changes (theme, colors, fonts, density,
+            speaker_notes, footer, aspect and the like).
 
     Returns:
         {"saved": bool, "preferences": {...}, "changed": {...}, "note"}.

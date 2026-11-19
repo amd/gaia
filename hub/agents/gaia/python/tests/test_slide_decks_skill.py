@@ -210,9 +210,7 @@ def test_a_logo_or_template_outside_the_allowed_folders_is_refused(
         args["prefs"] = {"logo_path": str(outside_logo)}
     else:
         outline["style"] = {"template_path": str(outside_logo)}
-    result = run(
-        agent, "build_deck", outline=outline, output_path=str(target), **args
-    )
+    result = run(agent, "build_deck", outline=outline, output_path=str(target), **args)
     assert result.get("status") == "error", result
     assert not target.exists()
 
@@ -234,16 +232,15 @@ def test_an_out_of_scope_logo_is_not_saved_and_a_saved_one_blocks_edits(
 ):
     agent, _skill, _b = loaded
     monkeypatch.setattr(agent, "_incognito", False, raising=False)
-    refused = run(
-        agent, "update_deck_prefs", changes={"logo_path": str(outside_logo)}
-    )
+    refused = run(agent, "update_deck_prefs", changes={"logo_path": str(outside_logo)})
     assert refused["saved"] is False and refused["status"] == "error", refused
     assert not (gaia_home / "skill-preferences" / f"{SKILL}.json").exists()
 
     deck = work / "edit-target.pptx"
-    assert run(agent, "build_deck", outline=OUTLINE, output_path=str(deck))[
-        "status"
-    ] == "ok"
+    assert (
+        run(agent, "build_deck", outline=OUTLINE, output_path=str(deck))["status"]
+        == "ok"
+    )
     # A logo saved before scope tightened (or written by hand) is still checked.
     store = gaia_home / "skill-preferences"
     store.mkdir(parents=True, exist_ok=True)
@@ -352,15 +349,11 @@ def test_nothing_is_saved_in_a_private_chat(loaded, monkeypatch):
     assert result["saved"] is False and result["note"]
 
 
-def test_skill_folder_ships_its_schema_and_assets():
+def test_skill_folder_ships_its_assets():
     from gaia_agent.agent import _bundled_skill_roots
 
     root = next(
         Path(r) / SKILL for r in _bundled_skill_roots() if (Path(r) / SKILL).is_dir()
     )
-    assert (root / "preferences.schema.json").is_file()
-    from gaia.skills.preferences import load_schema
-
-    assert load_schema(root)["type"] == "object"
     for theme in ("light", "dark", "minimal"):
         assert (root / "templates" / f"{theme}.pptx").is_file()

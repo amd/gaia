@@ -424,12 +424,14 @@ def test_the_count_comes_from_the_users_words(tools, request_text, count):
     assert skill_tools._asked_count(request_text)[0] == count
 
 
-def test_skill_call_request_is_the_users_message(tools):
+def test_the_request_is_the_users_message(tools):
+    import tools as skill_tools  # the skill's tools.py, on sys.path via conftest
+
     skill, _fns, _r = tools
     with bind(_Asking("one slide please"), skill) as call:
-        assert call.request == "one slide please"
+        assert skill_tools._request(call) == "one slide please"
     with bind(_Host(), skill) as call:
-        assert call.request == ""
+        assert skill_tools._request(call) == ""
 
 
 def test_an_axis_line_draws_the_boxes_as_stages(tools, tmp_path):
