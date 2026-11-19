@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from gaia import config as config_mod
 from gaia import project_trust
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import TerminalConfirmationMixin
@@ -62,8 +63,10 @@ def repo(tmp_path):
 # ── the store ─────────────────────────────────────────────────────────────
 
 
-def test_store_sits_beside_config_json(tmp_path):
-    assert trust_store_path() == tmp_path / "project_trust.json"
+def test_store_sits_beside_config_json():
+    assert (
+        trust_store_path() == config_mod.GAIA_CONFIG_FILE.parent / "project_trust.json"
+    )
 
 
 def test_unknown_folder_has_no_answer(repo):
@@ -169,7 +172,7 @@ def test_concurrent_threads_keep_every_answer(tmp_path):
 def test_another_process_writing_at_the_same_time_loses_nothing(tmp_path):
     env = {
         **os.environ,
-        "GAIA_CONFIG_FILE": str(tmp_path / "config.json"),
+        "GAIA_CONFIG_FILE": str(config_mod.GAIA_CONFIG_FILE),
         "PYTHONPATH": str(REPO_ROOT / "src"),
     }
     script = (
