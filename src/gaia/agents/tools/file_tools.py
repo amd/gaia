@@ -36,6 +36,7 @@ from gaia.agents.tools.file_edit import (
     after_excerpt,
     apply_unique_replacement,
     file_read_record,
+    masked_secret_refusal,
     read_first_preflight,
     stamp_of,
     turn_of,
@@ -64,6 +65,8 @@ from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_defaul
 from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.logger import get_logger
 from gaia.security import BackupError
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
+from gaia.utils.text_decoding import TRIED_ENCODINGS, decode_text
 from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
@@ -1206,8 +1209,8 @@ class FileSearchToolsMixin:
 
             Automatically detects file type and provides appropriate analysis:
             - Python files (.py): Syntax validation + symbol extraction (functions/classes)
-            - Word (.docx), PDF and Excel (.xlsx): extracted text, in parts when
-              long; continue at next_offset until it is null
+            - Word (.docx), PDF, Excel (.xlsx), PowerPoint (.pptx): extracted
+              text, in parts when long; continue at next_offset until it is null
             - Other text files: Raw content
 
             Args:
@@ -1243,7 +1246,7 @@ class FileSearchToolsMixin:
                         ),
                     }
 
-                unreadable = index_only_error(file_path)
+                unreadable = index_only_error(file_path, self)
                 if unreadable:
                     return unreadable
                 if document_type(file_path) is not None:
@@ -1689,7 +1692,9 @@ class FileSearchToolsMixin:
                     )
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(resolved_path, "overwriting")
+                refusal = reads.refusal(
+                    resolved_path, "overwriting"
+                ) or masked_secret_refusal(resolved_path, {"content": content})
                 if refusal is not None:
                     if path_validator is not None:
                         path_validator.audit_write(
@@ -1900,17 +1905,15 @@ class FileSearchToolsMixin:
             else:
                 # CSV or TSV
                 delimiter = "\t" if ext == ".tsv" else ","
-                # Try multiple encodings
-                content = None
-                for encoding in ("utf-8", "utf-8-sig", "latin-1", "cp1252"):
-                    try:
-                        with open(file_path, "r", encoding=encoding, newline="") as f:
-                            content = f.read()
-                        break
-                    except (UnicodeDecodeError, UnicodeError):
-                        continue
-                if content is None:
-                    error = "Could not decode file with any supported encoding (utf-8, latin-1, cp1252)"
+                try:
+                    with open(file_path, "rb") as f:
+                        content = decode_text(f.read())[0]
+                except UnicodeDecodeError as exc:
+                    error = (
+                        f"Could not decode {file_path} as text "
+                        f"(tried {TRIED_ENCODINGS}): {exc.reason}. "
+                        "Re-save it as UTF-8 CSV and try again."
+                    )
                     return [], [], error, None
 
                 try:
@@ -2080,8 +2083,15 @@ class FileSearchToolsMixin:
                     }
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(resolved_path) or reads.repeat_refusal(
-                    resolved_path, old_content, new_content, turn_of(self)
+                refusal = (
+                    reads.refusal(resolved_path)
+                    or reads.repeat_refusal(
+                        resolved_path, old_content, new_content, turn_of(self)
+                    )
+                    or masked_secret_refusal(
+                        resolved_path,
+                        {"old_content": old_content, "new_content": new_content},
+                    )
                 )
                 if refusal is not None:
                     return {**refusal, "operation": "edit_file"}
@@ -2466,23 +2476,12 @@ class FileSearchToolsMixin:
                 result["is_text"] = is_text
 
                 if is_text:
-                    # Read content for preview
-                    file_content = None
-                    used_encoding = None
-                    bom_codec = text_encoding(fp)
-                    # latin-1 accepts any bytes, so a BOM-marked or CP1252 file decodes by its codec.
-                    for encoding in (
-                        (bom_codec,)
-                        if bom_codec != "utf-8"
-                        else ("utf-8", "utf-8-sig", "latin-1", "cp1252")
-                    ):
-                        try:
-                            with open(fp, "r", encoding=encoding) as f:
-                                file_content = f.read()
-                            used_encoding = encoding
-                            break
-                        except (UnicodeDecodeError, UnicodeError):
-                            continue
+                    try:
+                        file_content, used_encoding = read_text(fp)
+                    except UnicodeDecodeError as exc:
+                        file_content = None
+                        result["encoding"] = "unknown"
+                        result["preview"] = f"[Could not decode: {exc.reason}]"
 
                     if file_content is not None:
                         lines = file_content.splitlines()
@@ -2513,9 +2512,6 @@ class FileSearchToolsMixin:
                                 result["csv_row_count"] = max(0, len(lines) - 1)
                             except Exception as e:
                                 logger.debug(f"Could not parse CSV structure: {e}")
-                    else:
-                        result["encoding"] = "unknown"
-                        result["preview"] = "[Could not decode file content]"
                 else:
                     result["encoding"] = "binary"
                     result["preview"] = (
@@ -2639,6 +2635,19 @@ class FileSearchToolsMixin:
                         }
 
                 supported_extensions = {".csv", ".tsv", ".xlsx", ".xls"}
+                if fp.suffix.lower() in IMAGE_EXTENSIONS:
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"{fp.name} is an image, not a spreadsheet. If it is "
+                            "attached or indexed, search its text with "
+                            "query_documents. To look at it, call "
+                            "answer_question_about_image with image_path set to "
+                            f"{fp} and question set to what the user asked."
+                        ),
+                        "has_errors": True,
+                        "operation": "analyze_data_file",
+                    }
                 if fp.suffix.lower() not in supported_extensions:
                     return {
                         "status": "error",

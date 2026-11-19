@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { RadioGroup } from '../RadioGroup';
 import { useChatStore } from '../../stores/chatStore';
 import { useResourceMonitorStore } from '../../stores/resourceMonitorStore';
 import type { ThemePreference } from '../../utils/theme';
@@ -9,6 +10,7 @@ import { SettingsDisclosure } from './SettingsDisclosure';
 import { UpdatesSection } from './UpdatesSection';
 import { DEFAULT_CUSTOM, PALETTES, type CustomColors, type PaletteId } from '../../utils/palette';
 import { formatShortcut } from '../../utils/platform';
+import { visibleShortcuts } from '../ShortcutsDialog';
 import { LOCALES, localeOptionLabel, type MessageKey } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
 
@@ -30,16 +32,6 @@ const PALETTE_NAME: Record<PaletteId, MessageKey> = {
     dusk: 'palette.dusk',
     custom: 'settings.colors.custom',
 };
-
-const SHORTCUTS: Array<[string, MessageKey]> = [
-    ['Enter', 'settings.shortcut.send'],
-    ['Shift+Enter', 'settings.shortcut.newLine'],
-    ['Esc', 'settings.shortcut.stop'],
-    ['Mod+Shift+O', 'settings.shortcut.newChat'],
-    ['Mod+K', 'settings.shortcut.search'],
-    ['Mod+B', 'settings.shortcut.sidebar'],
-    ['Mod+,', 'settings.shortcut.settings'],
-];
 
 export function GeneralSettings() {
     const t = useT();
@@ -77,7 +69,7 @@ export function GeneralSettings() {
             </div>
             <div className="settings-field">
                 <span className="settings-label" id="appearance-label">{t('settings.appearance')}</span>
-                <div className="segmented" role="radiogroup" aria-labelledby="appearance-label">
+                <RadioGroup className="segmented" aria-labelledby="appearance-label">
                     {THEMES.map((th) => (
                         <button
                             key={th.value}
@@ -90,7 +82,7 @@ export function GeneralSettings() {
                             {t(th.label)}
                         </button>
                     ))}
-                </div>
+                </RadioGroup>
             </div>
             <div className="settings-field">
                 <label className="setting-row">
@@ -109,7 +101,7 @@ export function GeneralSettings() {
                 <span className="settings-hint" id="resources-hint">{t('resources.settingsHint')}</span>
             </div>
             <SettingsDisclosure title={t('settings.colors')} titleId="palette-label" defaultOpen={palette === 'custom'}>
-                <div className="palette-grid" role="radiogroup" aria-labelledby="palette-label">
+                <RadioGroup className="palette-grid" aria-labelledby="palette-label">
                     {PALETTES.map((p) => (
                         <button
                             key={p.id}
@@ -138,7 +130,7 @@ export function GeneralSettings() {
                         </span>
                         {t('settings.colors.custom')}
                     </button>
-                </div>
+                </RadioGroup>
                 {palette === 'custom' && (
                     <div className="palette-custom">
                         <label className="palette-color" htmlFor="custom-accent">
@@ -158,10 +150,10 @@ export function GeneralSettings() {
             <UpdatesSection />
             <SettingsDisclosure title={t('settings.shortcuts')}>
                 <dl className="shortcut-list">
-                    {SHORTCUTS.map(([keys, what]) => (
-                        <div key={keys} className="shortcut-row">
+                    {visibleShortcuts().map(({ label, keys }) => (
+                        <div key={label} className="shortcut-row">
                             <dt><kbd>{formatShortcut(keys)}</kbd></dt>
-                            <dd>{t(what)}</dd>
+                            <dd>{t(label)}</dd>
                         </div>
                     ))}
                 </dl>

@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, ShieldQuestion } from 'lucide-react';
 import {
     useNotificationStore,
@@ -11,12 +11,13 @@ import {
     PATH_ACCESS_TOOL,
     PROJECT_TRUST_TOOL,
     permissionPromptText,
+    alwaysScopeText,
     type PermissionDecision,
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import { isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { CalendarApproval, CALENDAR_WRITE_TOOLS } from './CalendarApproval';
-import { pluralKey } from '../i18n/registry';
+import { pluralKey, type MessageKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
 import { MarkedText, markLtr } from './MarkedText';
 import { ChangePreview, fileChange } from './PermissionChangePreview';
@@ -25,7 +26,8 @@ import './PermissionPrompt.css';
 /** One-line description of a tool call, e.g. `run_shell_command · git status`. */
 function summarize(n: GaiaNotification): string {
     const args = n.toolArgs ?? {};
-    const primary = ['command', 'file_path', 'path', 'url', 'query', 'name']
+    // _site: the site a browser-pane read would show the model (SITE_ARG in tool_grants.py).
+    const primary = ['command', 'file_path', 'path', 'url', '_site', 'query', 'name']
         .map((k) => args[k])
         .find((v) => typeof v === 'string' && v.trim());
     return typeof primary === 'string' ? primary : '';
@@ -37,6 +39,70 @@ const COMMAND_SUMMARY_TOOLS = new Set(['run_shell_command', 'wait_for_condition'
 /** Tools whose relayed summary is the exact text being approved (`EXACT_TEXT_ARG` in call_risk.py). The flagship runs them from its send-email skill, so they also arrive namespaced. */
 const EXACT_MAIL_TOOLS = ['send_now', 'send_draft', 'reply_to_message', 'forward_message', 'discard_draft', 'update_draft'];
 const EXACT_SUMMARY_TOOLS = new Set([...EXACT_MAIL_TOOLS, ...EXACT_MAIL_TOOLS.map((tool) => `send-email/${tool}`)]);
+
+// The header lines `render_preview` in outgoing.py writes, longest label first so the regex picks it.
+const MAIL_FIELDS: ReadonlyArray<[string, MessageKey]> = [
+    ['Attachments left out, not sent', 'permission.mail.leftOut'],
+    ['Attachments', 'permission.mail.attachments'],
+    ['Subject', 'permission.mail.subject'],
+    ['Format', 'permission.mail.format'],
+    ['From', 'permission.mail.from'],
+    ['Bcc', 'permission.mail.bcc'],
+    ['Cc', 'permission.mail.cc'],
+    ['To', 'permission.mail.to'],
+];
+const MAIL_FIELD = new RegExp(`^(${MAIL_FIELDS.map(([label]) => label).join('|')}): (.*)$`);
+const MAIL_ADDRESS_FIELDS = new Set(['From', 'To', 'Cc', 'Bcc']);
+
+export interface MailHeader {
+    /** Text above the header, such as a note about hidden characters. */
+    before: string;
+    fields: Array<[label: string, value: string]>;
+    body: string;
+}
+
+/**
+ * An email being approved, split into its header lines and its body so the
+ * labels can be translated. Every value stays exactly as it will be sent.
+ * `null` when the text is not a header GAIA wrote, which then shows whole.
+ */
+export function splitMailHeader(text: string): MailHeader | null {
+    const lines = text.split('\n');
+    const opens = (line: string | undefined) => !!line && /^(From|To): /.test(line);
+    // Notes come first, each its own paragraph; the header is the first paragraph that opens like one.
+    let start = 0;
+    while (!opens(lines[start])) {
+        const gap = lines.indexOf('', start);
+        if (gap < 0) return null;
+        start = gap + 1;
+    }
+    const fields: MailHeader['fields'] = [];
+    let at = start;
+    for (; at < lines.length && lines[at] !== ''; at++) {
+        const match = MAIL_FIELD.exec(lines[at]);
+        if (!match) return null;
+        fields.push([match[1], match[2]]);
+    }
+    if (!fields.some(([label]) => label === 'To')) return null;
+    return { before: lines.slice(0, Math.max(0, start - 1)).join('\n'), fields, body: lines.slice(at + 1).join('\n') };
+}
+
+function MailFacts({ header }: { header: MailHeader }) {
+    const t = useT();
+    const key = new Map(MAIL_FIELDS);
+    return (
+        <dl className="perm-card-facts perm-mail-header" data-testid="perm-mail-header">
+            {header.fields.map(([label, value], i) => (
+                <Fragment key={i}>
+                    <dt>{t(key.get(label)!)}</dt>
+                    <dd className={label === 'From' ? 'perm-mail-from' : undefined}>
+                        <bdi dir={MAIL_ADDRESS_FIELDS.has(label) ? 'ltr' : 'auto'}>{value}</bdi>
+                    </dd>
+                </Fragment>
+            ))}
+        </dl>
+    );
+}
 
 /**
  * A relayed command prompt with no args: `command[\n…]\nin <folder>[\n(extras)]\n<risk note>`
@@ -60,6 +126,15 @@ export function splitCommandSummary(summary: string): { command: string; folder:
         extras: body.slice(at + 1).join(' ').trim(),
         note,
     };
+}
+
+/** A grant's folder by its name alone, for a button; the full path stays in its tooltip. */
+export function shortScope(scope: string): string {
+    // A translated scope wraps its path in direction isolates (U+2068 ... U+2069).
+    return scope.replace(/(\s\u2068?)((?:[A-Za-z]:)?[\\/][^\u2069]*)(\u2069?)$/, (_, lead: string, path: string, close: string) => {
+        const name = path.split(/[\\/]/).filter(Boolean).pop();
+        return `${lead}${name ?? path}${close}`;
+    });
 }
 
 /** Lines of code a prompt shows before "Show all". */
@@ -126,13 +201,16 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const hasTimeout = notification.timeoutSeconds != null && notification.timeoutSeconds > 0;
     // A deadline, not a tick count: background tabs throttle timers, and the
     // backend denies at its own deadline regardless of how often we ticked.
-    const deadline = useRef(hasTimeout ? Date.now() + notification.timeoutSeconds! * 1000 : null);
-    const [remaining, setRemaining] = useState<number | null>(hasTimeout ? notification.timeoutSeconds! : null);
+    // A prompt replayed after a reload keeps the deadline it was asked with.
+    const deadline = useRef(hasTimeout ? notification.expiresAt ?? Date.now() + notification.timeoutSeconds! * 1000 : null);
+    const [remaining, setRemaining] = useState<number | null>(
+        deadline.current === null ? null : Math.max(0, Math.ceil((deadline.current - Date.now()) / 1000)),
+    );
     const cardRef = useRef<HTMLElement>(null);
     const freshConsent = requiresFreshConsent(notification.tool);
     const scope = freshConsent ? undefined : notification.alwaysScope;
     // Shell scopes are already the command itself, so only file and skill grants carry a label.
-    const scopeText = notification.alwaysLabel ?? scope ?? '';
+    const scopeText = alwaysScopeText(notification, t) ?? notification.alwaysLabel ?? scope ?? '';
     const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
     const suggestAlways = !!scope && repeats > 0;
     const detail = summarize(notification);
@@ -152,6 +230,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const relayed = !hasArgs && COMMAND_SUMMARY_TOOLS.has(notification.tool ?? '')
         ? splitCommandSummary(notification.summary ?? '')
         : null;
+    const mail = exactText ? splitMailHeader(exactText) : null;
     const isPath = notification.tool === PATH_ACCESS_TOOL;
     const { heading, question } = permissionPromptText(notification, t, markLtr);
 
@@ -216,7 +295,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{folder}</code></p>}
                     {riskNote && <p className="perm-card-risk" role="note"><bdi>{riskNote}</bdi></p>}
                     {code && <CodeBlock code={code} />}
-                    {exactText && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-text">{exactText}</pre>}
+                    {mail?.before && <pre dir="ltr" className="perm-card-pre perm-card-exact">{mail.before}</pre>}
+                    {mail && <MailFacts header={mail} />}
+                    {exactText && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-text">{mail ? mail.body : exactText}</pre>}
                     {relayed && <pre dir="ltr" className="perm-card-pre perm-card-exact">{relayed.command}</pre>}
                     {relayed?.folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{relayed.folder}</code></p>}
                     {relayed?.extras && <p className="perm-card-detail"><bdi>{relayed.extras}</bdi></p>}
@@ -264,8 +345,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                             className={`perm-btn${suggestAlways ? ' is-suggested' : ''}`}
                             onClick={() => answer('always')}
                             disabled={busy}
+                            title={scopeText}
                         >
-                            {t('prompt.alwaysAllow', { scope: scopeText })}
+                            {t('prompt.alwaysAllow', { scope: shortScope(scopeText) })}
                         </button>
                     )}
                     <button type="button" className="perm-btn" onClick={() => answer('deny')} disabled={busy}>

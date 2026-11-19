@@ -29,6 +29,105 @@ git merge --ff-only origin/main               # safe: fails loudly instead of re
 Re-run this at the start of every round, not just once — rounds in this loop can span
 hours, and `main` moves fast when several PRs merge per round.
 
+## Order of work
+
+1. **Third-party low-risk bug fixes first**, each with a full line-by-line security review.
+2. **Maintainer and bot bug fixes.**
+3. **Ready features.**
+
+Milestones: a bug goes to the patch milestone; a feature that isn't ready goes to the next
+minor. Mark a release blocker only for a genuine ship-stopper.
+
+A PR that wires in an outside company's product gets the `third-party integration` label and
+is vetted per `../../../REVIEW.md` → "Third-party integrations".
+
+## Fast lane for small fixes
+
+Batch small fixes about 12 to a reviewer-merger agent, grouped by area, duplicate pairs
+first. That agent:
+
+- merges only clean PRs. It wrote nothing, so it is the independent verifier.
+- closes the weaker PR of a duplicate pair.
+- pushes no fixes. Anything not ready goes in a NOT-READY report, naming the exact blocker
+  and the fix needed, for the maintainer. The one exception is a mechanical keep-both
+  conflict in tests, locale files, or a CHANGELOG.
+
+## Express lane for low-risk bug fixes
+
+When the maintainer asks to land a backlog of bug fixes fast, merge a PR without the fast
+lane's verifier pass once **all** of these hold; the review bot's approval stands in for it:
+
+- it's a bug fix (`fix…` title), not a draft, and **mergeable** with no conflicts. A
+  conflict beyond a mechanical keep-both in tests, locale files or a CHANGELOG sends it to a
+  separate verifier, because whoever resolves it can't also merge it. The same holds for any
+  commit the merging agent pushed: an agent that changed the PR never takes this lane;
+- the product-code change is small, **~300 lines or fewer**. Tests, docs, CHANGELOG and
+  eval scenarios don't count toward the size;
+- the review bot's **latest verdict approves** (`Approve` or `Approve with suggestions`)
+  and was posted on the **current head** (otherwise remove and re-add `ready_for_ci` for a
+  fresh one), and every comment is addressed: each 🟡 it raised (including `Follow-up:` items) is fixed
+  or filed, and no human review thread is open;
+- no check is still running, and every **failing check is unrelated**:
+  - an infra lane: setup journeys, installers, hardware;
+  - a network or rate-limit failure on a non-test job (a test job that didn't run is
+    re-run, never skipped);
+  - a known flake;
+  - a failing test that fails the same way on bare `origin/main`.
+
+  Read the log to decide; never judge by the job name alone.
+
+Hold anything that breaks a condition, touches security or permission gating, or is
+LLM-behaviour-affecting (item 5 of the dispatch list; it still needs eval evidence). Those
+get a full verifier pass, and security ones are held for human sign-off (item 9). An outside
+contributor's PR gets its line-by-line security review before it can take this lane.
+A bot "Approve" doesn't clear a PR you've already held for a known blocker; keep a hold list
+and check it first. A held contributor PR once merged on the bot's approval alone and
+shipped a known bug.
+
+Keep the backlog moving:
+
+- **Approve waiting CI runs** on every open PR's current head. Skip superseded runs, which
+  only burn quota. Forks follow the approval rule in "Infra realities".
+- **Mark bot drafts ready** when they pass the same bar. Close a bot draft whose fix
+  already landed on `main`, or that a maintainer PR covers.
+- **Fix `main` before the PRs.** When the same test fails on many unrelated PRs, it's broken
+  on `main`. Fix it once and have a separate verifier merge it ahead of the batch, then
+  merge `main` into the held PRs so CI re-runs against the fix.
+- **On a maintainer fork, merge `main` in;** never rebase or force-push. Several PRs that
+  edit the same docs paragraph will keep conflicting; order their sentences once so each
+  later merge only adds.
+- **A PR held only for in-app evidence** (a screenshot or packaged-build replay) waits for
+  the maintainer or slips to the patch release. It never blocks the RC.
+
+## Verification
+
+- **Never self-merge.** An agent that authored a PR's final commits must not merge it; a
+  separate verifier does. A fix-and-merge shortcut once let 4 regressions land, and only an
+  independent post-merge review caught them.
+- **Cap fix-then-verify loops at about 3 rounds**, then hold for the maintainer with the
+  exact trade-off. When each patch trades one bug for another, change approach (e.g. a
+  linear tokenizer plus a differential corpus test against `main`, not another regex).
+- **Heuristic and answer-check changes:** the verifier runs branch and `main` over a corpus.
+  Any new false positive blocks the merge.
+- **Security fixes:** a new false refusal of common usage blocks the merge, the same as a
+  bypass.
+
+## Infra realities
+
+- **The repo's `GITHUB_TOKEN` API budget runs out under heavy merge volume.** Rate-limit reds
+  on label, verdict, CodeQL, or "Select unit tests" jobs don't block the merge, but they mean
+  the tests never ran. Re-run them; never merge past a test job that didn't run.
+- **`main` has no required status checks**, so the merge queue doesn't gate. Wait for the
+  PR's own CI yourself.
+- **Cap local pytest at `-n 4`** when several agents share one PC.
+- **Approving a fork's CI run:** read the head diff first. If it touches `.github/` or an
+  installer, flag it to the maintainer instead of approving.
+- **A clean push gets no new verdict.** The bot's per-push re-review is silent unless it finds
+  a regression, so an old "Request changes" stays the latest; remove and re-add `ready_for_ci`
+  to get a fresh one.
+- **Diff a merge from `main` against `origin/main`** for every file it touched, so a bad
+  resolution can't silently revert another PR's tests.
+
 ## Per-PR subagent dispatch
 
 One `Agent` call per PR, `isolation: "worktree"`, run in parallel (multiple
@@ -77,9 +176,10 @@ One `Agent` call per PR, `isolation: "worktree"`, run in parallel (multiple
    `PYTHONPATH` pointed at *this* worktree's `src/` + `hub/agents/*/python/` (an
    editable install elsewhere on the machine will otherwise silently test the
    wrong checkout — see `project_editable_install_wrong_worktree` in memory, or the
-   repo's own root `conftest.py` pin for pytest specifically). Run lint. Merge via
-   `gh pr merge <n> --squash`, falling back to `--auto` when the repo's merge queue
-   rejects a direct squash (`"! The merge strategy for main is set by the merge
+   repo's own root `conftest.py` pin for pytest specifically). Run lint. If you pushed
+   any commit, stop there and hand the PR to a separate verifier (see "Verification");
+   otherwise merge via `gh pr merge <n> --squash`, falling back to `--auto` when the
+   repo's merge queue rejects a direct squash (`"! The merge strategy for main is set by the merge
    queue"` is the queue accepting it, not refusing it — re-check `state`/`mergedAt`
    afterward since a queued merge can still fail later and the PR stays open).
 7. **When to hold instead of merge:** a real bug whose fix is still incomplete: a
@@ -113,6 +213,15 @@ a one-commit fix) rather than letting it silently block every other PR in the
 batch. Check whether another parallel subagent already found and fixed the same
 thing before filing a duplicate — two subagents hitting the same shared-file break
 independently is common in a big parallel batch.
+
+## Community PRs
+
+Third-party PRs come first in each round and get a line-by-line security review. Engage with
+their authors the way `github-issue-response` → *Community engagement* describes: selectively,
+in a human voice, and never by restating their PR. Thank only after the contribution lands
+(PR merged, reported bug fixed), with a short note unique to that person and work. Subagents
+keep their PR comments about the review itself; the coordinator posts the thank-you after the
+merge.
 
 ## Re-verifying a previously-held PR
 

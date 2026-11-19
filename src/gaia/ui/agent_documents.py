@@ -23,9 +23,10 @@ from typing import Any, Collection, Dict, Iterable, List, Optional, Tuple
 from fastapi import HTTPException
 
 from gaia.logger import get_logger
+from gaia.upload_names import reserve_copy_path
 
 from .database import ChatDatabase
-from .routers.documents import _sanitize_stem, _short_id
+from .routers.documents import _sanitize_stem
 from .utils import (
     ALLOWED_EXTENSIONS,
     compute_file_hash,
@@ -96,8 +97,17 @@ def _record_copy(
 
     managed = managed_documents_dir()
     managed.mkdir(parents=True, exist_ok=True)
-    copy = managed / f"{_short_id()}_{_sanitize_stem(path.stem)}{path.suffix.lower()}"
-    shutil.copyfile(path, copy)
+    copy = reserve_copy_path(
+        managed,
+        _sanitize_stem(path.stem),
+        path.suffix.lower(),
+        taken=lambda p: db.path_held_by_other_content(str(p), file_hash),
+    )
+    try:
+        shutil.copyfile(path, copy)
+    except OSError:
+        copy.unlink(missing_ok=True)
+        raise
     file_stat = copy.stat()
     doc = db.add_document(
         filename=path.name,
@@ -108,6 +118,19 @@ def _record_copy(
         file_mtime=file_stat.st_mtime,
     )
     return doc, True
+
+
+def _is_other_file(doc: Dict[str, Any], path: Path) -> bool:
+    """Whether the library row *doc* matched *path* by content but is another file.
+
+    GAIA's own copies are skipped: one is usually this file's copy from an
+    earlier turn, and the copy notice already named it.
+    """
+    stored = doc.get("filepath") or ""
+    if not stored or Path(os.path.realpath(stored)) == path:
+        return False
+    managed = Path(os.path.realpath(managed_documents_dir()))
+    return managed not in Path(os.path.realpath(stored)).parents
 
 
 def add_indexed_documents(
@@ -144,6 +167,12 @@ def add_indexed_documents(
                     f"{path.name} is outside the folders your documents are read "
                     f"from, so your documents hold a copy of it. Changes to "
                     f"{path} won't reach the copy."
+                )
+            elif _is_other_file(doc, path):
+                result.notices.append(
+                    f"{path.name} has the same content as {doc['filepath']}, "
+                    f"which is already in your documents, so this chat uses "
+                    f"that file."
                 )
             continue
         logger.warning("Agent-indexed %s not added to the library: %s", path, reason)

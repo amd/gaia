@@ -42,6 +42,7 @@ from gaia.agents.base.claims import (
     read_claims,
 )
 from gaia.agents.base.completion import WRITE_TOOLS, mentioned_paths
+from gaia.agents.base.text_task import instruction_part
 from gaia.agents.base.verification import is_check_execution, observed_text
 
 LOOK = "look"
@@ -286,6 +287,12 @@ def _read_it(target: str, records: Iterable[Dict[str, Any]]) -> bool:
     return False
 
 
+def _found_missing(target: str, records: Iterable[Dict[str, Any]]) -> bool:
+    """True when a call looked for *target* on disk and found it isn't there."""
+    key = _target_key(target)
+    return any(r.get("checked_absent") and key in _args_text(r) for r in records)
+
+
 def _target_key(target: str) -> str:
     return _slashed(re.split(r"[\\/]", target.rstrip("\\/"))[-1])
 
@@ -338,7 +345,11 @@ def look_findings(
     about_project = any(where_is.values()) or any(_ran(r) for r in records)
     engaged = plan_only or any(_read_it(t, records) for t in targets)
     for target in targets:
-        if _read_it(target, records) or _slashed(target) in earlier:
+        if (
+            _read_it(target, records)
+            or _found_missing(target, records)
+            or _slashed(target) in earlier
+        ):
             continue
         key = _target_key(target)
         said_read = any(key in clause for clause in claimed)
@@ -365,7 +376,9 @@ def look_findings(
                 f"I didn't read {names} this turn",
             )
         )
-    if absent and not any(_searched(r) or _looked(r) for r in records):
+    if absent and not any(
+        _searched(r) or _looked(r) or r.get("checked_absent") for r in records
+    ):
         findings.append(
             Finding(
                 LOOK,
@@ -898,8 +911,20 @@ _ACTION_EVIDENCE: Dict[str, "tuple[Callable[[Dict[str, Any]], bool], str]"] = {
 }
 
 
-def action_findings(answer: str, records: Sequence[Dict[str, Any]]) -> List[Finding]:
-    """Work the answer reports that no tool of that kind did."""
+def action_findings(
+    answer: str, records: Sequence[Dict[str, Any]], may_act: bool = True
+) -> List[Finding]:
+    """Work the answer reports that no tool of that kind did.
+
+    With *may_act* false the user barred tools this turn, so the correction
+    asks only for the claim to go, never for the work to be done.
+    """
+    remedy = (
+        "Do it now, or drop the claim."
+        if may_act
+        else "The user asked for no tools this turn, so don't call one: drop "
+        "the claim or reword it so it doesn't say you did."
+    )
     findings: List[Finding] = []
     for kind, phrase in action_claims(answer):
         backed, why = _ACTION_EVIDENCE[kind]
@@ -908,7 +933,7 @@ def action_findings(answer: str, records: Sequence[Dict[str, Any]]) -> List[Find
         findings.append(
             Finding(
                 ACTION,
-                f'Your answer says "{phrase}", but {why}. Do it now, or drop the claim.',
+                f'Your answer says "{phrase}", but {why}. {remedy}',
                 f'I said "{phrase}", but {why}',
             )
         )
@@ -916,22 +941,39 @@ def action_findings(answer: str, records: Sequence[Dict[str, Any]]) -> List[Find
 
 
 #: "use your shell tool": only a shell execution answers it.
+_SHELL = r"(?:shell|terminal|command[- ]line|bash|powershell|cmd)"
 _SHELL_REQUEST = re.compile(
-    r"\b(?:use|using|with)\s+(?:your|the)\s+"
-    r"(?:shell|terminal|command[- ]line|bash|powershell|cmd)\b",
+    rf"\b(?:use|using|with)\s+(?:your|the)\s+{_SHELL}\b"
+    # "In the shell, run: dir", but not "In the terminal, can I run it?"
+    rf"|\b(?:in|from)\s+(?:your|the|a)\s+{_SHELL}[\s,:]+(?:please\s+)?(?:run|execute)\b"
+    # The shell tool named outright.
+    r"|\buse\s+(?:the\s+)?run_shell_command\b",
     re.IGNORECASE,
 )
 #: A message that opens with "run"/"execute" and a command: quoted, a known
-#: program, or "the command/script/tests/build". Not "run a web search" or "run
-#: me through it", and only the opening: a pasted README's "Run npm install" is
-#: not a request.
+#: program, "this/the command", "this:", or a program with a switch
+#: ("cmdkey /list"). Not "run a web search" or "run me through it", and only
+#: the opening: a pasted README's "Run npm install" is not a request.
+_RUN = r"(?:run|execute)(?:\s+|(?=:))(?:exactly\b\s*)?"
+#: A command spelled out: quoted, after a colon, or a program with a switch.
+_SPELLED_OUT = (
+    r"[`\"']"
+    r"|(?:(?:this|the\s+following)\b\s*(?:exact\s+)?(?:commands?\s*)?)?:"
+    # Not "Run the -v flag" or "Run me -through".
+    r"|(?!(?:a|an|the|it|me|us|them|this|that)\b)[\w.\-]+\s+(?:--?|/)[A-Za-z?]"
+)
 _COMMAND_REQUEST = re.compile(
-    r"\A\s*(?:please\s+)?(?:run|execute)\s+"
-    r"(?:[`\"']"
+    rf"\A\s*(?:(?:please|now|then|ok(?:ay)?)[\s,]+)*{_RUN}"
+    rf"(?:{_SPELLED_OUT}"
     r"|(?:git|gh|npm|npx|pip|python|py|pytest|node|go|cargo|make|cmake|docker|"
     r"ls|dir|pwd|cd|echo|cat|type|whoami|hostname|ipconfig|ping|uv|ruff|"
     r"black|mypy|tsc|yarn|pnpm|dotnet|java|mvn|gradle)\b"
-    r"|the\s+(?:command|script|tests?|test\s+suite|build|linter|lint)\b)",
+    r"|(?:the|this|that|these|the\s+following)\s+(?:exact\s+|one\s+)?"
+    r"(?:commands?|script|tests?|test\s+suite|build|linter|lint)\b)"
+    # "Can you run …" is often a question about ability: only a spelled-out
+    # command makes it a request.
+    rf"|\A\s*(?:please[\s,]+)?(?:can|could|would|will)\s+you\s+(?:please\s+)?"
+    rf"{_RUN}(?:{_SPELLED_OUT})",
     re.IGNORECASE,
 )
 _SAYS_NOT_RUN = re.compile(
@@ -985,22 +1027,28 @@ def ungrounded(
     history: str = "",
     locate: Optional[Callable[[str], Optional[str]]] = None,
     plan_only: bool = False,
+    may_act: bool = True,
 ) -> List[Finding]:
     """Every gap between *answer* and this turn's tool record, look first.
+
+    *may_act* is false when the user barred tools this turn.
 
     *history* is the text of earlier turns. An answer that already says it did
     not look, or that its figures are unverified, has nothing left to correct
     about looking or figures — only a false report of work done still counts.
     """
-    findings = look_findings(answer, query, records, locate, history, plan_only)
+    # Files to read and commands to run come from the instruction; the figure
+    # check below reads the whole query, since figures may come from the text.
+    asked = instruction_part(query)
+    findings = look_findings(answer, asked, records, locate, history, plan_only)
     if admits_unverified(answer):
         findings = [f for f in findings if f.note == _ABSENT_NOTE]
     else:
         findings += content_findings(answer, records, history + "\n" + query)
     return (
         findings
-        + action_findings(answer, records)
-        + request_findings(answer, query, records)
+        + action_findings(answer, records, may_act)
+        + request_findings(answer, asked, records)
     )
 
 

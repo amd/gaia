@@ -45,7 +45,7 @@ async function successCard() {
     render(<MemoryDashboard />);
     // Stats and the knowledge table live under Advanced.
     fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
-    const label = await screen.findByText('Success Rate');
+    const label = await screen.findByText('Success rate');
     return label.closest('.mem-stat-card') as HTMLElement;
 }
 

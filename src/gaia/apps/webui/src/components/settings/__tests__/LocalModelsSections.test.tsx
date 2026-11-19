@@ -9,7 +9,7 @@ import { useModelStore } from '../../../stores/modelStore';
 import { resetSetupDownloads, scopedStatus, useSetupDownloads } from '../../../stores/setupDownloadsStore';
 import { NO_GPU_SPLIT } from '../../../test/setupApiMocks';
 import { DownloadChip } from '../../setup/DownloadChip';
-import { EMBED, GEMMA, GPT_OSS, QWEN, gpuStatus, plan, progress, runStatus } from '../../setup/__tests__/fixtures';
+import { EMBED, GEMMA, GPT_OSS, KOKORO, QWEN, SDXL, WHISPER, gpuStatus, plan, progress, runStatus } from '../../setup/__tests__/fixtures';
 import { LocalModelsSections } from '../LocalModelsSections';
 
 vi.mock('../../../services/api', async (importOriginal) => {
@@ -26,6 +26,7 @@ const AFTER_SETUP = () => plan([on(QWEN), { ...GEMMA, skipped: true, selected: f
 beforeEach(() => {
     vi.clearAllMocks();
     resetSetupDownloads();
+    useChatStore.setState({ systemStatus: null });
     mocked.getSetupPlan.mockResolvedValue(AFTER_SETUP());
     mocked.getGpuMemory.mockResolvedValue(NO_GPU_SPLIT);
     mocked.getSetupStatus.mockResolvedValue({ state: 'idle' });
@@ -56,6 +57,22 @@ describe('Settings > Models on this PC', () => {
         await waitFor(() => expect(mocked.skipSetupModel).toHaveBeenCalledExactlyOnceWith(GEMMA.id, false));
         await waitFor(() => expect(mocked.downloadSetupModel).toHaveBeenCalledWith(GEMMA.id, expect.objectContaining({ acknowledgeLowDisk: true })));
         expect(await screen.findByText('Saved.')).toBeInTheDocument();
+    });
+
+    it('says what the image, speech and voice models do, not that they answer chats', async () => {
+        mocked.getSetupPlan.mockResolvedValue(plan([on(QWEN), on(EMBED), SDXL, WHISPER, KOKORO]));
+        render(<LocalModelsSections />);
+        await screen.findByRole('group', { name: 'Models on this PC' });
+        const item = (name: string) => row(name).closest('li')!;
+        expect(item('SDXL Turbo')).toHaveTextContent('Image creation');
+        expect(item('SDXL Turbo')).toHaveTextContent('Creates pictures from a description.');
+        expect(item('Whisper Large v3 Turbo')).toHaveTextContent('Speech to text');
+        expect(item('Whisper Large v3 Turbo')).toHaveTextContent('Turns speech and recordings into text.');
+        expect(item('Kokoro')).toHaveTextContent('Read aloud');
+        expect(item('Kokoro')).toHaveTextContent('Reads answers aloud.');
+        for (const name of ['SDXL Turbo', 'Whisper Large v3 Turbo', 'Kokoro']) {
+            expect(item(name)).not.toHaveTextContent('Answers your chats.');
+        }
     });
 
     it('asks before downloading a model too big for memory, as setup does', async () => {
@@ -197,12 +214,101 @@ describe('the download chip in the app chrome', () => {
         expect(screen.queryByRole('button', { name: /Model downloads/ })).not.toBeInTheDocument();
         expect(useSetupDownloads.getState().status).toEqual({ state: 'idle' });
     });
+
+    it('follows a download Settings started, not only setup downloads', async () => {
+        useChatStore.setState({
+            systemStatus: {
+                download_progress: {
+                    state: 'downloading', model_name: 'ggml-gpt-oss-20b-MXFP4-GGUF', percent: 37,
+                    file: null, file_index: 0, total_files: 1, downloaded_bytes: 0, total_bytes: 0, message: null,
+                },
+            } as never,
+        });
+        render(<DownloadChip />);
+        const chip = await screen.findByRole('button', { name: 'Model downloads. Open Settings to see them.' });
+        expect(chip).toHaveTextContent('Downloading 1 of 1 · 37%');
+        expect(screen.queryByRole('button', { name: 'Dismiss the failed download' })).not.toBeInTheDocument();
+    });
+
+    it('keeps a failed Settings download visible after it stops', async () => {
+        useChatStore.setState({
+            systemStatus: {
+                download_progress: {
+                    state: 'error', model_name: 'ggml-gpt-oss-20b-MXFP4-GGUF', percent: 0,
+                    file: null, file_index: 0, total_files: 0, downloaded_bytes: 0, total_bytes: 0,
+                    message: 'Download stream interrupted: the connection to the model server closed',
+                },
+            } as never,
+        });
+        render(<DownloadChip />);
+        const chip = await screen.findByRole('button', { name: 'Model downloads. Open Settings to see them.' });
+        expect(chip).toHaveTextContent('A download failed');
+    });
+
+    it('dismisses a failed Settings download from the chip, without opening Settings', async () => {
+        mocked.dismissDownloadFailure.mockResolvedValue({ status: 'dismissed', model: 'ggml-gpt-oss-20b-MXFP4-GGUF' });
+        const openSettings = vi.fn();
+        useChatStore.setState({
+            openSettings,
+            systemStatus: {
+                download_progress: {
+                    state: 'error', model_name: 'ggml-gpt-oss-20b-MXFP4-GGUF', percent: 0,
+                    file: null, file_index: 0, total_files: 0, downloaded_bytes: 0, total_bytes: 0,
+                    message: 'disk full',
+                },
+            } as never,
+        });
+        render(<DownloadChip />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Dismiss the failed download' }));
+
+        await waitFor(() => expect(mocked.dismissDownloadFailure).toHaveBeenCalledWith('ggml-gpt-oss-20b-MXFP4-GGUF'));
+        expect(openSettings).not.toHaveBeenCalled();
+        await waitFor(() => expect(screen.queryByRole('button', { name: /Model downloads/ })).not.toBeInTheDocument());
+        // A reload's status poll carries no failure, so the chip stays hidden.
+        act(() => useChatStore.setState({ systemStatus: { download_progress: null } as never }));
+        expect(screen.queryByRole('button', { name: /Model downloads/ })).not.toBeInTheDocument();
+    });
+
+    it('keeps the failed chip when the server could not forget the failure', async () => {
+        mocked.dismissDownloadFailure.mockRejectedValueOnce(new Error('offline'));
+        useChatStore.setState({
+            systemStatus: {
+                download_progress: {
+                    state: 'error', model_name: 'ggml-gpt-oss-20b-MXFP4-GGUF', percent: 0,
+                    file: null, file_index: 0, total_files: 0, downloaded_bytes: 0, total_bytes: 0,
+                    message: 'disk full',
+                },
+            } as never,
+        });
+        render(<DownloadChip />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Dismiss the failed download' }));
+
+        await waitFor(() => expect(mocked.dismissDownloadFailure).toHaveBeenCalledTimes(1));
+        expect(screen.getByRole('button', { name: 'Model downloads. Open Settings to see them.' })).toHaveTextContent('A download failed');
+    });
+
+    it('stays hidden for a download that already finished', async () => {
+        useChatStore.setState({
+            systemStatus: {
+                download_progress: {
+                    state: 'complete', model_name: 'ggml-gpt-oss-20b-MXFP4-GGUF', percent: 100,
+                    file: null, file_index: 1, total_files: 1, downloaded_bytes: 1, total_bytes: 1, message: null,
+                },
+            } as never,
+        });
+        render(<DownloadChip />);
+        await waitFor(() => expect(mocked.getSetupStatus).toHaveBeenCalled());
+        expect(screen.queryByRole('button', { name: /Model downloads/ })).not.toBeInTheDocument();
+    });
 });
 
 describe('Settings > default chat model', () => {
-    it('refreshes "In use" and the sidebar right after the change, not on reload', async () => {
+    it('makes a new default that is on this PC the model in use', async () => {
         const refresh = vi.fn().mockResolvedValue(undefined);
-        useModelStore.setState({ refresh });
+        const select = vi.fn().mockResolvedValue(undefined);
+        useModelStore.setState({ refresh, select });
         mocked.chooseSetupChatModel.mockResolvedValue(plan([on(QWEN), { ...GEMMA, skipped: true, selected: false }, on(EMBED), GPT_OSS], {
             chat_model: { id: QWEN.id, user_set: true, size_gb: 0, downloaded: true },
         }));
@@ -213,7 +319,50 @@ describe('Settings > default chat model', () => {
         fireEvent.change(await screen.findByRole('combobox', { name: 'Default chat model' }), { target: { value: QWEN.id } });
         fireEvent.click(screen.getByRole('button', { name: /^Apply/ }));
         await waitFor(() => expect(mocked.chooseSetupChatModel).toHaveBeenCalledWith(QWEN.id, false));
+        await waitFor(() => expect(select).toHaveBeenCalledWith(QWEN.id));
+    });
+
+    it('says so, and still saves, when the switch to the new default fails', async () => {
+        const refresh = vi.fn().mockResolvedValue(undefined);
+        const select = vi.fn().mockRejectedValue(new Error('the model server is still starting'));
+        useModelStore.setState({ refresh, select });
+        mocked.chooseSetupChatModel.mockResolvedValue(plan([on(QWEN), { ...GEMMA, skipped: true, selected: false }, on(EMBED), GPT_OSS], {
+            chat_model: { id: QWEN.id, user_set: true, size_gb: 0, downloaded: true },
+        }));
+        mocked.getSetupPlan.mockResolvedValue(plan([on(QWEN), { ...GEMMA, skipped: true, selected: false }, on(EMBED), on(GPT_OSS)], {
+            chat_model: { id: GPT_OSS.id, user_set: true, size_gb: 0, downloaded: true },
+        }));
+        render(<LocalModelsSections />);
+        fireEvent.change(await screen.findByRole('combobox', { name: 'Default chat model' }), { target: { value: QWEN.id } });
+        fireEvent.click(screen.getByRole('button', { name: /^Apply/ }));
+        expect(await screen.findByText(/Saved as the default, but GAIA couldn't switch to it now: the model server is still starting/)).toBeInTheDocument();
+        expect(refresh).toHaveBeenCalled();
+    });
+
+    it('only refreshes when the new default still has to download', async () => {
+        const refresh = vi.fn().mockResolvedValue(undefined);
+        const select = vi.fn().mockResolvedValue(undefined);
+        useModelStore.setState({ refresh, select });
+        mocked.chooseSetupChatModel.mockResolvedValue(plan([on(QWEN), { ...GEMMA, skipped: true, selected: false }, on(EMBED), GPT_OSS], {
+            chat_model: { id: QWEN.id, user_set: true, size_gb: 0, downloaded: false },
+        }));
+        mocked.getSetupPlan.mockResolvedValue(plan([on(QWEN), { ...GEMMA, skipped: true, selected: false }, on(EMBED), on(GPT_OSS)], {
+            chat_model: { id: GPT_OSS.id, user_set: true, size_gb: 0, downloaded: true },
+        }));
+        render(<LocalModelsSections />);
+        fireEvent.change(await screen.findByRole('combobox', { name: 'Default chat model' }), { target: { value: QWEN.id } });
+        fireEvent.click(screen.getByRole('button', { name: /^Apply/ }));
         await waitFor(() => expect(refresh).toHaveBeenCalled());
+        expect(select).not.toHaveBeenCalled();
+    });
+
+    it('asks for the plan of where chat runs now, never for a local setup', async () => {
+        mocked.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, on(EMBED)]));
+        render(<LocalModelsSections />);
+        await screen.findByRole('combobox', { name: 'Default chat model' });
+        expect(mocked.getSetupPlan).toHaveBeenCalled();
+        // Unset lets the server leave the local chat model out while chat runs on a cloud model.
+        for (const call of mocked.getSetupPlan.mock.calls) expect(call[0]).toBeUndefined();
     });
 });
 

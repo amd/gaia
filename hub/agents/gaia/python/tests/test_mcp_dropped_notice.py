@@ -214,3 +214,50 @@ def test_process_query_reports_before_the_turn(configured_home):
         assert agent.process_query("hi") == "ok"
     turn.assert_called_once_with("hi")
     assert len(agent.console.warnings) == 1
+
+
+def test_the_model_is_told_what_the_user_was_told(configured_home):
+    """Asked about weatherbox, the model said it wasn't set up, under a row saying it was."""
+    manager = _Manager({}, failed={"weatherbox": "[WinError 2] not found"})
+    agent = _skeleton(manager)
+    agent._load_mcp_tools()
+    with (
+        patch(
+            "gaia.agents.base.memory.MemoryMixin.get_memory_dynamic_context",
+            return_value="",
+        ),
+        patch.object(ChatAgent, "_indexed_documents_line", return_value=""),
+    ):
+        context = agent.get_memory_dynamic_context()
+    assert "weatherbox" in context
+    assert "no tools this session" in context
+
+
+def test_no_notice_adds_nothing_for_the_model(configured_home):
+    agent = _skeleton(_Manager({"github": 3}))
+    with patch.object(ChatAgent, "_register_mcp_tools"):
+        agent._load_mcp_tools()
+    assert agent._mcp_dropped_line() == ""
+
+
+def test_a_corrupt_settings_file_reads_as_plain_words(tmp_path):
+    """The row ended '...recreate it on next configure().).'"""
+    from gaia.connectors.errors import ConnectorsError
+    from gaia.mcp.client.config import MCPConfig
+
+    broken = tmp_path / "mcp_servers.json"
+    broken.write_text(
+        '{"mcpServers": {"weatherbox": {"command": "npx", "args": [', "utf-8"
+    )
+    with pytest.raises(ConnectorsError) as caught:
+        MCPConfig._read_servers(MCPConfig.__new__(MCPConfig), broken)
+    message = str(caught.value)
+    assert "configure()" not in message
+    assert "Settings > Connectors" in message
+
+    agent = _skeleton(None)
+    agent._mcp_unavailable_error = message
+    with patch("gaia_agent.chat_agent.gaia_home", return_value=tmp_path):
+        agent._load_mcp_tools()
+    assert ").)" not in agent._mcp_dropped_notice
+    assert agent._mcp_dropped_notice.startswith("Your MCP servers are unavailable")

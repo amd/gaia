@@ -30,6 +30,8 @@ from gaia.skills.manager import SkillManager
 from gaia.skills.permissions import Permission
 from gaia.skills.tiers import enforce_tier_ceiling
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 
 class _HostAgent(Agent):
     def _get_system_prompt(self) -> str:

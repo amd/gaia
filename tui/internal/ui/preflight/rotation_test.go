@@ -116,7 +116,7 @@ func (h *fakeHost) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if r.Method == http.MethodPost && r.URL.Path == "/v1/email/init" {
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/gaia/init" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("✓ already downloaded.\n✓ Provisioning complete.\n"))
 		return
@@ -127,17 +127,11 @@ func (h *fakeHost) handle(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"service":"gaia-daemon","pid":%d}`, pid)
 	case "/daemon/v1/agents":
 		_, _ = w.Write([]byte(agentsRunning))
-	case "/v1/email/init":
+	case "/v1/gaia/init":
 		_, _ = w.Write([]byte(initReady))
-	case "/v1/email/connectors":
-		_, _ = w.Write([]byte(connectorsReady))
-	case "/daemon/v1/agents/email/ensure":
+	case "/daemon/v1/agents/gaia/ensure":
 		// A restarted daemon starts its sidecars again when a relayed call needs one.
-		_, _ = w.Write([]byte(`{"agent_id":"email","state":"running"}`))
-	case "/v1/email/search":
-		// The mailbox row's credential probe. It is a relayed POST like any
-		// other, so a token rotation lands on it too.
-		_, _ = w.Write([]byte(searchOK))
+		_, _ = w.Write([]byte(`{"agent_id":"gaia","state":"running"}`))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"detail":"no such route"}`))
@@ -170,7 +164,7 @@ func TestTokenRotationMidCheckRecovers(t *testing.T) {
 	h.rotateOn = "/daemon/v1/agents"
 
 	tr := h.transport()
-	rep := Check(context.Background(), tr, EmailConfig())
+	rep := Check(context.Background(), tr, testConfig())
 
 	if !rep.Ready() {
 		t.Fatalf("a mid-check daemon restart broke the report:\n%s", rep)
@@ -183,7 +177,7 @@ func TestTokenRotationMidCheckRecovers(t *testing.T) {
 
 	// A second pass must report the NEW pid — the gate re-reads the registry
 	// rather than trusting what it cached before the restart.
-	rep = Check(context.Background(), tr, EmailConfig())
+	rep = Check(context.Background(), tr, testConfig())
 	if !rep.Ready() {
 		t.Fatalf("the report after the restart is not ready:\n%s", rep)
 	}
@@ -200,9 +194,9 @@ func TestTokenRotationMidCheckRecovers(t *testing.T) {
 // turn takes too.
 func TestTokenRotationOnARelayedCallRecovers(t *testing.T) {
 	h := newFakeHost(t)
-	h.rotateOn = "/v1/email/init"
+	h.rotateOn = "/v1/gaia/init"
 
-	rep := Check(context.Background(), h.transport(), EmailConfig())
+	rep := Check(context.Background(), h.transport(), testConfig())
 	if !rep.Ready() {
 		t.Fatalf("a rotation on the relayed readiness call broke the report:\n%s", rep)
 	}
@@ -217,12 +211,12 @@ func TestADaemonThatDiesMidCheckFailsLoudly(t *testing.T) {
 	h := newFakeHost(t)
 	tr := h.transport()
 
-	if rep := Check(context.Background(), tr, EmailConfig()); !rep.Ready() {
+	if rep := Check(context.Background(), tr, testConfig()); !rep.Ready() {
 		t.Fatalf("baseline is not ready:\n%s", rep)
 	}
 	h.srv.Close() // the daemon is gone; instance.json still points at its port
 
-	rep := Check(context.Background(), tr, EmailConfig())
+	rep := Check(context.Background(), tr, testConfig())
 	row, _ := rep.Find(KeyDaemon)
 	if row.State != StateFailed {
 		t.Fatalf("a dead daemon left the daemon row at %s:\n%s", row.State.Word(), rep)
@@ -260,7 +254,7 @@ func TestATransportFailureIsNotSticky(t *testing.T) {
 	h := newFakeHost(t)
 	tr := h.transport()
 
-	if rep := Check(context.Background(), tr, EmailConfig()); !rep.Ready() {
+	if rep := Check(context.Background(), tr, testConfig()); !rep.Ready() {
 		t.Fatalf("baseline is not ready:\n%s", rep)
 	}
 
@@ -268,7 +262,7 @@ func TestATransportFailureIsNotSticky(t *testing.T) {
 
 	// Nothing can know the daemon moved until a call fails, so the first attempt
 	// after the move is expected to fail — loudly, with a real remedy.
-	first := Provision(context.Background(), tr, EmailConfig(), nil)
+	first := Provision(context.Background(), tr, testConfig(), nil)
 	if first.OK {
 		t.Skip("the moved daemon answered on the first try; nothing to prove here")
 	}
@@ -278,7 +272,7 @@ func TestATransportFailureIsNotSticky(t *testing.T) {
 
 	// The second attempt must recover: the stale record is gone and the client
 	// re-reads the registry the restarted daemon rewrote.
-	second := Provision(context.Background(), tr, EmailConfig(), nil)
+	second := Provision(context.Background(), tr, testConfig(), nil)
 	if !second.OK {
 		t.Fatalf("the gate never recovered from a daemon that moved: final=%q diag=%s",
 			second.Final, second.Diagnosis)

@@ -36,7 +36,7 @@
 .version-picker-header h3 {
     margin: 0;
     font-size: 15px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
 }
 
@@ -140,7 +140,7 @@
 }
 
 .vp-version {
-    font-weight: 600;
+    font-weight: 500;
     font-size: 14px;
     min-width: 70px;
     font-family: var(--font-mono);
@@ -247,8 +247,13 @@
     border-radius: 6px;
     cursor: pointer;
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
     transition: opacity var(--duration-fast) var(--ease);
+}
+
+a.vp-btn-confirm {
+    display: inline-block;
+    text-decoration: none;
 }
 
 .vp-btn-confirm:hover:not(:disabled) {

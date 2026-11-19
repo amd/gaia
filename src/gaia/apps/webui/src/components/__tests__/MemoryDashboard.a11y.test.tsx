@@ -54,7 +54,7 @@ async function renderDashboard() {
     render(<MemoryDashboard />);
     // Stats and the knowledge table live under Advanced.
     fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
-    return await screen.findByRole('button', { name: /Memory is disabled/ });
+    return await screen.findByRole('button', { name: /Remember across chats is off/ });
 }
 
 describe('MemoryDashboard accessibility', () => {
