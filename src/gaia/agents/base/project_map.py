@@ -1054,9 +1054,7 @@ class ProjectMapMixin:
         ):
             return
         try:
-            remember_folder_trust(
-                folder, TRUSTED if trusted else DECLINED, asked_user=True
-            )
+            remember_folder_trust(folder, TRUSTED if trusted else DECLINED)
         except ProjectTrustError as e:
             logger.warning(
                 "[project-trust] %s. This session keeps your answer; GAIA will "

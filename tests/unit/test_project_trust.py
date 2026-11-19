@@ -619,12 +619,53 @@ def test_an_agent_may_still_save_declined(repo, as_agent):
     assert folder_trust(repo) == DECLINED
 
 
-def test_the_users_own_answer_at_the_session_prompt_is_saved_under_an_agent(
-    repo, as_agent
-):
+def test_a_session_under_an_agent_keeps_a_yes_for_itself_only(repo, as_agent):
     console = _Console(answer=True)
     agent = _FakeAgent(repo, console)
     agent._on_task_start("hi")
     assert len(console.asked) == 1
     assert agent._full_project_context() is True
+    assert folder_trust(repo) is None
+
+
+def test_the_session_prompt_saves_the_users_yes(repo, monkeypatch):
+    from gaia.skills.human_only import AGENT_CHILD_ENV, started_by_agent
+
+    monkeypatch.delenv(AGENT_CHILD_ENV, raising=False)
+    assert not started_by_agent()
+    console = _Console(answer=True)
+    _FakeAgent(repo, console)._on_task_start("hi")
     assert folder_trust(repo) == TRUSTED
+
+
+def test_remember_folder_trust_has_no_exemption_keyword(repo, as_agent):
+    with pytest.raises(TypeError):
+        remember_folder_trust(repo, TRUSTED, asked_user=True)
+    assert folder_trust(repo) is None
+
+
+_DYNAMIC_CALLS = [
+    "m = __import__('gaia.project' + '_trust', fromlist=['x'])\n"
+    "m.remember_folder_trust(FOLDER, 'trusted')",
+    "import importlib\n"
+    "m = importlib.import_module('.'.join(['gaia', 'project_trust']))\n"
+    "m.remember_folder_trust(FOLDER, 'trusted')",
+    "import runpy\n"
+    "ns = runpy.run_module('gaia.' + 'project_trust')\n"
+    "ns['remember_folder_trust'](FOLDER, 'trusted')",
+    "import importlib\n"
+    "cli = importlib.import_module('gaia.project' + '_trust_cli')\n"
+    "import argparse\n"
+    "cli._handle_add(argparse.Namespace(folder=FOLDER))",
+]
+
+
+@pytest.mark.parametrize("code", _DYNAMIC_CALLS)
+def test_a_dynamic_import_from_agent_code_cannot_save_trusted(repo, as_agent, code):
+    # runpy loads a fresh copy of the module, so match the refusal by name.
+    try:
+        exec(code, {"FOLDER": str(repo)})  # noqa: S102
+    except Exception as e:  # pylint: disable=broad-except
+        assert type(e).__name__ == "ProjectTrustError", e
+        assert "only you can trust a folder" in str(e)
+    assert folder_trust(repo) is None
