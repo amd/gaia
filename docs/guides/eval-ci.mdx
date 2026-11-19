@@ -459,7 +459,7 @@ The startup term is a fixed reservation, not a measurement: the runner sets asid
 
 | Context | Timeout | Reasoning |
 |---------|---------|-----------|
-| Quick PR check | `300` (5min) | A floor only: the startup reservation raises it to at least 440s per scenario. Most single-turn RAG scenarios finish in 1-2 minutes |
+| Quick PR check | `300` (5min) | A floor only: the startup reservation raises it to at least 440s per scenario, more for multi-turn ones. RAG scenarios in the flagship baseline take 2 -- 15 minutes |
 | Standard CI run | `900` (default) | Covers multi-turn and multi-document scenarios |
 | Full benchmark | `1200` | Extra buffer for large-document and vision scenarios |
 

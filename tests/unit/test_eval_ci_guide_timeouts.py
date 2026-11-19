@@ -35,7 +35,7 @@ def _expected_minutes(category: str) -> float:
     card = json.loads(
         (BASELINE / f"scorecard_{category}.json").read_text(encoding="utf-8")
     )
-    elapsed = [s.get("elapsed_s") or 0 for s in card["scenarios"]]
+    elapsed = [s["elapsed_s"] for s in card["scenarios"] if s.get("elapsed_s")]
     assert elapsed, f"baseline for {category} has no scenarios"
     count = len(list((SCENARIOS / category).glob("*.yaml")))
     return sum(elapsed) / len(elapsed) * count / 60
