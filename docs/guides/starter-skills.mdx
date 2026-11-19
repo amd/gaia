@@ -192,29 +192,50 @@ gets them subtly wrong, while an LLM writing SQL against them does not.
 
 ### report-from-sources
 
-Builds a report, deck, brief or workbook from the user's files without dropping
-what the sources stress. It inventories the inputs and picks the newest file for
-each dataset, keeps a key-facts ledger per source (headline numbers, stated
-changes, notable events, risks), puts source and period on every figure, then
-checks the saved file against the ledger and against a numbered list of
-everything the user asked for.
+Works from a folder of the user's own documents and spreadsheets. It finds the
+newest copy of each dataset, pulls named time series with cell citations, keeps
+a key-facts ledger per source (headline numbers, stated changes, notable
+events, risks), then checks the saved report, deck or workbook against the
+sources and against a list of everything the user asked for. With one or two
+sources and a small ask it does only three steps: inventory, build, final
+check. It pairs with `office-docs` and `slide-decks`, which write the file.
 
 - **Provides** — three tools in its `tools.py`, registered as
-  `report-from-sources/<tool>` when the skill loads:
-  - `inventory_data_files(folder)`: every spreadsheet, CSV and JSON file with
-    its sheets, header rows, units and period coverage, and the copies of each
-    dataset ranked by vintage ("two versions of the same series: X (through
-    2026Q2, newest) and Y (through 2025Q2)").
-  - `series_from_workbook(file_path, labels, periods="last 5")`: named series
-    matched by label (the matched label is echoed; two close labels are
-    reported as ambiguous, a missing one with its nearest labels), values
-    exactly as stored, each cited to its cell, with units, footnote flags and a
-    provenance line. Reads wide tables (periods across, including two-row
-    headers such as a year over its quarters) and long ones (periods down).
+  `report-from-sources/<tool>` when the skill loads. They read time series
+  only: a table needs period labels (years, quarters, months or dates). A
+  table by category, or row-level records, gets an error that says to use
+  `run_python` instead.
+  - `inventory_data_files(folder)`: the newest copy of each dataset first
+    (`summary`, then `datasets` with `newest` and `data_through`), then every
+    spreadsheet, CSV and JSON file with its sheets, units and period coverage.
+    The result stays under about 18,000 characters. A large folder returns
+    less detail, and `truncated` lists what was cut. Call again on a
+    subfolder, or pass one data file as `folder`, for the full detail.
+  - `series_from_workbook(file_path, labels)`: named series matched by label,
+    values exactly as stored, each cited to its cell, with units, footnote
+    flags and a provenance line. The default is `periods="last 12"`;
+    `periods_available` says how many periods the file has. It reads wide
+    tables (periods across, including a year over its quarters) and long ones
+    (periods down). It never guesses:
+    - two close labels come back as ambiguous, a missing one with its nearest
+      labels;
+    - one period over several columns (2024 Actual and 2024 Budget) comes back
+      as ambiguous. Choose with `filters="header=Actual"`;
+    - a header of month names with no year is read as Jan, Feb, Mar, with a
+      note that the year is not stated;
+    - a row of numbers that look like years is not taken for a header;
+    - a formula row with no stored values (a workbook written by a program
+      and never opened in Excel) is reported as not calculated;
+    - a CSV may be UTF-16, and may use semicolons and decimal commas. A note
+      says which convention was read.
   - `chart_into_workbook(output_path, file_path, labels)`: the same series as
     a table plus a native Excel chart, with a source and period footnote,
     reread from the saved file and compared with the source before it reports
-    success.
+    success. It asks before replacing a workbook only after the series were
+    found.
+  - For a chart on a slide, `chart_input` in the `series_from_workbook`
+    result holds `categories`, `series` and `source`, the fields a
+    `slide-decks` chart slide takes.
 - **Demonstrates** — analyst practice as a procedure: provenance, coverage
   checks, and verifying a saved file against the request with `run_python`.
 - **Consumes** — `list_files`, `read_file`, `run_python`.

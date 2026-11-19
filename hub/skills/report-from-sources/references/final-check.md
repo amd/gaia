@@ -4,9 +4,9 @@ Do this before saying any deliverable is done.
 
 1. **Turn the request into a numbered checklist.** One line for each thing the
    user named: every section, chart, table, column and metric; every ID, item
-   or reference ("cite every ticket mentioned" means each one, by ID); every
-   structural ask (a labelled input cell, a toggle or dropdown, a sheet in a
-   given place); every file name, file type and folder; any length, audience or
+   or reference ("every one mentioned" means each one, by its ID); every
+   structural ask (a named sheet, a control the reader can change, a required
+   layout); every file name, file type and folder; any length, audience or
    style limit. Always add three lines of your own: the as-of line in the
    header, the summary before the evidence, and the Conflicts and gaps section.
 2. **Check each line against the saved file.** Reopen it; your memory of what

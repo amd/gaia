@@ -220,7 +220,7 @@ def test_lookup_errors_come_back_as_structured_results(tools, data):
     out = tools["series_from_workbook"](str(src), ["Headcount"])
     assert out["status"] == "error" and out["problems"][0]["status"] == "not_found"
     out = tools["series_from_workbook"](str(src), ["Revenue"], periods="sometime")
-    assert out["status"] == "error" and "last 5" in out["error"]
+    assert out["status"] == "error" and "last 12" in out["error"]
     out = tools["series_from_workbook"](str(data / "missing.xlsx"), ["Revenue"])
     assert "does not exist" in out["error"]
     # A string instead of a list still works: semicolons separate labels.
@@ -254,3 +254,114 @@ def test_chart_tool_takes_the_same_orientation_as_the_reader(
         assert charted["error"] == read["error"]
     if orientation == "sideways":
         assert "periods_in_rows" in charted["error"]
+
+
+def test_tool_docstrings_state_the_scope_and_the_default():
+    skill = parse_skill_file(SKILL_DIR)
+    before = dict(_TOOL_REGISTRY)
+    try:
+        register_skill_tools(skill)
+        docs = {
+            t: _TOOL_REGISTRY[f"{SKILL_DIR.name}/{t}"]["function"].__doc__
+            for t in TOOLS
+        }
+    finally:
+        unregister_skill_tools(skill.name)
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(before)
+    for name in TOOLS:
+        assert "time series" in docs[name] or "time-series" in docs[name], name
+    assert 'periods: Default "last 12"; also "all"' in docs["series_from_workbook"]
+    assert 'default "last 12"' in docs["chart_into_workbook"]
+
+
+def test_skill_body_has_a_short_path_and_bounds_the_reading():
+    skill = parse_skill_file(SKILL_DIR)
+    procedure = skill.body.split("## Procedure")[1]
+    # The short path is the first thing in the procedure.
+    assert procedure.strip().startswith(
+        "**One or two sources and a small ask: do steps 1, 3 and 5 only.**"
+    )
+    assert (
+        "do not page a long PDF to the end unless the ask covers the whole"
+        in " ".join(procedure.split())
+    )
+    assert skill.gaia.pairs_with == ["office-docs", "slide-decks"]
+    assert skill.description.endswith(
+        "Pairs with office-docs and slide-decks, which write the file."
+    )
+    assert [d for d in skill.gaia.requirements.dependencies] == ["openpyxl>=3.1"]
+    assert not (SKILL_DIR / "report_from_sources_lib" / "pptx_chart.py").exists()
+
+
+def test_inventory_tool_puts_what_to_read_first(tools, data):
+    _book(data / "kpi_2025.xlsx")
+    out = tools["inventory_data_files"](str(data))
+    assert list(out)[:5] == ["status", "folder", "summary", "datasets", "data_files"]
+    assert out["datasets"][0]["newest"] == "kpi_2025.xlsx"
+    # One data file instead of a folder: that file, in full.
+    (data / "other.csv").write_text("month,v\n2026-01,1\n2026-02,2\n2026-03,3\n")
+    one = tools["inventory_data_files"](str(data / "kpi_2025.xlsx"))
+    assert [f["file"] for f in one["data_files"]] == ["kpi_2025.xlsx"]
+
+
+def test_series_tool_reports_how_many_periods_exist(tools, data):
+    src = _book(data / "book.xlsx")
+    out = tools["series_from_workbook"](str(src), ["Revenue"], periods="last 2")
+    assert out["periods"] == ["2026Q1", "2026Q2"]
+    assert out["periods_available"]["count"] == 3
+    assert set(out["chart_input"]) == {"categories", "series", "source"}
+
+
+def test_scenario_columns_come_back_ambiguous_through_the_tools(tools, data):
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append([None, "Actual", "Actual", "Budget"])
+    ws.append(["Item", 2023, 2024, 2024])
+    ws.append(["Revenue", 90, 110, 120])
+    wb.save(data / "plan.xlsx")
+    src = str(data / "plan.xlsx")
+    out = tools["series_from_workbook"](src, ["Revenue"])
+    assert out["status"] == "ambiguous" and out["choices"] == ["Actual", "Budget"]
+    charted = tools["chart_into_workbook"](str(data / "c.xlsx"), src, ["Revenue"])
+    assert charted["status"] == "ambiguous" and not (data / "c.xlsx").exists()
+    charted = tools["chart_into_workbook"](
+        str(data / "c.xlsx"), src, ["Revenue"], filters="header=Actual"
+    )
+    assert charted["status"] == "success"
+    assert charted["read_back"] == {"Revenue": [90, 110]}
+
+
+def test_overwrite_is_asked_only_after_the_series_are_found(tools, agent, data):
+    src = _book(data / "book.xlsx")
+    out_path = data / "chart.xlsx"
+    assert (
+        tools["chart_into_workbook"](str(out_path), str(src), ["Revenue"])["status"]
+        == "success"
+    )
+    before = out_path.read_bytes()
+    asked = []
+    answer = {"yes": False}
+
+    def prompt(path, size):
+        asked.append(path)
+        return answer["yes"]
+
+    agent.path_validator._prompt_overwrite = prompt
+    # A lookup that fails never reaches the question.
+    out = tools["chart_into_workbook"](str(out_path), str(src), ["Headcount"])
+    assert out["status"] == "error" and asked == []
+    out = tools["chart_into_workbook"](
+        str(out_path), str(src), ["Revenue"], chart_type="pie3d"
+    )
+    assert out["status"] == "error" and asked == []
+    # Asked once; "no" leaves the workbook as it was.
+    out = tools["chart_into_workbook"](str(out_path), str(src), ["Revenue"])
+    assert out["status"] == "error" and "declined" in out["error"]
+    assert len(asked) == 1 and out_path.read_bytes() == before
+    answer["yes"] = True
+    out = tools["chart_into_workbook"](str(out_path), str(src), ["Revenue"])
+    assert out["status"] == "success" and len(asked) == 2
+    assert out_path.read_bytes() != before

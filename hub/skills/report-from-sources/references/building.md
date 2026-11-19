@@ -23,20 +23,34 @@ Then:
   figure you calculated as one the source states.
 - Keep the source's framing. Write "Net income fell 8% to $4.2M", not just
   "Net income $4.2M".
-- **Get series with `series_from_workbook(file_path, labels, periods="last 8")`.**
-  It echoes the label it matched (`matched_label`) and returns the values
-  exactly as stored, with each value's cell, the units, footnote flags such as
-  "123.4(a)", and a `provenance` line for the chart footnote. If a label comes
-  back `ambiguous`, call again with the exact label (or "Section > Label")
-  from `candidates`, or ask the user; if `not_found`, pick from `nearest` or
-  tell the user the series is not in the file. Never chart a look-alike
-  series in its place.
+- **Get time series with `series_from_workbook(file_path, labels)`.** Without
+  `periods` it returns the last 12 with data (`periods="last 12"`);
+  `periods_available` says how many the file has, so pass `periods="all"` or
+  a range for more. It echoes the label it matched (`matched_label`) and
+  returns the values exactly as stored, with each value's cell, the units,
+  footnote flags such as "123.4(a)", and a `provenance` line for the chart
+  footnote. Read `notes`: they say what was assumed (a decimal comma, a
+  header with no year).
+- **When it does not return values, do what the result says:**
+  - a label `ambiguous`: call again with the exact label (or
+    "Section > Label") from `candidates`, or ask the user;
+  - status `ambiguous` with `choices`: one period has several columns
+    (Actual and Budget). Call again with `filters="header=Actual"`;
+  - `not_found`: pick from `nearest` or tell the user the series is not in
+    the file. Never chart a look-alike series in its place;
+  - `formulas_not_calculated`: the row is there but holds no values. Compute
+    it from its input rows with `run_python`, or ask the user to open and
+    save the file in Excel or LibreOffice;
+  - "time series only": the table has no periods, or is row-level records.
+    Read it with `run_python` instead.
 - **For a chart in a workbook, call `chart_into_workbook`** with the same
   source arguments. It writes a table and a native Excel chart with an axis
   title, number format and a source and period footnote, then rereads the
-  saved file and confirms the chart's values equal the source. For a slide,
-  hand `chart_input` from `series_from_workbook` (categories, series, source
-  note) to the deck-building code unchanged.
+  saved file and confirms the chart's values equal the source.
+- **For a chart on a slide**, use `chart_input` from `series_from_workbook`.
+  Its `categories`, `series` and `source` are the fields a slide-decks chart
+  slide takes: add `type`, `title` and `chart_type`, and keep `source`, which
+  becomes the source line under the chart.
 - Compute other figures from the data with `run_python`. Never retype numbers
   you read off a page.
 - **Every chart and table names its source and period**, e.g. "Source:

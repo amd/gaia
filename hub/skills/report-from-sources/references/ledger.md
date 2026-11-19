@@ -1,8 +1,10 @@
 # Key-facts ledger per source
 
-Read each source in full with `read_file(file_path)`, following `next_offset`
-until it is null. A skim or a search result misses exactly the line that
-matters. For each source, write down:
+Read the sections of each source that hold the figures you need with
+`read_file(file_path)`: the summary or highlights first, then the sections the
+request is about. Read to the end (follow `next_offset` until it is null) only
+when the ask covers the whole document. A search result alone misses the line
+beside it that matters. For each source, write down:
 
 - **Headline numbers**: totals, rates, counts, balances.
 - **Changes the source states** against a prior period: from, to, and by how

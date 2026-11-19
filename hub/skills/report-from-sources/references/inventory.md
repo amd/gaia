@@ -1,13 +1,18 @@
 # Inventory the inputs
 
-**Call `inventory_data_files(folder)` first, then interpret its result.** One
-call returns, for every spreadsheet, CSV and JSON file, each sheet's layout,
-header rows (multi-row and merged headers), units, the periods it covers
-(first, last, and last with data) and its series names. It groups files that
-hold the same dataset and ranks them by vintage: `datasets[].note` names the
-newest copy and the older ones ("two versions of the same series: X (through
-2026Q2, newest) and Y (through 2025Q2)"). Documents come back under
-`narrative_sources`; read those for the ledger (`references/ledger.md`).
+**Call `inventory_data_files(folder)` first, then interpret its result.** Read
+`summary` and `datasets` first. The tool groups files that hold the same
+dataset and ranks them by vintage: `datasets[].newest` is the file to use,
+`data_through` its last period with data, and `note` names the older copies
+("two versions of the same series: X (through 2026Q2, newest) and Y (through
+2025Q2)"). `data_files` has, for every spreadsheet, CSV and JSON file, each
+sheet's layout, header rows, units, the periods it covers and its series
+names. Documents come back under `narrative_sources`; read those for the
+ledger (`references/ledger.md`).
+
+A folder with many files returns less detail so the result stays readable.
+`truncated.cut_to_fit` lists exactly what was left out. To get it, call the
+tool again on a subfolder, or pass the path of one data file as `folder`.
 
 From that result, record for every file what it covers and which period it is
 for, and show the table in your reply before you build anything:
@@ -26,7 +31,8 @@ for, and show the table in your reply before you build anything:
 - When the note says two copies cover the same periods, say which one you used
   and why (later revision, "final" over "draft"), and compare their values.
 - A file under `not_read`, or a sheet with layout `unknown`, the tool could
-  not parse. Open it with the fallback below.
+  not parse: it reads time series only, so a table by category or row-level
+  records comes back `unknown`. Open it with the fallback below.
 
 **Fallback when the tool can't parse a file.** List the folder with
 `list_files(path)`; this lists every spreadsheet's sheets, row counts and date
