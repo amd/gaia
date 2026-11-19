@@ -255,7 +255,8 @@ def _slip_of(where: str, home: str) -> bool:
     """Whether folder *where* reads as *home* with a folder name or two mistyped.
 
     Compared name by name, so a long shared start does not make two unrelated
-    folders look alike.
+    folders look alike. Only paths of the same depth compare, so a file in a
+    subfolder of the mistyped folder is not raised.
     """
     ours, theirs = home.split(os.sep), where.split(os.sep)
     if len(ours) != len(theirs):
