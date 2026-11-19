@@ -219,7 +219,7 @@ icon: "bug"
     **Model server log** in the sidebar's model popover or under a reply that failed on a
     local model, and **Settings → Advanced → Logs**. The model server tab shows llama.cpp's
     and FastFlowLM's output too, and works for a Lemonade you run yourself. See
-    [Logs](/guides/agent-ui#logs).
+    [Logs](/guides/agent-ui/settings#logs).
   </Accordion>
 
   <Accordion title="gaia init can't install the GAIA agent" icon="store">
@@ -242,9 +242,8 @@ icon: "bug"
 
 <AccordionGroup>
   <Accordion title="Agent says a tool 'requires explicit user approval'" icon="shield-halved">
-    Dangerous tools — shell commands, file writes, email send / forward /
-    permanent delete, calendar RSVP — only run after you approve them. If nothing
-    can ask you, the tool is denied rather than run silently:
+    Dangerous tools — shell commands, file writes, and other tools that change
+    your machine — only run after you approve them. If nothing can ask you, the tool is denied rather than run silently:
 
     ```
     'send_now' requires explicit user approval and cannot run unattended…
@@ -577,10 +576,11 @@ error. To run the chat model in the cloud instead, see
   </Accordion>
 
   <Accordion title="A chat model fails with 'llama-server failed to start'" icon="triangle-exclamation">
-    llama.cpp exited while loading the model. GAIA starts a llama.cpp chat model with two
-    slots over one shared KV cache (`--parallel 2 --kv-unified --cache-ram 0
-    --slot-prompt-similarity 0.5`), so side work such as titles and memory doesn't evict the
-    conversation. Some models and llama.cpp builds can't start with those flags: Gemma 4 with
+    llama.cpp exited while loading the model. GAIA starts a llama.cpp chat model with three
+    slots over one shared KV cache (`--parallel 3 --kv-unified --cache-ram 0
+    --slot-prompt-similarity 0.5 --ctx-checkpoints 16`), so side work such as titles and
+    memory doesn't evict the conversation, and a long chat doesn't keep growing the model
+    server's memory. Some models and llama.cpp builds can't start with those flags: Gemma 4 with
     an MTP draft model aborts on llama.cpp b12020, for example
     ([#6221](https://github.com/amd/gaia/issues/6221)).
 

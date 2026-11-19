@@ -90,8 +90,6 @@ def test_the_names_match_the_daemon_constants():
         BROKER_TOKEN_ENV_VAR,
         BROKER_TOKEN_FILE_ENV_VAR,
         CUSTODY_SECRET_ENV_VAR,
-        spec._EMAIL_TOKEN_ENV_VAR,
-        spec._EMAIL_TOKEN_FILE_ENV_VAR,
         spec._GAIA_TOKEN_ENV_VAR,
         spec._GAIA_TOKEN_FILE_ENV_VAR,
     ]

@@ -687,6 +687,10 @@ def _outlived(anchor: int, born: float) -> bool:
         return False
 
 
+# What secrets.token_urlsafe(32) produces; anything else in last_key is not ours.
+_API_KEY_RE = re.compile(r"[A-Za-z0-9_-]{43}")
+
+
 def _free_port() -> int:
     """Return a TCP port the OS reports as free on loopback.
 
@@ -887,6 +891,12 @@ class EmbeddedLemonade:
         """The port the last start used. Survives ``stop`` so the next start
         lands on the same port."""
         return self.root / "last_port.json"
+
+    @property
+    def last_key_path(self) -> Path:
+        """The API key the last start used. Survives ``stop`` and a crash so a
+        restart on the same port keeps the key running agents already hold."""
+        return self.root / "last_key"
 
     @property
     def busy_since_path(self) -> Path:
@@ -1296,18 +1306,23 @@ class EmbeddedLemonade:
         Args:
             state: pid, port, api_key and version of the live daemon.
         """
+        self._write_private(self.state_path, json.dumps(state, indent=2))
+
+    def _write_private(self, path: Path, text: str) -> None:
+        """Write *text* to a file created owner-only (0600 on POSIX)."""
         self.root.mkdir(parents=True, exist_ok=True)
-        self.state_path.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        descriptor = os.open(self.state_path, flags, stat.S_IRUSR | stat.S_IWUSR)
+        descriptor = os.open(path, flags, stat.S_IRUSR | stat.S_IWUSR)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(state, handle, indent=2)
+            handle.write(text)
 
     def _clear_state(self) -> None:
         """Remove the state and credentials files if present.
 
         Both go together: credentials naming a dead port are worse than none,
         because the next process to grab that port inherits the trust.
+        ``last_key`` stays: :meth:`_reusable_key` hands it back only on the same port.
         """
         self.state_path.unlink(missing_ok=True)
         self.env_path.unlink(missing_ok=True)
@@ -1840,6 +1855,39 @@ class EmbeddedLemonade:
         self.root.mkdir(parents=True, exist_ok=True)
         self.last_port_path.write_text(json.dumps({"port": port}), encoding="utf-8")
 
+    def _record_key(self, api_key: str) -> None:
+        self._write_private(self.last_key_path, api_key)
+
+    def _reusable_key(self, port: int) -> Optional[str]:
+        """The last start's key when this start lands on the same port, else None.
+
+        A new port means running agents cannot reach the server anyway, and the
+        old port may now belong to a stranger they sent the key to, so it rotates.
+        """
+        if port != self._read_last_port():
+            return None
+        path = self.last_key_path
+        try:
+            mode = path.stat().st_mode
+            key = path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return None
+        except (OSError, UnicodeDecodeError) as e:
+            log.warning("Ignoring unreadable %s (%s); starting with a new key", path, e)
+            return None
+        if platform.system() != "Windows" and mode & 0o077:
+            log.warning(
+                "Ignoring %s: other users can read it; starting with a new key",
+                path,
+            )
+            return None
+        if not _API_KEY_RE.fullmatch(key):
+            log.warning(
+                "Ignoring %s: it holds no valid key; starting with a new key", path
+            )
+            return None
+        return key
+
     def _write_env_file(self, port: int, api_key: str) -> Path:
         """Write the sourceable credentials file for the running instance.
 
@@ -2074,6 +2122,7 @@ class EmbeddedLemonade:
         )
         self._write_env_file(port, api_key)
         self._record_port(port)
+        self._record_key(api_key)
         log.info("Embedded Lemonade %s ready on port %s", self.version, port)
         return EmbeddedStatus(
             installed=True,
@@ -2095,7 +2144,8 @@ class EmbeddedLemonade:
         Returns:
             The process, the API key it was started with, and when it started.
         """
-        api_key = secrets.token_urlsafe(32)
+        # Running agents hold the last key; a new one would 401 them.
+        api_key = self._reusable_key(port) or secrets.token_urlsafe(32)
 
         from gaia.llm.fireworks_known_models import start_env
 
