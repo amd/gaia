@@ -101,8 +101,9 @@ there is nothing to launch first.
 Where the agent ships as its own program, as in the desktop app, the terminal
 installers and the one-line installer, `gaia -p` and `gaia chat` run it through
 GAIA's background service in the current folder. Confirmation-gated tools are
-refused there, so `--dangerously-skip-permissions`, `--full-access` and
-`--base-url` work only with the agent package installed, as in a source checkout.
+refused there, so `--dangerously-skip-permissions`, `--full-access`,
+`--base-url`, `--disallowed-tools`, `--no-web` and `--no-skills` work only with the
+agent package installed, as in a source checkout.
 
 ```bash
 gaia -p "Summarize README.md in three bullets"
@@ -122,6 +123,9 @@ echo "List the Python files here" | gaia -p --output-format json
 | `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking. A request that only hands over quoted text to translate, reword or proofread still has them refused |
 | `--full-access` | Full access, as the TUI's `/full-access`: lifts the shell guardrails, so test runners, build tools and other commands outside the no-prompt list run, and grants paths outside the current folder without asking. Implies `--dangerously-skip-permissions` |
 | `--base-url <url>` | Use a remote Lemonade server instead of the local one |
+| `--disallowed-tools <tools>` | Tools the agent may neither see nor call, comma- or space-separated, with `*` globs (`search_web,browser_*`). Repeatable. `search_tools` never finds a withheld tool, and a tool a skill adds mid-turn is withheld too when a pattern matches it. Each pattern must match a tool the agent has when the turn starts, or the run fails (exit 1) before it begins, so a typo can't leave a tool on |
+| `--no-web` | Withhold GAIA's tools that search, read, download or install from the internet: `search_web`, `fetch_page`, `fetch_webpage`, `download_file`, `open_url`, `browser_*`, `search_documentation`, `search_skill_hub`, `install_skill`, `install_cli` and `transcribe_media`. The shell and connector (MCP) tools stay available; withhold those with `--disallowed-tools`. The agent is also told not to search or fetch from the web through the shell or a script. That is an instruction, not a block: cut the network to enforce it |
+| `--no-skills` | No skill catalogue or suggestions in the prompt, no learned skill changes, and no tools to find, load, install or learn skills. A skill the agent always loads stays loaded |
 
 `-p` takes no subcommand: `gaia -p "hi" chat` is a usage error. The flags above
 apply only to `-p`; given before a subcommand without it (`gaia --model X chat`)
@@ -154,6 +158,7 @@ subcommand instead.
 | `time_limit_reached` | Only when `--time-limit` ended the turn early |
 | `attempts` | Only with `--attempts` above 1: each attempt's `is_error`, `status`, `error` (why it failed), `duration_s`, steps, tool calls and tokens. The top-level counts include them |
 | `conversation` | Only with `--verbose`: the turn's messages and tool calls |
+| `withheld_tools` | Only with `--disallowed-tools`, `--no-web` or `--no-skills`: the tools this turn withheld |
 | `route` | Only with `--model hybrid`: the model the turn ran on and why — `model`, `kind`, `difficulty`, `stakes`, `reason`, `classified` (false when the classifier gave no valid label), `seconds`, `sticky`, `policy` (the `hybrid_policy` in effect), `classifier_format` (`json_object` or `plain`), `fix` (what to change when the classifier failed), `degraded` and `notice` (true, with a message, once the classifier has failed 3 turns in a row) |
 
 **Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other

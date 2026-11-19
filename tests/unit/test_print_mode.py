@@ -182,7 +182,21 @@ def test_main_forwards_flags_and_exits_with_runs_code(monkeypatch):
         full_access=False,
         base_url="http://h:1/api/v1",
         time_limit=None,
+        disallowed_tools=(),
+        no_web=False,
+        no_skills=False,
     )
+
+
+def test_main_forwards_tool_restrictions(monkeypatch):
+    run = MagicMock(return_value=0)
+    monkeypatch.setattr(print_mode, "run", run)
+    argv = ["-p", "hi", "--disallowed-tools", "a, b_*", "--disallowed-tools", "c"]
+    assert _run_main(monkeypatch, [*argv, "--no-web", "--no-skills"]) == 0
+    kwargs = run.call_args.kwargs
+    assert kwargs["disallowed_tools"] == ["a", "b_*", "c"]
+    assert kwargs["no_web"] is True
+    assert kwargs["no_skills"] is True
 
 
 def test_main_defaults_output_format_to_text(monkeypatch):
@@ -205,6 +219,9 @@ def test_main_defaults_output_format_to_text(monkeypatch):
         ["--attempts", "2"],
         ["--dangerously-skip-permissions"],
         ["--full-access"],
+        ["--disallowed-tools", "search_web"],
+        ["--no-web"],
+        ["--no-skills"],
         ["--model", "m", "chat"],
     ],
 )
@@ -1525,6 +1542,102 @@ def test_time_limit_with_attempts_is_a_usage_error_before_anything_runs(
     assert print_mode.run("q", attempts=2, time_limit=60) == 2
     started.assert_not_called()
     assert "--time-limit can't be combined with --attempts" in capsys.readouterr().err
+
+
+class _RestrictableAgent:
+    def __init__(self, names):
+        self.names = list(names)
+        self.denied = []
+        self.rebuilt = False
+        self._learned_skills_enabled = True
+
+    def get_tools_info(self):
+        return {n: {} for n in self.names}
+
+    def deny_tools(self, patterns):
+        self.denied = list(patterns)
+        return sorted(
+            n for n in self.names if n in patterns or n.startswith("browser_")
+        )
+
+    def rebuild_system_prompt(self):
+        self.rebuilt = True
+
+
+def test_restrict_tools_without_flags_changes_nothing():
+    agent = _RestrictableAgent(["read_file", "search_web"])
+    assert print_mode.restrict_tools(agent, []) == []
+    assert agent.denied == [] and agent.rebuilt is False
+    assert agent._learned_skills_enabled is True
+
+
+def test_no_web_withholds_only_the_web_tools_this_agent_has():
+    agent = _RestrictableAgent(["read_file", "search_web", "browser_open"])
+    withheld = print_mode.restrict_tools(agent, [], no_web=True)
+    assert agent.denied == ["search_web", "browser_*"]
+    assert withheld == ["browser_open", "search_web"]
+    assert agent.rebuilt is True
+
+
+def test_no_skills_rebuilds_the_prompt_even_with_no_skill_tools():
+    agent = _RestrictableAgent(["read_file"])
+    assert print_mode.restrict_tools(agent, [], no_skills=True) == []
+    assert agent._learned_skills_enabled is False
+    assert agent.rebuilt is True
+
+
+def test_no_skills_withholds_skill_tools_and_learned_skills():
+    agent = _RestrictableAgent(["read_file", "load_skill", "list_skills"])
+    print_mode.restrict_tools(agent, ["read_file"], no_skills=True)
+    assert agent.denied == ["read_file", "list_skills", "load_skill"]
+    assert agent._learned_skills_enabled is False
+
+
+def test_run_turn_turns_off_the_skill_catalogue_and_withholds(stub_env, capsys):
+    calls = {}
+
+    def fake_restrict(agent, disallowed, *, no_web, no_skills):
+        calls.update(disallowed=disallowed, no_web=no_web, no_skills=no_skills)
+        return ["search_web"]
+
+    with patch.object(print_mode, "restrict_tools", fake_restrict):
+        code = print_mode.run(
+            "q", model="m", output_format="json", no_web=True, no_skills=True
+        )
+    assert code == 0
+    assert calls == {"disallowed": (), "no_web": True, "no_skills": True}
+    config = _agent().config
+    assert config.skill_discovery is False and config.skill_suggestions is False
+    assert json.loads(capsys.readouterr().out)["withheld_tools"] == ["search_web"]
+
+
+def test_relayed_turn_refuses_tool_restrictions_naming_the_flag():
+    with pytest.raises(RuntimeError, match="--no-web needs the GAIA agent"):
+        print_mode._relay_turn(
+            "q",
+            model=None,
+            verbose=False,
+            max_steps=None,
+            skip_permissions=False,
+            full_access=False,
+            base_url=None,
+            restricted="--no-web",
+        )
+
+
+def test_no_web_tells_the_model_the_shell_is_not_a_way_around(stub_env):
+    """The withheld tools only imply the rule; a model with a shell used curl."""
+    with patch.object(print_mode, "restrict_tools", lambda *a, **k: []):
+        assert print_mode.run("find the answer", model="m", no_web=True) == 0
+    (query,) = _agent().queries
+    assert query.startswith("find the answer")
+    assert query.endswith(print_mode.NO_WEB_NOTE)
+    assert "through the shell" in query
+
+
+def test_without_no_web_the_request_is_the_users_own(stub_env):
+    assert print_mode.run("find the answer", model="m") == 0
+    assert _agent().queries == ["find the answer"]
 
 
 def test_streamed_text_never_reaches_stdout(capsys):

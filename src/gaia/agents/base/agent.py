@@ -27,6 +27,7 @@ import time
 import uuid
 from collections import ChainMap
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -251,6 +252,23 @@ logger = get_logger(__name__)
 
 #: A message this long is also saved to a file the model can read with tools.
 LONG_MESSAGE_CHARS = 20_000
+
+
+def _tool_name_matches(name: str, patterns: Sequence[str]) -> bool:
+    """Whether *name*, or its bare name without a skill namespace, matches a glob."""
+    bare = bare_tool_name(name)
+    return any(fnmatchcase(name, p) or fnmatchcase(bare, p) for p in patterns)
+
+
+def _tool_permitted(agent: Any, name: str) -> bool:
+    """Whether *agent* may offer and run *name*: inside its scope and not denied.
+
+    getattr for both fields: test doubles call Agent's methods unbound.
+    """
+    scope = getattr(agent, "_tool_scope", None)
+    if scope is not None and name not in scope:
+        return False
+    return not _tool_name_matches(name, getattr(agent, "_denied_tool_patterns", ()))
 
 
 def _skill_validation_error(message: str) -> Exception:
@@ -3225,6 +3243,10 @@ class Agent(abc.ABC):
     # unrestricted behavior; an empty set deliberately permits no tools.
     _tool_scope: Optional[FrozenSet[str]] = None
 
+    # Glob patterns for tools this agent never offers or runs, including ones
+    # registered later (a skill's tools). Empty preserves unrestricted behavior.
+    _denied_tool_patterns: Tuple[str, ...] = ()
+
     # Class-level so a subclass that never runs ``__init__`` still increments.
     _turn_seq: int = 0
 
@@ -5049,10 +5071,45 @@ Do NOT wrap conversational replies in JSON.
         callers.
         """
         registry = self._tools_registry
-        scope = getattr(self, "_tool_scope", None)
-        if scope is None:
+        if getattr(self, "_tool_scope", None) is None and not getattr(
+            self, "_denied_tool_patterns", ()
+        ):
             return registry
-        return {name: entry for name, entry in registry.items() if name in scope}
+        return {
+            name: entry
+            for name, entry in registry.items()
+            if _tool_permitted(self, name)
+        }
+
+    def deny_tools(self, patterns: Sequence[str]) -> List[str]:
+        """Never offer or run a tool whose name matches a glob in *patterns*.
+
+        Applies to tools registered later too. Returns the names it withholds
+        now; raises ``ValueError`` for a pattern that matches none of them, so a
+        typo can't leave a tool on that the caller meant to turn off.
+        """
+        if isinstance(patterns, (str, bytes)):
+            raise TypeError("patterns must be a sequence of globs, not a string")
+        patterns = tuple(p.strip() for p in patterns if p and p.strip())
+        names = list(self._tools_registry)
+        unmatched = [
+            p
+            for p in patterns
+            if not any(_tool_name_matches(name, (p,)) for name in names)
+        ]
+        if unmatched:
+            raise ValueError(
+                f"No tool matches {', '.join(unmatched)}. This agent's tools: "
+                f"{', '.join(sorted(names))}."
+            )
+        self._denied_tool_patterns = (*self._denied_tool_patterns, *patterns)
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
+        return sorted(n for n in names if _tool_name_matches(n, patterns))
+
+    def _tool_permitted(self, name: str) -> bool:
+        """Whether *name* is inside this agent's scope and not denied."""
+        return _tool_permitted(self, name)
 
     def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
         """Format the registered tools into a string for the prompt.
@@ -5070,9 +5127,7 @@ Do NOT wrap conversational replies in JSON.
         else:
             registry = self._tools_registry
             items = [(n, registry[n]) for n in filter_to if n in registry]
-        scope = getattr(self, "_tool_scope", None)
-        if scope is not None:
-            items = [(n, info) for n, info in items if n in scope]
+        items = [(n, info) for n, info in items if _tool_permitted(self, n)]
 
         for name, tool_info in items:
             params_str = ", ".join(
@@ -6447,11 +6502,15 @@ Do NOT wrap conversational replies in JSON.
         """Get information about tools available to this agent."""
         scope = getattr(self, "_tool_scope", None)
         if scope is None:
-            return self._tools_registry
+            return {
+                name: info
+                for name, info in self._tools_registry.items()
+                if _tool_permitted(self, name)
+            }
         return {
             name: self._tools_registry[name]
             for name in scope
-            if name in self._tools_registry
+            if name in self._tools_registry and _tool_permitted(self, name)
         }
 
     def get_tools(self) -> List[Dict[str, Any]]:
@@ -7279,9 +7338,7 @@ Do NOT wrap conversational replies in JSON.
         else:
             registry = self._tools_registry
             items = [(n, registry[n]) for n in filter_to if n in registry]
-        scope = getattr(self, "_tool_scope", None)
-        if scope is not None:
-            items = [(n, info) for n, info in items if n in scope]
+        items = [(n, info) for n, info in items if _tool_permitted(self, n)]
 
         schemas = []
         for name, tool_info in items:
@@ -8804,11 +8861,7 @@ Do NOT wrap conversational replies in JSON.
         # when a tool name was registered globally but not shown here.
         if tool_name not in execution_registry:
             tool_name = tool_name.replace("-", "_")
-        if (
-            getattr(self, "_tool_scope", None) is not None
-            and tool_name in self._tools_registry
-            and tool_name not in execution_registry
-        ):
+        if tool_name in self._tools_registry and tool_name not in execution_registry:
             return {
                 **NOT_EXECUTED,
                 "status": "error",
