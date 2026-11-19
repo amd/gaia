@@ -40,7 +40,7 @@ def require_matching_checkout(module: str) -> Optional[int]:
         print(
             f"gaia is imported from {imported}, but you are in the checkout "
             f"{here}.\nRun it from {imported}, or from {here} with "
-            f"PYTHONPATH=$PWD/src python -m {module}",
+            f"PYTHONPATH set to {here / 'src'}: python -m {module}",
             file=sys.stderr,
         )
         return 2

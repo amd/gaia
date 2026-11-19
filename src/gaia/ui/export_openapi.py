@@ -15,7 +15,7 @@ Usage::
     python -m gaia.ui.export_openapi --check
 
 Run it from the repo root of the checkout ``gaia`` is imported from; it refuses
-(exit 2) elsewhere. From another worktree, prefix ``PYTHONPATH=$PWD/src``.
+(exit 2) elsewhere. From another worktree, set ``PYTHONPATH`` to its ``src``.
 """
 
 from __future__ import annotations

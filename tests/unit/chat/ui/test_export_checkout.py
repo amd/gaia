@@ -20,7 +20,8 @@ def test_other_checkout_is_refused(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert str(_export_checkout.MODULE_CHECKOUT) in err
     assert str(other.resolve()) in err
-    assert "PYTHONPATH" in err
+    assert f"PYTHONPATH set to {other.resolve() / 'src'}" in err
+    assert "$PWD" not in err
 
 
 def test_outside_any_checkout_is_refused(tmp_path, monkeypatch, capsys):
