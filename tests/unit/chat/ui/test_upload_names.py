@@ -5,6 +5,7 @@
 import io
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,10 +19,11 @@ from gaia.upload_names import (
     reserve_copy_path,
     upload_copy_stem,
     upload_original_name,
+    upload_url_name,
 )
 
-# UPLOAD_URL_RE in src/gaia/apps/webui/src/utils/markdown.ts.
-WEB_UI_SERVES = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+# UPLOAD_NAME in src/gaia/apps/webui/src/utils/markdown.ts.
+WEB_UI_SERVES = re.compile(r"(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+")
 
 HOSTILE_NAMES = [
     "Q3 plan (final).pdf",
@@ -38,18 +40,20 @@ HOSTILE_NAMES = [
 
 @pytest.mark.parametrize("name", HOSTILE_NAMES)
 def test_any_name_becomes_one_the_web_ui_serves(name):
-    assert WEB_UI_SERVES.fullmatch(upload_copy_stem(name) + ".pdf")
+    assert WEB_UI_SERVES.fullmatch(upload_url_name(upload_copy_stem(name) + ".pdf"))
 
 
 @pytest.mark.parametrize(
     "name, shown",
     [
         ("kestrel-plan.pdf", "kestrel-plan.pdf"),
-        ("Q3 plan (final).pdf", "Q3_plan_final.pdf"),
+        ("Q3 plan (final).pdf", "Q3 plan (final).pdf"),
         ("../../evil.pdf", "evil.pdf"),
         ("..\\..\\evil.pdf", "evil.pdf"),
         ("-draft.pdf", "draft.pdf"),
-        ("تقرير الاجتماع.pdf", "attachment.pdf"),
+        ("تقرير الاجتماع.pdf", "تقرير الاجتماع.pdf"),
+        ("می‌خواهم.pdf", "می‌خواهم.pdf"),
+        (" report .pdf", "report.pdf"),
     ],
 )
 def test_the_copy_is_cited_by_its_readable_name(name, shown):
@@ -112,6 +116,7 @@ def test_an_uploaded_attachment_reaches_the_agent(client, name):
     )
     assert response.status_code == 200, response.text
     upload = response.json()
+    assert upload["url"] == "/api/files/uploads/" + quote(upload["filename"], safe="")
 
     # The composer's link, as the chat route resolves it for the agent.
     link = f"[attachment]({upload['url']})"
@@ -129,6 +134,91 @@ def test_the_agent_is_given_the_name_the_user_attached(client):
     ).json()
     resolved = resolve_upload_links(f"Read it\n\n[notes.txt]({upload['url']})")
     assert Path(attached_upload_paths(resolved)[0]).name == "notes.txt"
+
+
+@pytest.mark.parametrize(
+    "name, stored",
+    [
+        ("Q3 plan (final).pdf", "Q3 plan (final).pdf"),
+        ("تقرير الاجتماع.pdf", "تقرير الاجتماع.pdf"),
+        ("Quarterly review #1 & notes.pdf", "Quarterly review #1 & notes.pdf"),
+        ("100% done.pdf", "100% done.pdf"),
+        ("../../evil.pdf", "evil.pdf"),
+        ("-draft.pdf", "draft.pdf"),
+    ],
+)
+def test_an_uploaded_file_keeps_its_name(client, name, stored):
+    upload = client.post(
+        "/api/files/upload",
+        files={"file": (name, io.BytesIO(b"%PDF-1.4"), "application/pdf")},
+    ).json()
+
+    assert upload["filename"] == stored
+    assert upload["url"] == "/api/files/uploads/" + quote(stored, safe="")
+    assert client.get(upload["url"]).content == b"%PDF-1.4"
+
+    copy = str(uploads_dir().resolve() / stored)
+    assert display_file_name(copy) == stored
+    resolved = resolve_upload_links(f"[{stored}]({upload['url']})")
+    assert resolved == f"[{stored}]({copy})"
+    assert attached_upload_paths(resolved) == [copy]
+
+
+def test_a_device_name_is_stored_under_an_id(client):
+    upload = client.post(
+        "/api/files/upload",
+        files={"file": ("CON.pdf", io.BytesIO(b"%PDF-1.4"), "application/pdf")},
+    ).json()
+
+    assert re.fullmatch(r"[0-9a-f]{12}_CON\.pdf", upload["filename"])
+    assert display_file_name(str(uploads_dir() / upload["filename"])) == "CON.pdf"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "..%2F..%2Fsecret.txt",
+        "%2e%2e%2fsecret.txt",
+        "%2e%2e",
+        "sub%2Fplan.pdf",
+        "plan%5C.pdf",
+        "plan%00.pdf",
+        "%2ehidden.pdf",
+        "bad%zz.pdf",
+        "plan%20.pdf",
+    ],
+)
+def test_an_encoded_link_cannot_escape_the_uploads_folder(client, target):
+    (uploads_dir().parent / "secret.txt").write_text("secret")
+    (uploads_dir() / ".hidden.pdf").write_bytes(b"x")
+    (uploads_dir() / "sub").mkdir()
+    (uploads_dir() / "sub" / "plan.pdf").write_bytes(b"x")
+
+    link = f"[x](/api/files/uploads/{target})"
+    assert resolve_upload_links(link) == link
+    assert attached_upload_paths(link) == []
+
+
+def test_an_encoded_link_to_a_symlink_is_not_attached(client, tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("token")
+    link_path = uploads_dir() / "link.txt"
+    try:
+        link_path.symlink_to(secret)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available to this user")
+
+    link = "[x](/api/files/uploads/link.txt)"
+    assert resolve_upload_links(link) == link
+    assert attached_upload_paths(link) == []
+
+
+def test_only_files_linked_in_the_message_are_granted(client):
+    copy = uploads_dir() / "notes.txt"
+    copy.write_text("hello")
+
+    assert attached_upload_paths(f"see {copy}") == []
+    assert attached_upload_paths(f"[x]({copy})") == [str(copy)]
 
 
 def test_attaching_one_file_twice_keeps_one_plainly_named_copy(tmp_path):
@@ -258,7 +348,7 @@ def test_a_hostile_attachment_name_stays_one_plain_file(client, name):
     assert response.status_code == 200, response.text
     stored = uploads_dir().resolve() / response.json()["filename"]
     assert stored.parent == uploads_dir().resolve()
-    assert WEB_UI_SERVES.fullmatch(stored.name)
+    assert WEB_UI_SERVES.fullmatch(upload_url_name(stored.name))
     assert stored.name.split(".")[0].upper() != "CON"
 
 

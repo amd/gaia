@@ -41,12 +41,13 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import keyring
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import gaia.connectors as connections
 import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+from gaia.connectors.accounts import list_accounts
 from gaia.connectors.activations import (
     ActivationsLedgerCorrupt,
     list_agent_activations,
@@ -56,6 +57,7 @@ from gaia.connectors.api import activate as activate_connector_for_agent
 from gaia.connectors.api import deactivate as deactivate_connector_for_agent
 from gaia.connectors.api import resolve_declared_scopes
 from gaia.connectors.errors import (
+    AccountChoiceRequiredError,
     AuthRequiredError,
     ConfigurationError,
     ConnectionBusyError,
@@ -68,6 +70,7 @@ from gaia.connectors.errors import (
     NoDeclaredScopesError,
     ScopeMismatchError,
     ScopeNotAllowedError,
+    UnknownAccountError,
     UnknownAgentError,
     UnknownConnectorError,
 )
@@ -151,12 +154,24 @@ def _require_mcp_server(connector_id: str) -> None:
 
 class AuthorizeRequest(BaseModel):
     scopes: List[str] = Field(default_factory=list)
+    # Show the provider's account picker to sign in to another account.
+    add_account: bool = False
+    # Reconnect this stored account (its account_id or address). Its address
+    # goes to the provider as a sign-in hint.
+    account: Optional[str] = None
     # #2117 — namespaced agent ids to grant this connector once OAuth
     # completes, so connecting a mailbox grants it to the email agent in the
     # same flow. The router resolves each agent's required scopes from its
     # REQUIRED_CONNECTORS declaration (single source of truth) before handing
     # the map to the flow.
     grant_agents: List[str] = Field(default_factory=list)
+
+
+class AccountUpdateRequest(BaseModel):
+    """Body for ``PATCH /api/connectors/{id}/accounts/{account_id}``. Only
+    ``true`` is accepted: to change the default, make another account it."""
+
+    is_default: bool
 
 
 class GrantRequest(BaseModel):
@@ -189,8 +204,9 @@ class ForwardConnectionRequest(BaseModel):
     OAuth, no consent step.
 
     ``refresh_token`` / ``client_secret`` are secret INPUTS — they are never
-    echoed back in any response. ``account_email`` is display-only in v1
-    (the keyring slot is single-account per provider). ``grant_agents`` is
+    echoed back in any response. ``account_email`` picks which stored account
+    the forward replaces (the one with that address); with other accounts
+    stored and no match, the forward is refused. ``grant_agents`` is
     the list of namespaced agent ids (e.g. ``installed:email``) to grant the
     forwarded scopes so they can resolve the connection ambiently.
     """
@@ -258,6 +274,19 @@ set_emitter(_emitter)
 
 
 def _raise_http_for(exc: ConnectorsError) -> HTTPException:
+    if isinstance(exc, UnknownAccountError):
+        return HTTPException(
+            status_code=404,
+            detail={
+                "error": "unknown_account",
+                "connector_id": exc.connector_id,
+                "account": exc.account,
+                "choices": exc.choices,
+                "message": str(exc),
+            },
+        )
+    if isinstance(exc, AccountChoiceRequiredError):
+        return HTTPException(status_code=409, detail=exc.http_detail())
     if isinstance(exc, UnknownConnectorError):
         return HTTPException(
             status_code=404,
@@ -461,6 +490,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
     configured = False
     account_id: Optional[str] = None
     scopes: list = []
+    accounts: List[Dict[str, Any]] = []
     configurable = True
     config_error: Optional[str] = None
     oauth_client: Optional[Dict[str, Any]] = None
@@ -492,12 +522,19 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
                 "This is a catalog/code mismatch; please file a bug."
             )
 
-        # Derive configured/account/scopes from the keyring blob — that
-        # IS the source of truth. peek_connection is read-only and never
-        # raises on missing entries.
-        blob = peek_connection(provider_ref)
+        # Derive configured/account/scopes from the keyring blobs — that IS
+        # the source of truth. ``account_id`` and ``scopes`` describe the
+        # default account; ``accounts`` lists every one. Read-only.
+        stored = list_accounts(provider_ref)
+        accounts = [a.to_dict() for a in stored]
+        default = next((a for a in stored if a.is_default), None)
+        blob = (
+            peek_connection(provider_ref, slot=default.slot)
+            if default is not None and default.status == "ok"
+            else None
+        )
+        configured = any(a.status == "ok" for a in stored)
         if blob is not None:
-            configured = True
             account_id = blob.get("account_email")
             scopes = list(blob.get("scopes", []))
 
@@ -568,7 +605,10 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "configurable": configurable,
         "config_error": config_error,
         "oauth_client": oauth_client,
+        # The default account's address (the field predates several accounts).
         "account_id": account_id,
+        # Every stored account: {account_id, email, status, is_default}.
+        "accounts": accounts,
         "scopes": scopes,
         "enabled": enabled,
         "activations": activations,
@@ -643,11 +683,14 @@ async def connector_events() -> StreamingResponse:
 
     Event types:
       - ``connector.configured``        ({connector_id, account_id})
-      - ``connector.disconnected``      ({connector_id})
+      - ``connector.disconnected``      ({connector_id, account_id?,
+        account_email?, remaining_accounts, revoke_*})
+      - ``connector.account.changed``   ({connector_id, account_id, is_default})
       - ``connector.tested``            ({connector_id, ok, detail})
       - ``connector.enabled``           ({connector_id})
       - ``connector.disabled``          ({connector_id})
-      - ``connector.oauth.completed``   ({connector_id, account_email})
+      - ``connector.oauth.completed``   ({connector_id, account_email,
+        account_id, added, is_default, requested_account_id})
       - ``connector.oauth.error``       ({connector_id, error})
       - ``connector.grant.changed``     ({connector_id, agent_id, scopes})
       - ``connector.activation.changed`` ({connector_id, agent_id, active})
@@ -918,10 +961,19 @@ async def test_connector(connector_id: str) -> Dict[str, Any]:
 @router.delete(
     "/{connector_id}", status_code=204, dependencies=[Depends(_require_ui_header)]
 )
-async def disconnect_connector(connector_id: str) -> Response:
-    """Disconnect a connector — removes credentials and (for MCP) removes from mcp_servers.json."""
+async def disconnect_connector(
+    connector_id: str, all_accounts: bool = Query(False, alias="all")
+) -> Response:
+    """Disconnect a connector — removes credentials and (for MCP) removes it
+    from mcp_servers.json.
+
+    An OAuth connector with several accounts answers 409
+    ``account_choice_required`` with the ``choices``: remove one with
+    ``DELETE /{connector_id}/accounts/{account_id}``, or every one with
+    ``?all=true``.
+    """
     try:
-        revoke_result = await disconnect(connector_id)
+        revoke_result = await disconnect(connector_id, all_accounts=all_accounts)
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"Unknown connector: {connector_id!r}"
@@ -938,6 +990,68 @@ async def disconnect_connector(connector_id: str) -> Response:
         {"connector_id": connector_id, **(revoke_result or {})},
     )
     return Response(status_code=204)
+
+
+@router.delete(
+    "/{connector_id}/accounts/{account_id}",
+    status_code=204,
+    dependencies=[Depends(_require_ui_header)],
+)
+async def disconnect_account(connector_id: str, account_id: str) -> Response:
+    """Disconnect one account of an OAuth connector (``account_id`` is its
+    stable id or address). The other accounts keep working, and agent grants
+    are kept until the last account goes."""
+    try:
+        revoke_result = await disconnect(connector_id, account_id=account_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown connector: {connector_id!r}"
+        )
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
+
+    await _emitter.emit(
+        "connector.disconnected",
+        {"connector_id": connector_id, **(revoke_result or {})},
+    )
+    return Response(status_code=204)
+
+
+@router.patch(
+    "/{connector_id}/accounts/{account_id}",
+    dependencies=[Depends(_require_ui_header)],
+)
+async def update_account(
+    connector_id: str, account_id: str, body: AccountUpdateRequest
+) -> Dict[str, Any]:
+    """Make one account the connector's default. Returns ``{"accounts": [...]}``."""
+    if not body.is_default:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "is_default can only be set to true. To change the default, "
+                "make another account the default."
+            ),
+        )
+    if connector_id not in REGISTRY:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown connector: {connector_id!r}"
+        )
+    try:
+        chosen = await asyncio.to_thread(
+            connections.set_default_account, connector_id, account_id
+        )
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
+    await _emitter.emit(
+        "connector.account.changed",
+        {
+            "connector_id": connector_id,
+            "account_id": chosen.account_id,
+            "is_default": True,
+        },
+    )
+    return {"accounts": [a.to_dict() for a in list_accounts(connector_id)]}
 
 
 async def _set_connector_enabled(connector_id: str, enabled: bool) -> Dict[str, Any]:
@@ -1012,6 +1126,12 @@ async def authorize(
     OAuth exchange succeeds — connecting a mailbox grants it to the email agent
     in the same flow (#2117). Scope resolution happens up front so an unknown
     or non-declaring agent fails the request before any browser step.
+
+    ``add_account: true`` shows the provider's account picker to add another
+    account. ``account: "<account_id or address>"`` reconnects that account.
+    Whichever account signs in, an existing one is updated in place and a new
+    one is added; ``connector.oauth.completed`` names it (``account_id``) and
+    says whether it was ``added``.
     """
     retry_keyring()
     grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
@@ -1020,6 +1140,8 @@ async def authorize(
             connector_id,
             scopes=_signin_scopes(connector_id, body.scopes, grant_map),
             grant_agents=grant_map or None,
+            add_account=body.add_account,
+            account=body.account,
         )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
@@ -1053,7 +1175,10 @@ async def authorize_device(
     grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
     try:
         info = await connections.start_device_flow(
-            connector_id, scopes=_signin_scopes(connector_id, body.scopes, grant_map)
+            connector_id,
+            scopes=_signin_scopes(connector_id, body.scopes, grant_map),
+            add_account=body.add_account,
+            account=body.account,
         )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
@@ -1068,6 +1193,7 @@ async def authorize_device(
                 interval=info["interval"],
                 expires_in=info["expires_in"],
                 grant_agents=grant_map or None,
+                intent=info["intent"],
             )
         except ConnectorsError as e:
             await _emitter.emit(
@@ -1298,9 +1424,16 @@ async def list_forwarded_connections() -> Dict[str, Any]:
 
 
 @forwarded_router.get("/{provider}")
-async def get_forwarded_connection(provider: str) -> Dict[str, Any]:
-    """Return one connection's metadata, or 404 — secrets omitted (AC4)."""
-    entry = connections.get_connection(provider)
+async def get_forwarded_connection(
+    provider: str, account: Optional[str] = None
+) -> Dict[str, Any]:
+    """Return one connected account's metadata (the default account unless
+    ``?account=<account_id or address>`` names another), or 404 — secrets
+    omitted (AC4)."""
+    try:
+        entry = connections.get_connection(provider, account)
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
     if entry is None:
         raise HTTPException(
             status_code=404, detail=f"No connection for provider {provider!r}"
@@ -1312,9 +1445,9 @@ async def get_forwarded_connection(provider: str) -> Dict[str, Any]:
     "/{provider}", status_code=204, dependencies=[Depends(_require_ui_header)]
 )
 async def revoke_forwarded_connection(provider: str) -> Response:
-    """Revoke a forwarded connection: clear the refresh token, the forwarded
-    OAuth client credentials, every per-agent grant, and the cached provider /
-    token state (AC4). Idempotent."""
+    """Revoke a forwarded connection: clear every account's refresh token, the
+    forwarded OAuth client credentials, every per-agent grant, and the cached
+    provider / token state (AC4). Idempotent."""
     from gaia.connectors.grants import revoke_all_grants_for
     from gaia.connectors.providers import _registry as _provider_registry
     from gaia.connectors.store import clear_provider_credentials
@@ -1323,7 +1456,9 @@ async def revoke_forwarded_connection(provider: str) -> Response:
     # #2591: call the async core directly — this handler is already on the
     # event loop, and ``revoke_connection``'s sync wrapper would raise
     # rather than let a nested loop deadlock.
-    revoke_result = await connections.revoke_connection_async(provider)
+    revoke_result = await connections.revoke_connection_async(
+        provider, all_accounts=True
+    )
     clear_provider_credentials(provider)
     revoke_all_grants_for(provider)
     _provider_registry.pop(provider, None)

@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "blocked_navigation",
+    "message": "Stopped the page from going to https://evil.example/landing; https://evil.example was not approved.",
+    "data": {
+      "url": "https://evil.example/landing",
+      "origin": "https://evil.example"
+    }
+  }
+}

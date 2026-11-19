@@ -4,6 +4,7 @@
 import { useCallback, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { ArrowUp, FileAudio, FileText, FileVideo, Plus, Square, X } from 'lucide-react';
 import type { UseAttachments } from '../hooks/useAttachments';
+import { ElementChips, useElementChipsBlock } from './browser-pane/ElementChip';
 import { useT } from '../i18n/useT';
 import { middleTruncate } from '../utils/format';
 import { isVideoFile } from '../utils/mediaFiles';
@@ -60,9 +61,10 @@ export function Composer({
     // What is sent: the text plus a link for each attached file.
     const sentLength = attachments.compose(value.trim()).length;
     const tooLong = sentLength > MAX_MESSAGE_CHARS;
+    const chipsBlock = useElementChipsBlock(streaming);
     // A refused file would silently vanish on send, so it must be removed first.
     const refusedNames = attachments.attachments.filter((a) => a.error).map((a) => a.name).join(', ');
-    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong && !refusedNames;
+    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong && !refusedNames && !chipsBlock;
 
     const shownPlaceholder = disabledReason || placeholder || t('composer.placeholder');
 
@@ -113,6 +115,7 @@ export function Composer({
             onDrop={handleDrop}
             onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
         >
+            <ElementChips />
             {attachments.attachments.length > 0 && (
                 <ul className="composer-attachments" aria-label={t('composer.attached')}>
                     {attachments.attachments.map((a) => {
@@ -201,7 +204,7 @@ export function Composer({
                             onClick={onSubmit}
                             disabled={!canSend}
                             aria-label={answering ? t('composer.sendAnswer') : t('composer.queue')}
-                            title={answering ? t('composer.sendAnswerTitle') : t('composer.queueTitle')}
+                            title={answering ? t('composer.sendAnswerTitle') : (chipsBlock ?? t('composer.queueTitle'))}
                         >
                             <ArrowUp size={16} />
                         </button>
@@ -224,7 +227,7 @@ export function Composer({
                             onClick={onSubmit}
                             disabled={!canSend}
                             aria-label={t('composer.send')}
-                            title={t.hint(t('composer.send'), 'Enter')}
+                            title={chipsBlock ?? t.hint(t('composer.send'), 'Enter')}
                         >
                             <ArrowUp size={16} />
                         </button>

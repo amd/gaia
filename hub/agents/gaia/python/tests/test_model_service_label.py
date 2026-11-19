@@ -55,7 +55,9 @@ def test_gaias_own_lemonade_keeps_its_name(monkeypatch):
 def _failure_answer(label, cause):
     from gaia.agents.base.agent import Agent
 
-    host = SimpleNamespace(_model_service_label=lambda: label)
+    host = SimpleNamespace(
+        _model_service_label=lambda: label, _turn_model_retries={"failed": False}
+    )
     return Agent._model_failure_answer(
         host, [], 1, stopped_responding=False, cause=cause, advice=None
     )

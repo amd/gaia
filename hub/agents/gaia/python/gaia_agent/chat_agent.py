@@ -327,6 +327,26 @@ def _with_project_paths(env: Dict[str, str], project: os.PathLike | str) -> None
     )
 
 
+def _server_refusal(
+    agent: Any, source: str, folder: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """The refusal for Python that starts a never-ending server, or None."""
+    from gaia.browser.dev_servers import (
+        dev_server_offered,
+        server_in_python,
+        server_refusal,
+    )
+
+    server = server_in_python(source)
+    if server is None:
+        return None
+    return {
+        "status": "error",
+        "error": server_refusal(server.what, folder, dev_server_offered(agent)),
+        "has_errors": True,
+    }
+
+
 #: The line in a Python tool's docstring that :func:`_lists_script_libraries` fills.
 SCRIPT_LIBRARIES_PLACEHOLDER = "{script_libraries}"
 
@@ -1358,10 +1378,8 @@ class ChatAgent(
             return
         self._rag_failure_logged = signature
         if missing:
-            logger.warning(
-                "RAG not available (install with: uv pip install -e '.[rag]'): %s",
-                exc,
-            )
+            # *exc* already carries the install hint that is true for this build.
+            logger.warning("RAG not available: %s", exc)
         else:
             logger.warning("RAG failed to start: %s", exc)
         logger.debug("RAG init traceback:", exc_info=True)
@@ -2132,6 +2150,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             browser_section = """
 **BROWSER TOOLS:** search_web (DuckDuckGo, no key), fetch_page (extract readable text/links/tables), download_file (save URL locally; can then index_document).
 """
+        # Only a chat open in GAIA desktop, where the user can see the pane.
+        if browser_section and getattr(self, "_browser_pane_attached", False):
+            browser_section += """**BROWSER PANE:** The user sees a browser pane beside this chat; the browser tools act there, and "this page" is its page (browser_snapshot reads it).
+"""
 
         # Tail of Tier 1: indexing note kept separately so gated sections can
         # be inserted between discovery_rules and this tail.
@@ -2874,6 +2896,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "error": f"Could not read {file_path}: {e}",
                         "has_errors": True,
                     }
+                refused = _server_refusal(self, source, str(p.resolve().parent))
+                if refused is not None:
+                    return refused
                 start = time.monotonic()
                 run_dir = p.resolve().parent
                 try:
@@ -3018,6 +3043,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         ),
                         "has_errors": True,
                     }
+                refused = _server_refusal(self, code, None)
+                if refused is not None:
+                    return refused
 
                 try:
                     if hasattr(self, "_project_map_root"):
@@ -3186,10 +3214,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "files."
                     )
                 notes.append(_tool_import_hint(r.stderr, tool_names))
+                from gaia.agents.base.artifacts import retain_excerpt
+
                 result = _python_run_result(
                     r,
-                    r.stdout[:8000],
-                    r.stderr[:2000],
+                    retain_excerpt(self, r.stdout, 8000),
+                    retain_excerpt(self, r.stderr, 2000),
                     time.monotonic() - start,
                     " ".join(n for n in notes if n) or None,
                     system_python_runs=_shell_runs_any_python(self),

@@ -30,15 +30,6 @@ DAEMON_ROOT = DAEMON_SIDECARS.parents[0]
 CONNECTORS_ERRORS = DAEMON_ROOT.parent / "connectors" / "errors.py"
 # src/gaia/daemon/sidecars/install.py -> parents[3] = repo root
 _REPO_ROOT = DAEMON_SIDECARS.parents[3]
-FORWARDED_CREDENTIALS = (
-    _REPO_ROOT
-    / "hub"
-    / "agents"
-    / "email"
-    / "python"
-    / "gaia_agent_email"
-    / "forwarded_credentials.py"
-)
 
 # Any `gaia ...` invocation embedded in a user-facing string in this package.
 _GAIA_CMD = re.compile(r"`gaia ([^`]+)`")
@@ -50,7 +41,7 @@ _SOURCE_JOIN = re.compile(r'"\s*\n\s*f?"')
 
 # `<id>`, `{agent_id}`, `{self.spec.agent_id}`, `"<q>"` — a stand-in for a
 # real argument. Optional surrounding quote allowed (docstring examples like
-# `gaia email "<q>"` quote the placeholder the way a real invocation would).
+# `gaia -p "<q>"` quote the placeholder the way a real invocation would).
 _PLACEHOLDER = re.compile(r"[\"']?[<{][^>}]*[>}][\"']?")
 
 # The literal placeholder tokens a remedy must never leave unfilled (#2730
@@ -64,7 +55,7 @@ def _remedy_source_roots() -> "list[Path]":
     can live in (#2730 AC-9a). Recursive over ``src/gaia/daemon/**`` — the
     original non-recursive ``DAEMON_SIDECARS.glob('*.py')`` reached neither
     ``forward.py`` (one directory up) nor ``connectors/errors.py`` (a
-    different package) nor the hub wheel's own remedy strings.
+    different package).
 
     Used ONLY by the scope-placeholder scan below, not by
     ``_emitted_gaia_commands`` — a plain ``<scope>``/``<scopes>`` substring
@@ -73,21 +64,8 @@ def _remedy_source_roots() -> "list[Path]":
     architecture-documentation prose (e.g. a docstring mentioning a future
     ``gaia api`` subcommand) that was never meant to be validated as a
     literal, parseable invocation — that is a materially different, wider
-    claim than AC-9a makes.
-
-    NOT covered, deliberately: ``hub/agents/email/python/gaia_agent_email/**``
-    (e.g. ``onboarding_tools.py``, which does emit remedies). Two of its
-    module docstrings (``onboarding_tools.py``, ``question.py``) deliberately
-    quote the OLD placeholder-shaped UX as the bad behaviour they replaced —
-    scanning that directory would need AST-level "is this a docstring vs. a
-    live f-string" discrimination to avoid flagging its own history, which is
-    machinery disproportionate to the risk here: every remedy in that package
-    now derives its scopes from ``gaia_agent_email/scopes.py`` /
-    ``outlook_scopes.py`` (the single source of truth, #2730 D2) rather than
-    a hand-written literal, so the class of bug this scan exists to catch is
-    already structurally harder to reintroduce there. A chosen boundary, not
-    a missed one."""
-    return [DAEMON_ROOT, CONNECTORS_ERRORS, FORWARDED_CREDENTIALS]
+    claim than AC-9a makes."""
+    return [DAEMON_ROOT, CONNECTORS_ERRORS]
 
 
 def _iter_remedy_source_files():

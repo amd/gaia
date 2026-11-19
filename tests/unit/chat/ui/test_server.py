@@ -1688,7 +1688,7 @@ class TestSessionEndpoints:
     def test_create_session_microsoft_mail_provider(self, client):
         resp = client.post(
             "/api/sessions",
-            json={"agent_type": "email", "mail_provider": "microsoft"},
+            json={"mail_provider": "microsoft"},
         )
         assert resp.status_code == 200
         sid = resp.json()["id"]
@@ -1730,7 +1730,7 @@ class TestSessionEndpoints:
         assert resp.status_code == 422
         detail = resp.json()["detail"]
         assert "'data'" in detail
-        assert "email, gaia" in detail
+        assert "Registered agent ids: gaia." in detail
         assert client.get("/api/sessions").json()["total"] == 0
 
     def test_a_legacy_chat_id_is_accepted_but_not_listed(
@@ -1778,15 +1778,14 @@ class TestSessionEndpoints:
     def test_the_listed_ids_include_every_accepted_one(
         self, client, gaia_only_registry
     ):
-        """A sidecar id is accepted without a registry entry, so it is listed."""
+        """Every id the endpoint accepts is one it lists, and nothing more."""
         assert (
-            client.post("/api/sessions", json={"agent_type": "email"}).status_code
-            == 200
+            client.post("/api/sessions", json={"agent_type": "gaia"}).status_code == 200
         )
         detail = client.post("/api/sessions", json={"agent_type": "data"}).json()[
             "detail"
         ]
-        assert "Registered agent ids: email, gaia." in detail
+        assert "Registered agent ids: gaia." in detail
 
     def test_update_session_mail_provider(self, client):
         sid = client.post("/api/sessions", json={}).json()["id"]
@@ -2402,6 +2401,21 @@ class TestSessionDocumentEndpoints:
             f"/api/sessions/{session_id}/documents", json={"document_id": "nonexistent"}
         )
         assert resp.status_code == 404
+
+    def test_attach_document_removed_mid_request_is_not_reported_attached(
+        self, client, db, monkeypatch
+    ):
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+        # The document passes the existence check, then is gone when the row is written.
+        monkeypatch.setattr(db, "get_document", lambda doc_id: {"id": doc_id})
+
+        resp = client.post(
+            f"/api/sessions/{session_id}/documents", json={"document_id": "gone"}
+        )
+
+        assert resp.status_code == 409
+        assert "try again" in resp.json()["detail"]
+        assert client.get(f"/api/sessions/{session_id}").json()["document_ids"] == []
 
     def test_detach_document(self, client, db):
         create_resp = client.post("/api/sessions", json={})

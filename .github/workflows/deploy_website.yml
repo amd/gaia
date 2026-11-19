@@ -25,7 +25,7 @@
 # Nixpacks picks the build Node from website/package.json `engines.node`; keep it
 # and website-ci.yml's node-version in step, or CI and production diverge.
 #
-# This workflow is also dispatched by release_agent_email.yml after a successful
+# This workflow is also dispatched by release_agent_gaia.yml after a successful
 # agent publish, so a newly published agent shows up without a website commit.
 
 name: Deploy Website (Railway)
