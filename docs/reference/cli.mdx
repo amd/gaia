@@ -98,6 +98,28 @@ answer, so it can be piped or captured; progress, warnings and logs go to
 stderr. GAIA starts Lemonade Server through the daemon if it is not running, so
 there is nothing to launch first.
 
+**Model download.** When the run's local model is not on disk, `gaia -p`
+asks before it downloads anything:
+
+```
+gaia -p: Qwen3-0.6B-GGUF is not downloaded (0.4 GB). Download it now? [y/N]
+```
+
+`y` or `yes` downloads the model and then answers. Anything else, including a
+bare Enter, downloads nothing and exits `1`. The question is asked on stderr
+and answered at the terminal, so it needs both: when the prompt is piped in,
+or stdin or stderr is redirected, as in a script, there is nobody to ask, and
+the run exits `1` without downloading and names `--yes`. Pass `--yes` (`-y`)
+to agree in advance; the download then starts without a question. This holds
+for every model a run would use, whether it came from `--model`, from
+`last_model` or `default_model`, or from the hybrid model's settings.
+
+The progress goes to stderr: on a terminal a bar with the percent and the
+downloaded and total size, redrawn in place; in a pipe or a log file one plain
+line every 10%. stdout still carries only the answer. Ctrl+C at the question
+or during the download exits `130`; a stopped download continues when the same
+command is run again. A download that fails exits `1` with the reason.
+
 Where the agent ships as its own program, as in the desktop app, the terminal
 installers and the one-line installer, `gaia -p` and `gaia chat` run it through
 GAIA's background service in the current folder. Confirmation-gated tools are
@@ -117,7 +139,8 @@ echo "List the Python files here" | gaia -p --output-format json
 | Flag | Description |
 |------|-------------|
 | `-p`, `--print [prompt]` | The prompt. With no text after it, the prompt is read from stdin; an empty stdin or an interactive terminal is an error |
-| `--model <id>` | Model to run (local or cloud, e.g. `amd.DeepSeek-V4.1-Flash`), or `hybrid` to pick a cheap or strong model for the turn ([Hybrid model](/guides/llm-gateway#hybrid-model)). Default: the model the Agent UI and TUI reopen on (`last_model`), else `default_model` from `gaia config`, else the agent's own default. A local model that is not downloaded is refused, never downloaded |
+| `--model <id>` | Model to run (local or cloud, e.g. `amd.DeepSeek-V4.1-Flash`), or `hybrid` to pick a cheap or strong model for the turn ([Hybrid model](/guides/llm-gateway#hybrid-model)). Default: the model the Agent UI and TUI reopen on (`last_model`), else `default_model` from `gaia config`, else the agent's own default. A local model that is not downloaded is downloaded first, once you confirm it (see Model download above), including one added with `gaia model add` |
+| `--yes`, `-y` | Download the run's model without asking when it is not downloaded yet. Needed where nobody can answer the question: a script, a piped prompt, redirected stderr |
 | `--output-format text\|json` | `text` (default) prints the answer alone; `json` prints one JSON object (below) |
 | `--verbose` | With `--output-format json`: add the turn's full `conversation` (every model message and tool call) |
 | `--max-steps <n>` | Cap on agent steps for this run, at least 1. Default: the agent's own limit ([Agent step limit](#agent-step-limit)) |
@@ -166,7 +189,7 @@ subcommand instead.
 
 **Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other
 than `success`), when the model server could not be started, or when no prompt was
-given; `130` when interrupted; `2` for a usage error such as an unknown flag, a
+given, when the model's download failed, or when a download was needed and not confirmed; `130` when interrupted; `2` for a usage error such as an unknown flag, a
 launcher flag (`--ui`, `--cli`) combined with `-p`, or `--verbose` without
 `--output-format json`. On any failure the reason
 goes to stderr; in json mode stdout still carries one object, with `is_error: true`
