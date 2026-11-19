@@ -162,12 +162,12 @@ class TestRegistry:
         assert "gaia connectors configure google --client-id" in msg
         # connect authorizes scopes and grants the agent in one flow (#2347).
         assert "gaia connectors connect google --scopes" in msg
-        assert "--grant-agent installed:email" in msg
-        # Concrete, copy-paste example with the email agent's FULL scope set.
-        assert "gmail.modify" in msg
-        assert "gmail.send" in msg
+        assert "--grant-agent installed:gaia" in msg
+        assert "installed:email" not in msg
+        # Concrete, copy-paste example with the scopes GAIA declares.
+        assert "gmail.readonly" in msg
+        assert "gmail.compose" in msg
         assert "calendar.events" in msg
-        assert "calendar.readonly" in msg
         # UI path still named for UI users.
         assert "Settings -> Connectors -> Google" in msg
         assert "amd-gaia.ai/docs/connectors/google" in msg
@@ -372,7 +372,7 @@ class TestMicrosoftDispatch:
 
         calls: list[str] = []
 
-        async def _fake_get_or_refresh(provider_id, *, account_email=None):
+        async def _fake_get_or_refresh(provider_id, *, slot):
             calls.append(provider_id)
             return "tok"
 
@@ -384,10 +384,16 @@ class TestMicrosoftDispatch:
         assert calls == ["microsoft_work", "microsoft_work"]
 
         deleted: list[tuple] = []
-        monkeypatch.setattr(
-            "gaia.connectors.oauth_pkce.delete_connection",
-            lambda provider_id, **kw: deleted.append((provider_id, kw)),
-        )
+
+        async def _fake_revoke(provider_id, account=None, *, all_accounts=False):
+            deleted.append((provider_id, all_accounts))
+            return {
+                "remaining_accounts": 0,
+                "revoke_supported": True,
+                "revoked_remotely": True,
+            }
+
+        monkeypatch.setattr("gaia.connectors.api.revoke_connection_async", _fake_revoke)
         monkeypatch.setattr(
             "gaia.connectors.grants.revoke_all_grants_for", lambda cid: None
         )
@@ -395,7 +401,7 @@ class TestMicrosoftDispatch:
             "gaia.connectors.activations.revoke_all_activations_for", lambda cid: None
         )
         await handler.disconnect(work_spec)
-        assert deleted[0][0] == "microsoft_work"
+        assert deleted == [("microsoft_work", True)]
 
     def test_resolved_provider_ids_are_never_equal(self):
         from gaia.connectors.catalog.microsoft import (

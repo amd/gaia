@@ -119,9 +119,9 @@ def test_sidecar_gets_a_hidden_console(on_windows, spawned, tmp_path, monkeypatc
     from gaia.daemon.sidecars.spec import builtin_specs
 
     # Dev mode delivers the secret by file, so no installed binary is needed.
-    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    monkeypatch.setenv("GAIA_GAIA_AGENT_MODE", "dev")
     m = mgr.AgentSidecarManager(
-        builtin_specs()["email"], cache_dir=tmp_path, log_dir=tmp_path / "logs"
+        builtin_specs()["gaia"], cache_dir=tmp_path, log_dir=tmp_path / "logs"
     )
     with pytest.raises(SidecarSpawnError):
         m._spawn_process(["sidecar"], {}, 9127)
@@ -143,7 +143,7 @@ def test_supervised_lemonade_gets_a_hidden_console(on_windows, spawned, tmp_path
 def test_mcp_stdio_server_gets_a_hidden_console(on_windows, spawned):
     from gaia.mcp.client.transports.stdio import StdioTransport
 
-    assert StdioTransport(command="npx", args=["-y", "server"]).connect() is False
+    assert StdioTransport(command="mcp-server", args=["--stdio"]).connect() is False
     _assert_hidden(spawned[0], group=False)
 
 

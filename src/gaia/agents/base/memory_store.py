@@ -4435,13 +4435,16 @@ class MemoryStore:
     def search_deltas(
         self,
         base_name: str | None = None,
-        scope: str | None = None,
+        scope: str | Sequence[str] | None = None,
         status: str | None = None,
         delta_id: str | None = None,
         include_superseded: bool = False,
         limit: int | None = 200,
     ) -> List[Dict]:
         """Return delta rows as dicts, oldest first.
+
+        *scope* may name several scopes; rows from any of them come back in
+        one chronological list.
 
         Chronological because resolution replays them in order: the last write
         to a section is the one that wins.
@@ -4461,9 +4464,11 @@ class MemoryStore:
         if base_name:
             clauses.append("base_name = ?")
             params.append(base_name)
+        if isinstance(scope, str):
+            scope = [scope]
         if scope:
-            clauses.append("scope = ?")
-            params.append(scope)
+            clauses.append(f"scope IN ({', '.join('?' for _ in scope)})")
+            params.extend(scope)
         if status:
             clauses.append("status = ?")
             params.append(status)

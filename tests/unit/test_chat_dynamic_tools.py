@@ -898,3 +898,22 @@ def test_skill_body_filter_runs_before_the_turn_tool_filter(monkeypatch):
         agent._process_query_impl("read me an rss feed")
 
     assert order == ["bodies", "tools"]
+
+
+def test_a_withheld_tool_is_never_found(searching):
+    agent, _ = searching({"analyze_data_file": 0.9, "read_file": 0.5})
+    agent.deny_tools(["analyze_data_file"])
+
+    result = _search(agent)
+
+    assert result["tools"] == ["read_file"]
+    assert "analyze_data_file" not in result.get("docs", "")
+
+
+def test_no_skills_are_found_once_load_skill_is_withheld(searching):
+    agent, _ = searching(
+        {"pdf-tricks": 0.9}, {"pdf-tricks": SimpleNamespace(description="PDFs")}
+    )
+    agent._denied_tool_patterns = ("load_skill",)
+
+    assert _search(agent)["skills"] == []

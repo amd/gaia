@@ -387,3 +387,46 @@ def test_without_a_job_object_the_live_tree_is_still_killed(tmp_path, monkeypatc
 
     assert job.stopped == "timeout"
     assert _wait_gone(int(pid_file.read_text()))
+
+
+@pytest.mark.parametrize("tool_name", ["run_python", "execute_python_file"])
+def test_a_python_run_is_refused_once_the_turn_time_limit_is_nearly_up(
+    agent_tools, project, tool_name
+):
+    """A snippet started with no time left would be killed with nothing written."""
+    from gaia.agents.base.verification import OUT_OF_TIME
+
+    agent, tools = agent_tools
+    script = project / "never_runs.py"
+    script.write_text("open('ran.txt', 'w').write('x')\n")
+    args = (
+        {"code": script.read_text()}
+        if tool_name == "run_python"
+        else {"file_path": str(script)}
+    )
+    agent.time_limit_s = 600
+    agent._turn_started_at = time.monotonic() - 599
+    try:
+        result = tools[tool_name]["function"](**args)
+    finally:
+        agent.time_limit_s = None
+    assert result == OUT_OF_TIME
+    assert not (project / "ran.txt").exists()
+
+
+def test_a_python_run_is_cut_to_the_time_the_turn_has_left(agent_tools):
+    """A 120 s default must not outlast a turn with 3 s before its stop point."""
+    agent, tools = agent_tools
+    agent.time_limit_s = 100
+    agent._turn_started_at = time.monotonic() - 82  # 90 - 82 = 8 s to the stop
+    started = time.monotonic()
+    try:
+        result = tools["run_python"]["function"](code="import time; time.sleep(60)")
+    finally:
+        agent.time_limit_s = None
+    assert time.monotonic() - started < 30
+    assert result["status"] == "error"
+    assert "timed out" in str(result).lower()
+    # The limit ended it, so asking for a larger timeout is not on offer.
+    assert "time limit cut this run short" in result["error"]
+    assert "larger timeout" not in result["error"]

@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -1020,7 +1021,15 @@ class ProjectMapMixin:
         if not wanted or setting != AUTO or folder is None:
             return
         files, decision = self._project_trust(folder)
-        if not files or decision is not None or not self._can_ask_about_project():
+        if not files or decision is not None:
+            return
+        if not self._can_ask_about_project():
+            if not getattr(self, "_warned_unattended_trust", False):
+                self._warned_unattended_trust = True
+                sys.stderr.write(
+                    f"Folder {folder} has guidance files. "
+                    "Run 'gaia project trust add' to load them without --full-access.\n"
+                )
             return
 
         console = self.console

@@ -61,7 +61,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 - **Plain language first, in every artifact** — the release notes, PR body, Discord post, and your own between-phase status updates all follow [CLAUDE.md → How You Communicate](../../../CLAUDE.md#how-you-communicate): lead with what a user can now do, layer version numbers, SHAs, and pipeline mechanics underneath. Say each point once — don't restate a highlight in the changelog and again in the announcement.
 - **No Claude attribution anywhere** — not in PR titles, PR bodies, commit messages (no `Co-Authored-By: Claude ...` trailer), release notes, code comments, or the Discord announcement.
 - **No silent fallbacks** — if a validator fails, a step times out, or a workflow run isn't found, stop with an actionable error. Do not retry blindly. Do not "proceed anyway."
-- **Release notes are bulleted, plain, and short** — see *Notes format* in Phase 1. Every entry is one bullet, never a prose block; no narrative overview paragraph; no emoji; a hard word budget that is checked, not eyeballed. Sections in order: `## Breaking Changes` (only if any), `## What's New`, `## Bug Fixes`, `## Known Issues` (only if any), `## Contributors`, `## Full Changelog`. Patch releases do **not** include a `pip install` block.
+- **Release notes are bulleted, plain, and short** — see *Notes format* in Phase 1. Every entry is one bullet, never a prose block; no narrative overview paragraph; no emoji; a hard word budget that is checked, not eyeballed. Sections in order: `## Summary`, `## Breaking Changes` (only if any), `## What's New`, `## Bug Fixes`, `## Known Issues` (only if any), `## Contributors`, `## Full Changelog`. Patch releases do **not** include a `pip install` block.
 - **Match the previous release PR body shape exactly** — read the most recent merged `Release vX.Y.Z` PR (e.g. `gh pr list --repo amd/gaia --state merged --search "Release v in:title" --limit 3`). Open with `# GAIA vX.Y.Z Release Notes` (no MDX frontmatter in the PR body), end with a `Release checklist` section. Style drift here costs review cycles.
 - **The `version.py` bump and its notes land in the same commit.** `docs.yml` and `tests/unit/test_docs_json_release.py` both resolve `docs/releases/v<version>.mdx` and the `docs.json` navbar label from the *declared* `__version__`, so bumping ahead of the notes (the old `0.17.3` → "bump to 0.17.4 for development" pattern) turns every later docs and unit run red, not just the release PR. Never bump on its own.
 - **Bulletproof commits only** — every change made by this skill must satisfy the four criteria in CLAUDE.md (validated, critiqued, scope-clean, no half-finished work) before being committed.
@@ -113,8 +113,11 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
    # GAIA v<version> Release Notes
 
-   <Optional single sentence naming what this release is about. Drop it entirely if
-   the bullets already say it — that is the common case. Never a paragraph.>
+   ## Summary
+
+   - <highest-impact user-visible outcome, in plain words>
+   - <the next one; 3–5 bullets in all>
+   - <N> contributors merged <M> PRs since v<previous>.
 
    ## Breaking Changes
 
@@ -143,6 +146,17 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
    Full Changelog: [v<previous>...v<version>](https://github.com/amd/gaia/compare/v<previous>...v<version>)
    ```
+
+   **`## Summary` comes first — high signal, low noise.** 3–5 short bullets, each one
+   user-visible outcome of *this* release in plain words: no implementation detail, no
+   PR/issue numbers or file names, no sub-bullets. Then one stats bullet: the line
+   `python util/release_stats.py v<previous> HEAD --bullet` prints (each person counted
+   once; re-run it against the tag commit before tagging). Release-window figures only: no
+   stars, downloads, or growth, and no eval data (scores, cost, token or time figures, task
+   counts or traces). The notes are public.
+
+   > - Ask about a PDF longer than 100 pages and get a complete answer.
+   > - 42 contributors merged 310 PRs since v0.25.4.
 
    Omit `## Breaking Changes` and `## Known Issues` when empty — no "None" placeholder. Drop
    the `---` rules between sections; the headings already separate them.
@@ -179,13 +193,14 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    - **Bullets, not paragraphs.** Every entry is one bullet: a bold clause naming what the
      user can now do, then at most one sentence, then the PR links. No `###` prose blocks
      inside `What's New`.
-   - **Say it once.** A highlight appears in the bullet list or in the opening sentence,
-     never both. The frontmatter `description` is not a third copy.
+   - **Say it once.** `## Summary` names an outcome in a few words; its `What's New` or
+     `Bug Fixes` bullet carries the detail and links. The frontmatter `description` is not
+     a third copy.
    - **Factual, not promotional.** State the capability and stop. Banned: emoji, "we're
      excited to announce", "finally", "blazing(-fast)", "game-changer", "seamless",
      "powerful", "unlock", "Here's the good stuff", "makes X effortless", "no more
      crashes", invented benchmarks.
-   - **Order by what users run.** Agents and commands first (`gaia hub`, `gaia email`, …);
+   - **Order by what users run.** Agents and commands first (`gaia-tui`, `gaia slack`, …);
      SDK, CI, and refactor work last, or omitted when it has no user-visible effect.
    - **Word budget — a cap, not a target.** **≤ 350 words** for a patch, **≤ 600** for a
      minor/major, measured from the top down to the first of `## Bug Fixes` / `## Known
@@ -198,14 +213,14 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    **Example — one highlight:**
 
    > **Bad** (prose block, promotional, three sentences where one works):
-   > ### Triage your inbox from the terminal — `gaia email`
-   > Point GAIA at your inbox and it sorts the noise from what needs you: drafts
-   > replies to routine mail, flags what's urgent, leaves the rest. Runs locally, so
-   > your mail never leaves your machine. Try it: `gaia email`.
+   > ### Talk to GAIA from Slack — `gaia slack`
+   > Bring GAIA into your workspace and it answers right where your team already
+   > talks. No more switching apps to ask a question — just message it and the
+   > answer appears in Slack. Try it: `gaia slack setup`.
 
    > **Good** (one bullet, plain, factual):
-   > - **Triage your inbox from the terminal** — `gaia email` sorts mail, drafts replies to
-   >   routine messages, and flags what needs you. Runs locally. (PR [#1234](https://github.com/amd/gaia/pull/1234))
+   > - **Talk to GAIA from Slack** — `gaia slack setup` connects a workspace so you can
+   >   message GAIA from Slack. (PR [#1234](https://github.com/amd/gaia/pull/1234))
 
 4. **Add the release page to [docs/docs.json](../../../docs/docs.json):** add `releases/v<version>` to the Releases tab. Step 5 stamps the navbar label.
 
@@ -364,7 +379,7 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    ```
    If it fails, release the flagship in this order. Skipping step 2 deadlocks: `release_agent_gaia.yml` refuses to run until the Terminal UI (`terminal-hub`) version the lock pins is on the hub, and it normally publishes only on the final tag, which this gate blocks.
    1. Bump the flagship in a PR: edit `__version__` in `hub/agents/gaia/python/gaia_agent/__init__.py`, run `python util/release_versions.py --stamp`, add a `hub/agents/gaia/npm/CHANGELOG.md` entry. (`hub/agents/gaia/python/packaging/stamp_version.py` writes the same flagship fields and still works; `release_agent_gaia.yml` runs its `--check`.)
-   2. **Publish the Terminal UI (`terminal-hub`) first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its Windows-setup leg fails because there is no GitHub release or new flagship yet, and its installer-attach job finds no GitHub release, warns, and attaches nothing; neither publishes anything. **Publish terminal-hub** going green is what this step needs. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
+   2. **Publish the Terminal UI (`terminal-hub`) first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its Windows-setup leg is skipped because there is no GitHub release yet, and its installer-attach job finds no GitHub release, warns, and attaches nothing; neither publishes anything. **Publish terminal-hub** going green is what this step needs. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
    3. Tag `agent-pkg-gaia-v<flagship-version>` on the merged commit and approve `release_agent_gaia.yml`.
    4. Merge the PR the release opens once it publishes: its `pin-lock` job commits the regenerated `binaries.lock.json` (real hashes) to branch `flagship-lock/v<flagship-version>` and opens `chore(release): pin flagship agent <version>'s published hashes`. It is a bot PR, so CI only runs when the merge queue picks it up. Never hand-edit the hashes; if the PR is missing, re-run that release run's `pin-lock` job, which never opens a second PR and does nothing when main already matches. Then re-run Phase 3 on the merged commit. Code the binary is frozen from must not change between the agent tag and the core tag.
 

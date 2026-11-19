@@ -586,11 +586,14 @@ def test_an_agent_argv_falls_through_to_the_agent(project, child_env):
     assert _dispatch(["--json-events"], project, child_env).returncode == 97
 
 
+_HAS = "GAIA's own Python: has "
+
+
 def _libraries_named(tool):
     description = _TOOL_REGISTRY[tool]["description"]
-    line = next(s for s in description.split("\n\n") if s.startswith("Has "))
+    line = next(s for s in description.split("\n\n") if s.startswith(_HAS))
     assert "no pip" in line
-    named = line.removeprefix("Has ").split(";")[0].replace("\n", " ")
+    named = line.removeprefix(_HAS).split(";")[0].replace("\n", " ")
     return [n.strip() for n in named.split(",")]
 
 
@@ -719,3 +722,133 @@ def test_the_hinted_failure_still_teaches_the_fix_once_a_retry_works(tmp_path):
         s._memory_store.close()
 
     assert "used `csv`, `statistics` instead" in lesson["content"]
+
+
+# --- A script that needs a module GAIA's own Python lacks ---------------------
+# run_python runs the interpreter GAIA ships, so a project's own packages are
+# not importable there; the error points at the system Python instead.
+
+from types import SimpleNamespace  # noqa: E402
+
+from gaia_agent import chat_agent  # noqa: E402
+from gaia_agent.chat_agent import (  # noqa: E402
+    _python_run_result,
+    _system_python_hint,
+    system_python,
+)
+
+_MISSING = "ModuleNotFoundError: No module named 'torch.nn'"
+_SYSTEM = os.path.join(os.sep, "usr", "bin", "python3")
+
+
+def _which(found):
+    return lambda name: found.get(name)
+
+
+def _failed(stderr):
+    return SimpleNamespace(returncode=1, stderr=stderr)
+
+
+def test_the_system_python_is_one_on_path_that_is_not_gaias(monkeypatch):
+    monkeypatch.setattr(chat_agent.shutil, "which", _which({"python3": _SYSTEM}))
+    assert system_python() == _SYSTEM
+
+
+def test_gaias_own_interpreter_is_not_the_system_python(monkeypatch):
+    monkeypatch.setattr(chat_agent.shutil, "which", _which({"python3": sys.executable}))
+    assert system_python() is None
+
+
+def test_the_windows_store_stub_is_not_a_python(monkeypatch):
+    stub = os.path.join("C:\\", "Users", "x", "WindowsApps", "python.exe")
+    monkeypatch.setattr(chat_agent.shutil, "which", _which({"python": stub}))
+    assert system_python() is None
+
+
+def test_a_venvs_base_python_is_a_different_python(monkeypatch, tmp_path):
+    """The venv's interpreter links to the base one, which has other packages."""
+    venv = tmp_path / "venv"
+    monkeypatch.setattr(sys, "prefix", str(venv))
+    monkeypatch.setattr(sys, "base_prefix", str(tmp_path / "base"))
+    monkeypatch.setattr(chat_agent.shutil, "which", _which({"python3": sys.executable}))
+    assert system_python() == sys.executable
+
+
+def test_the_venvs_own_python_is_not_the_system_python(monkeypatch, tmp_path):
+    venv = tmp_path / "venv"
+    own = str(venv / "bin" / "python3")
+    monkeypatch.setattr(sys, "prefix", str(venv))
+    monkeypatch.setattr(sys, "base_prefix", str(tmp_path / "base"))
+    monkeypatch.setattr(chat_agent.shutil, "which", _which({"python3": own}))
+    assert system_python() is None
+
+
+@pytest.mark.parametrize(
+    "has_shell, full_access, expected",
+    [(True, True, True), (True, False, False), (False, True, False)],
+)
+def test_the_hint_needs_a_shell_that_would_run_it(has_shell, full_access, expected):
+    """Outside full access the shell refuses a Python that is not on its list."""
+    from gaia_agent.chat_agent import _shell_runs_any_python
+
+    agent = SimpleNamespace(
+        _tools_registry={"run_shell_command": {}} if has_shell else {},
+        full_access_active=lambda: full_access,
+    )
+    assert _shell_runs_any_python(agent) is expected
+
+
+def test_python_is_used_when_there_is_no_python3(monkeypatch):
+    monkeypatch.setattr(chat_agent.shutil, "which", _which({"python": _SYSTEM}))
+    assert system_python() == _SYSTEM
+
+
+def test_a_missing_module_names_the_system_python(monkeypatch):
+    monkeypatch.setattr(chat_agent, "system_python", lambda: _SYSTEM)
+    result = _python_run_result(
+        _failed(_MISSING), "", _MISSING, 0.1, system_python_runs=True
+    )
+    assert result["status"] == "error"
+    assert "has no torch" in result["error"]
+    assert _SYSTEM in result["error"]
+    assert "run_shell_command" in result["error"]
+
+
+@pytest.mark.parametrize(
+    "stderr, shell_tool, other",
+    [
+        (_MISSING, False, _SYSTEM),  # no shell tool to run it with
+        (_MISSING, True, None),  # no other Python on this machine
+        ("ZeroDivisionError: division by zero", True, _SYSTEM),  # not an import
+    ],
+)
+def test_no_hint_without_a_way_to_act_on_it(monkeypatch, stderr, shell_tool, other):
+    monkeypatch.setattr(chat_agent, "system_python", lambda: other)
+    assert _system_python_hint(stderr, shell_tool) is None
+    result = _python_run_result(
+        _failed(stderr), "", stderr, 0.1, system_python_runs=shell_tool
+    )
+    assert "system Python" not in result["error"]
+
+
+def test_a_bundled_library_keeps_its_own_hint(monkeypatch):
+    """pandas missing from a source install is retried without it, not rerouted."""
+    monkeypatch.setattr(chat_agent, "system_python", lambda: _SYSTEM)
+    stderr = "ModuleNotFoundError: No module named 'pandas'"
+    result = _python_run_result(
+        _failed(stderr), "", stderr, 0.1, system_python_runs=True
+    )
+    assert "pip is not available" in result["error"]
+    assert "system Python" not in result["error"]
+
+
+def test_the_description_says_whose_python_this_is():
+    from gaia_agent.chat_agent import _lists_script_libraries
+
+    def sample():
+        """Run.
+
+        {script_libraries}
+        """
+
+    assert "GAIA's own Python: has " in _lists_script_libraries(sample).__doc__

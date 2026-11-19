@@ -114,11 +114,11 @@ def _autouse_reset_token_cache():
         yield
         return
 
-    if hasattr(tokens, "_cache"):
-        tokens._cache.clear()
+    tokens._cache.clear()
+    tokens._identity_unavailable.clear()
     yield
-    if hasattr(tokens, "_cache"):
-        tokens._cache.clear()
+    tokens._cache.clear()
+    tokens._identity_unavailable.clear()
 
 
 @pytest.fixture(autouse=True)
