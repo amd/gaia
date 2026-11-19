@@ -148,8 +148,14 @@ func TestTheStartupRestoreSaysWhatItIsRestoring(t *testing.T) {
 	if !strings.Contains(got, "restoring "+flashID+"…") {
 		t.Fatalf("the restore turn does not say what it is restoring: %q", got)
 	}
-	if strings.Contains(got, "keep typing") || strings.Contains(got, "Esc cancel") {
-		t.Fatalf("the restore turn still advertises the generic turn hints: %q", got)
+	if strings.Contains(got, "keep typing") {
+		t.Fatalf("the restore turn still advertises typing ahead: %q", got)
+	}
+	if !m.streaming {
+		t.Fatalf("the restore turn is not streaming, so this test proves nothing about Esc")
+	}
+	if !strings.Contains(got, "Esc cancel") {
+		t.Fatalf("Esc still cancels the restore, but the bar no longer says so: %q", got)
 	}
 
 	m = deliver(t, m,
@@ -164,6 +170,21 @@ func TestTheStartupRestoreSaysWhatItIsRestoring(t *testing.T) {
 	if got := joinHints(m.statusHints()); !strings.Contains(got, "keep typing") ||
 		!strings.Contains(got, "Esc cancel") {
 		t.Fatalf("a normal turn after the restore lost its hints: %q", got)
+	}
+}
+
+// A relayed restore has no stream of its own, so Esc has nothing to cancel and
+// the bar must not offer it.
+func TestARelayedRestoreDoesNotOfferEscCancel(t *testing.T) {
+	m, c, _ := startupChat(t, StartupRestore, "fireworks", flashID)
+	m = openChat(t, m, c)
+	m.streaming = false
+	got := joinHints(m.statusHints())
+	if !strings.Contains(got, "restoring "+flashID+"…") {
+		t.Fatalf("the relayed restore does not say what it is restoring: %q", got)
+	}
+	if strings.Contains(got, "Esc cancel") {
+		t.Fatalf("a restore with no stream offers a cancel Esc cannot do: %q", got)
 	}
 }
 
