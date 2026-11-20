@@ -224,6 +224,19 @@ def verify_keyring_backend() -> None:
         )
 
 
+def keyring_read_refusal() -> Optional[str]:
+    """Why keyring reads are refused (a weak or uninspectable backend), else None.
+
+    For delete paths that must still work there. Any other backend failure
+    raises, as :func:`verify_keyring_backend` does.
+    """
+    try:
+        verify_keyring_backend()
+    except WeakKeyringError as e:
+        return str(e)
+    return None
+
+
 def _wrap_keyring_call(operation: str):
     """Decorator-like helper: translate keyring exceptions into
     ``ConnectorsError`` with actionable text per CLAUDE.md."""

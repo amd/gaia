@@ -785,6 +785,37 @@ async def revoke_provider_token(
     return result
 
 
+#: Where a user removes GAIA's access by hand, per OAuth provider id.
+REVOKE_PAGES: Dict[str, Tuple[str, str]] = {
+    "google": ("Google", "https://myaccount.google.com/permissions"),
+    "microsoft": ("Microsoft", "https://account.live.com/consent/Manage"),
+    "microsoft_work": ("Microsoft", "https://myapps.microsoft.com"),
+}
+
+
+def not_revoked_on_weak_keyring(provider_id: str) -> Dict[str, Any]:
+    """The revoke outcome when the keyring refuses reads (weak or uninspectable).
+
+    Revoking needs the stored refresh token, which GAIA will not read from
+    such a keyring, so only the local copy is removed. ``revoke_error`` tells
+    the user where to revoke GAIA's access by hand.
+    """
+    label, page = REVOKE_PAGES.get(
+        provider_id, (provider_id, "your account's connected-apps page")
+    )
+    return {
+        "revoke_supported": False,
+        "revoked_remotely": False,
+        "revoke_error": (
+            "The keyring on this PC is not secure, so GAIA removed the sign-in "
+            "without reading it and did not revoke GAIA's access at "
+            f"{label}. To revoke it, remove GAIA at {page}. To keep using "
+            "connectors, switch to a secure credential store: "
+            "https://amd-gaia.ai/docs/security/connections"
+        ),
+    }
+
+
 async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
     """Loopback handler for ``GET /callback``."""
     flow = _pending.get(flow_id)
