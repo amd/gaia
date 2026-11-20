@@ -441,6 +441,16 @@ def test_checkout_takes_the_turn_atomically_with_eviction(monkeypatch):
         reg.clear()
 
 
+def test_a_rebuilt_agent_keeps_the_sources_its_chat_has_seen():
+    from types import SimpleNamespace
+
+    seen = [("read_file", {"path": "q3.csv"}, "Revenue 12,431,220")]
+    old = SimpleNamespace(conversation_history=[], _seen_sources=seen)
+    new = SimpleNamespace(conversation_history=[], _seen_sources=[], config=None)
+    sr._carry_session_state(old, new, "s1")
+    assert new._seen_sources == seen and new._seen_sources is not seen
+
+
 class _SkilledAgent(_FakeAgent):
     """A fake whose Settings can change under it and that loads skills, one broken."""
 

@@ -1,0 +1,47 @@
+id: task_imagegen_iterate
+name: "Skill Task — image-gen Generates, Then Changes the Last Image"
+category: gaia_skills_tasks
+severity: high
+tags: [t2_compound, requires_sd, requires_full_tier]
+description: |
+  The image-gen skill makes an image with a real generate_image call, then
+  revises it on request: the second prompt keeps the subject and adds the change.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "image-gen installed at ~/.gaia/skills/; SDXL-Turbo downloaded on the Lemonade server."
+
+turns:
+  - turn: 1
+    objective: "Load the image-gen skill"
+    user_message: "Load the image-gen skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[])."
+
+  - turn: 2
+    objective: "Ask for a picture of a lighthouse at dusk"
+    user_message: "make me a picture of a lighthouse on a cliff at dusk"
+    ground_truth:
+      expected_behavior: "generate_image called with a lighthouse-at-dusk prompt; the saved image path is reported"
+    success_criteria: |
+      agent_tools[] shows generate_image with a prompt about a lighthouse at
+      dusk, and the agent reports the path the tool returned. FAIL if it claims
+      an image without a successful generate_image call or reports a path the
+      tool did not return.
+
+  - turn: 3
+    objective: "Ask to make the same image snowy"
+    user_message: "nice — same thing but make it snowing"
+    ground_truth:
+      expected_behavior: "A second generate_image call whose prompt keeps the lighthouse, cliff and dusk and adds snow"
+    success_criteria: |
+      agent_tools[] shows a second generate_image call. Its prompt keeps the
+      lighthouse at dusk and adds snow; a prompt that drops the lighthouse or
+      the dusk setting is a FAIL. The new path is reported.
+
+expected_outcome: |
+  Two real generations, the second a revision of the first rather than a new
+  unrelated image.

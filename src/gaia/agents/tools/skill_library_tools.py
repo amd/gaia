@@ -333,6 +333,29 @@ class SkillLibraryToolsMixin:
                 "a terminal — do not claim it works."
             )
 
+        # What the model can call now, by name: "registered_tools: []" alone
+        # reads as "no tools" for a skill that uses the agent's own.
+        report = self.skill_tool_report(skill)
+        if report["available"]:
+            payload["tools_available"] = report["available"]
+            payload["tools_hint"] = (
+                "These tools are on your tool list now and stay there for this "
+                "chat. Call them directly, as the skill's instructions say."
+            )
+        unlisted = [*report["blocked"], *report["unlisted"]]
+        if unlisted:
+            payload["unavailable_tools"] = unlisted
+            unlisted_warning = (
+                f"Skill '{skill.name}' names tool(s) {', '.join(unlisted)}, "
+                "which are turned off or not on the tool list in this chat, so "
+                "you cannot call them. The parts of its instructions that use "
+                "them cannot run — say so instead of improvising a substitute."
+            )
+            existing = payload.get("warning")
+            payload["warning"] = (
+                f"{existing} {unlisted_warning}" if existing else unlisted_warning
+            )
+
         # tools_required is advisory at load time — the base loader logs the
         # gap and loads anyway, so surface it here or the model discovers it
         # mid-recipe as a missing tool.
@@ -433,6 +456,12 @@ class SkillLibraryToolsMixin:
                     "needs a larger model. Tell the user so; a skill they paste "
                     "or point to can still be added with capture_skill. "
                     f"See {_DOCS_URL}"
+                )
+            elif not hub_offered:
+                payload["hint"] = (
+                    "Searching and installing skills from the hub needs a larger "
+                    "model. If the user wants a skill not listed here, tell them "
+                    "so; they can switch to a larger model in the model list."
                 )
             return payload
 

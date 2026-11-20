@@ -18,7 +18,6 @@ Test coverage includes:
 import asyncio
 import logging
 import threading
-import time
 
 import httpx
 import pytest
@@ -503,18 +502,17 @@ class TestApiUnitValidation:
     def test_health_endpoint_degrades_when_lemonade_is_unreachable(self, monkeypatch):
         """Connection failures stay bounded and report an unavailable LLM."""
         monkeypatch.setenv("LEMONADE_BASE_URL", "http://lemonade.test")
-        respx.get("http://lemonade.test/api/v1/health").mock(
+        route = respx.get("http://lemonade.test/api/v1/health").mock(
             side_effect=httpx.ConnectError("connection refused")
         )
 
-        started = time.monotonic()
         response = self.client.get("/health")
-        elapsed = time.monotonic() - started
 
         assert response.status_code == 200
         assert response.json()["status"] == "degraded"
         assert response.json()["components"]["llm"]["status"] == "unavailable"
-        assert elapsed < 0.5
+        # time bound is the client timeout checked by the next test
+        assert route.call_count == 1
 
     @respx.mock
     def test_health_endpoint_configures_bounded_lemonade_timeout(self, monkeypatch):

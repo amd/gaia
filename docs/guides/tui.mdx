@@ -817,8 +817,9 @@ saying what it can do.
 A command GAIA doesn't run unasked — `python script.py`, `git commit`, `npm test`
 with no skill loaded for it — gets this prompt rather than an error. `a` covers
 that one command family (`git commit`, `python (any script)`) for the session and
-nothing wider. If you deny it, the agent is told not to get the same result
-another way, and stops to explain.
+nothing wider. If you deny it, the agent is told that this one command is off:
+it must not run it through another tool or script, and it carries on with the
+rest of the task by other means and says what it could not do.
 
 A command GAIA's own checks don't cover — `git push`, `git fetch`, Python passed
 with `-c`, a PowerShell command it can't read, a line with `$(…)`, a path outside
@@ -845,9 +846,9 @@ don't cover that also deletes or discards work (`git push --force`, `git reset
 --hard`, `git clean`, `rm` outside the project), a granted CLI's actions that
 end someone else's work (`gh issue close`, `gh pr merge`), and folders no
 approval can open (credential folders, the system temp folder, a whole drive or
-your home folder), and reading credential files (`.env`, private keys, `.npmrc`) even
-under full access. The agent
-says what it would have run, so you can run it yourself.
+your home folder), and reading credential files (`.env`, private keys, `.npmrc`).
+The agent says what it would have run, so you can run it yourself. Under full
+access none of these is refused: the shell runs any command.
 
 | Key | What it does |
 |---|---|
@@ -883,8 +884,9 @@ on every frame.
 Commands GAIA's checks don't cover — printing a credential (`gh auth token`), a
 `git` option that hides a script — ask once in `ask` and `accept edits`, showing
 the exact line, and no `a` answer covers them. An encoded PowerShell command, or
-one that deletes or discards work on such a line, stays refused. Only full
-access lifts the shell guardrails; see [Full access](/reference/cli#full-access).
+one that deletes or discards work on such a line, stays refused. Full access
+lifts all of this: the shell runs any command, asks nothing and refuses
+nothing. See [Full access](/reference/cli#full-access).
 
 A session launched with `--use-claude` skips first-boot setup entirely and does not
 start the local server — that flag exists to avoid the local backend, so running an
@@ -984,8 +986,11 @@ this command?`, `Write this file?`, `Install this skill?`); any other tool reads
 `Allow <tool>?`. A `DESTRUCTIVE` prompt adds a warning line under the call.
 
 **y** runs it once, **n** or **esc** denies. Denying is a normal outcome, not an
-error — the agent is told you said no, doesn't try another way to do the same
-thing, and carries on with whatever doesn't need it. When nobody can answer — a
+error — the agent is told you said no to that one action, doesn't do the same
+thing through another tool, and carries on with the task by other means. A no
+covers the command on what it named (`pip install pandas`, not every `pip
+install`), and a declined script's own new output files can still be produced
+another way. When nobody can answer — a
 scheduled or background run, or a prompt that expires — the command doesn't run.
 A command GAIA's own checks don't cover offers no `a`: it shows the exact line
 and a risk line, and runs once if you say yes (see
@@ -996,7 +1001,8 @@ the part that matters. An "always allow" answer, where offered, is scoped to
 that specific call — approving `gh issue list` once does not hand over your
 shell for the session.
 
-`--full-access` runs every tool without asking, and the TUI shows a
+`--full-access` runs every tool without asking, and the shell and Python
+tools run whatever the agent gives them. The TUI shows a
 persistent warning the whole time it is on. `/full-access off` turns it off
 mid-session.
 

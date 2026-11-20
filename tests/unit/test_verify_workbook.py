@@ -9,6 +9,7 @@ recalculated the file, so the agent reported it as done. Another saved plain
 text as a .docx.
 """
 
+import gc
 import hashlib
 import importlib.util
 import inspect
@@ -367,18 +368,43 @@ def _rows_and_aggregates(rows: int, aggregates: int):
     return wb
 
 
-def test_a_long_data_sheet_is_checked_in_seconds(tmp_path):
-    """Each reference used to scan every formula on its sheet: 20,000 row
-    formulas under 50 whole-column aggregates took over a minute."""
-    path = _save(_rows_and_aggregates(20_000, 50), tmp_path)
-
-    started = time.perf_counter()
-    result = _static(path)
-    elapsed = time.perf_counter() - started
-
-    assert result["formula_count"] == 20_051
+def _check_seconds(path: Path) -> float:
+    """CPU seconds for one check, without a garbage collection landing in it."""
+    gc.collect()
+    gc.disable()
+    try:
+        started = time.process_time()
+        result = _static(path)
+        elapsed = time.process_time() - started
+    finally:
+        gc.enable()
     assert result["error_count"] == 0, result["errors"][:3]
-    assert elapsed < 10, f"took {elapsed:.1f}s"
+    return elapsed
+
+
+def test_checking_time_grows_linearly_with_the_sheet(tmp_path):
+    """Each reference used to scan every formula on its sheet: 20,000 row
+    formulas under 50 whole-column aggregates took over a minute.
+
+    Four times the rows must cost about four times as long; that scan made
+    it twelve times or more. A ratio of CPU times holds on a loaded runner,
+    where a wall-clock limit did not."""
+    rows = 1_500
+    small = _save(_rows_and_aggregates(rows, 50), tmp_path, "small.xlsx")
+    large = _save(_rows_and_aggregates(4 * rows, 50), tmp_path, "large.xlsx")
+
+    small_times, large_times = [], []
+    for _ in range(3):
+        small_times.append(_check_seconds(small))
+        large_times.append(_check_seconds(large))
+    ratio = min(large_times) / max(min(small_times), 0.01)
+
+    assert _static(large)["formula_count"] == 4 * rows + 51
+    assert ratio < 8, (
+        f"4x the rows took {ratio:.1f}x as long ({min(small_times):.2f}s vs "
+        f"{min(large_times):.2f}s of CPU): the check no longer scales "
+        "linearly with the sheet"
+    )
 
 
 def test_a_formula_under_a_range_is_still_a_dependency(tmp_path):

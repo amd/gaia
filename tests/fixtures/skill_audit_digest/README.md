@@ -18,7 +18,10 @@ that the two interoperate. So both suites assert against **these** vectors:
 
 - `vectors.json` — the expected digests. **Do not regenerate this to make a test
   pass.** If a digest changes, the wire format changed: bump `AUDIT_ENGINE`, and
-  update both implementations together.
+  update both implementations together. `engine` moves with every
+  `AUDIT_ENGINE` bump even when, as for 0.2.0, the rule change does not touch
+  this tree and every digest stays the same. Recompute the digests with
+  `content_digest` / `manifest_digest` before changing any of them.
 - `tree/` — a small skill tree covering the cases that distinguish the algorithm:
   nested `scripts/`, a `__pycache__` that must be ignored, and CRLF content.
 
@@ -35,7 +38,10 @@ relative POSIX path. Each record is:
 ```
 
 The path is included so a rename changes the digest; the length keeps the
-concatenation unambiguous. `__pycache__`, `.git`, and compiled artifacts are
-excluded — a build cache appearing must not invalidate a valid report. Unlike
+concatenation unambiguous. `__pycache__`, `.git`, and tool caches are excluded —
+a build cache appearing must not invalidate a valid report, and no bundle copy
+into GAIA carries a `__pycache__`. Compiled modules, archives, a `.pyc` outside
+`__pycache__`, and `node_modules` ship with the skill, so they are hashed (and
+the audit reports them, since it cannot read them as source). Unlike
 `manifest_digest`, file bytes are hashed **raw**, with no line-ending
 normalization, because it covers arbitrary content and not just text.

@@ -249,10 +249,10 @@ class PermissionState:
         Two attributes, because they are two different grants that happen to be
         turned on together. ``auto_approve_gated_tools`` skips the confirmation
         prompt; ``full_access`` additionally lifts the shell guardrails — the
-        operator block, the read-only binary policy and the rate limit (#3373,
-        #3374). An unattended harness that only pre-approves prompts sets the
-        first and must not inherit the second, which is what
-        ``lifts_shell_gates=False`` buys the HTTP transport. ``grants_paths``
+        operator block, the command policy, the path checks and the rate limit
+        (#3373, #3374). An unattended harness that only pre-approves prompts
+        sets the first and must not inherit the second, which is what
+        ``lifts_shell_gates=False`` buys it. ``grants_paths``
         lets an out-of-scope path through without a prompt, but only on a run
         a person is watching (``answers_confirmations``).
         """
@@ -2149,6 +2149,9 @@ def dispatch_query(
             agent._engineering_reported_setup_status = setup_status
     if query == CLEAR_CONVERSATION_QUERY:
         agent.conversation_history.clear()
+        # Facts seen in the cleared chat must not ground the next one's numbers.
+        if hasattr(agent, "clear_seen_sources"):
+            agent.clear_seen_sources()
         _reset_hybrid_route(agent)
         loader = getattr(agent, "tool_loader", None)
         if loader is not None:
@@ -2245,10 +2248,9 @@ def build_parser() -> "argparse.ArgumentParser":
         dest="full_access",
         action="store_true",
         help="Start with the permission gates OFF: every gated tool runs "
-        "without asking, the shell-only operators (>, >>, <, &, `, $(), "
-        "newline) parse and run, the "
-        "read-only binary policy is replaced by the developer set (node, npm, "
-        "make, cmake, go, cargo, sed, awk, curl, python, pytest, gh, git) and "
+        "without asking, the shell runs any program with any shell syntax, "
+        "Python code runs unchecked, paths outside the allowed folders are "
+        "open and "
         "the shell rate limit is lifted. This is arbitrary code execution. Off "
         "unless passed, and the host can toggle it at any time over the "
         "control channel. Every shell command run this way is audit-logged.",
