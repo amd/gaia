@@ -5290,7 +5290,7 @@ def main():
                                 + (f": {detail}" if detail else "")
                             )
                     else:
-                        os.kill(pid, signal.SIGKILL)
+                        os.kill(pid, signal.SIGKILL)  # pylint: disable=no-member
                     print(f"Force-stopped Telegram adapter (pid {pid}).")
                     # A hard-killed adapter cannot clean up its PID file.
                     with contextlib.suppress(FileNotFoundError):
