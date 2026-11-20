@@ -719,7 +719,7 @@ TEST_F(GaiacppStdio, AllowRunsTheToolOnce) {
     }
     EXPECT_EQ(prompt["action"], "file_write");
     EXPECT_EQ(prompt["risk"], "write");
-    EXPECT_EQ(prompt["summary"], "Write " + out.string());
+    EXPECT_EQ(prompt["summary"], out.string() + "\n\nWhat will be saved:\n    hi");
     EXPECT_FALSE(fs::exists(out)) << "nothing is written before the answer";
 
     decide("allow", prompt["confirm_id"]);
@@ -739,6 +739,51 @@ TEST_F(GaiacppStdio, AllowRunsTheToolOnce) {
     decide("deny", second["confirm_id"]);
     ASSERT_TRUE(waitTerminal(2).is_object());
     EXPECT_FALSE(fs::exists(again));
+}
+
+TEST_F(GaiacppStdio, AnEditPromptShowsBeforeAndAfterAndItsResultReadsInWords) {
+    const fs::path file = work_ / "inventory.py";
+    std::ofstream(file) << "count = 1\nname = 'a'\n";
+    mock_.pushResponse(toolCall("file_read", {{"path", file.string()}}));
+    mock_.pushResponse(
+        toolCall("file_edit", {{"path", file.string()}, {"old_string", "count = 1"}, {"new_string", "count = 2"}}));
+    mock_.pushResponse(answer("Fixed."));
+    start();
+    ask("fix the count");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    EXPECT_EQ(prompt["action"], "file_edit");
+    EXPECT_EQ(prompt["summary"],
+              file.string() + "\n\nBefore:\n    count = 1\n\nAfter:\n    count = 2");
+    decide("allow", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+
+    std::vector<std::string> previews;
+    for (const auto& e : events()) {
+        if (e.value("type", "") == "tool_result") previews.push_back(e.value("preview", ""));
+    }
+    ASSERT_EQ(previews.size(), 2u);
+    EXPECT_EQ(previews[0], "Read 2 lines from inventory.py");
+    EXPECT_EQ(previews[1], "Changed 1 place in inventory.py");
+    for (const auto& p : previews) EXPECT_EQ(p.find('{'), std::string::npos) << p;
+}
+
+TEST_F(GaiacppStdio, ALongWritePromptCountsTheLinesItLeavesOut) {
+    std::string content;
+    for (int i = 1; i <= 15; ++i) content += "line " + std::to_string(i) + "\n";
+    const fs::path out = work_ / "long.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", out.string()}, {"content", content}}));
+    mock_.pushResponse(answer("Not written."));
+    start();
+    ask("write it");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    const std::string summary = prompt.value("summary", "");
+    EXPECT_NE(summary.find("    line 12\n"), std::string::npos) << summary;
+    EXPECT_EQ(summary.find("line 13"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("[+3 more lines not shown]"), std::string::npos) << summary;
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
 }
 
 TEST_F(GaiacppStdio, DenyAndTimeoutLeaveTheToolUnrun) {
@@ -821,7 +866,7 @@ TEST_F(GaiacppStdio, AlwaysForAShellCommandCoversThatProgramOnly) {
     ASSERT_TRUE(prompt.is_object());
     EXPECT_EQ(prompt["action"], "bash_execute");
     EXPECT_EQ(prompt["risk"], "execute");
-    EXPECT_EQ(prompt["summary"], "Run: mkdir first");
+    EXPECT_EQ(prompt["summary"], "mkdir first") << "the command itself: the prompt's title asks the question";
     EXPECT_EQ(prompt["always_scope"], "Run mkdir commands");
     decide("always", prompt["confirm_id"]);
     ASSERT_TRUE(waitTerminal(1).is_object());

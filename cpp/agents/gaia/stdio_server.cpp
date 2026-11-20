@@ -87,9 +87,66 @@ std::string narrate(const std::string& tool, const json& args) {
     return "";
 }
 
-std::string previewOf(const json& result) {
+std::string counted(long long n, const char* one, const char* many) {
+    return std::to_string(n) + " " + (n == 1 ? one : many);
+}
+
+std::string leafOf(const std::string& path) {
+    const size_t cut = path.find_last_of("/\\");
+    return cut == std::string::npos ? path : path.substr(cut + 1);
+}
+
+// What a finished call did, when its result is counts and flags and not text.
+std::string outcomeOf(const std::string& tool, const json& r) {
+    if (r.contains("error")) return "";
+    const std::string name = r.contains("path") && r["path"].is_string() ? leafOf(r["path"].get<std::string>()) : "the file";
+    const auto number = [&r](const char* key) { return r.contains(key) && r[key].is_number_integer(); };
+    if (tool == "file_edit" && number("replacements")) {
+        return "Changed " + counted(r["replacements"].get<long long>(), "place", "places") + " in " + name;
+    }
+    if (tool == "file_write" && number("bytes_written")) {
+        return "Saved " + name + " (" + counted(r["bytes_written"].get<long long>(), "byte", "bytes") + ")";
+    }
+    if (tool == "file_read" && number("lines")) {
+        return "Read " + counted(r["lines"].get<long long>(), "line", "lines") + " from " + name;
+    }
+    if (tool == "file_search" && number("total")) {
+        return "Found " + counted(r["total"].get<long long>(), "match", "matches");
+    }
+    if (tool == "bash_execute" && number("exit_code")) {
+        if (r.value("timed_out", false)) return "Timed out";
+        std::string said;
+        for (const char* key : {"stdout", "stderr"}) {
+            if (said.empty() && r.contains(key) && r[key].is_string()) said = r[key].get<std::string>();
+        }
+        const long long code = r["exit_code"].get<long long>();
+        if (code == 0) return said.empty() ? "Finished with no output" : clip(said, 200);
+        return "Failed (exit " + std::to_string(code) + ")" + (said.empty() ? "" : ": " + clip(said, 160));
+    }
+    if (tool == "web_fetch" && number("total_chars")) {
+        return "Read " + counted(r["total_chars"].get<long long>(), "character", "characters") + " from the page";
+    }
+    return "";
+}
+
+// A result with no line of text, as "key: value" pairs instead of its JSON.
+std::string plainPairs(const json& result) {
+    std::string out;
+    for (const auto& [key, value] : result.items()) {
+        if (!value.is_primitive() || value.is_null()) continue;
+        std::string word = key;
+        std::replace(word.begin(), word.end(), '_', ' ');
+        if (!out.empty()) out += ", ";
+        out += word + ": " + (value.is_string() ? value.get<std::string>() : dumps(value));
+    }
+    return out;
+}
+
+std::string previewOf(const std::string& tool, const json& result) {
     if (result.is_string()) return clip(result.get<std::string>(), 200);
     if (result.is_object()) {
+        const std::string outcome = outcomeOf(tool, result);
+        if (!outcome.empty()) return outcome;
         // A delegation's "error" also carries advice meant for the model; its summary is the line for a person.
         if (result.contains("helpers") && result["helpers"].is_array() && result.contains("summary") &&
             result["summary"].is_string()) {
@@ -100,8 +157,59 @@ std::string previewOf(const json& result) {
                 return clip(result[key].get<std::string>(), 200);
             }
         }
+        const std::string pairs = plainPairs(result);
+        return pairs.empty() ? "Done" : clip(pairs, 200);
     }
     return clip(dumps(result), 200);
+}
+
+// Up to 12 lines of text a call would write, indented, with the rest counted.
+std::string shownBlock(const std::string& text) {
+    constexpr size_t kLines = 12;
+    std::string out;
+    size_t lines = 0, start = 0;
+    while (start < text.size()) {
+        const size_t end = (std::min)(text.find('\n', start), text.size());
+        if (++lines <= kLines) {
+            std::string line = text.substr(start, end - start);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            out += "    " + clip(line, 200) + "\n";
+        }
+        start = end + 1;
+    }
+    if (lines > kLines) {
+        out += "    … [+" + counted(static_cast<long long>(lines - kLines), "more line", "more lines") + " not shown]\n";
+    }
+    if (!out.empty()) out.pop_back();
+    return out.empty() ? "    (nothing)" : out;
+}
+
+// The body of an approval prompt: what the call will do, with no tool name or JSON.
+std::string promptSummary(const std::string& tool, const json& args) {
+    if (tool == "bash_execute") return argOf(args, "command");
+    if (tool == "file_write") {
+        return argOf(args, "path") + "\n\nWhat will be saved:\n" + shownBlock(argOf(args, "content"));
+    }
+    if (tool == "file_edit") {
+        return argOf(args, "path") + "\n\nBefore:\n" + shownBlock(argOf(args, "old_string")) + "\n\nAfter:\n" +
+               shownBlock(argOf(args, "new_string"));
+    }
+    if (tool == "web_fetch") return argOf(args, "url");
+    if (tool == "forget") return "Memory " + argOf(args, "id");
+    if (tool == "take_screenshot") {
+        const std::string to = argOf(args, "output_path");
+        return to.empty() ? "The whole screen" : "The whole screen, saved to " + to;
+    }
+    if (tool == "generate_image") return argOf(args, "prompt") + "\nSaved to " + argOf(args, "output_path");
+    std::string name = tool;
+    std::replace(name.begin(), name.end(), '_', ' ');
+    std::string out = "Use " + name;
+    if (args.is_object()) {
+        for (const auto& [key, value] : args.items()) {
+            out += "\n" + key + ": " + clip(value.is_string() ? value.get<std::string>() : dumps(value), 300);
+        }
+    }
+    return out;
 }
 
 // Same as sidecar.cpp's toolRisk and grantLabel.
@@ -242,7 +350,7 @@ public:
             json shown = data;
             const std::string dumped = dumps(data);
             if (dumped.size() > kMaxEventData) shown = {{"truncated", true}, {"text", clip(dumped, kMaxEventData)}};
-            server_.write({{"type", "tool_result"}, {"tool", tool_}, {"data", shown}, {"preview", previewOf(data)}});
+            server_.write({{"type", "tool_result"}, {"tool", tool_}, {"data", shown}, {"preview", previewOf(tool_, data)}});
         }
     }
     void printError(const std::string& m) override { status(m); }
@@ -606,7 +714,6 @@ void StdioServer::pumpStdin() {
 }
 
 ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args) {
-    const bool shell = tool == "bash_execute";
     // "Always" is only offered where the grant is narrower than the tool: a
     // write to one file must not approve every later write.
     const ToolInfo* info = agent_.tools().findTool(tool);
@@ -626,11 +733,7 @@ ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args
         return ToolConfirmResult::DENY;
     }
     const std::string confirmId = randomHex(16);
-    const std::string summary = shell                  ? "Run: " + argOf(args, "command")
-                                : tool == "file_write" ? "Write " + argOf(args, "path")
-                                : tool == "file_edit"  ? "Edit " + argOf(args, "path")
-                                : tool == "web_fetch"  ? "Fetch " + argOf(args, "url")
-                                                       : "Use " + tool + " " + clip(dumps(args), 300);
+    const std::string summary = promptSummary(tool, args);
     json event = {{"type", "needs_confirmation"},
                   {"run_id", runId_},
                   {"action", tool},
