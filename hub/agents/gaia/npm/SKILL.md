@@ -353,6 +353,7 @@ The canonical event shapes, as emitted:
 | `context_usage` | `{ type, window, used, turns_in_view, turns_hidden, ... }`: the context meter, not terminal. A request that sent `turns` gets it before the answer (contract ≥ 2.28), so the meter fills during a long turn; `final.context` follows with the loaded model's own count |
 | `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) and `file_path` (the absolute path a write lands at, when the model gave a relative one) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
+| `task_list` | `{ type, items[], source, current_action, action_started_at, steps_since_update, updated_at }`: the plan the agent keeps with `update_tasks`, not terminal. `source` is `plan` when the agent derived the list from its reply's `plan` field because the model kept none; label that one as the agent's plan, not a kept list. Each event is the whole list, so replace what you show rather than merging. `items[]` are `{ id, content, status, started_at, completed_at }` with `status` `pending`, `in_progress` or `completed`; drop `current_action` at `final` or `error` |
 | `final` | `{ type, answer, usage?, failed?, failure?, context?, context_error?, performance?, model_messages?, route? }` — terminal. `route` (contract ≥ 2.29, `hybrid` sessions only): the turn's routing decision; `route.model` is the model it ran on, so bill and label by it. `failed: true`: the turn did not complete (a model call broke, or a gated tool was refused on a run nobody can answer) and `answer` says what was and wasn't done; show it as an error, not a result. `failure: "model_server_down"`: the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
 | `error` | `{ type, detail, status }` — terminal, surface `detail` verbatim |
 
@@ -393,7 +394,7 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Thirteen of the agent's 105 tools mutate the machine and need explicit approval
+Thirteen of the agent's 106 tools mutate the machine and need explicit approval
 before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
 offered the scratchpad, email, send-email, calendar, image-generation or skill-hub
 tools, so `install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
@@ -626,7 +627,7 @@ but none ship today — see below.
 Some bundled skills ship tools as well as a playbook. `guides` and
 `calculators` draw recipe, workout, how-to, checklist, itinerary, tip and loan
 cards; their tools (`guides/show_recipe`, `calculators/show_loan_calculator`, …)
-join the tool list only once the skill loads, so they are not in the 105. So
+join the tool list only once the skill loads, so they are not in the 106. So
 do the nine `browser-pane` tools, and that skill is offered only in a chat open
 in GAIA desktop with the browser pane.
 

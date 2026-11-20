@@ -17,7 +17,7 @@ source-exhaustive** mapping from the handler's vocabulary onto the canonical
 event types —
 
     status | token | reasoning | tool_call | tool_result | needs_confirmation
-          | needs_input | final | error
+          | needs_input | task_list | final | error
 
 The optional ``reasoning`` event is emitted only when requested by a
 contract-compatible caller; otherwise thinking folds to ``status``. The stream is
@@ -264,6 +264,10 @@ class CanonicalTranslator:
         # flushes any pending tool_call (its producer sent no tool_args), then maps.
         if etype == "tool_args":
             return self._on_tool_args(event)
+        # The task list rides beside the work: it must not flush a tool_call
+        # still waiting for its arguments.
+        if etype == "task_list":
+            return self._on_task_list(event)
 
         out: List[Dict[str, Any]] = []
         if etype != "tool_start":
@@ -446,6 +450,19 @@ class CanonicalTranslator:
         steps = event.get("steps") or []
         joined = " → ".join(str(s) for s in steps)
         return self._user_status(f"Plan: {joined}" if joined else "Plan")
+
+    def _on_task_list(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "type": "task_list",
+                "items": event.get("items") or [],
+                "source": event.get("source"),
+                "current_action": event.get("current_action"),
+                "action_started_at": event.get("action_started_at"),
+                "steps_since_update": event.get("steps_since_update", 0),
+                "updated_at": event.get("updated_at"),
+            }
+        ]
 
     def _on_chunk(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         delta = event.get("content", "")
@@ -758,7 +775,8 @@ class CanonicalTranslator:
         "agent_created": _on_agent_created,
         "skill_use": _on_skill_use,
         "context_usage": _on_context_usage,
-        # tool_args is handled before dispatch (merges into the pending tool_call).
+        # tool_args is handled before dispatch (merges into the pending tool_call);
+        # so is task_list, which passes through unchanged.
     }
 
 

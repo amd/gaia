@@ -2156,6 +2156,9 @@ def dispatch_query(
         loader = getattr(agent, "tool_loader", None)
         if loader is not None:
             loader.reset_session()
+        task_list = getattr(agent, "task_list", None)
+        if task_list is not None:
+            task_list.clear(emit=False)
         if index is not None:
             guarded(index, index.cleared, out)
         _write({"type": "final", "answer": "conversation_cleared"}, out)
@@ -2324,6 +2327,13 @@ def main(argv: Optional[list] = None) -> int:
         )
         agent.conversation_history = SessionHistory(history_path)
         logger.info("Session transcript: %s", history_path)
+        # Fast mode has no task list; the mixin's bind is then a no-op.
+        bind = getattr(agent, "bind_task_list_store", None)
+        if bind is not None:
+            bind(
+                agent.conversation_history.load_task_list,
+                agent.conversation_history.save_task_list,
+            )
         index = open_index(history_path, args.session_kind)
     except Exception as exc:
         print(traceback.format_exc(), file=sys.stderr)
@@ -2347,6 +2357,10 @@ def main(argv: Optional[list] = None) -> int:
         # Model load is the longest window the parent has to leave in, and it
         # is gone — there is nobody left to serve.
         _exit_cleanly(out)
+    # A resumed transcript's list; read with the first turn, like the ping above.
+    task_list = getattr(agent, "task_list", None)
+    if task_list is not None and task_list.items:
+        _write({"type": "task_list", **task_list.state()}, out)
 
     # stdin is read by its own thread so it keeps being read DURING a turn —
     # which is the only time a confirmation decision can arrive. The turn loop
@@ -2364,6 +2378,9 @@ def main(argv: Optional[list] = None) -> int:
             history = getattr(agent, "conversation_history", None)
             if history is not None:
                 history.clear()
+            task_list = getattr(agent, "task_list", None)
+            if task_list is not None:
+                task_list.clear(emit=False)
             _reset_hybrid_route(agent)
             if index is not None:
                 guarded(index, index.cleared)

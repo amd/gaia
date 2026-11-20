@@ -67,8 +67,8 @@ _spec.loader.exec_module(capability_matrix)
 # 98 with the three audio_generation tools (music, sound effects, model list).
 # 101 with get_thread, list_connected_mailboxes and list_waiting_on_you.
 # 102 with `forget_everything`, 103 once search_tools became a default tool.
-# 105 with analyze_transcript and export_transcript.
-_EXPECTED_TOOLS_TOTAL = 105
+# 105 with analyze_transcript and export_transcript, 106 with update_tasks.
+_EXPECTED_TOOLS_TOTAL = 106
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
 # 16 with `sleep`, which joins the core set rather than a bundle: waiting out a
@@ -78,7 +78,8 @@ _EXPECTED_TOOLS_TOTAL = 105
 # 27 with `forget_everything`, beside `forget` so "forget everything" always reaches it.
 # 29 with `search_file_content` and `list_files`, which a model otherwise worked
 # around in about a fifth more steps.
-_EXPECTED_CORE_COUNT = 29
+# 30 with `update_tasks`: the task list is kept across the whole turn.
+_EXPECTED_CORE_COUNT = 30
 # 25: the `cli_setup` bundle, `shell_session` (get_shell_state,
 # reset_shell_session), plus `browser_nav` and `browser_use`.
 # 26 with `audio_generation`; 27 with `email_threads`.

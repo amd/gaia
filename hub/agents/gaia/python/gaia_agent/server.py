@@ -1745,6 +1745,8 @@ _QUERY_SSE_RESPONSES = {
             "reasoning {delta, retracts_answer?} | "
             "tool_call {tool, args} | tool_result {tool, data, render?} | "
             "context_usage {window, used, ...} | "
+            "task_list {items, source?, current_action?, action_started_at?, "
+            "steps_since_update?, updated_at?} | "
             "needs_confirmation {run_id, action, summary, confirm_id?, "
             "always_scope?, risk?, tool_label?, args?, args_truncated?, "
             "prompt_context?} | needs_input {run_id, request_id, question, "
