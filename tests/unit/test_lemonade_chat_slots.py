@@ -130,6 +130,14 @@ def test_the_load_skips_llama_cpps_warm_up_run():
     assert "--no-warmup" in CHAT_LLAMACPP_ARGS.split()
 
 
+def test_the_load_stores_the_kv_cache_at_8_bits():
+    # Half the GPU memory of llama.cpp's 16-bit default; the agent evals for
+    # context retention and tool selection scored the same with it.
+    flags = CHAT_LLAMACPP_ARGS.split()
+    assert flags[flags.index("--cache-type-k") + 1] == "q8_0"
+    assert flags[flags.index("--cache-type-v") + 1] == "q8_0"
+
+
 def test_the_load_has_a_slot_for_every_pinned_request():
     # llama.cpp defers a request for a slot it lacks until the caller gives up.
     flags = CHAT_LLAMACPP_ARGS.split()

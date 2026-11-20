@@ -918,10 +918,12 @@ NPU_BACKEND_INSTALL_TIMEOUT = 600  # seconds; the FastFlowLM release download
 # an edit or a regenerate.
 # llama.cpp's warm-up run at load leaves ~250 MB of GPU memory allocated and
 # makes the first reply no faster.
+# An 8-bit KV cache takes half the GPU memory of the 16-bit default (0.5 GB at
+# 64K for Gemma-4-E4B, 2.5 GB at 262K for Qwen3.6-35B).
 # Args the user saved for the model in Lemonade win (users_llamacpp_args).
 CHAT_LLAMACPP_ARGS = (
     "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5 "
-    "--ctx-checkpoints 16 --no-warmup"
+    "--ctx-checkpoints 16 --no-warmup --cache-type-k q8_0 --cache-type-v q8_0"
 )
 #: Slots requests are pinned to (llama.cpp ``id_slot``). Left to LRU, a memory
 #: extraction landed on the conversation's slot and overwrote it, and the next
