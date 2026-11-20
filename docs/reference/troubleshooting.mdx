@@ -912,11 +912,16 @@ error. To run the chat model in the cloud instead, see
 
   <Accordion title="Cloud models and downloads fail: the certificate store has no ca-certificates.crt" icon="certificate">
     **Cause:** the model server inside GAIA trusts HTTPS sites through exactly
-    one file, `/etc/ssl/certs/ca-certificates.crt`. The `ca-certificates`
-    package Fedora 44 first shipped leaves that file out, so every cloud model
-    and every model download fails. GAIA says so in setup's cloud step and in
-    a failed download, and `~/.gaia/lemonade/lemond.log` shows
-    `Problem with the SSL CA cert`. Your key is not the problem.
+    one file, `/etc/ssl/certs/ca-certificates.crt`, and ignores
+    `SSL_CERT_FILE`. Where that file is missing (the `ca-certificates`
+    package Fedora 44 first shipped leaves it out), GAIA starts the model
+    server in a private view of the filesystem that shows your system's own
+    bundle at that path, so cloud models and downloads work with no change to
+    your system. That needs unprivileged user namespaces; when the kernel
+    refuses them, every cloud model and every model download fails. GAIA then
+    says so in setup's cloud step and in a failed download, and
+    `~/.gaia/lemonade/lemond.log` shows `Problem with the SSL CA cert`. Your
+    key is not the problem.
 
     **Fix:** install your system's updates (GNOME Software, or
     `sudo dnf upgrade ca-certificates`); the updated package adds the file.

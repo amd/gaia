@@ -301,6 +301,10 @@ jobs:
           - {label: macOS arm64, os: macos-latest, key: darwin-arm64, exe: gaia}
           - {label: Ubuntu 24.04, os: ubuntu-24.04, key: linux-x64, exe: gaia}
           - {label: Fedora 44, os: ubuntu-latest, key: linux-x64, exe: gaia, container: 'fedora:44'}  # Fedora 45's OpenSSL 4 has no libssl.so.3 (#7010)
+          # Fedora 44's original ca-certificates has no Debian-path CA file, the only one
+          # lemond reads, so GAIA starts it in a user+mount namespace (#7226). Docker's
+          # default seccomp/AppArmor profiles block those namespaces; a desktop does not.
+          - {label: 'Fedora 44, original CA layout', os: ubuntu-latest, key: linux-x64, exe: gaia, ca_layout: fedora-original, container: {image: 'fedora:44', options: '--security-opt seccomp=unconfined --security-opt apparmor=unconfined --cap-add SYS_ADMIN'}}
     steps:
       - name: Is this platform wanted
         id: want
@@ -334,6 +338,12 @@ jobs:
           # shellcheck disable=SC2046  # one package per word
           dnf install -y --setopt=install_weak_deps=False \
             $(grep -v '^#' installer/core/fedora-engine-packages.txt)
+
+      - name: Leave only Fedora's own CA bundle, as the original ca-certificates did
+        if: steps.want.outputs.run == 'true' && matrix.ca_layout == 'fedora-original'
+        run: |
+          rm -f /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/pki/tls/cert.pem /etc/ssl/cert.pem
+          test -s /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 
       - uses: actions/download-artifact@v8
         if: steps.want.outputs.run == 'true'
