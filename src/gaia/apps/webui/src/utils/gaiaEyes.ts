@@ -3,10 +3,27 @@
 
 /** What GAIA's eyes show: the work in progress, and a short reaction to how a message sounds. */
 
-import type { EyesState } from '../components/gaiaEyesSheet';
+import { EYES_ANIMATIONS, EYES_VARIANTS, type EyesState } from '../components/gaiaEyesSheet';
 
 export type EyesPhase = 'think' | 'read' | 'tool' | 'wait';
 export type EyesMood = Exclude<EyesState, EyesPhase>;
+
+const PHASES: readonly string[] = ['think', 'read', 'tool', 'wait'] satisfies EyesPhase[];
+
+/** Every mood the eyes can draw. GAIA names one of these for her own reply (`MOODS` in agents/base/mood.py). */
+export const EYES_MOODS = (Object.keys(EYES_VARIANTS) as EyesState[]).filter(
+    (state): state is EyesMood => !PHASES.includes(state),
+);
+
+/** `word` as a mood the eyes can draw, or null. */
+export function asEyesMood(word: string | null | undefined): EyesMood | null {
+    return EYES_MOODS.find((mood) => mood === word) ?? null;
+}
+
+/** How long the longest mood takes to play. */
+export const LONGEST_MOOD_MS = Math.max(
+    ...EYES_MOODS.flatMap((mood) => EYES_VARIANTS[mood].map((name) => (EYES_ANIMATIONS[name].frames / EYES_ANIMATIONS[name].fps) * 1000)),
+);
 
 /** Live status lines that mean GAIA is thinking; any other line is a tool or the model server at work. */
 const THINKING = /^(Thinking\.\.\.|Reasoning\b|Waiting for GAIA to start this answer…)/;

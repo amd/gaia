@@ -110,7 +110,9 @@ AGENT_ID = "gaia"
 #: ``turns``: the turn's first call is measured before the answer streams.
 #: 2.29 added ``final.route``: the model a ``hybrid`` session's turn ran on.
 #: 2.30 added ``DELETE /sessions/{id}``: end a session and stop its MCP servers.
-API_VERSION = "2.30"
+#: 2.31 added the non-terminal ``mood`` event: the one-word mood the model opened
+#: its reply with, sent only to an ``agent_ui`` caller.
+API_VERSION = "2.31"
 
 #: How long the stream allows the turn's context measurement before naming the
 #: failure on ``final``, and how long the loop's own fallback measurement waits.
@@ -1746,7 +1748,7 @@ _QUERY_SSE_RESPONSES = {
             "level?, phase?, queue?, retracts_answer?} | token {delta} | "
             "reasoning {delta, retracts_answer?} | "
             "tool_call {tool, args} | tool_result {tool, data, render?} | "
-            "context_usage {window, used, ...} | "
+            "context_usage {window, used, ...} | mood {mood} | "
             "needs_confirmation {run_id, action, summary, confirm_id?, "
             "always_scope?, risk?, tool_label?, args?, args_truncated?, "
             "prompt_context?} | needs_input {run_id, request_id, question, "

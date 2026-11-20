@@ -97,6 +97,7 @@ from gaia.agents.base.model_features import (
     features_for_model,
     withheld_tools,
 )
+from gaia.agents.base.mood import MOOD_PROMPT
 from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 
 # dynamic_tools_env_override is re-exported so callers importing it from
@@ -2359,6 +2360,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         prompt = base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
         if self._offers_scheduling():
             prompt += _AGENT_UI_SCHEDULE_LINE
+        if self.expresses_mood:
+            prompt += f"\n{MOOD_PROMPT}\n"
         return prompt
 
     def get_session_folders_system_prompt(self) -> str:
@@ -4058,6 +4061,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             for _name in _chat_exclude:
                 self._instance_tools.pop(_name, None)
         self._offer_features(self.model_features)
+
+    @property
+    def expresses_mood(self) -> bool:
+        """The Agent UI draws GAIA's eyes; other surfaces have nowhere to show a mood."""
+        return getattr(self.config, "surface", None) == "agent_ui"
 
     def _offers_scheduling(self) -> bool:
         """The Agent UI has a Scheduled tasks panel; other surfaces don't."""

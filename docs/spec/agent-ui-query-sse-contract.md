@@ -33,10 +33,10 @@ which is **not** the v2 contract below.
 
 This document defines two things and freezes the boundary between them:
 
-1. **The target wire contract** (sections 3 to 5): the ten canonical event types
+1. **The target wire contract** (sections 3 to 5): the eleven canonical event types
    plus the `/query` request body. Integrators depend on this and nothing else.
 2. **The translation map** (§6) — a total, source-exhaustive mapping from the
-   in-process handler's vocabulary onto the ten canonical types, so the v2
+   in-process handler's vocabulary onto the eleven canonical types, so the v2
    translation layer (built in #2016) can be implemented with **no source event
    left unmapped**.
 
@@ -210,12 +210,13 @@ as "no documents are indexed" about a file the user can see attached.
 
 ---
 
-## 4. The ten canonical event types
+## 4. The eleven canonical event types
 
 The contract is exactly these `type` values (design §0.2 — the original seven,
 plus `needs_input` added as an additive MINOR by #2469, `reasoning`, sent
-only on request, by contract 2.22, and `context_usage`, streamed before the
-answer by contract 2.28). No others are valid on
+only on request, by contract 2.22, `context_usage`, streamed before the
+answer by contract 2.28, and `mood`, sent to an `agent_ui` caller by
+contract 2.31). No others are valid on
 the wire; a receiver applies the §7 unknown-type rule to anything else.
 
 | `type` | Payload | UI effect |
@@ -226,6 +227,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
 | `context_usage` | `{window, used, turns_in_view, turns_hidden, ...}` | update the composer's context meter; **not terminal**. The sidecar streams it before the answer for a caller that sent `turns` (contract ≥ 2.28), in the same shape an in-process turn streams at turn start, so the meter fills during a long turn instead of waiting for `final` |
+| `mood` | `{mood}` | the one-word mood the model opened its reply with, e.g. `happy`, `curious`, `sad`; **not terminal**. A front-end may act it out (the Agent UI plays it on GAIA's eyes) or ignore it. The flagship sends it only to a caller whose request set `surface: "agent_ui"` (contract ≥ 2.31): that caller's prompt asks the model for the tag, and the tag itself never reaches `token` or `final.answer`. A reply with no tag sends no event |
 | `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) `risk_note` (why the agent's checks don't cover the call), `file_path` (where a relative write lands) and `script` (for `execute_python_file`, the file's content as read when the prompt was built, capped at 400 lines with the rest counted in `hidden_lines`, or `unreadable` saying why there is none) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
 | `final` | `{answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?, route?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `failure: "model_server_down"` means the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25), and `route` is a `hybrid` session's routing decision, whose `model` is the concrete model the turn ran on: bill and label the turn by it (contract >= 2.29) |
@@ -354,6 +356,14 @@ indistinguishable from a dead one.
     "turns_hidden":  { "type": "integer" },  // earlier turns it no longer sees
     "model":         { "type": "string" }    // present on the `final.context` copy
   } }  // carries the whole breakdown; a meter reads these keys and ignores the rest
+
+// mood (contract >= 2.31; not terminal)
+{ "type": "object", "additionalProperties": false,
+  "required": ["type", "mood"],
+  "properties": {
+    "type": { "const": "mood" },
+    "mood": { "type": "string" }  // one of MOODS in src/gaia/agents/base/mood.py
+  } }
 
 // final
 { "type": "object", "additionalProperties": false,
@@ -650,7 +660,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 > `grep '"type":"..."'` over `sse_handler.py` returns 18 strings, but two of
 > them — `file_list` and `search_results` — are **nested** `result_data.type`
 > values *inside* a `tool_result` event, not top-level event types. The handler
-> emits **17 distinct top-level event types** (listed below), plus the `None`
+> emits **18 distinct top-level event types** (listed below), plus the `None`
 > queue sentinel (stream close, not a wire event).
 
 ### 6.1 The four clean maps (named in the issue)
@@ -680,6 +690,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 | `tool_confirm_denied` | `confirm_tool_execution` (background mode) | **fold** | `status` | Unattended auto-deny is informational — the run continues and the agent retries. Surface the actionable `message` as a `status` line, not an `error` (the run did not fail). |
 | `skill_use` | `print_skill_use` | **fold** | `status` | "Using skill: _name_" when GAIA loaded the skill for one of its `loads_with` tools, or it was already loaded. Dropped when the model called `load_skill` itself, which already went out as a `tool_call`. |
 | `context_usage` | `_restore_model_history` (`_chat_helpers.py`) | **map** | `context_usage` | Already the canonical shape, streamed at turn start; passed through unchanged. A caller that sends `turns` gets the same event from the sidecar before its answer (contract ≥ 2.28). |
+| `mood` | `print_mood` | **map** | `mood` | Already the canonical shape; passed through unchanged. Emitted when the model's reply opens with a `[mood:WORD]` tag, which the agent loop removes from the text first (contract ≥ 2.31). |
 | `agent_created` | `print_agent_created` | **drop** | — | Registry-refresh signal with no chat-stream meaning. Must move to a **host control channel**, not the `/query` event stream. Dropping it here is a contract decision, not a silent loss — call it out in #2016. |
 | `None` (queue sentinel) | `signal_done` | **n/a** | *stream close* | Not a wire event. The canonical stream ends after the terminal `final`/`error`; the sentinel maps to closing the `text/event-stream` response. |
 

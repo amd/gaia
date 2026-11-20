@@ -558,6 +558,10 @@ class OutputHandler(ABC):
         """
         ...
 
+    def print_mood(self, mood: str):  # pylint: disable=unused-argument
+        """The model opened its reply with *mood*, one of ``mood.MOODS``. Optional — no-op."""
+        ...
+
     def print_skill_use(  # pylint: disable=unused-argument
         self, name: str, loaded: List[str], how: str
     ):

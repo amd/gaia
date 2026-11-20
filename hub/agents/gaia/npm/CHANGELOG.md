@@ -178,6 +178,12 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   as `.wav`.
 ### Changed
 
+- **The agent can say how it feels (contract 2.31).** For a request with
+  `surface: "agent_ui"`, the prompt asks the model to open a reply with a
+  one-word mood tag. The agent removes the tag from the text and sends the
+  word as a new non-terminal `mood` event, `{ "type": "mood", "mood": "happy" }`,
+  which the Agent UI plays on GAIA's eyes. Other surfaces get the same prompt
+  and stream as before, and a client may ignore the event.
 - **A file a skill's tool saves counts as saved.** A deck or report written by
   a skill tool existed on disk, yet the turn ended "incomplete" with "No
   successful write to `deck.pptx` is recorded for this turn", because the

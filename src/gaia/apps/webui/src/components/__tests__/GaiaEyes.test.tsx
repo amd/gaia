@@ -10,6 +10,7 @@ import { MessageBubble } from '../MessageBubble';
 import { useChatStore } from '../../stores/chatStore';
 import type { Message } from '../../types';
 import { EYES_ANIMATIONS, EYES_CELL, EYES_VARIANTS } from '../gaiaEyesSheet';
+import { LONGEST_MOOD_MS } from '../../utils/gaiaEyes';
 
 type Name = keyof typeof EYES_ANIMATIONS;
 
@@ -141,22 +142,55 @@ describe('the eyes in the live status line', () => {
     });
     const streaming = message({ id: -1, role: 'assistant' });
 
-    function renderTurn(asked: string, props: { liveStatus?: string | null; awaitingUser?: boolean } = {}) {
+    function renderTurn(asked: string, props: { liveStatus?: string | null; awaitingUser?: boolean; answer?: string } = {}) {
         useChatStore.setState({ messages: [message({ content: asked, created_at: `2026-11-19T00:00:00Z#${asked}` })] });
-        return render(
+        const bubble = () => (
             <MessageBubble
-                message={streaming}
+                message={props.answer ? { ...streaming, content: props.answer } : streaming}
                 isStreaming
                 agentSteps={[]}
-                agentStepsActive
+                agentStepsActive={!props.answer}
                 liveStatus={props.liveStatus ?? 'Thinking...'}
                 awaitingUser={props.awaitingUser ?? false}
-            />,
+            />
         );
+        return render(bubble());
     }
 
     afterEach(() => {
-        useChatStore.setState({ messages: [] });
+        useChatStore.setState({ messages: [], gaiaMood: null });
+    });
+
+    it("play GAIA's own mood when she names one, over the reaction to the message", () => {
+        const { container } = renderTurn('thank you so much, that fixed it');
+        expect(eyes(container).dataset.eyes).toBe('happy');
+        act(() => { useChatStore.getState().setGaiaMood('proud'); });
+        expect(eyes(container).dataset.eyes).toBe('proud');
+        act(() => { vi.advanceTimersByTime(longestMs('proud') + 1); });
+        expect(eyes(container).dataset.eyes).toBe('think');
+    });
+
+    it('ignore a mood word they cannot draw', () => {
+        const { container } = renderTurn('summarize this report');
+        act(() => { useChatStore.getState().setGaiaMood('calm'); });
+        expect(useChatStore.getState().gaiaMood).toBeNull();
+        expect(eyes(container).dataset.eyes).toBe('think');
+    });
+
+    it('stay beside an answer that is already streaming, just long enough to play her mood', () => {
+        const { container } = renderTurn('my dog died this morning', { answer: 'I am so sorry.' });
+        expect(container.querySelector('.thinking-indicator')).toBeNull();
+        act(() => { useChatStore.getState().setGaiaMood('sad'); });
+        expect(eyes(container).dataset.eyes).toBe('sad');
+        expect(container.querySelector('.thinking-indicator-text')).toBeNull();
+        act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS + 1); });
+        expect(container.querySelector('.thinking-indicator')).toBeNull();
+    });
+
+    it("forget GAIA's mood when the next turn starts", () => {
+        useChatStore.getState().setGaiaMood('happy');
+        useChatStore.getState().clearAgentSteps();
+        expect(useChatStore.getState().gaiaMood).toBeNull();
     });
 
     it('sit before the status text and follow what GAIA is doing', () => {
