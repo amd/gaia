@@ -309,7 +309,7 @@ def test_refusal_message_is_actionable(monkeypatch):
     with pytest.raises(ConnectorsError) as exc:
         keyring_access.read(SERVICE, "anything")
     msg = str(exc.value)
-    assert "PlaintextKeyring" in msg and "docs/security/connections.mdx" in msg
+    assert "PlaintextKeyring" in msg and "See docs" in msg
 
 
 def test_discord_connector_token_is_none_on_a_refused_backend(refused):
