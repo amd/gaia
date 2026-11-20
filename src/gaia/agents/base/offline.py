@@ -75,16 +75,41 @@ ONLINE_SERVICE_TOOLS = frozenset(
 )
 
 #: Commands that go online with no URL in sight: a remote, a package index, an API.
+#: Kept in step with the ``online`` pattern in cpp/src/security.cpp. Build tools
+#: that resolve dependencies from a remote repository on nearly every run (mvn,
+#: gradle) count whatever their arguments.
 _ONLINE_COMMAND_RE = re.compile(
     r"(?:^|[;&|(`]|\b(?:then|do)\s)\s*(?:sudo\s+)?"
     r"(?:git(?:\s+-{1,2}[\w-]+(?:[ =](?!-)\S+)?)*\s+"
-    r"(?:clone|fetch|pull|push|ls-remote|submodule\s+update)\b"
-    r"|(?:pip3?|uv\s+pip|python3?\s+-m\s+pip)\s+(?:install|download)\b"
-    r"|(?:npm|pnpm|yarn|bun)\s+(?:install|add|i|update|publish)\b"
-    r"|(?:npx|uvx|pipx|bunx)\s"
-    r"|uv\s+(?:add|sync|tool\s+install)\b|cargo\s+(?:install|fetch|update)\b"
-    r"|go\s+(?:get|install|mod\s+download)\b|docker\s+(?:pull|push|login)\b"
-    r"|(?:winget|choco|scoop|apt|apt-get|brew|dnf|yum)\s+(?:install|upgrade|update)\b"
+    r"(?:clone|fetch|pull|push|ls-remote|submodule\s+update|remote\s+update"
+    r"|lfs\s+(?:fetch|pull|push))\b"
+    r"|(?:pip[0-9.]*|uv\s+pip|(?:python[0-9.]*|py)\s+-m\s+pip)\s+"
+    r"(?:install|download|wheel|index|search)\b"
+    r"|(?:npm|pnpm|yarn|bun)\s+(?:install|add|i|ci|update|upgrade|up|publish|dlx|exec"
+    r"|create|x|audit|outdated|view|info|search|login)\b"
+    r"|(?:npm|pnpm|yarn|bun)\s+init\s+[^-\s]"
+    r"|(?:npx|uvx|pipx|bunx|pnpx)\s"
+    r"|uv\s+(?:add|sync|lock|tool\s+(?:install|upgrade)|python\s+install|run\s+--with"
+    r"|self\s+update)\b"
+    r"|(?:poetry|pdm)\s+(?:install|add|update|lock|sync|publish|self\s+update)\b"
+    r"|(?:conda|mamba|micromamba)\s+(?:install|create|update|upgrade|search"
+    r"|env\s+(?:create|update))\b"
+    r"|cargo\s+(?:install|fetch|update|publish|search|add|login)\b"
+    r"|go\s+(?:get|install|mod\s+(?:download|tidy))\b"
+    r"|gem\s+(?:install|update|fetch|push|search|sources)\b"
+    r"|bundler?\s+(?:install|update|add|outdated|lock)\b"
+    r"|composer\s+(?:install|update|require|create-project)\b"
+    r"|dotnet\s+(?:restore|add|new\s+install|tool\s+(?:install|update|restore)"
+    r"|workload|nuget)\b"
+    r"|nuget\s+(?:install|restore|update|push)\b"
+    r"|(?:docker|podman)\s+(?:pull|push|login|search)\b"
+    r"|(?:winget|choco|scoop|apt|apt-get|brew|dnf|yum|zypper|apk|snap|flatpak)\s+"
+    r"(?:install|reinstall|upgrade|update|download|search|add|fetch|tap|source"
+    r"|dist-upgrade|full-upgrade)\b"
+    r"|pacman\s+-S|(?:install|update|find|save)-(?:module|package|script)\b"
+    r"|start-bitstransfer\b|bitsadmin\b|certutil\b.*-urlcache|aria2c\b"
+    r"|(?:huggingface-cli|hf)\s+(?:download|upload|login)\b|ollama\s+(?:pull|push)\b"
+    r"|(?:mvn|mvnw|gradle|gradlew)(?:\s|$)"
     r"|gh\s|curl\b|wget\b|ssh\b|scp\b|iwr\b|irm\b|invoke-(?:webrequest|restmethod)\b)",
     re.IGNORECASE,
 )
@@ -330,6 +355,9 @@ def _unwrap(tokens: List[str]) -> Tuple[List[str], bool]:
 
 
 def _mentions_online(words: List[str]) -> bool:
+    # A full path, a quoted name or a Windows suffix still runs the program.
+    if words:
+        words = [_program(words[0]), *words[1:]]
     return _ONLINE_COMMAND_RE.search(" ".join(words)) is not None
 
 
