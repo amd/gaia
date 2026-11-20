@@ -798,6 +798,9 @@ each answer: `ctx 41%`. The figure counts what the model sees before older turns
 leave its view, so 100% is the point where they start to drop. Past 80% it reads
 `ctx 86% nearly full` and stays visible ahead of the scroll hints; on a narrow
 terminal it is the first thing to give way. `/context` prints the breakdown.
+The meter needs an agent the TUI launches itself, such as the flagship; an agent
+reached through the daemon doesn't report it to the TUI yet, so there the meter
+stays hidden.
 
 Once the history is three quarters of the way there, one line under the answer
 says which turns the next messages will push out of the model's view, oldest
