@@ -400,7 +400,7 @@ def test_reading_through_a_link_to_a_protected_folder_is_refused(
 
     assert refused["status"] == "error", refused
     assert refused["executed"] is False
-    assert "no approval or full access lifts this" in refused["error"]
+    assert "no approval lifts this" in refused["error"]
     # Final: no tool is offered as another way in.
     assert "read_file" not in refused["error"]
     assert agent.ran == []
@@ -529,14 +529,12 @@ def test_a_watched_protected_folder_is_never_asked_about(layout, monkeypatch):
     refused = _python(agent, "print(open('sys/hosts').read())")
 
     assert refused["status"] == "error", refused
-    assert "no approval or full access lifts this" in refused["error"]
+    assert "no approval lifts this" in refused["error"]
     assert console.asked == []
     assert agent.ran == []
 
 
-def test_full_access_reaches_elsewhere_but_never_a_protected_folder(
-    layout, monkeypatch
-):
+def test_full_access_reaches_elsewhere_and_a_protected_folder(layout, monkeypatch):
     _links(
         monkeypatch,
         {
@@ -547,11 +545,11 @@ def test_full_access_reaches_elsewhere_but_never_a_protected_folder(
     agent = _agent(layout, full_access=True)
 
     allowed = _python(agent, "print(open('link/notes.txt').read())")
-    refused = _python(agent, "print(open('sys/hosts').read())")
+    protected = _python(agent, "print(open('sys/hosts').read())")
 
     assert allowed["status"] == "success", allowed
-    assert refused["status"] == "error", refused
-    assert len(agent.ran) == 1
+    assert protected["status"] == "success", protected
+    assert len(agent.ran) == 2
 
 
 def test_a_path_that_cannot_be_resolved_is_refused(layout, monkeypatch):

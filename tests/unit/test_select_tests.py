@@ -1158,15 +1158,40 @@ def test_an_unlisted_module_that_branches_on_macos_fails_the_check():
     assert _unlisted_darwin_modules(sources) == ["src/gaia/not_listed_xyz.py"]
 
 
+def _tracked_src_sources(repo):
+    """``{path: source}`` for the Python under src/gaia that git tracks."""
+    # Untracked Python (node-gyp under webui/node_modules) isn't shipped source.
+    return {
+        path: (repo / path).read_text(encoding="utf-8", errors="ignore")
+        for path in st.tracked_files(repo)
+        if path.startswith("src/gaia/") and path.endswith(".py")
+    }
+
+
+def test_untracked_python_is_not_scanned_but_a_tracked_unlisted_module_is(tmp_path):
+    darwin = "import sys\nIS_MAC = sys.platform == 'darwin'\n"
+    tracked = tmp_path / "src/gaia/not_listed_xyz.py"
+    tracked.parent.mkdir(parents=True)
+    tracked.write_text(darwin, encoding="utf-8")
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    for vendored in (
+        f"{WEBUI}node_modules/node-gyp/gyp/pylib/gyp/__init__.py",
+        "src/gaia/.venv/lib/site.py",
+        "src/gaia/build/lib/mac.py",
+    ):
+        (tmp_path / vendored).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / vendored).write_text(darwin, encoding="utf-8")
+    sources = _tracked_src_sources(tmp_path)
+    assert _unlisted_darwin_modules(sources) == ["src/gaia/not_listed_xyz.py"]
+
+
 def test_every_module_that_branches_on_macos_runs_the_macos_lane():
     # A module with a darwin branch the gate doesn't list would merge without
     # the macOS lane ever running on its PR.
-    sources = {
-        path.relative_to(REPO).as_posix(): path.read_text(
-            encoding="utf-8", errors="ignore"
-        )
-        for path in (REPO / "src/gaia").rglob("*.py")
-    }
+    sources = _tracked_src_sources(REPO)
+    assert "src/gaia/cli.py" in sources
     missing = _unlisted_darwin_modules(sources)
     assert not missing, (
         "These modules branch on macOS but the macOS lane skips them on a PR. "

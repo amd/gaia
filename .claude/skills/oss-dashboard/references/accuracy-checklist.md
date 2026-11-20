@@ -5,7 +5,7 @@ at ranges 24h, 7d, 30d, 90d, 1y and All, and around UTC midnight.
 
 ## How to run a round
 
-1. `scripts/audit_numbers.py` — re-counts PRs, issues, CI pass rate, stars and downloads from GitHub over the
+1. `<skill>/scripts/audit_numbers.py` — re-counts PRs, issues, CI pass rate, stars and downloads from GitHub over the
    dashboard's exact windows. Every DIFF is a bug until explained.
 2. Screenshot every page at every range (headless browser or by hand). Headless Chrome/Edge can hang after writing
    the file: run each under a timeout and kill only that process (`--headless=new --virtual-time-budget=15000

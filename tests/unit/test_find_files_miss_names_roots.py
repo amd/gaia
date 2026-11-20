@@ -10,6 +10,7 @@ shows the search was complete.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -68,17 +69,35 @@ def test_a_content_miss_lists_the_searched_folder(home):
     assert f"Searched: {home.resolve()}." in out
 
 
+def _searched(out):
+    return out.split("Searched: ", 1)[1].split(". Repeating", 1)[0].split(", ")
+
+
 def test_smart_scope_lists_every_existing_root_once(home):
-    (home / "Downloads").mkdir()
+    # Projects, not Downloads: macOS never walks Downloads in a default search.
+    (home / "Projects").mkdir()
     out = _find_files([str(home)])("no_such_file_xyz", scope="smart")
 
-    searched = out.split("Searched: ", 1)[1].split(". Repeating", 1)[0]
-    roots = searched.split(", ")
+    roots = _searched(out)
     assert str((home / "Work").resolve()) in roots
-    assert str((home / "Downloads").resolve()) in roots
+    assert str((home / "Projects").resolve()) in roots
     assert len(roots) == len(set(roots))
     # A folder that does not exist was never searched, so it is not named.
-    assert "Desktop" not in searched
+    assert not any(r.endswith("Desktop") for r in roots)
+
+
+def test_a_macos_guarded_folder_is_skipped_not_named_as_searched(home, monkeypatch):
+    (home / "Downloads").mkdir()
+    monkeypatch.setattr(
+        "gaia.agents.tools.protected_folders.sys",
+        SimpleNamespace(platform="darwin"),
+    )
+    out = _find_files([str(home)])("no_such_file_xyz", scope="smart")
+
+    roots = _searched(out)
+    assert str((home / "Work").resolve()) in roots
+    assert str((home / "Downloads").resolve()) not in roots
+    assert "Skipped ~/Downloads: macOS asks for permission" in out
 
 
 def test_a_hit_does_not_list_searched_folders(home):

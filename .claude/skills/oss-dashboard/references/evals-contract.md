@@ -1,6 +1,6 @@
 # Eval results contract (v1)
 
-The Evals page reads results from CI artifacts. Any workflow listed in `EVAL_WORKFLOWS` (by file name, in `src/config.ts`) can feed it, whatever language or harness it uses, by uploading files in this format.
+The Evals page reads results from CI artifacts. Any workflow listed in `EVAL_WORKFLOWS` (by file name, in `<dir>/src/config.ts`) can feed it, whatever language or harness it uses, by uploading files in this format.
 
 ## The artifact
 
