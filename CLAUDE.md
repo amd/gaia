@@ -592,7 +592,7 @@ gaia/
 │   ├── automations/    # Reminders, alerts, triggers, summaries (gaia automation)
 │   ├── audio/          # Audio: Lemonade ASR, speaker diarization, TTS, media decode
 │   ├── browser/        # Live-browser automation (Playwright) behind the browser_use tools
-│   ├── chat/           # Agent SDK (AgentSDK class, prompts)
+│   ├── chat/           # Agent SDK (AgentSDK class)
 │   ├── code_index/     # Code indexing/search backend
 │   ├── connectors/     # Connector framework (Google/GitHub OAuth, MCP-server connectors, grants)
 │   ├── daemon/         # Headless daemon (gaia daemon): custody, broker, scheduler, sidecars
