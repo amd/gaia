@@ -457,3 +457,45 @@ func TestSetMockBinaryReplacesTheNativeAgentToo(t *testing.T) {
 		t.Errorf("--mock left the native agent's settings behind: %+v", got)
 	}
 }
+
+// gaiapy on a daemon install gets the same notice as gaia-agent, and the
+// notice never names a program the user did not type.
+func TestGaiapyOnADaemonInstallStaysBehindTheDaemon(t *testing.T) {
+	f := isolateNative(t)
+	dir := filepath.Join(f.home, ".gaia", "agents", FlagshipID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	record := `{"id":"gaia","version":"0.1.1","artifact_kind":"binary"}`
+	if err := os.WriteFile(filepath.Join(dir, SentinelName), []byte(record), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeProgram(t, dir, PythonAgentBinary)
+
+	c := NewCatalog()
+	c.DiscoverBinaries()
+	notice, err := c.SelectFlagshipAgent(PythonAgentChoice)
+	if err != nil {
+		t.Fatalf("gaiapy was refused on a daemon install: %v", err)
+	}
+	if notice != DaemonPythonNotice || strings.Contains(notice, PythonAgentBinary+" was asked for") {
+		t.Errorf("gaiapy got the wrong notice: %q", notice)
+	}
+	if got := c.Get(FlagshipID); got.Transport != TransportDaemon || got.Native {
+		t.Errorf("gaiapy moved the flagship off the daemon: %+v", got)
+	}
+}
+
+// An unknown name lists every name the terminal UI does take, gaiapy included.
+func TestAnUnknownAgentProgramListsGaiapy(t *testing.T) {
+	isolateNative(t)
+	err := selectAgent(NewCatalog(), "gaiarust")
+	if err == nil {
+		t.Fatal("an unknown agent program was accepted")
+	}
+	for _, name := range []string{NativeAgentBinary, PythonAgentChoice, PythonAgentBinary} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("the error does not name %s: %v", name, err)
+		}
+	}
+}
