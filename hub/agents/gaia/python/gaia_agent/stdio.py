@@ -2056,6 +2056,14 @@ def _end_turn(handler: Any, state: Optional[PermissionState]) -> None:
 
 CLEAR_CONVERSATION_QUERY = "\x00gaia:clear_conversation\x00"
 
+
+def _forget_web_calls(agent: Any) -> None:
+    """Pages read before a clear no longer back a research citation."""
+    web_calls = getattr(agent, "_web_calls", None)
+    if web_calls is not None:
+        web_calls.clear()
+
+
 #: Sent by the host before the chat opens, so the first question does not pay
 #: for loading the model and reading the system prompt. Answered with a `final`
 #: whose answer is WARMED_UP, or WARM_UP_SKIPPED for a remote model, where
@@ -2152,6 +2160,7 @@ def dispatch_query(
         # Facts seen in the cleared chat must not ground the next one's numbers.
         if hasattr(agent, "clear_seen_sources"):
             agent.clear_seen_sources()
+        _forget_web_calls(agent)
         _reset_hybrid_route(agent)
         loader = getattr(agent, "tool_loader", None)
         if loader is not None:
@@ -2364,10 +2373,7 @@ def main(argv: Optional[list] = None) -> int:
             history = getattr(agent, "conversation_history", None)
             if history is not None:
                 history.clear()
-            # Pages read before /clear no longer back a citation.
-            web_calls = getattr(agent, "_web_calls", None)
-            if web_calls is not None:
-                web_calls.clear()
+            _forget_web_calls(agent)
             _reset_hybrid_route(agent)
             if index is not None:
                 guarded(index, index.cleared)

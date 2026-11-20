@@ -8,6 +8,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **Ask for research with `/research`.** A query that starts with `/research`
+  loads the `research-report` skill for the turn and asks for a report that
+  cites, for every claim, a page the agent fetched, with a check for newer
+  developments and a Sources list. The Agent UI's Research switch and the TUI's
+  `/research` send this form. Typing the skill's own `/research-report` is the
+  same research turn. A profile without web tools refuses it by name.
+- **Research citations are checked before the answer is final.** A cited link
+  the agent never fetched, or one that matches no search result or page (a
+  retyped link), goes back to the model once to fetch or drop; any left is
+  listed under the report.
+- **`research-report` 1.1.0.** The whole cited report now goes in the reply
+  (not only in a saved file), encyclopedias lead to primary sources instead of
+  standing in for them, long pages are read with `find`, anything that can
+  change gets a search for newer developments, and a refused web search is
+  stated in the report.
+
 - **Generated music and sound effects can be saved into a folder of the
   user's.** `generate_music` and `generate_sound_effect` take `save_to`, an
   absolute folder or a new `.wav` path, and write a copy there as
@@ -403,21 +419,6 @@ Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   measurement are sealed as the agent prints the answer, so a run still
   storing memory past the old 15 s wait no longer drops them, and a
   measurement that cannot finish carries `context_error` instead of nothing.
-
-- **Ask for research with `/research`.** A query that starts with `/research`
-  loads the `research-report` skill for the turn and asks for a report that
-  cites, for every claim, a page the agent fetched, with a check for newer
-  developments and a Sources list. The Agent UI's Research switch and the TUI's
-  `/research` send this form. A profile without web tools refuses it by name.
-- **Research citations are checked before the answer is final.** A cited link
-  the agent never fetched, or one that matches no search result or page (a
-  retyped link), goes back to the model once to fetch or drop; any left is
-  listed under the report.
-- **`research-report` 1.1.0.** The whole cited report now goes in the reply
-  (not only in a saved file), encyclopedias lead to primary sources instead of
-  standing in for them, long pages are read with `find`, anything that can
-  change gets a search for newer developments, and a refused web search is
-  stated in the report.
 
 - **`/init` says a missing model once.** On a PC with no Lemonade client, the
   `hint` read "The model X is not downloaded. X is not downloaded, and no

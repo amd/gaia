@@ -643,7 +643,10 @@ class GaiaAgent(
         problems = super().answer_problems(answer)
         if self._research_brief != RESEARCH_BRIEF:
             return problems
-        return problems + citation_problems(answer or "", list(self._web_calls))
+        request = getattr(self, "_original_user_input", None) or ""
+        return problems + citation_problems(
+            answer or "", list(self._web_calls), str(request)
+        )
 
     def answer_repair_prompt(self, problems):
         if self._research_brief != RESEARCH_BRIEF:
