@@ -359,9 +359,25 @@ class ToolLoader:
         name a tool this agent does not have, and the loader must not invent
         capability.
         """
+        admitted = []
         for name in names:
             if name in registry and name not in self._added:
                 self._added.append(name)
+                admitted.append(name)
+        absent = [name for name in names if name not in registry]
+        if admitted or absent:
+            # The turn's selection line is logged before a mid-turn load.
+            logger.info(
+                "TOOL_LOADER %s",
+                json.dumps(
+                    {
+                        "turn": self._turn,
+                        "event": "admit",
+                        "tools": admitted,
+                        "not_registered": absent,
+                    }
+                ),
+            )
         return self.offered(registry)
 
     def remove_tools(

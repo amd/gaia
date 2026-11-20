@@ -209,9 +209,15 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     )
 
 
+# An offset past SQLite's integer range can't reach the query: it would 500.
+SQLITE_INT_MAX = 2**63 - 1
+
+
 @router.get("/api/sessions", response_model=SessionListResponse)
 async def list_sessions(
-    limit: int = 50, offset: int = 0, db: ChatDatabase = Depends(get_db)
+    limit: int = 50,
+    offset: int = Query(0, le=SQLITE_INT_MAX),
+    db: ChatDatabase = Depends(get_db),
 ):
     """List all chat sessions."""
     limit = max(1, min(limit, 200))
@@ -575,7 +581,7 @@ async def mark_session_read(session_id: str, db: ChatDatabase = Depends(get_db))
 async def get_messages(
     session_id: str,
     limit: int = 100,
-    offset: int = 0,
+    offset: int = Query(0, le=SQLITE_INT_MAX),
     db: ChatDatabase = Depends(get_db),
 ):
     """Get messages for a session."""

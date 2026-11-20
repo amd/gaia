@@ -15,7 +15,7 @@
   "components/QueuedMessages.tsx": 7,
   "components/RetryWithMenu.tsx": 1,
   "components/SetupScreen.tsx": 2,
-  "components/TurnChanges.tsx": 17,
+  "components/TurnChanges.tsx": 16,
   "components/UnsupportedFeature.tsx": 3,
   "components/render/CardErrorBoundary.tsx": 1,
   "components/render/ConfirmationCard.tsx": 4,

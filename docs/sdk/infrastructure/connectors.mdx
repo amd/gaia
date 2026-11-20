@@ -216,10 +216,10 @@ curl -X POST http://localhost:4200/v1/connections/google \
 
 | Method / path | Purpose |
 |---|---|
-| `POST /v1/connections/{provider}` | Persist a forwarded grant (201). No browser step. |
+| `POST /v1/connections/{provider}` | Persist a forwarded grant (201). No browser step. 404 if `provider` isn't an OAuth connector. |
 | `GET /v1/connections` | List connections — **metadata only, secrets omitted**. |
 | `GET /v1/connections/{provider}` | The default account's metadata (404 if absent); `?account=<id or address>` picks another. |
-| `DELETE /v1/connections/{provider}` | Clears every account's local token, the client, grants, and caches. Never revokes the host app's own OAuth grant — see below. |
+| `DELETE /v1/connections/{provider}` | Clears every account's local token, the client, grants, and caches (404 if `provider` isn't an OAuth connector). Never revokes the host app's own OAuth grant — see below. |
 
 After a successful POST the agent resolves the connection ambiently — the
 triage request carries **no credentials**; `get_access_token` reads the

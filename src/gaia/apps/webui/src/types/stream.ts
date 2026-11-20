@@ -31,7 +31,8 @@ export type StreamEventType =
     | 'followup_taken'    // The running turn took a message sent mid-turn
     | 'followup_returned' // The turn ended without taking these mid-turn messages
     | 'followup_unavailable' // The running turn can't take a message mid-turn
-    | 'context_usage';    // What this turn's model call holds, by kind
+    | 'context_usage'     // What this turn's model call holds, by kind
+    | 'draft';            // A tool call's text so far, while the model writes it
 
 /** One thing found in a recording section, before the whole recording is read. */
 export interface FoundItem {
@@ -83,6 +84,8 @@ export interface StreamEvent {
     success?: boolean;
     /** On a `tool_result`: no answer came in time, so a "denied" status is not the user's no. */
     timed_out?: boolean;
+    /** On a `tool_result`: "policy" when GAIA's own rule stopped the call, so "denied" is not the user's no. */
+    denied_by?: string;
     /** On a `tool_result`: "agent" when GAIA turned the call down itself and showed no prompt. */
     declined_by?: string;
     steps?: string[];

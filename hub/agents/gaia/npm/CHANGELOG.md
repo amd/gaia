@@ -6,13 +6,146 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
+Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
 - **The sidecar no longer crashes on a busy Windows PC.** It died with an access
   violation in Python's `_wmi` module when a WMI query timed out. It now reads
   OS and CPU facts without WMI.
+- **Full access runs any command.** It used to refuse a program outside a
+  short developer list (`pip`, `where`, `rmdir`, `gaia`, a program given by its
+  full path), a package install outside a virtual environment, a path outside
+  the allowed folders, a credential file and `gaia skill`, and one refused
+  delete then blocked later Python for the rest of the request. Now
+  `run_shell_command` and `run_python` run what they are given: any program,
+  `rm` included, any shell syntax (loops, conditions, several lines), any
+  folder. `POST /v1/gaia/sessions/{id}/bypass` gives an HTTP session the same
+  full access, so an Agent UI chat's Full access no longer asks before a gated
+  shell command; a sidecar started without a caller-auth token refuses to turn
+  it on (`403`). A call you declined stays declined, and calendar changes and
+  outgoing mail still wait for you. The other modes are unchanged.
+- **Every chat on a PC embeds with one embedder, the GPU one.** The embedder
+  was chosen per session, so a chat on the other device could clear all of
+  memory's vectors. It is now one per PC, on an NPU PC too: FastFlowLM's NPU
+  embedder (`embed-gemma-300m-FLM`) ranked text no better than chance on
+  FastFlowLM 1.0.7, so `gaia init --profile npu` downloads the GPU embedder
+  instead. A choice saved in Settings › Memory reaches open sessions on their
+  next turn, keeping the conversation and loaded skills.
+- **`gaia -p --time-limit` uses the time it is given.** One slow step made the
+  agent stop with minutes left, so a found answer often never reached the
+  requested file. It now stops two typical steps short of the limit, is always
+  warned first, and its closing step may run one last tool call, so a final
+  write lands. Every model call is capped to what the time left allows, and a
+  call still running past the limit is abandoned with the result still
+  reported. Qwen's `<function=…>` tool-call text now runs as a call instead of
+  being shown as the answer. The agent is told the time used at 25% and 50%,
+  its last tool call may run for half of the time left instead of being
+  refused, and the 70% warning no longer invites it to rewrite a finished file
+  or put caveats inside one. The time kept back is never more than a quarter
+  of the limit, so one long early step no longer ends the turn near its
+  halfway point, and the answer after a time-limit stop is a short summary (at
+  most 2,048 tokens) that names files instead of repeating them.
+- **`gaia -p` can download a local model that is not on disk yet**, then
+  answer with it, instead of refusing the run. It asks first, on stderr, with
+  the model and its size (`Download it now? [y/N]`); only `y` or `yes`
+  downloads. Where nobody can answer (a script, a piped prompt, redirected
+  stderr) nothing is downloaded and the run exits 1 naming `--yes` (`-y`),
+  which agrees in advance. The progress goes to stderr: a bar with percent and
+  downloaded/total size on a terminal, one plain line every 10% in a pipe or
+  log file. stdout still carries only the answer. Ctrl+C at the question or
+  during the download exits 130; a failed download exits 1 with the reason.
 ### Changed
 
+- **A file a skill's tool saves counts as saved.** A deck or report written by
+  a skill tool existed on disk, yet the turn ended "incomplete" with "No
+  successful write to `deck.pptx` is recorded for this turn", because the
+  completion check only knew the built-in write tools. A write made through
+  `gaia.skills.context` (`check_write`, `open_write`) is now on the same
+  record once the file has really changed, and so is a file whose path a
+  tool's result reports and that changed during the call.
+- **A built file gets one short self-check, not a second pass over the
+  work.** On long local-model tasks a requirement the request stated was
+  dropped (a tab, a chart, a length limit), an implausible result went out
+  unquestioned, or a duplicate input row reached a total. A turn that built a
+  document or data file is now asked once, in a few lines, to mark each
+  stated requirement met or not and to answer three plausibility questions;
+  figures are checked against sources only in prose that quotes them. With
+  nothing wrong it costs one short model step and the answer is unchanged.
+  Slide counts, named tabs, word limits, empty files and wrong extensions are
+  checked in code and raised only when wrong. The check shrinks or is skipped
+  when a time limit is nearly used up, never ends a finished turn
+  "incomplete", logs each firing (`[check:self]`), and is turned off with
+  `GAIA_AGENT_SELF_CHECK=0`.
+- **Finished work is no longer reported as unfinished or unsourced.** A turn
+  whose file exists ends `success`; a file not read back after its last
+  change is a "Not checked:" line in the answer, listed in
+  `completion_caveats`. A skill's check tool that opened the file has read it
+  back, and so has a full read followed only by in-place edits. A check tool
+  that returns findings (`"status": "errors_found"`, `"ok": false`) is a
+  successful call, not a tool error. Figures in a file a script or tool built
+  are no longer listed as "figures I found no source for" unless a call typed
+  them.
+- **A loaded skill's tools stay on the tool list, and `load_skill` says
+  which ones.** A skill loaded by a skill set, or by any agent that picks
+  its own tools each turn, could name tools the model was never sent. Every
+  loaded skill's tools are now listed each turn, whether or not its
+  instructions are showing. The `load_skill` result lists the tools now
+  callable (`tools_available`) and names any that are turned off
+  (`unavailable_tools`) instead of reporting plain success, and the log
+  records tools added mid-turn (`TOOL_LOADER ... "event": "admit"`).
+- **Declining one tool call no longer ends the task.** A declined call told the
+  model not to get the same result "another way" and to stop, so one refused
+  script closed every other route to the work. The no now covers that action
+  only: the same command, script, host or change to the same file is still
+  stopped whichever tool carries it, and the model is told to carry on by
+  other means and say what it could not do. A declined command covers what it
+  named (`pip install pandas`, not every `pip install`), and a file a declined
+  Python script would only have created is no longer off limits.
+- **Office files are checked before they are handed over.** The bundled
+  `office-docs` skill ships two tools that never write the file.
+  `verify_workbook` recalculates a copy of an .xlsx (with LibreOffice when
+  installed) and names every cell with `#REF!`, `#VALUE!`, `#DIV/0!`,
+  `#NAME?`, a circular reference, a SUM/SUMIFS over text, or a criterion that
+  matches no row. A workbook with errors returns `status: errors_found`, and
+  one with typed totals and no formulas returns `no_formulas`. Without
+  LibreOffice nothing is computed: findings that depend on a value are
+  warnings, and the result tells the agent to compute the figures it reports
+  with pandas and to say the formulas were not recalculated. `verify_document`
+  confirms a .docx or .pptx is a real Word or PowerPoint file and counts its
+  headings, tables, pictures, slides and charts. Text saved under a .docx name
+  is an error that says how to build a real one. The skill also teaches real
+  headings and tables in Word files and native charts.
+- **The skill suggestion now tells the model which skill to load.** Local models
+  ignored the old "skills that may fit this request" line: over 56 tasks one
+  called `load_skill` on 3. The line now reads "Call load_skill('pdf') before
+  you start: it covers this kind of request. Also consider: office-docs." It is
+  still one line in the user's message, with the skills in the same order.
+- **A skill that clearly fits the request can load before the turn (opt-in).**
+  With `GAIA_SKILL_AUTOLOAD=1` or `skill_autoload=True`, the best match loads
+  first when it scores at least 0.40 and is 0.03 ahead of every skill it does
+  not pair with. The request then opens with "Loaded report-from-sources
+  because it matches this request". Weaker matches are suggested as before.
+  - Skills that pair with the best match no longer block it. A paired skill
+    loads with it only when it scores 0.40 and is 0.03 ahead of every
+    remaining skill itself; otherwise the request names it as "Also
+    available". Two skills per turn at most.
+  - Only trusted skills load this way: ones that ship with the agent, and hub
+    installs at the `community` tier or above. A captured skill, your own
+    skill and anything from a `.claude` folder stay suggestions.
+  - A skill that grants a command-line program stays a suggestion in Ask mode.
+    Under full access it loads, with a warning naming the program. Switch full
+    access off and the skill is unloaded at the next turn.
+  - The skill bodies in the prompt, plus the new one, must fit in 18% of the
+    model's context window (about 5,900 tokens of the default 32,768).
+  - A skill unloaded earlier in the session is not auto-loaded again.
+  - `GAIA_SKILL_AUTOLOAD_TAU` and `GAIA_SKILL_AUTOLOAD_MARGIN` (or
+    `skill_autoload_threshold` and `skill_autoload_margin`) set the 0.40 and
+    0.03.
+  - If you turn it on where it cannot run (catalogue or suggestions off, fast
+    mode, memory off, or an embedder other than `embeddinggemma-300m`), one
+    warning says it is inactive and why.
+
+  Off by default. On the held-out half of the labelled requests, 0.40 and
+  0.03 measured precision 0.93 and recall 0.59.
 - **Start a message with `/` and a skill's name to run that skill**, as in
   Claude Code: `/pdf turn notes.md into a report`. The agent loads the skill
   with the same checks as `load_skill` and follows it for the rest of the line.
@@ -40,8 +173,42 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
 ### Fixed
 
+- A model added with `gaia model add` downloads by its id alone. A pull that
+  did not stream progress sent no registration, so Lemonade answered "not
+  registered with Lemonade Server"; it now sends the added model's checkpoint,
+  recipe, vision projector and labels, as the streamed pull did.
+- A model's size is no longer guessed from part of its name when GAIA has it
+  on record: a 27B model added at 18.6 GB was reported as 5.0 GB, because
+  "27B" was read as "7B".
 - A reply that goes quiet partway through is requested again, up to twice,
   instead of ending the turn; the work done so far is kept either way.
+- A file a script wrote and the agent then showed whole with `cat` counts as
+  read back. Before, the answer still carried "has not been read back
+  completely" and the turn was marked unfinished.
+- A cloud model that spends a whole reply reasoning and returns nothing is
+  asked for its lowest reasoning level on the next request, so the turn moves
+  on; after a second such reply in one turn, that level holds for the rest of
+  the turn. A turn now ends on its third cut-off reply in a row, not its third
+  overall.
+- In a `gaia -p` run the agent is told nobody can answer questions, so it
+  settles an open choice itself and says what it assumed instead of ending on
+  an offer to change it later.
+- `run_python` runs a saved script by `path` (with optional `args`), so a
+  script is written once, fixed with `edit_file` and run again instead of
+  being typed out for every run. The call is checked and approved exactly as
+  `execute_python_file` is. Every Python result now says the interpreter is
+  new for that call, a `NameError` adds that each call starts fresh, and a
+  failed run says how to fix and re-run it without sending the code again.
+- `read_file` reads more without a detour. A .pptx comes back as slide text
+  with speaker notes. A workbook too long to read in full comes back as each
+  sheet's size and first rows, with how to read a range, instead of an error.
+  An .html file comes back as its text (`raw=true` for the markup).
+  `start_line` with `limit` reads that many lines, and a `start_line` of 0 is
+  the first line. When a loaded skill has a tool for the file's type, the
+  result names it before `index_document`.
+- A Python that `run_shell_command` starts reads and prints UTF-8, as
+  `run_python` already did, unless the command or the environment sets an
+  encoding itself.
 - `run_python` no longer drops long output without saying so. Output past
   8,000 characters used to be cut silently, so a scan's later hits never
   reached the agent. It now gets the start and end, is told how much was left

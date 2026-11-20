@@ -125,6 +125,8 @@ SUMMARY_VIEW_KEYS = (
     "needs_model",
     # Set on a "denied" call nobody answered, so it isn't shown as the user's no.
     "timed_out",
+    # "policy" on a "denied" call GAIA's own rule stopped, for the same reason.
+    "denied_by",
     # "agent" on a "denied" call GAIA turned down itself, with no prompt shown.
     "declined_by",
     # False on a call refused before it ran, so a relayed refusal contacted nothing.
@@ -141,6 +143,8 @@ SUMMARY_VIEW_KEYS = (
     "num_chunks",
     # A ``search_web`` result's hits, so a relayed turn can cite them.
     "sources",
+    # The file a tool built, so a client can offer to open it.
+    "path",
 )
 
 #: Which connector an MCP tool call belongs to, carried from ``tool_start``.
@@ -404,6 +408,15 @@ class CanonicalTranslator:
             if phase == "model_queue" and isinstance(queue, dict):
                 out[0]["queue"] = {k: queue[k] for k in _QUEUE_FIELDS if k in queue}
         return out
+
+    def _on_draft(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "type": "draft",
+                "tool": str(event.get("tool", "")),
+                "text": str(event.get("text", "")),
+            }
+        ]
 
     def _on_step(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         step = event.get("step")
@@ -727,6 +740,7 @@ class CanonicalTranslator:
     # Dispatch table: every top-level source type sse_handler.py emits.
     _DISPATCH = {
         "status": _on_status,
+        "draft": _on_draft,
         "step": _on_step,
         "thinking": _on_thinking,
         "plan": _on_plan,

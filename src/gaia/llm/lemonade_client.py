@@ -42,15 +42,12 @@ from typing import (
     Union,
 )
 
-import openai  # For exception types
 import requests
-
-# Import OpenAI client for internal use
-from openai import OpenAI
 
 from gaia.env import child_env, load_env
 from gaia.llm import call_ledger, stream_watchdog
 from gaia.llm.degenerate_output import DegenerateOutput, DegenerateOutputGuard
+from gaia.llm.lazy_openai import OpenAI, loaded_openai_errors, openai
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -612,17 +609,22 @@ def resolve_default_vision_model(chat_model: Optional[str] = None) -> Optional[s
     return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
 
-def resident_vision_model(configured: str, base_url: Optional[str] = None) -> str:
+def resident_vision_model(
+    configured: str,
+    base_url: Optional[str] = None,
+    client: Optional["LemonadeClient"] = None,
+) -> str:
     """The already-loaded vision model to read images with, else ``configured``.
 
     Reading a scan with a model that is already resident spares a reload and
     evicting chat. Only :data:`VISION_CHAT_MODELS` count, because those have
     been tested; a model named outside that set was chosen on purpose and stays.
+    The server asked is *client*'s when given, else the one at *base_url*.
     """
     if configured not in VISION_CHAT_MODELS:
         return configured
     try:
-        loaded = LemonadeClient(base_url=base_url).health_check()
+        loaded = (client or LemonadeClient(base_url=base_url)).health_check()
     except LemonadeClientError as e:
         # VLMClient.check_availability reports the unreachable server next.
         log.warning("Could not read the loaded models from Lemonade: %s", e)
@@ -694,6 +696,14 @@ EMBEDDER_MODELS = frozenset(
 #: than its ubatch (default 512), so every embedder load carries this one.
 EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
+#: A reranker scores query + chunk as one input, which must fit one ubatch; the
+#: ubatch cannot exceed the batch (default 2048), so both are raised together.
+RERANKER_BATCH_TOKENS = 4096
+RERANKER_LLAMACPP_ARGS = (
+    f"--batch-size {RERANKER_BATCH_TOKENS} --ubatch-size {RERANKER_BATCH_TOKENS}"
+)
+#: Longest query sent to the reranker, so a full chunk plus it fits the ubatch.
+RERANK_QUERY_MAX_CHARS = 1024
 #: Headroom for the BOS/EOS tokens the server adds to every input.
 _EMBED_RESERVED_TOKENS = 48
 #: Worst realistic ratio: Gemma's tokenizer gives every digit its own token.
@@ -879,9 +889,13 @@ NPU_BACKEND_INSTALL_TIMEOUT = 600  # seconds; the FastFlowLM release download
 # slot over one shared KV pool keeps the conversation resident, so the RAM copy
 # buys nothing; the similarity floor keeps a short side prompt off its slot. The
 # third slot holds the full tool list primed, out of the side jobs' way.
+# llama.cpp keeps up to 32 context checkpoints per slot in host RAM (63 MB each
+# for Qwen3.6-35B); 16 halves that and re-reads no more tokens on a new chat,
+# an edit or a regenerate.
 # Args the user saved for the model in Lemonade win (users_llamacpp_args).
 CHAT_LLAMACPP_ARGS = (
-    "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5"
+    "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5 "
+    "--ctx-checkpoints 16"
 )
 #: Slots requests are pinned to (llama.cpp ``id_slot``). Left to LRU, a memory
 #: extraction landed on the conversation's slot and overwrote it, and the next
@@ -898,6 +912,7 @@ FULL_TOOLS_SLOT = 2
 _GAIA_SAVED_CHAT_ARGS = frozenset(
     {
         CHAT_LLAMACPP_ARGS,
+        "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
         "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
         "--parallel 1",
     }
@@ -2322,14 +2337,10 @@ MODELS = {
         # Q8_0 weights; held in memory beside the chat model (CO_RESIDENT_MODELS).
         size_gb=0.33,
     ),
-    # --- NPU-native FLM embedder for the NPU profile (#1744) ---
-    # EmbeddingGemma 300M built for the FastFlowLM/NPU backend. On a shared-
-    # memory Ryzen AI APU a GGUF embedder runs on Vulkan/llama.cpp and
-    # reclaims the memory the FLM chat model holds, so loading it evicts the
-    # chat model — every chat turn then thrashes NPU<->Vulkan (#1676). Keeping
-    # the embedder on the same FLM/NPU backend as the chat model lets both stay
-    # co-resident. Built-in Lemonade *-FLM model: pull by name only (no recipe;
-    # passing recipe triggers user-model registration and 400s — #1655).
+    # --- NPU-native FLM embedder (#1744) ---
+    # EmbeddingGemma 300M built for FastFlowLM. No profile uses it: its search
+    # ranked at chance on FLM 1.0.7 (GaiaConfig.TESTED_EMBEDDING_DEVICES).
+    # Built-in Lemonade *-FLM model: pull by name only (no recipe — #1655).
     "embed-gemma-flm": ModelRequirement(
         model_type=ModelType.EMBEDDING,
         model_id="embed-gemma-300m-FLM",
@@ -2352,6 +2363,27 @@ def find_model_requirement(model_id: Optional[str]) -> Optional[ModelRequirement
 
     entry = find_custom_model(model_id)
     return requirement_for(entry) if entry is not None else None
+
+
+def _pull_registration(
+    model_name: str, given: Dict[str, Any]
+) -> Tuple[str, Dict[str, Any]]:
+    """The name and registration fields a pull of *model_name* sends.
+
+    A ``user.`` model Lemonade has not seen needs its registration on the first
+    pull, under its ``user.`` name even when asked for without it. *given* is
+    what the caller passed: a checkpoint there means the caller registers the
+    model itself, and any other field it set wins over the model's own.
+    """
+    if given.get("checkpoint"):
+        return model_name, given
+    mr = find_model_requirement(model_name)
+    registration = mr.pull_kwargs() if mr else {}
+    if not registration:
+        return model_name, given
+    filled = dict(registration)
+    filled.update({k: v for k, v in given.items() if v not in (None, "")})
+    return mr.model_id, filled
 
 
 # Sampling for a local model with no published profile below: low temperature
@@ -4194,7 +4226,7 @@ class UsersServerUnchangedError(LemonadeClientError):
     """
 
 
-def _cloud_error_status(error: openai.APIError) -> Optional[int]:
+def _cloud_error_status(error: "openai.APIError") -> Optional[int]:
     """Read numeric status fields; never interpret or display upstream text."""
     status = getattr(error, "status_code", None)
     if (
@@ -5382,7 +5414,7 @@ class LemonadeClient:
         except (
             LemonadeClientError,
             requests.exceptions.RequestException,
-            openai.APIError,
+            *loaded_openai_errors("APIError"),
         ) as e:
             if not self._recover_stopped_gaia_lemonade(e, model):
                 raise
@@ -5402,7 +5434,7 @@ class LemonadeClient:
         except (
             LemonadeClientError,
             requests.exceptions.RequestException,
-            openai.APIError,
+            *loaded_openai_errors("APIError"),
         ) as e:
             if yielded or not self._recover_stopped_gaia_lemonade(e, model):
                 raise
@@ -5878,8 +5910,9 @@ class LemonadeClient:
 
         Returns:
             Dict with ``id``, ``downloaded``, ``size_gb`` — the catalog's
-            ``size``, or a name-based estimate when the catalog lacks one — and
-            ``listed``, False when the catalog doesn't know the model at all
+            ``size``, else the size GAIA has on record for the model, else a
+            name-based estimate — and ``listed``, False when the catalog
+            doesn't know the model at all
 
         Raises:
             LemonadeClientError: If the catalog can't be fetched
@@ -5891,7 +5924,7 @@ class LemonadeClient:
                 return {
                     "id": model.get("id"),
                     "size_gb": (
-                        float(size) if size else self._estimate_model_size(model_name)
+                        float(size) if size else self._known_model_size(model_name)
                     ),
                     "downloaded": bool(model.get("downloaded", False)),
                     "listed": True,
@@ -5899,10 +5932,17 @@ class LemonadeClient:
 
         return {
             "id": model_name,
-            "size_gb": self._estimate_model_size(model_name),
+            "size_gb": self._known_model_size(model_name),
             "downloaded": False,
             "listed": False,
         }
+
+    def _known_model_size(self, model_name: str) -> float:
+        """*model_name*'s size in GB as GAIA records it, else a name-based estimate."""
+        mr = find_model_requirement(model_name)
+        if mr is not None and mr.size_gb:
+            return float(mr.size_gb)
+        return self._estimate_model_size(model_name)
 
     def _model_storage_free_bytes(self) -> Tuple[int, str]:
         """Free bytes and path of the server's model cache, from ``/system-info``.
@@ -5938,21 +5978,26 @@ class LemonadeClient:
         if "a3b" in model_lower or "a2b" in model_lower:
             return 18.0  # MoE models like Qwen3.5-35B-A3B are ~18GB
 
-        # Look for billion parameter indicators (dense models)
-        if "70b" in model_lower or "72b" in model_lower:
+        # Billion-parameter count (dense models). The whole number is read, so
+        # "27b" is 27 and not the "7b" inside it.
+        count = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)b(?![a-z0-9])", model_lower)
+        billions = float(count.group(1)) if count else None
+        if billions in (70, 72):
             return 40.0  # ~40GB for 70B models
-        elif "30b" in model_lower or "34b" in model_lower:
+        elif billions in (30, 34):
             return 18.0  # ~18GB for 30B models
-        elif "13b" in model_lower or "14b" in model_lower:
+        elif billions in (13, 14):
             return 8.0  # ~8GB for 13B models
-        elif "7b" in model_lower or "8b" in model_lower:
+        elif billions in (7, 8):
             return 5.0  # ~5GB for 7-8B models
-        elif "4b" in model_lower:
+        elif billions == 4:
             return 2.5  # ~2.5GB for 4B models (e.g., Qwen3-VL-4B)
-        elif "3b" in model_lower:
+        elif billions == 3:
             return 2.0  # ~2GB for 3B models
-        elif "1b" in model_lower or "0.5b" in model_lower or "0.6b" in model_lower:
+        elif billions is not None and billions <= 1:
             return 1.0  # ~1GB for small models
+        elif billions is not None:
+            return round(billions * 0.6, 1)  # ~0.6GB per billion at 4-bit
         elif "embed" in model_lower:
             return 0.5  # Embedding models are usually small
         else:
@@ -7119,20 +7164,39 @@ class LemonadeClient:
                 )
                 return
 
+            def _open_chunks():
+                return self._stream_chat_chunks(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_completion_tokens=max_completion_tokens,
+                    stop=stop,
+                    timeout=timeout,
+                    logprobs=logprobs,
+                    tools=tools,
+                    **kwargs,
+                )
+
             produced = False
-            for chunk in self._stream_chat_chunks(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_completion_tokens=max_completion_tokens,
-                stop=stop,
-                timeout=timeout,
-                logprobs=logprobs,
-                tools=tools,
-                **kwargs,
-            ):
-                produced = True
-                yield chunk
+            try:
+                for chunk in _open_chunks():
+                    produced = True
+                    yield chunk
+            except LemonadeClientError as e:
+                if produced:
+                    raise
+
+                # A client outside the lease can evict the model after the
+                # check above; reload once, as chat_completions does.
+                def _reopen_chunks():
+                    check_cancelled(f"'{model}' to reload")
+                    return _open_chunks()
+
+                for chunk in self._execute_with_auto_download(
+                    _reopen_chunks, model, auto_download, error=e
+                ):
+                    produced = True
+                    yield chunk
 
             # A cloud model that streamed nothing has not "finished" — the
             # gateway accepted the request and sent no tokens. Falling back is
@@ -7874,6 +7938,33 @@ class LemonadeClient:
             self.model = active_model
 
     @guard_inference()
+    def rerank(
+        self,
+        query: str,
+        documents: List[str],
+        model: str,
+        timeout: int = DEFAULT_REQUEST_TIMEOUT,
+    ) -> Dict[str, Any]:
+        """Score *documents* against *query* with a downloaded Lemonade reranker.
+
+        The caller chooses a model from the downloaded catalog. This method does
+        not pull models, so a retrieval feature can never start a surprise model
+        download.
+        """
+        if not query.strip():
+            raise ValueError("Reranking query must not be empty.")
+        if not documents:
+            raise ValueError("Reranking requires at least one document.")
+        if not model.strip():
+            raise ValueError("Reranking requires a model ID.")
+        return self._send_request(
+            "POST",
+            f"{self.base_url}/rerank",
+            data={"model": model, "query": query, "documents": documents},
+            timeout=timeout,
+        )
+
+    @guard_inference()
     def generate_audio(
         self,
         payload: Dict[str, Any],
@@ -8528,6 +8619,21 @@ class LemonadeClient:
         self.log.info(f"Installing {model_name}")
         self.ensure_npu_backend(model_name)
 
+        model_name, registration = _pull_registration(
+            model_name,
+            {
+                "checkpoint": checkpoint,
+                "recipe": recipe,
+                "reasoning": reasoning,
+                "mmproj": mmproj,
+                "embedding": embedding,
+                "vision": vision,
+            },
+        )
+        checkpoint, recipe = registration["checkpoint"], registration["recipe"]
+        reasoning, mmproj = registration["reasoning"], registration["mmproj"]
+        embedding, vision = registration["embedding"], registration["vision"]
+
         request_data = {"model_name": model_name}
 
         if checkpoint:
@@ -8716,22 +8822,20 @@ class LemonadeClient:
         self.log.info(f"Installing {model_name} with streaming progress")
         self.ensure_npu_backend(model_name)
 
-        if not checkpoint:
-            # A user. model Lemonade has not seen needs its registration on the
-            # first pull, under its user. name even when asked for without it.
-            mr = find_model_requirement(model_name)
-            registration = mr.pull_kwargs() if mr else {}
-            if registration:
-                model_name = mr.model_id
-                checkpoint = registration["checkpoint"]
-                recipe = recipe or registration["recipe"]
-                mmproj = mmproj or registration["mmproj"]
-                if vision is None:
-                    vision = registration["vision"]
-                if reasoning is None:
-                    reasoning = registration["reasoning"]
-                if embedding is None:
-                    embedding = registration["embedding"]
+        model_name, registration = _pull_registration(
+            model_name,
+            {
+                "checkpoint": checkpoint,
+                "recipe": recipe,
+                "reasoning": reasoning,
+                "mmproj": mmproj,
+                "embedding": embedding,
+                "vision": vision,
+            },
+        )
+        checkpoint, recipe = registration["checkpoint"], registration["recipe"]
+        reasoning, mmproj = registration["reasoning"], registration["mmproj"]
+        embedding, vision = registration["embedding"], registration["vision"]
 
         request_data = {"model_name": model_name, "stream": True}
 

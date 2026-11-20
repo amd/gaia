@@ -19,6 +19,8 @@ beforeEach(() => {
     vi.clearAllMocks();
     mockedApi.getMemorySettings.mockResolvedValue(memory(true));
     mockedApi.updateMemorySettings.mockResolvedValue(memory(false));
+    // The embedding-model card has its own tests.
+    mockedApi.getEmbedder.mockReturnValue(new Promise(() => {}));
 });
 
 describe('MemorySettings', () => {
