@@ -456,11 +456,18 @@ def _host_cwd(host: Any) -> str:
     return str(workspace or os.getcwd())
 
 
+def _full_access(host: Any) -> bool:
+    """Full access runs Python as written: none of this screen applies."""
+    from gaia.agents.base.agent import Agent
+
+    return Agent._full_access_on(host)
+
+
 def python_code_refusal(
     host: Any, code: Any, may_write: Optional[Callable[[str], bool]] = None
 ) -> Optional[Dict[str, Any]]:
     """The refusal *code* has earned before ``run_python`` runs it, or None."""
-    if not isinstance(code, str) or not code.strip():
+    if not isinstance(code, str) or not code.strip() or _full_access(host):
         return None
     mentions = protected_paths_in_code(
         code,
@@ -524,7 +531,7 @@ def python_file_refusal(
     """
     from gaia.agents.base.verification import NOT_EXECUTED
 
-    if not isinstance(file_path, str) or not file_path.strip():
+    if not isinstance(file_path, str) or not file_path.strip() or _full_access(host):
         return None
     cwd = _host_cwd(host)
     validator = getattr(host, "path_validator", None)

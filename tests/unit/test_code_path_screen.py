@@ -27,6 +27,8 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.code_path_screen import (
     protected_paths_in_code,
     python_code_preflight,
+    python_code_refusal,
+    python_file_refusal,
 )
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.tools import tool
@@ -284,9 +286,33 @@ def test_run_python_naming_a_protected_file_never_reaches_the_card(home):
     result = agent._execute_tool("run_python", {"code": code})
 
     assert result["status"] == "error"
-    assert "No approval can grant it" in result["error"]
+    assert "no approval" in result["error"].lower()
     assert console.prompted == []
     assert agent.ran == []
+
+
+def test_full_access_runs_a_snippet_naming_a_protected_path(home):
+    console = _Console()
+    console.full_access = True
+    agent = _PythonAgent(home, console)
+    code = f"print(open(r'{home / '.ssh' / 'id_test'}').read())"
+
+    assert python_code_refusal(agent, code) is None
+    assert python_file_refusal(agent, str(home / ".ssh" / "id_test")) is None
+    result = agent._execute_tool("run_python", {"code": code})
+
+    assert result["status"] == "success", result
+    assert agent.ran == [code]
+
+
+def test_without_full_access_the_same_snippet_is_refused(home):
+    console = _Console()
+    console.full_access = False
+    agent = _PythonAgent(home, console)
+    code = f"print(open(r'{home / '.ssh' / 'id_test'}').read())"
+
+    assert python_code_refusal(agent, code) is not None
+    assert python_file_refusal(agent, str(home / ".ssh" / "id_test")) is not None
 
 
 @pytest.mark.parametrize(
@@ -296,7 +322,10 @@ def test_run_python_naming_a_protected_file_never_reaches_the_card(home):
         "open('.env', 'w').write('A=1')",
     ],
 )
-def test_a_snippet_that_only_names_a_credential_file_reaches_the_card(home, code):
+def test_a_snippet_that_only_names_a_credential_file_reaches_the_card(
+    home, code, monkeypatch
+):
+    monkeypatch.chdir(home / "project")
     console = _Console()
     agent = _PythonAgent(home, console)
     assert console.grant_call_for_session("run_python", {"code": "print(0)"})
@@ -321,7 +350,7 @@ def test_always_allow_does_not_cover_a_snippet_naming_a_protected_path(home):
 
     assert ordinary["status"] == "success"
     assert protected["status"] == "error"
-    assert "even with full access or after approval" in protected["error"]
+    assert "even after approval" in protected["error"]
     assert agent.ran == ["print(1)"]
 
 
