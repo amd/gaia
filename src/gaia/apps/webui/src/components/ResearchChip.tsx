@@ -4,6 +4,17 @@
 import { Telescope } from 'lucide-react';
 import { useT } from '../i18n/useT';
 import { researchOn, useChatStore } from '../stores/chatStore';
+import { withResearchCommand } from '../utils/research';
+
+/** Whether research mode is on for *sessionId* (null: the new-chat screen). */
+export function useResearchMode(sessionId: string | null): boolean {
+    return useChatStore((s) => researchOn(s, sessionId));
+}
+
+/** *text* as it is sent from *sessionId*: a `/research` turn while research mode is on. */
+export function withResearch(text: string, sessionId: string | null): string {
+    return withResearchCommand(text, researchOn(useChatStore.getState(), sessionId));
+}
 
 /**
  * Composer toggle: while on, each message is sent as a `/research` turn.
@@ -17,7 +28,7 @@ export function ResearchChip({ sessionId, disabled, compact = false }: {
     compact?: boolean;
 }) {
     const t = useT();
-    const on = useChatStore((s) => researchOn(s, sessionId));
+    const on = useResearchMode(sessionId);
     const setResearch = useChatStore((s) => s.setResearch);
     const setOn = (value: boolean) => setResearch(sessionId, value);
     return (
