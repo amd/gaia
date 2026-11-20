@@ -915,6 +915,20 @@ def test_a_dotfile_on_its_own_is_still_a_file_name():
 
 
 @pytest.mark.parametrize(
+    "query, path",
+    [
+        ("Save it to the .env file", ".env"),
+        ("Write it to the .gitignore file", ".gitignore"),
+        ("Save it to my .bashrc file", ".bashrc"),
+        ("Save notes.txt file", "notes.txt"),
+        ("Save it as file.txt", "file.txt"),
+    ],
+)
+def test_a_named_file_is_still_required(query, path):
+    assert save_obligations(query) == ([path], True)
+
+
+@pytest.mark.parametrize(
     "code",
     [
         # The run that touched the file failed.
