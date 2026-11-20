@@ -213,6 +213,24 @@ After an intended change, regenerate them and review the diff:
 cd tui && go test ./internal/ui/chat -run TestFrame -update
 ```
 
+### Delegated work in the work log
+
+`delegate_task` is drawn as one bullet, like any other tool
+(`internal/ui/chat/delegation.go`). It is recognised by the shape of its
+result — a `summary` string and a `helpers` list — never by its narration,
+which differs between `gaiacpp` ("Handing 4 tasks to helpers") and
+`gaia-agent` ("Handing work to helpers").
+
+| When | What is drawn |
+|---|---|
+| Running | A `status` with `phase: "helpers"` is stored on the newest open tool and shown on the status line after its headline, with the word "helpers" dropped: `Handing 4 tasks to helpers · 3 of 4 done, 1 failed…`. It is never a bullet of its own and never becomes the model phase. With no tool open it is an ordinary status |
+| Finished, folded | The `└` line is the result's `summary`. `status: "partial"` draws it in the warning colour and leaves the bullet unfailed; `status: "error"` is a failed step (`error: …` while the turn runs, `✗ failed: …` once it ends). When any helper is not `ok`, a faint `· Ctrl+O details` follows the summary if the row has room for all of it. Two delegations in a row are never joined into one bullet |
+| Finished, `Ctrl+O` | The summary, then one clipped row per helper, in id order: `✓` / `~` / `✗`, the id, the task in a column of about two fifths of the row, then the first line of `conclusion`. A `partial` helper reads `stopped short (<reason>): …` and a `failed` one `failed: <reason>`, with `reason` in plain words (`step_limit` is "out of steps"). Past 16 helpers the list ends `… N more` |
+
+The result's `advice` and `error` are written for the model and are never
+drawn. A result the agent cut down on the wire (`{"truncated": true, …}`) has
+no `helpers`, so only the summary line is drawn, from the event's `preview`.
+
 ## The control API
 
 Off by default. `--control` auto-assigns a port; `--control-port N` pins one. It

@@ -79,13 +79,23 @@ std::string narrate(const std::string& tool, const json& args) {
     if (tool == "query_documents") return "Searching the documents";
     if (tool == "index_document") return "Indexing " + argOf(args, "path");
     if (tool == "search_code") return "Searching the code";
+    if (tool == "delegate_task") {
+        const size_t n = args.is_object() && args.contains("tasks") && args["tasks"].is_array() ? args["tasks"].size() : 0;
+        return n > 0 ? "Handing " + std::to_string(n) + (n == 1 ? " task" : " tasks") + " to helpers"
+                     : "Handing work to helpers";
+    }
     return "";
 }
 
 std::string previewOf(const json& result) {
     if (result.is_string()) return clip(result.get<std::string>(), 200);
     if (result.is_object()) {
-        for (const char* key : {"error", "message", "output", "stdout", "content"}) {
+        // A delegation's "error" also carries advice meant for the model; its summary is the line for a person.
+        if (result.contains("helpers") && result["helpers"].is_array() && result.contains("summary") &&
+            result["summary"].is_string()) {
+            return clip(result["summary"].get<std::string>(), 200);
+        }
+        for (const char* key : {"error", "message", "output", "stdout", "content", "summary"}) {
             if (result.contains(key) && result[key].is_string() && !result[key].get<std::string>().empty()) {
                 return clip(result[key].get<std::string>(), 200);
             }
@@ -238,6 +248,9 @@ public:
     void printError(const std::string& m) override { status(m); }
     void printWarning(const std::string& m) override { status(m); }
     void printInfo(const std::string& m) override { status(m); }
+    void printToolProgress(const std::string& phase, const std::string& m) override {
+        server_.write({{"type", "status"}, {"message", m}, {"phase", phase}});
+    }
     void startProgress(const std::string&) override {}
     void stopProgress() override {}
     void printFinalAnswer(const std::string&, const UsageStats&) override {}

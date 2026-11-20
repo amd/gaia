@@ -3119,7 +3119,7 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 			// Nor does a failed row, retried or not: folded, the next call's
 			// outcome would replace its error line. A failure folds under an
 			// earlier row only when it is a retry of that same call.
-			keep := stepFailed(*last) ||
+			keep := stepFailed(*last) || len(last.Helpers) > 0 || len(item.Helpers) > 0 ||
 				(stepFailed(item) && (item.RetryKey == "" || item.RetryKey != last.RetryKey))
 			if last.Kind == item.Kind && activityKey(*last) == activityKey(item) &&
 				last.Approval == item.Approval && !keep {

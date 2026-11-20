@@ -54,6 +54,12 @@ public:
     virtual void startProgress(const std::string& message) = 0;
     virtual void stopProgress() = 0;
 
+    /// How far the running tool has got ("2 of 4 helpers done"). `phase` names the kind of
+    /// progress so a UI can show it on that tool's row. Default: an info line.
+    virtual void printToolProgress(const std::string& /*phase*/, const std::string& message) {
+        printInfo(message);
+    }
+
     // === Completion Methods ===
     virtual void printFinalAnswer(const std::string& answer,
                                   const UsageStats& usage = {}) = 0;

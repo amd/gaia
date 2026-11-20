@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 
 #include "gaia/sse_parser.h"
@@ -258,6 +259,65 @@ LemonadeHealth LemonadeClient::healthCheck() {
         h.error = e.what();
     }
     return h;
+}
+
+int LemonadeClient::slotsInFlags(const std::vector<std::string>& flags) {
+    auto whole = [](const std::string& v) {
+        if (v.empty() || v.size() > 4 || v.find_first_not_of("0123456789") != std::string::npos) return 0;
+        return std::stoi(v);
+    };
+    for (size_t i = 0; i < flags.size(); ++i) {
+        const std::string& f = flags[i];
+        for (const char* name : {"--parallel", "-np"}) {
+            const std::string flag = name;
+            if (f == flag && i + 1 < flags.size()) return whole(flags[i + 1]);
+            if (f.rfind(flag + "=", 0) == 0) return whole(f.substr(flag.size() + 1));
+        }
+    }
+    return 0;
+}
+
+ModelCapacity LemonadeClient::modelCapacity(const std::string& modelId) {
+    ModelCapacity cap;
+    const bool lemonade = baseUrl_.size() >= 7 && baseUrl_.substr(baseUrl_.size() - 7) == "/api/v1";
+    try {
+        if (!lemonade) {
+            // A bare llama.cpp server answers /props beside /v1.
+            std::string root = baseUrl_;
+            if (root.size() >= 3 && root.substr(root.size() - 3) == "/v1") root.resize(root.size() - 3);
+            const json props = json::parse(http_.get(root + "/props", {}, 10, 10).body);
+            cap.slots = props.value("total_slots", 0);
+            if (cap.slots <= 0) cap.unknown = root + "/props names no total_slots";
+            return cap;
+        }
+        const json health = json::parse(httpGet("/health", 10));
+        const json* entry = loadedModel(health, modelId);
+        if (!entry) {
+            cap.unknown = modelId + " is not among the models " + baseUrl_ + "/health reports loaded";
+            return cap;
+        }
+        cap.recipe = entry->value("recipe", "");
+        std::vector<std::string> launch;
+        if (const auto cmd = entry->find("launch_command"); cmd != entry->end() && cmd->is_array()) {
+            for (const auto& part : *cmd) {
+                if (part.is_string()) launch.push_back(part.get<std::string>());
+            }
+        }
+        std::vector<std::string> args;
+        if (const auto options = entry->find("recipe_options"); options != entry->end() && options->is_object()) {
+            std::istringstream in(options->value("llamacpp_args", ""));
+            for (std::string word; in >> word;) args.push_back(word);
+        }
+        cap.slots = slotsInFlags(launch);
+        if (cap.slots <= 0) cap.slots = slotsInFlags(args);
+        // llama.cpp serves one request at a time unless told otherwise.
+        if (cap.slots <= 0 && cap.recipe == "llamacpp") cap.slots = 1;
+        if (cap.slots <= 0) cap.unknown = "the server reports no slot count for " + modelId;
+    } catch (const std::exception& e) {
+        cap.slots = 0;
+        cap.unknown = std::string("the model server did not say: ") + e.what();
+    }
+    return cap;
 }
 
 LemonadeStatus LemonadeClient::getStatus() {
