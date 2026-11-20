@@ -5,6 +5,8 @@ folder compares against the chat's folder, not the folder the process started
 in: the Agent UI backend and the daemon's sidecar both start in the home
 folder (#8629)."""
 
+import os
+
 import pytest
 from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
@@ -36,9 +38,10 @@ def _agent(working_directory, allowed):
     )
 
 
-def _plan_after_writing(agent, report, base):
+def _plan_after_writing(agent, report):
     report.write_text("# Answers\n", encoding="utf-8")
-    evidence = CompletionEvidence(REQUEST, str(base))
+    # The agent builds the turn's evidence with the process folder.
+    evidence = CompletionEvidence(REQUEST, os.getcwd())
     args = {"file_path": str(report)}
     evidence.record("write_file", args, {"status": "success", **args}, True)
     agent._completion_evidence = evidence
@@ -61,7 +64,7 @@ def test_a_mistyped_copy_of_the_chat_folder_is_raised(folders, registry):
     chat, slip, _process = folders
     agent = _agent(str(chat), [chat, slip])
 
-    plan = _plan_after_writing(agent, slip / "answers.md", chat)
+    plan = _plan_after_writing(agent, slip / "answers.md")
 
     assert plan is not None
     assert len(plan["findings"]) == 1
@@ -75,7 +78,7 @@ def test_a_file_in_the_chat_folder_is_not_raised(folders, registry):
     chat, slip, _process = folders
     agent = _agent(str(chat), [chat, slip])
 
-    assert _plan_after_writing(agent, chat / "answers.md", chat) is None
+    assert _plan_after_writing(agent, chat / "answers.md") is None
 
 
 def test_without_a_chat_folder_the_process_folder_is_the_working_folder(
@@ -88,7 +91,7 @@ def test_without_a_chat_folder_the_process_folder_is_the_working_folder(
     monkeypatch.chdir(process)
     agent = _agent(None, [process, slip])
 
-    plan = _plan_after_writing(agent, slip / "answers.md", process)
+    plan = _plan_after_writing(agent, slip / "answers.md")
 
     assert plan is not None and len(plan["findings"]) == 1
     assert str(process) in plan["findings"][0]
