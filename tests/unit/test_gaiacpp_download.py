@@ -226,10 +226,10 @@ class _Answers:
 def test_the_reason_shown_for_a_release_without_gaiacpp_has_no_address(
     client, monkeypatch
 ):
-    monkeypatch.delenv(native_fetch.ASSETS_URL_ENV, raising=False)
-    info = native_fetch.download_info
+    monkeypatch.delenv(gaiacpp_fetch.ASSETS_URL_ENV, raising=False)
+    info = gaiacpp_fetch.download_info
     monkeypatch.setattr(
-        native_fetch, "download_info", lambda: info(_Answers(status=404))
+        gaiacpp_fetch, "download_info", lambda: info(_Answers(status=404))
     )
     gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
     assert gaiacpp["can_download"] is False
@@ -245,10 +245,10 @@ def test_the_reason_shown_when_the_release_cannot_be_reached_is_plain(
 ):
     import requests
 
-    monkeypatch.delenv(native_fetch.ASSETS_URL_ENV, raising=False)
-    info = native_fetch.download_info
+    monkeypatch.delenv(gaiacpp_fetch.ASSETS_URL_ENV, raising=False)
+    info = gaiacpp_fetch.download_info
     down = _Answers(raises=requests.ConnectionError("getaddrinfo failed"))
-    monkeypatch.setattr(native_fetch, "download_info", lambda: info(down))
+    monkeypatch.setattr(gaiacpp_fetch, "download_info", lambda: info(down))
     gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
     reason = gaiacpp["unavailable_reason"]
     assert "internet connection" in reason
@@ -259,10 +259,10 @@ def test_the_reason_shown_when_the_release_cannot_be_reached_is_plain(
 def test_a_server_that_answers_with_an_error_is_not_blamed_on_the_connection_alone(
     client, monkeypatch
 ):
-    monkeypatch.delenv(native_fetch.ASSETS_URL_ENV, raising=False)
-    info = native_fetch.download_info
+    monkeypatch.delenv(gaiacpp_fetch.ASSETS_URL_ENV, raising=False)
+    info = gaiacpp_fetch.download_info
     monkeypatch.setattr(
-        native_fetch, "download_info", lambda: info(_Answers(status=503))
+        gaiacpp_fetch, "download_info", lambda: info(_Answers(status=503))
     )
     gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
     assert "try again later" in gaiacpp["unavailable_reason"]
@@ -271,7 +271,7 @@ def test_a_server_that_answers_with_an_error_is_not_blamed_on_the_connection_alo
 
 
 def test_the_reason_shown_for_an_unverifiable_release_has_no_address(client, release):
-    (release / native_fetch.SUMS_NAME).write_text("", encoding="utf-8")
+    (release / gaiacpp_fetch.SUMS_NAME).write_text("", encoding="utf-8")
     gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
     reason = gaiacpp["unavailable_reason"]
     assert "can't be verified" in reason
