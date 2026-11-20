@@ -104,16 +104,15 @@ var toolPhrases = map[string]toolPhrase{
 	"fetch_url":     {With: "Reading %s", Without: "Fetching a page", Arg: "url"},
 	"download_file": {With: "Downloading %s", Without: "Downloading a file", Arg: "url"},
 
-	// Email
-	"pre_scan_inbox":  {Without: "Scanning your inbox"},
-	"list_inbox":      {Without: "Reading your inbox"},
-	"triage_inbox":    {Without: "Triaging your inbox"},
-	"get_message":     {With: "Opening message %s", Without: "Opening a message", Arg: "message_id"},
-	"triage_message":  {With: "Triaging message %s", Without: "Triaging a message", Arg: "message_id"},
-	"search_messages": {With: "Searching your mail for %s", Without: "Searching your mail", Arg: "query"},
+	// Mail
+	"list_inbox":   {Without: "Reading your inbox"},
+	"read_email":   {With: "Opening message %s", Without: "Opening a message", Arg: "message_id"},
+	"search_email": {With: "Searching your mail for %s", Without: "Searching your mail", Arg: "query"},
 
-	// Not a tool: the agent asking to reach a path outside the session.
-	"allow_path_access": {With: "Asking for access to %s", Without: "Asking for access to a location", Arg: "path"},
+	// Not tools: the agent checking in on a long turn, and asking to reach a
+	// path outside the session.
+	"continue_long_turn": {Without: "Asking whether to keep going"},
+	"allow_path_access":  {With: "Asking for access to %s", Without: "Asking for access to a location", Arg: "path"},
 
 	// Not a tool: the agent asking whether to read a folder's CLAUDE.md, AGENTS.md and skills.
 	"trust_project_folder": {With: "Asking to trust %s", Without: "Asking to trust this folder", Arg: "folder"},
@@ -159,6 +158,10 @@ func toolNarration(tool string, args json.RawMessage, narration string) string {
 func narrationFor(tool string, args json.RawMessage, narration string) string {
 	if n := clean(narration); n != "" {
 		return truncateRunes(unclipArg(n, args), narrationMax)
+	}
+
+	if line, ok := audioNarration(tool, args); ok {
+		return truncateRunes(line, narrationMax)
 	}
 
 	// The command is the narration — anything wrapped round it is noise.
@@ -221,7 +224,7 @@ func unclipArg(narration string, args json.RawMessage) string {
 
 // derivePhrase builds a phrase from the tool name when the table has no entry.
 // An unrecognised leading verb yields "Running <tool>" rather than a guess:
-// "Pre scan inbox" reads like a bug, "Running pre_scan_inbox" reads like a tool.
+// "Frob widget" reads like a bug, "Running frob_widget" reads like a tool.
 func derivePhrase(tool string) toolPhrase {
 	// The tool name goes into a Sprintf FORMAT string, so a literal "%" in it
 	// would be read as a verb: derivePhrase("get_100%_done") produced
@@ -497,6 +500,8 @@ func clean(s string) string {
 	if strings.ContainsRune(s, 0x1b) {
 		s = ansi.Strip(s)
 	}
+	// C1 controls and bidi overrides too: model text reaches every row here.
+	s = scrubDisplayControls(s)
 	s = strings.Map(func(r rune) rune {
 		switch {
 		case r == '\t' || r == '\n' || r == '\r':

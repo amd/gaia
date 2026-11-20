@@ -103,7 +103,7 @@ _REQUIRED_RECONFIGURE_MINOR = 5
 _CLIENTS_TIMEOUT = (2.0, 10.0)
 
 # Ensure: connect fast; read generously — a first-run ensure may lazily fetch the
-# sidecar binary before answering (mirrors gaia.ui.email_sidecar.daemon_client).
+# sidecar binary before answering (mirrors gaia.ui.sidecar.daemon_client).
 _ENSURE_TIMEOUT = (5.0, 900.0)
 # A cold start's health wait (60s) plus a start already in flight. Keep
 # gaiainit.CheckTimeout in the TUI above this plus daemon start (60s).

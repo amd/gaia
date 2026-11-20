@@ -267,7 +267,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package: call it with plain `fetch`. Contract version **2.29**; the stream is
+package: call it with plain `fetch`. Contract version **2.30**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -278,7 +278,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `run_id` | yes | **You mint it**, and it must be a UUID (non-UUID → 422). It is the cancel handle, valid from the instant the request is sent. |
 | `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. If it doesn't fit beside the agent's prompt and tools in the model's window, the agent keeps the newest whole turns that do and says so in a `status` event; one turn bigger than that is kept with its longest messages cut. |
 | `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. 1–128 characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a **400**. |
-| `documents` | no | Contract ≥ 2.16. Absolute paths of the files the user attached to this conversation — send the whole set **every turn**, an empty list when none are left. The agent indexes any it has not read yet before the turn runs, up to 100 documents or 10,000 passages (the rest are granted, named as not loaded in `index_documents`, and load when asked about by name), and stops searching any an earlier turn sent that this one leaves out, granting each exact file and not its folder. A relative path is a **422**. A missing file, a folder, or a refused secret is named as not indexed in the turn's `index_documents` step, and the turn still runs. |
+| `documents` | no | Contract ≥ 2.16. Absolute paths of the files the user attached to this conversation — send the whole set **every turn**, an empty list when none are left. The agent indexes any it has not read yet before the turn runs, up to 100 documents or 10,000 passages (the rest are granted, named as not loaded in `index_documents`, and load when asked about by name), and stops searching and reading any an earlier turn sent that this one leaves out (a folder the caller granted still covers its files), granting each exact file and not its folder. A relative path is a **422**. A missing file, a folder, or a refused secret is named as not indexed in the turn's `index_documents` step, and the turn still runs. |
 | `allowed_paths` | no | Contract ≥ 2.18. Absolute folder or file paths the conversation may read — the scope your UI shows. A new session gets exactly this scope; a retained session adds any entry it lacks and never drops one until the session ends. `GAIA_ALLOWED_PATHS` still narrows it. A relative path is a **422**. Omit it for the agent's default scope. |
 | `working_directory` | no | Contract ≥ 2.24. Absolute chat workspace used to resolve relative file paths for reads, writes, edits and approval prompts. It is separate from `allowed_paths`; a relative path is a **422**. Send the same folder the UI shows. |
 | `memory` | no | Contract ≥ 2.18. `"on"`, `"private"` or `"off"`. Under `"private"` or `"off"` the turn saves nothing to memory, including errors and lessons the agent saves on its own. A retained session keeps the last value: send it every turn. |
@@ -351,7 +351,7 @@ The canonical event shapes, as emitted:
 | `tool_call` | `{ type, tool, args, mcp_server?, mcp_server_label?, mcp_tool? }` — an MCP tool names its connector (`mcp_server_label`, e.g. `"Git"`) and the server's own tool name (`mcp_tool`, e.g. `"git_log"`); label the call with those, not the prefixed `tool` |
 | `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`); a `search_web` result lists its hits in `data.sources` (`[{ title, url }]`); `render` names the card to draw — `guide` for the bundled `guides` skill's tools, `calculator` for the `calculators` skill's — and a host without a renderer for a key draws its generic result card |
 | `context_usage` | `{ type, window, used, turns_in_view, turns_hidden, ... }`: the context meter, not terminal. A request that sent `turns` gets it before the answer (contract ≥ 2.28), so the meter fills during a long turn; `final.context` follows with the loaded model's own count |
-| `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) and `file_path` (the absolute path a write lands at, when the model gave a relative one) |
+| `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) `file_path` (the absolute path a write lands at, when the model gave a relative one) and `script` (for `execute_python_file`, the file as read when the prompt was built: `{ text, hidden_lines }`, or `{ unreadable }` saying why there is none; show it, and expect an error instead of a run if the file changes before it starts) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
 | `final` | `{ type, answer, usage?, failed?, failure?, context?, context_error?, performance?, model_messages?, route? }` — terminal. `route` (contract ≥ 2.29, `hybrid` sessions only): the turn's routing decision; `route.model` is the model it ran on, so bill and label by it. `failed: true`: the turn did not complete (a model call broke, or a gated tool was refused on a run nobody can answer) and `answer` says what was and wasn't done; show it as an error, not a result. `failure: "model_server_down"`: the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
 | `error` | `{ type, detail, status }` — terminal, surface `detail` verbatim |
@@ -446,6 +446,11 @@ alone does not tell you whether a call will ask. `browser_login` always asks.
 run signed in to, or when the target element's label reads irreversible, and
 run unasked on the open web. The hook **fails closed**: if the browser cannot
 be asked what state it is in, the call is treated as authenticated and prompts.
+In GAIA desktop's browser pane the same hook gates the bundled `browser-pane`
+skill's tools: they ask before a site not yet approved, a control that may not
+be undoable, or starting a dev server (`browser-pane/dev_server`, which runs
+code), and **`browser-pane/browser_eval`** is marked `requires_confirmation`
+and asks every time.
 Design a workflow around the approval path, not around a fixed tool list.
 
 **Contract ≥ 2.14 can answer one.** Send a `session_id` and leave
@@ -478,7 +483,8 @@ is `pytest` on one call and `rm -rf` on the next. `always` grants the family
 named in `always_scope` for the rest of the session (`pytest` covers every
 spelling of a test run) — say so in your UI, because it stops asking; no
 `always_scope` means don't offer it. `always_label` (when present) says the same
-grant in plain words, e.g. `editing notes.md`. If your prompt expires unanswered, send
+grant in plain words, e.g. `editing notes.md`. Both arrive with any hidden or
+reordering character in the name written as `[U+XXXX]`, so show them as sent. If your prompt expires unanswered, send
 `timeout`, not `deny`: it still refuses, but the agent tells the user the
 request timed out instead of claiming they said no. Unknown run → **404**; a
 prompt that is no longer pending → **409**; any other decision → **422**. All loud,
@@ -522,20 +528,29 @@ included. `category` is a tool-mixin name (`rag`, `file_io`, `shell`, ...),
 `mcp`, `skill`, or `agent` for a tool the agent defines itself. An unknown
 session is a **404**: send a query on it first.
 
-**That bypass stops the prompts; it does not open the shell.** The stdio
-transport's `--full-access` does both — it runs gated tools unasked *and*
-lifts the shell tool's guardrails (redirection and the other shell-only
-operators, the read-only binary allowlist, the rate limit). That second half is
-arbitrary code execution, appropriate for one local parent on a private pipe and
-not for a bound socket, so it stays on stdio: HTTP sessions never lift the shell
-gates, and the request body rejects unknown fields so a client cannot ask. See
-SPEC §5.5.
+**Contract ≥ 2.30 ends a session** when your user deletes the conversation, so
+its agent and the MCP servers it started stop now instead of when the session
+idles out (hours later):
 
-So a shell command past those gates (a delete, `git add`) is never run unasked
-under bypass. On a run someone can answer (`can_answer_questions` not `false`,
-with a `session_id`) it emits `needs_confirmation` and waits for
-`/tool_decision`, exactly as with bypass off; commands that need no approval
-still run unasked. A run nobody can answer refuses it, as below.
+```
+DELETE /v1/gaia/sessions/{session_id}   → { session_id, deleted: true }
+```
+
+An unknown session is a **404**. One running a turn is a **409**: cancel the
+run, then delete again.
+
+**That bypass is full access: it stops the prompts and opens the shell.** It
+is the same mode as the stdio transport's `--full-access`. Gated tools run
+unasked, `run_shell_command` runs any command (a delete, `git add`, a program
+by its full path, redirection, loops), and `run_python` runs its code
+unchecked. That is arbitrary code execution with the user's account, so turn it
+on only when the person asked for it. A sidecar started without a caller-auth
+token refuses to turn it on (**403**). The query body rejects unknown fields, so
+a client cannot ask for it there. See SPEC §5.5.
+
+With bypass off, a shell command past the gates (a delete, `git add`) emits
+`needs_confirmation` on a run someone can answer (`can_answer_questions` not
+`false`, with a `session_id`) and waits for `/tool_decision`.
 
 **A run nobody can answer is still refused.** With `can_answer_questions: false`,
 or with no `session_id`, the server emits `needs_confirmation`, follows it
@@ -592,7 +607,9 @@ the conversation's scope without that extra prompt, but still cannot widen this
 environment-level restriction. The scratch directory stays writable. An empty,
 relative or missing entry stops the sidecar at startup. It confines the agent's
 tools, not code they run: a `run_python` script or shell command can still read
-anything the OS user can, so isolating a run from files it must not see needs a
+anything the OS user can (code whose text names a credential folder or file is refused before it runs,
+a credential file only when the code reads it, but code that works a path out while it runs is not
+caught), so isolating a run from files it must not see needs a
 separate OS user, container or VM. Embedding `GaiaAgent` lets you pass an explicit
 list instead (the variable still narrows it):
 
@@ -612,7 +629,9 @@ but none ship today — see below.
 Some bundled skills ship tools as well as a playbook. `guides` and
 `calculators` draw recipe, workout, how-to, checklist, itinerary, tip and loan
 cards; their tools (`guides/show_recipe`, `calculators/show_loan_calculator`, …)
-join the tool list only once the skill loads, so they are not in the 106.
+join the tool list only once the skill loads, so they are not in the 106. So
+do the nine `browser-pane` tools, and that skill is offered only in a chat open
+in GAIA desktop with the browser pane.
 
 Loaded skills are **not** all resident every turn: each turn the agent embeds
 the query against every loaded skill's description and renders only the
@@ -644,8 +663,7 @@ is enforced only when the request itself names a source document or asks for
 every item, and a file the user named as a deliverable is never a source.
 
 **No skill *set* loads.** `gaia-agent.yaml` ships its `skill_sets:` and
-`default_skill_set:` blocks **commented out** — following the email agent's
-precedent, because loading several skill bodies into every prompt costs tokens
+`default_skill_set:` blocks **commented out**, because loading several skill bodies into every prompt costs tokens
 and no eval has measured that trade for this agent yet. Re-enabling is
 uncommenting two blocks; no code change.
 
@@ -728,6 +746,13 @@ There is no silent null.
 
 ## Gotchas — read before debugging
 
+- **Mail needs a connector, and every send asks first.** The agent reads Gmail
+  or Outlook through eight read-only tools plus the `inbox-triage` skill once
+  the Google or Microsoft connector is connected and granted to it, and drafts
+  and sends through the `send-email` skill, which prompts before anything
+  leaves the mailbox. It never archives, labels or deletes received mail,
+  Gemma 4 E4B is not offered the mail tools, and there is no separate email
+  agent to call. See the README's Email section.
 - **`/health` green ≠ ready.** It never touches the model server. Use
   `GET /v1/gaia/init` and branch on `.ready`; it returns 503 with a full body and
   a `hint`, not an empty error.
@@ -764,7 +789,7 @@ There is no silent null.
   temp dir) is dropped, and a **shared** bin directory is moved to the end
   instead of removed, so the `python3` / `lemonade-server` / real `gaia` beside
   it stay reachable. If the Python CLI isn't installed anywhere, the daemon never
-  comes up. It must also be **0.26.0+**: an older core's daemon starts fine but
+  comes up. It must also be **0.27.0+**: an older core's daemon starts fine but
   cannot run this agent, which reads as a UI with a dead agent rather than as
   a version problem.
 - **The TUI is installed as `gaia-cli`, never `gaia`** — the terminal-hub artifact
@@ -795,7 +820,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.29","agentVersion":"0.3.5"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.30","agentVersion":"0.3.5"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \

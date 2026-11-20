@@ -370,3 +370,32 @@ class TestScheduleStoreProtocol:
 
     def test_reexport_is_concrete_store(self):
         assert ReexportedTomlStore is TomlScheduleStore
+
+
+def test_reads_never_fail_while_another_thread_saves(tmp_path):
+    """Readers skip the store lock; a save's rename must never fail them."""
+    store = TomlScheduleStore(tmp_path / "schedules.toml")
+    store.add(Schedule(name="x", cron="0 9 * * *", prompt="hi"))
+    stop = threading.Event()
+    writer_errors = []
+
+    def keep_saving():
+        flip = False
+        while not stop.is_set():
+            flip = not flip
+            try:
+                store.set_enabled("x", flip)
+            except Exception as e:  # pylint: disable=broad-except
+                writer_errors.append(e)
+                return
+
+    writer = threading.Thread(target=keep_saving)
+    writer.start()
+    try:
+        for _ in range(1500):
+            assert set(store.load()) == {"x"}
+            assert store.get("x").prompt == "hi"
+    finally:
+        stop.set()
+        writer.join()
+    assert writer_errors == []

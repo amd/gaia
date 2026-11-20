@@ -6,9 +6,10 @@
 # a broken page (type error, failed Astro build) reached main and only failed at
 # deploy time. This runs on every PR that touches website/.
 #
-# The download links are built from the newest stable GitHub release (no
-# bundled fixture fallback — see website/src/data/github.ts), exactly like the
-# Railway production build.
+# PR builds read tests/fixtures/github/releases.json instead of the live
+# releases API, so a shared hourly GitHub API quota cannot fail validation.
+# Main builds leave the fixture unset and fetch live, exactly like the Railway
+# production build. See website/src/data/github.ts.
 
 name: Website CI
 
@@ -34,6 +35,7 @@ on:
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/publish.yml'
       - '.github/workflows/website-ci.yml'
+      - 'tests/fixtures/github/releases.json'
   push:
     branches: [main]
     paths:
@@ -45,6 +47,7 @@ on:
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/publish.yml'
       - '.github/workflows/website-ci.yml'
+      - 'tests/fixtures/github/releases.json'
 
 permissions:
   contents: read
@@ -86,7 +89,16 @@ jobs:
       - name: Unit tests (vitest)
         run: npm test
 
+      # PR builds use the checked-in fixture, so they do not touch the live
+      # releases API or spend the workflow token's hourly quota. Main builds
+      # leave GAIA_GITHUB_FIXTURE empty and fetch live. Retries stay opt-in for
+      # live API reads and cannot refill a shared hourly quota; they only ride
+      # out a transient 403. Both are step-level so `npm test` keeps the default
+      # of no retries.
       - name: Build (astro build)
+        env:
+          GITHUB_FETCH_RETRIES: ${{ github.event_name != 'pull_request' && '3' || '' }}
+          GAIA_GITHUB_FIXTURE: ${{ github.event_name == 'pull_request' && format('{0}/tests/fixtures/github/releases.json', github.workspace) || '' }}
         run: npx astro build
 
       # Production's start command was previously never exercised by CI, so a

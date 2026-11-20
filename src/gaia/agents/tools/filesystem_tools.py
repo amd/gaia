@@ -987,6 +987,7 @@ class FileSystemToolsMixin:
                 # One allowance for the whole call, well under the tool timeout.
                 budget = SearchBudget()
                 skipped = [0]
+                searched = []
 
                 for root_path in search_roots:
                     if len(results) >= max_results:
@@ -998,6 +999,7 @@ class FileSystemToolsMixin:
                     if budget.exhausted():
                         budget.unfinished(root)
                         continue
+                    searched.append(str(root))
                     # A workspace scope takes its depth from the shared policy,
                     # so this tool and ``search_file`` cannot disagree on how
                     # deep the project is. An explicit scope was named by the
@@ -1088,6 +1090,21 @@ class FileSystemToolsMixin:
                         )
                     else:
                         found_none = f"No files found matching '{query}'."
+                    # Only a completed scan may tell the model not to repeat it.
+                    finished = [r for r in searched if r not in budget.unfinished_paths]
+                    if budget.truncated:
+                        if finished:
+                            found_none += f" Finished searching: {', '.join(finished)}."
+                    elif searched:
+                        found_none += (
+                            f" Searched: {', '.join(searched)}. Repeating this "
+                            "search will not find it; try another scope or ask "
+                            "the user where the file is."
+                        )
+                    else:
+                        found_none += (
+                            f" No folder in scope '{scope}' could be searched."
+                        )
                     return (
                         f"{found_none} {skipped_note}".rstrip()
                         + skip_note

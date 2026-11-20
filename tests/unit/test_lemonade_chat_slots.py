@@ -63,6 +63,13 @@ def test_a_llamacpp_chat_load_gets_three_slots_and_no_ram_cache(client):
         assert flag in sent["llamacpp_args"]
 
 
+def test_the_load_limits_context_checkpoints():
+    # llama.cpp's default of 32 per slot let a long chat grow the server by
+    # 0.6 GB (Gemma-4-E4B) to 2 GB (Qwen3.6-35B) of host RAM.
+    flags = CHAT_LLAMACPP_ARGS.split()
+    assert 0 < int(flags[flags.index("--ctx-checkpoints") + 1]) < 32
+
+
 def test_the_load_has_a_slot_for_every_pinned_request():
     # llama.cpp defers a request for a slot it lacks until the caller gives up.
     flags = CHAT_LLAMACPP_ARGS.split()

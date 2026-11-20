@@ -7,7 +7,8 @@ code spells out — files it reads or changes, folders it lists, and where any
 link it makes points — are held to the allowed folders the file tools use,
 after following links. A path the code only works out when it runs is beyond
 this check, except a link's target: a link nobody can see the end of is refused.
-An outside file or folder is asked about first, as read_file asks.
+An outside file or folder is asked about first, as read_file asks. Full access
+skips the check: the code runs as written.
 """
 
 from __future__ import annotations
@@ -204,8 +205,8 @@ def _outside_message(validator: Any, how: str, path: str, real: str, final: str)
     )
     if final:
         return (
-            f"{where} It is a protected location: no approval or full access lifts "
-            "this, so tell the user it was not done."
+            f"{where} It is a protected location: no approval lifts this, so "
+            "tell the user it was not done."
         )
     declined = getattr(validator, "_declined_by_user", None)
     if how != LINK and callable(declined) and declined(real):

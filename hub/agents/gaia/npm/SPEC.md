@@ -71,8 +71,8 @@ both components. That stopped being true once the TUI became the published
 versions. A shared base URL cannot express that, so `2.x` is rejected at load with
 an error naming the schema — never read as `3.x` with a missing field.
 
-The email agent's lock is `schemaVersion` `1.0`, a flat `binaries` map, because it
-delivers one binary from one lane. A `1.x`-shaped lock is likewise rejected.
+A `1.x`-shaped lock (a flat `binaries` map, one binary from one lane) is likewise
+rejected.
 
 ### 2.2 Where each component comes from
 
@@ -261,7 +261,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.29"`                  |
+| Contract version   | `API_VERSION = "2.30"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -278,11 +278,12 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
-| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14), and on a run the caller can answer, grant out-of-scope paths unasked (still inside `GAIA_ALLOWED_PATHS`); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
+| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Turn full access on or off for one session (≥ 2.14): gated tools run unasked, the shell runs any command and Python runs any code. On a run the caller can answer, the file tools are granted out-of-scope paths unasked (still inside `GAIA_ALLOWED_PATHS`) |
 | `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.23) |
 | `GET`  | `/v1/gaia/sessions/{session_id}/grants` | The session's "always" answers, `{ key, label }` each (≥ 2.26) |
 | `DELETE` | `/v1/gaia/sessions/{session_id}/grants` | Revoke one (`?key=`) or all of them (≥ 2.26) |
 | `GET`  | `/v1/gaia/sessions/{session_id}/tools` | The tools the session's agent can call now, `{ name, description, category }` each; an unknown session is a `404` (≥ 2.27) |
+| `DELETE` | `/v1/gaia/sessions/{session_id}` | End the session: close its agent and stop the MCP servers it started. An unknown session is a `404`; one running a turn is a `409` (≥ 2.30) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 #### `/query` request body
@@ -291,8 +292,7 @@ The full, machine-readable contract — every field, type, and which are
 required — is the committed
 [`openapi.gaia.json`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/openapi.gaia.json),
 regenerated from the live routes by `python -m gaia_agent.export_openapi` and
-checked for drift in CI — the same pattern as the email agent's own
-`openapi.email.json`. Required: **`query`**, **`run_id`**,
+checked for drift in CI. Required: **`query`**, **`run_id`**,
 **`context`** — `additionalProperties: false`, so an unrecognized field or a
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
@@ -321,7 +321,7 @@ attached to the conversation. Send the whole set on every turn. Before the turn
 runs, the agent indexes the ones it has not indexed yet, so a file attached
 mid-conversation is read on the next turn, and drops from the session's index
 any file an earlier turn sent that this one leaves out, so a detached or deleted
-file is no longer searched. Send an empty list when none are attached. A conversation searches at most 100 documents or 10,000 passages at once: past that the rest are granted but not loaded, the `index_documents` step says how many and which limit was reached, and the agent loads one when asked about it by name. Each path is granted as that exact
+file is no longer searched. Its grant goes with it, so it can no longer be read either, unless a folder the caller granted holds it. Send an empty list when none are attached. A conversation searches at most 100 documents or 10,000 passages at once: past that the rest are granted but not loaded, the `index_documents` step says how many and which limit was reached, and the agent loads one when asked about it by name. Each path is granted as that exact
 file, never its folder. A relative path is a `422`. A missing file, a folder, or
 a secret the path policy refuses is reported as not indexed in the turn's
 `index_documents` step, and the turn still runs. Pre-2.16 binaries `422` the
@@ -477,7 +477,15 @@ its own prompt is in `prompt_context`: `working_directory` (where a shell call
 runs, when the model's arguments don't say it), `risk_note` (why the
 agent's checks don't cover the call, which is then approved once) and
 `file_path` (the absolute path a write lands at, when the model gave a relative
-one). A prompt
+one) and `script` (for `execute_python_file`, the file's content as read when
+the prompt was built: `{ text, hidden_lines }` with up to 400 lines or 48,000
+characters and a count of the lines left out, or `{ unreadable }`, one of
+`missing`, `not_text`, `too_large`, `unreadable`). Show `script` to the user:
+the path alone does not say what will run. A credential file, or a path no
+approval can grant, never reaches a prompt: the call is refused first and the
+file is not opened. A file that changes after the
+prompt was built is not run; the call returns an error and the agent asks
+again. A prompt
 the agent raises on its own, such as `allow_path_access`, has the path it asks
 about in `args`.
 
@@ -590,6 +598,12 @@ naming the allowed characters, on `/query`, `/sessions/{session_id}/bypass` and
 Omitting it is a valid, explicit one-shot: nothing persists past that single
 turn, and the agent is not told otherwise.
 
+A retained session rebuilds its agent at the start of its next turn when the
+Lemonade Server or the embedder chosen in Settings changed, or an MCP connector
+was turned on or off or (de)activated for GAIA, since it was built. The rebuilt
+agent keeps the conversation, loaded skills, the internet switch, the memory
+mode, granted folders and documents, and the working folder.
+
 Internal explicit deletion follows the same idle-only rule as eviction: it returns
 `False` for an absent or busy session and preserves a running agent. Successful
 deletion claims the turn lock before removal and closes outside the registry lock.
@@ -607,6 +621,15 @@ collapses the rest to a one-line menu entry (re-activated by calling
 `load_skill` again). `GAIA_DYNAMIC_SKILLS=0` disables the selection;
 `GAIA_DYNAMIC_SKILLS_TAU=<float>` overrides its threshold; an embedder outage
 disables it for the session and every body renders.
+
+A query that starts with `/<skill-name>`, where the name is an installed skill,
+runs on that skill, as in Claude Code: the agent loads it exactly as
+`load_skill` would (same gates, same refusals), keeps its body in the prompt for
+the turn, and sends the model the rest of the line as the request. Host notes in
+front of the line (one `[…]` line each, then a blank line) are kept. Anything
+else, such as `/tmp/notes.txt`, is sent unchanged. A load that is refused is
+reported to the user with its fix, and the request is not attempted. This holds
+on `/v1/gaia/query`, over stdio and in `process_query`.
 
 A retained session also carries a **project map** — up to 600 prompt tokens of
 directory shape, entry points, installed commands and platform quirks, present
@@ -732,11 +755,16 @@ files; a `.env` file cannot set that switch itself.
 environment the sidecar starts in — absolute folders joined with `;` on
 Windows and `:` elsewhere. The scope becomes the overlap with the agent's own scope;
 an entry outside it is ignored with a warning and never widens it. Out-of-scope
-paths are refused without a prompt in every mode, including full access. The
+paths are refused without a prompt in every mode, including full access, for
+the file tools. The
 scratch directory stays writable. An empty, relative or missing entry stops
 the sidecar at startup, before it binds a port. It confines the agent's tools
-— every file tool, search, index and shell path check — not code they run: a
-`run_python` script or shell command can still read anything the OS user can,
+— every file tool, search, index, and the shell path check outside full access
+— not code they run: under full access the shell and Python tools run in any
+folder, and a `run_python` script or shell command can always read anything the OS user can
+(outside full access, code whose text names a credential folder or file is refused before it runs,
+a credential file only when the code reads it,
+but code that works a path out while it runs is not caught),
 so isolating a run from files it must not see needs a separate OS user,
 container or VM.
 
@@ -755,12 +783,20 @@ a JSON line carrying a `gaia_control` key: a back-channel that answers a
 confirmation prompt *while* a turn is in flight, toggles full access or
 "accept edits" (file edits inside the starting folder run unasked; commands still
 ask), and stops a turn (`cancel`) without ending the process — so loaded skills,
-"always" grants, history and the permission mode survive a cancel. When stdin
+"always" grants, history and the permission mode survive a cancel. Clearing the
+conversation (the `clear_conversation` query or the `clear_history` control) drops
+its "always" grants with its history; full access and loaded skills stay. When stdin
 closes mid-turn (the host has gone), the running turn is cancelled and saved in
 the session history as interrupted: "This answer was interrupted when GAIA
 closed." The question is saved when the turn starts, so it survives even if the
 host kills the process before the turn ends. Another process sharing the
 history file leaves a turn that is still running out of its model view.
+
+Over stdio, a recorded turn is followed by the same `context_usage` event,
+measured for the next message, so the terminal UI's context meter moves with
+every answer; and a turn that runs a plan sends it on a `status` as
+`plan: {steps, current_step}`. Both are in §10.3 of
+`docs/spec/agent-ui-query-sse-contract.md`.
 
 Contract 2.14 gave the HTTP surface the same three capabilities per run and per
 session — `/tool_decision`, `/sessions/{id}/bypass` (the route keeps its
@@ -772,7 +808,8 @@ of the process (embeddings stay on Lemonade either way).
 Sessions a host can list and reopen are stdio-only too: `--history-file` plus
 `--session-kind` keeps the session's title, status (`running`, `waiting` on a
 permission prompt, `done`, `failed`) and a readable transcript beside the
-transcript file. The terminal UI's `/sessions` and `--resume` read it. The
+transcript file. The terminal UI's `/sessions` and `--resume` read it, and
+reopen a session in a new process, so it starts with no "always" grants. The
 layout is §10.4 of `docs/spec/agent-ui-query-sse-contract.md`.
 
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
@@ -802,42 +839,39 @@ changed since its preview is refused, and each preview covers one add — to
 `~/.gaia/skills` at the `experimental` tier and recomposes the prompt so
 the session can use them. Skills that ship code are refused unless the line
 carries `--allow-code`. Each command ends in exactly one `final` or `error` event.
+Bare `/skills`, a successful add and the model-state status ping each carry
+`skills: [{name, description}]`, the installed skills the TUI's `/` palette
+offers as `/<skill-name>`; an agent without the skill library sends `[]`.
 The TUI's `/provider` panel configures credentials directly with local Lemonade;
 keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model
 remotely, so a local server URL alone does not establish local inference.
 
-`--full-access` turns off more than the prompt. It also lifts the shell
-tool's own guardrails for the session: the shell-only operators — redirection
-(`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`) and the
-newline — parse and run, chaining (`&&`, `||`, `;`, `|`) already ran by
-default, the read-only binary allowlist is replaced by a developer set
-(`node`, `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`,
-`timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`/`git`,
-which already had their own paths), and the shell rate limit is dropped. `git`
-being in that set means the policy that holds `git push`, `git reset` and
-`git rebase` also stops applying under bypass. Without bypass those commands ask
-the user once, and are refused only on a run nobody can answer; the destructive
-forms (`git push --force`, `git reset --hard`) are refused with no prompt. That is
-arbitrary code execution in the working directory, which is why it exists only
-on this transport: one local parent process on a private pipe. It is **not**
-reachable over HTTP, and the request body cannot ask for it —
-`POST /v1/gaia/sessions/{id}/bypass` stops an HTTP session's approval prompts
-but never lifts these shell gates. A command those gates hold is never run
-unasked there: on a run someone can answer it still emits `needs_confirmation`
-and waits for `/tool_decision`, and on a run nobody can answer it is refused.
-`rm` is excluded
-from the developer set — not a boundary, since anything in the set can delete a
-file, but a tripwire against an accidental recursive delete. Redirection has one
-exception: a command that is nothing but a skill-granted CLI runs argv-only
-rather than through a shell, so a `>` there is refused with an explanation
-instead of reaching the binary as a literal argument.
+`--full-access` turns off more than the prompt. It also lifts every guardrail
+of the shell and Python tools for the session. The shell runs any program, by
+name or by full path, `rm`, `rmdir` and `del` included: there is no command
+list. The line goes to a shell (`sh`, or `cmd.exe` on Windows), so redirection
+(`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`), loops,
+conditions and several lines all run. No working folder, `cd`, path argument,
+link, credential file, package install or address is refused, the shell rate
+limit is dropped, and `run_python` / `execute_python_file` run their code
+unchecked. A refusal GAIA made by itself is not kept against later calls. What
+still holds: a call the user declined stays declined for that request, calendar
+changes and outgoing mail wait for a person, and a program that is not
+installed fails with the shell's own error. Without full access those commands
+ask the user once, or are refused on a run nobody can answer.
+
+That is arbitrary code execution with the user's account.
+`POST /v1/gaia/sessions/{id}/bypass` turns the same mode on for an HTTP
+session, so guard that route: it is behind the caller-auth token like the rest
+of the API, and a sidecar started without a token refuses to turn it on (`403`). A request with no `session_id` has no mode and never gets it, and
+the query body cannot ask for it.
 
 Every shell command run under bypass is recorded with its full arguments and its
 per-segment breakdown in `~/.gaia/cache/file_audit.log` — skipping the prompt
 does not skip the record. Treat that file as sensitive; arguments are verbatim.
-The host can toggle bypass mid-session over `gaia_control`, and the shell gates
-follow on the very next command.
+The host can toggle full access mid-session over `gaia_control`, and the shell
+follows on the very next command.
 
 `--use-claude` is the one with a reach beyond the machine, and it cannot be
 turned on for what this package delivers: the terminal UI **refuses** the launch
@@ -884,6 +918,18 @@ demonstrably saw.
 
 Clients that predate 2.15 get a `404` on the path itself. Probe `/version`
 before sending rather than reading a 404 as "the run ended".
+
+### 5.7 Mail
+
+Mail goes through the same `/query` route; there is no mail-specific endpoint
+and no separate email sidecar. The agent's eight mail tools are read-only
+(list, search, read, thread, folders, waiting-on-you, mailbox state) and need
+the Google or Microsoft connector connected and granted to the agent. Drafting
+and sending come from the bundled `send-email` skill, whose tools join the
+list as `send-email/<tool>` once it loads; each send, and each change to a
+saved draft, raises a `needs_confirmation` first. A model on the `compact`
+feature tier (Gemma 4 E4B) is offered neither. Setup:
+[Email guide](https://amd-gaia.ai/docs/guides/email).
 
 ## 6. Process ownership
 

@@ -112,14 +112,15 @@ _EXPECTED_REST_OP_NAMES = {
     "sessions/{session_id}/internet",
     "sessions/{session_id}/grants",
     "sessions/{session_id}/tools",
+    "sessions/{session_id}",
     "memory",
     "skills",
 }
 # One per route method: sessions/{session_id}/grants is both GET and DELETE.
-_EXPECTED_REST_FUNCTIONAL_COUNT = 12
+_EXPECTED_REST_FUNCTIONAL_COUNT = 13
 # + the init readiness probe and the three liveness/version probes
 # (/health, /version, /v1/gaia/version).
-_EXPECTED_REST_IN_CONTRACT_COUNT = 16
+_EXPECTED_REST_IN_CONTRACT_COUNT = 17
 
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 
@@ -284,6 +285,7 @@ def test_eval_surface_state_is_derived_not_asserted(matrix):
         "gaia_shell",
         "gaia_skills_capture",
         "gaia_skills_lifecycle",
+        "gaia_skills_selection",
         "gaia_skills_tasks",
         "gaia_tool_selection",
         "gaia_voice",

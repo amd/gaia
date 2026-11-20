@@ -285,6 +285,8 @@ const std::map<std::string, std::set<std::string>>& domainLevels() {
         {"filesystem", {"read", "write", "none"}},
         {"mcp",        {"connect", "none"}},
         {"network",    {"read", "write", "none"}},
+        {"program",    {"run", "none"}},
+        {"scratch",    {"write", "none"}},
         {"shell",      {"execute", "none"}},
     };
     return kLevels;
@@ -344,6 +346,21 @@ void validatePermission(const std::string& raw, const std::string& skillName) {
             " does not define. Valid levels for " + pyRepr(domain) + ": " +
             sortedLevels(domain) + ". Grammar: " + FORMAT_DOCS_URL +
             "#permission-model");
+    }
+
+    const std::string scope =
+        secondColon == std::string::npos ? std::string() : stripWhitespace(trimmed.substr(secondColon + 1));
+    if (domain == "program" && level == "run" && scope.empty()) {
+        throw SkillValidationError(
+            "Skill '" + skillName + "' declares " + pyRepr(raw) +
+            " without naming the program. Scope it to the one executable its code runs, e.g. "
+            "'program:run:soffice'. Grammar: " + FORMAT_DOCS_URL + "#permission-model");
+    }
+    if (domain == "scratch" && !scope.empty()) {
+        throw SkillValidationError(
+            "Skill '" + skillName + "' declares " + pyRepr(raw) +
+            "; 'scratch' takes no scope. The folder is a fresh temporary one per tool call. "
+            "Declare 'scratch:write'. Grammar: " + FORMAT_DOCS_URL + "#permission-model");
     }
 }
 
@@ -949,7 +966,8 @@ void validateSkill(const Skill& skill, const std::string& source) {
         R"((?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))"
         R"((?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?)"
         R"((?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$)");
-    if (skill.version && !std::regex_match(*skill.version, kSemver)) {
+    // std::regex recurses once per character, so an absurdly long version is refused before it is matched.
+    if (skill.version && (skill.version->size() > 256 || !std::regex_match(*skill.version, kSemver))) {
         throw SkillValidationError(
             source + ": version " + pyRepr(*skill.version) +
             " is not valid SemVer. Use MAJOR.MINOR.PATCH (e.g. '1.0.0'); omit the "
