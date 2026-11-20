@@ -1796,12 +1796,9 @@ async def query(request: QueryRequest):
         _require_valid_session_id(request.session_id)
 
     handler = SSEOutputHandler()
-    # Bypass permissions are a stdio-transport affordance and must stay one
-    # (#3373). The stdio parent is one local process on a private pipe; this
-    # endpoint is a bound socket, and an unguarded shell reachable over it is
-    # remote code execution rather than a relaxed permission model. There is no
-    # request field that could ask for it — this pins that, so adding one
-    # without also revisiting the reasoning fails a test instead of shipping.
+    # Full access belongs to a session, set through /sessions/{id}/bypass
+    # (#3373). There is no request field that could ask for it — this pins
+    # that, so a query with no session never runs with it.
     handler.full_access = False
     session = None
     #: Set only on the one-shot path. A session agent belongs to the registry
@@ -2454,7 +2451,10 @@ async def tool_decision(run_id: str, body: ToolDecisionRequest):
 
 @router.post("/sessions/{session_id}/bypass", response_model=BypassResponse)
 async def set_bypass(session_id: str, body: BypassRequest):
-    """Turn unattended tool approval on or off for a session.
+    """Turn full access on or off for a session.
+
+    On, gated tools run unasked, the shell runs any command and Python runs any
+    code, as with the stdio transport's ``--full-access``.
 
     Session-scoped rather than run-scoped because it must outlive any one turn —
     that is the whole point of bypass — and it takes effect on the very next
@@ -2465,6 +2465,19 @@ async def set_bypass(session_id: str, body: BypassRequest):
     against a typo'd session id.
     """
     _require_valid_session_id(session_id)
+    auth = caller_auth.get_config()
+    if body.enabled and auth is not None and not auth.token:
+        # Full access is an unrestricted shell: never hand it to a caller this
+        # server cannot tell apart from any other local process.
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Full access needs caller authentication, and this sidecar was "
+                "started without a token. Start it through the GAIA daemon or "
+                f"the Agent UI, or set {caller_auth.TOKEN_FILE_ENV_VAR} (or "
+                f"{caller_auth.TOKEN_ENV_VAR}) before starting it."
+            ),
+        )
     session = session_registry.get(session_id)
     if session is None:
         raise HTTPException(

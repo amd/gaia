@@ -104,7 +104,7 @@ def python_credential_refusal(
 ) -> Optional[Dict[str, Any]]:
     """The hard refusal for a Python call that reads a credential file, or None.
 
-    No tier: neither an approval nor full access lifts it.
+    No tier: no approval lifts it. Full access never reaches it.
     """
     key = PYTHON_TOOLS.get(tool_name)
     value = (tool_args or {}).get(key) if key else None
@@ -123,8 +123,8 @@ def python_credential_refusal(
         "status": "error",
         "error": (
             f"Not run: this Python code reads '{found}', which holds credentials, "
-            "keys or secrets. Python tools may not read it, even with full access "
-            "or after approval. Ask the user to open the file themselves."
+            "keys or secrets. Python tools may not read it, even after approval. "
+            "Ask the user to open the file themselves."
         ),
         "has_errors": True,
     }
