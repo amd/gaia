@@ -194,6 +194,24 @@ func TestWithNoChoiceThePythonAgentRunsBesideAnInstalledGaiacpp(t *testing.T) {
 	}
 }
 
+// gaiapy is what the saved choice and /agent call the Python agent, so
+// --agent-program and GAIA_TUI_AGENT take that name too.
+func TestGaiapyNamesThePythonAgent(t *testing.T) {
+	f := isolateNative(t)
+	python := writeProgram(t, f.path, PythonAgentBinary)
+
+	for _, name := range []string{PythonAgentChoice, "GaiaPy"} {
+		c := NewCatalog()
+		if err := selectAgent(c, name); err != nil {
+			t.Fatalf("%s was refused as an agent program: %v", name, err)
+		}
+		got := c.Get(FlagshipID)
+		if got.Native || len(got.BinaryArgs) != 0 || !samePath(t, got.BinaryPath, python) {
+			t.Errorf("asking for %s did not run %s bare: %+v", name, PythonAgentBinary, got)
+		}
+	}
+}
+
 // An install record can put the flagship behind the daemon, which runs the
 // Python agent. gaiacpp is spawned by the terminal UI itself, so picking it has
 // to bring the entry back to the subprocess transport, or it would be marked

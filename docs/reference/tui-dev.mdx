@@ -98,7 +98,7 @@ a reopened one, the two cases a `gaiacpp` launch refuses on the command line.
 |---|---|
 | `gaiacpp` | The first `gaiacpp` in the five places above, then `cpp/build/Debug`, `cpp/build/Release` and `cpp/build` in the working directory and up to seven folders above it |
 | A path to `gaiacpp` | That file. It counts as `gaiacpp` when it is named `gaiacpp` or `gaiacpp-<platform>`, as the release assets are |
-| `gaia-agent` | The Python agent as installed: the first `gaia-agent` on `PATH`, in a finished install under `~/.gaia/agents/gaia/`, or in `cpp/build`. On an install whose record puts the flagship behind the daemon (`artifact_kind: binary`) it stays behind the daemon, and the first chat frame says so, because the `gaia-agent` file in that install is the daemon's HTTP sidecar |
+| `gaia-agent` or `gaiapy` | The Python agent as installed: the first `gaia-agent` on `PATH`, in a finished install under `~/.gaia/agents/gaia/`, or in `cpp/build`. On an install whose record puts the flagship behind the daemon (`artifact_kind: binary`) it stays behind the daemon, and the first chat frame says so, because the `gaia-agent` file in that install is the daemon's HTTP sidecar |
 | A path to `gaia-agent` | That file, spawned by `gaia-cli` itself, even on a daemon install |
 
 On Windows `gaiacpp.exe` and `gaia-agent.exe` are accepted for the two names.

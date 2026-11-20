@@ -17,6 +17,10 @@ const (
 	NativeAgentBinary = "gaiacpp"
 	// PythonAgentBinary is the Python flagship's stdio child.
 	PythonAgentBinary = "gaia-agent"
+	// PythonAgentChoice is the Python agent's name as a choice: the value
+	// flagship_agent and /agent take. It is accepted wherever
+	// PythonAgentBinary is, so one name works for every way of choosing.
+	PythonAgentChoice = "gaiapy"
 	// NativeStdioFlag puts gaiacpp on the stdio protocol; without it the
 	// program opens its own interactive session.
 	NativeStdioFlag = "--stdio"
@@ -197,7 +201,7 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 		agent.useNative(l.Path)
 		return "", nil
 
-	case strings.EqualFold(name, PythonAgentBinary):
+	case strings.EqualFold(name, PythonAgentBinary), strings.EqualFold(name, PythonAgentChoice):
 		if agent.Transport == TransportDaemon {
 			// The install record put the Python agent behind the daemon; the
 			// file of that name in the install directory is its HTTP sidecar,
