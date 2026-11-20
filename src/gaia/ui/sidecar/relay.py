@@ -50,6 +50,12 @@ from gaia.agents.base.tool_grants import (
 from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.logger import get_logger
 from gaia.ui.event_narration import derive_narration
+from gaia.ui.sidecar.native_tools import (
+    NATIVE_TOOL_LABELS,
+    as_flagship_call,
+    native_prompt_summary,
+    native_result_summary,
+)
 from gaia.ui.sidecar.profiles import GAIA_PROFILE, RelayProfile
 from gaia.ui.sse_handler import (
     SSEOutputHandler,
@@ -168,7 +174,11 @@ def _humanize_tool(tool: str) -> str:
 
 
 def _tool_label(tool: str, profile: RelayProfile = GAIA_PROFILE) -> str:
-    return profile.tool_labels.get(tool) or _humanize_tool(tool)
+    return (
+        profile.tool_labels.get(tool)
+        or NATIVE_TOOL_LABELS.get(tool)
+        or _humanize_tool(tool)
+    )
 
 
 def _is_summary_view(data: Any) -> bool:
@@ -289,11 +299,16 @@ def _dispatch_one(
                 path_access if isinstance(path_access, str) else None,
             )
             # The UI's own approval prompt.
+            # gaiacpp's names for a tool and its arguments, read as the flagship's.
+            shown_tool, _ = as_flagship_call(tool, None)
+            label = _tool_label(shown_tool, profile)
             request: Dict[str, Any] = {
                 "type": "permission_request",
-                "tool": tool,
+                "tool": shown_tool,
                 "confirm_id": confirm_id,
-                "summary": str(event.get("summary", "")),
+                "summary": native_prompt_summary(
+                    tool, str(event.get("summary", "")), label
+                ),
             }
             if always_scope:
                 request["always_scope"] = always_scope
@@ -302,7 +317,9 @@ def _dispatch_one(
             if event.get("risk"):
                 request["risk"] = str(event["risk"])
             if event.get("tool_label"):
-                request["tool_label"] = str(event["tool_label"])
+                sent = str(event["tool_label"])
+                # gaiacpp sends its tool's name as the label.
+                request["tool_label"] = label if sent == tool else sent
             # The whole call: the summary shortens code, and a path prompt is
             # worded from the path's kind. The card reads GAIA's folder, risk note
             # and resolved path from args, as in-process, so prompt_context goes
@@ -323,6 +340,7 @@ def _dispatch_one(
                 # What GAIA checked, in place of the model's own spelling.
                 if isinstance(context.get("shown_args"), dict):
                     args.update(context["shown_args"])
+            _, args = as_flagship_call(tool, args)
             if args:
                 request["args"] = args
                 if event.get("args_truncated"):
@@ -335,7 +353,7 @@ def _dispatch_one(
                 # Unattended run (a schedule): nobody can answer, so end it here
                 # rather than race the sidecar, which ends a session-less run
                 # on its own and then 404s a deny.
-                raise _NobodyToApprove(_unattended_approval_text(tool, profile))
+                raise _NobodyToApprove(_unattended_approval_text(shown_tool, profile))
             handler._emit(request)
             return False
 
@@ -377,8 +395,10 @@ def _dispatch_one(
             handler._emit(thinking)
 
     elif etype == "tool_call":
-        tool = str(event.get("tool") or "unknown")
-        args = event.get("args") or {}
+        sent_tool = str(event.get("tool") or "unknown")
+        tool, args = as_flagship_call(sent_tool, event.get("args") or {})
+        # The result carries no arguments, so it is named as its call was.
+        handler.relay_shown_tool = (sent_tool, tool)
         label = _tool_label(tool, profile)
         # The turn summary and the heartbeat read this state, not the events.
         handler.record_tool_started(tool)
@@ -390,6 +410,7 @@ def _dispatch_one(
         # The call in plain words; a sidecar older than the field gets it derived here.
         narration = str(
             event.get("narration")
+            or NATIVE_TOOL_LABELS.get(tool)
             or derive_narration(tool, args if isinstance(args, dict) else {})
         )
         start: Dict[str, Any] = {
@@ -418,14 +439,20 @@ def _dispatch_one(
             )
 
     elif etype == "tool_result":
-        tool = str(event.get("tool") or "unknown")
+        sent_tool = str(event.get("tool") or "unknown")
+        called = getattr(handler, "relay_shown_tool", None)
+        if isinstance(called, tuple) and called[0] == sent_tool:
+            tool = called[1]
+        else:
+            tool, _ = as_flagship_call(sent_tool, None)
         data = event.get("data")
         success = _derive_success(data)
         handler.record_tool_result(data, success)
         out: Dict[str, Any] = {
             "type": "tool_result",
             "tool": tool,
-            "summary": _derive_summary(tool, data, profile),
+            "summary": native_result_summary(sent_tool, data)
+            or _derive_summary(tool, data, profile),
             "success": success,
             "data": data if data is not None else {},
         }
