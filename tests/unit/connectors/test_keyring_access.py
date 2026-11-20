@@ -514,3 +514,35 @@ def test_mcp_server_configure_refuses_before_writing(refused):
     with pytest.raises(ConnectorsError):
         asyncio.run(McpServerHandler().configure(spec, config))
     assert refused.calls == []
+
+
+def _long_marker_items(monkeypatch) -> dict:
+    """Store items holding a chunked recovery marker that belongs to ``acct-b``."""
+    writer = StrongKeyring()
+    _activate(monkeypatch, writer)
+    snapshot = {
+        store._provider_credentials_username("google"): "c" * 1500,
+        store._connection_username("google", "acct-b"): None,
+    }
+    store.write_forward_recovery("google", snapshot, slot="acct-b")
+    marker = writer.items[(SERVICE, store._forward_recovery_username("google"))]
+    assert marker.startswith(store._CHUNK_SENTINEL), "marker must be chunked"
+    return dict(writer.items)
+
+
+@pytest.mark.parametrize("kind", ["strong", "weak"])
+def test_deleting_one_account_keeps_another_accounts_chunked_marker(kind, monkeypatch):
+    items = _long_marker_items(monkeypatch)
+    backend = StrongKeyring() if kind == "strong" else PlaintextKeyring()
+    backend.items.update(items)
+    _activate(monkeypatch, backend)
+    marker_key = (SERVICE, store._forward_recovery_username("google"))
+
+    store.delete_connection("google", slot=store.DEFAULT_ACCOUNT)
+    assert marker_key in backend.items
+
+    store.delete_connection("google", slot="acct-b")
+    assert not any(
+        user.startswith(store._forward_recovery_username("google"))
+        for _, user in backend.items
+    )

@@ -441,13 +441,14 @@ def _parse_manifest(raw: str) -> Optional[tuple[int, Optional[str]]]:
         return None
 
 
-def _kr_get(username: str) -> Optional[str]:
+def _kr_get(username: str, *, for_delete: bool = False) -> Optional[str]:
     """Read a (possibly chunked) value stored via :func:`_kr_set`.
 
     Any partial/torn state (missing slot, or a CRC mismatch from a crashed
     mid-rewrite) resolves to ``None`` — never a truncated-but-valid-looking
-    value."""
-    raw = _kr_raw_get(username)
+    value. ``for_delete`` reads the way a delete is checked; only a delete path
+    may pass it."""
+    raw = _kr_raw_get(username, for_delete=for_delete)
     if raw == "":
         # An earlier release's manifest as macOS kept it; nothing stores an empty value.
         logger.warning(
@@ -464,7 +465,7 @@ def _kr_get(username: str) -> Optional[str]:
     count, crc = parsed
     parts: list[str] = []
     for idx in range(count):
-        part = _kr_raw_get(_chunk_username(username, idx))
+        part = _kr_raw_get(_chunk_username(username, idx), for_delete=for_delete)
         if part is None:
             # Missing slot — torn entry; treat as "not configured".
             return None
@@ -829,7 +830,7 @@ def connection_slot_in_use(provider: str, *, slot: str = DEFAULT_ACCOUNT) -> boo
 
 def _drop_forward_recovery_for(provider: str, slot: str) -> None:
     """Delete an interrupted forward's marker if it covers ``slot``."""
-    raw = _kr_raw_get(_forward_recovery_username(provider), for_delete=True)
+    raw = _kr_get(_forward_recovery_username(provider), for_delete=True)
     if raw is None:
         return
     try:
