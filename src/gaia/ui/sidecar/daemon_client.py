@@ -260,5 +260,5 @@ def stop_sidecar(agent_id: str) -> None:
         ) from e
     if r.status_code != 200:
         raise SidecarError(
-            f"the daemon failed to stop the '{agent_id}' sidecar: " f"{error_detail(r)}"
+            f"the daemon failed to stop the '{agent_id}' sidecar: {error_detail(r)}"
         )
