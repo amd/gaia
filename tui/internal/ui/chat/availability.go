@@ -84,7 +84,7 @@ func (m ChatModel) availableCommandSet() map[string]bool {
 			if supported, known := m.commandSupported(client.CapabilityMemory); known && !supported {
 				continue
 			}
-		case "/setup", "/models", agentCommand:
+		case "/setup", "/models", imageCommandPrefix, agentCommand:
 			if m.agentID != setupAgentID {
 				continue
 			}

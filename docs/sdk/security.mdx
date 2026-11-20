@@ -62,6 +62,11 @@ Three things are wider on purpose:
   which it skipped.
 - Output a tool writes to GAIA's own folders (`~/.gaia/screenshots`,
   `~/.gaia/transcripts`, `~/.gaia/cache/audio/generations`) is not the user's files and is not checked.
+- The agent can read back what it produced: transcripts in `~/.gaia/transcripts`,
+  and image files saved directly in `~/.gaia/cache/sd/images` (not links or
+  hard links), so a follow-up can summarize a transcript or edit, upscale or
+  describe a generated image. Both are read-only to file tools, and a session
+  confined by `GAIA_ALLOWED_PATHS` does not get them.
 - `capture_skill` may copy a local skill folder from anywhere, because every
   capture asks the user first with the source shown.
 
