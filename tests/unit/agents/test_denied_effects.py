@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gaia.agents.base import denied_effects
 from gaia.agents.base.agent import DECLINED_HINT, Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.denied_effects import (
@@ -1498,25 +1500,27 @@ def test_with_no_way_to_ask_the_policy_every_delete_is_kept(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "declined, later",
-    [
-        ("pip install pandas", "pip install openpyxl"),
-        ("gh issue close 3", "gh issue close 4"),
-        ("git push origin main", "git push upstream dev"),
-        (
-            "powershell -Command \"Expand-Archive -Path 'a.zip' -DestinationPath out\"",
-            "powershell -Command \"Expand-Archive -Path 'b.zip' -DestinationPath tmp\"",
-        ),
-        ("dir /s reports", "dir invoices"),
-        (r'pip install "C:\My Wheels\a.whl"', r'pip install "C:\My Wheels\b.whl"'),
-        ("pip install ./pkg-a", "pip install ./pkg-b"),
-        ("pip install ./a/pkg[x]", "pip install ./b/pkg[x]"),
-        ('pip install "My Wheels/a.whl"', 'pip install "My Wheels/b.whl"'),
-        ("pip install w@1/a.whl", "pip install w@1/b.whl"),
-        ("pip install w@1/a.whl", "pip install w@2/a.whl"),
-    ],
-)
+_ANOTHER_ACTION = [
+    ("pip install pandas", "pip install openpyxl"),
+    ("gh issue close 3", "gh issue close 4"),
+    ("git push origin main", "git push upstream dev"),
+    (
+        "powershell -Command \"Expand-Archive -Path 'a.zip' -DestinationPath out\"",
+        "powershell -Command \"Expand-Archive -Path 'b.zip' -DestinationPath tmp\"",
+    ),
+    ("dir /s reports", "dir invoices"),
+    (r'pip install "C:\My Wheels\a.whl"', r'pip install "C:\My Wheels\b.whl"'),
+    ("pip install ./pkg-a", "pip install ./pkg-b"),
+    ("pip install ./a/pkg[x]", "pip install ./b/pkg[x]"),
+    ('pip install "My Wheels/a.whl"', 'pip install "My Wheels/b.whl"'),
+    ("pip install w@1/a.whl", "pip install w@1/b.whl"),
+    ("pip install w@1/a.whl", "pip install w@2/a.whl"),
+    ("pip install dist/a.whl", "pip install dist/b.whl"),
+    ("pip install a/x.whl", "pip install b/x.whl"),
+]
+
+
+@pytest.mark.parametrize("declined, later", _ANOTHER_ACTION)
 def test_the_same_program_on_something_else_is_another_action(
     declined, later, tmp_path
 ):
@@ -1529,36 +1533,78 @@ def test_the_same_program_on_something_else_is_another_action(
     )
 
 
-@pytest.mark.parametrize(
-    "declined, later",
-    [
-        ("pip install pandas", "pip install --upgrade pandas"),
-        ("pip install pandas", "python -m pip install pandas"),
-        ("pip install pandas", "pip install pandas openpyxl"),
-        ("git push origin main", "git push --force origin main"),
-        ("git push origin main", "git push"),
-        ("git push", "git push origin main"),
-        ("gh issue close 3", 'bash -c "gh issue close 3"'),
-        ("git add a.txt", "git add ."),
-        ("git add src", "git add src/app.py"),
-        ('git commit -m "fix bug"', 'git commit -m "Fix the bug"'),
-        ('gh pr create --title "Fix" --body "one"', 'gh pr create -t "A fix" -b "two"'),
-        ("pip install pandas", "pip install pandas==2.2"),
-        ("pip install pandas>=2", "pip install 'pandas[excel]<3'"),
-        ('git commit -am "fix bug"', 'git commit -m "Fix the bug"'),
-        ("npm install @scope/pkg@1.0", "npm install @scope/pkg"),
-        ("pip install ./pkg[excel]", "pip install ./pkg"),
-        (r'pip install "C:\My Wheels\pkg[x]"', r'pip install "C:\My Wheels\pkg"'),
-        ('git tag -am "v1" v1', 'git tag -m "Release one" v1'),
-        ('pip install "./My Wheels/a.whl"', 'pip install "My Wheels/a.whl"'),
-        ('pip install "My Wheels/a.whl"', 'pip install "./My Wheels/a.whl"'),
-        ("pip install ./w@1/a.whl", "pip install w@1/a.whl"),
-        ('pip install "My Wheels/a.whl[x]"', 'pip install "./My Wheels/a.whl"'),
-        ("npm install ./w@1/pkg", "npm install w@1/pkg"),
-        ("pip install ./dist/a.whl", "pip install dist/a.whl"),
-        ("pip install git+https://h/r@v1", "pip install git+https://h/r@v2"),
-    ],
-)
+_SAME_ACTION = [
+    ("pip install pandas", "pip install --upgrade pandas"),
+    ("pip install pandas", "python -m pip install pandas"),
+    ("pip install pandas", "pip install pandas openpyxl"),
+    ("git push origin main", "git push --force origin main"),
+    ("git push origin main", "git push"),
+    ("git push", "git push origin main"),
+    ("gh issue close 3", 'bash -c "gh issue close 3"'),
+    ("git add a.txt", "git add ."),
+    ("git add src", "git add src/app.py"),
+    ('git commit -m "fix bug"', 'git commit -m "Fix the bug"'),
+    ('gh pr create --title "Fix" --body "one"', 'gh pr create -t "A fix" -b "two"'),
+    ("pip install pandas", "pip install pandas==2.2"),
+    ("pip install pandas>=2", "pip install 'pandas[excel]<3'"),
+    ('git commit -am "fix bug"', 'git commit -m "Fix the bug"'),
+    ("npm install @scope/pkg@1.0", "npm install @scope/pkg"),
+    ("pip install ./pkg[excel]", "pip install ./pkg"),
+    (r'pip install "C:\My Wheels\pkg[x]"', r'pip install "C:\My Wheels\pkg"'),
+    ('git tag -am "v1" v1', 'git tag -m "Release one" v1'),
+    ('pip install "./My Wheels/a.whl"', 'pip install "My Wheels/a.whl"'),
+    ('pip install "My Wheels/a.whl"', 'pip install "./My Wheels/a.whl"'),
+    ("pip install ./w@1/a.whl", "pip install w@1/a.whl"),
+    ('pip install "My Wheels/a.whl[x]"', 'pip install "./My Wheels/a.whl"'),
+    ("npm install ./w@1/pkg", "npm install w@1/pkg"),
+    ("pip install ./dist/a.whl", "pip install dist/a.whl"),
+    ("pip install git+https://h/r@v1", "pip install git+https://h/r@v2"),
+    (
+        "conda install conda-forge/label/dev::numpy=1.26",
+        "conda install conda-forge/label/dev::numpy=1.25",
+    ),
+    (
+        "conda install conda-forge/label/dev::numpy=1.26",
+        "conda install conda-forge/label/dev::numpy",
+    ),
+    ("npm install alias@npm:@scope/pkg@1", "npm install alias@npm:@scope/pkg@2"),
+    ("pip install dist/a.whl", "pip install ./dist/a.whl"),
+    ("pip install git+ssh://git@h/r@v1", "pip install git+ssh://git@h/r@v2"),
+    ("pip install pkg@https://h/a.whl", "pip install pkg@https://h/b.whl"),
+    ("npm install file:./w@1/a.zip", "npm install file:./w@2/a.zip"),
+]
+
+#: Pairs main kept as one action that are now two, on purpose: two different
+#: package files are two different installs.
+_SPLIT_FROM_MAIN = {
+    (r'pip install "C:\My Wheels\a.whl"', r'pip install "C:\My Wheels\b.whl"'),
+    ('pip install "My Wheels/a.whl"', 'pip install "My Wheels/b.whl"'),
+    ("pip install w@1/a.whl", "pip install w@1/b.whl"),
+    ("pip install w@1/a.whl", "pip install w@2/a.whl"),
+}
+
+
+_MAIN_VERSION_PIN = re.compile(r"[\[<>=!~;@ ]")
+
+
+def _unpinned_on_main(word: str) -> str:
+    """``_unpinned`` as main had it, the bar no pair may fall below."""
+    return word[:1] + _MAIN_VERSION_PIN.split(word[1:], maxsplit=1)[0]
+
+
+@pytest.mark.parametrize("declined, later", _SAME_ACTION + _ANOTHER_ACTION)
+def test_no_install_main_blocked_now_slips_through(declined, later, tmp_path):
+    """A later install main stopped is still stopped, bar the files above."""
+    args = ("run_shell_command", _shell(declined), "run_shell_command", _shell(later))
+    with patch.object(denied_effects, "_unpinned", _unpinned_on_main):
+        blocked_on_main = _overlaps(*args, tmp_path)
+    if (declined, later) in _SPLIT_FROM_MAIN:
+        assert blocked_on_main and not _overlaps(*args, tmp_path)
+    elif blocked_on_main:
+        assert _overlaps(*args, tmp_path)
+
+
+@pytest.mark.parametrize("declined, later", _SAME_ACTION)
 def test_a_reworded_command_is_the_same_action(declined, later, tmp_path):
     assert _overlaps(
         "run_shell_command",

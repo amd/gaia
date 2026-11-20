@@ -746,6 +746,9 @@ _PACKAGE_PROGRAMS = frozenset(
     {"pip", "pip3", "uv", "pipx", "conda", "mamba", "npm", "pnpm", "yarn", "winget"}
 )
 _VERSION_PIN = re.compile(r"[\[<>=!~;@ ]")
+_PACKAGE_FILE_SUFFIXES = (".whl", ".tar.gz", ".tar.bz2", ".zip")
+#: Spec syntax that is never a local file, whatever it ends with.
+_NEVER_A_PATH = ("::", "npm:", "github:", "file:", "://")
 #: ``git commit -am "msg"``: a cluster of git short switches ending in ``m``.
 _GIT_MESSAGE_CLUSTER = re.compile(r"-[a-z]+m")
 
@@ -772,12 +775,24 @@ def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
     return kept
 
 
+def _is_package_file(word: str) -> bool:
+    """True for a built package file (``dist/a.whl``), judged by its shape.
+
+    A ``/`` alone does not make a path: ``chan/label::numpy=1.2`` and
+    ``alias@npm:@scope/pkg@1`` are package specs whose version is a pin.
+    """
+    word = word.lower()
+    if any(marker in word for marker in _NEVER_A_PATH):
+        return False
+    return word.endswith(_PACKAGE_FILE_SUFFIXES)
+
+
 def _unpinned(word: str) -> str:
     """A package operand without its version, extras or markers."""
-    relative = "/" in word and "://" not in word and not word.startswith("@")
-    if relative or "\\" in word or word.startswith(".") or re.match(r"[a-z]:", word):
-        # A path keeps its spaces and ``@``; only its extras are dropped.
-        return word.split("[", 1)[0]
+    base = word.split("[", 1)[0]
+    if _is_package_file(base):
+        # A file's name keeps its spaces and ``@``; only its extras are dropped.
+        return base
     # A leading ``@`` is an npm scope, not a pin.
     return word[:1] + _VERSION_PIN.split(word[1:], maxsplit=1)[0]
 
