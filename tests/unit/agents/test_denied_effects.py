@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import DECLINED_HINT, Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.denied_effects import (
     COMMAND,
@@ -1284,7 +1284,8 @@ def test_a_refusal_gets_a_recovery_prompt_that_does_not_invite_a_reroute(
     ]
     assert recovery, "the refusal should still reach the recovery step"
     assert "Create a NEW corrected plan" not in recovery[-1]
-    assert "do not reach the same result" in recovery[-1]
+    assert "do not do the same thing through another tool" in recovery[-1]
+    assert "not a no to the task" in recovery[-1]
 
 
 def test_an_ordinary_error_keeps_the_fix_it_prompt():
@@ -1490,3 +1491,260 @@ def test_with_no_way_to_ask_the_policy_every_delete_is_kept(tmp_path):
 
     assert ledger.conflict("run_shell_command", _shell("mv c.txt d.txt"))
     assert not ledger.conflict("run_shell_command", _shell("cp a.txt b.txt"))
+
+
+# ---------------------------------------------------------------------------
+# A no is to one action, not to the tool or the task
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "declined, later",
+    [
+        ("pip install pandas", "pip install openpyxl"),
+        ("gh issue close 3", "gh issue close 4"),
+        ("git push origin main", "git push upstream dev"),
+        (
+            "powershell -Command \"Expand-Archive -Path 'a.zip' -DestinationPath out\"",
+            "powershell -Command \"Expand-Archive -Path 'b.zip' -DestinationPath tmp\"",
+        ),
+        ("dir /s reports", "dir invoices"),
+    ],
+)
+def test_the_same_program_on_something_else_is_another_action(
+    declined, later, tmp_path
+):
+    assert not _overlaps(
+        "run_shell_command",
+        _shell(declined),
+        "run_shell_command",
+        _shell(later),
+        tmp_path,
+    )
+
+
+@pytest.mark.parametrize(
+    "declined, later",
+    [
+        ("pip install pandas", "pip install --upgrade pandas"),
+        ("pip install pandas", "python -m pip install pandas"),
+        ("pip install pandas", "pip install pandas openpyxl"),
+        ("git push origin main", "git push --force origin main"),
+        ("git push origin main", "git push"),
+        ("git push", "git push origin main"),
+        ("gh issue close 3", 'bash -c "gh issue close 3"'),
+        ("git add a.txt", "git add ."),
+        ("git add src", "git add src/app.py"),
+        ('git commit -m "fix bug"', 'git commit -m "Fix the bug"'),
+        ('gh pr create --title "Fix" --body "one"', 'gh pr create -t "A fix" -b "two"'),
+        ("pip install pandas", "pip install pandas==2.2"),
+        ("pip install pandas>=2", "pip install 'pandas[excel]<3'"),
+    ],
+)
+def test_a_reworded_command_is_the_same_action(declined, later, tmp_path):
+    assert _overlaps(
+        "run_shell_command",
+        _shell(declined),
+        "run_shell_command",
+        _shell(later),
+        tmp_path,
+    )
+
+
+def _anywhere(path):
+    return True
+
+
+def _declined_program(tmp_path, code, may_create=_anywhere):
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record(
+        "run_python",
+        {"code": code},
+        "Tool 'run_python' was denied by the user.",
+        may_create=may_create,
+    )
+    return ledger
+
+
+_BUILDS_A_REPORT = (
+    "import os\n"
+    "os.makedirs('out', exist_ok=True)\n"
+    "with open('out/report.csv', 'w') as fh:\n"
+    "    fh.write('a,b\\n')\n"
+)
+
+
+def test_a_declined_programs_new_output_can_be_made_another_way(tmp_path):
+    ledger = _declined_program(tmp_path, _BUILDS_A_REPORT)
+    report = {"file_path": "out/report.csv", "content": "a,b\n"}
+    assert ledger.conflict("write_file", report) is None
+    other = "open('out/report.csv', 'w').write('a,b\\n')"
+    assert ledger.conflict("run_python", {"code": other}) is None
+
+
+def test_a_folder_that_is_already_there_is_not_what_was_declined(tmp_path):
+    (tmp_path / "out").mkdir()
+    ledger = _declined_program(tmp_path, _BUILDS_A_REPORT)
+    assert (
+        ledger.conflict("write_file", {"file_path": "out/notes.md", "content": "x"})
+        is None
+    )
+
+
+def test_without_a_write_scope_every_path_is_still_recorded(tmp_path):
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record("run_python", {"code": _BUILDS_A_REPORT}, "denied by the user")
+    assert ledger.conflict(
+        "write_file", {"file_path": "out/report.csv", "content": "x"}
+    )
+
+
+def test_a_new_file_outside_the_chats_folders_stays_declined(tmp_path):
+    ledger = _declined_program(
+        tmp_path, _BUILDS_A_REPORT, may_create=lambda path: False
+    )
+    assert ledger.conflict(
+        "write_file", {"file_path": "out/report.csv", "content": "x"}
+    )
+
+
+def test_a_declined_overwrite_is_not_smuggled_through_another_tool(tmp_path):
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "report.csv").write_text("kept\n")
+    ledger = _declined_program(tmp_path, _BUILDS_A_REPORT)
+    assert ledger.conflict(
+        "write_file", {"file_path": "out/report.csv", "content": "x"}
+    )
+    assert ledger.conflict("run_shell_command", _shell("echo x > out/report.csv"))
+    # The folder was only ensured, so its other files are not swept up.
+    assert (
+        ledger.conflict("write_file", {"file_path": "out/other.csv", "content": "x"})
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import shutil\nshutil.rmtree('archive')",
+        "import os\nos.makedirs('archive', exist_ok=True)\nos.rename('archive', 'old')",
+        "from pathlib import Path\nPath('archive/ledger.csv').unlink()",
+        "import shutil\nshutil.move('archive/ledger.csv', 'elsewhere.csv')",
+    ],
+)
+def test_a_declined_delete_or_move_is_not_smuggled_through_another_tool(code, tmp_path):
+    (tmp_path / "archive").mkdir()
+    (tmp_path / "archive" / "ledger.csv").write_text("kept\n")
+    ledger = _declined_program(tmp_path, code)
+    assert ledger.conflict("run_shell_command", _shell("rm -rf archive"))
+    assert ledger.conflict(
+        "write_file", {"file_path": "archive/ledger.csv", "content": ""}
+    )
+
+
+def test_a_declined_script_is_the_same_script_through_any_tool(tmp_path):
+    script = tmp_path / "build_report.py"
+    script.write_text(_BUILDS_A_REPORT)
+    wrapper = (
+        f"import subprocess, sys\nsubprocess.run([sys.executable, {str(script)!r}])"
+    )
+    ledger = _declined_program(tmp_path, wrapper)
+    assert ledger.conflict("run_shell_command", _shell(f'python "{script}"'))
+    assert ledger.conflict("execute_python_file", {"file_path": str(script)})
+    # What the script was for is still open to a different route.
+    assert (
+        ledger.conflict("write_file", {"file_path": "out/report.csv", "content": "x"})
+        is None
+    )
+
+
+class _DenyPythonConsole(AgentConsole):
+    """Declines run_python, approves everything else."""
+
+    def __init__(self):
+        super().__init__()
+        self.prompted = []
+
+    def confirm_tool_execution(self, tool_name, tool_args):
+        self.prompted.append(tool_name)
+        return tool_name != "run_python"
+
+
+class _Worker(_Probe):
+    def _register_tools(self):
+        super()._register_tools()
+        agent = self
+
+        @tool
+        def run_python(code: str) -> dict:
+            """Probe python."""
+            agent.ran.append(("run_python", code))
+            return {"status": "success", "return_code": 0}
+
+        @tool
+        def write_file(file_path: str, content: str) -> dict:
+            """Probe writer."""
+            agent.ran.append(("write_file", file_path))
+            return {"status": "success", "file_path": file_path}
+
+
+def _worker(console, cwd):
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        _Worker._console_override = console
+        agent = _Worker(silent_mode=True, skip_lemonade=True)
+    agent._denied_effects = DeniedEffects(str(cwd))
+    root = os.path.normcase(os.path.realpath(str(cwd)))
+
+    def inside(path, prompt_user=True):
+        return os.path.normcase(os.path.realpath(path)).startswith(root)
+
+    agent.path_validator = MagicMock(
+        is_path_allowed=inside, is_write_blocked=lambda path: (False, "")
+    )
+    return agent
+
+
+def test_one_declined_script_does_not_close_the_task(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    console = _DenyPythonConsole()
+    agent = _worker(console, tmp_path)
+
+    declined = agent._execute_tool("run_python", {"code": _BUILDS_A_REPORT})
+    again = agent._execute_tool("run_python", {"code": _BUILDS_A_REPORT})
+    written = agent._execute_tool(
+        "write_file", {"file_path": "out/report.csv", "content": "a,b\n"}
+    )
+
+    assert declined["status"] == "denied"
+    assert declined["hint"] == DECLINED_HINT
+    assert again["status"] == "denied"
+    assert written["status"] == "success"
+    assert agent.ran == [("write_file", "out/report.csv")]
+
+
+def test_a_declined_delete_is_still_stopped_at_the_next_tool(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "archive").mkdir()
+    console = _DenyPythonConsole()
+    agent = _worker(console, tmp_path)
+
+    agent._execute_tool(
+        "run_python", {"code": "import shutil\nshutil.rmtree('archive')"}
+    )
+    rerouted = agent._execute_tool("run_shell_command", {"command": "rm -rf archive"})
+
+    assert rerouted["status"] == "denied"
+    assert rerouted["executed"] is False
+    assert "do not reach it with another tool" in rerouted["error"]
+    assert "steps that do something else are still open" in rerouted["error"]
+    assert agent.ran == []
+    # Stopped by the ledger: nobody is prompted to approve the reroute.
+    assert console.prompted == ["run_python"]
+
+
+def test_the_hint_closes_the_call_not_the_task():
+    assert "not the tool and not the task" in DECLINED_HINT
+    assert "Do not repeat it or reword it" in DECLINED_HINT
+    assert "Carry on with the task" in DECLINED_HINT
+    assert "say in your answer what you could not do" in DECLINED_HINT
+    assert "then stop" not in DECLINED_HINT

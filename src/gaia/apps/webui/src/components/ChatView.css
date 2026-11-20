@@ -79,7 +79,7 @@
     border-radius: var(--radius-md);
     color: var(--text-primary);
     font-size: var(--fs-body);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 /* A long title fades out rather than ending in an ellipsis, so it reads as
@@ -118,7 +118,7 @@
 
 .title-edit {
     font-size: var(--fs-body);
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     padding: 4px 10px;
     border: 1px solid var(--accent-solid);
@@ -173,7 +173,7 @@
     color: var(--accent-green);
 }
 .doc-context-label {
-    font-weight: 600;
+    font-weight: 500;
     white-space: nowrap;
     color: var(--text-secondary);
     font-size: var(--fs-label);
@@ -225,7 +225,9 @@
 }
 .doc-pill-name {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 .doc-pill-icon {
     flex-shrink: 0;
@@ -368,7 +370,7 @@
     border-radius: var(--radius-lg);
     margin: 8px;
     color: var(--accent);
-    font-weight: 600;
+    font-weight: 500;
     font-size: 15px;
     font-family: var(--font-sans);
     letter-spacing: 0.3px;
@@ -486,7 +488,7 @@
     color: var(--accent-yellow);
     cursor: pointer;
     font: inherit;
-    font-weight: 700;
+    font-weight: 500;
     padding: 0;
     text-decoration: underline;
     text-decoration-style: dotted;

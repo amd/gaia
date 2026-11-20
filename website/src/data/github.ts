@@ -4,13 +4,17 @@
 // GitHub + npm data for the homepage: the download buttons, the stats row and
 // the release stream.
 //
-// A build-time fetch with no bundled fixture and no silent fallback — a
-// malformed response or an unreachable endpoint fails the build loudly rather
-// than shipping a stale number or a dead download link. GITHUB_TOKEN is
-// OPTIONAL: GitHub's and npm's read endpoints work unauthenticated for a public
-// repo/package, so its absence must never fail the build. It only raises the
-// GitHub rate limit from 60/hr to 5,000/hr, which matters for CI, not for an
-// occasional local build.
+// Production, main, tag and deploy builds fetch the live GitHub API. PR CI sets
+// GAIA_GITHUB_FIXTURE to a checked-in response so validation does not spend the
+// workflow token's hourly API quota. A malformed response or a missing fixture
+// fails the build loudly rather than shipping a stale number or a dead download
+// link. GITHUB_TOKEN is OPTIONAL: GitHub's and npm's read endpoints work
+// unauthenticated for a public repo/package, so its absence must never fail the
+// build. It only raises the GitHub rate limit from 60/hr to 5,000/hr, which
+// matters for CI, not for an occasional local build.
+
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const REPO = "amd/gaia";
 const NPM_PACKAGE = "@amd-gaia/gaia";
@@ -46,6 +50,9 @@ export interface ReleaseStats {
   // `releases`/`totalReleaseCount` (main tags only): don't "fix" it into
   // false consistency.
   totalDownloadCount: number;
+  // The newest stable release and its downloads so far, leaving out update
+  // feeds, checksums and signatures (see sumInstallDownloads). Null before the first.
+  latestRelease: { tag: string; installDownloads: number } | null;
 }
 
 export interface NpmDownloadStats {
@@ -82,6 +89,94 @@ export interface GithubRelease {
   published_at: string | null;
   html_url: string;
   assets: GithubReleaseAsset[];
+}
+
+interface GithubFixture {
+  repo: { stargazers_count: number; forks_count: number };
+  releases: GithubRelease[];
+}
+
+const GITHUB_FIXTURE_ENV = "GAIA_GITHUB_FIXTURE";
+
+let fixturePromise: Promise<GithubFixture | null> | null = null;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+// PR CI points this at tests/fixtures/github/releases.json. The fixture goes
+// through the same parsing and rendering code as a live response; a malformed
+// fixture fails instead of silently falling back to the network.
+function readGithubFixture(): Promise<GithubFixture | null> {
+  fixturePromise ??= (async () => {
+    const path = (process.env[GITHUB_FIXTURE_ENV] ?? "").trim();
+    if (!path) return null;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(resolve(path), "utf8"));
+    } catch (e) {
+      throw new Error(
+        `[github] Failed to read ${GITHUB_FIXTURE_ENV}=${path}: ${(e as Error).message}`,
+      );
+    }
+
+    if (!isRecord(parsed)) {
+      throw new Error(`[github] ${GITHUB_FIXTURE_ENV}=${path} must be a JSON object.`);
+    }
+    const repo = parsed.repo;
+    const releases = parsed.releases;
+    if (!isRecord(repo) || !Array.isArray(releases)) {
+      throw new Error(
+        `[github] ${GITHUB_FIXTURE_ENV}=${path} must contain a "repo" object ` +
+          `and a "releases" array.`,
+      );
+    }
+    if (
+      typeof repo.stargazers_count !== "number" ||
+      typeof repo.forks_count !== "number"
+    ) {
+      throw new Error(
+        `[github] ${GITHUB_FIXTURE_ENV}=${path} is missing numeric ` +
+          `repo.stargazers_count/repo.forks_count.`,
+      );
+    }
+    if (
+      !releases.every(
+        (r: unknown) =>
+          isRecord(r) &&
+          typeof r.tag_name === "string" &&
+          typeof r.draft === "boolean" &&
+          typeof r.prerelease === "boolean" &&
+          typeof r.html_url === "string" &&
+          Array.isArray(r.assets) &&
+          r.assets.every(
+            (a: unknown) =>
+              isRecord(a) &&
+              typeof a.name === "string" &&
+              typeof a.browser_download_url === "string" &&
+              typeof a.size === "number" &&
+              typeof a.download_count === "number",
+          ),
+      )
+    ) {
+      throw new Error(
+        `[github] ${GITHUB_FIXTURE_ENV}=${path} has a malformed release or asset.`,
+      );
+    }
+
+    console.log(
+      `[github] Using checked-in fixture ${path} (${releases.length} releases).`,
+    );
+    return {
+      repo: {
+        stargazers_count: repo.stargazers_count,
+        forks_count: repo.forks_count,
+      },
+      releases: releases as GithubRelease[],
+    };
+  })();
+  return fixturePromise;
 }
 
 // Main product tags look like "v0.24.1", including the occasional 4-segment
@@ -242,6 +337,23 @@ export function sumAssetDownloads(assets: { download_count: number }[]): number 
   return assets.reduce((sum, a) => sum + a.download_count, 0);
 }
 
+// Files that are not GAIA itself: the desktop app's update feeds (fetched on
+// every start), differential-update data, checksums and signatures. Installer
+// files an app downloads to update itself (the macOS .zip) still count. Kept in
+// step with META_PATTERNS in workers/admin/src/classify.ts.
+const NOT_INSTALL_FILES: RegExp[] = [
+  /^latest(-[a-z]+)?\.yml$/i,
+  /\.blockmap$/i,
+  /\.sigstore\.json$/i,
+  /sha256sums/i,
+  /^gaia-agent-release\.json$/i,
+  /^gaia-agent\.yaml$/i,
+];
+
+export function sumInstallDownloads(assets: { name: string; download_count: number }[]): number {
+  return sumAssetDownloads(assets.filter((a) => !NOT_INSTALL_FILES.some((p) => p.test(a.name))));
+}
+
 // Whole calendar days between two dates, computed in UTC (not the build
 // machine's local timezone) so the result doesn't shift depending on where
 // the site happens to build — GitHub's published_at is already UTC.
@@ -282,6 +394,61 @@ function trimZero(n: number): string {
   return n.toFixed(1).replace(/\.0$/, "");
 }
 
+// Opt-in only: website-ci.yml sets GITHUB_FETCH_RETRIES=3 on live build steps.
+// Deploys and local builds leave it unset, so a real failure still fails on the
+// first response rather than hiding behind a wait.
+const MAX_RETRIES = 5;
+const RETRY_WAIT_CAP_MS = 30_000;
+const RETRY_WAIT_BUDGET_MS = 30_000;
+
+function githubFetchRetries(): number {
+  const raw = (process.env.GITHUB_FETCH_RETRIES ?? "").trim();
+  if (!raw) return 0;
+  const n = Number(raw);
+  if (!Number.isInteger(n)) {
+    throw new Error(
+      `[github] GITHUB_FETCH_RETRIES must be an integer, got ${JSON.stringify(raw)}.`,
+    );
+  }
+  if (n < 0 || n > MAX_RETRIES) {
+    throw new Error(
+      `[github] GITHUB_FETCH_RETRIES must be from 0 to ${MAX_RETRIES}, got ${n}.`,
+    );
+  }
+  return n;
+}
+
+/** How long to wait before the next attempt, never more than 30 s. */
+export function retryDelayMs(res: Response, attempt: number): number {
+  const retryAfter = res.headers.get("retry-after");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) return clampWait(seconds * 1000);
+    const when = Date.parse(retryAfter);
+    if (!Number.isNaN(when)) return clampWait(when - Date.now());
+  }
+  const reset = res.headers.get("x-ratelimit-reset");
+  if (reset) {
+    const epochSeconds = Number(reset);
+    if (Number.isFinite(epochSeconds)) return clampWait(epochSeconds * 1000 - Date.now());
+  }
+  return clampWait(500 * 2 ** (attempt - 1));
+}
+
+function clampWait(ms: number): number {
+  return Math.max(0, Math.min(ms, RETRY_WAIT_CAP_MS));
+}
+
+/** The wait before a retry, or null when it would take the total past 30 s. */
+export function retryWaitMs(
+  res: Response,
+  attempt: number,
+  waitedMs: number,
+): number | null {
+  const delayMs = retryDelayMs(res, attempt);
+  return delayMs <= RETRY_WAIT_BUDGET_MS - waitedMs ? delayMs : null;
+}
+
 function githubHeaders(): Record<string, string> {
   const headers: Record<string, string> = { Accept: "application/vnd.github+json" };
   const token = process.env.GITHUB_TOKEN;
@@ -297,26 +464,65 @@ function githubHeaders(): Record<string, string> {
   return headers;
 }
 
+function rateLimitError(url: string, status: number, attempts: number): Error {
+  if (process.env.GITHUB_TOKEN) {
+    return new Error(
+      `[github] Request to ${url} returned HTTP ${status} after ${attempts} attempt(s). ` +
+        `GITHUB_TOKEN is set, so this is the GitHub API rate limit or an exhausted ` +
+        `workflow-token hourly quota, not a missing token. Try again after the quota ` +
+        `resets, or set GITHUB_FETCH_RETRIES to wait for a transient limit.`,
+    );
+  }
+  return new Error(
+    `[github] Request to ${url} returned HTTP ${status}. If this is a ` +
+      `rate limit (403), set GITHUB_TOKEN in the build environment.`,
+  );
+}
+
 async function githubFetch(url: string): Promise<Response> {
-  let res: Response;
-  try {
-    res = await fetch(url, { headers: githubHeaders() });
-  } catch (e) {
-    throw new Error(
-      `[github] Failed to fetch ${url}: ${(e as Error).message}. Check network ` +
-        `connectivity; the download links and stats row have no bundled fallback.`,
-    );
+  const retries = githubFetchRetries();
+  const headers = githubHeaders();
+  let waitedMs = 0;
+
+  for (let attempt = 1; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, { headers });
+    } catch (e) {
+      throw new Error(
+        `[github] Failed to fetch ${url}: ${(e as Error).message}. Check network ` +
+          `connectivity; a live build has no bundled fallback.`,
+      );
+    }
+    if (res.ok) return res;
+
+    if (res.status !== 403 && res.status !== 429) {
+      throw new Error(
+        `[github] Request to ${url} returned HTTP ${res.status}. If this is a ` +
+          `rate limit (403), set GITHUB_TOKEN in the build environment.`,
+      );
+    }
+    if (attempt > retries) throw rateLimitError(url, res.status, attempt);
+
+    const delayMs = retryWaitMs(res, attempt, waitedMs);
+    // A wait that lands exactly on the budget is allowed; one that would take
+    // the total past it is not, so the cumulative wait never exceeds 30 s.
+    if (delayMs === null) throw rateLimitError(url, res.status, attempt);
+    waitedMs += delayMs;
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
-  if (!res.ok) {
-    throw new Error(
-      `[github] Request to ${url} returned HTTP ${res.status}. If this is a ` +
-        `rate limit (403), set GITHUB_TOKEN in the build environment.`,
-    );
-  }
-  return res;
 }
 
 async function fetchRepo(): Promise<RepoStats> {
+  githubFetchRetries();
+  const fixture = await readGithubFixture();
+  if (fixture) {
+    return {
+      stars: fixture.repo.stargazers_count,
+      forks: fixture.repo.forks_count,
+    };
+  }
+
   const url = `https://api.github.com/repos/${REPO}`;
   const res = await githubFetch(url);
   const json = (await res.json()) as { stargazers_count?: unknown; forks_count?: unknown };
@@ -334,6 +540,10 @@ async function fetchRepo(): Promise<RepoStats> {
 const MAX_RELEASE_PAGES = 50;
 
 async function fetchAllReleases(): Promise<GithubRelease[]> {
+  githubFetchRetries();
+  const fixture = await readGithubFixture();
+  if (fixture) return fixture.releases;
+
   const releases: GithubRelease[] = [];
   for (let page = 1; page <= MAX_RELEASE_PAGES; page++) {
     const url = `https://api.github.com/repos/${REPO}/releases?per_page=100&page=${page}`;
@@ -414,10 +624,14 @@ export async function getReleaseStats(): Promise<ReleaseStats> {
   releaseStatsPromise ??= (async () => {
     const all = await getAllReleases();
     const nonDraft = all.filter((r) => !r.draft);
+    const latest = latestStable(all);
     return {
       releases: streamReleases(all),
       totalReleaseCount: nonDraft.filter((r) => isMainReleaseTag(r.tag_name)).length,
       totalDownloadCount: sumAssetDownloads(nonDraft.flatMap((r) => r.assets)),
+      latestRelease: latest
+        ? { tag: latest.tag_name, installDownloads: sumInstallDownloads(latest.assets) }
+        : null,
     };
   })();
   return releaseStatsPromise;

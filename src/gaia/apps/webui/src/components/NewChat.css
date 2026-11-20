@@ -64,7 +64,7 @@
 
 .new-chat-setup-failed-title {
     color: var(--danger);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .new-chat-setup-failed-error {
@@ -149,7 +149,9 @@
 
 .new-chat-folder-name {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -231,7 +233,9 @@
 
 .new-chat-doc span {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 

@@ -278,7 +278,7 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
-| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14), and on a run the caller can answer, grant out-of-scope paths unasked (still inside `GAIA_ALLOWED_PATHS`); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
+| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Turn full access on or off for one session (≥ 2.14): gated tools run unasked, the shell runs any command and Python runs any code. On a run the caller can answer, the file tools are granted out-of-scope paths unasked (still inside `GAIA_ALLOWED_PATHS`) |
 | `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.23) |
 | `GET`  | `/v1/gaia/sessions/{session_id}/grants` | The session's "always" answers, `{ key, label }` each (≥ 2.26) |
 | `DELETE` | `/v1/gaia/sessions/{session_id}/grants` | Revoke one (`?key=`) or all of them (≥ 2.26) |
@@ -591,10 +591,10 @@ Omitting it is a valid, explicit one-shot: nothing persists past that single
 turn, and the agent is not told otherwise.
 
 A retained session rebuilds its agent at the start of its next turn when the
-Lemonade Server chosen in Settings changed, or an MCP connector was turned on
-or off or (de)activated for GAIA, since it was built. The rebuilt agent keeps the conversation, loaded skills, the internet
-switch, the memory mode, granted folders and documents, and the working
-folder.
+Lemonade Server or the embedder chosen in Settings changed, or an MCP connector
+was turned on or off or (de)activated for GAIA, since it was built. The rebuilt
+agent keeps the conversation, loaded skills, the internet switch, the memory
+mode, granted folders and documents, and the working folder.
 
 Internal explicit deletion follows the same idle-only rule as eviction: it returns
 `False` for an absent or busy session and preserves a running agent. Successful
@@ -747,11 +747,13 @@ files; a `.env` file cannot set that switch itself.
 environment the sidecar starts in — absolute folders joined with `;` on
 Windows and `:` elsewhere. The scope becomes the overlap with the agent's own scope;
 an entry outside it is ignored with a warning and never widens it. Out-of-scope
-paths are refused without a prompt in every mode, including full access. The
+paths are refused without a prompt in every mode, including full access, for
+the file tools. The
 scratch directory stays writable. An empty, relative or missing entry stops
 the sidecar at startup, before it binds a port. It confines the agent's tools
-— every file tool, search, index and shell path check — not code they run: a
-`run_python` script or shell command can still read anything the OS user can,
+— every file tool, search, index, and the shell path check outside full access
+— not code they run: under full access the shell and Python tools run in any
+folder, and a `run_python` script or shell command can always read anything the OS user can,
 so isolating a run from files it must not see needs a separate OS user,
 container or VM.
 
@@ -825,37 +827,31 @@ keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model
 remotely, so a local server URL alone does not establish local inference.
 
-`--full-access` turns off more than the prompt. It also lifts the shell
-tool's own guardrails for the session: the shell-only operators — redirection
-(`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`) and the
-newline — parse and run, chaining (`&&`, `||`, `;`, `|`) already ran by
-default, the read-only binary allowlist is replaced by a developer set
-(`node`, `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`,
-`timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`/`git`,
-which already had their own paths), and the shell rate limit is dropped. `git`
-being in that set means the policy that holds `git push`, `git reset` and
-`git rebase` also stops applying under bypass. Without bypass those commands ask
-the user once, and are refused only on a run nobody can answer; the destructive
-forms (`git push --force`, `git reset --hard`) are refused with no prompt. That is
-arbitrary code execution in the working directory, which is why it exists only
-on this transport: one local parent process on a private pipe. It is **not**
-reachable over HTTP, and the request body cannot ask for it —
-`POST /v1/gaia/sessions/{id}/bypass` stops an HTTP session's approval prompts
-but never lifts these shell gates. A command those gates hold is never run
-unasked there: on a run someone can answer it still emits `needs_confirmation`
-and waits for `/tool_decision`, and on a run nobody can answer it is refused.
-`rm` is excluded
-from the developer set — not a boundary, since anything in the set can delete a
-file, but a tripwire against an accidental recursive delete. Redirection has one
-exception: a command that is nothing but a skill-granted CLI runs argv-only
-rather than through a shell, so a `>` there is refused with an explanation
-instead of reaching the binary as a literal argument.
+`--full-access` turns off more than the prompt. It also lifts every guardrail
+of the shell and Python tools for the session. The shell runs any program, by
+name or by full path, `rm`, `rmdir` and `del` included: there is no command
+list. The line goes to a shell (`sh`, or `cmd.exe` on Windows), so redirection
+(`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`), loops,
+conditions and several lines all run. No working folder, `cd`, path argument,
+link, credential file, package install or address is refused, the shell rate
+limit is dropped, and `run_python` / `execute_python_file` run their code
+unchecked. A refusal GAIA made by itself is not kept against later calls. What
+still holds: a call the user declined stays declined for that request, calendar
+changes and outgoing mail wait for a person, and a program that is not
+installed fails with the shell's own error. Without full access those commands
+ask the user once, or are refused on a run nobody can answer.
+
+That is arbitrary code execution with the user's account.
+`POST /v1/gaia/sessions/{id}/bypass` turns the same mode on for an HTTP
+session, so guard that route: it is behind the caller-auth token like the rest
+of the API, and a sidecar started without a token refuses to turn it on (`403`). A request with no `session_id` has no mode and never gets it, and
+the query body cannot ask for it.
 
 Every shell command run under bypass is recorded with its full arguments and its
 per-segment breakdown in `~/.gaia/cache/file_audit.log` — skipping the prompt
 does not skip the record. Treat that file as sensitive; arguments are verbatim.
-The host can toggle bypass mid-session over `gaia_control`, and the shell gates
-follow on the very next command.
+The host can toggle full access mid-session over `gaia_control`, and the shell
+follows on the very next command.
 
 `--use-claude` is the one with a reach beyond the machine, and it cannot be
 turned on for what this package delivers: the terminal UI **refuses** the launch

@@ -202,6 +202,7 @@ describe('the drift guard runs on every tree it reads', () => {
       'docs/spec/gaia-design-language.mdx',
       'installer/tui/artifacts.py',
       'src/gaia/apps/webui/src/styles/index.css',
+      'tests/fixtures/github/releases.json',
       'tui/internal/ui/theme/theme.go',
     ]);
   });

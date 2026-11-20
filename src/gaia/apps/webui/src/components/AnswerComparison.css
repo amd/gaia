@@ -16,7 +16,7 @@
     margin-bottom: 8px;
     color: var(--text-secondary);
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .answer-compare-cols {
@@ -41,7 +41,9 @@
     overflow: hidden;
     color: var(--text-primary);
     font-size: 13px;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -119,7 +121,9 @@
 .retry-menu-name {
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 

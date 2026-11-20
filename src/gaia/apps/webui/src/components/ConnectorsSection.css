@@ -34,7 +34,8 @@
     .connector-tile-header {
         flex-wrap: wrap;
     }
-    .connector-status.ok {
+    /* Any status, not only Connected: a long name otherwise pushes the chevron to its own line. */
+    .connector-status {
         order: 3;
         flex-basis: 100%;
         min-width: 0;
@@ -84,7 +85,7 @@
 
 .connector-tile-name {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .connector-tile-type {
@@ -336,7 +337,7 @@
 
 .grants-header {
     font-size: var(--fs-label);
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     color: var(--text-muted);
     margin-bottom: 8px;
@@ -362,7 +363,7 @@
 
 .grant-agent-card-name {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     color: var(--text-primary);
     margin-bottom: 10px;
@@ -593,7 +594,7 @@
 
 .agent-mcp-server-name {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .agent-mcp-agent-label {
@@ -701,7 +702,9 @@
     color: var(--text-muted);
     font-size: 11px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
     max-width: 60%;
 }
@@ -736,7 +739,7 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 18px;
     letter-spacing: 2px;
-    font-weight: 600;
+    font-weight: 500;
     padding: 4px 10px;
     border-radius: 6px;
     background: var(--bg-tertiary);

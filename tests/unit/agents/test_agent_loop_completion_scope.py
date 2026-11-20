@@ -384,9 +384,13 @@ def test_the_work_a_completion_check_asks_for_is_not_refused(agent, tmp_path):
         call("write_file", file_path="out/summary.md", content="three rows\n"),
         call("read_file", file_path="out/summary.md"),
         {"answer": "Saved the summary to `out/summary.md`: three rows."},
+        # The file now exists, so the turn's one self-check is asked for.
+        {"answer": "RESULT: PASS"},
     )
     result = agent.process_query("Summarize the data and save it to `out/summary.md`")
     assert "[check:completion]" in str(sent[1][-1]["content"])
+    assert "[check:self]" in str(sent[-1][-1]["content"])
+    assert result["result"].startswith("Saved the summary to `out/summary.md`")
     results = " ".join(
         str(m["content"]) for turn in sent for m in turn if m.get("role") == "tool"
     )
@@ -924,6 +928,83 @@ def _write_and_verify(tmp_path, name, content, on_disk=None):
     ledger.record("write_file", args, {"status": "success"}, True)
     Agent._verify_whole_write(_AGENT, ledger, "write_file", args)
     return _gaps(ledger, f"The report is saved to `{name}`.")
+
+
+def _script_writes_then_shell_shows(tmp_path, command, stdout=None, **extra):
+    """A requested output a script wrote, then a shell line that prints it."""
+    ledger = CompletionEvidence("Write the result to out.toml.", str(tmp_path))
+    target = tmp_path / "out.toml"
+    content = "takeoff = 53\nlanding = 62\n"
+    target.write_text(content, encoding="utf-8")
+    ledger.record(
+        "run_python",
+        {"code": "..."},
+        {"status": "success", "file_path": str(target)},
+        True,
+    )
+    args = {"command": command}
+    result = {"status": "success", "stdout": content if stdout is None else stdout}
+    result.update(extra)
+    ledger.record("run_shell_command", args, result, True)
+    Agent._verify_shown_file(_AGENT, ledger, "run_shell_command", args, result)
+    return _gaps(ledger, "The result is saved to `out.toml`.")
+
+
+def test_a_shell_cat_that_showed_the_whole_file_is_a_read_back(tmp_path):
+    """A file a script wrote, shown whole by cat, was still called unread."""
+    gaps = _script_writes_then_shell_shows(tmp_path, "cat out.toml")
+    assert not any("read back" in g for g in gaps)
+
+
+@pytest.mark.parametrize(
+    "command, stdout, extra",
+    [
+        ("cat out.toml | head -1", None, {}),
+        ("cat out.toml && echo done", None, {}),
+        ("head -1 out.toml", None, {}),
+        ("cat out.toml", "takeoff = 53\n", {}),
+        ("cat out.toml", None, {"output_truncated": True}),
+    ],
+)
+def test_a_shell_line_that_did_not_show_all_of_it_is_no_read_back(
+    tmp_path, command, stdout, extra
+):
+    gaps = _script_writes_then_shell_shows(tmp_path, command, stdout, **extra)
+    assert any("read back" in g for g in gaps)
+
+
+def test_a_cat_run_in_another_folder_reads_the_file_there(tmp_path):
+    """After a cd the shell is elsewhere; the path is relative to that folder."""
+    ledger = CompletionEvidence("Write the result to out/r.toml.", str(tmp_path))
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "r.toml").write_text("ok = true" + chr(10), encoding="utf-8")
+    ledger.record(
+        "run_python",
+        {"code": "..."},
+        {"status": "success", "file_path": str(out / "r.toml")},
+        True,
+    )
+    args = {"command": "cat r.toml"}
+    result = {"status": "success", "stdout": "ok = true" + chr(10), "cwd": str(out)}
+    ledger.record("run_shell_command", args, result, True)
+    Agent._verify_shown_file(_AGENT, ledger, "run_shell_command", args, result)
+    gaps = _gaps(ledger, "The result is saved to `out/r.toml`.")
+    assert not any("read back" in g for g in gaps)
+
+
+def test_a_cat_of_a_script_output_not_yet_recorded_is_a_read_back(tmp_path):
+    """The script reported no path and the request named none: still a read."""
+    ledger = CompletionEvidence("Save the result as a TOML file.", str(tmp_path))
+    target = tmp_path / "out.toml"
+    content = "takeoff = 53\n"
+    _run_script(ledger, lambda: target.write_text(content, encoding="utf-8"))
+    args = {"command": "cat out.toml"}
+    result = {"status": "success", "stdout": content}
+    ledger.record("run_shell_command", args, result, True)
+    Agent._verify_shown_file(_AGENT, ledger, "run_shell_command", args, result)
+    gaps = _gaps(ledger, "The result is saved to `out.toml`.")
+    assert not any("read back" in g for g in gaps)
 
 
 def test_a_whole_write_the_framework_matched_needs_no_read_back(tmp_path):

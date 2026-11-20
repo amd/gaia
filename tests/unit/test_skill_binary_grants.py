@@ -1034,7 +1034,11 @@ def test_a_line_the_runner_cannot_parse_is_refused_before_any_prompt():
         "find . -delete",
     ],
 )
-def test_a_confirmable_command_reaches_the_prompt_instead_of_being_refused(command):
+def test_a_confirmable_command_reaches_the_prompt_instead_of_being_refused(
+    command, monkeypatch
+):
+    # A program that is not on this PC is answered "not installed" instead.
+    monkeypatch.setattr("gaia.program_lookup.resolve", lambda name: f"/usr/bin/{name}")
     assert (
         _refusal(_Gated("gh"), command) is None
     ), f"{command!r} was refused before anyone could approve it"
@@ -1422,7 +1426,7 @@ def test_a_one_time_call_says_how_it_may_run():
     """Accurate to the model: approved once by the user, or not at all."""
     error, _ = _Gated("gh")._validate_shell_command("gh auth token")
     assert "exact command once" in error["hint"]
-    assert "do not reach the same result another way" in error["hint"]
+    assert "do not run it through another tool or script" in error["hint"]
 
 
 def test_the_always_grant_is_scoped_to_the_command_class_not_the_tool():
@@ -1692,7 +1696,7 @@ def _run_capturing_subprocess(host, command):
         )
         return _FakeProcess()
 
-    def fake_pipeline(segments, modes, envs, cwd, timeout, waiter=None):
+    def fake_pipeline(segments, modes, envs, cwd, timeout, waiter=None, marked=True):
         seen["pipeline"] = segments
         return subprocess_module.CompletedProcess(segments, 0, "", "")
 

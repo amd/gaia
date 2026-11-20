@@ -114,10 +114,13 @@ _PART_ERRORS = (ResourceProbeError, OSError, AttributeError)
 class OptionalPart(Generic[T]):
     """A GPU or network reading that can fail on its own.
 
-    CPU and memory still show when it does; the part reports why it's
-    missing instead, logs the cause once, and stays off until the sampler
-    restarts.
+    CPU and memory still show when it does. A failed read is skipped and the
+    part reopens on the next poll; only ``MAX_FAILURES`` failures in a row
+    turn it off and report why, until the sampler restarts.
     """
+
+    # Windows can fail one GPU counter read when a new process starts.
+    MAX_FAILURES = 3
 
     def __init__(
         self,
@@ -128,26 +131,53 @@ class OptionalPart(Generic[T]):
         self.what = what
         self.error: Optional[str] = None
         self._state: Optional[T] = None
+        self._start = start
         self._close = close
+        self._failures = 0
+        self._open()
+
+    def _open(self) -> None:
         try:
-            self._state = start()
+            self._state = self._start()
         except _PART_ERRORS as e:
-            self._broke(e)
+            self._failed(e)
 
     def read(self, fn: Callable[[T], list]) -> list:
         if self._state is None:
-            return []
+            if self.error is not None:
+                return []
+            self._open()
+            if self._state is None:
+                return []
         try:
-            return fn(self._state)
+            out = fn(self._state)
         except _PART_ERRORS as e:
             self.close()
-            self._broke(e)
+            self._failed(e)
             return []
+        self._failures = 0
+        return out
 
-    def _broke(self, e: Exception) -> None:
+    def _failed(self, e: Exception) -> None:
+        self._failures += 1
+        if self._failures < self.MAX_FAILURES:
+            logger.warning(
+                "Resource monitor: %s read failed (%d of %d in a row), "
+                "retrying on the next poll: %s",
+                self.what,
+                self._failures,
+                self.MAX_FAILURES,
+                e,
+            )
+            return
         self.error = str(e) or type(e).__name__
-        logger.warning(
-            "Resource monitor: %s usage unavailable: %s", self.what, e, exc_info=True
+        logger.error(
+            "Resource monitor: %s usage unavailable after %d failed reads in a "
+            "row, giving up until the resource monitor restarts: %s",
+            self.what,
+            self._failures,
+            e,
+            exc_info=True,
         )
 
     def close(self) -> None:

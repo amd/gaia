@@ -202,6 +202,16 @@ def test_clear_on_an_agent_without_routing_is_harmless():
     stdio._reset_hybrid_route(SimpleNamespace())
 
 
+def test_clear_forgets_the_sources_the_chat_has_seen(monkeypatch):
+    """A cleared chat's file numbers must not ground the next chat's deck."""
+    agent, _, _, _ = _agent(monkeypatch, [_label("answer_question", 1, "low")])
+    agent.conversation_history = [{"role": "user", "content": "Summarise q3.csv"}]
+    agent.note_seen("read_file", {"path": "q3.csv"}, "Revenue 12,431,220")
+    assert len(agent.seen_sources()) == 2
+    stdio.dispatch_query(agent, stdio.CLEAR_CONVERSATION_QUERY, io.StringIO())
+    assert agent.seen_sources() == []
+
+
 def test_routed_model_refusal_names_its_setting(monkeypatch):
     from gaia.llm.lemonade_client import CloudModelUnavailableError
 

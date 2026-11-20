@@ -3292,16 +3292,19 @@ def _find_last_tool_step(steps: list) -> dict | None:
 
 
 def _denial(event: dict) -> Optional[str]:
-    """``"declined"``, ``"timedOut"`` or ``"autoDeclined"`` for a call that never ran.
+    """Why a ``tool_result``'s call never ran, as the step field that records it.
 
-    A relayed result nests its status in ``data``.
+    ``"declined"`` (the user said no), ``"timedOut"`` (nobody answered),
+    ``"refused"`` (GAIA's own rule) or ``"autoDeclined"`` (GAIA judged it not
+    needed, unasked). A relayed result nests these in ``data``.
     """
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     if event.get("status", data.get("status")) != "denied":
         return None
-    timed_out = event.get("timed_out") is True or data.get("timed_out") is True
-    if timed_out:
+    if event.get("timed_out") is True or data.get("timed_out") is True:
         return "timedOut"
+    if event.get("denied_by", data.get("denied_by")) == "policy":
+        return "refused"
     if event.get("declined_by", data.get("declined_by")) == "agent":
         return "autoDeclined"
     return "declined"
@@ -6524,6 +6527,7 @@ async def _index_document(
         progress["at"] = _time.monotonic()
 
     def _do_index():
+        from gaia.agents.registry import machine_embedding_model
         from gaia.daemon.broker_client import lease_cancel_scope, lease_wait_listener
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
@@ -6534,7 +6538,10 @@ async def _index_document(
         # Allow access to the file's directory (and user home) since the UI
         # explicitly selected this file via the file browser.
         allowed = [str(filepath.parent), str(Path.home())]
-        config = RAGConfig(allowed_paths=allowed)
+        # The embedder chat searches with, so the upload's vectors are reused.
+        config = RAGConfig(
+            allowed_paths=allowed, embedding_model=machine_embedding_model()
+        )
         rag = RAGSDK(config)
         loaded = batch.pop("embedder", None) if batch is not None else None
         if loaded is not None:
