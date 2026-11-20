@@ -57,6 +57,13 @@ describe('citations in an answer', () => {
         expect(found[1].href).toMatch(/\/api\/documents\/ar25\/file#page=60$/);
     });
 
+    it('names the answer\'s chat, which away from the PC is what may open the document', () => {
+        const { container } = render(<RenderedContent content={'According to report.pdf, page 2:'} sessionId="chat 1" />);
+        const hrefs = [...container.querySelectorAll<HTMLAnchorElement>('a.citation-link, a.citation-page')].map((a) => a.getAttribute('href'));
+        expect(hrefs).toHaveLength(2);
+        for (const href of hrefs) expect(href).toMatch(/\/api\/documents\/rep\/file\?session_id=chat\+1#page=2$/);
+    });
+
     it('English, "pages 175 and 205"', () => {
         expect(links('According to annual-report-2024-ar.pdf, pages 175 and 205:').map(({ kind, page }) => [kind, page]))
             .toEqual([['doc', 175], ['page', 175], ['page', 205]]);

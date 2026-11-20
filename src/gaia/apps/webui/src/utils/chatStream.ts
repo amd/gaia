@@ -3,8 +3,8 @@
 
 /** Pure helpers ChatView uses to turn the chat stream into messages. */
 
-import type { AgentStep, Message, RenderCardData, StreamEvent } from '../types';
-import { addCard } from './connectCards';
+import type { AgentStep, Message, StreamEvent } from '../types';
+import { cardsFromSteps } from './renderCards.core';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -64,14 +64,6 @@ export function isEchoOfFailedTool(event: StreamEvent, steps: AgentStep[]): bool
     const last = steps[steps.length - 1];
     if (!last || last.type !== 'tool') return false;
     return last.success === false || (!!last.active && last.success == null);
-}
-
-/** The cards a reloaded answer drew, from the steps that persisted them. */
-function cardsFromSteps(steps: AgentStep[] | undefined): RenderCardData[] | undefined {
-    const cards = (steps || [])
-        .filter((s) => typeof s.render === 'string' && s.render.length > 0)
-        .reduce<RenderCardData[]>((acc, s) => addCard(acc, { render: s.render as string, data: s.data }), []);
-    return cards.length > 0 ? cards : undefined;
 }
 
 /** Messages as the API sends them, with steps and stats under the names the view reads. */

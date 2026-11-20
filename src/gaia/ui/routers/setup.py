@@ -9,18 +9,29 @@ with the same ``gaia init --check``, so they can never disagree.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from gaia.installer.model_choice import (
+    ROLE_CHAT,
+    ROLE_EMBEDDING,
+    ROLE_IMAGE_CREATION,
+    ROLE_SPEECH,
+    ROLE_VISION,
+    ROLE_VOICE,
+)
+from gaia.llm.lemonade_choice import MODE_EXTERNAL, MODE_GAIA
+from gaia.llm.npu_linux import ACCESS, DEVICE, DRIVER, FIRMWARE, MEMLOCK, RUNTIME
 from gaia.logger import get_logger
 
 from .. import setup_plan as plan_api
 from ..database import ChatDatabase
 from ..dependencies import get_db
-from ..security import require_local_pc, require_ui_header
+from ..models import WireModel
+from ..security import refuse_on_device_listener, require_local_pc, require_ui_header
 from ..setup_plan import (
     CantRunHere,
     ServerNotRunning,
@@ -30,6 +41,8 @@ from ..setup_plan import (
     choose_chat_model,
 )
 from ..setup_runner import (
+    MODEL_STATES,
+    PHASES,
     REPORT_NAME_RE,
     SetupBusy,
     SetupError,
@@ -63,6 +76,344 @@ _BUSY = (
 )
 _START_FAILED = "Setup couldn't start. Try again. " + _LOG
 
+_Number = Union[int, float]
+_Role = Literal[
+    ROLE_CHAT,
+    ROLE_VISION,
+    ROLE_EMBEDDING,
+    ROLE_SPEECH,
+    ROLE_VOICE,
+    ROLE_IMAGE_CREATION,
+]
+_ModelState = Literal[MODEL_STATES]  # type: ignore[valid-type]
+_Phase = Literal[PHASES]  # type: ignore[valid-type]
+
+
+class SetupStepView(WireModel):
+    """One step of setup as the user reads it; ``status`` only while a run is on."""
+
+    key: _Phase
+    label: str
+    detail: str
+    status: Optional[Literal["pending", "active", "done", "failed", "cancelled"]] = None
+
+
+class SetupModelLoad(WireModel):
+    """One model the load check tried."""
+
+    id: str
+    role: str
+    size_gb: Optional[_Number]
+    loaded: bool
+    error: Optional[str]
+    #: Whether the server already has it; null when not checked.
+    downloaded: Optional[bool]
+    #: Why it failed; only ``broken`` says the file itself is bad.
+    kind: Optional[str]
+
+
+class SetupCheckResponse(WireModel):
+    """``gaia init --check --json`` plus the step lists the screen shows."""
+
+    ready: bool
+    stage: Optional[str]
+    reasons: List[str]
+    models: List[SetupModelLoad]
+    agent_missing: bool
+    warnings: List[str]
+    no_agent_build: bool
+    model_list_unread: bool
+    initialized: bool
+    steps: List[SetupStepView]
+    cloud_steps: List[SetupStepView]
+
+
+class SetupLemonade(WireModel):
+    """The model server setup will use."""
+
+    mode: Literal[MODE_GAIA, MODE_EXTERNAL]
+    url: Optional[str]
+    reachable: bool
+
+
+class SetupChatModel(WireModel):
+    """The chat model setup starts from."""
+
+    id: str
+    user_set: bool
+    size_gb: Optional[_Number]
+    downloaded: Optional[bool]
+
+
+class SetupOption(WireModel):
+    """One default chat model and whether this PC can run it."""
+
+    id: str
+    size_gb: Optional[_Number]
+    fits: Optional[bool]
+    reason: Optional[str]
+
+
+class SetupDisk(WireModel):
+    """The drive models download to."""
+
+    path: Optional[str]
+    free_gb: Optional[_Number]
+    source: Optional[Literal["lemonade", "local"]]
+
+
+class SetupCatalogEntry(WireModel):
+    """One model setup can pull or use. Every ``*_gb`` is decimal GB."""
+
+    id: str
+    name: str
+    roles: List[_Role]
+    purpose: str
+    if_skipped: Optional[str]
+    recipe: Optional[str]
+    size_gb: Optional[_Number]
+    full_size_gb: Optional[_Number]
+    partial: bool
+    partial_gb: _Number
+    downloaded: Optional[bool]
+    in_lemonade: bool
+    recommended: bool
+    planned: bool
+    gaia_model: bool
+    selected: bool
+    skipped: bool
+    chat_choice: bool
+    support: Optional[Literal["verified", "untested"]]
+    reads_images: bool
+    feature_tier: Literal["compact", "full"]
+    source: Optional[str]
+    fits: Optional[bool]
+    need_gb: Optional[_Number]
+    capacity_gb: Optional[_Number]
+    fit_reason: Optional[str]
+    fit_code: Optional[Literal["memory", "npu", "backend"]]
+
+
+class SetupPlanModel(SetupCatalogEntry):
+    """A catalog entry setup will download, with its role in the plan."""
+
+    role: Literal["chat", "embedding"]
+
+
+class SetupComponent(WireModel):
+    """Something setup fetches besides the models."""
+
+    id: Literal["server", "backend", "agent"]
+    version: Optional[str]
+    size_gb: Optional[_Number]
+    source: str
+    #: The server only: true when the GAIA installer carries its archive.
+    bundled: Optional[bool] = None
+    installed: Optional[bool]
+
+
+class SetupBackend(WireModel):
+    """A backend Lemonade reports for this PC."""
+
+    recipe: str
+    backend: str
+    state: Optional[str]
+    version: Optional[str]
+    default: bool
+
+
+class SetupNpuProblem(WireModel):
+    """One thing between this PC and running a model on its NPU."""
+
+    code: Literal[DRIVER, DEVICE, FIRMWARE, ACCESS, MEMLOCK, RUNTIME]
+    title: str
+    fix: str
+    params: Dict[str, str]
+
+
+class SetupNpuStatus(WireModel):
+    """Whether this PC has an NPU and what stops a model running on it."""
+
+    present: bool
+    ready: bool
+    problems: List[SetupNpuProblem]
+
+
+class SetupDevice(WireModel):
+    """A processor Lemonade found."""
+
+    kind: str
+    name: str
+    family: Optional[str]
+    available: bool
+    integrated: Optional[bool]
+    cores: Optional[_Number]
+    threads: Optional[_Number]
+
+
+class SetupGaiaBuild(WireModel):
+    """Which GAIA is running."""
+
+    version: str
+    kind: Literal["release", "release_candidate", "local", "source"]
+    rc: Optional[str]
+    commit: Optional[str]
+
+
+class SetupSystem(WireModel):
+    """What setup found across GAIA, the model server and this PC."""
+
+    gaia_build: SetupGaiaBuild
+    gaia_version: str
+    gaia_home: str
+    agent_version: Optional[str]
+    lemonade_version: Optional[str]
+    os: Optional[str]
+    processor: Optional[str]
+    physical_memory: Optional[str]
+    devices: List[SetupDevice]
+
+
+class SetupPlanResponse(WireModel):
+    """What setup will use and download, before it starts."""
+
+    profile: str
+    lemonade: SetupLemonade
+    chat_model: SetupChatModel
+    recommended_model: Optional[str]
+    decided_after_server: bool
+    memory_gb: Optional[int]
+    memory_source: Optional[str]
+    capacity_gb: Optional[_Number]
+    disk: SetupDisk
+    download_gb: Optional[_Number]
+    disk_warning: Optional[str]
+    skipped_models: List[str]
+    options: List[SetupOption]
+    models: List[SetupPlanModel]
+    catalog: List[SetupCatalogEntry]
+    components: List[SetupComponent]
+    backends: List[SetupBackend]
+    npu: SetupNpuStatus
+    system: SetupSystem
+    vision_model: Optional[str]
+
+
+class SetupRemoveModelResponse(SetupPlanResponse):
+    """The new plan after a model is removed, and the space it freed."""
+
+    freed_gb: _Number
+
+
+class SetupNeedModel(WireModel):
+    """The model a job is missing."""
+
+    id: str
+    name: str
+    size_gb: Optional[_Number]
+    source: Optional[str]
+
+
+class SetupModelNeedResponse(WireModel):
+    """Whether a job needs a model that isn't on this PC; ``off`` says why none is offered."""
+
+    job: _Role
+    needed: bool
+    model: Optional[SetupNeedModel]
+    disk_free_gb: Optional[_Number]
+    off: Optional[Literal["npu"]] = None
+
+
+class SetupProblemView(WireModel):
+    """A failed setup with a known fix: the user's model server."""
+
+    kind: Literal["server_unreachable", "server_too_old"]
+    message: str
+    start: Optional[str]
+    use_gaia: bool
+    env_url: Optional[str]
+
+
+class SetupModelProgress(WireModel):
+    """One model's download. Sizes in bytes; speed in bytes per second."""
+
+    id: str
+    roles: List[_Role]
+    state: _ModelState
+    bytes_done: _Number
+    bytes_total: _Number
+    speed_bps: _Number
+    eta_s: Optional[int]
+    error: Optional[str]
+    error_kind: Optional[str]
+    can_retry: bool
+    retrying_until: Optional[_Number]
+    downloaded_before_gb: Optional[_Number]
+    log: List[str]
+
+
+class SetupOverall(WireModel):
+    """Bytes-weighted progress across the models being set up."""
+
+    bytes_done: _Number
+    bytes_total: _Number
+    speed_bps: _Number
+    eta_s: Optional[int]
+    percent: Optional[int]
+    failed: int
+
+
+class SetupTestRow(WireModel):
+    """One row of the Test step; the fields come from ``gaia init``'s events."""
+
+    job: Optional[str]
+    subject: Optional[str]
+    state: Optional[str]
+    error: Optional[str]
+    kind: Optional[str]
+    seconds: Optional[_Number]
+
+
+class SetupRunStatus(WireModel):
+    """The running (or last) setup. ``idle`` carries only ``state`` and, after a
+    single model download, ``models``, ``overall`` and ``logs``."""
+
+    state: Literal["idle", "running", "verifying", "ready", "failed", "cancelled"]
+    steps: Optional[List[SetupStepView]] = None
+    text: Optional[str] = None
+    percent: Optional[int] = None
+    size: Optional[str] = None
+    error: Optional[str] = None
+    problem: Optional[SetupProblemView] = None
+    command: Optional[str] = None
+    log_tail: Optional[List[str]] = None
+    skip_chat_model: Optional[bool] = None
+    gaia_lemonade: Optional[bool] = None
+    server_only: Optional[bool] = None
+    upgrade_embedded: Optional[bool] = None
+    model_failed: Optional[bool] = None
+    components: Optional[Dict[str, str]] = None
+    component_kinds: Optional[Dict[str, str]] = None
+    tests: Optional[List[SetupTestRow]] = None
+    chat_model: Optional[str] = None
+    models: Optional[List[SetupModelProgress]] = None
+    overall: Optional[SetupOverall] = None
+    logs: Optional[Dict[str, List[str]]] = None
+
+
+class SetupReportResponse(WireModel):
+    """The troubleshooting bundle just written."""
+
+    name: str
+    path: str
+    size_bytes: int
+
+
+class SetupCancelResponse(WireModel):
+    """Whether anything was stopped."""
+
+    cancelled: bool
+
 
 def _plan_error(e: SetupPlanError, unknown_model: str) -> HTTPException:
     """The response for a failed plan call; *unknown_model* is the 422 wording."""
@@ -85,7 +436,12 @@ def _run_error(e: SetupError) -> HTTPException:
 
 
 # Starts a subprocess that can load models, so a cross-site GET must not reach it.
-@router.get("/api/setup/check", dependencies=[Depends(require_ui_header)])
+@router.get(
+    "/api/setup/check",
+    dependencies=[Depends(require_ui_header)],
+    response_model=SetupCheckResponse,
+    response_model_exclude_unset=True,
+)
 def setup_check(skip_chat_model: bool = False, load: bool = False) -> Dict[str, Any]:
     """``gaia init --check --json``: ready, or the stage and reasons it is not."""
     try:
@@ -105,7 +461,12 @@ def setup_check(skip_chat_model: bool = False, load: bool = False) -> Dict[str, 
 
 
 # Probes the Lemonade GAIA uses, so a cross-site GET must not reach it.
-@router.get("/api/setup/plan", dependencies=[Depends(require_ui_header)])
+@router.get(
+    "/api/setup/plan",
+    dependencies=[Depends(require_ui_header)],
+    response_model=SetupPlanResponse,
+    response_model_exclude_unset=True,
+)
 def setup_plan(skip_chat_model: Optional[bool] = None) -> Dict[str, Any]:
     """The server, chat model and downloads setup will use; loads nothing.
 
@@ -118,7 +479,12 @@ def setup_plan(skip_chat_model: Optional[bool] = None) -> Dict[str, Any]:
         raise _plan_error(e, _PLAN_FAILED) from e
 
 
-@router.post("/api/setup/npu/recheck", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/api/setup/npu/recheck",
+    dependencies=[Depends(require_ui_header)],
+    response_model=SetupPlanResponse,
+    response_model_exclude_unset=True,
+)
 def setup_npu_recheck() -> Dict[str, Any]:
     """Read the NPU's setup afresh, after the user fixed something; returns the plan."""
     from gaia.llm import npu_linux
@@ -131,6 +497,8 @@ def setup_npu_recheck() -> Dict[str, Any]:
 @router.post(
     "/api/setup/npu/memlock-fix",
     dependencies=[Depends(require_ui_header), Depends(require_local_pc)],
+    response_model=SetupPlanResponse,
+    response_model_exclude_unset=True,
 )
 def setup_npu_memlock_fix() -> Dict[str, Any]:
     """Raise the locked-memory limit FastFlowLM needs, behind the desktop's own
@@ -166,7 +534,12 @@ class ChatModelRequest(BaseModel):
     acknowledge_no_fit: bool = False
 
 
-@router.post("/api/setup/chat-model", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/api/setup/chat-model",
+    dependencies=[Depends(require_ui_header)],
+    response_model=SetupPlanResponse,
+    response_model_exclude_unset=True,
+)
 def setup_chat_model(
     body: ChatModelRequest, skip_chat_model: Optional[bool] = None
 ) -> Dict[str, Any]:
@@ -194,7 +567,12 @@ class VisionModelRequest(BaseModel):
     model_id: Optional[str] = None
 
 
-@router.post("/api/setup/vision-model", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/api/setup/vision-model",
+    dependencies=[Depends(require_ui_header)],
+    response_model=SetupPlanResponse,
+    response_model_exclude_unset=True,
+)
 def setup_vision_model(
     body: VisionModelRequest, skip_chat_model: Optional[bool] = None
 ) -> Dict[str, Any]:
@@ -206,7 +584,12 @@ def setup_vision_model(
         raise _plan_error(e, f"{body.model_id} can't read images.") from e
 
 
-@router.post("/api/setup/report", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/api/setup/report",
+    dependencies=[Depends(require_ui_header), Depends(refuse_on_device_listener)],
+    response_model=SetupReportResponse,
+    response_model_exclude_unset=True,
+)
 def setup_report() -> Dict[str, Any]:
     """Bundle setup's record, every GAIA log and a system snapshot for a bug report."""
     record = runner.report()
@@ -222,7 +605,10 @@ def setup_report() -> Dict[str, Any]:
     return {"name": path.name, "path": str(path), "size_bytes": path.stat().st_size}
 
 
-@router.get("/api/setup/report/{name}", dependencies=[Depends(require_ui_header)])
+@router.get(
+    "/api/setup/report/{name}",
+    dependencies=[Depends(require_ui_header), Depends(refuse_on_device_listener)],
+)
 def setup_report_file(name: str) -> FileResponse:
     """A troubleshooting report written by ``POST /api/setup/report``."""
     from gaia.home import gaia_home
@@ -236,7 +622,12 @@ def setup_report_file(name: str) -> FileResponse:
 _MODEL_JOBS = ("chat", "vision", "embedding", "speech", "voice", "image_creation")
 
 
-@router.get("/api/setup/needs/{job}", dependencies=[Depends(require_ui_header)])
+@router.get(
+    "/api/setup/needs/{job}",
+    dependencies=[Depends(require_ui_header)],
+    response_model=SetupModelNeedResponse,
+    response_model_exclude_unset=True,
+)
 def setup_model_need(job: str) -> Dict[str, Any]:
     """Whether a job needs a model that isn't on this PC, and which."""
     if job not in _MODEL_JOBS:
@@ -254,7 +645,12 @@ class SkipModelRequest(BaseModel):
     skipped: bool = True
 
 
-@router.post("/api/setup/models/skip", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/api/setup/models/skip",
+    dependencies=[Depends(require_ui_header)],
+    response_model=SetupPlanResponse,
+    response_model_exclude_unset=True,
+)
 def setup_skip_model(
     body: SkipModelRequest, skip_chat_model: Optional[bool] = None
 ) -> Dict[str, Any]:
@@ -282,6 +678,8 @@ class DownloadModelRequest(BaseModel):
     "/api/setup/models/download",
     status_code=202,
     dependencies=[Depends(require_ui_header)],
+    response_model=SetupRunStatus,
+    response_model_exclude_unset=True,
 )
 def setup_download_model(body: DownloadModelRequest) -> Dict[str, Any]:
     """Download one model now: Retry, Resume, or one skipped at setup.
@@ -310,7 +708,12 @@ class RemoveModelRequest(BaseModel):
     model_id: str
 
 
-@router.post("/api/setup/models/remove", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/api/setup/models/remove",
+    dependencies=[Depends(require_ui_header)],
+    response_model=SetupRemoveModelResponse,
+    response_model_exclude_unset=True,
+)
 def setup_remove_model(
     body: RemoveModelRequest, skip_chat_model: Optional[bool] = None
 ) -> Dict[str, Any]:
@@ -353,7 +756,11 @@ class SetupRunRequest(BaseModel):
     upgrade_embedded: bool = False
 
 
-@router.post("/api/setup/run")
+@router.post(
+    "/api/setup/run",
+    response_model=SetupRunStatus,
+    response_model_exclude_unset=True,
+)
 def setup_run(
     body: SetupRunRequest, db: ChatDatabase = Depends(get_db)
 ) -> Dict[str, Any]:
@@ -422,7 +829,11 @@ def start_run(body: SetupRunRequest, chat_model_for) -> Dict[str, Any]:
         raise _run_error(e) from e
 
 
-@router.get("/api/setup/status")
+@router.get(
+    "/api/setup/status",
+    response_model=SetupRunStatus,
+    response_model_exclude_unset=True,
+)
 def setup_status() -> Dict[str, Any]:
     """The running (or last) setup's steps and progress; ``state: idle`` if none."""
     return runner.status() or {"state": "idle"}
@@ -432,7 +843,11 @@ class CancelRequest(BaseModel):
     model_id: Optional[str] = None
 
 
-@router.post("/api/setup/cancel")
+@router.post(
+    "/api/setup/cancel",
+    response_model=SetupCancelResponse,
+    response_model_exclude_unset=True,
+)
 def setup_cancel(body: Optional[CancelRequest] = None) -> Dict[str, Any]:
     """Stop the running setup, or one model's download. Finished models and
     partial files are kept, so a later run or download resumes."""

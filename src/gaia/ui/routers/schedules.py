@@ -12,7 +12,9 @@ from typing import List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ..models import WireModel
 from ..scheduler import DuplicateScheduleName, Scheduler
+from ..security import audit_approval
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +117,12 @@ class ScheduleResultsResponse(BaseModel):
     total: int
 
 
+class ScheduleDeleteResponse(WireModel):
+    """Confirmation that a schedule was deleted."""
+
+    deleted: bool
+
+
 class ParseScheduleRequest(BaseModel):
     """Request to parse a natural language schedule description."""
 
@@ -203,6 +211,7 @@ async def parse_schedule(request: ParseScheduleRequest):
 @router.post("/api/schedules", response_model=ScheduleResponse)
 async def create_schedule(
     request: CreateScheduleRequest,
+    http_request: Request,
     scheduler: Scheduler = Depends(get_scheduler),
 ):
     """Create a new scheduled task."""
@@ -213,6 +222,7 @@ async def create_schedule(
             prompt=request.prompt,
             tz=request.timezone,
         )
+        audit_approval(http_request, f"schedule {request.name!r} created")
         return task
     except DuplicateScheduleName as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -267,6 +277,7 @@ async def get_schedule(
 async def update_schedule(
     name: str,
     request: UpdateScheduleRequest,
+    http_request: Request,
     scheduler: Scheduler = Depends(get_scheduler),
 ):
     """Update a scheduled task (pause, resume, cancel)."""
@@ -274,7 +285,9 @@ async def update_schedule(
         if request.status == "paused":
             return await scheduler.pause_task(name)
         elif request.status == "active":
-            return await scheduler.resume_task(name)
+            resumed = await scheduler.resume_task(name)
+            audit_approval(http_request, f"schedule {name!r} resumed")
+            return resumed
         elif request.status == "cancelled":
             return await scheduler.cancel_task(name)
         else:
@@ -308,18 +321,25 @@ async def edit_schedule(
 @router.post("/api/schedules/{name:path}/run", response_model=ScheduleResponse)
 async def run_schedule_now(
     name: str,
+    http_request: Request,
     scheduler: Scheduler = Depends(get_scheduler),
 ):
     """Run a scheduled task once now; its next scheduled time stays as it was."""
     try:
-        return await scheduler.run_task_now(name)
+        started = await scheduler.run_task_now(name)
+        audit_approval(http_request, f"schedule {name!r} run now")
+        return started
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Schedule '{name}' not found")
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
 
-@router.delete("/api/schedules/{name:path}")
+@router.delete(
+    "/api/schedules/{name:path}",
+    response_model=ScheduleDeleteResponse,
+    response_model_exclude_unset=True,
+)
 async def delete_schedule(
     name: str,
     scheduler: Scheduler = Depends(get_scheduler),

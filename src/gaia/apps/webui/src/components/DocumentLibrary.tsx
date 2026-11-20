@@ -14,21 +14,18 @@ import { requestErrorParam } from '../utils/requestErrors';
 import { formatSize } from '../utils/format';
 import { examplePath } from '../utils/platform';
 import { cleanPastedPath } from '../utils/pastedPath';
-import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
+import { INDEX_POLL_MS, REMOVE_UNDO_MS, countText, elapsed, failureHint, formatFullTimestamp, formatTimestamp, isIndexing, splitFailureReason } from '../utils/documentLibrary.core';
+
+export { INDEX_POLL_MS, REMOVE_UNDO_MS };
+import { UploadErrorToast } from './UnsupportedFeature';
+import { fileExtension, unsupportedTypeMessage } from '../utils/uploadErrors.core';
 import type { Document, IndexFolderResponse } from '../types';
-import { dateLocale, useT, type Translate } from '../i18n/useT';
+import { useT, type Translate } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
 import { IndexingProgress } from './IndexingProgress';
 import { isServerFailure, serverFailureText, serverNotAddedText, waitsForServerReturn } from '../utils/documentFailure';
 import './DocumentLibrary.css';
 import { visibleName } from './CalendarApproval';
-
-/** Split a stored indexing error into a one-line summary and the rest. */
-function splitFailureReason(lastError: string): { summary: string; more: string } {
-    const text = lastError.replace(/^RAG indexing failed for [^:]+:\s*/, '').trim();
-    const [first, ...rest] = text.split('\n');
-    return { summary: first.trim(), more: rest.join('\n').trim() };
-}
 
 /** One sentence on what folder indexing added, skipped and couldn't read. */
 function describeFolderResult(t: Translate, folderName: string, result: IndexFolderResponse): string {
@@ -56,13 +53,8 @@ function describeFolderResult(t: Translate, folderName: string, result: IndexFol
     });
 }
 
-/** How often an indexing document's status (and progress) is asked for. */
-export const INDEX_POLL_MS = 1000;
-
 /** A library longer than this gets a filter box. */
 const FILTER_AFTER = 5;
-/** How long a removed document can be put back before it is deleted. */
-export const REMOVE_UNDO_MS = 6000;
 
 interface PendingRemoval { id: string; name: string }
 
@@ -72,63 +64,6 @@ function withProgress(map: Record<string, api.IndexProgress>, id: string, progre
     if (!(id in map)) return map;
     const { [id]: _gone, ...rest } = map;
     return rest;
-}
-
-/** Compute elapsed time as human-readable string. */
-function elapsed(startMs: number): string {
-    const sec = Math.floor((Date.now() - startMs) / 1000);
-    if (sec < 60) return `${sec}s`;
-    const min = Math.floor(sec / 60);
-    const rem = sec % 60;
-    return `${min}m ${rem}s`;
-}
-
-/** Format an ISO timestamp as a relative or absolute local time string. */
-function formatTimestamp(isoString: string, t: Translate): string {
-    try {
-        const date = new Date(isoString);
-        if (isNaN(date.getTime())) return '';
-        const now = new Date();
-        const diffMs = now.getTime() - date.getTime();
-        const diffSec = Math.floor(diffMs / 1000);
-        const diffMin = Math.floor(diffSec / 60);
-        const diffHour = Math.floor(diffMin / 60);
-        const diffDay = Math.floor(diffHour / 24);
-
-        if (diffSec < 60) return t('time.justNow');
-        if (diffMin < 60) return t('time.minutesAgo', { n: diffMin });
-        if (diffHour < 24) return t('time.hoursAgo', { n: diffHour });
-        if (diffDay === 1) return t('time.yesterday');
-        if (diffDay < 7) return t('time.daysAgo', { n: diffDay });
-
-        // Older than a week: show date + time
-        return date.toLocaleDateString(dateLocale(t), {
-            month: 'short',
-            day: 'numeric',
-            hour: 'numeric',
-            minute: '2-digit',
-        });
-    } catch {
-        return '';
-    }
-}
-
-/** Format an ISO timestamp as a full local date/time for tooltips. */
-function formatFullTimestamp(isoString: string, t: Translate): string {
-    try {
-        const date = new Date(isoString);
-        if (isNaN(date.getTime())) return '';
-        return date.toLocaleString(dateLocale(t), {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-            hour: 'numeric',
-            minute: '2-digit',
-            second: '2-digit',
-        });
-    } catch {
-        return '';
-    }
 }
 
 /** Characters a long name keeps at its end, so the extension and any version suffix stay in view. */
@@ -231,7 +166,7 @@ export function DocumentLibrary() {
 
     // Poll for indexing status on documents that are still 'indexing'
     const hasIndexingDocs = documents.some(
-        (d) => d.indexing_status === 'indexing' || d.indexing_status === 'pending'
+        (d) => isIndexing(d.indexing_status)
     );
 
     useEffect(() => {
@@ -258,7 +193,7 @@ export function DocumentLibrary() {
                 // Read fresh state inside callback to avoid stale closure
                 const freshDocs = useChatStore.getState().documents;
                 const indexingDocs = freshDocs.filter(
-                    (d) => d.indexing_status === 'indexing' || d.indexing_status === 'pending'
+                    (d) => isIndexing(d.indexing_status)
                 );
 
                 for (const doc of indexingDocs) {
@@ -288,7 +223,7 @@ export function DocumentLibrary() {
     useEffect(() => {
         const activeIds = new Set(
             documents
-                .filter((d) => d.indexing_status === 'indexing' || d.indexing_status === 'pending')
+                .filter((d) => isIndexing(d.indexing_status))
                 .map((d) => d.id)
         );
         for (const id of indexingStartTimes.current.keys()) {
@@ -400,10 +335,8 @@ export function DocumentLibrary() {
         onFolder?: () => Promise<boolean>,
     ): Promise<boolean> => {
         if (!(await ensureModel('embedding'))) return false;
-        const ext = filename.includes('.') ? '.' + filename.split('.').pop()?.toLowerCase() : '';
-        const unsupportedMessage = ext && !isExtensionSupported(ext)
-            ? (getUnsupportedCategory(ext)?.message ?? `The file type "${ext}" is not supported for indexing.`)
-            : null;
+        const ext = fileExtension(filename);
+        const unsupportedMessage = unsupportedTypeMessage(filename);
         // A typed path may be a dotted folder name (notes.v2), so only the server can rule it out.
         if (unsupportedMessage && !onFolder) {
             log.doc.warn(`Unsupported file type: ${filename} (${ext})`);
@@ -472,7 +405,7 @@ export function DocumentLibrary() {
         setUploadStatus(t('docs.indexingFolder', { name: folderName }));
         try {
             // Top level only: a typed path like a home folder would otherwise index everything below it.
-            const result = await api.indexFolder(folder, false);
+            const result = await api.indexFolder(folder, false, currentSessionId);
             await attachIndexed(result.documents.map((d) => d.id).filter(Boolean), folderName);
             setFolderNotice(describeFolderResult(t, folderName, result));
             const data = await api.listDocuments();
@@ -487,16 +420,16 @@ export function DocumentLibrary() {
         } finally {
             setUploadStatus('');
         }
-    }, [attachIndexed, setDocuments, t]);
+    }, [attachIndexed, currentSessionId, setDocuments, t]);
 
     /** Index a document by a server-side filesystem path (used by the file browser and path input). */
     const uploadFile = useCallback(async (filepath: string, filename: string) => {
         return runUpload(
             filename,
-            () => api.uploadDocumentByPath(filepath),
+            () => api.uploadDocumentByPath(filepath, currentSessionId),
             () => indexFolderPath(filepath, filename),
         );
-    }, [runUpload, indexFolderPath]);
+    }, [runUpload, indexFolderPath, currentSessionId]);
 
     /**
      * Index a document by uploading its bytes directly (used by drag-and-drop).
@@ -702,7 +635,7 @@ export function DocumentLibrary() {
                 );
             }
             case 'failed': {
-                const hint = doc.error_kind ? PERMANENT_FAILURE_HINTS[doc.error_kind] : undefined;
+                const hint = failureHint(t, doc.error_kind);
                 const serverReason = serverFailureText(doc.error_kind, t);
                 const waiting = waitsForServerReturn(doc.error_kind);
                 const lastError = serverReason ?? doc.last_error;
@@ -939,9 +872,9 @@ export function DocumentLibrary() {
                     {/* Stats */}
                     {shownCount > 0 && (
                         <div className="doc-stats">
-                            <span>{t.plural('docs.count', shownCount - failedDocs.length)}</span>
+                            <span>{countText(t, 'docs.count', shownCount - failedDocs.length)}</span>
                             {unreadableCount > 0 && (
-                                <span className="doc-stats-failed">{t.plural('docs.unreadable', unreadableCount)}</span>
+                                <span className="doc-stats-failed">{countText(t, 'docs.unreadable', unreadableCount)}</span>
                             )}
                             {serverWaitCount > 0 && (
                                 <span className="doc-stats-failed doc-stats-server">{t.plural('docs.serverWaiting', serverWaitCount)}</span>

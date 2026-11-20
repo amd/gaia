@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiFetch, sendMessageStream, uploadDocumentBlob, uploadFile, uploadMedia } from '../api';
-import { createKnowledge, deleteKnowledge, editKnowledge } from '../memoryApi';
+import { createKnowledge, deleteKnowledge, editKnowledge, streamRefusedAsPcOnly } from '../memoryApi';
 import { speak } from '../speechApi';
 
 const jsonResponse = (body: unknown) =>
@@ -106,6 +106,14 @@ describe('every mutating request carries x-gaia-ui', () => {
         await uploadMedia(new File(['x'], 'talk.wav'), () => {}).catch(() => {});
         expect(sent['x-gaia-ui']).toBe('1');
     });
+
+    it.each(['discovery', 'inference'] as const)('the %s stream probe stays a GET, which the guard lets through', async (kind) => {
+        fetchMock.mockResolvedValue(new Response('', { status: 403 }));
+        await streamRefusedAsPcOnly(kind);
+        const init = fetchMock.mock.calls[0][1] as RequestInit | undefined;
+        expect(init?.method ?? 'GET').toBe('GET');
+        expect(init?.body).toBeUndefined();
+    });
 });
 
 const SOURCES = import.meta.glob(['/src/**/*.{ts,tsx}', '!/src/**/__tests__/**', '!/src/**/*.test.{ts,tsx}'], {
@@ -117,7 +125,7 @@ const SOURCES = import.meta.glob(['/src/**/*.{ts,tsx}', '!/src/**/__tests__/**',
 /** Every file that sends a request itself instead of through apiFetch, and how often. */
 const RAW_REQUESTS: Record<string, { fetch: number; xhr: number }> = {
     '/src/services/api.ts': { fetch: 5, xhr: 1 },
-    '/src/services/memoryApi.ts': { fetch: 1, xhr: 0 },
+    '/src/services/memoryApi.ts': { fetch: 2, xhr: 0 },
     '/src/services/setupApi.ts': { fetch: 1, xhr: 0 },
     '/src/services/speechApi.ts': { fetch: 1, xhr: 0 },
 };

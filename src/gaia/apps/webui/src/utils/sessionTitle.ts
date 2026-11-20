@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { markStrayDirection } from '../components/CalendarApproval';
+import { markStrayDirection } from './calendarApproval.core';
 
 // Mirrors PLACEHOLDER_TITLES in src/gaia/ui/database.py: titles the server
 // still treats as unnamed, so it names the chat after its first question.

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useT } from '../../i18n/useT';
+import { readLimitDraft } from '../../utils/spendingLimit.core';
 import { formatTotal } from './cloudPrice';
 import type { SpendingReport } from '../../types';
 
@@ -39,9 +40,7 @@ export function SpendingLimit() {
     }
 
     const limit = report.limit_usd;
-    const parsed = draft.trim() === '' ? null : Number(draft);
-    const draftValid = parsed === null || (Number.isFinite(parsed) && parsed > 0);
-    const dirty = parsed !== limit;
+    const { parsed, valid: draftValid, dirty } = readLimitDraft(draft, limit);
 
     return (
         <section className="settings-field spending" aria-label={t('settings.spend.aria')}>

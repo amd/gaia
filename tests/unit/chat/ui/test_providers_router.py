@@ -1160,6 +1160,72 @@ def test_connect_ignores_gateway_fields_for_fireworks(client, lemonade, keys):
     )
 
 
+_CUSTOM_GATEWAY = {
+    "name": "amd",
+    "base_url": "https://gw.example/v1",
+    "auth_header_name": "X-Key",
+    "auth_header_prefix": "Token ",
+    "runtime_key_set": True,
+    "models_discovered": True,
+}
+
+
+def test_provider_summaries_read_only_and_carry_no_secret(client, lemonade, keys):
+    lemonade.cloud["amd"] = dict(_CUSTOM_GATEWAY)
+    keys["stored"]["fireworks"] = KEY
+    resp = client.get("/api/providers/list")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "providers": [
+            {
+                "id": "local",
+                "name": "Local",
+                "remote": False,
+                "privacy_notice": providers._PRIVACY["local"],
+                "configured": True,
+                "blocked": False,
+                "network": None,
+            },
+            {
+                "id": "fireworks",
+                "name": "Fireworks AI",
+                "remote": True,
+                "privacy_notice": providers._PRIVACY["fireworks"],
+                "configured": False,
+                "blocked": False,
+                "network": None,
+            },
+            {
+                "id": "amd",
+                "name": "AMD LLM Gateway",
+                "remote": True,
+                "privacy_notice": providers._PRIVACY["amd"],
+                "configured": True,
+                "blocked": False,
+                "network": {"reachable": True},
+            },
+        ],
+        "lemonade_error": None,
+    }
+    assert lemonade.paths() == ["system-info", "system-info"]
+    assert keys["ensure"] == []
+    assert KEY not in resp.text and "gw.example" not in resp.text
+
+
+def test_provider_summaries_say_an_unreachable_gateway_without_its_address(
+    client, lemonade, keys, reach
+):
+    lemonade.cloud["amd"] = dict(_CUSTOM_GATEWAY)
+    reach["error"] = _offline()
+    resp = client.get("/api/providers/list")
+    assert resp.status_code == 200, resp.text
+    by_id = {p["id"]: p for p in resp.json()["providers"]}
+    assert by_id["amd"]["network"] == {"reachable": False}
+    assert by_id["local"]["network"] is None
+    assert by_id["fireworks"]["network"] is None
+    assert "llm-api.amd.com" not in resp.text and "gw.example" not in resp.text
+
+
 def test_connect_reports_a_key_the_store_did_not_keep(client, lemonade, keys):
     keys["remember_error"] = "The OS credential store did not keep the key"
     resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})

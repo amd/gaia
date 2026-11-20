@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, AUTOMATIONS, DEVICE_STATES, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDevices, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
 import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -367,9 +367,19 @@ const audit = async (page: Page): Promise<string[]> => {
             const icon = button.querySelector(':scope > svg');
             if (!icon || !shown(button) || !button.textContent?.trim()) continue;
             const iconBox = icon.getBoundingClientRect();
-            const range = document.createRange();
-            range.selectNodeContents(button);
-            const gaps = [...range.getClientRects()]
+            // An element child counts by its own box, so text its overflow clips never reaches the icon.
+            const boxes: DOMRect[] = [];
+            for (const node of button.childNodes) {
+                if (node === icon || node instanceof SVGElement || !node.textContent?.trim()) continue;
+                if (node instanceof Element) {
+                    if (shown(node)) boxes.push(...node.getClientRects());
+                    continue;
+                }
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                boxes.push(...range.getClientRects());
+            }
+            const gaps = boxes
                 .filter((r) => r.left >= iconBox.right - 1 || r.right <= iconBox.left + 1)
                 .map((r) => Math.max(r.left - iconBox.right, iconBox.left - r.right));
             if (gaps.length && Math.min(...gaps) < 3) problems.push(`icon touches its label: ${label(button)}`);
@@ -377,6 +387,33 @@ const audit = async (page: Page): Promise<string[]> => {
         return [...new Set(problems)];
     });
 };
+
+// The icon-gap rule on two probes: a label its own box clips just short of the icon (Linux fonts did this to the
+// model pill), which is fine, and a bare label with no gap, which is not.
+test('the icon-gap rule ignores text its own box clips and still catches a label touching its icon', async ({ page }) => {
+    await open(page, '', 'ar');
+    await page.evaluate(() => {
+        const host = document.createElement('div');
+        host.dir = 'rtl';
+        host.style.cssText = 'position:fixed;top:200px;left:40px;z-index:9999;display:flex;flex-direction:column;gap:12px';
+        host.innerHTML = `
+            <button type="button" class="probe-clipped" style="display:flex;align-items:center;gap:6px;font-size:12px">
+                <svg width="13" height="13" aria-hidden="true"></svg>
+                <span dir="ltr" style="flex:none;overflow:hidden;white-space:nowrap;text-align:left">Gemma-4-E4B-it-GGUF</span>
+            </button>
+            <button type="button" class="probe-touching" style="display:flex;align-items:center;gap:0;font-size:12px">
+                <svg width="13" height="13" aria-hidden="true"></svg>محلي
+            </button>`;
+        document.body.append(host);
+        const span = host.querySelector('.probe-clipped span') as HTMLElement;
+        const range = document.createRange();
+        range.selectNodeContents(span);
+        // Clip the text 5 px short, so its hidden tail ends 1 px from the icon, inside the 6 px gap.
+        span.style.width = `${range.getBoundingClientRect().width - 5}px`;
+    });
+    const found = (await audit(page)).filter((f) => f.startsWith('icon touches its label') && f.includes('probe-'));
+    expect(found).toEqual(['icon touches its label: <button class="probe-touching"> "محلي"']);
+});
 
 // A reply that never ends, so the card stays up for the screenshot.
 const RECORDING_EVENTS = [
@@ -1475,7 +1512,7 @@ for (const locale of ['ar', 'en']) {
             expect(r.x, 'the path chip starts outside the column').toBeGreaterThanOrEqual(box.x - 1);
             expect(r.x + r.width, 'the path chip runs past the column').toBeLessThanOrEqual(box.x + box.width + 1);
             // The whole path stays one click target, with the full path in its title.
-            await expect(chip).toHaveAttribute('title', new RegExp(`${LONG_PATH.replace(/[\\.]/g, '\\$&')}$`));
+            await expect(chip).toHaveAttribute('title', new RegExp(LONG_PATH.replace(/[\\.]/g, '\\$&')));
         }
         const sideways = await scroller.evaluate((el) => el.scrollWidth - el.clientWidth);
         expect(sideways, 'the chat scrolls sideways').toBeLessThanOrEqual(1);
@@ -3527,6 +3564,64 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const openDevices = async (page: Page) => {
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await page.getByRole('dialog').locator('[data-section="devices"]').click();
+    await expect(page.locator('.devices-pane')).toBeVisible();
+};
+
+for (const locale of ['ar', 'en']) {
+    for (const [state, answers] of Object.entries(DEVICE_STATES)) {
+        test(`settings devices: ${state} (${locale})`, async ({ page }) => {
+            await open(page, '', locale, (p) => withDevices(p, answers));
+            await openDevices(page);
+            // A row's words wrap as one line of text, not as flex items in columns.
+            for (const row of await page.locator('.devices-failed').all()) await expect(row.locator('> *')).toHaveCount(2);
+            await shot(page, `devices-${locale}-${state}`);
+            await scrollPane(page, 'bottom');
+            await shot(page, `devices-${locale}-${state}-end`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi')).toEqual([]);
+        });
+    }
+
+    test(`settings devices: pairing code shown (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withDevices(p, DEVICE_STATES.empty));
+        await openDevices(page);
+        await page.locator('.devices-pane .btn-primary').first().click();
+        await expect(page.locator('.devices-qr img')).toBeVisible();
+        await expect(page.locator('.devices-pairing .btn-secondary').first()).toBeVisible();
+        await shot(page, `devices-${locale}-pairing`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`settings devices: remove and reset confirmations (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withDevices(p, DEVICE_STATES.waiting));
+        await openDevices(page);
+        await page.locator('.devices-row[data-device-id="dev-ipad"] .btn-secondary').click();
+        await expect(page.getByRole('alertdialog')).toBeVisible();
+        await shot(page, `devices-${locale}-remove`);
+        expect(await audit(page)).toEqual([]);
+        await page.keyboard.press('Escape');
+        await page.locator('.devices-pane .btn-danger').click();
+        await expect(page.getByRole('alertdialog')).toBeVisible();
+        await shot(page, `devices-${locale}-reset`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    for (const width of [390, 768]) {
+        test(`settings devices: ${width} px with a device waiting (${locale})`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 844 });
+            await open(page, '', locale, (p) => withDevices(p, DEVICE_STATES.waiting));
+            await page.getByRole('button', { name: /Open sidebar/ }).click();
+            await openDevices(page);
+            await page.locator('.devices-row').first().scrollIntoViewIfNeeded();
+            await shot(page, `devices-${locale}-${width}`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
+}
+
 const openAutomations = async (page: Page) => {
     await page.getByRole('button', { name: /Settings/ }).first().click();
     await page.getByRole('dialog').locator('[data-section="automations"]').click();
@@ -3979,6 +4074,31 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.schedule-result-item')).toHaveCount(2);
             await check(page, 'list');
         });
+
+        for (const width of [390, 1280]) {
+            test(`a failed Run now says why in the interface language, at ${width} wide`, async ({ page }) => {
+                // A rejection that is not an Error is the case the catalog's own wording covers.
+                await page.addInitScript(() => {
+                    const real = window.fetch.bind(window);
+                    window.fetch = (input, init) =>
+                        /\/api\/schedules\/[^/]+\/run/.test(String(input instanceof Request ? input.url : input))
+                            ? Promise.reject('offline')
+                            : real(input, init);
+                });
+                await page.setViewportSize({ width, height: 844 });
+                await open(page, '', locale, (p) => withSchedules(p));
+                if (width < 600) await page.getByRole('button', { name: locale === 'ar' ? /فتح الشريط الجانبي/ : 'Open sidebar' }).click();
+                await page.locator('.sb').getByRole('button', { name: locale === 'ar' ? /المهام المجدولة/ : /Scheduled tasks/ }).click();
+                await expect(page.locator('.schedule-modal')).toBeVisible();
+                await page.locator('.schedule-card').first().getByRole('button', { name: locale === 'ar' ? /تشغيل الآن/ : /Run now/ }).click();
+                const error = page.locator('.schedule-action-error');
+                await expect(error).toContainText(locale === 'ar' ? 'تعذّر تشغيل المهمة المجدولة الآن' : 'Could not run the schedule now');
+                // The sidebar drawer waits behind the dialog at phone width; judge the dialog.
+                await shot(page, `schedules-${locale}-run-failed-${width}`);
+                expect((await audit(page)).filter((p) => p.includes('schedule') || p.includes('scrolls sideways'))).toEqual([]);
+                if (locale === 'ar') expect(await untranslated(page, '.schedule-modal', '[dir="auto"], textarea')).toEqual([]);
+            });
+        }
 
         test('a long prompt stops at three lines inside its card', async ({ page }) => {
             await openSchedules(page);
@@ -6700,5 +6820,60 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `skills-link-result-${locale}`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.skill-link-result')).toEqual([]);
+    });
+}
+
+/** The send's stream dies after a policy block; the re-attach never answers, so the reconnecting line stays up. */
+function dropStreamAfterPolicyBlock(): void {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes('/api/chat/attach')) return new Promise<Response>(() => undefined);
+        if (!url.includes('/api/chat/send')) return realFetch(input, init);
+        const block = {
+            type: 'policy_alert', tool: 'run_shell_command', decision: 'BLOCK', reason: 'Shell commands are blocked here.',
+            rule_ids: ['no-shell'], policy_version: 'v7', receipt_id: 'rcpt-7',
+        };
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(block)}\n\n`));
+                setTimeout(() => controller.error(new TypeError('network error')), 50);
+            },
+        });
+        return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a dropped stream says it is reconnecting, and what waits behind it is worded in the interface language (${locale})`, async ({ page }) => {
+        const ar = locale === 'ar';
+        await page.addInitScript(dropStreamAfterPolicyBlock);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        // The chat header's own labels.
+        await expect(page.getByRole('button', { name: ar ? /تصفح الملفات على هذا الجهاز/ : 'Browse files on this PC' })).toBeVisible();
+        await expect(page.getByRole('button', { name: ar ? /تصدير المحادثة/ : 'Export chat' })).toBeVisible();
+        const box = page.getByRole('textbox').first();
+        await box.fill('Summarize the minutes');
+        await box.press('Enter');
+        await expect(page.locator('.thinking-indicator-text').last()).toContainText(ar ? 'إعادة الاتصال' : 'Reconnecting (attempt 1 of 3)');
+        const toast = page.locator('.policy-alert-toast');
+        await expect(toast).toContainText(ar ? 'مقيّدة بموجب السياسة' : 'is restricted by policy');
+        await expect(toast.getByRole('button')).toContainText(ar ? 'عرض الإيصال' : 'View receipt');
+        await box.fill('And the action items');
+        await box.press('Enter');
+        const waiting = page.locator('.queued-message');
+        await expect(waiting).toHaveCount(1);
+        await expect(waiting.locator('.queued-message-state')).toContainText(ar ? 'في قائمة الانتظار' : 'Queued. Sends when this reply ends.');
+        await expect(waiting.getByRole('button', { name: ar ? /إضافة إلى هذا الرد/ : 'Add to this reply' })).toBeVisible();
+        await expect(page.getByRole('list', { name: ar ? /رسائل بانتظار الإرسال/ : 'Messages waiting to send' })).toBeVisible();
+        await shot(page, `reconnecting-queued-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (ar) {
+            expect(await untranslated(page, '.thinking-indicator')).toEqual([]);
+            expect(await untranslated(page, '.policy-alert-toast')).toEqual([]);
+            expect(await untranslated(page, '.queued-messages', '.queued-message-text')).toEqual([]);
+        }
+        await page.locator('.task-title').click();
+        await expect(page.getByRole('textbox', { name: ar ? /عنوان المحادثة/ : 'Chat title' })).toBeVisible();
     });
 }

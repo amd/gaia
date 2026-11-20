@@ -25,6 +25,7 @@ import {
     type BatteryState,
     type ChatPhases,
 } from '../utils/chatAlerts';
+import { getT } from '../i18n/useT';
 import { log } from '../utils/logger';
 import * as api from '../services/api';
 import type { Session } from '../types';
@@ -132,7 +133,7 @@ export function useChatAlerts(): void {
             fired = true;
             if (mode !== 'banner') continue;
             if (event !== 'finished') {
-                const { title, body } = alertText(event, session);
+                const { title, body } = alertText(event, session, getT());
                 showBanner(sessionId, title, body);
                 continue;
             }
@@ -140,12 +141,12 @@ export function useChatAlerts(): void {
             api.getSession(sessionId)
                 .then((fresh: Session) => {
                     useChatStore.getState().updateSessionInList(sessionId, fresh);
-                    const { title, body } = alertText(event, fresh);
+                    const { title, body } = alertText(event, fresh, getT());
                     showBanner(sessionId, title, body);
                 })
                 .catch((err) => {
                     log.system.error(`Could not read how chat ${sessionId} ended`, err);
-                    const { title, body } = alertText(event, { ...session, last_run_status: null } as Session);
+                    const { title, body } = alertText(event, { ...session, last_run_status: null } as Session, getT());
                     showBanner(sessionId, title, body);
                 });
         }

@@ -42,11 +42,14 @@ describe('the model server log on a failed turn', () => {
         expect(screen.queryByRole('button', { name: 'Model server log' })).toBeNull();
     });
 
-    it('is offered under the answer an agent saves when the model call failed', () => {
+    it('is offered under a failure answer the server flagged, whatever its opening says', () => {
         place.mockReturnValue({ remote: false, label: 'Local', description: null });
-        // Word for word what the agent wrote in the desktop app with the model server down.
-        const content = "The model call failed at step 1, so this request is unfinished. The model server at 127.0.0.1:58123: Couldn't reach the local LLM.\n\nNothing had run yet.\n\nIt may be loading or briefly busy — try sending the message again.";
-        render(<MessageBubble message={{ ...failed, failed: false, content }} />);
+        // A headline the agent chose, so nothing in the text says it failed.
+        const content = "GAIA's AI engine couldn't start, so this request is unfinished. Lemond exited.\n\nNothing had run yet.";
+        render(<MessageBubble message={{ ...failed, content }} latencyMs={2_000} />);
+        expect(screen.getAllByText('Something went wrong')).toHaveLength(1);
+        expect(screen.getByRole('button', { name: 'Failed after 2 s' })).toBeInTheDocument();
+        expect(document.body).not.toHaveTextContent('Answered in');
         fireEvent.click(screen.getByRole('button', { name: 'Model server log' }));
         expect(useLogsStore.getState()).toMatchObject({ open: true, source: 'model_server' });
     });

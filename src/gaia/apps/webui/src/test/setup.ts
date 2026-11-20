@@ -30,6 +30,24 @@ if (typeof HTMLCanvasElement !== 'undefined') {
     });
 }
 
+// jsdom has no Path2D or 2D canvas.
+if (typeof globalThis.Path2D === 'undefined') {
+    class Path2DStub {
+        addPath() {}
+        closePath() {}
+        moveTo() {}
+        lineTo() {}
+        bezierCurveTo() {}
+        quadraticCurveTo() {}
+        arc() {}
+        arcTo() {}
+        ellipse() {}
+        rect() {}
+        roundRect() {}
+    }
+    Object.defineProperty(globalThis, 'Path2D', { configurable: true, writable: true, value: Path2DStub });
+}
+
 // `waitFor` keeps its own clock, so vitest's testTimeout does not cover it.
 // One second is a scheduling accident away on a contended runner.
 configure({ asyncUtilTimeout: 10_000 });

@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { getApiBase } from '../../utils/apiBase';
-
-/** A file GAIA generated, as the backend's card names it: one encoded file name. */
-const MEDIA_SRC_RE = /^\/api\/media\/(image|audio)\/([A-Za-z0-9%._~-]+)$/;
+import { parseMediaSrc } from '../../utils/renderCards.core';
 
 /**
  * Resolve a generated-media reference (`/api/media/<kind>/<name>`) to the
@@ -15,14 +13,7 @@ const MEDIA_SRC_RE = /^\/api\/media\/(image|audio)\/([A-Za-z0-9%._~-]+)$/;
  * path (`..`, a separator) is rejected here as well as on the server.
  */
 export function resolveMediaSrc(kind: 'image' | 'audio', src: string): string | null {
-    const match = MEDIA_SRC_RE.exec(src);
-    if (!match || match[1] !== kind) return null;
-    let name: string;
-    try {
-        name = decodeURIComponent(match[2]);
-    } catch {
-        return null;
-    }
-    if (name === '.' || name === '..' || /[/\\:\0]/.test(name)) return null;
-    return `${getApiBase()}/media/${kind}/${match[2]}`;
+    const name = parseMediaSrc(kind, src);
+    if (name === null) return null;
+    return `${getApiBase()}/media/${kind}/${name}`;
 }

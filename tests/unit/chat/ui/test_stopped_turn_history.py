@@ -9,6 +9,7 @@ on the next turn: stop an essay, ask for a capital, get the essay back.
 
 import asyncio
 import json
+import re
 import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -294,8 +295,43 @@ async def test_turn_stopped_mid_answer_without_a_recorded_turn_keeps_the_stop_no
 )
 def test_the_ui_matches_the_same_cut_off_text(text):
     """The footer matches these by text; a reworded notice would read as answered."""
-    bubble = (
-        Path(__file__).resolve().parents[4]
-        / "src/gaia/apps/webui/src/components/MessageBubble.tsx"
-    ).read_text(encoding="utf-8")
-    assert f"'{text}'" in bubble, f"MessageBubble.tsx no longer lists {text!r}"
+    webui = Path(__file__).resolve().parents[4] / "src/gaia/apps/webui/src"
+    matchers = [
+        (webui / "components/MessageBubble.tsx").read_text(encoding="utf-8"),
+        (webui / "utils/turnEnding.core.ts").read_text(encoding="utf-8"),
+    ]
+    quoted = r"'((?:[^'\\\n]|\\.)*)'" + "|" + r'"((?:[^"\\\n]|\\.)*)"'
+
+    def unquote(match):
+        return re.sub(r"\\(.)", r"\1", match.group(1) or match.group(2) or "")
+
+    # (a) the exact text is a string literal where the UI matches.
+    if any(text in map(unquote, re.finditer(quoted, src)) for src in matchers):
+        return
+
+    # (b) it is a CUT_OFF_NOTICE_TEXT value whose key the matcher references.
+    constants = (webui / "utils/constants.ts").read_text(encoding="utf-8")
+    block = re.search(
+        r"export const CUT_OFF_NOTICE_TEXT\s*=\s*\{(.*?)\}\s*(?:as const\s*)?;",
+        constants,
+        re.S,
+    )
+    assert block, "constants.ts no longer defines CUT_OFF_NOTICE_TEXT"
+    entries = re.finditer(rf"(\w+)\s*:\s*(?:{quoted})", block.group(1))
+    keys = [
+        m.group(1)
+        for m in entries
+        if text == re.sub(r"\\(.)", r"\1", m.group(2) or m.group(3) or "")
+    ]
+    assert keys, (
+        f"backend text {text!r} fails (a) and (b): it is no string literal in "
+        "MessageBubble.tsx or turnEnding.core.ts, and no CUT_OFF_NOTICE_TEXT value"
+    )
+    assert any(
+        re.search(rf"CUT_OFF_NOTICE_TEXT\.{key}\b", src)
+        for key in keys
+        for src in matchers
+    ), (
+        f"backend text {text!r} fails (b): CUT_OFF_NOTICE_TEXT.{keys[0]} holds it, "
+        "but neither MessageBubble.tsx nor turnEnding.core.ts references that key"
+    )

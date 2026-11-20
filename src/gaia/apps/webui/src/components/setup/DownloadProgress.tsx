@@ -3,86 +3,18 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, ChevronRight, Pause, RotateCw } from 'lucide-react';
-import { useT, type Translate } from '../../i18n/useT';
+import { useT } from '../../i18n/useT';
 import type { SetupModelProgress, SetupModelState, SetupRunStatus } from '../../types';
 import { ConfirmSheet } from './ConfirmSheet';
 import { FollowLog } from './FollowLog';
 import { SetupFooter } from './SetupFooter';
-import { DownloadMeter, STALL_NOTICE_S, STALL_STUCK_S, formatBytes, formatEta, formatSize, formatSpeed, ltrIn, spokenEta, type Estimate } from './format';
+import { DownloadMeter, STALL_NOTICE_S, STALL_STUCK_S, formatBytes, formatEta, formatSpeed, ltrIn, spokenEta, type Estimate } from './format';
+import {
+    CONFIRM_CANCEL_BYTES, STATE_KEY, downloadsActive, failureText, logAddsDetail, retryingSeconds, rowDetail, sortedModels, stalledSeconds,
+} from './downloadModel';
 import { usePageVisible } from './motion';
 
-/** Cancelling past this much asks first. */
-const CONFIRM_CANCEL_BYTES = 1e9;
-
-/** What is happening now on top, then what went wrong, what is done, and what waits. */
-const STATE_ORDER: Record<SetupModelState, number> = {
-    downloading: 0, verifying: 1, failed: 2, ready: 3, unchecked: 3, cancelled: 4, queued: 5, skipped: 6,
-};
-
-/** Within a state: embedder, then chat, then the rest. */
-function roleOrder(m: SetupModelProgress): number {
-    if (m.roles.includes('embedding')) return 0;
-    if (m.roles.includes('chat')) return 1;
-    return 2;
-}
-
-export function sortedModels(models: SetupModelProgress[]): SetupModelProgress[] {
-    return [...models].filter((m) => m.state !== 'skipped')
-        .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || roleOrder(a) - roleOrder(b));
-}
-
-/** A log line the row already says: which model, its progress bar, or that it finished. */
-const REPEATS_ROW = /^\s*(Downloading:|Downloaded\b|\[[=\-\s>#]*\])/;
-
-/** The log is worth opening only once it says something the row doesn't. */
-export function logAddsDetail(lines: string[]): boolean {
-    return lines.some((l) => l.trim() && !REPEATS_ROW.test(l));
-}
-
-const STATE_KEY: Record<SetupModelState, Parameters<Translate>[0]> = {
-    queued: 'setup.state.queued',
-    downloading: 'setup.state.downloading',
-    verifying: 'setup.state.verifying',
-    ready: 'setup.state.ready',
-    failed: 'setup.state.failed',
-    skipped: 'setup.state.skipped',
-    cancelled: 'setup.state.cancelled',
-    unchecked: 'setup.state.unchecked',
-};
-
-/** Whether anything is still moving: a run, or a single download. */
-export function downloadsActive(status: SetupRunStatus | null): boolean {
-    if (!status) return false;
-    if (status.state === 'running' || status.state === 'verifying') return true;
-    // A row verifying outside a run is Retry testing it again.
-    return !!status.models?.some((m) => m.state === 'downloading' || m.state === 'queued' || m.state === 'verifying');
-}
-
-function failureText(m: SetupModelProgress, name: string, freeGb: number | null, t: Translate): string {
-    switch (m.error_kind) {
-        case 'network':
-            return t('setup.fail.network', { name });
-        case 'disk_full': {
-            const left = Math.max(0, m.bytes_total - m.bytes_done) / 1e9;
-            const need = freeGb != null ? Math.max(0.1, left - freeGb) : left;
-            return t('setup.fail.diskFull', { name, done: formatBytes(m.bytes_done), need: formatSize(need) });
-        }
-        case 'verify':
-            return t('setup.fail.verify', { name });
-        case 'memory':
-            return t('setup.fail.testMemory', { name });
-        case 'stuck':
-            return t('setup.fail.testStuck', { name });
-        case 'answer':
-            return t('setup.fail.testAnswer', { name });
-        case 'window':
-            return t('setup.fail.testWindow', { name });
-        case 'path_too_long':
-            return t('setup.fail.pathTooLong', { name });
-        default:
-            return t('setup.fail.lemonade', { name });
-    }
-}
+export { downloadsActive, logAddsDetail, sortedModels };
 
 interface RowProps {
     model: SetupModelProgress;
@@ -111,36 +43,12 @@ function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume,
     const lines = m.log ?? [];
     const pct = m.bytes_total > 0 ? Math.min(100, (m.bytes_done / m.bytes_total) * 100) : m.state === 'ready' ? 100 : 0;
     const state = t(STATE_KEY[m.state]);
-    const retryingFor = m.retrying_until ? Math.max(0, Math.round(m.retrying_until - now / 1000)) : 0;
-    const stalled = m.state === 'downloading' && !retryingFor ? estimate?.stalledFor ?? 0 : 0;
+    const retryingFor = retryingSeconds(m, now);
+    const stalled = stalledSeconds(m, estimate, retryingFor);
     // Motion only while something moves: bytes arriving, or a file being checked.
     const live = (m.state === 'verifying' && checking) || (m.state === 'downloading' && !retryingFor && stalled < STALL_NOTICE_S);
 
-    let detail: string;
-    if (m.state === 'downloading') {
-        const sizes = ltrIn(t.locale, m.bytes_total > 0 ? `${formatBytes(m.bytes_done)} / ${formatBytes(m.bytes_total)}` : formatBytes(m.bytes_done));
-        if (retryingFor > 0) detail = t('setup.progress.retrying', { n: String(retryingFor) });
-        else if (stalled >= STALL_STUCK_S) detail = t('setup.progress.stuck');
-        else if (stalled >= STALL_NOTICE_S) detail = t('setup.progress.stalled', { n: String(STALL_NOTICE_S) });
-        else if (estimate?.speed && estimate.eta != null) {
-            const { speed, eta } = estimate;
-            detail = t.compose((say) => `${sizes} · ${ltrIn(t.locale, formatSpeed(speed))} · ${formatEta(eta, say)}`);
-        } else detail = t.compose((say) => `${sizes} · ${say('setup.progress.estimating')}`);
-    } else if (m.state === 'verifying') {
-        detail = !checking ? t('setup.progress.waitingCheck')
-            : checkingFor >= 10 ? t('setup.progress.checkingFor', { n: String(checkingFor) })
-                : t('setup.progress.checkingLoad');
-    } else if (m.state === 'ready') {
-        detail = m.bytes_total ? formatBytes(m.bytes_total) : '';
-    } else if (m.state === 'unchecked') {
-        detail = t('setup.progress.unchecked');
-    } else if (m.state === 'cancelled') {
-        detail = m.bytes_done > 0 ? t('setup.progress.keptPartial', { done: formatBytes(m.bytes_done) }) : '';
-    } else if (m.state === 'queued') {
-        detail = m.bytes_total ? formatBytes(m.bytes_total) : '';
-    } else {
-        detail = '';
-    }
+    const detail = rowDetail({ model: m, estimate, retryingFor, stalled, checking, checkingFor, t });
 
     const valueText = m.state === 'downloading'
         ? t.compose((say) => [

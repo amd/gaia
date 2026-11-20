@@ -5,7 +5,7 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { enMessages } from '../locales/en';
-import { LOCALES, getLocale, localeOptionLabel, ref, stripIsolates, translate, type MessageKey } from '../registry';
+import { LOCALES, getLocale, localeOptionLabel, ref, setVariantPrefix, stripIsolates, translate, type MessageKey } from '../registry';
 import { PALETTES } from '../../utils/palette';
 import { translator, useT } from '../useT';
 import { readLocale, useChatStore } from '../../stores/chatStore';
@@ -94,6 +94,21 @@ describe('translate', () => {
         expect(t.plural('docs.count', 1)).toBe('1 document');
         expect(t.plural('docs.count', 3)).toBe('3 documents');
         expect(stripIsolates(translator('ar').plural('docs.count', 3))).toBe('المستندات: 3 (3 documents)');
+    });
+
+    describe('variant prefix', () => {
+        afterEach(() => setVariantPrefix(null));
+
+        it('swaps in the variant of a message that has one, in both languages, and leaves the rest', () => {
+            const phone = 'mobileApp.yourPc.';
+            expect(translate('en', 'resources.error')).toBe("Can't read this PC's usage. Trying again…");
+            setVariantPrefix(phone);
+            expect(translate('en', 'resources.error')).toBe("Can't read your PC's usage. Trying again…");
+            expect(stripIsolates(translate('ar', 'resources.error'))).toContain('الكمبيوتر لديك');
+            expect(translate('en', 'composer.remove', { name: 'a.txt' })).toBe(getLocale('en').messages['composer.remove'].replace('{name}', 'a.txt'));
+            setVariantPrefix(null);
+            expect(translate('en', 'resources.error')).toBe("Can't read this PC's usage. Trying again…");
+        });
     });
 });
 

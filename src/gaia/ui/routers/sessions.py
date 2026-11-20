@@ -12,8 +12,10 @@ import json
 import logging
 import sqlite3
 from datetime import datetime
+from typing import Annotated, Any, Dict, List, Literal, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import Field
 
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
@@ -49,15 +51,74 @@ from ..models import (
     SessionResponse,
     SessionSearchResponse,
     UpdateSessionRequest,
+    WireModel,
 )
 from ..run_manager import run_manager
-from ..security import flagship_only
+from ..security import flagship_only, is_local_pc
 from ..utils import UPLOAD_LINK_RE, message_to_response, session_to_response
 from .memory import _get_store as get_memory_store
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["sessions"])
+
+
+class SessionDeleteResponse(WireModel):
+    """Confirmation that a session was deleted."""
+
+    deleted: bool
+
+
+class SessionAttachResponse(WireModel):
+    """Confirmation that a document was attached to a session."""
+
+    attached: bool
+
+
+class SessionDetachResponse(WireModel):
+    """Confirmation that a document was detached from a session."""
+
+    detached: bool
+
+
+class SessionActivateResponse(WireModel):
+    """The Agent UI was told to switch to this session."""
+
+    activated: Literal[True]
+    session_id: str
+
+
+class MessageDeleteResponse(WireModel):
+    """Confirmation that a message was deleted."""
+
+    deleted: Literal[True]
+
+
+class MessagesDeleteResponse(WireModel):
+    """Confirmation that a message and every later one were deleted."""
+
+    deleted: Literal[True]
+    count: int
+
+
+class MarkdownExportResponse(WireModel):
+    """The session as one markdown document."""
+
+    content: str
+    format: Literal["markdown"]
+
+
+class JsonExportResponse(WireModel):
+    """The session's row and messages as the database stores them."""
+
+    session: Dict[str, Any]
+    messages: List[Dict[str, Any]]
+    format: Literal["json"]
+
+
+SessionExportResponse = Annotated[
+    Union[MarkdownExportResponse, JsonExportResponse], Field(discriminator="format")
+]
 
 
 def _reject_if_turn_running(http_request: Request, session_id: str) -> None:
@@ -168,6 +229,15 @@ class _SystemSseEmitter:
 
 
 _system_emitter = _SystemSseEmitter()
+
+#: Marks an event only the PC's own windows may receive.
+_PC_ONLY = "pc_only"
+
+
+async def emit_pc_event(event: dict) -> None:
+    """Tell the PC's windows something no remote caller may see, such as a
+    device pairing; the stream drops it for everyone else."""
+    await _system_emitter.emit({**event, _PC_ONLY: True})
 
 
 # ── Session CRUD ─────────────────────────────────────────────────────────────
@@ -294,13 +364,16 @@ async def create_session(
 
 
 @router.get("/api/sessions/events")
-async def session_events():
+async def session_events(request: Request):
     """SSE stream for system-level session events (activation etc.).
 
     Frontend subscribes on mount; events are emitted by activate_session().
-    Event shape: {"type": "set_active_session", "session_id": "<id>"}
+    Event shape: {"type": "set_active_session", "session_id": "<id>"}. The
+    PC also gets the events :func:`emit_pc_event` sends.
     """
     from fastapi.responses import StreamingResponse
+
+    at_the_pc = is_local_pc(request)
 
     async def generate():
         q = await _system_emitter.subscribe()
@@ -309,6 +382,8 @@ async def session_events():
             while True:
                 try:
                     event = await asyncio.wait_for(q.get(), timeout=30.0)
+                    if event.get(_PC_ONLY) and not at_the_pc:
+                        continue
                     yield f"data: {json.dumps(event)}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"  # prevent proxy timeout
@@ -339,7 +414,12 @@ async def search_sessions(
     return SessionSearchResponse(query=q, results=results, truncated=truncated)
 
 
-@router.post("/api/sessions/{session_id}/activate", status_code=200)
+@router.post(
+    "/api/sessions/{session_id}/activate",
+    status_code=200,
+    response_model=SessionActivateResponse,
+    response_model_exclude_unset=True,
+)
 async def activate_session(session_id: str, db: ChatDatabase = Depends(get_db)):
     """Signal the frontend to switch to this session (MCP automation support).
 
@@ -487,7 +567,11 @@ def _log_unended(log, session_id: str, agent: str, reason: str, error) -> None:
     )
 
 
-@router.delete("/api/sessions/{session_id}")
+@router.delete(
+    "/api/sessions/{session_id}",
+    response_model=SessionDeleteResponse,
+    response_model_exclude_unset=True,
+)
 async def delete_session(
     session_id: str,
     http_request: Request,
@@ -600,7 +684,11 @@ async def get_messages(
     )
 
 
-@router.delete("/api/sessions/{session_id}/messages/{message_id}")
+@router.delete(
+    "/api/sessions/{session_id}/messages/{message_id}",
+    response_model=MessageDeleteResponse,
+    response_model_exclude_unset=True,
+)
 async def delete_message(
     session_id: str, message_id: int, db: ChatDatabase = Depends(get_db)
 ):
@@ -614,7 +702,11 @@ async def delete_message(
     return {"deleted": True}
 
 
-@router.delete("/api/sessions/{session_id}/messages/{message_id}/and-below")
+@router.delete(
+    "/api/sessions/{session_id}/messages/{message_id}/and-below",
+    response_model=MessagesDeleteResponse,
+    response_model_exclude_unset=True,
+)
 async def delete_messages_from(
     session_id: str, message_id: int, db: ChatDatabase = Depends(get_db)
 ):
@@ -660,7 +752,11 @@ def _plain_attachments(content: str) -> str:
     return UPLOAD_LINK_RE.sub(lambda m: f"Attached: {m['label']}", content)
 
 
-@router.get("/api/sessions/{session_id}/export")
+@router.get(
+    "/api/sessions/{session_id}/export",
+    response_model=SessionExportResponse,
+    response_model_exclude_unset=True,
+)
 async def export_session(
     session_id: str,
     format: str = "markdown",  # noqa: A002
@@ -719,7 +815,11 @@ async def export_session(
 # ── Session-Document Attachments ─────────────────────────────────────────────
 
 
-@router.post("/api/sessions/{session_id}/documents")
+@router.post(
+    "/api/sessions/{session_id}/documents",
+    response_model=SessionAttachResponse,
+    response_model_exclude_unset=True,
+)
 async def attach_document(
     session_id: str,
     request: AttachDocumentRequest,
@@ -745,7 +845,11 @@ async def attach_document(
     return {"attached": True}
 
 
-@router.delete("/api/sessions/{session_id}/documents/{doc_id}")
+@router.delete(
+    "/api/sessions/{session_id}/documents/{doc_id}",
+    response_model=SessionDetachResponse,
+    response_model_exclude_unset=True,
+)
 async def detach_document(
     session_id: str,
     doc_id: str,

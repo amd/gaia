@@ -486,7 +486,7 @@ export interface Message {
     stopState?: 'stopped' | 'unconfirmed';
     /** Error the server reported while a stopped turn was closing. */
     stopError?: string;
-    /** Client-side: this reply stands in for a turn that failed before answering. */
+    /** A model failure ended this turn (saved by the server, or on `done`), or, client-side, this reply stands in for a turn that failed before answering. */
     failed?: boolean;
     /** Client-side: the raw error, to recognize the server's saved copy of this failure. */
     failureText?: string;

@@ -345,9 +345,19 @@ def test_add_passes_the_chosen_names_and_code_opt_in(client, monkeypatch):
 
     seen = {}
 
+    added = {
+        "name": "deslop",
+        "updated": False,
+        "path": "/skills/deslop",
+        "verdict": "pass",
+        "has_code": True,
+        "code_trusted": True,
+        "findings": [],
+    }
+
     def fake_add(url, names, *, allow_code, force, pin):
         seen.update(url=url, names=names, allow_code=allow_code, force=force, pin=pin)
-        return link.LinkAddResult(added=[{"name": "deslop"}], failed={"x": "why"})
+        return link.LinkAddResult(added=[added], failed={"x": "why"})
 
     monkeypatch.setattr(link, "add_from_link", fake_add)
     body = client.post(
@@ -367,7 +377,7 @@ def test_add_passes_the_chosen_names_and_code_opt_in(client, monkeypatch):
         "force": False,
         "pin": "commit:" + "a" * 40,
     }
-    assert body == {"added": [{"name": "deslop"}], "failed": {"x": "why"}}
+    assert body == {"added": [added], "failed": {"x": "why"}}
 
 
 def test_featured_libraries_include_pstack(client):

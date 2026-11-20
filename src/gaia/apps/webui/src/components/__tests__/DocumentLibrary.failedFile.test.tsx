@@ -3,6 +3,7 @@
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { stripIsolates } from '../../i18n/registry';
 import { DocumentLibrary } from '../DocumentLibrary';
 import { SessionDocsBar } from '../SessionDocsBar';
 import { useChatStore } from '../../stores/chatStore';
@@ -89,9 +90,10 @@ describe('a file GAIA could not read', () => {
 
         await screen.findByText('notes.txt');
         const stats = document.querySelector('.doc-stats')!;
-        expect(stats).toHaveTextContent('1 document');
-        expect(stats).toHaveTextContent("1 couldn't be read");
-        expect(stats).not.toHaveTextContent('2 documents');
+        const text = stripIsolates(stats.textContent ?? '');
+        expect(text).toContain('1 document');
+        expect(text).toContain("1 couldn't be read");
+        expect(text).not.toContain('2 documents');
     });
 });
 
@@ -168,10 +170,10 @@ describe('a file the model server could not embed', () => {
         render(<DocumentLibrary />);
 
         await screen.findByText('third.md');
-        const stats = document.querySelector('.doc-stats')!;
-        expect(stats).toHaveTextContent('1 document');
-        expect(stats).toHaveTextContent("1 couldn't be read");
-        expect(stats).toHaveTextContent('1 waiting for the model server');
+        const stats = stripIsolates(document.querySelector('.doc-stats')!.textContent ?? '');
+        expect(stats).toContain('1 document');
+        expect(stats).toContain("1 couldn't be read");
+        expect(stats).toContain('1 waiting for the model server');
     });
 
     it('counts a server-down file in Arabic too', async () => {

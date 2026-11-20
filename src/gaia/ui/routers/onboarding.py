@@ -38,6 +38,7 @@ from gaia.logger import get_logger
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
+from ..models import WireModel
 
 logger = get_logger(__name__)
 
@@ -230,7 +231,38 @@ async def onboarding_preflight() -> PreflightReport:
     )
 
 
-@router.get("/api/onboarding/start")
+class StartCardView(WireModel):
+    """A task a new chat offers."""
+
+    skill: str
+    title: str
+    note: str
+    prompt: str
+    needs_input: bool
+
+
+class StartWorkingFolder(WireModel):
+    """The folder a new chat's agent works in."""
+
+    path: str
+    name: str
+    gaia_folder: bool
+    choosable: bool
+
+
+class StartScreenResponse(WireModel):
+    """A new chat's task cards and working folder; ``skills_error`` says why there are no cards."""
+
+    cards: List[StartCardView]
+    working_folder: StartWorkingFolder
+    skills_error: Optional[str]
+
+
+@router.get(
+    "/api/onboarding/start",
+    response_model=StartScreenResponse,
+    response_model_exclude_unset=True,
+)
 def new_chat_start(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     """A new chat's task cards and working folder, from what is set up here.
 

@@ -7,6 +7,7 @@ import { TurnAnnouncer } from './TurnAnnouncer';
 import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
+import { latencyByMessage } from '../utils/answerStats.core';
 import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, carryMessageKeys, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
@@ -66,7 +67,7 @@ import { isPlaceholderTitle, shownTitle } from '../utils/sessionTitle';
 import { laterTurns, lastSentMessage } from '../utils/editLast';
 import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
 import { requestErrorParam } from '../utils/requestErrors';
-import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
+import { MAX_SESSION_TITLE_CHARS, RECONNECTING_PHASE, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { ModelServerDownNotice } from './ModelServerDownNotice';
@@ -75,13 +76,12 @@ import { followSlideEvent, settleSlideDraft, SLIDE_PREVIEW_ENABLED } from '../st
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
 import { useOpeningMessage } from '../hooks/useOpeningMessage';
 import { getT, useT } from '../i18n/useT';
+import { STOP_GRACE_MS } from '../utils/turnEnding.core';
 
 /** Events that only come after the agent got past a permission prompt. */
 const RESOLVES_PROMPTS = new Set(['tool_start', 'tool_end', 'tool_result']);
-const RECONNECTING_PREFIX = 'Connection lost. Reconnecting';
 
-/** How long Stop waits for the server's closing `done` before the client closes the turn itself. */
-export const STOP_GRACE_MS = 15_000;
+export { STOP_GRACE_MS };
 
 export { QUEUE_BUSY_WAIT_MS } from '../services/queueDispatch';
 
@@ -532,7 +532,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const notTaken = (outcome: SendOutcome) => { if (fromQueue) options?.onQueuedOutcome?.(outcome); };
         if (!reattach && retiredAgent) {
             log.chat.warn(`Send blocked: chat ${sessionId} belongs to the retired "${retiredAgent}" agent`);
-            notTaken({ kind: 'failed', error: `This chat's "${retiredAgent}" agent was retired, so it cannot take new messages.` });
+            notTaken({ kind: 'failed', error: getT()('chat.retiredSend', { agent: retiredAgent }) });
             return false;
         }
         // Waiting messages go first, so a new one joins the end of the line.
@@ -612,7 +612,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
         stepIdRef.current = 0;
         toolOccurredRef.current = false;
         if (reconnect) {
-            useChatStore.getState().setLiveStatus(`${RECONNECTING_PREFIX} (attempt ${reconnect} of ${MAX_STREAM_RECONNECTS})…`);
+            useChatStore.getState().setLiveStatus(
+                getT()('live.reconnectingStream', { attempt: reconnect, max: MAX_STREAM_RECONNECTS }),
+                RECONNECTING_PHASE,
+            );
         }
 
         log.stream.info('Starting agent stream...');
@@ -675,7 +678,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             gaveUpOnRunRef.current = true;
             streamEndedAtRef.current = Date.now();
             endStopWait();
-            settleQueued({ kind: 'failed', error: 'Stopped before GAIA confirmed it got this message.' });
+            settleQueued({ kind: 'failed', error: getT()('chat.stoppedBeforeConfirmed') });
             abortRef.current?.abort();
             abortRef.current = null;
             if (streamRafRef.current !== null) {
@@ -707,7 +710,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onConnected: () => {
                 if (isStale()) return;
                 const store = useChatStore.getState();
-                if (store.liveStatus === api.SEND_WAITING_NOTICE_TEXT || store.liveStatus?.startsWith(RECONNECTING_PREFIX)) {
+                if (store.liveStatus === api.SEND_WAITING_NOTICE_TEXT || store.livePhase === RECONNECTING_PHASE) {
                     store.setLiveStatus(null);
                 }
             },
@@ -1046,6 +1049,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         stopState,
                         historyNotice,
                         libraryNotices: event.library_notices,
+                        failed: event.failed === true || undefined,
                         failure: event.failed ? event.failure : undefined,
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
@@ -1154,7 +1158,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     const attempt = ++reconnectsRef.current;
                     const delay = RECONNECT_DELAYS_MS[attempt - 1] ?? 0;
                     log.chat.warn(`Stream for session=${sessionId} lost (${err.name}); reconnecting in ${delay}ms (${attempt}/${MAX_STREAM_RECONNECTS})`);
-                    useChatStore.getState().setLiveStatus(`${RECONNECTING_PREFIX} (attempt ${attempt} of ${MAX_STREAM_RECONNECTS})…`);
+                    useChatStore.getState().setLiveStatus(
+                        getT()('live.reconnectingStream', { attempt, max: MAX_STREAM_RECONNECTS }),
+                        RECONNECTING_PHASE,
+                    );
                     const reattach = () => {
                         reconnectTimerRef.current = null;
                         if (!mountedRef.current || isStale() || stopRequestedRef.current) return;
@@ -1196,7 +1203,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         agentSteps: steps.length > 0 ? steps : undefined,
                         cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
                         stopState: 'stopped',
-                        stopError: err.message || 'Unknown error',
+                        stopError: err.message || getT()('chat.unknownError'),
                     });
                     // The server persisted its own row for this turn; don't let the poll swap ours out.
                     lastMsgCountRef.current = useChatStore.getState().messages.length;
@@ -1607,25 +1614,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // A card speaks for itself: the reply's wording is read only without one.
         && (hasConnectCard(lastMessage) ? lastConnectProviders.length > 0 : isAuthRequiredMessage(lastMessage.content));
 
-    // Pre-compute per-message latency: time from preceding user message to each
-    // assistant message. O(N) single pass, avoids repeated backward scans in render.
-    const latencyByMsgId = useMemo(() => {
-        const map = new Map<number, number>();
-        let lastUserTime: number | undefined;
-        for (const msg of messages) {
-            if (msg.role === 'user' && msg.created_at) {
-                lastUserTime = new Date(msg.created_at).getTime();
-            } else if (msg.role === 'assistant' && msg.created_at && lastUserTime !== undefined) {
-                const assistTime = new Date(msg.created_at).getTime();
-                if (assistTime > lastUserTime) map.set(msg.id, assistTime - lastUserTime);
-                lastUserTime = undefined;
-            }
-        }
-        return map;
-    }, [messages]);
+    const latencyByMsgId = useMemo(() => latencyByMessage(messages), [messages]);
 
     const composerBlocked = retiredAgent
-        ? `This chat used the retired "${retiredAgent}" agent and is read-only. Start a new chat.`
+        ? t('chat.retiredReadOnly', { agent: retiredAgent })
         : isStarting(systemStatus)
             ? STARTING_REASON
             : null;
@@ -1637,7 +1629,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            aria-label={shownTitle(session?.title) || 'Chat'}
+            aria-label={shownTitle(session?.title) || t('chat.label')}
         >
             <TurnAnnouncer busy={busy} />
             <header className="task-header">
@@ -1655,7 +1647,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             }}
                             {...CLAIMS_ESCAPE}
                             autoFocus
-                            aria-label="Chat title"
+                            aria-label={t('chat.titleLabel')}
                             dir="auto"
                         />
                     ) : (
@@ -1727,6 +1719,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             && msg.role === 'assistant' && idx === messages.length - 1
                             && !msg.stopState && !msg.failed && !isErrorContent(msg.content);
                         const latency = msg.stats?.seconds != null ? msg.stats.seconds * 1000 : latencyByMsgId.get(msg.id);
+                        const serverDown = msg.failure === 'model_server_down' && idx === messages.length - 1 && !busy;
                         const unsent = isUnsent(msg);
                         return (
                             <div
@@ -1762,10 +1755,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onContinue={canTryAgain && stopped ? handleContinue : undefined}
                                     latest={msg.role === 'assistant' && idx === messages.length - 1}
                                     latencyMs={latency}
+                                    fixShownBelow={serverDown}
                                 />
-                                {msg.failure === 'model_server_down' && idx === messages.length - 1 && !busy && (
-                                    <ModelServerDownNotice />
-                                )}
+                                {serverDown && <ModelServerDownNotice />}
                                 {comparison?.messageId === msg.id && (
                                     <AnswerComparison
                                         original={msg}

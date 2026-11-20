@@ -33,6 +33,10 @@ import { useConnectorsSSE } from '../../hooks/useConnectorsSSE';
 import type { ConnectorListEntry } from '../../types';
 import { ltrIn } from '../setup/format';
 import './EmailConnectCta.css';
+import { detectProvider, isAuthRequiredMessage, type EmailProvider } from '../../utils/connectorRetry.core';
+
+export { detectProvider, isAuthRequiredMessage };
+export type { EmailProvider };
 
 /**
  * #2117 — the agent this CTA grants when sign-in completes: GAIA, and only when
@@ -61,54 +65,6 @@ export function mailGrantIds(
 }
 
 // ── Detection ────────────────────────────────────────────────────────────────
-
-/** Match the canonical prefixes the connectors framework emits. The
- *  prefixes are stable (see ``connectors/formatting.py``); fuzzy
- *  fallbacks handle agent-specific override messages.
- */
-export function isAuthRequiredMessage(content: string): boolean {
-    if (!content) return false;
-    if (content.includes('NOT_CONNECTED:')) return true;
-    if (content.includes('AGENT_NOT_GRANTED:')) return true;
-    if (content.includes('AUTH_REQUIRED:')) return true;
-    // Lowercased substring check so wording tweaks upstream don't silently
-    // break the detection.
-    const lower = content.toLowerCase();
-    if (
-        lower.includes('connectors → google') ||
-        lower.includes('connections → google')
-    ) {
-        return true;
-    }
-    if (
-        lower.includes('connectors → microsoft') ||
-        lower.includes('connections → microsoft') ||
-        lower.includes('microsoft is not currently connected')
-    ) {
-        return true;
-    }
-    return false;
-}
-
-/** The mailbox connectors GAIA reads: ``google`` (Gmail) and ``microsoft`` (Outlook). */
-export type EmailProvider = 'google' | 'microsoft';
-
-/**
- * Which provider an error message names: ``'google'``, ``'microsoft'``, or
- * ``'all'`` when it names both or neither.
- */
-export function detectProvider(content: string): EmailProvider | 'all' {
-    if (!content) return 'all';
-    const lower = content.toLowerCase();
-    const mentionsGoogle = lower.includes('google') || lower.includes('gmail');
-    const mentionsMicrosoft =
-        lower.includes('microsoft') ||
-        lower.includes('outlook') ||
-        lower.includes('office365') ||
-        lower.includes('o365');
-    if (mentionsGoogle === mentionsMicrosoft) return 'all';
-    return mentionsGoogle ? 'google' : 'microsoft';
-}
 
 // ── OAuth helpers (mirror ConnectorsSection.openAuthUrl) ─────────────────────
 

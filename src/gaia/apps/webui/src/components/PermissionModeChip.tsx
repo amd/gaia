@@ -10,7 +10,7 @@ import { useNotificationStore, selectSessionPermissionPrompt } from '../stores/n
 import type { PermissionMode } from '../types';
 import { ref, type MessageKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
-import { requestErrorText } from '../utils/requestErrors';
+import { requestErrorParam, requestErrorText } from '../utils/requestErrors';
 import { announcePermissionMode, usePermissionModeEvents } from '../utils/permissionModeEvents';
 
 export const MODES: Array<{ mode: PermissionMode; label: MessageKey; note: MessageKey }> = [
@@ -71,12 +71,12 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
             if (sessionId) {
                 api.getPermissions(sessionId)
                     .then((p) => setMode(p.mode))
-                    .catch((e) => setError((prev) => `${prev ?? ''} Couldn't re-read the saved mode: ${requestErrorText(e)}`.trim()));
+                    .catch((e) => setError((prev) => `${prev ?? ''} ${t('perm.rereadFailed', { error: requestErrorParam(e) })}`.trim()));
             }
         } finally {
             setConfirming(false);
         }
-    }, [confirming, promptWaiting, sessionId, setDraftMode]);
+    }, [confirming, promptWaiting, sessionId, setDraftMode, t]);
 
     const full = mode === 'full_access';
     const Icon = full ? ShieldAlert : ShieldCheck;

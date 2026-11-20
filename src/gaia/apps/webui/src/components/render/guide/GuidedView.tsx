@@ -6,7 +6,7 @@ import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Pause, Play, Square, X } from 'lucide-react';
 import { useEscapeToClose } from '../../../hooks/useEscapeToClose';
 import { useFocusTrap } from '../../../hooks/useFocusTrap';
-import { findDurations, formatClock, parseSets } from './durations';
+import { bigTimerIndex, findDurations, formatClock, parseSets } from './durations';
 import { itemDisplay, stepText } from './guideText';
 import type { GuideViewState } from './guideText';
 import type { GuideDoc } from './guideDoc';
@@ -91,8 +91,7 @@ export function GuidedView({ doc, state, timers, onClose }: {
 
     const restIndex = sets?.restIndex ?? null;
     const resting = restIndex !== null && timers.read(timerId(index, restIndex), spans[restIndex].seconds).status !== 'idle';
-    const primary = resting ? restIndex : spans.findIndex((_, i) => i !== restIndex);
-    const bigIndex = primary === -1 ? (spans.length ? 0 : null) : primary;
+    const bigIndex = bigTimerIndex(spans.length, restIndex, resting);
     const big = bigIndex === null ? null : { id: timerId(index, bigIndex), seconds: spans[bigIndex].seconds };
     const bigView = big ? timers.read(big.id, big.seconds) : null;
 

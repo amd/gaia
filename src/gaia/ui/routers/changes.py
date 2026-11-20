@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -28,6 +29,7 @@ from gaia.logger import get_logger
 from .. import session_git
 from ..database import ChatDatabase
 from ..dependencies import get_db
+from ..models import WireModel
 
 logger = get_logger(__name__)
 
@@ -44,6 +46,171 @@ class UndoRequest(BaseModel):
 class UndoSettings(BaseModel):
     retention_days: int = Field(..., ge=1, le=365)
     max_mb: int = Field(..., ge=10, le=100_000)
+
+
+class UndoSettingsResponse(WireModel):
+    """The undo history limits and how much of it is used."""
+
+    retention_days: int
+    max_mb: int
+    used_bytes: int
+    turns: int
+    path: str
+
+
+FileChange = Literal["edited", "created", "deleted"]
+
+
+class UntrackedWork(WireModel):
+    """Work that may have changed files without GAIA keeping a copy."""
+
+    kind: str
+    detail: str
+    paths: List[str]
+    #: Absent from turns recorded before it was kept.
+    may_write: Optional[bool] = None
+
+
+class TurnFileChange(WireModel):
+    path: str
+    #: ``pending`` while the turn still runs.
+    change: Literal["edited", "created", "deleted", "pending"]
+    tool: Optional[str]
+
+
+class TurnChanges(WireModel):
+    """One turn's file changes."""
+
+    turn_id: str
+    session_id: str
+    message_id: Optional[int]
+    started_at: str
+    finished_at: Optional[str]
+    restored_at: Optional[str]
+    files: List[TurnFileChange]
+    untracked: List[UntrackedWork]
+    incomplete: bool
+
+
+class TurnChangesList(WireModel):
+    """Every turn in the session that changed files, oldest first."""
+
+    turns: List[TurnChanges]
+
+
+class FileDiff(WireModel):
+    path: str
+    change: Literal["edited", "created", "deleted", "pending"]
+    unified: str
+    binary: bool
+    too_large: bool
+    truncated: bool
+    before_size: int
+    after_size: int
+
+
+class TurnDiff(WireModel):
+    """What the turn did to each file, as unified diffs."""
+
+    turn_id: str
+    files: List[FileDiff]
+
+
+class UndoResult(WireModel):
+    """What undoing the turn put back, removed, and could not account for."""
+
+    turn_id: str
+    restored: List[str]
+    removed: List[str]
+    kept_folders: List[str]
+    untracked: List[UntrackedWork]
+    incomplete: bool
+
+
+class UndoAllResult(WireModel):
+    """What undoing every turn of the chat put back, removed, and could not account for."""
+
+    turn_ids: List[str]
+    restored: List[str]
+    removed: List[str]
+    kept_folders: List[str]
+    untracked: List[UntrackedWork]
+    incomplete: bool
+
+
+class ChatFileChange(WireModel):
+    """A file from before the chat's first turn to after its last."""
+
+    path: str
+    change: FileChange
+    unified: str
+    binary: bool
+    too_large: bool
+    truncated: bool
+    additions: Optional[int]
+    deletions: Optional[int]
+    before_size: int
+    after_size: int
+    message_ids: List[int]
+    changed_since: Optional[str]
+
+
+class ChangeTotals(WireModel):
+    files: int
+    additions: int
+    deletions: int
+    uncounted: int
+
+
+class SessionChanges(WireModel):
+    """Every file the chat changed; ``pending`` while a turn still runs."""
+
+    files: List[ChatFileChange]
+    totals: ChangeTotals
+    turns: int
+    pending: bool
+    untracked: List[UntrackedWork]
+    incomplete: bool
+
+
+class GitDraft(WireModel):
+    title: str
+    body: str
+
+
+class GitRepo(WireModel):
+    """A repository holding the chat's changes, with a drafted message."""
+
+    root: str
+    branch: str
+    remote: Optional[str]
+    default_branch: Optional[str]
+    gh: bool
+    files: List[str]
+    uncommitted: List[str]
+    ignored: List[str]
+    draft: GitDraft
+    pr_blocked: Optional[str]
+
+
+class SessionGit(WireModel):
+    """The chat's repositories; ``reason`` says why git is unavailable."""
+
+    available: bool
+    repos: List[GitRepo]
+    reason: Optional[str] = None
+
+
+class GitCommitResult(WireModel):
+    root: str
+    commit: str
+    files: List[str]
+    ignored: List[str]
+
+
+class GitPullRequestResult(WireModel):
+    root: str
+    url: str
 
 
 def _require_session(db: ChatDatabase, session_id: str) -> None:
@@ -111,7 +278,11 @@ def _refuse_if_macos_blocks(turns: list) -> None:
         )
 
 
-@router.get("/api/sessions/{session_id}/changes")
+@router.get(
+    "/api/sessions/{session_id}/changes",
+    response_model=TurnChangesList,
+    response_model_exclude_unset=True,
+)
 async def list_changes(session_id: str, db: ChatDatabase = Depends(get_db)):
     """Every turn in the session that changed files, oldest first."""
     _require_session(db, session_id)
@@ -122,7 +293,11 @@ async def list_changes(session_id: str, db: ChatDatabase = Depends(get_db)):
     return {"turns": turns}
 
 
-@router.get("/api/sessions/{session_id}/changes/{turn_id}/diff")
+@router.get(
+    "/api/sessions/{session_id}/changes/{turn_id}/diff",
+    response_model=TurnDiff,
+    response_model_exclude_unset=True,
+)
 async def diff_changes(
     session_id: str, turn_id: str, db: ChatDatabase = Depends(get_db)
 ):
@@ -135,7 +310,11 @@ async def diff_changes(
     return {"turn_id": turn_id, "files": files}
 
 
-@router.post("/api/sessions/{session_id}/changes/{turn_id}/undo")
+@router.post(
+    "/api/sessions/{session_id}/changes/{turn_id}/undo",
+    response_model=UndoResult,
+    response_model_exclude_unset=True,
+)
 async def undo_changes(
     session_id: str,
     turn_id: str,
@@ -165,7 +344,11 @@ async def undo_changes(
             raise _snapshot_http_error(e) from e
 
 
-@router.get("/api/sessions/{session_id}/changes/total")
+@router.get(
+    "/api/sessions/{session_id}/changes/total",
+    response_model=SessionChanges,
+    response_model_exclude_unset=True,
+)
 async def session_changes(session_id: str, db: ChatDatabase = Depends(get_db)):
     """Every file the chat changed, before its first turn against after its last."""
     _require_session(db, session_id)
@@ -175,7 +358,11 @@ async def session_changes(session_id: str, db: ChatDatabase = Depends(get_db)):
         raise _snapshot_http_error(e) from e
 
 
-@router.post("/api/sessions/{session_id}/changes/undo")
+@router.post(
+    "/api/sessions/{session_id}/changes/undo",
+    response_model=UndoAllResult,
+    response_model_exclude_unset=True,
+)
 async def undo_session_changes(
     session_id: str,
     body: UndoRequest,
@@ -219,7 +406,11 @@ class PullRequestRequest(BaseModel):
     )
 
 
-@router.get("/api/sessions/{session_id}/changes/git")
+@router.get(
+    "/api/sessions/{session_id}/changes/git",
+    response_model=SessionGit,
+    response_model_exclude_unset=True,
+)
 async def git_state(session_id: str, db: ChatDatabase = Depends(get_db)):
     """The git repositories holding the chat's changes, with drafted messages."""
     _require_session(db, session_id)
@@ -244,7 +435,11 @@ async def _git_action(http_request: Request, session_id: str, fn, *args):
             raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-@router.post("/api/sessions/{session_id}/changes/git/commit")
+@router.post(
+    "/api/sessions/{session_id}/changes/git/commit",
+    response_model=GitCommitResult,
+    response_model_exclude_unset=True,
+)
 async def git_commit(
     session_id: str,
     body: CommitRequest,
@@ -265,7 +460,11 @@ async def git_commit(
     )
 
 
-@router.post("/api/sessions/{session_id}/changes/git/pr")
+@router.post(
+    "/api/sessions/{session_id}/changes/git/pr",
+    response_model=GitPullRequestResult,
+    response_model_exclude_unset=True,
+)
 async def git_pull_request(
     session_id: str,
     body: PullRequestRequest,
@@ -299,7 +498,11 @@ def _settings_payload() -> dict:
     }
 
 
-@router.get("/api/settings/undo")
+@router.get(
+    "/api/settings/undo",
+    response_model=UndoSettingsResponse,
+    response_model_exclude_unset=True,
+)
 async def get_undo_settings():
     """How long and how much undo history is kept, and how much is used."""
     try:
@@ -308,7 +511,11 @@ async def get_undo_settings():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.put("/api/settings/undo")
+@router.put(
+    "/api/settings/undo",
+    response_model=UndoSettingsResponse,
+    response_model_exclude_unset=True,
+)
 async def put_undo_settings(body: UndoSettings):
     """Change the limits and trim history to fit them now."""
 

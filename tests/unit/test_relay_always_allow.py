@@ -349,6 +349,7 @@ class _WritingAgent:
 
     def __init__(self, **_kwargs):
         self.console = None
+        self.indexed_files: set = set()
         self.conversation_history = []
         self._cancel_event = None
         self._followup_queue = None
