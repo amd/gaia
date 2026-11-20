@@ -35,7 +35,11 @@ from gaia.agents.base.call_risk import (
     RISK_NOTE_ARG,
     shell_command_risk,
 )
-from gaia.agents.base.checks import attach_check, check_from_command
+from gaia.agents.base.checks import (
+    attach_check,
+    check_from_command,
+    command_check_label,
+)
 from gaia.agents.base.command_wrappers import command_starts
 from gaia.agents.base.denied_effects import (
     COMPUTED_PATH,
@@ -7859,12 +7863,14 @@ class ShellToolsMixin:
             except subprocess.TimeoutExpired:
                 continue  # slice expired, not the command's own deadline
 
-    def _timeout_hint(self, timeout_class: str, cwd: str) -> str:
-        """The next step after a kill: scope the run to what this turn changed.
+    def _timeout_hint(self, timeout_class: str, cwd: str, command: str = "") -> str:
+        """The next step after a kill: scope a check to what this turn changed.
 
-        Never "raise the timeout": a repo-wide lint or test run that blew its
-        class default usually blows a larger one too. A build or download is
-        pointed at a background run instead.
+        A test or lint run is never told to "raise the timeout": a repo-wide
+        check that blew its class default usually blows a larger one too. A
+        script that is not a check (a data job, a build step) may just be slow,
+        so it gets the background run and the longer timeout. A build or
+        download is pointed at a background run.
         """
         if cut_by_time_limit(self):
             return TIME_LIMIT_CUT_RUN
@@ -7874,6 +7880,12 @@ class ShellToolsMixin:
             f"{cls.seconds}s by default). Whatever it printed before the kill "
             "is in 'stdout'/'stderr' above."
         )
+        if timeout_class == "script" and not command_check_label(command):
+            return (
+                f"{hint} If it was still making progress, run it in the "
+                f"background and poll it with {_WAIT_TOOL}, or re-run it with a "
+                f"larger timeout, up to {MAX_COMMAND_TIMEOUT}s."
+            )
         if timeout_class not in ("test", "script"):
             return (
                 f"{hint} If it was still making progress, run it in the "
@@ -8517,7 +8529,7 @@ class ShellToolsMixin:
                 "duration_seconds": time.monotonic() - start_time,
                 "cwd": cwd,
                 "steps": [{"command": command, "return_code": None}],
-                "hint": self._timeout_hint(timeout_class, cwd),
+                "hint": self._timeout_hint(timeout_class, cwd, command),
             }
         except BaseException:
             terminate_process_tree(process)
@@ -8947,7 +8959,7 @@ class ShellToolsMixin:
                                 "duration_seconds": time.monotonic() - start_time,
                                 "cwd": cwd,
                                 "steps": ran,
-                                "hint": self._timeout_hint(timeout_class, cwd),
+                                "hint": self._timeout_hint(timeout_class, cwd, command),
                             },
                             check_from_command(
                                 command,

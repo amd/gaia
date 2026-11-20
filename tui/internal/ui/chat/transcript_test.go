@@ -245,7 +245,7 @@ func TestAConfirmationIsShownOnceThenQuiet(t *testing.T) {
 		t.Errorf("the gated step must say it is waiting on the user:\n%s", frame)
 	}
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	updated, cmd := answerKey(t, m, "y")
 	m = updated.(ChatModel)
 	decided := cmd().(components.ConfirmationDecidedMsg)
 	updated, deliver := m.Update(decided)

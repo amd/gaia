@@ -51,7 +51,7 @@ endif()
 
 # Integration tests require a running Lemonade server -- always OFF by default.
 option(GAIA_BUILD_INTEGRATION_TESTS
-    "Build LLM integration tests (requires lemonade-server with Qwen3-4B-GGUF loaded)" OFF)
+    "Build LLM integration tests (requires lemonade-server with Qwen3-4B-Instruct-2507-GGUF loaded)" OFF)
 
 # Performance benchmarks -- always OFF by default.
 option(GAIA_BUILD_BENCHMARKS "Build performance benchmarks" OFF)
@@ -597,7 +597,7 @@ if(GAIA_BUILD_TESTS)
 endif()
 
 # ---------------------------------------------------------------------------
-# Integration tests  (require a running lemonade-server with Qwen3-4B-GGUF)
+# Integration tests  (require a running lemonade-server with Qwen3-4B-Instruct-2507-GGUF)
 # Enable with:  cmake ... -DGAIA_BUILD_INTEGRATION_TESTS=ON
 # ---------------------------------------------------------------------------
 if(GAIA_BUILD_INTEGRATION_TESTS)

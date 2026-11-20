@@ -98,7 +98,7 @@ Unicode true
 ; The terminal's exe before it became gaia-cli: an upgrade removes it.
 !define LEGACY_TUI_EXE    "gaia-tui.exe"
 !define AGENT_EXE         "gaia-agent.exe"
-; The native agent gaia-cli runs, in place of gaia-agent, from beside itself.
+; The native agent a user can switch gaia-cli to; it runs from beside it.
 !define NATIVE_AGENT_EXE  "gaiacpp.exe"
 ; The frozen gaia core; its _internal folder sits beside it.
 !define CORE_EXE          "gaia.exe"

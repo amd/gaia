@@ -363,6 +363,7 @@
               "reference/api",
               "reference/api-spec",
               "reference/dev",
+              "reference/harnesses",
               {
                 "group": "Evaluation Framework",
                 "pages": [

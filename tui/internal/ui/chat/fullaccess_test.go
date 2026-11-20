@@ -109,7 +109,7 @@ func TestEachDecisionReachesTheAgent(t *testing.T) {
 			m.streaming = true
 			m = feed(t, m, gatedShellCall())
 
-			updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key)})
+			updated, cmd := answerKey(t, m, tc.key)
 			m = updated.(ChatModel)
 			if cmd == nil {
 				t.Fatalf("%q produced no decision", tc.key)
@@ -196,7 +196,7 @@ func TestAFailedDecisionDeliveryIsSurfaced(t *testing.T) {
 	m = feed(t, m, gatedShellCall())
 	c.err = errPermissionChannelGone
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	updated, cmd := answerKey(t, m, "y")
 	m = updated.(ChatModel)
 	decided := cmd().(components.ConfirmationDecidedMsg)
 	_, deliver := m.Update(decided)
@@ -387,7 +387,7 @@ func TestChatDoesNotOfferAlwaysWithoutAScope(t *testing.T) {
 	if strings.Contains(m.View(), " a allow ") {
 		t.Errorf("always offered for an unscopable call:\n%s", m.View())
 	}
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	updated, cmd := answerKey(t, m, "a")
 	m = updated.(ChatModel)
 	if cmd != nil {
 		t.Error("'a' must not resolve a confirmation the agent would not scope")
@@ -407,7 +407,7 @@ func TestTranscriptRecordsTheGrantedScope(t *testing.T) {
 	m.streaming = true
 	m = feed(t, m, gatedShellCall())
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	updated, cmd := answerKey(t, m, "a")
 	m = updated.(ChatModel)
 	decided := cmd().(components.ConfirmationDecidedMsg)
 	updated2, _ := m.Update(decided)

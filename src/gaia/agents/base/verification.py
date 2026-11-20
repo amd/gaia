@@ -616,6 +616,11 @@ _TEST_INPUT_NAME = re.compile(
     r"|specs?|mocks?|samples?|e2e|assets?|resources?"
 )
 
+#: Folders an agent loads at runtime: skill bundles and prompt templates.
+_RUNTIME_INPUT_DIRS: FrozenSet[str] = frozenset(
+    {"prompt", "prompts", "skill", "skills"}
+)
+
 #: Files that configure a build, an install or a test run, whatever their suffix.
 _BUILD_INPUT = re.compile(
     r"(?:requirements|constraints)[\w.-]*\.txt|cmakelists\.txt|pyproject\.toml"
@@ -624,12 +629,12 @@ _BUILD_INPUT = re.compile(
     r"|cargo\.(?:toml|lock)|[\w.-]+\.config\.(?:json|ya?ml)"
 )
 
-#: Source files: one of these is code even when the request named it as output.
-_CODE_SUFFIXES: FrozenSet[str] = frozenset(
-    {".bat", ".c", ".cc", ".cjs", ".cpp", ".cs", ".go", ".h", ".hpp", ".java"}
-    | {".js", ".jsx", ".kt", ".lua", ".mjs", ".php", ".ps1", ".py", ".pyi"}
-    | {".pyx", ".rb", ".rs", ".scala", ".sh", ".svelte", ".swift", ".ts"}
-    | {".tsx", ".vue"}
+#: Report types: a requested output with one of these suffixes that no test
+#: reads leaves an earlier test run standing. Any other requested file — config,
+#: data, markup — still counts as a change.
+_REPORT_SUFFIXES: FrozenSet[str] = _PROSE_SUFFIXES | frozenset(
+    {".csv", ".docx", ".gif", ".jpeg", ".jpg", ".log", ".pdf", ".png", ".pptx"}
+    | {".svg", ".tsv", ".txt", ".webp", ".xls", ".xlsx"}
 )
 
 
@@ -653,10 +658,12 @@ def feeds_tests(path: str, root: Optional[str] = None) -> bool:
 
     A folder or file named like a test input (``tests``, ``test_data``,
     ``__tests__``, ``spec``, ``fixtures``, ``data``, ``expected.txt``, …), a
-    file in or below a Python package folder (a ``.md`` there can be a prompt
-    the code loads at runtime), or a build, install or test config. Errs
-    towards True: a wrong True only asks for a re-run. A relative *path* is
-    resolved against *root*, and folder names are read below *root*.
+    skill or prompt file (``SKILL.md``, anything under a ``skills`` or
+    ``prompts`` folder), a file in or below a Python package folder (a ``.md``
+    there can be a prompt the code loads at runtime), or a build, install or
+    test config. Errs towards True: a wrong True only asks for a re-run. A
+    relative *path* is resolved against *root*, and folder names are read
+    below *root*.
     """
     import os
 
@@ -665,8 +672,11 @@ def feeds_tests(path: str, root: Optional[str] = None) -> bool:
         return False
     *folders, name = parts
     stem = os.path.splitext(name)[0]
-    if _BUILD_INPUT.fullmatch(name) or any(
-        _TEST_INPUT_NAME.fullmatch(part) for part in (*folders, stem)
+    if (
+        _BUILD_INPUT.fullmatch(name)
+        or name == "skill.md"
+        or any(f in _RUNTIME_INPUT_DIRS for f in folders)
+        or any(_TEST_INPUT_NAME.fullmatch(part) for part in (*folders, stem))
     ):
         return True
     path = path.strip()
@@ -703,11 +713,11 @@ def is_doc_path(path: str, root: Optional[str] = None) -> bool:
     return suffix in _DOCS_FOLDER_SUFFIXES and any(f in _DOCS_DIRS for f in folders)
 
 
-def is_code_path(path: str) -> bool:
-    """True when *path* has a source-code suffix."""
+def is_report_path(path: str) -> bool:
+    """True when *path* has a report suffix: prose, a table, a document, an image."""
     import os
 
-    return os.path.splitext((path or "").strip().lower())[1] in _CODE_SUFFIXES
+    return os.path.splitext((path or "").strip().lower())[1] in _REPORT_SUFFIXES
 
 
 #: Tools whose *output* can show a test run, whatever the command looked like.
@@ -1020,10 +1030,11 @@ def is_code_mutation(
 ) -> bool:
     """True when this call rewrote a file a test run could depend on.
 
-    A write to a doc (:func:`is_doc_path`), or to a non-code file the request
-    asked for as its output (*is_deliverable*) that no test reads, leaves an
-    earlier test run standing. A call whose target can't be read counts as a
-    change.
+    A write to a doc (:func:`is_doc_path`), or to a report the request asked
+    for as its output (*is_deliverable*) that no test reads, leaves an earlier
+    test run standing. A requested config or data file (``.yaml``, ``.json``,
+    ``.sql``, ``Dockerfile``, …) still counts. A call whose target can't be
+    read counts as a change.
     """
     if not is_file_mutation(tool_name):
         return False
@@ -1039,7 +1050,7 @@ def is_code_mutation(
         is_doc_path(path, root)
         or (
             is_deliverable is not None
-            and not is_code_path(path)
+            and is_report_path(path)
             and not feeds_tests(path, root)
             and is_deliverable(path)
         )
