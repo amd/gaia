@@ -366,6 +366,11 @@ def _read_record(path, text):
         "build sales.csv with a few rows of test data",
         "just make up some sales numbers and save them to sales.csv",
         "Create sales.csv with random amounts per region using gen.py",
+        "write sales.csv with a fake customer list and balances",
+        "create a fake customer list with emails and balances in sales.csv",
+        "fill sales.csv with make-believe prices",
+        "put sample-data for a demo in sales.csv",
+        "write mock-up figures to sales.csv",
     ],
 )
 def test_sample_data_the_user_asked_for_is_not_reported(query):
@@ -393,6 +398,25 @@ def test_sample_data_the_user_asked_for_is_not_reported(query):
         # A file name is not the data noun: "sales" here is sales.csv.
         "list the toy drones to sales.csv",
         "save a mock test of the sales.csv totals",
+        # Any sign the figures are meant to be real outweighs "sample"/"demo".
+        "write sales.csv for the demo with actual prices of the top 3 GPUs",
+        "I do not want you to use fake numbers - put our real regional sales in "
+        "sales.csv",
+        "write a spreadsheet sales.csv to test the prices of the top 5 laptops",
+        "save example prices for the RTX 4090 at Newegg and Amazon to sales.csv",
+        "make a demo spreadsheet sales.csv with current prices of GPUs",
+        "sample sales from last quarter for our 3 regions in sales.csv",
+        "write example numbers from the 2023 census to sales.csv",
+        "save sample prices from https://shop.example/gpus to sales.csv",
+        "save today's sample prices to sales.csv",
+        "put the latest sample sales in sales.csv",
+        "write illustrative figures from Nvidia's earnings to sales.csv",
+        "Please never invent anything. Save sample sales to sales.csv",
+        "don’t use dummy data; write sales.csv",
+        "run a test on the sales numbers and put the results in sales.csv",
+        # Not English: no exemption, so it warns.
+        "datos de ejemplo en sales.csv",
+        "Beispieldaten in sales.csv speichern",
     ],
 )
 def test_a_request_for_real_figures_is_still_reported(query):

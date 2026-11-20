@@ -1889,23 +1889,35 @@ def _mentioned(claim: _Claim, answer: str) -> bool:
 _DATA_NOUN = (
     r"(?:data(?:set)?s?|rows?|records?|entries|figures?|numbers?|values?|amounts?|"
     r"sales|prices?|transactions?|orders?|invoices?|expenses?|budgets?|"
-    r"spreadsheets?|tables?|workbooks?|csv|content)\b(?!\.\w)"
+    r"spreadsheets?|tables?|workbooks?|csv|content|lists?|customers?)\b(?!\.\w)"
+)
+_INVENTED_WORD = (
+    r"(?:sample|fake|dummy|mock|made[- ]up|make[- ]believe|invented|fictional|"
+    r"fictitious|synthetic|placeholder|imaginary|hypothetical|illustrative|random|toy)"
 )
 #: "5 rows of sample sales", "fill it with made-up numbers", "some test data".
 #: "A sample of my data" and "sample size" are about real data.
 _INVENTED = re.compile(
-    r"\b(?:(?:sample|fake|dummy|mock|made[- ]up|invented|fictional|fictitious|"
-    r"synthetic|placeholder|imaginary|hypothetical|illustrative|random|demo|toy)"
-    r"\s+(?!(?:of|from|in|size|rate|mean|variance|standard|std)\b)"
+    r"\b(?:" + _INVENTED_WORD + r"[\s-]+"
+    r"(?!(?:of|from|in|size|rate|mean|variance|standard|std)\b)"
     r"(?:[a-z-]+\s+){0,2}" + _DATA_NOUN + r"|"
-    r"(?<!for )(?:example|test)\s+(?:[a-z-]+\s+){0,2}" + _DATA_NOUN + r"|"
+    r"(?<!for )example\s+(?:[a-z-]+\s+){0,2}" + _DATA_NOUN + r"|"
+    r"test\s+" + _DATA_NOUN + r"|"
     r"(?:make\s+up|invent|fabricate)\s+(?:[a-z0-9-]+\s+){0,3}" + _DATA_NOUN + r")",
     re.I,
 )
+#: Any of these means the figures are meant to be real: "actual prices",
+#: "prices at Newegg", "numbers from the 2023 census", a URL.
+_REAL_DATA = re.compile(
+    r"(?i:\b(?:actual|real|current|today['’]?s|live|latest)\b|\bfrom\b|https?://|\bwww\.)"
+    r"|\b(?:at|on)\s+(?:the\s+)?[A-Z0-9]"
+)
+#: "I do not want you to use fake numbers", wherever the negation sits.
 _NOT_INVENTED = re.compile(
-    r"\b(?:no|not|never|don'?t|do\s+not|without|avoid|instead\s+of|rather\s+than|"
-    r"isn'?t|aren'?t)\s+(?:[a-z-]+\s+){0,2}$",
-    re.I,
+    r"\b(?:no|not|never|don['’]?t|do\s+not|without|avoid|instead\s+of|rather\s+than|"
+    r"isn['’]?t|aren['’]?t)\b.*\b(?:" + _INVENTED_WORD + r"|make\s+up|invent|"
+    r"fabricat|example|test)",
+    re.I | re.S,
 )
 _NAMED_FILE = re.compile(r"(?<![\w.])[\w-]+(?:\.[\w-]+)*\.[A-Za-z][A-Za-z0-9]{1,5}\b")
 #: A script the request names is how the file gets built, not where figures come from.
@@ -1953,11 +1965,14 @@ def asks_for_invented_data(query: str, written: Collection[str] = ()) -> bool:
     """*query* asks for sample, fake or made-up data to be put in a file.
 
     Not when it names a file other than the ones in *written* (basenames):
-    "5 sample rows from sales.csv" is real data.
+    "5 sample rows from sales.csv" is real data. Nor when anything in it asks
+    for real figures ("actual", "at Newegg", "not fake"): when unsure, warn.
     """
     text = query or ""
-    if not any(
-        not _NOT_INVENTED.search(text[: m.start()]) for m in _INVENTED.finditer(text)
+    if (
+        not _INVENTED.search(text)
+        or _REAL_DATA.search(text)
+        or _NOT_INVENTED.search(text)
     ):
         return False
     known = {name.lower() for name in written}
