@@ -180,6 +180,24 @@ TEST(AgentVlmTest, ProcessQueryAllEmptyUserMessagesThrows) {
     EXPECT_EQ(mock.loadRequestCount(), 0);
 }
 
+TEST(AgentVlmTest, ARequestFarLargerThanTheWindowIsRefusedBeforeItIsSent) {
+    bench::MockLlmServer mock(/*reportModelLoaded=*/false);
+    class Bare : public Agent { public: using Agent::Agent; };
+    AgentConfig cfg = makeCfg(mock.baseUrl());
+    cfg.modelId = "some-model";
+    cfg.contextSize = 4096;
+    Bare agent(cfg);
+
+    try {
+        agent.processQuery(std::string(9 * 1024 * 1024, 'x'), 1);
+        FAIL() << "an oversized request must be refused";
+    } catch (const std::invalid_argument& e) {
+        EXPECT_NE(std::string(e.what()).find("more than any model's context window"), std::string::npos) << e.what();
+    }
+    EXPECT_TRUE(mock.receivedBodies().empty());
+    EXPECT_EQ(mock.loadRequestCount(), 0);
+}
+
 // ---- AC-12: history strips image parts (two-turn) ----
 
 TEST(AgentVlmTest, ProcessQueryWithImagesStripsFromHistory) {

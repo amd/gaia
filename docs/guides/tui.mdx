@@ -58,8 +58,10 @@ gaia-cli
 
 Every release publishes a native installer per platform at
 [amd-gaia.ai](https://amd-gaia.ai/#install) (the page picks your platform). Each puts
-two binaries on disk and on your PATH — `gaia-cli` (this app) and `gaia-agent` (the flagship agent
-it runs) — so there is nothing to unzip and nothing to `chmod`.
+`gaia-cli` (this app) and `gaia-agent` (the Python GAIA agent) on disk and on your PATH,
+so there is nothing to unzip and nothing to `chmod`. On Windows x64, Linux x64 and Apple
+silicon it also puts `gaiacpp` there, the native GAIA agent, and the terminal runs that one
+instead. See [Which agent program answers](#which-agent-program-answers).
 
 | Platform | File | How to install | Installs to |
 | --- | --- | --- | --- |
@@ -69,7 +71,7 @@ it runs) — so there is nothing to unzip and nothing to `chmod`.
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
 | Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo dnf install ./gaia-<version>.x86_64.rpm` | `/usr/bin` |
 
-On macOS and Linux the package carries only those two binaries. The first time you
+On macOS and Linux the package carries only those binaries. The first time you
 open GAIA, setup installs the rest of GAIA (its Python part, the `gaia` command) into
 `~/.gaia`. That takes about two minutes and needs internet. The one-line installer
 (`curl -fsSL https://amd-gaia.ai/install.sh | sh`) installs it up front instead.
@@ -124,7 +126,7 @@ A macOS `.pkg` ships no uninstaller — that is the platform convention, not an
 omission — so remove the files and then forget the receipt:
 
 ```bash
-sudo rm -f /usr/local/bin/gaia-cli /usr/local/bin/gaia-agent
+sudo rm -f /usr/local/bin/gaia-cli /usr/local/bin/gaia-agent /usr/local/bin/gaiacpp
 sudo rm -rf /usr/local/share/doc/gaia-cli
 sudo pkgutil --forget ai.amd.gaia.terminal-hub
 sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
@@ -610,25 +612,59 @@ names the update command.
 | `Ctrl+V` | Paste — text, or a clipboard **image** (a screenshot), which is saved to a temp file and its path inserted |
 | `Ctrl+Y` | Copy the whole answer |
 | `Ctrl+B` | Copy the last code block in the answer |
-| `Ctrl+F` | Open the newest generated image or audio file. Available only for the verified image/audio cards shown by the TUI |
-| `Ctrl+G` | Reveal the newest generated image or audio file in its folder. Like `Ctrl+F`, this is unavailable over SSH; use the displayed path on the remote machine instead |
-| `Ctrl+O` | Show every step in full — the agent's narration, wrapped commands, timings — or fold it back to one row per step |
+| `Ctrl+O` | Show every step in full — each call's command or code, its timing, its full outcome, the turn's metrics — or fold it back to one bullet per step |
+| `Ctrl+F` | Open the newest file a turn created: a document (spreadsheets, documents, decks, PDFs, text, images) or a generated image or audio file. Unavailable over SSH; use the displayed path on the remote machine instead |
+| `Ctrl+G` | Reveal the newest generated image or audio file in its folder. Like `Ctrl+F`, this is unavailable over SSH |
 
 ### Reading a turn
 
-While the agent works, and afterwards, each thing it did is one short row, with
-the answer set apart below:
+Each thing the agent does is one bullet that says what it did, in plain words.
+The command or code behind it is one dim line underneath at most, and `Ctrl+O`
+shows all of it. One line at the bottom says what is happening right now, how
+long the turn has taken, and moves while it works:
 
 ```
-  ▪ Reading file: toybox/dates.py
-    └ 3 symbols
-  ▪ Editing file: toybox/dates.py x2 · approved
-  ▪ Running command: python -m pytest -q tests/
-    └ exit 0 · 2 lines
+  ● I'll read each contract first, then build the register.
+  ● Read 4 files · 17s
+    └ msa_acme.docx, nda_beta.docx, sow_gamma.docx, … 1 more
+  ● Extract clause terms into a table · 4.0s
+    └ Run a 6-line Python script
+    └ error: KeyError: 'Term'
 
-  Fixed and verified — all 4 tests pass.
+  ⣟ Install the spreadsheet library… (2m 4s)
 ```
 
+When it finishes, the files it made are listed under the answer, with a look
+inside each one, and one line sums the turn up:
+
+```
+  Eight contracts reviewed. Three carry uncapped liability; …
+
+  Created
+    contract_review.xlsx  18 KB · 3 sheets: Register (9 rows), Clauses (65 rows), Summary
+    summary.md            1 KB · 212 words
+  ✓ Read 4 files · ran 1 Python script · 43s · ↓ 9.8k tokens
+```
+
+- **What a bullet says** comes from, best first: a description the model wrote
+  with the call, the goal the agent announced before it, then a summary built
+  from the call itself (`Run a 42-line Python script that reads 3 spreadsheets`,
+  `Search the web for 'FDIC Q2 2026'`). Placeholder text such as a plan's
+  "Following the plan to …" headline is never shown.
+- **The dot** is green when a step is done, grey while it is in progress, and red
+  only for a failure that ended the work. The words say the same thing, so
+  nothing depends on colour.
+- **A failed step** keeps its reason under it, remedy included. While the turn
+  is still running it reads `error` and stays calm, since the agent may fix it
+  and try again. Once a later run of the same file or the same command
+  succeeds, it is one calm line that reads `error, retried`. The same command
+  means every command in a `&&`, `||` or `;` chain, in the same folder, with the
+  same arguments; added switches like `--user` and the right side of a pipe
+  don't count. A step with no file or command to match, such as a web fetch or
+  a query, is never marked retried. A failure nothing recovered turns red and
+  reads `✗ failed` when the turn ends.
+- **Writes and edits** show a compact diff: line numbers, `+` and `-`, the code
+  in colour, cut with `… N more lines`.
 - **Paths** are shown relative to the folder you started GAIA in, or under `~`;
   a path that is still long keeps its end. The agent works in that folder too:
   a file you name without a full path, such as `note.txt` or `src/app.py`, is
@@ -640,23 +676,14 @@ the answer set apart below:
   lets GAIA use that file for the rest of the chat. Started from your home
   folder or a drive root, that is everything under it, so start GAIA in the
   folder you are working in.
-- **A failed step** keeps its reason under it, remedy included — that row is
-  where a failure lives, not a separate error. While the turn is still running
-  it reads `error` in amber, since the agent may fix it and try again. Once a
-  later run of the same file or the same command succeeds, it reads
-  `error, retried` and keeps its one-line error. The same command means every
-  command in a `&&`, `||` or `;` chain, in the same folder, with the same
-  arguments; added switches like `--user` and the right side of a pipe don't
-  count. A step with no file or command
-  to match, such as a web fetch or a query, is never marked retried. A failure
-  nothing recovered turns red and reads `failed` when the turn ends.
-- **A confirmation** asks once, in the prompt pinned above the composer. The step
-  it gated then records your answer in a word: `approved`, `denied`, or `always
-  allowed '<scope>'`.
-- **The agent's narration** ("Let me check the tests first") is folded away.
-  `Ctrl+O` shows it, along with each step's full command and timing. A stage or a
-  narration line the agent repeats word for word — a plan's "Following the plan
-  to …" headline before every step — is shown once, until it changes.
+- **A confirmation** asks once, in the prompt pinned above the composer. A plain
+  yes adds nothing to the step; `denied`, a timeout, or an "always" grant stays
+  on it.
+- **A long turn** folds its middle once it has more than eight steps:
+  `… 23 more actions · Ctrl+O to expand`.
+- **Each file in the Created list is a link.** In a terminal that supports them
+  (Windows Terminal, iTerm2, WezTerm, kitty), clicking one opens the file.
+  `Ctrl+F` opens the newest one from the keyboard.
 
 ### Saying something while the agent is still working
 
@@ -1038,7 +1065,37 @@ The list shows chats only; `a` in the list (or `/sessions all`) adds eval and
 scheduled runs. Sessions are kept by the GAIA agent the TUI starts itself,
 under `~/.gaia/tui/history/`. When the agent is an installed binary that runs
 through the background service instead, it doesn't keep them yet: `/sessions`
-and `--resume` say so rather than showing an empty list.
+and `--resume` say so rather than showing an empty list. The native agent, `gaiacpp`, doesn't keep sessions yet either: `--resume` with it stops and names the Python agent to use instead.
+
+## Which agent program answers
+
+GAIA's agent comes as two programs: `gaiacpp`, the native one, and `gaia-agent`,
+the Python one. The terminal installers and the one-line installers put `gaiacpp` next
+to `gaia-cli` on Windows x64, Linux x64 and Apple silicon, alongside `gaia-agent`. When
+`gaiacpp` is on the machine (on your PATH, next to `gaia-cli`, or in
+`~/.gaia/agents/gaia`), the terminal UI runs it, and the header says so:
+
+```
+ GAIA  │ agent gaia v0.25.4 (gaiacpp) │ Gemma-4-E4B-it-GGUF
+```
+
+Without `(gaiacpp)` the Python agent is answering, as it does on an Intel Mac,
+Windows on Arm or Linux on Arm, where no `gaiacpp` is built. To pick one yourself, set
+`GAIA_TUI_AGENT` to `gaiacpp`, `gaia-agent`, or the path of either, or pass the
+same value to `--agent-program`:
+
+```bash
+GAIA_TUI_AGENT=gaia-agent gaia-cli
+```
+
+If the one you named is not installed, `gaia-cli` stops and lists where it
+looked; it does not start the other one.
+
+The native agent has no Claude provider. `--use-claude` is refused at launch
+with it, and `/model` with a Claude model is refused in the chat, leaving the
+session on its current model. Use `/provider` to pick a model on this PC or a
+cloud provider that Lemonade offers, or run the Python agent for Claude. The
+developer manual has the [full comparison](/reference/tui-dev#which-agent-program-runs).
 
 ## Running an agent by id
 
@@ -1061,6 +1118,20 @@ query (SSH, tmux, a CI log) — if the screen comes out hard to read, force a mo
 ```bash
 GAIA_TUI_THEME=light gaia-cli    # or dark; unset or "auto" = detect
 ```
+
+### Motion
+
+Only what is happening right now moves: the spinner and a soft highlight
+sweeping across the status line, a gentle pulse on a prompt that is waiting for
+you, and one sweep across the summary line when a turn finishes. To turn all of
+it off:
+
+```bash
+gaia config set reduced_motion true     # every launch
+GAIA_TUI_REDUCED_MOTION=1 gaia-tui      # this launch
+```
+
+Motion is also off when `NO_COLOR` is set or the output is not a terminal.
 
 ## Troubleshooting
 

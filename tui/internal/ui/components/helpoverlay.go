@@ -301,7 +301,7 @@ const chatHelpText = `  GAIA Chat
   Mouse wheel   Scrolls
   Click         Picks a palette row or question
                 option · Ctrl+T to click links too
-  Ctrl+O  Fold · Ctrl+F/Ctrl+G open/reveal media
+  Ctrl+O  Fold · Ctrl+F open file · Ctrl+G reveal
 
   Copy and paste
   ──────────────────

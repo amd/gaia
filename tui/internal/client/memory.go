@@ -56,7 +56,7 @@ type MemoryStats struct {
 	ByContext      map[string]int `json:"by_context"`
 	SensitiveCount int            `json:"sensitive_count"`
 	EntityCount    int            `json:"entity_count"`
-	AvgConfidence  float64        `json:"avg_confidence"`
+	AvgConfidence  *float64       `json:"avg_confidence,omitempty"`
 }
 
 // MemoryContext is one row of MemoryStore.get_contexts().
@@ -71,16 +71,16 @@ type MemoryContext struct {
 // the LLM to summarize its own memory, which is exactly the unreliable path
 // this view replaces).
 type MemoryItem struct {
-	ID         string  `json:"id"`
-	Category   string  `json:"category"`
-	Content    string  `json:"content"`
-	Entity     string  `json:"entity,omitempty"`
-	Context    string  `json:"context"`
-	Confidence float64 `json:"confidence"`
-	Sensitive  bool    `json:"sensitive"`
-	CreatedAt  string  `json:"created_at,omitempty"`
-	UpdatedAt  string  `json:"updated_at,omitempty"`
-	LastUsed   string  `json:"last_used,omitempty"`
+	ID         string   `json:"id"`
+	Category   string   `json:"category"`
+	Content    string   `json:"content"`
+	Entity     string   `json:"entity,omitempty"`
+	Context    string   `json:"context"`
+	Confidence *float64 `json:"confidence,omitempty"`
+	Sensitive  bool     `json:"sensitive"`
+	CreatedAt  string   `json:"created_at,omitempty"`
+	UpdatedAt  string   `json:"updated_at,omitempty"`
+	LastUsed   string   `json:"last_used,omitempty"`
 }
 
 // FetchMemory asks the running agent for its memory snapshot over the SAME

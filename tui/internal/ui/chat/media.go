@@ -69,26 +69,33 @@ func isASCIILetter(c byte) bool {
 // checks; it does not touch the disk, so the hint bar can call it every frame.
 func (m ChatModel) latestMediaCandidate() (mediaCard, bool) {
 	for i := len(m.messages) - 1; i >= 0; i-- {
-		msg := m.messages[i]
-		if msg.Role != RoleCard || msg.Render != "media" {
-			continue
+		if card, ok := mediaCandidate(m.messages[i]); ok {
+			return card, true
 		}
-		var card mediaCard
-		if err := json.Unmarshal(msg.Data, &card); err != nil {
-			continue
-		}
-		raw := strings.TrimSpace(card.Path)
-		if isRemoteOrDevicePath(raw) || hasStreamOrExpansion(raw) {
-			continue
-		}
-		path := filepath.Clean(raw)
-		if path == "." || !filepath.IsAbs(path) || !isAllowedMediaPath(path) {
-			continue
-		}
-		card.Path = path
-		return card, true
 	}
 	return mediaCard{}, false
+}
+
+// mediaCandidate is msg's media card when it is one whose path passes the
+// string checks.
+func mediaCandidate(msg Message) (mediaCard, bool) {
+	if msg.Role != RoleCard || msg.Render != "media" {
+		return mediaCard{}, false
+	}
+	var card mediaCard
+	if err := json.Unmarshal(msg.Data, &card); err != nil {
+		return mediaCard{}, false
+	}
+	raw := strings.TrimSpace(card.Path)
+	if isRemoteOrDevicePath(raw) || hasStreamOrExpansion(raw) {
+		return mediaCard{}, false
+	}
+	path := filepath.Clean(raw)
+	if path == "." || !filepath.IsAbs(path) || !isAllowedMediaPath(path) {
+		return mediaCard{}, false
+	}
+	card.Path = path
+	return card, true
 }
 
 // latestMediaCard is the newest candidate whose file still exists on disk.

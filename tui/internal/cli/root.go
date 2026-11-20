@@ -17,15 +17,13 @@ import (
 	"github.com/amd/gaia/tui/internal/update"
 )
 
-// dev is developer mode: rich in-TUI output (per-turn timings, step and turn
-// boundaries, tool arguments and truncated tool output, raw harness statuses)
-// and DEBUG-level file logging in the agent it spawns.
+// dev is developer mode: the loopback control API is on (auto-assigned port
+// unless --control-port picks one), diagnostics go to the session log, and an
+// agent the TUI spawns logs at DEBUG. The screen is the same one every user
+// sees: debug detail lives in --trace, the logs, and behind Ctrl+O.
 //
-// One flag, not two. `--debug` already meant exactly this in the TUI, and the
-// agent half of the same feature shipped as `--dev`; keeping both names as
-// separate switches would give one idea two spellings that could disagree. So
-// `--dev` is the name and `--debug` is a hidden alias onto this same variable
-// (see init) — old scripts and docs keep working, help lists one flag.
+// `--debug` is a hidden alias onto this same variable (see init), so old
+// scripts and docs keep working and help lists one flag.
 var dev bool
 
 // developerMode enables harness engineering, independently of diagnostic output.
@@ -96,6 +94,18 @@ func binaryName(argv0 string) string {
 // deterministic child. Declared here rather than beside the flag so every entry
 // point that honours it reads the same variable.
 var mockAgent string
+
+// agentProgram backs --agent-program: which agent program the flagship runs.
+var agentProgram string
+
+// agentChoice is the agent program asked for: the flag, else GAIA_TUI_AGENT,
+// else "" for the one the catalog picks.
+func agentChoice() string {
+	if agentProgram != "" {
+		return agentProgram
+	}
+	return os.Getenv(catalog.AgentEnv)
+}
 
 // tracePath is --trace's raw value: "" (off), traceAutoPath (bare --trace), or
 // the path the user gave. Resolved by openTrace.
@@ -228,7 +238,7 @@ var rootCmd = &cobra.Command{
 		if err := update.RemoveLeftover(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
-		if err := ui.RunFlagship(dev, mockAgent, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace, resume); err != nil {
+		if err := ui.RunFlagship(dev, mockAgent, agentChoice(), ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace, resume); err != nil {
 			return err
 		}
 		// An install the user asked for in /update runs now, after the TUI
@@ -270,9 +280,10 @@ func init() {
 	rootCmd.Flags().BoolVar(&developerMode, "developer-mode", false,
 		"enable the developer skill and consent-based Claude Code/Codex handoff")
 	rootCmd.PersistentFlags().BoolVar(&dev, "dev", false,
-		"developer mode: show per-turn timings, steps, and tool arguments and output "+
-			"(agents the TUI spawns itself also log at DEBUG to ~/.gaia/logs/). "+
-			"This is what is on SCREEN; --trace writes the same events to a file")
+		"developer mode: turn on the loopback control API (same as --control) so a "+
+			"script or assistant can drive this session, with diagnostics in "+
+			"~/.gaia/logs/. The screen does not change; for debug detail use --trace, "+
+			"the logs, or Ctrl+O")
 	// Same variable as --dev, hidden: the previous name for this mode. Kept so
 	// existing scripts and docs do not break, out of --help so the two spellings
 	// never read as two features.
@@ -333,12 +344,17 @@ func init() {
 	// substituted a stand-in.
 	rootCmd.PersistentFlags().StringVar(&mockAgent, "mock", "",
 		"path to a stand-in agent binary, for tests (overrides the agent being launched)")
+	rootCmd.PersistentFlags().StringVar(&agentProgram, "agent-program", "",
+		"which agent program GAIA runs on: "+catalog.NativeAgentBinary+" (the native agent), "+
+			catalog.PythonAgentBinary+" (the Python agent), or a path to either. Unset runs "+
+			catalog.NativeAgentBinary+" when it is installed and "+catalog.PythonAgentBinary+
+			" otherwise; a named one that is missing is an error. Overrides "+catalog.AgentEnv)
 	rootCmd.PersistentFlags().StringVar(&tracePath, "trace", "",
 		"record every agent event — tool calls WITH their arguments, results, errors "+
 			"and timings — to a JSONL file, one event per line, for later inspection. "+
 			"Bare --trace writes ~/.gaia/traces/<timestamp>-<agent>.jsonl; --trace=<path> "+
-			"picks the file (the path must be attached with =, not spaced). Independent "+
-			"of --dev, which shows the same events on screen instead. The file holds "+
+			"picks the file (the path must be attached with =, not spaced). Agents the "+
+			"TUI spawns itself also log at DEBUG to ~/.gaia/logs/. The file holds "+
 			"whatever the agent read — file contents, shell output, email — so review "+
 			"it before sharing. Does NOT capture prompt size or token accounting — "+
 			"those live only in the agent's own recorder (GAIA_TURN_LOG)")
