@@ -3,138 +3,15 @@
 
 import { useEffect, useRef } from 'react';
 import { AlertTriangle, X, AlertCircle, Bug } from 'lucide-react';
-import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../utils/mediaFiles';
+import { describeUploadError } from '../utils/uploadErrors.core';
+import { GITHUB_NEW_ISSUE_URL, buildBugReportUrl } from '../utils/bugReport.core';
 import { useT } from '../i18n/useT';
-import { serverFailureText, serverNotAddedText } from '../utils/documentFailure';
 import './UnsupportedFeature.css';
 
-const GITHUB_NEW_ISSUE_URL = 'https://github.com/amd/gaia/issues/new';
+export { getUnsupportedCategory, isExtensionSupported, SUPPORTED_EXTENSIONS } from '../utils/uploadErrors.core';
+
 const GITHUB_FEATURE_REQUEST_URL = `${GITHUB_NEW_ISSUE_URL}?template=feature_request.md`;
 const GITHUB_BUG_REPORT_URL = `${GITHUB_NEW_ISSUE_URL}?template=bug_report.md`;
-
-// ── Unsupported file type categories ─────────────────────────────────────
-
-interface FileTypeCategory {
-    label: string;
-    extensions: Set<string>;
-    message: string;
-    alternatives: string[];
-    featureTitle: string;
-}
-
-const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
-    {
-        label: 'Image',
-        extensions: new Set(['.ico', '.heic', '.heif']),
-        message: 'This image format cannot be indexed.',
-        alternatives: [
-            'Convert it to PNG or JPEG — GAIA reads the text in those images',
-        ],
-        featureTitle: 'Support HEIC and ICO image indexing',
-    },
-    {
-        label: 'Video',
-        extensions: VIDEO_EXTENSIONS,
-        message: 'Video files can\'t go in the document library.',
-        alternatives: [
-            'Attach the video to a chat, and GAIA will transcribe it',
-        ],
-        featureTitle: 'Support video files in the document library',
-    },
-    {
-        label: 'Audio',
-        extensions: AUDIO_EXTENSIONS,
-        message: 'Audio files can\'t go in the document library.',
-        alternatives: [
-            'Attach the recording to a chat, and GAIA will transcribe it',
-        ],
-        featureTitle: 'Support audio files in the document library',
-    },
-    {
-        label: 'Archive',
-        extensions: new Set(['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.tgz']),
-        message: 'Archive files must be extracted before indexing.',
-        alternatives: [
-            'Extract the archive contents to a folder',
-            'Then index the folder or individual files from the Document Library',
-        ],
-        featureTitle: 'Support automatic archive extraction for indexing',
-    },
-    {
-        label: 'Executable',
-        extensions: new Set(['.exe', '.msi', '.dll', '.so', '.app', '.dmg', '.bin', '.com']),
-        message: 'Executable and binary files cannot be indexed.',
-        alternatives: [
-            'Index source code files (.py, .js, .ts, .java, etc.) instead',
-            'Index documentation or README files from the project',
-        ],
-        featureTitle: 'Support binary file analysis',
-    },
-    {
-        label: 'Database',
-        extensions: new Set(['.sqlite', '.db', '.mdb', '.accdb', '.dbf']),
-        message: 'Database files are not supported for direct indexing.',
-        alternatives: [
-            'Export data to CSV or JSON format, then index those files',
-            'Use SQL queries to extract relevant data to a text file',
-        ],
-        featureTitle: 'Support database file indexing',
-    },
-    {
-        label: 'Microsoft Office',
-        extensions: new Set(['.doc', '.ppt', '.xls']),
-        message:
-            'Legacy Office formats (.doc, legacy PowerPoint .ppt, legacy Excel ' +
-            '.xls) are not supported — GAIA reads only the modern XML-based ' +
-            'formats. Modern Word (.docx), PowerPoint (.pptx), and Excel (.xlsx) ' +
-            'are supported.',
-        alternatives: [
-            'Re-save as .docx — GAIA indexes modern Word documents directly',
-            'Save modern PowerPoint as .pptx — GAIA indexes .pptx directly',
-            'Re-save legacy .xls workbooks as .xlsx — GAIA supports modern Excel files',
-        ],
-        featureTitle: 'Support legacy Microsoft Office (doc, ppt, xls) indexing',
-    },
-];
-
-/**
- * Look up the unsupported file category for a given extension.
- * Returns null if the extension is in the supported set.
- */
-export function getUnsupportedCategory(extension: string): FileTypeCategory | null {
-    const ext = extension.toLowerCase().startsWith('.') ? extension.toLowerCase() : `.${extension.toLowerCase()}`;
-    for (const cat of UNSUPPORTED_FILE_CATEGORIES) {
-        if (cat.extensions.has(ext)) return cat;
-    }
-    return null;
-}
-
-/**
- * Set of all supported extensions for document indexing.
- *
- * Keep this in sync with ``ALLOWED_EXTENSIONS`` in
- * ``src/gaia/ui/utils.py``. Only list extensions that have a real extractor
- * in ``src/gaia/rag/sdk.py::_extract_text_from_file`` — listing one without
- * a backend handler causes the RAG pipeline to index binary garbage.
- * .pptx and .docx ARE supported (python-pptx / python-docx ship with GAIA);
- * legacy .doc/.ppt/.xls are intentionally excluded. Raster images are read by
- * the vision model.
- */
-export const SUPPORTED_EXTENSIONS = new Set([
-    '.pdf', '.pptx', '.docx', '.epub',
-    '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tif', '.tiff',
-    '.txt', '.md', '.mdx', '.markdown', '.rst', '.csv', '.json', '.xlsx',
-    '.html', '.htm', '.xml', '.svg',
-    '.yaml', '.yml', '.py', '.js', '.ts', '.java', '.c', '.cpp',
-    '.h', '.rs', '.go', '.rb', '.sh', '.bat', '.ps1', '.log',
-    '.cfg', '.ini', '.toml',
-]);
-
-/** Check if a file extension is supported for indexing. */
-export function isExtensionSupported(extension: string): boolean {
-    const ext = extension.toLowerCase().startsWith('.') ? extension.toLowerCase() : `.${extension.toLowerCase()}`;
-    return SUPPORTED_EXTENSIONS.has(ext);
-}
 
 // ── Build a GitHub issue URL ─────────────────────────────────────────────
 
@@ -177,57 +54,9 @@ export function featureRequestUrl(title: string, context?: string): string {
 
 /** Create a GitHub bug report URL with pre-filled title and body. */
 export function bugReportUrl(title: string, errorDetail?: string): string {
-    const body = [
-        '## Bug Description',
-        '',
-        errorDetail || title,
-        '',
-        '## Steps to Reproduce',
-        '',
-        '1. Open GAIA Agent UI',
-        '2. _Describe what you did:_',
-        '3. ',
-        '',
-        '## Expected Behavior',
-        '',
-        '_What did you expect to happen?_',
-        '',
-        '## Actual Behavior',
-        '',
-        '_What happened instead?_',
-        '',
-        '---',
-        getEnvironmentInfo(),
-        '',
-        '_Submitted from GAIA Agent UI_',
-    ].join('\n');
-
-    const params = new URLSearchParams({
-        title: `[Bug] ${title}`,
-        body,
-        labels: 'bug,agent-ui',
-    });
-    return `${GITHUB_NEW_ISSUE_URL}?${params.toString()}`;
+    return buildBugReportUrl(title, errorDetail, getEnvironmentInfo());
 }
 
-// ── Upload Error Toast ───────────────────────────────────────────────────
-
-/** Failures retrying can't fix until the file changes (the backend's error kind), and what to do instead. */
-export const PERMANENT_FAILURE_HINTS: Record<string, string> = {
-    corrupted: 'The file looks damaged. Re-download or re-export it, then add the new copy.',
-    encrypted: 'The PDF needs a password to open. Save a copy without the password, then add that.',
-    empty: 'The PDF has no readable text, which usually means it is a scan. Run OCR on it, then add it again.',
-    empty_file: 'This file is empty. Add content to it, then add it again.',
-    unsupported_workbook: 'This is an old .xls workbook or has a password. Open it in Excel, save a copy as .xlsx without a password, then add that.',
-};
-
-/** The backend's message without its leading category label, e.g. "File not found:". */
-function stripPrefix(message: string, prefix: string): string {
-    if (!message.startsWith(prefix)) return message;
-    const rest = message.slice(prefix.length).trim();
-    // What follows the label is now the sentence's start.
-    return rest.charAt(0).toUpperCase() + rest.slice(1);
-}
 
 interface UploadErrorToastProps {
     /** The filename that failed. */
@@ -261,80 +90,9 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
         };
     }, [onDismiss, timeout]);
 
-    // Extract extension from filename
-    const ext = filename.includes('.') ? '.' + filename.split('.').pop()?.toLowerCase() : '';
-    const category = ext ? getUnsupportedCategory(ext) : null;
-
-    // Determine if it's a file type issue or a general error
-    const isFileTypeError = error.toLowerCase().includes('unsupported file type') ||
-        error.toLowerCase().includes('not supported for indexing') ||
-        error.toLowerCase().includes('file type not allowed') ||
-        category !== null;
-
-    const isConnectionError = error.toLowerCase().includes('fetch') ||
-        error.toLowerCase().includes('network') ||
-        error.toLowerCase().includes('connect');
-
-    let title: string;
-    let detail: string;
-    let issueUrl: string | null;
-    let Icon = AlertCircle;
-
-    const permanentHint = kind ? PERMANENT_FAILURE_HINTS[kind] : undefined;
-
-    // A wrong path, a file outside the readable folders or a damaged file is the user's to fix, not a bug to report.
-    if (permanentHint) {
-        title = `"${filename}" can't be read`;
-        detail = permanentHint;
-        issueUrl = null;
-        Icon = AlertTriangle;
-    } else if (serverFailureText(kind, t)) {
-        // The file is fine; the model server didn't answer.
-        title = serverNotAddedText(kind, filename, t) ?? t('docs.notAddedServer', { name: filename });
-        detail = serverFailureText(kind, t) ?? error;
-        issueUrl = null;
-        Icon = AlertTriangle;
-    } else if (kind === 'too_large') {
-        title = t('docs.tooLarge', { name: filename });
-        detail = error;
-        issueUrl = null;
-        Icon = AlertTriangle;
-    } else if (status === 404) {
-        title = t('docs.notFound', { name: filename });
-        detail = t('docs.notFoundDetail');
-        issueUrl = null;
-        Icon = AlertTriangle;
-    } else if (status === 403) {
-        title = `GAIA can't read files in that location`;
-        detail = `${error} Or drop the file here instead (up to 20 MB) and GAIA keeps its own copy.`;
-        issueUrl = null;
-        Icon = AlertTriangle;
-    } else if (isFileTypeError && category) {
-        title = `${category.label} files not supported`;
-        detail = category.message;
-        issueUrl = featureRequestUrl(category.featureTitle);
-        Icon = AlertTriangle;
-    } else if (isFileTypeError && !ext) {
-        title = `"${filename}" has no file extension`;
-        detail = stripPrefix(error, 'File type not allowed:');
-        issueUrl = null;
-        Icon = AlertTriangle;
-    } else if (isFileTypeError) {
-        title = `File type not supported: ${ext}`;
-        detail = 'This file format cannot be indexed. Supported: PDF, DOCX, PPTX, XLSX, EPUB, images (PNG, JPG, WEBP, ...), TXT, MD, CSV, JSON, HTML, XML, YAML, and 30+ code file formats.';
-        issueUrl = featureRequestUrl(`Support ${ext} file indexing`);
-        Icon = AlertTriangle;
-    } else if (isConnectionError) {
-        title = 'Connection error';
-        detail = 'Could not reach the GAIA server. Make sure the backend is running.';
-        issueUrl = bugReportUrl(`Upload connection error for ${filename}`);
-        Icon = AlertCircle;
-    } else {
-        title = `Failed to index "${filename}"`;
-        detail = error || 'An unexpected error occurred during indexing.';
-        issueUrl = bugReportUrl(`Indexing error: ${error.slice(0, 80)}`);
-        Icon = Bug;
-    }
+    const { title, detail, icon, report } = describeUploadError(t, { filename, error, status, kind });
+    const Icon = icon === 'warning' ? AlertTriangle : icon === 'alert' ? AlertCircle : Bug;
+    const issueUrl = report === null ? null : report.kind === 'feature' ? featureRequestUrl(report.title) : bugReportUrl(report.title);
 
     return (
         <div className="upload-error-toast" role="alert">
@@ -344,7 +102,7 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
                 <div className="upload-error-detail">
                     {detail}
                     {issueUrl && ' '}
-                    {issueUrl === null ? null : isFileTypeError ? (
+                    {issueUrl === null ? null : report?.kind === 'feature' ? (
                         <a href={issueUrl} target="_blank" rel="noopener noreferrer">
                             Request this feature →
                         </a>

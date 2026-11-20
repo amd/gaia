@@ -38,7 +38,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Union
 
 import keyring
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -93,13 +93,15 @@ from gaia.connectors.mcp_server import (
     is_mcp_server_configured,
 )
 from gaia.connectors.registry import REGISTRY
-from gaia.connectors.spec import ConfigField
+from gaia.connectors.spec import _VALID_KINDS, ConfigField, ConnectorType
 from gaia.connectors.store import (
     peek_connection,
     peek_provider_credentials,
     retry_keyring,
 )
 
+from ..models import WireModel
+from ..security import refuse_on_device_listener
 from ..security import require_ui_header as _require_ui_header
 
 logger = logging.getLogger(__name__)
@@ -217,6 +219,151 @@ class ForwardConnectionRequest(BaseModel):
     scopes: List[str] = Field(default_factory=list)
     account_email: str = Field(default="")
     grant_agents: List[str] = Field(default_factory=list)
+
+
+ConfigFieldKind = Literal[tuple(sorted(_VALID_KINDS))]  # type: ignore[valid-type]
+
+
+class ConnectorFieldSummary(WireModel):
+    """One field of a connector's setup or configure form."""
+
+    key: str
+    label: str
+    kind: ConfigFieldKind
+    required: bool
+    placeholder: str
+    help_md: str
+    prefix: str
+
+
+class ConnectorOAuthClient(WireModel):
+    """Which OAuth client a provider would use; the secret is never included."""
+
+    source: Optional[Literal["keyring", "env"]]
+    client_id: Optional[str]
+    has_secret: bool
+
+
+class ConnectorSummary(WireModel):
+    """A catalog connector merged with its live state."""
+
+    id: str
+    display_name: str
+    icon: str
+    category: str
+    tier: int
+    type: ConnectorType
+    description: str
+    product_url: Optional[str]
+    docs_url: Optional[str]
+    setup_url: Optional[str]
+    configured: bool
+    configurable: bool
+    config_error: Optional[str]
+    oauth_client: Optional[ConnectorOAuthClient]
+    account_id: Optional[str]
+    scopes: List[str]
+    enabled: bool
+    activations: Dict[str, bool]
+    mcp_env_keys: List[str]
+    default_scopes: List[str]
+    available_scopes: List[str]
+    supports_device_code: bool
+    oauth_setup_fields: List[ConnectorFieldSummary]
+    config_fields: List[ConnectorFieldSummary]
+
+
+class ConnectorUnavailable(WireModel):
+    """A catalog connector whose live state could not be read."""
+
+    id: str
+    display_name: str
+    error: Literal["unavailable"]
+    reason: Optional[Literal["activations_unreadable"]] = None
+    path: Optional[str] = None
+
+
+class ConnectorListResponse(WireModel):
+    """Result of ``GET /api/connectors``."""
+
+    connectors: List[Union[ConnectorSummary, ConnectorUnavailable]]
+
+
+class ConnectorGrantsResponse(WireModel):
+    """Result of ``GET /api/connectors/{id}/grants``: scopes per agent id."""
+
+    grants: Dict[str, List[str]]
+
+
+class ConnectorActivationsResponse(WireModel):
+    """Result of ``GET /api/connectors/{id}/activations``: on/off per agent id."""
+
+    activations: Dict[str, bool]
+
+
+class AgentMcpServer(WireModel):
+    """An MCP server a custom agent declares in its own ``mcp_servers.json``."""
+
+    agent_id: str
+    agent_name: str
+    config_path: str
+    server_name: str
+    command: str
+    args: List[str]
+    disabled: bool
+
+
+class AgentMcpsResponse(WireModel):
+    """Result of ``GET /api/connectors/agent-mcps``."""
+
+    agent_mcps: List[AgentMcpServer]
+
+
+class ConnectorConfigureResponse(WireModel):
+    """Result of ``POST /api/connectors/{id}/configure``; the keys set depend on the step.
+
+    ``status``/``connector_id``: OAuth client saved. ``flow_id``/
+    ``authorization_url``: browser sign-in started. ``provider`` through
+    ``connected_at``: sign-in finished. ``configured``/``connector_id``/
+    ``command``/``args``: MCP server written.
+    """
+
+    status: Optional[str] = None
+    connector_id: Optional[str] = None
+    flow_id: Optional[str] = None
+    authorization_url: Optional[str] = None
+    provider: Optional[str] = None
+    account_email: Optional[str] = None
+    scopes: Optional[List[str]] = None
+    connected_at: Optional[float] = None
+    configured: Optional[bool] = None
+    command: Optional[str] = None
+    args: Optional[List[str]] = None
+
+
+class ConnectorTestResponse(WireModel):
+    """Result of ``POST /api/connectors/{id}/test``."""
+
+    ok: bool
+    detail: str
+    reason: Optional[Literal["timeout", "disabled"]] = None
+
+
+class ConnectorAuthorizeResponse(WireModel):
+    """Result of ``POST /api/connectors/{id}/authorize``."""
+
+    flow_id: str
+    authorization_url: str
+
+
+class ConnectorDeviceAuthResponse(WireModel):
+    """Result of ``POST /api/connectors/{id}/authorize-device``."""
+
+    user_code: str
+    verification_uri: str
+    expires_in: int
+    interval: int
+    message: str
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -643,8 +790,10 @@ def _field_summary(f: ConfigField) -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────
 
 
-@router.get("")
-@router.get("/")
+@router.get("", response_model=ConnectorListResponse, response_model_exclude_unset=True)
+@router.get(
+    "/", response_model=ConnectorListResponse, response_model_exclude_unset=True
+)
 async def list_connectors() -> Dict[str, Any]:
     """Return catalog specs merged with live state for all connectors."""
     specs = REGISTRY.all()
@@ -712,7 +861,7 @@ async def connector_events() -> StreamingResponse:
     )
 
 
-@router.get("/_debug")
+@router.get("/_debug", dependencies=[Depends(refuse_on_device_listener)])
 async def debug_state() -> Dict[str, Any]:
     """Diagnostics endpoint, gated by ``GAIA_DEBUG=1``."""
     if os.environ.get("GAIA_DEBUG") != "1":
@@ -747,7 +896,9 @@ async def debug_state() -> Dict[str, Any]:
     }
 
 
-@router.get("/agent-mcps")
+@router.get(
+    "/agent-mcps", response_model=AgentMcpsResponse, response_model_exclude_unset=True
+)
 async def list_agent_mcps(request: Request) -> Dict[str, Any]:
     """Return MCP servers declared by custom-Python agents (#1020).
 
@@ -847,12 +998,15 @@ def _eval_mailbox_state() -> Dict[str, Any]:
     }
 
 
-@router.get("/eval-mailbox")
+@router.get("/eval-mailbox", dependencies=[Depends(refuse_on_device_listener)])
 async def get_eval_mailbox() -> Dict[str, Any]:
     return _eval_mailbox_state()
 
 
-@router.post("/eval-mailbox", dependencies=[Depends(_require_ui_header)])
+@router.post(
+    "/eval-mailbox",
+    dependencies=[Depends(_require_ui_header), Depends(refuse_on_device_listener)],
+)
 async def set_eval_mailbox(body: EvalMailboxRequest) -> Dict[str, Any]:
     """Attach or detach the fixture for sessions that start reading mail next."""
     from gaia.agents.tools._email import fixture
@@ -862,17 +1016,29 @@ async def set_eval_mailbox(body: EvalMailboxRequest) -> Dict[str, Any]:
     return _eval_mailbox_state()
 
 
-@router.get("/{connector_id}/grants")
+@router.get(
+    "/{connector_id}/grants",
+    response_model=ConnectorGrantsResponse,
+    response_model_exclude_unset=True,
+)
 async def get_grants(connector_id: str) -> Dict[str, Any]:
     return {"grants": list_agent_grants(connector_id)}
 
 
-@router.get("/{connector_id}/activations")
+@router.get(
+    "/{connector_id}/activations",
+    response_model=ConnectorActivationsResponse,
+    response_model_exclude_unset=True,
+)
 async def get_activations(connector_id: str) -> Dict[str, Any]:
     return {"activations": list_agent_activations(connector_id)}
 
 
-@router.get("/{connector_id}")
+@router.get(
+    "/{connector_id}",
+    response_model=ConnectorSummary,
+    response_model_exclude_unset=True,
+)
 async def get_connector(connector_id: str) -> Dict[str, Any]:
     try:
         return _connector_summary(connector_id)
@@ -896,7 +1062,12 @@ async def get_connector(connector_id: str) -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────
 
 
-@router.post("/{connector_id}/configure", dependencies=[Depends(_require_ui_header)])
+@router.post(
+    "/{connector_id}/configure",
+    dependencies=[Depends(_require_ui_header), Depends(refuse_on_device_listener)],
+    response_model=ConnectorConfigureResponse,
+    response_model_exclude_unset=True,
+)
 async def configure_connector(
     request: Request, connector_id: str, body: ConfigureRequest
 ) -> Dict[str, Any]:
@@ -934,7 +1105,12 @@ async def configure_connector(
     return result
 
 
-@router.post("/{connector_id}/test", dependencies=[Depends(_require_ui_header)])
+@router.post(
+    "/{connector_id}/test",
+    dependencies=[Depends(_require_ui_header), Depends(refuse_on_device_listener)],
+    response_model=ConnectorTestResponse,
+    response_model_exclude_unset=True,
+)
 async def test_connector(connector_id: str) -> Dict[str, Any]:
     """Run the health check for a connector."""
     retry_keyring()
@@ -1103,19 +1279,34 @@ async def _set_connector_enabled(connector_id: str, enabled: bool) -> Dict[str, 
     return _connector_summary(connector_id)
 
 
-@router.post("/{connector_id}/enable", dependencies=[Depends(_require_ui_header)])
+@router.post(
+    "/{connector_id}/enable",
+    dependencies=[Depends(_require_ui_header), Depends(refuse_on_device_listener)],
+    response_model=ConnectorSummary,
+    response_model_exclude_unset=True,
+)
 async def enable_connector(connector_id: str) -> Dict[str, Any]:
     """Enable a previously-disabled MCP connector; open chats get it next message."""
     return await _set_connector_enabled(connector_id, True)
 
 
-@router.post("/{connector_id}/disable", dependencies=[Depends(_require_ui_header)])
+@router.post(
+    "/{connector_id}/disable",
+    dependencies=[Depends(_require_ui_header)],
+    response_model=ConnectorSummary,
+    response_model_exclude_unset=True,
+)
 async def disable_connector(connector_id: str) -> Dict[str, Any]:
     """Disable a configured MCP connector without clearing its credentials."""
     return await _set_connector_enabled(connector_id, False)
 
 
-@router.post("/{connector_id}/authorize", dependencies=[Depends(_require_ui_header)])
+@router.post(
+    "/{connector_id}/authorize",
+    dependencies=[Depends(_require_ui_header), Depends(refuse_on_device_listener)],
+    response_model=ConnectorAuthorizeResponse,
+    response_model_exclude_unset=True,
+)
 async def authorize(
     request: Request, connector_id: str, body: AuthorizeRequest
 ) -> Dict[str, Any]:
@@ -1153,7 +1344,10 @@ _device_poll_tasks: set = set()
 
 
 @router.post(
-    "/{connector_id}/authorize-device", dependencies=[Depends(_require_ui_header)]
+    "/{connector_id}/authorize-device",
+    dependencies=[Depends(_require_ui_header), Depends(refuse_on_device_listener)],
+    response_model=ConnectorDeviceAuthResponse,
+    response_model_exclude_unset=True,
 )
 async def authorize_device(
     request: Request, connector_id: str, body: AuthorizeRequest
@@ -1236,8 +1430,28 @@ async def cancel_flow_endpoint(flow_id: str) -> Response:
     return Response(status_code=204)
 
 
+class GrantSaved(WireModel):
+    """The agent's grant on the connector, as saved."""
+
+    connector_id: str
+    agent_id: str
+    scopes: List[str]
+
+
+class ActivationSaved(WireModel):
+    """The agent is active on the connector; ``auto_granted`` when a grant was made too."""
+
+    connector_id: str
+    agent_id: str
+    active: Literal[True]
+    auto_granted: bool
+
+
 @router.put(
-    "/{connector_id}/grants/{agent_id:path}", dependencies=[Depends(_require_ui_header)]
+    "/{connector_id}/grants/{agent_id:path}",
+    dependencies=[Depends(_require_ui_header), Depends(refuse_on_device_listener)],
+    response_model=GrantSaved,
+    response_model_exclude_unset=True,
 )
 async def put_grant(
     connector_id: str, agent_id: str, body: GrantRequest
@@ -1289,7 +1503,9 @@ async def delete_grant(connector_id: str, agent_id: str) -> Response:
 
 @router.put(
     "/{connector_id}/activations/{agent_id:path}",
-    dependencies=[Depends(_require_ui_header)],
+    dependencies=[Depends(_require_ui_header), Depends(refuse_on_device_listener)],
+    response_model=ActivationSaved,
+    response_model_exclude_unset=True,
 )
 async def put_activation(
     connector_id: str, agent_id: str, body: ActivationRequest
@@ -1335,7 +1551,7 @@ async def put_activation(
 @router.delete(
     "/{connector_id}/activations/{agent_id:path}",
     status_code=204,
-    dependencies=[Depends(_require_ui_header)],
+    dependencies=[Depends(_require_ui_header), Depends(refuse_on_device_listener)],
 )
 async def delete_activation(connector_id: str, agent_id: str) -> Response:
     """Deactivate ``agent_id`` for ``connector_id``. Idempotent.
@@ -1379,7 +1595,9 @@ def _require_oauth_provider(provider: str) -> None:
 
 
 @forwarded_router.post(
-    "/{provider}", status_code=201, dependencies=[Depends(_require_ui_header)]
+    "/{provider}",
+    status_code=201,
+    dependencies=[Depends(_require_ui_header), Depends(refuse_on_device_listener)],
 )
 async def forward_connection(
     request: Request, provider: str, body: ForwardConnectionRequest

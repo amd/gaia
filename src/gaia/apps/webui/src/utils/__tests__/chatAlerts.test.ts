@@ -11,6 +11,7 @@ import {
     chatPhases,
     ordinal,
 } from '../chatAlerts';
+import { tEn, translator } from '../../i18n/translator';
 import { DEFAULT_ALERT_SETTINGS } from '../../stores/notificationStore';
 import type { Session } from '../../types';
 
@@ -43,13 +44,17 @@ describe('chatAlertEvents', () => {
 
 describe('alertText', () => {
     it('names the chat and says when it failed', () => {
-        expect(alertText('needs_approval', chat('a'))).toEqual({ title: 'GAIA needs your approval', body: 'Chat a' });
-        expect(alertText('finished', chat('a', { last_run_status: 'failed' })).title).toBe('GAIA hit a problem');
-        expect(alertText('finished', undefined).body).toBe('A chat');
-        expect(alertText('finished', chat('a', { last_run_status: 'done' })).title).toBe('GAIA finished');
-        expect(alertText('finished', chat('a', { last_run_status: 'stopped' })).title).toBe('GAIA stopped');
+        expect(alertText('needs_approval', chat('a'), tEn)).toEqual({ title: 'GAIA needs your approval', body: 'Chat a' });
+        expect(alertText('finished', chat('a', { last_run_status: 'failed' }), tEn).title).toBe('GAIA hit a problem');
+        expect(alertText('finished', undefined, tEn).body).toBe('A chat');
+        expect(alertText('finished', chat('a', { last_run_status: 'done' }), tEn).title).toBe('GAIA finished');
+        expect(alertText('finished', chat('a', { last_run_status: 'stopped' }), tEn).title).toBe('GAIA stopped');
         // Unknown outcome: no claim that it worked.
-        expect(alertText('finished', chat('a')).title).toBe('A chat stopped running');
+        expect(alertText('finished', chat('a'), tEn).title).toBe('A chat stopped running');
+    });
+
+    it('follows the interface language', () => {
+        expect(alertText('question', undefined, translator('ar')).title).toContain('لدى GAIA سؤال');
     });
 });
 

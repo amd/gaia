@@ -1,0 +1,102 @@
+---
+title: "Phone App"
+description: "Use GAIA from your iPhone on your home network: pair it with your PC and chat, review permissions and check on tasks"
+icon: "mobile"
+---
+
+The GAIA phone app is a remote for the GAIA running on your PC. Your models, files, memory
+and keys stay on the PC; the phone shows your chats and lets you start new ones, approve
+permission requests and check on scheduled tasks. It works only while the phone and the PC
+are on the same home network.
+
+<Info>
+  Phone access is still in development, and the app is built from source for now (iPhone
+  first). See [Build the app](#build-the-app).
+</Info>
+
+## Pair a phone
+
+<Steps>
+  <Step title="Turn on phone access on the PC">
+    Phone access is off until you enable it. Add `"device_pairing": true` to
+    `~/.gaia/config.json` and restart GAIA. **Settings → Phones and tablets** then appears
+    (the setting is honored only from this file, so nothing else can switch it on).
+  </Step>
+  <Step title="Allow connections">
+    In **Settings → Phones and tablets**, turn on **Allow paired devices to connect**.
+    While it is off, nothing can connect, paired or not.
+  </Step>
+  <Step title="Scan the code">
+    Choose **Pair a phone or tablet** and open the GAIA app on the phone. Scan the code
+    on the PC screen. If you can't scan it, use **Copy pairing link** and paste it into
+    **Paste the pairing link or code** in the app. A code works once and expires after a
+    few minutes; **Show a new code** makes another.
+  </Step>
+  <Step title="Allow it on the PC">
+    The phone appears under **Waiting for your OK**. It can't reach your chats until you
+    choose **Allow**. **Deny** discards it.
+  </Step>
+</Steps>
+
+The phone talks to your PC over an encrypted connection tied to your PC's own certificate,
+so only the PC you paired with can answer it.
+
+## What the phone does
+
+- Read and continue your chats, start new ones, and stop a reply.
+- Approve or deny permission requests, answer GAIA's questions, and see notifications.
+- Check on scheduled tasks and goals.
+- Use the same languages as the desktop app, including right-to-left layout.
+
+## What stays on the PC
+
+Everything that sets up or changes the PC is done at the PC, and the phone doesn't offer it:
+setup and models, settings, provider keys, memory, documents and files, connectors and skills,
+and creating, running or pausing scheduled tasks and goals. Renaming, pinning and deleting chats
+are done on the PC too.
+
+## Forget a phone
+
+In **Settings → Phones and tablets**, **Remove** next to a paired phone ends its access. To
+use it again, pair it again. A phone you don't use for a while is removed automatically.
+
+If a phone is lost, or you're not sure who paired, choose **Reset pairing**. It removes every
+phone and tablet, gives the PC a new security certificate, and each device has to pair again.
+The same section lists failed pairing attempts, so you can see if someone tried.
+
+## Troubleshooting
+
+- **The phone can't find the PC.** Check that both are on the same Wi-Fi network and that
+  **Allow paired devices to connect** is on. On Windows, make sure the network is set to the
+  Private profile so the firewall allows the connection.
+- **"Port in use."** Another app holds the port. Close it, then turn the setting off and on.
+- **The code doesn't work.** It may have expired or already been used. Show a new code.
+
+## Build the app
+
+The app is in [`src/gaia/apps/mobile`](https://github.com/amd/gaia/tree/main/src/gaia/apps/mobile)
+(Expo and React Native). Its README covers the dev setup and tests. To run it on your own
+iPhone you build and sideload it with fastlane, signing with your own Apple developer team.
+Every account value comes from environment variables, so nothing personal is committed:
+
+| Variable | What it is |
+|----------|------------|
+| `GAIA_APPLE_TEAM_ID` | Your Apple Developer team id |
+| `GAIA_MATCH_GIT_URL` | The private git repository that holds your signing certificates and profiles |
+| `GAIA_IOS_BUNDLE_ID` | Bundle id of the app you build (it must be an App ID on your team) |
+| `GAIA_IOS_BUNDLE_ID_DEV` | Bundle id of the development build |
+
+The App Store Connect key, match passphrase and device id are set the same way. The
+[fastlane README](https://github.com/amd/gaia/blob/main/src/gaia/apps/mobile/fastlane/README.md)
+lists every variable and which lane needs it:
+
+```bash
+cd src/gaia/apps/mobile
+bundle exec fastlane ios check      # unsigned simulator build, no credentials
+bundle exec fastlane ios device     # signed build for your registered iPhone
+bundle exec fastlane ios sideload   # install that build over the cable
+```
+
+## See also
+
+- [Agent UI](/guides/agent-ui), the desktop app the phone mirrors

@@ -44,6 +44,7 @@ setup(
         "gaia.daemon.sidecars",
         "gaia.ui",
         "gaia.ui.routers",
+        "gaia.ui.devices",
         "gaia.ui.sidecar",
         "gaia.sidecar",
         "gaia.database",

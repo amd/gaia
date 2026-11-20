@@ -63,7 +63,7 @@ export function AnswerComparison({ original, originalModel, originalLatencyMs, s
                 <article className="compare-col" aria-label={t('compare.answerFrom', { model: originalModel ?? ref('compare.originalModel') })}>
                     <h4>{originalModel ? displayModelName(originalModel) : t('compare.original')}</h4>
                     <Meta parts={[originalLatencyMs != null && originalLatencyMs > 0 ? seconds(t, originalLatencyMs / 1000) : null, rate(t, tps)]} />
-                    <div className="compare-body"><RenderedContent content={original.content} /></div>
+                    <div className="compare-body"><RenderedContent content={original.content} sessionId={original.session_id} /></div>
                     <button
                         type="button"
                         className="compare-keep"
@@ -95,7 +95,7 @@ export function AnswerComparison({ original, originalModel, originalLatencyMs, s
                                     rate(t, state.result.stats.tokens_per_second),
                                 ]}
                             />
-                            <div className="compare-body"><RenderedContent content={state.result.content} /></div>
+                            <div className="compare-body"><RenderedContent content={state.result.content} sessionId={original.session_id} /></div>
                             <button type="button" className="compare-keep" onClick={() => onKeep('retry')} disabled={!!keeping}>
                                 {t(keeping === 'retry' ? 'compare.keeping' : 'compare.keep')}
                             </button>

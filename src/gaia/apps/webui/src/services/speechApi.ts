@@ -46,8 +46,7 @@ export async function getSpeechModel(): Promise<SpeechModel> {
     return apiFetch<SpeechModel>('GET', '/speech/model');
 }
 
-/** Longest text one `/speech` request takes; mirrors MAX_SPEECH_CHARS. */
-export const MAX_SPEECH_CHARS = 1000;
+export { MAX_SPEECH_CHARS } from '../utils/speechText';
 
 /** Speak *text* as WAV audio, in the saved voice unless one is given. */
 export async function speak(

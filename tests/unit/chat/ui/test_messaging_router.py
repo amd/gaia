@@ -76,7 +76,15 @@ def test_a_refused_token_is_a_400_with_discords_reason(monkeypatch):
 
 def test_connect_starts_the_bridge(monkeypatch):
     started = []
-    monkeypatch.setattr(discord_cli, "connect", lambda token: {"connected": True})
+    connected = {
+        "connected": True,
+        "bot_name": "GAIA",
+        "application_id": "42",
+        "invite_url": "https://discord.com/oauth2/authorize?client_id=42",
+        "bot_page_url": "https://discord.com/developers/applications/42/bot",
+        "bot_public": False,
+    }
+    monkeypatch.setattr(discord_cli, "connect", lambda token: connected)
     monkeypatch.setattr(
         discord_cli,
         "start_detached",

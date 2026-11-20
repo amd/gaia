@@ -15,6 +15,8 @@ declare module 'qrcode' {
         options?: QRCodeToCanvasOptions,
     ): Promise<void>;
 
-    export default { toCanvas };
-    export { toCanvas };
+    function toDataURL(text: string, options?: QRCodeToCanvasOptions): Promise<string>;
+
+    export default { toCanvas, toDataURL };
+    export { toCanvas, toDataURL };
 }

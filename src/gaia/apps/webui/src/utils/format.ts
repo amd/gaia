@@ -41,3 +41,10 @@ export function findSessionByHash(sessions: { id: string }[], hash: string): str
   const match = sessions.find((s) => s.id.replace(/-/g, '').toLowerCase().startsWith(normalizedHash));
   return match ? match.id : null;
 }
+
+/** A token count in short form: 950, 1.2K, 32K, 1.5M. */
+export function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
+  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+}

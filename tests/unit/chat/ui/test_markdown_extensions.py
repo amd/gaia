@@ -10,7 +10,7 @@ from gaia.ui.utils import ALLOWED_EXTENSIONS, TEXT_EXTENSIONS
 MARKDOWN = {".md", ".mdx", ".markdown", ".rst"}
 WEBUI_LIST = (
     Path(__file__).resolve().parents[4]
-    / "src/gaia/apps/webui/src/components/UnsupportedFeature.tsx"
+    / "src/gaia/apps/webui/src/utils/uploadErrors.core.ts"
 )
 
 

@@ -17,6 +17,7 @@ import { ModelRow } from './ModelRow';
 import { ConfirmSheet } from '../setup/ConfirmSheet';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import { isDownloading } from '../modelMeta';
+import { groupModels } from '../../utils/modelList.core';
 import { modelServerHealth } from '../../services/statusPoll';
 import '../ModelPicker.css';
 import { CloudPrices } from './CloudPrices';
@@ -260,25 +261,15 @@ export function ModelSettings() {
         if (listedInUse) setInUseRow(listedInUse);
     }, [listedInUse]);
 
-    const filtered = useMemo(() => {
-        const q = query.trim().toLowerCase();
-        return (models ?? []).filter(
-            (m) => !q || m.id.toLowerCase().includes(q) || (m.display_name ?? '').toLowerCase().includes(q),
-        );
-    }, [models, query]);
-    const runnable = filtered.filter((m) => m.available !== false);
-    const fireworksCollapsed = chosen === 'fireworks' && !showAllFireworksModels && !query.trim()
-        && runnable.some((m) => m.rank !== null);
+    const { filtered, visibleRunnable, onThisPc, toDownload, unavailable, collapsed: fireworksCollapsed, hiddenCount } = useMemo(
+        () => groupModels(models, { query, provider: chosen, showAll: showAllFireworksModels, activeModel: active?.model }),
+        [models, query, chosen, showAllFireworksModels, active?.model],
+    );
     const inCollapsedView = (m: ProviderModel) => m.rank !== null || m.id === active?.model;
-    const visibleRunnable = fireworksCollapsed ? runnable.filter(inCollapsedView) : runnable;
-    const hiddenFireworksModels = fireworksCollapsed ? runnable.filter((m) => !inCollapsedView(m)) : [];
-    const unavailable = filtered.filter((m) => m.available === false);
     const labels = distinctModelLabels(models ?? []);
     const searching = !!query.trim();
     const isCurrent = (m: ProviderModel) => sameModelId(active?.model, m.id);
     const local = provider?.id === 'local';
-    const onThisPc = visibleRunnable.filter((m) => m.downloaded).sort((a, b) => Number(isCurrent(b)) - Number(isCurrent(a)));
-    const toDownload = visibleRunnable.filter((m) => !m.downloaded);
     const readyModels = (models ?? []).filter((m) => m.available !== false && m.downloaded);
     const ranked = readyModels.filter(inCollapsedView);
     const removing = confirmRemove ? (models ?? []).find((m) => m.id === confirmRemove) ?? null : null;
@@ -535,7 +526,7 @@ export function ModelSettings() {
                             ) : (
                                 <ul className="model-list">{visibleRunnable.map(renderRow)}</ul>
                             )}
-                            {fireworksCollapsed && hiddenFireworksModels.length > 0 && (
+                            {fireworksCollapsed && hiddenCount > 0 && (
                                 <button
                                     type="button"
                                     className="btn-secondary"

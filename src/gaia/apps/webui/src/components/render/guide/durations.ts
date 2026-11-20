@@ -54,6 +54,25 @@ export function findDurations(text: string): DurationSpan[] {
     return spans.map(({ start, end, seconds }) => ({ start, end, seconds }));
 }
 
+export interface StepSegment {
+    /** Text up to and including the duration phrase and any punctuation right after it. */
+    before: string;
+    phrase: string;
+    seconds: number;
+}
+
+/** Splits step text at its durations, so a timer chip can end each stretch of text and its line. */
+export function splitAtDurations(text: string): { segments: StepSegment[]; tail: string } {
+    let cursor = 0;
+    const segments = findDurations(text).map((span) => {
+        const punctuation = /^[.,;:!?]+/.exec(text.slice(span.end))?.[0] ?? '';
+        const before = text.slice(cursor, span.end + punctuation.length);
+        cursor = span.end + punctuation.length;
+        return { before, phrase: text.slice(span.start, span.end), seconds: span.seconds };
+    });
+    return { segments, tail: text.slice(cursor) };
+}
+
 /** "15:00", "0:45", "1:20:00". */
 export function formatClock(totalSeconds: number): string {
     const s = Math.max(0, Math.ceil(totalSeconds));
@@ -116,4 +135,11 @@ export function parseSets(text: string): WorkoutSets {
         holdIndex,
         restIndex,
     };
+}
+
+/** Which duration the guided view's big timer follows: the rest once it has started, else the first that isn't the rest. */
+export function bigTimerIndex(count: number, restIndex: number | null, resting: boolean): number | null {
+    const others = Array.from({ length: count }, (_, i) => i).filter((i) => i !== restIndex);
+    if (resting && restIndex !== null) return restIndex;
+    return others[0] ?? (count ? 0 : null);
 }

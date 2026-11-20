@@ -5,6 +5,14 @@
 
 import { getApiBase } from '../utils/apiBase';
 
+/** A memory request the server refused; `status` 403 on the profile routes means "not at the PC". */
+export class MemoryApiError extends Error {
+    constructor(message: string, readonly status: number) {
+        super(message);
+        this.name = 'MemoryApiError';
+    }
+}
+
 async function memFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${getApiBase()}${path}`;
     const headers: Record<string, string> = {};
@@ -20,7 +28,7 @@ async function memFetch<T>(method: string, path: string, body?: unknown): Promis
         const text = await res.text().catch(() => '');
         let detail = text;
         try { detail = JSON.parse(text).detail || text; } catch { /* noop */ }
-        throw new Error(detail || `Memory API error (HTTP ${res.status})`);
+        throw new MemoryApiError(detail || `Memory API error (HTTP ${res.status})`, res.status);
     }
     // A 204 has no body, whatever its content-type says.
     if (res.status === 204) return undefined as T;
@@ -208,12 +216,40 @@ export interface InferenceInsight {
 
 /** Open an EventSource SSE stream for system discovery. */
 export function openDiscoveryStream(): EventSource {
-    return new EventSource(`${getApiBase()}/memory/stream-discovery`);
+    return new EventSource(discoveryStreamUrl());
+}
+
+function discoveryStreamUrl(): string {
+    return `${getApiBase()}/memory/stream-discovery`;
+}
+
+function inferenceStreamUrl(includeBrowser: boolean): string {
+    return `${getApiBase()}/memory/stream-inference?include_browser=${includeBrowser}`;
 }
 
 /** Open an EventSource SSE stream for LLM profile inference. */
 export function openInferenceStream(includeBrowser: boolean): EventSource {
-    return new EventSource(`${getApiBase()}/memory/stream-inference?include_browser=${includeBrowser}`);
+    return new EventSource(inferenceStreamUrl(includeBrowser));
+}
+
+/**
+ * Ask why a profile stream failed: an EventSource can't read the status, so this reads it
+ * once and drops the body. True only for the server's 403.
+ */
+export async function streamRefusedAsPcOnly(kind: 'discovery' | 'inference', includeBrowser = false): Promise<boolean> {
+    const ctrl = new AbortController();
+    try {
+        const res = await fetch(kind === 'discovery' ? discoveryStreamUrl() : inferenceStreamUrl(includeBrowser), { signal: ctrl.signal });
+        return res.status === 403;
+    } catch {
+        return false; // unreachable server: the caller keeps its connection error
+    } finally {
+        ctrl.abort();
+    }
+}
+
+export function isPcOnlyRefusal(err: unknown): boolean {
+    return err instanceof MemoryApiError && err.status === 403;
 }
 
 export function commitDiscovery(items: DiscoveryFinding[]) {
@@ -245,6 +281,19 @@ export interface MemorySettingsUpdateResponse extends MemorySettings {
 
 export function updateMemorySettings(settings: Partial<MemorySettings>) {
     return memFetch<MemorySettingsUpdateResponse>('PUT', '/memory/settings', settings);
+}
+
+/** Rows deleted per table by DELETE /api/memory/all. */
+export interface MemoryCleared {
+    knowledge: number;
+    tool_history: number;
+    conversations: number;
+}
+
+export interface MemoryReinitializeResult {
+    cleared: MemoryCleared;
+    /** ``error`` is set when memory was cleared but system discovery failed. */
+    system_context: { stored: number; error?: string };
 }
 
 export type EmbedderDevice = 'npu' | 'gpu';
@@ -284,17 +333,11 @@ export function setEmbedder(device: EmbedderDevice | null) {
 }
 
 export function clearAllMemory() {
-    return memFetch<{ knowledge: number; tool_history: number; conversations: number }>(
-        'DELETE', '/memory/all'
-    );
+    return memFetch<MemoryCleared>('DELETE', '/memory/all');
 }
 
 export function reinitializeMemory() {
-    return memFetch<{
-        cleared: { knowledge: number; tool_history: number; conversations: number };
-        /** ``error`` is set when memory was cleared but system discovery failed. */
-        system_context: { stored: number; error?: string };
-    }>('POST', '/memory/reinitialize');
+    return memFetch<MemoryReinitializeResult>('POST', '/memory/reinitialize');
 }
 
 // ── Goals & Tasks ────────────────────────────────────────────────────────────
