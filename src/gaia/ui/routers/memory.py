@@ -1605,7 +1605,7 @@ def stream_inference(include_browser: bool = Query(False)):
                         "message": (
                             "Profile inference runs only on a local model, and "
                             f"'{model}' isn't downloaded on this PC. Download it "
-                            "under Settings > Model > Manage downloads and disk "
+                            "under Settings > Agent & model > Manage downloads and disk "
                             "space, then try again."
                         ),
                     }

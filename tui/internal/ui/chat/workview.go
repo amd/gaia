@@ -228,6 +228,10 @@ func canJoin(e workEntry, it ActivityItem, head string, src int) bool {
 	if failedItem(last) || last.Approval == approvalWaiting {
 		return false
 	}
+	// Folded together, one delegation's helper list would hide the other's.
+	if len(last.Helpers) > 0 || len(it.Helpers) > 0 {
+		return false
+	}
 	if approvalClass(last.Approval) != approvalClass(it.Approval) {
 		return false
 	}
@@ -387,8 +391,10 @@ func (m ChatModel) renderAct(e workEntry, finished, recovered bool, width int) [
 	if what := whatLine(e); what != "" {
 		details = append([]string{what}, details...)
 	}
+	outcome := ""
 	if state == "ok" {
 		if out := conciseDetail(last.Detail); out != "" && !strings.EqualFold(out, entryText(e)) && !rawDump(out) {
+			outcome = out
 			details = append(details, out)
 		}
 	}
@@ -400,6 +406,9 @@ func (m ChatModel) renderAct(e workEntry, finished, recovered bool, width int) [
 		if state == "fail" && d == failure {
 			style = failStyle
 		}
+		if d == outcome && last.Partial {
+			style = helperWarnStyle
+		}
 		rows := 1
 		if d == failure && (state == "fail" || last.Recovery == recoveryPending) {
 			// A failure that ended the work, or one the agent has not moved
@@ -407,7 +416,13 @@ func (m ChatModel) renderAct(e workEntry, finished, recovered bool, width int) [
 			rows = logDetailRows
 		}
 		wrapped := wrapLog(d, "", width-4, rows)
-		lines = append(lines, "    "+style.Render(glyphDetail+" "+wrapped[0]))
+		first := "    " + style.Render(glyphDetail+" "+wrapped[0])
+		// Whole or absent, like a status-bar hint: never a clipped key name.
+		if anyHelperShort(last.Helpers) && len(wrapped) == 1 && (d == outcome || d == failure) &&
+			displayWidth(wrapped[0])+displayWidth(foldedHelpersHint) <= width-6 {
+			first += devPayloadStyle.Render(foldedHelpersHint)
+		}
+		lines = append(lines, first)
 		for _, r := range wrapped[1:] {
 			lines = append(lines, "      "+style.Render(r))
 		}
@@ -535,10 +550,15 @@ func (m ChatModel) renderActExpanded(e workEntry, recovered bool, width int) []s
 			style := detailStyle
 			if failedItem(it) && !recovered {
 				style = failStyle
+			} else if it.Partial {
+				style = helperWarnStyle
 			}
 			for _, r := range wrapLog(d, "", width-6, logDetailRows) {
 				lines = append(lines, "      "+style.Render(r))
 			}
+		}
+		if it.Done && len(it.Helpers) > 0 {
+			lines = append(lines, m.renderHelperLines(it, 0)...)
 		}
 	}
 	return append(lines, m.renderChanges(e, diffRowsExpanded, width)...)
@@ -672,7 +692,8 @@ func (m ChatModel) renderLiveRegion() string {
 	for i := range entries {
 		groups[i] = m.renderEntries(entries[i:i+1], false)
 	}
-	budget := m.logRows()
+	plan := m.renderPlan(m.logWidth() + 4)
+	budget := max(m.logRows()-len(plan), 1)
 	total := 0
 	for _, g := range groups {
 		total += len(g)
@@ -701,6 +722,8 @@ func (m ChatModel) renderLiveRegion() string {
 	for _, g := range groups[len(groups)-kept:] {
 		lines = append(lines, g...)
 	}
+	// Last, so it sits right above the running step on the status line.
+	lines = append(lines, plan...)
 	return strings.Join(lines, "\n")
 }
 
@@ -735,6 +758,10 @@ func (m ChatModel) statusPhrase() string {
 	}
 	if it, ok := m.liveItem(); ok {
 		head, _ := headline(it)
+		if it.Progress != "" {
+			progress := helperProgress(it.Progress)
+			head += " · " + progress
+		}
 		return head
 	}
 	if m.buffer != "" {
@@ -1033,6 +1060,7 @@ func (m ChatModel) answerTrailer(msg *Message) string {
 	if recap := m.renderRecap(msg, m.now()); recap != "" {
 		rows = append(rows, recap)
 	}
+	rows = append(rows, m.renderProvenance(msg.Provenance)...)
 	if stats := m.answerStats(msg); stats != "" {
 		rows = append(rows, activityStyle.Render("  "+stats))
 	}

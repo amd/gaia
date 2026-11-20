@@ -423,4 +423,91 @@ TEST_F(GaiacppCli, ServeOnAPortInUseFailsWithoutWaiting) {
     EXPECT_LT(elapsed, std::chrono::seconds(9)) << "the bind error waited for the ready announcement";
 }
 
+TEST_F(GaiacppCli, AHelperRunShowsInTheJsonOutputAndTheStepLog) {
+    bench::MockLlmServer mock;
+    // One helper at a time, so the replies are taken in order: parent, helper, helper, parent.
+    mock.pushResponse(withUsage(
+        toolCall("delegate_task", R"({"tasks":[{"task":"what does note.txt say","paths":["note.txt"]}]})"), 1000, 0, 40));
+    mock.pushResponse(withUsage(toolCall("file_read", R"({"path":"note.txt"})"), 300, 0, 10));
+    mock.pushResponse(withUsage(finalAnswer("note.txt says hello"), 350, 200, 15));
+    mock.pushResponse(withUsage(finalAnswer("It says hello."), 1200, 900, 20));
+    const fs::path steps = dir_ / "steps.jsonl";
+
+    const gaia::ProcessResult r = run(mock, "", " --max-helpers 1", {{"GAIA_STEP_LOG", steps.string()}});
+    ASSERT_EQ(r.exitCode, 0) << r.stderr_output;
+
+    const json out = json::parse(r.stdout_output);
+    EXPECT_EQ(out["result"], "It says hello.");
+    ASSERT_TRUE(out.contains("helpers")) << out.dump(2);
+    EXPECT_EQ(out["helpers"]["runs"], 1);
+    EXPECT_EQ(out["helpers"]["ok"], 1);
+    EXPECT_EQ(out["helpers"]["failed"], 0);
+    EXPECT_EQ(out["helpers"]["width"], 1);
+    EXPECT_EQ(out["helpers"]["input_tokens"], 650);
+    EXPECT_EQ(out["helpers"]["cached_tokens"], 200);
+    EXPECT_EQ(out["helpers"]["output_tokens"], 25);
+    EXPECT_EQ(out["input_tokens"], 2850) << "the run's total counts the helper's tokens";
+    EXPECT_EQ(out["cached_tokens"], 1100);
+    EXPECT_EQ(out["output_tokens"], 85);
+    EXPECT_EQ(out["num_tool_calls"], 1) << "the parent made one call; the helper's are its own";
+
+    std::ifstream in(steps);
+    int helperLines = 0, helperCalls = 0;
+    for (std::string line; std::getline(in, line);) {
+        const json step = json::parse(line);
+        if (step.value("kind", "") == "helper") {
+            ++helperLines;
+            EXPECT_EQ(step["status"], "ok");
+        } else if (step.contains("helper")) {
+            ++helperCalls;
+        }
+    }
+    EXPECT_EQ(helperLines, 1);
+    EXPECT_EQ(helperCalls, 3) << "two model calls and one tool call, each tagged with the helper";
+}
+
+TEST_F(GaiacppCli, ARunWithoutHelpersHasNoHelpersBlock) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+    const gaia::ProcessResult r = run(mock, "");
+    ASSERT_EQ(r.exitCode, 0) << r.stderr_output;
+    EXPECT_FALSE(json::parse(r.stdout_output).contains("helpers"));
+}
+
+TEST_F(GaiacppCli, AHostedModelThroughLemonadeGetsTheProvidersWindowUnlessOneIsGiven) {
+    std::ofstream(dir_ / "work" / "second.txt") << "another file, so the prompt states how much there is to read";
+    auto windowIn = [](const bench::MockLlmServer& mock) {
+        const json body = json::parse(mock.receivedBodies().back());
+        const std::string system = body["messages"][0]["content"].get<std::string>();
+        const std::string marker = "Your context window holds ";
+        const size_t at = system.find(marker);
+        return at == std::string::npos ? std::string("(not stated)") : system.substr(at + marker.size(), 7);
+    };
+    {
+        bench::MockLlmServer mock;
+        mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+        ASSERT_EQ(run(mock, "", " -m fireworks.some-model").exitCode, 0);
+        EXPECT_EQ(windowIn(mock), "131072 ");
+    }
+    {
+        bench::MockLlmServer mock;
+        mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+        ASSERT_EQ(run(mock, "", " -m fireworks.some-model --ctx-size 20000").exitCode, 0);
+        EXPECT_EQ(windowIn(mock), "20000 t") << "a window that was asked for is kept";
+    }
+    {
+        bench::MockLlmServer mock;
+        mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+        ASSERT_EQ(run(mock, "").exitCode, 0);
+        EXPECT_EQ(windowIn(mock), "32768 t") << "a local model keeps the default";
+    }
+}
+
+TEST_F(GaiacppCli, MaxHelpersMustBeAWholeNumber) {
+    bench::MockLlmServer mock;
+    const gaia::ProcessResult r = run(mock, "", " --max-helpers many");
+    EXPECT_EQ(r.exitCode, 2);
+    EXPECT_NE(r.stderr_output.find("--max-helpers"), std::string::npos) << r.stderr_output;
+}
+
 }  // namespace

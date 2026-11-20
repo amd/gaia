@@ -102,6 +102,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			break
 		}
 
+		if e.Plan != nil {
+			m.updatePlan(planFromWire(e.Plan.Steps, e.Plan.CurrentStep))
+		}
+
 		// Kept in the transcript, not the live line: it explains later answers.
 		if e.HistoryCut != nil {
 			m.messages = append(m.messages, Message{
@@ -111,9 +115,14 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			break
 		}
 
-		// A phase report drives the live line and nothing else: it is not
-		// narration, so it never lands in the work log.
-		if e.Phase != "" {
+		// Helper progress rides on the step running the helpers; with none open it is an ordinary status.
+		if e.Phase == phaseHelpers {
+			if m.setHelperProgress(e.Message) {
+				break
+			}
+		} else if e.Phase != "" {
+			// A phase report drives the live line and nothing else: it is not
+			// narration, so it never lands in the work log.
 			m.phase = modelPhase{name: e.Phase, words: e.Words, label: truncateRunes(clean(e.Message), narrationMax)}
 			break
 		}
@@ -155,10 +164,16 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			Goal:     m.takeGoal(),
 			At:       m.now(),
 			RetryKey: retryKey(e.Tool, e.Args),
+			Sources:  callSources(e.Tool, e.Args),
 		})
 
 	case event.CanonicalToolResultEvent:
 		m.phase = modelPhase{}
+		// Read before the generic failure path: its `error` text is for the model.
+		if d, ok := delegationOf(e.Data); ok {
+			m.setToolOutputAt(m.closeDelegation(e.Tool, d), e)
+			break
+		}
 		outcome, toolErr := event.ToolOutcomeOf(e)
 		if e.Render == "" {
 			// A tool that draws no card has no surface but its step row, so the
@@ -307,6 +322,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				Metrics:      usage.Metrics,
 				Recap:        workRecap(work),
 				Deliverables: findDeliverables(work, content, m.queryStart),
+				Provenance:   turnProvenance(work, m.turnPlace()),
 				FinishedAt:   m.now(),
 				CostUSD:      m.turnCostUSD(usage.InputTokens, usage.CachedTokens, usage.Tokens),
 			})
@@ -369,6 +385,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.settleTurn()
 		m.updateViewport()
 		return m, nil, true
+
+	case event.CanonicalContextUsageEvent:
+		m.takeContextUsage(e)
 
 	case event.CanonicalUnsupportedEvent:
 		// Contract §7: a newer agent's event type is shown, never dropped.
@@ -583,7 +602,9 @@ func (m ChatModel) confirmAction(runID, action string, approved bool) tea.Cmd {
 // to the render card in the transcript — this line only says it came back, how
 // much of it, and how long it took.
 func (m *ChatModel) markToolDone(e event.CanonicalToolResultEvent) {
-	at := m.setOpenToolOutcome(e.Tool, toolResultSucceeded(e.Data), toolResultDetail(e))
+	ok := toolResultSucceeded(e.Data)
+	at := m.setOpenToolOutcome(e.Tool, ok, toolResultDetail(e))
+	m.planToolFinished(e.Tool, ok)
 	m.setToolOutputAt(at, e)
 }
 
@@ -600,6 +621,7 @@ func (m *ChatModel) setToolOutputAt(at int, e event.CanonicalToolResultEvent) {
 	item := &m.activity[at]
 	item.End = m.now()
 	item.OutLines = outputLines(e.Data)
+	item.Sources = append(item.Sources, resultSources(item.Tool, e.Data)...)
 	if c := item.Call.Change; c != nil && !c.Created && item.Success != nil && *item.Success {
 		c.StartLine = locateEdit(c)
 	}

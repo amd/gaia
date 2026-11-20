@@ -469,6 +469,7 @@ is on the wire. It is sent when the phase actually starts, never on a timer, and
 | `model_retry` | a model call failed for another reason (the model service was busy, timed out, stopped sending, or the connection dropped) and is retried: once per retry, `message` naming the trouble, the wait and the attempt ("The model service is busy — retrying in 8s (2/4)") | — |
 | `answer_restart` | a reply was cut off part-way (the model server stopped or the connection dropped) and the step starts over; carries `retracts_answer: true` | — |
 | `model_queue` | the turn is queued for the model behind another request, then every ~2 s while it waits, then once when it gets the model | `queue` (below) |
+| `helpers` | a `delegate_task` call is running and one of its helpers has just ended: once per helper, `message` counting those ended and those that failed ("2 of 4 helpers done", "3 of 4 helpers done, 1 failed"). It belongs on the running tool's own row, not on a separate status line, and is not ended by the rule below: it lasts until that tool's `tool_result` | — |
 
 `model_queue` is the one phase sent on a timer: the steady updates are what let a
 receiver tell a queued turn from a dead one. Its `queue` object has `event`
@@ -853,6 +854,22 @@ or a smaller model or longer prompt shrank the budget), so a stable cut is
 reported once. The model is told on every such turn, not once: the oldest user
 message it is sent opens with a one-sentence note that earlier turns exist and
 are no longer shown.
+
+A turn that runs a plan sends `plan` on a `status` each time the plan is made or
+its current step moves: `{"steps": [...], "current_step": N}`, where each step is
+`{tool?, description?, args?}` (string arguments clipped to 300 characters) and
+`current_step` is 0-based. `message` is then the plan headline, or empty when it
+repeats the last one. The TUI draws it as a checklist and replaces it when the
+steps change.
+
+Once a turn is recorded, and before its terminal event, the agent sends
+`context_usage`: the same event, in the same shape, the HTTP server streams by
+contract 2.28 (§4), measured for the next message. The TUI's meter reads
+`system + tool_definitions + history_used` against
+`system + tool_definitions + history_budget`, so 100% is where older turns start
+to drop, not the end of the window. `at_risk` previews the turns the next ones
+will push out of view; the TUI warns once each time it grows, and `history_cut`
+still reports the cut once it has happened.
 
 ### 10.4 Session listing
 

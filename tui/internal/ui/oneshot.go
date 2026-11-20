@@ -280,6 +280,10 @@ func RunOneShot(
 			}
 			fmt.Fprintf(errW, "❌ %s\n", e.Detail)
 
+		case event.CanonicalContextUsageEvent:
+			// A meter for the next message; a one-shot has none.
+			debugf("context_usage: %d of %d tokens", e.Used, e.Window)
+
 		case event.CanonicalUnsupportedEvent:
 			// Contract §7: visible, never dropped.
 			fmt.Fprintf(errW, "  [unsupported event %q]\n", e.EventType)

@@ -534,14 +534,14 @@ VISION_CHAT_MODELS = frozenset(
 VISION_OFF_ON_NPU = (
     "GAIA can't read images while it runs on the NPU, because the NPU model "
     "doesn't read images. To read images, switch the chat model to the GPU in "
-    "Settings > Model."
+    "Settings > Agent & model."
 )
 
 #: Why there is no vision model on the NPU when none that reads images is downloaded.
 VISION_NOT_INSTALLED = (
     "No image-reading model is installed on this PC, and the chat model runs on "
     "the NPU, which doesn't read images. To read images, pick Gemma 4 E4B as the "
-    "chat model in Settings > Model (GAIA offers to download it), then ask again."
+    "chat model in Settings > Agent & model (GAIA offers to download it), then ask again."
 )
 
 
@@ -1673,7 +1673,7 @@ def _chosen_ctx_size(model: str, base_url: Optional[str]) -> Optional[int]:
         raise LemonadeClientError(
             f"GAIA can't read this PC's memory ({e}), so it can't check that the "
             f"{tokens // 1024}K context size you chose for {model} fits, and won't "
-            "load it unchecked. Choose Automatic in Settings › Model, or set "
+            "load it unchecked. Choose Automatic in Settings › Agent & model, or set "
             "GAIA_CTX_SIZE to pin a size yourself."
         ) from e
     try:
@@ -3738,7 +3738,7 @@ def _unknown_user_model_message(model_id: str) -> str:
     return (
         f"Can't download '{model_id}': GAIA doesn't know where it comes from. "
         "Add it from its Hugging Face link, then download it: in the Agent UI "
-        "use Settings > Model > Add a model from Hugging Face; in the terminal "
+        "use Settings > Agent & model > Add a model from Hugging Face; in the terminal "
         "app use /provider, choose Local, then ctrl+a."
     )
 
@@ -5579,7 +5579,7 @@ class LemonadeClient:
             self.log.warning(
                 f"The restarted Lemonade Server still lists no {provider} models; "
                 f"reconnect {provider} in the TUI's /provider panel or the Agent "
-                "UI's Settings > Model."
+                "UI's Settings > Agent & model."
             )
         return bool(usable)
 

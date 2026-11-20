@@ -151,6 +151,9 @@ type ChatModel struct {
 	setupChoices *modelsetup.Choices
 	// gpuApplies is whether /gpu means anything on this PC (an integrated GPU).
 	gpuApplies bool
+	// agentProgramHost is set when the host answers AgentProgramMsg (/agent).
+	agentProgramHost bool
+
 	// agentsPanel is the in-chat "/agents" listing (nil unless open). It only
 	// lists and selects (agents.SelectedMsg's own doc comment); switching to
 	// the picked agent is the root model's job, so a SelectedMsg is left to
@@ -403,6 +406,12 @@ type ChatModel struct {
 	modelDisplay string
 	modelBackend string
 	modelRemote  bool
+	// plan is the running turn's plan checklist (plan.go).
+	plan livePlan
+	// ctxMeter is how full the model's context is (context.go).
+	ctxMeter contextMeter
+	// starters are the first screen's suggestions (suggestions.go).
+	starters []starter
 
 	// awaitingModelSwitch is true for the duration of a `/model <id>` turn
 	// this session itself started. A model-state ping that disagrees with
@@ -594,6 +603,7 @@ func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, se
 	m := NewChatModel(c, agentName, "")
 	m.agentID = agentID
 	m.setupVerified = setupVerified
+	m.starters = installedStarters(skillsDir())
 	return m.applyFirstBootGate()
 }
 
@@ -1407,6 +1417,10 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.hideWarmUpStage()
 	}
 
+	if next, cmd, ok := m.pickSuggestion(msg); ok {
+		return next, cmd
+	}
+
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		if m.streaming && m.cancelFn != nil && !m.cancelPending {
@@ -1770,6 +1784,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	if isVoiceCommand(query) {
 		return m.runVoiceCommand(commandArg(query, voiceCommand))
 	}
+	if isAgentCommand(query) {
+		return m.runAgentCommand(commandArg(query, agentCommand))
+	}
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
@@ -1879,6 +1896,11 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 			Role:    RoleStatus,
 			Content: m.cost.render(m.costModelName(), lookupPrice(m.modelID)),
 		})
+		m.updateViewport()
+		return m, nil
+
+	case "/context":
+		m.messages = append(m.messages, Message{Role: RoleStatus, Content: m.contextBreakdown()})
 		m.updateViewport()
 		return m, nil
 
@@ -2015,6 +2037,7 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	m.lastEventAt = m.queryStart
 	m.userWait, m.userWaitStart = 0, time.Time{}
 	m.goalFresh = false
+	m.plan = livePlan{}
 	m.updateViewport()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2093,6 +2116,7 @@ func (m *ChatModel) settleTurn() {
 	// and when the cancel lost the race it sat directly above the answer that
 	// did arrive, contradicting it.
 	m.dropCancellingNotice()
+	m.flushContextWarning()
 	if m.cancelPending {
 		m.cancelPending = false
 		m.messages = append(m.messages, Message{
@@ -2209,6 +2233,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 				last.Done = true
 				last.Success = &e.Success
 				last.End = m.now()
+				m.planToolFinished(last.Tool, e.Success)
 				if summary != "" {
 					last.Content += " → " + summary
 				}
@@ -2224,6 +2249,9 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 				last.End = m.now()
 			}
 		}
+
+	case event.PlanEvent:
+		m.updatePlan(planFromWire(legacyPlanSteps(e), e.CurrentStep))
 
 	case event.StepEvent:
 		// Not shown. "Step 2/50" is the agent loop's bound, not the user's
@@ -2668,6 +2696,9 @@ func (m ChatModel) renderWelcome() string {
 	agent := lipgloss.NewStyle().
 		Foreground(theme.Text).
 		Render("Connected to: " + m.agentIdentity() + m.coreVersionSuffix())
+	if list := m.renderSuggestions(); list != "" {
+		return title + "\n" + agent + "\n\n" + list + "\n\n" + hint
+	}
 	return title + "\n" + agent + "\n\n" + hint
 }
 
@@ -3094,7 +3125,7 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 			// Nor does a failed row, retried or not: folded, the next call's
 			// outcome would replace its error line. A failure folds under an
 			// earlier row only when it is a retry of that same call.
-			keep := stepFailed(*last) ||
+			keep := stepFailed(*last) || len(last.Helpers) > 0 || len(item.Helpers) > 0 ||
 				(stepFailed(item) && (item.RetryKey == "" || item.RetryKey != last.RetryKey))
 			if last.Kind == item.Kind && activityKey(*last) == activityKey(item) &&
 				last.Approval == item.Approval && !keep {

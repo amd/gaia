@@ -95,3 +95,49 @@ func TestSubprocessGaiacppWithoutStdioIsRefused(t *testing.T) {
 		t.Fatalf("gaiacpp without --stdio was not refused naming the flag: %v", err)
 	}
 }
+
+// An installed gaiacpp the user never chose must not take away --use-claude or
+// --resume: with no choice the Python agent runs and both are accepted. Chosen,
+// gaiacpp still refuses --use-claude loudly.
+func TestUseClaudeAndResumeWorkBesideAnUnchosenGaiacpp(t *testing.T) {
+	bin := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("PATH", bin)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("GAIA_HOME", "")
+	t.Setenv("GAIA_CONFIG_DIR", "")
+	t.Setenv(catalog.NativePathEnv, "")
+	t.Setenv(client.HistoryFileEnv, "")
+	t.Chdir(t.TempDir())
+	name := catalog.NativeAgentBinary
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cat, _, err := loadCatalog("", "", catalog.FlagshipID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := *cat.Get(catalog.FlagshipID)
+	if agent.Native {
+		t.Fatalf("gaiacpp ran although nobody chose it: %+v", agent)
+	}
+	if err := checkClaudeSupported(agent, true); err != nil {
+		t.Errorf("--use-claude was refused with no agent chosen: %v", err)
+	}
+	if _, err := resumeTarget(agent, Resume{Pick: true}); err != nil {
+		t.Errorf("--resume was refused with no agent chosen: %v", err)
+	}
+
+	chosen, _, err := loadCatalog("", catalog.NativeAgentBinary, catalog.FlagshipID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkClaudeSupported(*chosen.Get(catalog.FlagshipID), true); err == nil {
+		t.Error("--use-claude was accepted for a chosen gaiacpp, which exits on it")
+	}
+}

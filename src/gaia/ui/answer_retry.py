@@ -143,7 +143,7 @@ def _is_loaded(client: Any, model: str) -> bool:
         raise RetryError(
             503,
             f"Could not reach the model server at {client.base_url} to load "
-            f"{model}: {exc}. Check Settings → Model.",
+            f"{model}: {exc}. Check Settings → Agent & model.",
         ) from exc
     return any((m.get("model_name") or "").lower() == model.lower() for m in loaded)
 
@@ -206,7 +206,7 @@ def answer_with(
             raise RetryError(
                 503,
                 f"{model} did not answer at {client.base_url}: {exc}. "
-                "Check Settings → Model.",
+                "Check Settings → Agent & model.",
             ) from exc
         finished = time.monotonic()
         server: dict[str, Any] = {}

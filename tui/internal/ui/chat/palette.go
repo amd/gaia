@@ -47,10 +47,12 @@ var paletteCommands = []paletteCommand{
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
 	{"/gateway", "Connect GAIA to the AMD LLM gateway and pick its models"},
 	{"/cost", "What this session has spent; /cost help for rates"},
+	{"/context", "How full the model's context is, and what fills it"},
 	{"/copy", "Pick any message with ↑/↓ and copy it with Enter"},
 	{"/copy all", "Copy the whole conversation as markdown"},
 	{"/read-aloud", "Read the last reply aloud; again (or /read-aloud stop) stops it"},
 	{"/voice", "Pick the read-aloud voice and speed, or read every reply"},
+	{agentCommand, "See or switch the agent program: gaiapy, or gaiacpp (Beta)"},
 	{"/agents", "List installed agents and switch this session to one"},
 	{"/update", "Check for a newer GAIA, install one (/update now, /update v0.25.0), or set auto-update"},
 	{"/sessions", "Reopen a past session — ones waiting on you come first"},
@@ -109,6 +111,31 @@ func filterModelCommands(arg string) []paletteCommand {
 	return out
 }
 
+// agentPalettePrefix turns the palette into the agent-program picker, the way
+// modelPalettePrefix does for models.
+const agentPalettePrefix = agentCommand + " "
+
+// agentPaletteCommands is the agent-program picker's rows.
+func agentPaletteCommands() []paletteCommand {
+	return []paletteCommand{
+		{agentCommand, "Show both programs and which one is running"},
+		{agentPalettePrefix + "gaiapy", "Python agent: every tool, well tested, heavier"},
+		{agentPalettePrefix + "gaiacpp", "Native agent (Beta): fast, light, fewer tools"},
+	}
+}
+
+// filterAgentCommands narrows the picker to rows matching what was typed
+// after `/agent `.
+func filterAgentCommands(arg string) []paletteCommand {
+	var out []paletteCommand
+	for _, c := range agentPaletteCommands() {
+		if arg == "" || strings.Contains(c.Name, arg) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // filterPaletteCommands narrows paletteCommands to the ones whose name
 // starts with the composer's current text, case-insensitively, AND that
 // available marks as offered. Recomputed fresh on every keystroke rather
@@ -128,6 +155,12 @@ func filterPaletteCommands(value string, available map[string]bool) []paletteCom
 			return nil
 		}
 		return filterModelCommands(strings.TrimSpace(arg))
+	}
+	if arg, ok := strings.CutPrefix(strings.ToLower(value), agentPalettePrefix); ok {
+		if available != nil && !available[agentCommand] {
+			return nil
+		}
+		return filterAgentCommands(strings.TrimSpace(arg))
 	}
 	q := strings.ToLower(strings.TrimSpace(value))
 	var out []paletteCommand

@@ -4,7 +4,7 @@
 """The context window a user chose for a local model, and what they may choose.
 
 GAIA picks a window automatically (``lemonade_client.context_for_capacity``).
-A user may pick another in Settings › Model, from the model's floor up to the
+A user may pick another in Settings › Agent & model, from the model's floor up to the
 largest window that fits this PC (``model_fit.largest_context``); a model with
 no MODELS entry is offered 32K up to the window it was trained for. The choice is
 kept per model in ``config.json``'s ``context_sizes`` and used for every load of
@@ -125,20 +125,20 @@ def check_saved_size(model_id: str, tokens: int, capacity) -> None:
             raise ContextChoiceError(
                 f"The context size you chose for {model_id} ({_k(tokens)} tokens) "
                 f"is below the {_k(UNREGISTERED_MIN_CTX)} minimum. Choose another "
-                "size, or Automatic, in Settings › Model."
+                "size, or Automatic, in Settings › Agent & model."
             )
         return
     if tokens > span["max_fit"]:
         raise ContextChoiceError(
             f"The context size you chose for {model_id} ({_k(tokens)} tokens) does "
             f"not fit this PC, which holds at most {_k(span['max_fit'])} for it. "
-            "Choose a smaller size, or Automatic, in Settings › Model."
+            "Choose a smaller size, or Automatic, in Settings › Agent & model."
         )
     if tokens < span["min"]:
         raise ContextChoiceError(
             f"The context size you chose for {model_id} ({_k(tokens)} tokens) is "
             f"below its {_k(span['min'])} minimum. Choose another size, or "
-            "Automatic, in Settings › Model."
+            "Automatic, in Settings › Agent & model."
         )
 
 

@@ -12,8 +12,8 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
-import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, scene, withSetup } from './setup-scenes';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
+import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -865,6 +865,7 @@ for (const locale of ['ar', 'en']) {
             await p.route('**/api/settings', (route) => route.fulfill({ json: {
                 custom_model: 'no-such-model-xyz-123', model_status: { found: false, checked: true, downloaded: false, loaded: false },
                 context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+                network_policy: 'cloud_allowed', flagship_agent: 'gaiapy', gaiacpp_available: true,
             } }));
         });
         await page.locator('.msg-error .msg-try-again').filter({ hasText: /Advanced|متقدم/ }).click();
@@ -2760,6 +2761,7 @@ for (const locale of ['ar', 'en'] as const) {
                 return route.fulfill({ json: {
                     custom_model: UNLISTED_ID, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
                     model_status: { found: false, downloaded: false, loaded: false, checked },
+                    network_policy: 'cloud_allowed', flagship_agent: 'gaiapy', gaiacpp_available: true,
                 } });
             }));
             await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2820,10 +2822,14 @@ interface ModelPageOptions {
     theme?: 'light' | 'dark';
     fireworks?: Record<string, unknown>;
     localOnly?: boolean;
+    agent?: AgentProgramsAnswers;
 }
 
-async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light', fireworks, localOnly = false }: ModelPageOptions = {}): Promise<void> {
-    await open(page, '', locale, (p) => withModelPage(p, models, SETUP_PLAN, status, fireworks, localOnly), theme);
+async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light', fireworks, localOnly = false, agent }: ModelPageOptions = {}): Promise<void> {
+    await open(page, '', locale, async (p) => {
+        await withModelPage(p, models, SETUP_PLAN, status, fireworks, localOnly);
+        if (agent) await withAgentPrograms(p, agent);
+    }, theme);
     const sidebar = page.getByRole('button', { name: /Open sidebar/ });
     if (await sidebar.isVisible()) await sidebar.click();
     await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2838,6 +2844,73 @@ const groups = (page: Page) => page.locator('.settings-card .settings-disclosure
 
 for (const locale of ['ar', 'en']) {
     test.describe(`settings model page (${locale})`, () => {
+        for (const noGaiacpp of [false, true]) {
+            for (const expanded of [false, true]) {
+                const state = `${noGaiacpp ? 'unavailable-' : ''}${expanded ? 'expanded' : 'collapsed'}`;
+                test(`the agent choice (${state})`, async ({ page }) => {
+                    await openModelPage(page, locale, noGaiacpp ? { agent: { gaiacpp: 'unavailable' } } : {});
+                    const agent = page.locator('.agent-choice');
+                    await expect(agent.locator('[role="radio"]')).toHaveCount(2);
+                    await expect(agent.locator('.agent-choice-off')).toHaveCount(noGaiacpp ? 1 : 0);
+                    await expect(agent.locator('.agent-choice-size')).toHaveCount(noGaiacpp ? 1 : 2);
+                    const more = agent.locator('.agent-choice-more');
+                    if (expanded) await more.click();
+                    await expect(more).toHaveAttribute('aria-expanded', String(expanded));
+                    await expect(agent.locator('.agent-choice-detail')).toBeVisible({ visible: expanded });
+                    for (const row of await agent.locator('[role="radio"]').all()) {
+                        expect((await row.boundingBox())!.height).toBeLessThan(48);
+                    }
+                    // The product names and sizes read left to right in either language.
+                    for (const name of await agent.locator('bdi.agent-choice-name, bdi.agent-choice-size').all()) {
+                        expect(await name.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+                    }
+                    await expectSnugTags(agent);
+                    // The section is named for both: the nav and the pane's title.
+                    await expect(page.locator('.settings-pane-title')).toHaveText(locale === 'ar' ? /الوكيل والنموذج/ : /^Agent & model$/);
+                    await shot(page, `model-${locale}-agent-${state}`);
+                    expect(await audit(page)).toEqual([]);
+                });
+            }
+        }
+
+        test('gaiacpp not on this PC: a Download button on its row, and Download shows a bar', async ({ page }) => {
+            await openModelPage(page, locale, { agent: { gaiacpp: 'downloadable', poll: AGENT_DOWNLOADING } });
+            const agent = page.locator('.agent-choice');
+            const button = agent.locator('.agent-choice-download');
+            await expect(button).toBeVisible();
+            await expect(agent.locator('[role="radio"]').nth(1)).toHaveAttribute('aria-disabled', 'true');
+            // The button stays inside its row, clear of the row's text.
+            const [row, btn, what] = await Promise.all([
+                agent.locator('[role="radio"]').nth(1).boundingBox(),
+                button.boundingBox(),
+                agent.locator('.agent-choice-item .agent-choice-what').boundingBox(),
+            ]);
+            expect(btn!.x).toBeGreaterThanOrEqual(row!.x);
+            expect(btn!.x + btn!.width).toBeLessThanOrEqual(row!.x + row!.width);
+            expect(btn!.x >= what!.x + what!.width || btn!.x + btn!.width <= what!.x).toBe(true);
+            await expectSnugTags(agent);
+            await shot(page, `model-${locale}-agent-download-button`);
+            expect(await audit(page)).toEqual([]);
+
+            await button.click();
+            await expect(agent.getByRole('progressbar', { name: /gaiacpp/ })).toHaveAttribute('aria-valuenow', '40');
+            await expect(agent.locator('[role="radio"]').first()).toHaveAttribute('aria-checked', 'true');
+            // The bar replaces the button; a dimmed button once slid out of its row here.
+            await expect(button).toHaveCount(0);
+            await shot(page, `model-${locale}-agent-downloading`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a failed gaiacpp download says so in the card, with Retry', async ({ page }) => {
+            await openModelPage(page, locale, { agent: { gaiacpp: 'downloadable', download: AGENT_DOWNLOADING, poll: AGENT_DOWNLOAD_FAILED } });
+            const failed = page.locator('.agent-choice .dl-fail');
+            await expect(failed).toBeVisible();
+            await expect(failed.getByRole('button')).toBeVisible();
+            await expect(page.locator('.agent-choice-detail')).toBeHidden();
+            await shot(page, `model-${locale}-agent-download-failed`);
+            expect(await audit(page)).toEqual([]);
+        });
+
         test('the model in use and its controls sit above the list', async ({ page }) => {
             await openModelPage(page, locale);
             await expect(page.locator('#ctx-size')).toBeVisible();

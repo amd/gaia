@@ -45,7 +45,10 @@ type Message struct {
 	// the answer landed, for the recap's one-time sweep.
 	Recap        string
 	Deliverables []deliverable
-	FinishedAt   time.Time
+	// Provenance is where the turn ran and what it drew on; nil when it used
+	// no tools.
+	Provenance *provenance
+	FinishedAt time.Time
 	// CostUSD is what the turn cost on a per-token provider with a known
 	// price; 0 when either is not the case.
 	CostUSD float64
@@ -128,6 +131,8 @@ type ActivityItem struct {
 	// Repeat counts additional consecutive occurrences folded into this item by
 	// the live work log; 0 means it happened once.
 	Repeat int
+	// Sources are the pages and documents the call drew on (provenance.go).
+	Sources []string
 	// RetryKey is what "the same kind of call" means for a failed step that a
 	// later success can settle (see retryKey). Empty means nothing to match
 	// on, so the failure is never marked retried.
@@ -135,4 +140,14 @@ type ActivityItem struct {
 	// Recovery is how a failed step reads given the rest of its turn — set at
 	// render time by settleFailures, never stored. "" is a plain failure.
 	Recovery string
+	// Progress is a running delegation's latest count ("2 of 4 helpers
+	// done"), shown on the step's own row until its result lands.
+	Progress string
+	// Helpers is a finished delegation's per-helper outcomes, in id order;
+	// MoreHelpers counts any past the most one step lists.
+	Helpers     []helperOutcome
+	MoreHelpers int
+	// Partial marks a delegation some helpers failed or stopped short in,
+	// while others returned something usable: a warning, not a failed step.
+	Partial bool
 }
