@@ -152,6 +152,7 @@ from gaia.agents.base.self_check import (
     self_check_prompt,
 )
 from gaia.agents.base.skill_budget import (
+    SUMMARIZED_THIS_TURN_HEADER,
     SUMMARY_HEADER,
     fit_skill_filter,
     note_skill_request,
@@ -372,19 +373,36 @@ def local_max_output_tokens(ctx_size: int) -> int:
 _SKILLS_PROMPT_FRAGMENT = "get_skills_system_prompt"
 
 
-def _skill_change_note(before: Dict[str, str], after: Dict[str, str]) -> str:
-    """What changed in the shown skills, as a message for the model."""
+def _skill_change_note(
+    before: Dict[str, str],
+    after: Dict[str, str],
+    summaries: Optional[Dict[str, str]] = None,
+) -> str:
+    """What changed in the shown skills, as a message for the model.
+
+    *summaries* maps each loaded skill cut to one line to fit the context
+    window to that line: it is still loaded, so it is never called inactive.
+    """
+    summaries = summaries or {}
     added = [text for name, text in after.items() if before.get(name) != text]
     removed = sorted(set(before) - set(after))
+    shrunk = [name for name in removed if name in summaries]
+    dropped = [name for name in removed if name not in summaries]
     parts = []
     if added:
         parts.append(
             "==== SKILLS LOADED THIS TURN (follow them from here on) ====\n"
             + "\n\n".join(added)
         )
-    if removed:
+    if shrunk:
         parts.append(
-            f"Skills no longer active: {', '.join(removed)}. "
+            SUMMARIZED_THIS_TURN_HEADER
+            + "\n"
+            + "\n".join(summaries[name] for name in shrunk)
+        )
+    if dropped:
+        parts.append(
+            f"Skills no longer active: {', '.join(dropped)}. "
             "Stop following their instructions."
         )
     return "\n\n".join(parts)
@@ -4644,6 +4662,16 @@ Do NOT wrap conversational replies in JSON.
             if skill.body and (active is None or skill.name in active)
         }
 
+    def _skill_summaries_shown(self) -> Dict[str, str]:
+        """Each loaded skill summarized to fit the window, as its one line."""
+        skills = getattr(self, "_loaded_skills", None) or {}
+        return {
+            name: summary_line(
+                skills[name], _skill_menu_description(skills[name].description)
+            )
+            for name in summarized_skills(self)
+        }
+
     def _turn_session_context(
         self, messages: List[Dict[str, Any]]
     ) -> Tuple[str, List[Dict[str, Any]]]:
@@ -4669,7 +4697,7 @@ Do NOT wrap conversational replies in JSON.
                     "shown": shown,
                 }
             return live, []
-        note = _skill_change_note(pin["shown"], shown)
+        note = _skill_change_note(pin["shown"], shown, self._skill_summaries_shown())
         if not note:
             return pin["context"], []
         message = {"role": "user", "content": note}

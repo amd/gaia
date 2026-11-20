@@ -326,6 +326,15 @@ SUMMARY_HEADER = (
 )
 
 
+#: Opens the mid-turn note for a loaded skill just cut to one line: it is still
+#: loaded, so the model must not read it as dropped.
+SUMMARIZED_THIS_TURN_HEADER = (
+    "==== SKILLS SUMMARIZED THIS TURN (still loaded, and their tools stay on "
+    "your list — call load_skill('<name>') again for one's full instructions, "
+    "or read just the references/<file> you need) ===="
+)
+
+
 def skill_budget_report(agent: Any) -> Optional[Dict[str, Any]]:
     """This turn's skill budget for diagnostics, or ``None`` when not in use."""
     plan = getattr(agent, "_skill_budget", None)
@@ -344,6 +353,8 @@ __all__ = [
     "SKILL_BUDGET_FRACTION",
     "SMALL_WINDOW_AUTOLOADS",
     "SMALL_WINDOW_TOKENS",
+    "SUMMARIZED_THIS_TURN_HEADER",
+    "SUMMARY_HEADER",
     "SkillBudget",
     "body_tokens",
     "fit_bodies",

@@ -20,6 +20,7 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.skill_budget import (
     SKILL_BUDGET_CEILING,
     SKILL_BUDGET_FLOOR,
+    SUMMARIZED_THIS_TURN_HEADER,
     SUMMARY_HEADER,
     SkillBudget,
     fit_bodies,
@@ -519,6 +520,55 @@ def test_many_skills_on_a_16k_window_shrink_text_but_keep_every_tool(budget_agen
         expected = {f"{n}/{n.replace('-', '_')}_run" for n in names}
         assert expected <= set(agent._active_tool_filter)
         assert expected <= set(_sent_tools(agent))
+
+
+class _TurnMessages(list):
+    """A turn's message list that records the notes appended mid-turn."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.notes = []
+
+    def append_transient(self, message):
+        self.notes.append(message["content"])
+
+
+@pytest.mark.parametrize("window", [16_384, 65_536])
+def test_a_skill_summarized_mid_turn_is_not_called_inactive(budget_agent, window):
+    agent = budget_agent(window, ["alpha", "beta"])
+    agent.scores = {"alpha": 0.9}
+    agent.load_skill("alpha")
+    agent._refresh_active_skill_filter("about alpha")
+    agent._refresh_active_tool_filter("about alpha")
+    messages = _TurnMessages([{"role": "user", "content": "about alpha"}])
+    agent._turn_session_context(messages)  # pins the turn's skills section
+
+    agent.load_skill("beta")  # over budget with alpha: alpha is cut to a line
+    agent._turn_session_context(messages)
+
+    assert skill_budget_report(agent)["summarized"] == ["alpha"]
+    (note,) = messages.notes
+    assert "BODY-BETA" in note
+    assert SUMMARIZED_THIS_TURN_HEADER in note
+    assert "- alpha: Does alpha things." in note
+    assert "no longer active" not in note
+    assert "alpha/alpha_run" in agent._active_tool_filter
+
+
+def test_an_unloaded_skill_is_still_called_inactive(budget_agent):
+    agent = budget_agent(200_000, ["alpha", "beta"])
+    for name in ("alpha", "beta"):
+        agent.load_skill(name)
+    agent._refresh_active_skill_filter("both")
+    messages = _TurnMessages([{"role": "user", "content": "both"}])
+    agent._turn_session_context(messages)
+
+    agent.unload_skill("alpha")
+    agent._turn_session_context(messages)
+
+    (note,) = messages.notes
+    assert "Skills no longer active: alpha." in note
+    assert SUMMARIZED_THIS_TURN_HEADER not in note
 
 
 class _ToolsOf:

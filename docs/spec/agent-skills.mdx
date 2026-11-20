@@ -834,7 +834,9 @@ with `SKILL_CONTEXT_BUDGET = True`.
   ```
 
   Calling `load_skill` on a summarized skill shows it in full straight away,
-  summarizing another if it has to.
+  summarizing another if it has to. A skill summarized partway through a turn
+  this way is announced as still loaded, with its tools and its one line,
+  never as no longer active.
 - **Tools are never withdrawn.** Only text shrinks. Every loaded skill keeps
   its tools on the tool list whether its body is shown in full or summarized:
   its `tools_required` and the tools it provides itself (its `tools.py`,
