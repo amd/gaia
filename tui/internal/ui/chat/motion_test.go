@@ -189,35 +189,71 @@ func TestATickRedrawsOnlyTheStatusLine(t *testing.T) {
 
 // A long turn ticks for its whole length; the per-tick cost has to stay flat
 // as the transcript grows, which it does only if a tick never rebuilds it.
+// Measured as a ratio of a short to a long transcript, not a wall-clock budget,
+// so a slow or loaded CI box can't fail it.
 func TestTickCostDoesNotGrowWithTheTranscript(t *testing.T) {
+	const (
+		shortExchanges = 5
+		longExchanges  = 200
+		ticks          = 50
+		rounds         = 5
+		maxGrowth      = 3.0
+	)
+	short, shortNow := tickingChat(t, shortExchanges)
+	long, longNow := tickingChat(t, longExchanges)
+	shortRenders, longRenders := short.lastRender, long.lastRender
+
+	// Best of alternating rounds: noise only ever adds time, and alternating
+	// keeps a burst of load from landing on one side alone.
+	var bestShort, bestLong time.Duration
+	for r := 0; r < rounds; r++ {
+		s := frameCost(t, short, shortNow, ticks)
+		l := frameCost(t, long, longNow, ticks)
+		if r == 0 || s < bestShort {
+			bestShort = s
+		}
+		if r == 0 || l < bestLong {
+			bestLong = l
+		}
+	}
+	t.Logf("one frame (tick + View): %s with %d messages, %s with %d",
+		bestShort, len(short.messages), bestLong, len(long.messages))
+
+	if short.lastRender != shortRenders || long.lastRender != longRenders {
+		t.Error("ticks rebuilt the transcript")
+	}
+	// A rebuild per frame scales with the transcript, 40x more messages here.
+	if growth := float64(bestLong) / float64(max(bestShort, time.Microsecond)); growth > maxGrowth {
+		t.Errorf("a frame with %d messages costs %.1fx one with %d (%s vs %s); a tick must not scale with the transcript",
+			len(long.messages), growth, len(short.messages), bestLong, bestShort)
+	}
+}
+
+// tickingChat is a chat mid-turn, a tool running, after n earlier exchanges.
+func tickingChat(t *testing.T, n int) (*ChatModel, *time.Time) {
+	t.Helper()
 	m, now := frameChat(t, 120, 40)
 	m.motion = motionState{gradient: true}
-	for i := 0; i < 200; i++ {
+	for i := 0; i < n; i++ {
 		m.messages = append(m.messages,
 			Message{Role: RoleUser, Content: "question"},
 			Message{Role: RoleAssistant, Content: strings.Repeat("an answer with **markdown** ", 20)})
 	}
 	startTurn(m, *now, "one more")
 	at(t, m, now, time.Second, call("read_file", `{"file_path":"a.docx"}`))
-	renders := m.lastRender
+	return m, now
+}
 
-	const ticks = 200
+// frameCost is the mean cost of one animation frame (tick + View) over n ticks.
+func frameCost(t *testing.T, m *ChatModel, now *time.Time, n int) time.Duration {
+	t.Helper()
 	start := time.Now()
-	for i := 0; i < ticks; i++ {
+	for i := 0; i < n; i++ {
 		*now = now.Add(50 * time.Millisecond)
 		*m = repaintTick(t, *m)
 		_ = m.View()
 	}
-	per := time.Since(start) / ticks
-	t.Logf("one frame (tick + View) with %d messages: %s", len(m.messages), per)
-	if m.lastRender != renders {
-		t.Error("ticks rebuilt the transcript")
-	}
-	// Generous for a loaded CI box: 20 frames a second must stay a sliver of
-	// one core. A full transcript rebuild per frame costs well over this.
-	if per > 15*time.Millisecond {
-		t.Errorf("one animation frame costs %s; at %d fps that is not negligible", per, animFPS)
-	}
+	return time.Since(start) / time.Duration(n)
 }
 
 // repaintTick delivers one spinner tick the way the program loop does.
