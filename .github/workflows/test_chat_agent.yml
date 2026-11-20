@@ -44,6 +44,8 @@ on:
       - 'tests/unit/test_run_python_timeouts.py'
       - 'tests/unit/test_run_python_adversarial.py'
       - 'tests/unit/test_run_python_frozen.py'
+      # test_run_python_frozen.py imports it.
+      - 'src/gaia/installer/data_libraries.py'
       - 'tests/unit/test_run_python_frozen_adversarial.py'
       - 'tests/unit/test_script_credential_guard.py'
       - 'tests/unit/test_run_python_untracked.py'
@@ -132,6 +134,8 @@ on:
       - 'tests/unit/test_run_python_timeouts.py'
       - 'tests/unit/test_run_python_adversarial.py'
       - 'tests/unit/test_run_python_frozen.py'
+      # test_run_python_frozen.py imports it.
+      - 'src/gaia/installer/data_libraries.py'
       - 'tests/unit/test_run_python_frozen_adversarial.py'
       - 'tests/unit/test_script_credential_guard.py'
       - 'tests/unit/test_run_python_untracked.py'

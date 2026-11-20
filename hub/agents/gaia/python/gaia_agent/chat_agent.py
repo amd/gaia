@@ -430,6 +430,13 @@ _STDLIB_ROUTES: Dict[str, str] = {
     "xlsxwriter": "csv, saving a .csv file instead of a workbook",
 }
 
+#: gaia.installer.data_libraries.SETUP_COMMAND, spelled out so this package
+#: imports nothing an older core lacks; a test pins the two together.
+DATA_LIBRARIES_SETUP_COMMAND = "gaia init --data-libraries"
+
+#: Import names setup installs that the binary does not bundle.
+_SETUP_ONLY_LIBRARIES = frozenset({"duckdb", "pyarrow"})
+
 _MISSING_MODULE_LINE = re.compile(r"No module named '([A-Za-z_][\w.]*)'")
 
 
@@ -437,14 +444,28 @@ def _missing_library_hint(stderr_line: str) -> Optional[str]:
     """How to retry when a script imports a bundled library this Python lacks."""
     match = _MISSING_MODULE_LINE.search(stderr_line or "")
     module = match.group(1).split(".")[0] if match else None
+    if module in _SETUP_ONLY_LIBRARIES and not is_frozen():
+        return (
+            f"{module} is not installed in this Python. Retry now without it; "
+            "to have it in later runs, tell "
+            f"the user to run `{DATA_LIBRARIES_SETUP_COMMAND}` in a terminal."
+        )
     if module not in BUNDLED_LIBRARIES.values():
         return None
     route = _STDLIB_ROUTES.get(module, "the standard library only")
     if module in _STDLIB_ROUTES:
         route = f"{route} from the standard library"
-    return (
-        f"{module} is not installed in this Python and pip is not available. "
+    # A source install has pip; only the frozen build has no way to add it.
+    unavailable = " and pip is not available" if is_frozen() else ""
+    hint = (
+        f"{module} is not installed in this Python{unavailable}. "
         f"Retry now without it, using {route}."
+    )
+    if is_frozen():
+        return hint
+    return (
+        f"{hint} To have {module} in later runs, tell the user to run "
+        f"`{DATA_LIBRARIES_SETUP_COMMAND}` in a terminal."
     )
 
 

@@ -838,8 +838,46 @@ def test_a_bundled_library_keeps_its_own_hint(monkeypatch):
     result = _python_run_result(
         _failed(stderr), "", stderr, 0.1, system_python_runs=True
     )
-    assert "pip is not available" in result["error"]
+    assert "pandas is not installed in this Python" in result["error"]
     assert "system Python" not in result["error"]
+
+
+@pytest.mark.parametrize("frozen", [True, False])
+def test_only_the_frozen_build_says_pip_is_unavailable(monkeypatch, frozen):
+    monkeypatch.setattr(chat_agent, "is_frozen", lambda: frozen)
+    for module in ("pandas", "duckdb"):
+        hint = chat_agent._missing_library_hint(f"No module named '{module}'")
+        if hint is not None:
+            assert ("pip is not available" in hint) is frozen
+
+
+def test_a_missing_bundled_library_names_the_setup_command(monkeypatch):
+    """A source install can add the library; the model is told the command."""
+    from gaia.installer.data_libraries import SETUP_COMMAND
+
+    assert chat_agent.DATA_LIBRARIES_SETUP_COMMAND == SETUP_COMMAND
+    monkeypatch.setattr(chat_agent, "is_frozen", lambda: False)
+    hint = chat_agent._missing_library_hint("No module named 'pandas'")
+    assert "Retry now without it, using csv" in hint
+    assert f"`{SETUP_COMMAND}`" in hint
+
+
+def test_a_setup_only_library_names_the_setup_command(monkeypatch):
+    """duckdb is installed by setup but not bundled or advertised."""
+    monkeypatch.setattr(chat_agent, "is_frozen", lambda: False)
+    hint = chat_agent._missing_library_hint("No module named 'duckdb'")
+    assert "Retry now without it" in hint
+    assert "`gaia init --data-libraries`" in hint
+    monkeypatch.setattr(chat_agent, "is_frozen", lambda: True)
+    assert chat_agent._missing_library_hint("No module named 'duckdb'") is None
+
+
+def test_a_frozen_build_names_no_setup_command(monkeypatch):
+    """Nothing can be installed into the binary, so no command is offered."""
+    monkeypatch.setattr(chat_agent, "is_frozen", lambda: True)
+    hint = chat_agent._missing_library_hint("No module named 'pandas'")
+    assert "Retry now without it" in hint
+    assert "gaia init" not in hint
 
 
 def test_the_description_says_whose_python_this_is():

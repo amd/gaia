@@ -8,6 +8,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **A missing data library names the command that adds it.** On a pip or uv
+  install, a `run_python` script that imports pandas, openpyxl, duckdb or
+  another library setup offers now fails with a hint to run
+  `gaia init --data-libraries`, instead of saying pip is not available. The
+  desktop app's binary bundles its libraries, so its hint is unchanged.
 - **The sidecar no longer crashes on a busy Windows PC.** It died with an access
   violation in Python's `_wmi` module when a WMI query timed out. It now reads
   OS and CPU facts without WMI.

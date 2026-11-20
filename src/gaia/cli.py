@@ -4006,6 +4006,20 @@ afterwards (or `swebench <run_dir>` does, later).
         help="Skip building the Agent UI frontend (same effect as GAIA_SKIP_WEBUI_BUILD)",
     )
     init_parser.add_argument(
+        "--data-libraries",
+        action="store_true",
+        help="Only install the recommended Python libraries scripts and skills "
+        "use (pandas, numpy, matplotlib, openpyxl, ...); no Lemonade or model "
+        "steps. With --check: list each one as installed or not and exit 0 "
+        "when all are there, 1 otherwise.",
+    )
+    init_parser.add_argument(
+        "--no-data-libraries",
+        action="store_true",
+        help="Don't download the recommended Python libraries, now or in later "
+        "runs (saved as data_libraries in ~/.gaia/config.json)",
+    )
+    init_parser.add_argument(
         "--skip-pip-extras",
         action="store_true",
         help="Install no Python packages (the desktop app ships its own)",
@@ -6337,6 +6351,43 @@ Let me know your answer!
             log_manager.configure_agent_console(debug=getattr(args, "verbose", False))
             sys.exit(run_agent_refresh())
 
+        if args.data_libraries:
+            model_flags = [
+                flag
+                for flag, value in (
+                    ("--use-model", getattr(args, "use_model", None)),
+                    ("--skip-model", getattr(args, "skip_model", None)),
+                    ("--download-model", getattr(args, "download_model", None)),
+                    ("--chat-model", getattr(args, "chat_model", None)),
+                    ("--load", getattr(args, "load", False)),
+                    ("--plan", getattr(args, "plan", False)),
+                    ("--force-models", getattr(args, "force_models", False)),
+                )
+                if value
+            ]
+            if (
+                profile != "gaia"
+                or args.agent_only
+                or args.no_data_libraries
+                or model_flags
+            ):
+                print(
+                    "Error: --data-libraries only installs the recommended "
+                    "Python libraries; it does not combine with --profile, "
+                    "--minimal, --agent-only, --no-data-libraries or model "
+                    "options"
+                    + (f" ({', '.join(model_flags)})" if model_flags else "")
+                    + ".",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            from gaia.installer.data_libraries import run_command
+
+            log_manager.configure_agent_console(debug=getattr(args, "verbose", False))
+            sys.exit(
+                run_command(check=args.check, as_json=getattr(args, "json", False))
+            )
+
         # MCP profile has its own init flow (no Lemonade/models)
         if profile == "mcp":
             from gaia.installer.mcp_init import run_mcp_init
@@ -6441,6 +6492,7 @@ Let me know your answer!
             remote=getattr(args, "remote", False),
             skip_webui_build=getattr(args, "skip_webui_build", False),
             skip_pip_extras=getattr(args, "skip_pip_extras", False),
+            no_data_libraries=getattr(args, "no_data_libraries", False),
             skip_chat_model=getattr(args, "skip_chat_model", False),
             lemonade_url=getattr(args, "lemonade_url", None),
             gaia_lemonade=getattr(args, "gaia_lemonade", False),
