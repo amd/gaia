@@ -251,9 +251,12 @@ class DictationToolsMixin:
             )
         if not output_path:
             return None, audio_format, None
-        destination = _workspace_target(self, output_path)
         # A trailing separator names a folder even when the name has a dot.
+        # Strip it: on POSIX a trailing backslash would stay in the folder name.
         names_folder = output_path.rstrip().endswith(("/", "\\"))
+        if names_folder:
+            output_path = output_path.rstrip().rstrip("/\\") or output_path
+        destination = _workspace_target(self, output_path)
         if names_folder or destination.is_dir() or not destination.suffix:
             destination = destination / f"{stem}{SPEECH_FILE_FORMATS[audio_format]}"
         else:

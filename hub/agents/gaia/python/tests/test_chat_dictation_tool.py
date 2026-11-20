@@ -278,6 +278,17 @@ def test_a_folder_name_with_a_dot_is_a_folder_when_it_ends_in_a_separator(
     assert "must be a folder or a file ending in .mp3" in result["error"]
 
 
+@pytest.mark.parametrize("trail", ["//", "\\\\", "/\\", "\\ ", "/ \n"])
+def test_repeated_or_mixed_trailing_separators_still_name_the_folder(dictation, trail):
+    out = dictation.allowed / "Reports v1.2"
+    result = dictation.tool(
+        str(dictation.allowed / "story.txt"), output_path=str(out) + trail
+    )
+    assert result["status"] == "success", result
+    assert result["saved_to"] == str(out / "story.mp3")
+    assert not any("\\" in part for part in Path(result["saved_to"]).parts[1:])
+
+
 def test_a_script_copy_that_fails_does_not_undo_the_audio_copy(dictation, monkeypatch):
     """The reply must match the disk: the audio is there, only the script is not."""
     import shutil
