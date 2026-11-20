@@ -25,7 +25,11 @@ from gaia.agents.base.completion import (
     blocking_gaps,
     caveated_answer,
 )
-from gaia.agents.base.deliverables import file_findings, text_blocks
+from gaia.agents.base.deliverables import (
+    asks_for_invented_data,
+    file_findings,
+    text_blocks,
+)
 from gaia.agents.base.tool_outcome import tool_result_failed
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.verification import observed_text, verification_record
@@ -355,25 +359,34 @@ def _read_record(path, text):
 @pytest.mark.parametrize(
     "query",
     [
-        "create sales.csv holding 5 rows of sample sales (region, amount) using a "
-        "Python script, then read it back and tell me the total",
+        # #8651, asked for explicitly.
+        "create sales.csv holding 5 rows of made-up sample sales (region, amount) "
+        "using a Python script, then read it back and tell me the total",
         "Make sales.csv with some fake numbers so I can try the chart",
         "write sales.csv filled with dummy data",
         "I need mock sales figures in sales.csv",
         "put made-up amounts for two regions into sales.csv",
         "generate synthetic transactions and save them as sales.csv",
-        "create sales.csv with example data for a demo",
-        "build sales.csv with a few rows of test data",
+        "synthetic test records in sales.csv",
         "just make up some sales numbers and save them to sales.csv",
+        "make up 10 sample orders and save them to sales.csv",
         "Create sales.csv with random amounts per region using gen.py",
         "write sales.csv with a fake customer list and balances",
         "create a fake customer list with emails and balances in sales.csv",
         "fill sales.csv with make-believe prices",
-        "put sample-data for a demo in sales.csv",
         "write mock-up figures to sales.csv",
+        "mock up a table of sales in sales.csv",
+        "invent some prices for a toy store in sales.csv",
+        "Generate placeholder rows for the Acme demo in sales.csv",
+        "fictional sales for a store called Bob's in sales.csv",
+        "realistic but made-up sales figures in sales.csv",
+        "generate fake data from scratch in sales.csv",
+        # The negation is about realness, not about the invention.
+        "10 fake orders in sales.csv, nothing real",
+        "I don’t want real data, just fake numbers in sales.csv",
     ],
 )
-def test_sample_data_the_user_asked_for_is_not_reported(query):
+def test_invented_data_the_user_asked_for_is_not_reported(query):
     assert _sales(query) == []
 
 
@@ -389,19 +402,33 @@ def test_sample_data_the_user_asked_for_is_not_reported(query):
         "for example, save the regional totals to sales.csv",
         "test that the totals are right and save the data to sales.csv",
         "what sample size do I need? save the regional figures to sales.csv",
+        # "Sample", "example", "illustrative", "demo" and "test" are ambiguous.
+        "create sales.csv holding 5 rows of sample sales (region, amount) using a "
+        "Python script, then read it back and tell me the total",
+        "create sales.csv with example data for a demo",
+        "build sales.csv with a few rows of test data",
+        "put sample-data for a demo in sales.csv",
+        "SAMPLE ORDERS into sales.csv",
+        "write illustrative figures to sales.csv",
+        "hypothetical sales for next year in sales.csv",
+        "sample data on Monday's demo in sales.csv",
         # The adjective names the subject, not the data: the prices are real.
         "write a price comparison of toy drones to sales.csv",
         "Price out the demo kit BOM in sales.csv",
         "pick a random laptop and save its price and specs to sales.csv",
         "write sales.csv for our demo day with current venue prices",
         "Write a market report on the toy industry to sales.csv with revenue figures",
+        "fake Rolex prices in sales.csv",
+        "synthetic rubber prices in sales.csv",
+        "the products that make up our revenue, in sales.csv",
+        "make up for lost sales in sales.csv",
+        "a team made up of 5 people and their salaries in sales.csv",
+        "realistic but made-up? sales figures in sales.csv",
         # A file name is not the data noun: "sales" here is sales.csv.
         "list the toy drones to sales.csv",
         "save a mock test of the sales.csv totals",
-        # Any sign the figures are meant to be real outweighs "sample"/"demo".
+        # Any sign the figures are meant to be real outweighs every other word.
         "write sales.csv for the demo with actual prices of the top 3 GPUs",
-        "I do not want you to use fake numbers - put our real regional sales in "
-        "sales.csv",
         "write a spreadsheet sales.csv to test the prices of the top 5 laptops",
         "save example prices for the RTX 4090 at Newegg and Amazon to sales.csv",
         "make a demo spreadsheet sales.csv with current prices of GPUs",
@@ -411,8 +438,36 @@ def test_sample_data_the_user_asked_for_is_not_reported(query):
         "save today's sample prices to sales.csv",
         "put the latest sample sales in sales.csv",
         "write illustrative figures from Nvidia's earnings to sales.csv",
+        "Using genuine figures, make a sample sales table in sales.csv",
+        "sample sales table in sales.csv, verified figures only",
+        "sample sales data using genuine 2024 Amazon prices in sales.csv",
+        "sample table of AMD's Q3 revenue by segment in sales.csv",
+        "illustrative table of Apple's 2024 revenue in sales.csv",
+        "example table of the top 5 GPUs and their MSRP in sales.csv",
+        "sample prices of RTX 4090 cards on newegg in sales.csv",
+        "sample prices of iPhone 16 models in sales.csv",
+        "use the numbers in Q3_report.pdf to build sample sales data in sales.csv",
+        "sample table of exchange rates per the ECB in sales.csv",
+        "sample orders matching what's in the database in sales.csv",
+        "sample customers list with their true balances in sales.csv",
+        # ...even next to an explicit invention word.
+        "mock up a table of today's GPU prices in sales.csv",
+        "mock table of NVIDIA stock prices this week in sales.csv",
+        "fake it till you make it: write Tesla's Q3 revenue numbers in sales.csv",
+        "fictional story with real 2023 inflation figures in sales.csv",
+        "dummy-proof list of current mortgage rates in sales.csv",
+        "fake prices for the iPhone 16 in sales.csv",
+        "fake sales numbers for AMD's Q3 in sales.csv",
+        "make up sales figures based on ledger.xlsx in sales.csv",
+        "dummy data per the ECB in sales.csv",
+        "make up fake sales numbers from www.example.com in sales.csv",
+        # A negation anywhere means real figures.
+        "I do not want you to use fake numbers - put our real regional sales in "
+        "sales.csv",
         "Please never invent anything. Save sample sales to sales.csv",
         "don’t use dummy data; write sales.csv",
+        "fake numbers aren't okay in sales.csv",
+        "real numbers only, no fake data, in sales.csv",
         "run a test on the sales numbers and put the results in sales.csv",
         # Not English: no exemption, so it warns.
         "datos de ejemplo en sales.csv",
@@ -424,21 +479,63 @@ def test_a_request_for_real_figures_is_still_reported(query):
     assert found and "12,500" in found[0].note
 
 
-def test_sample_wording_does_not_excuse_figures_meant_to_come_from_a_file_read():
+def test_a_very_long_request_is_never_exempted():
+    query = "make up fake sales numbers in sales.csv. " + "Keep going. " * 400
+
+    assert len(query) > 4000
+    assert asks_for_invented_data(query[:4000], {"sales.csv"})
+    assert not asks_for_invented_data(query, {"sales.csv"})
+    assert _sales(query)
+
+
+_SIZE = 100_000
+_LONG_REQUESTS = {
+    "invention then negations": "fake data " + "no " * (_SIZE // 3),
+    "negations then invention": "no " * (_SIZE // 3) + " fake data",
+    "many words": "fake data in out.csv " + "word " * (_SIZE // 5),
+    "spaces": "sample " + " " * _SIZE + "data",
+    "dashes": "sample" + "-" * _SIZE + "data",
+    "one long word": "fake " + "a" * _SIZE,
+    "dotted name": "fake data " + "a." * (_SIZE // 2),
+    "alternating negations": "fake data " + "not ex " * (_SIZE // 7),
+    "repeated sample": "sample " * (_SIZE // 7),
+    "repeated make up": "make up " * (_SIZE // 8),
+    "mixed separators": "fake data " + "a-b.c'd&e " * (_SIZE // 10),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_LONG_REQUESTS))
+def test_the_request_scan_is_linear(shape):
+    """Each shape at 100 KB, and cut to just under the cap so the scan runs."""
+    query = _LONG_REQUESTS[shape]
+    for text in (query, query[:3999]):
+        start = time.perf_counter()
+        asks_for_invented_data(text, {"out.csv"})
+        assert time.perf_counter() - start < 0.1, len(text)
+
+
+def test_invented_wording_does_not_excuse_figures_meant_to_come_from_a_file_read():
+    for query in (
+        "turn my ledger into fake sales rows in sales.csv",
+        "write made-up sales to sales.csv",
+    ):
+        assert asks_for_invented_data(query, {"sales.csv"})
     records = [
         _read_record("ledger.csv", "region,units\nNorth,3\n"),
         _ran(_SALES_SCRIPT),
     ]
 
-    assert _sales("turn my ledger into sample sales rows in sales.csv", records)
+    assert _sales("turn my ledger into fake sales rows in sales.csv", records)
     assert _sales(
-        "write sample sales to sales.csv",
+        "write made-up sales to sales.csv",
         input_names=["C:/work/ledger.csv"],
         inputs=["region,units\nNorth,3\n"],
     )
 
 
-def test_sample_wording_does_not_excuse_figures_the_turn_looked_up():
+def test_invented_wording_does_not_excuse_figures_the_turn_looked_up():
+    query = "look up Acme and write a fake sales report to sales.csv"
+    assert asks_for_invented_data(query, {"sales.csv"})
     result = {"summary": "Acme regional revenue: North 11,000, South 9,100"}
     search = verification_record(
         "search_web", {"query": "acme sales"}, result, errored=False
@@ -447,13 +544,10 @@ def test_sample_wording_does_not_excuse_figures_the_turn_looked_up():
         args={"query": "acme sales"}, output="", observed=observed_text(result)
     )
 
-    assert _sales(
-        "look up Acme's sales and write a sample report to sales.csv",
-        [search, _ran(_SALES_SCRIPT)],
-    )
+    assert _sales(query, [search, _ran(_SALES_SCRIPT)])
 
 
-def test_reading_the_skill_or_the_file_back_keeps_the_sample_exemption():
+def test_reading_the_skill_or_the_file_back_keeps_the_exemption():
     records = [
         _read_record("skills/office-docs/SKILL.md", "Use openpyxl. Limit 100 rows."),
         _read_record(
@@ -465,7 +559,7 @@ def test_reading_the_skill_or_the_file_back_keeps_the_sample_exemption():
 
     assert (
         _sales(
-            "create sales.csv with 5 rows of sample sales",
+            "create sales.csv with 5 rows of made-up sample sales",
             records,
             input_names=["C:/gaia/skills/office-docs/references/excel.md"],
             inputs=["Widths: 12, 40."],

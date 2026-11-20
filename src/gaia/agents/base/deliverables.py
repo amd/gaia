@@ -1886,40 +1886,6 @@ def _mentioned(claim: _Claim, answer: str) -> bool:
     return claim.value.number in named
 
 
-_DATA_NOUN = (
-    r"(?:data(?:set)?s?|rows?|records?|entries|figures?|numbers?|values?|amounts?|"
-    r"sales|prices?|transactions?|orders?|invoices?|expenses?|budgets?|"
-    r"spreadsheets?|tables?|workbooks?|csv|content|lists?|customers?)\b(?!\.\w)"
-)
-_INVENTED_WORD = (
-    r"(?:sample|fake|dummy|mock|made[- ]up|make[- ]believe|invented|fictional|"
-    r"fictitious|synthetic|placeholder|imaginary|hypothetical|illustrative|random|toy)"
-)
-#: "5 rows of sample sales", "fill it with made-up numbers", "some test data".
-#: "A sample of my data" and "sample size" are about real data.
-_INVENTED = re.compile(
-    r"\b(?:" + _INVENTED_WORD + r"[\s-]+"
-    r"(?!(?:of|from|in|size|rate|mean|variance|standard|std)\b)"
-    r"(?:[a-z-]+\s+){0,2}" + _DATA_NOUN + r"|"
-    r"(?<!for )example\s+(?:[a-z-]+\s+){0,2}" + _DATA_NOUN + r"|"
-    r"test\s+" + _DATA_NOUN + r"|"
-    r"(?:make\s+up|invent|fabricate)\s+(?:[a-z0-9-]+\s+){0,3}" + _DATA_NOUN + r")",
-    re.I,
-)
-#: Any of these means the figures are meant to be real: "actual prices",
-#: "prices at Newegg", "numbers from the 2023 census", a URL.
-_REAL_DATA = re.compile(
-    r"(?i:\b(?:actual|real|current|today['’]?s|live|latest)\b|\bfrom\b|https?://|\bwww\.)"
-    r"|\b(?:at|on)\s+(?:the\s+)?[A-Z0-9]"
-)
-#: "I do not want you to use fake numbers", wherever the negation sits.
-_NOT_INVENTED = re.compile(
-    r"\b(?:no|not|never|don['’]?t|do\s+not|without|avoid|instead\s+of|rather\s+than|"
-    r"isn['’]?t|aren['’]?t)\b.*\b(?:" + _INVENTED_WORD + r"|make\s+up|invent|"
-    r"fabricat|example|test)",
-    re.I | re.S,
-)
-_NAMED_FILE = re.compile(r"(?<![\w.])[\w-]+(?:\.[\w-]+)*\.[A-Za-z][A-Za-z0-9]{1,5}\b")
 #: A script the request names is how the file gets built, not where figures come from.
 _CODE_SUFFIXES = frozenset({".py", ".js", ".ts", ".sh", ".ps1", ".bat", ".ipynb"})
 
@@ -1961,26 +1927,185 @@ def _outside_sources(
     return any(_basename(p) not in written and _data_source(p) for p in paths)
 
 
-def asks_for_invented_data(query: str, written: Collection[str] = ()) -> bool:
-    """*query* asks for sample, fake or made-up data to be put in a file.
+#: Longer requests are never exempted, so the scan below stays bounded.
+_MAX_REQUEST = 4000
+#: Words, file names ("sales.csv") and the punctuation that ends a phrase.
+_TOKEN = re.compile(r"[\w'&]+(?:[.-][\w'&]+)*|[.,;:!?]")
+_FILE_TOKEN = re.compile(r"[\w'&-]+(?:\.[\w-]+)*\.[A-Za-z][A-Za-z0-9]{1,5}")
+_DATA_WORDS = frozenset(
+    "data dataset datasets row rows record records entry entries figure figures "
+    "number numbers value values amount amounts sale sales price prices "
+    "transaction transactions order orders invoice invoices expense expenses "
+    "budget budgets spreadsheet spreadsheets table tables workbook workbooks csv "
+    "content list lists customer customers user users name names email emails "
+    "balance balances account accounts contact contacts employee employees "
+    "salary salaries revenue revenues profit profits cost costs score scores "
+    "grade grades reading readings measurement measurements log logs stats "
+    "statistics metrics inventory receipts receipt quotes listings".split()
+)
+#: Words that only ever mean invented data, when a data word follows:
+#: "fake customer list", "dummy data", "made-up numbers".
+_INVENTION_WORDS = frozenset(
+    "fake faked dummy mock mocked mock-up mockup made-up make-believe invented "
+    "fictional fictitious fabricated imaginary placeholder placeholders "
+    "synthetic".split()
+)
+#: Verbs that ask for invention: "make up 10 orders", "invent some prices".
+_INVENTION_VERBS = frozenset("invent fabricate".split())
+#: "make up" only as a request, not "the products that make up our revenue".
+_MAKE_UP_LEAD = frozenset(
+    ", ; : . ! ? please pls just and then to can could would will you i we "
+    "also simply so or".split()
+)
+_FILLERS = frozenset(
+    "a an some few several more the test sample example demo customer product "
+    "user employee transaction financial contact new extra up".split()
+)
+_KEEP_HYPHENATED = frozenset("made-up mock-up make-believe".split())
+_NEGATIONS = frozenset(
+    "no not never without avoid nothing none nor neither instead rather cannot "
+    "dont".split()
+)
+#: Any of these means the figures are meant to be real.
+_REAL_WORDS = frozenset(
+    "actual actually real genuine verified verifiable current currently today "
+    "todays tonight yesterday live latest official true accurate factual "
+    "authentic existing recent recently historical published reported "
+    "documented sourced cited stock msrp market database db crm erp from via "
+    "census".split()
+)
+_PERIOD_UNITS = frozenset("week month year quarter season weekend".split())
+_FINANCE_WORDS = frozenset(
+    "revenue revenues earnings sales profit profits income stock shares share "
+    "price prices results guidance margin margins".split()
+)
+_PERIOD_TOKEN = re.compile(r"(?:19|20)\d\d|q[1-4]|h[12]|fy\d{0,4}")
 
-    Not when it names a file other than the ones in *written* (basenames):
-    "5 sample rows from sales.csv" is real data. Nor when anything in it asks
-    for real figures ("actual", "at Newegg", "not fake"): when unsure, warn.
+
+def _word(token: str) -> str:
+    """*token* lowercased, without a trailing possessive: "today's" -> "today"."""
+    word = token.lower().strip("'")
+    return word[:-2] if word.endswith("'s") else word
+
+
+def _negation(word: str) -> bool:
+    return word in _NEGATIONS or word.endswith("n't")
+
+
+def _is_period(word: str) -> bool:
+    return bool(_PERIOD_TOKEN.fullmatch(word))
+
+
+def _request_tokens(text: str) -> List[str]:
+    """Split *text* once; hyphenated words are split unless they are one idea."""
+    tokens: List[str] = []
+    for token in _TOKEN.findall(text.replace("’", "'")):
+        if "-" in token and "." not in token and token.lower() not in _KEEP_HYPHENATED:
+            tokens += [part for part in token.split("-") if part]
+        else:
+            tokens.append(token)
+    return tokens
+
+
+def _invention_at(words: Sequence[str], i: int) -> bool:
+    """An unambiguous ask for invented data starts at ``words[i]``.
+
+    The data word must follow at once or after a few filler words ("a fake
+    customer list", "make up 10 sample orders"), so "fake Rolex prices" and
+    "the regions that make up our sales" don't count.
+    """
+    word = words[i]
+    if word in ("make", "makes", "making"):
+        if words[i + 1 : i + 2] != ["up"] or (i and words[i - 1] not in _MAKE_UP_LEAD):
+            return False
+        start = i + 2
+    elif word == "made" and words[i + 1 : i + 2] == ["up"]:
+        start = i + 2
+    elif word in _INVENTION_WORDS or word in _INVENTION_VERBS:
+        start = i + 1
+    elif word == "random":
+        return words[i + 1 : i + 2] != [] and words[i + 1] in _DATA_WORDS
+    else:
+        return False
+    for follow in words[start : start + 4]:
+        if follow in _DATA_WORDS:
+            return True
+        if follow not in _FILLERS and not follow.isdigit():
+            return False
+    return False
+
+
+def _points_at_real_data(
+    tokens: Sequence[str], words: Sequence[str], written: Set[str]
+) -> bool:
+    """Anything in the request says the figures should be real."""
+    sentence_start = True
+    for i, (token, word) in enumerate(zip(tokens, words)):
+        nxt = words[i + 1] if i + 1 < len(words) else ""
+        capital_next = tokens[i + 1][:1].isupper() if nxt else False
+        negated = any(_negation(w) for w in words[max(0, i - 2) : i])
+        if word in _REAL_WORDS and not negated and (word, nxt) != ("from", "scratch"):
+            return True
+        if _is_period(word) or (
+            word in ("this", "last", "past") and nxt in _PERIOD_UNITS
+        ):
+            return True
+        if word == "per" and (nxt == "the" or capital_next):
+            return True
+        if word in ("at", "on") and capital_next:
+            return True
+        if word in ("according", "based") and nxt in ("to", "on"):
+            return True
+        if (
+            token.lower().endswith("'s")
+            and token[:1].isupper()
+            and nxt in _FINANCE_WORDS
+        ):
+            return True
+        if nxt.isdigit() and (
+            (token[:1].isupper() and not sentence_start)
+            or (len(token) > 1 and token.isupper())
+            or (token[:1].islower() and any(c.isupper() for c in token[1:]))
+        ):
+            return True
+        if _FILE_TOKEN.fullmatch(token):
+            name = token.lower()
+            if _data_source(name) and name not in written:
+                return True
+        sentence_start = token in (".", "!", "?", ";")
+    return False
+
+
+def asks_for_invented_data(query: str, written: Collection[str] = ()) -> bool:
+    """*query* clearly asks for invented data to be put in a file.
+
+    Only explicit invention counts: "fake", "dummy", "mock", "made-up",
+    "make up", "invent", "fictional", "placeholder", "synthetic", and
+    "random" right before a data word. "Sample", "example", "demo" and
+    "test" are ambiguous and don't. Any negation ("no fake numbers") or
+    sign of real figures (a source, "actual", a period such as "Q3" or
+    "2024", a named input file, a URL) means warn. Linear in the request,
+    and a request over ``_MAX_REQUEST`` characters is never exempted.
     """
     text = query or ""
-    if (
-        not _INVENTED.search(text)
-        or _REAL_DATA.search(text)
-        or _NOT_INVENTED.search(text)
-    ):
+    if len(text) > _MAX_REQUEST:
+        return False
+    lowered = text.lower()
+    if "http://" in lowered or "https://" in lowered or "www." in lowered:
+        return False
+    tokens = _request_tokens(text)
+    words = [_word(t) for t in tokens]
+    real_negations = {
+        j
+        for j, w in enumerate(words)
+        if _negation(w) and any(x in _REAL_WORDS for x in words[j + 1 : j + 3])
+    }
+    if any(_negation(w) and j not in real_negations for j, w in enumerate(words)):
+        return False
+    if not any(_invention_at(words, i) for i in range(len(words))):
         return False
     known = {name.lower() for name in written}
-    for match in _NAMED_FILE.finditer(text):
-        name = match.group(0).lower()
-        if _data_source(name) and name not in known:
-            return False
-    return True
+    return not _points_at_real_data(tokens, words, known)
 
 
 def file_findings(
@@ -2001,9 +2126,10 @@ def file_findings(
     (*context*). A script's output sources an amount only when it computed
     from files read this turn (*input_names* are the files *inputs* hold).
     An answer that says its figures are unverified and names a
-    value has already told the user about it. A request for sample or made-up
-    data has no source to find, so nothing is reported, unless the turn read
-    another file or looked something up: the figures were meant to come from it.
+    value has already told the user about it. A request that clearly asks for
+    invented data ("fake", "dummy", "make up") has no source to find, so
+    nothing is reported, unless the turn read another file or looked
+    something up: the figures were meant to come from it.
 
     *built* are the paths in *files* a script or a tool produced, rather than
     the model typing their text. A figure in one of those is the program's
