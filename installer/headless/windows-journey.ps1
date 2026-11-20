@@ -248,8 +248,12 @@ function Setup-Journey {
 }
 
 function Stop-AgentUi {
-    $backendPid = Get-Content "$gaiaHome\backend.pid" -ErrorAction SilentlyContinue
-    if ($backendPid) { & taskkill.exe /T /F /PID $backendPid 2>&1 | Out-Null }
+    # backend-pids\<app pid>.pid per app; backend.pid from older apps.
+    $records = @(Get-Item "$gaiaHome\backend.pid" -ErrorAction SilentlyContinue) + @(Get-ChildItem "$gaiaHome\backend-pids\*.pid" -ErrorAction SilentlyContinue)
+    foreach ($record in $records) {
+        $backendPid = Get-Content $record.FullName -ErrorAction SilentlyContinue
+        if ($backendPid) { & taskkill.exe /T /F /PID $backendPid 2>&1 | Out-Null }
+    }
     & taskkill.exe /T /F /IM gaia-desktop.exe 2>&1 | Out-Null
     Get-Process | Where-Object { $_.Path -and $_.Path -like "$gaiaHome\venv\*" } | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 3

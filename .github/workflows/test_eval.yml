@@ -17,6 +17,11 @@ on:
       - 'eval/corpus/**'
       - 'eval/prompts/**'
       - 'tests/test_eval.py'
+      - 'tests/unit/eval/test_skill_scenario_coverage.py'
+      - 'tests/unit/conftest.py'
+      - 'tests/unit/eval/conftest.py'
+      - 'src/gaia/agents/tools/skill_library_tools.py'
+      - 'util/skill_eval_scenarios.py'
       - 'setup.py'
       - '.github/workflows/test_eval.yml'
       - 'conftest.py'
@@ -31,6 +36,11 @@ on:
       - 'eval/corpus/**'
       - 'eval/prompts/**'
       - 'tests/test_eval.py'
+      - 'tests/unit/eval/test_skill_scenario_coverage.py'
+      - 'tests/unit/conftest.py'
+      - 'tests/unit/eval/conftest.py'
+      - 'src/gaia/agents/tools/skill_library_tools.py'
+      - 'util/skill_eval_scenarios.py'
       - 'setup.py'
       - '.github/workflows/test_eval.yml'
       - 'conftest.py'
@@ -77,7 +87,12 @@ jobs:
       - name: Run eval unit tests
         run: |
           pytest tests/test_eval.py -v --cov=src/gaia/eval --cov-report=term-missing
-          
+
+      # Scenario-only PRs skip test_unit.yml, so the skill coverage guard runs here.
+      - name: Check every hub skill still has eval scenarios
+        run: |
+          pytest tests/unit/eval/test_skill_scenario_coverage.py -q
+
       - name: Test eval CLI commands
         run: |
           # Test help command

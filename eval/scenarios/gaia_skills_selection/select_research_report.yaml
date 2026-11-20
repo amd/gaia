@@ -1,0 +1,30 @@
+# FIXTURE-SYNC: http://127.0.0.1:8765/solarium_a.html and solarium_b.html —
+# founded 2019 in Nevada; 42 MWh now; 90 MWh by 2027; second site in Arizona.
+id: select_research_report
+name: "Skill Selection — A Cited-Report Request Picks research-report"
+category: gaia_skills_selection
+severity: high
+tags: [t1_basic]
+description: |
+  A request for a report with sources, without naming a skill. research-report
+  is the fit; summarize, document-brief and daily-brief are the near misses.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Every hub/skills skill ships with the flagship; fixture server on 127.0.0.1:8765."
+
+turns:
+  - turn: 1
+    objective: "Ask for a short report with citations on the Solarium Project from the two fixture pages"
+    user_message: "Write me a short report on the Solarium Project with citations, using http://127.0.0.1:8765/solarium_a.html and http://127.0.0.1:8765/solarium_b.html"
+    ground_truth:
+      expected_answer: "Founded 2019 in Nevada; 42 MWh today; plans 90 MWh by 2027 and a second site in Arizona — each fact cited to one of the two URLs"
+    success_criteria: |
+      agent_tools[] shows load_skill("research-report") and fetches of both
+      pages. Facts match and each is cited to a fixture URL. FAIL if no skill
+      is loaded or a different one is, or if a fact is invented.
+
+expected_outcome: |
+  research-report is picked for a cited write-up and the citations are real.

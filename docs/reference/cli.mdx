@@ -98,6 +98,28 @@ answer, so it can be piped or captured; progress, warnings and logs go to
 stderr. GAIA starts Lemonade Server through the daemon if it is not running, so
 there is nothing to launch first.
 
+**Model download.** When the run's local model is not on disk, `gaia -p`
+asks before it downloads anything:
+
+```
+gaia -p: Qwen3-0.6B-GGUF is not downloaded (0.4 GB). Download it now? [y/N]
+```
+
+`y` or `yes` downloads the model and then answers. Anything else, including a
+bare Enter, downloads nothing and exits `1`. The question is asked on stderr
+and answered at the terminal, so it needs both: when the prompt is piped in,
+or stdin or stderr is redirected, as in a script, there is nobody to ask, and
+the run exits `1` without downloading and names `--yes`. Pass `--yes` (`-y`)
+to agree in advance; the download then starts without a question. This holds
+for every model a run would use, whether it came from `--model`, from
+`last_model` or `default_model`, or from the hybrid model's settings.
+
+The progress goes to stderr: on a terminal a bar with the percent and the
+downloaded and total size, redrawn in place; in a pipe or a log file one plain
+line every 10%. stdout still carries only the answer. Ctrl+C at the question
+or during the download exits `130`; a stopped download continues when the same
+command is run again. A download that fails exits `1` with the reason.
+
 Where the agent ships as its own program, as in the desktop app, the terminal
 installers and the one-line installer, `gaia -p` and `gaia chat` run it through
 GAIA's background service in the current folder. Confirmation-gated tools are
@@ -117,14 +139,15 @@ echo "List the Python files here" | gaia -p --output-format json
 | Flag | Description |
 |------|-------------|
 | `-p`, `--print [prompt]` | The prompt. With no text after it, the prompt is read from stdin; an empty stdin or an interactive terminal is an error |
-| `--model <id>` | Model to run (local or cloud, e.g. `amd.DeepSeek-V4.1-Flash`), or `hybrid` to pick a cheap or strong model for the turn ([Hybrid model](/guides/llm-gateway#hybrid-model)). Default: the model the Agent UI and TUI reopen on (`last_model`), else `default_model` from `gaia config`, else the agent's own default. A local model that is not downloaded is refused, never downloaded |
+| `--model <id>` | Model to run (local or cloud, e.g. `amd.DeepSeek-V4.1-Flash`), or `hybrid` to pick a cheap or strong model for the turn ([Hybrid model](/guides/llm-gateway#hybrid-model)). Default: the model the Agent UI and TUI reopen on (`last_model`), else `default_model` from `gaia config`, else the agent's own default. A local model that is not downloaded is downloaded first, once you confirm it (see Model download above), including one added with `gaia model add` |
+| `--yes`, `-y` | Download the run's model without asking when it is not downloaded yet. Needed where nobody can answer the question: a script, a piped prompt, redirected stderr |
 | `--output-format text\|json` | `text` (default) prints the answer alone; `json` prints one JSON object (below) |
 | `--verbose` | With `--output-format json`: add the turn's full `conversation` (every model message and tool call) |
 | `--max-steps <n>` | Cap on agent steps for this run, at least 1. Default: the agent's own limit ([Agent step limit](#agent-step-limit)) |
 | `--time-limit <seconds>` | Wall-clock seconds the turn may take, at least 1. The agent is told the limit with the request, and to write a first version of any requested file early. At 25% and 50% it is told the time used. At 70% it is told to write what was asked for and not yet written, to leave a finished file alone, and to keep caveats in its answer rather than in the file; it is always told before it stops, even when one long step jumps past 70%. Near the limit it stops working, keeping back two of its typical steps (three while a requested file is missing, never less than 5% and never more than 25% of the limit): it writes any requested file still missing, may make one last tool call that runs (a final write, say), and answers. Each model call is capped to the output the time left allows at the model's measured speed; the reply that may carry the last tool call gets half of the time left, and the final answer is short (at most 2,048 tokens), a summary of where the work stands and the next steps that names files rather than repeating them. A shell or Python command, a wait or a sleep the agent starts gets a timeout no longer than the time left before that stop, and one with no time left is refused; the one last tool call may run for half of what is left of the limit. A turn still busy at the limit is stopped there: a running shell or Python command ends, a model call still running 5 seconds past the limit is abandoned, and the answer says the time limit stopped the turn, followed by the agent's latest findings. A turn the limit ended reports `status: incomplete` and exits 1, even when it wrote its file and answered. Counted from the start of the turn, after server start-up, so give a wrapper's own timeout some headroom above it. Can't be combined with `--attempts` yet (a usage error). Default: no limit |
 | `--attempts <n>` | Run `n` (up to 4) independent attempts, then one turn that checks and combines them ([below](#independent-attempts)). Default: 1 |
 | `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking. A request that only hands over quoted text to translate, reword or proofread still has them refused |
-| `--full-access` | Full access, as the TUI's `/full-access`: lifts the shell guardrails, so test runners, build tools and other commands outside the no-prompt list run, and grants paths outside the current folder without asking. Implies `--dangerously-skip-permissions` |
+| `--full-access` | Full access, as the TUI's `/full-access`: the shell runs any command and Python runs any code, with nothing asked and nothing refused, on any path. Implies `--dangerously-skip-permissions` |
 | `--base-url <url>` | Use a remote Lemonade server instead of the local one |
 | `--disallowed-tools <tools>` | Tools the agent may neither see nor call, comma- or space-separated, with `*` globs (`search_web,browser_*`). Repeatable. `search_tools` never finds a withheld tool, and a tool a skill adds mid-turn is withheld too when a pattern matches it. Each pattern must match a tool the agent has when the turn starts, or the run fails (exit 1) before it begins, so a typo can't leave a tool on |
 | `--no-web` | Withhold GAIA's tools that search, read, download or install from the internet: `search_web`, `fetch_page`, `fetch_webpage`, `download_file`, `open_url`, `browser_*`, `search_documentation`, `search_skill_hub`, `install_skill`, `install_cli` and `transcribe_media`. The shell and connector (MCP) tools stay available; withhold those with `--disallowed-tools`. The agent is also told not to search or fetch from the web through the shell or a script. That is an instruction, not a block: cut the network to enforce it |
@@ -166,7 +189,7 @@ subcommand instead.
 
 **Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other
 than `success`), when the model server could not be started, or when no prompt was
-given; `130` when interrupted; `2` for a usage error such as an unknown flag, a
+given, when the model's download failed, or when a download was needed and not confirmed; `130` when interrupted; `2` for a usage error such as an unknown flag, a
 launcher flag (`--ui`, `--cli`) combined with `-p`, or `--verbose` without
 `--output-format json`. On any failure the reason
 goes to stderr; in json mode stdout still carries one object, with `is_error: true`
@@ -242,6 +265,8 @@ Agents stop after a maximum number of reasoning/tool steps. The flagship GAIA ag
 When 20, 10 and 5 steps remain, the agent is told so and asked to produce what the request asked for from what it already has, marking anything it couldn't verify, rather than keep researching. An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. If a file the request asked for doesn't exist yet, the agent first gets one step in which it may only write those files. The summary is kept even when a requested file still wasn't written; the missing file is listed after it. If that last call fails, you get the step-limit notice with the agent's latest write-up and a line saying why the summary couldn't be written. Set `GAIA_AGENT_BUDGET_NOTICES=0` to turn the step-budget notices off.
 
 Before an agent answers, it reads back the files it edited that turn. If one is missing, empty, or does not parse (Python and JSON), the agent gets two extra steps to fix it, on top of the step limit. Content the user gave word for word in the request is left as written. This happens at most twice per turn; anything still broken after that is listed under the answer. A turn that stops early (step limit, time limit, a repeating call) still reads its edits back, but has no steps left to fix them, so anything broken is listed under the answer. Set `GAIA_AGENT_VERIFY_EDITS=0` to turn the read-back off.
+
+A turn that built a document or data file from other files, or built an office file, is asked once before it answers to check it against the request: each stated requirement met or not, and whether the result is plausible. When nothing is wrong this costs one short model step and the answer is unchanged; a miss is fixed or stated in the answer. The check is shortened or skipped when a time limit is nearly used up, and each firing is logged on a line starting `[check:self]`. Set `GAIA_AGENT_SELF_CHECK=0` to turn it off. Details: [Agent system](/sdk/core/agent-system).
 
 A model that writes its tool calls as JSON text can answer with a plan of several calls, which run without a model call between them. When the plan finishes, the agent restates the request and the whole plan before asking for an answer or another plan. Set `GAIA_AGENT_PLAN_RECAP=0` to send a one-line note instead (how many plan steps ran and how many steps are left): the plan and its results are already in the conversation, so this cuts what every later call re-sends. Models that call tools natively never take this path.
 
@@ -327,7 +352,7 @@ $env:GAIA_ALLOWED_PATHS = "C:\evals\task-17"; gaia-cli
   nothing, and one outside it (another drive) is ignored with a warning — neither
   grants anything. If no entry overlaps, the agent can reach no files at all
   except its scratch folder. Out-of-scope paths are refused without an approval
-  prompt, and full access does not lift that.
+  prompt, and full access does not lift that for the file tools.
 - **One exception: an Agent UI chat with no attached documents.** Its default
   scope is GAIA's documents folder plus the folder the backend started in. When
   no entry overlaps that default, the folders this list names become the chat's
@@ -337,7 +362,8 @@ $env:GAIA_ALLOWED_PATHS = "C:\evals\task-17"; gaia-cli
   content searches (including the Documents/Downloads sweep and deep search),
   indexing a document, code search and its index, the project map, saving
   downloads, capturing a skill from a local folder, and the path checks on shell
-  commands. The agent's own scratch folder stays writable.
+  commands outside full access (under it the shell and Python tools run in any
+  folder). The agent's own scratch folder stays writable.
 - **It does not sandbox code.** A `run_python` script or a shell command the
   agent runs can open any file your OS account can read. This setting confines
   GAIA's tools, not arbitrary code — for real isolation, run the agent as a
@@ -1997,30 +2023,49 @@ GAIA versions released before this setting existed ignore the file.
 ### Full access
 
 By default the agent asks before it runs a shell command or writes a file.
-**Full access** stops the asking: every gated tool runs without a prompt, and
-the shell guardrails come off — output redirection works, and the read-only
-command list is replaced by a developer set (`python`, `pytest`, `node`, `npm`,
-`make`, `go`, `cargo`, `gh`, `git`, …) that can run arbitrary code. `git` is
-unrestricted, including push and history rewrites. It is the only mode in which
-commands GAIA otherwise refuses outright (a credential print such as
-`gh auth token`, an encoded PowerShell command) can run.
+**Full access** stops the asking, and the refusing: every gated tool runs
+without a prompt, and the shell and Python tools run what the agent gives them.
 
-Three things hold in every mode, full access included. A shell command or
-Python code that reads a file the file tools refuse (`.env`, a private key,
-`.npmrc`, `secrets.json`) is refused. Writing one, copying over one, or naming
-one as a search pattern still runs. Credential files never take part in a
-recursive search. A command that is just `grep -r`, `rg` or `git grep` runs with
-them left out, so `grep -rn TODO .` still searches everything else. Any other
-recursive search (piped or chained, inside a script, `findstr /s`,
-`Select-String` over `Get-ChildItem -Recurse`, `ag`, `find -exec`) is refused
-when the folder it searches holds one, and so is a `git grep` of a credential
-file's blob (`HEAD:.env`). On Windows, use `rg` or `git grep` for this: a
-recursive `grep` there is refused when the folder holds a credential file. Tokens
-in shell and Python output, such as the one in a `git remote -v` URL, are
-masked before the model reads it. And a cloud-metadata or link-local address
-(`169.254.169.254`, `fe80::/10`, `metadata.google.internal`) the web fetcher
-blocked stays blocked for the shell and Python for the rest of that turn.
-Private LAN addresses stay reachable from the shell.
+- **Any program.** There is no command list. `pip`, `where`, `gaia`, `rm`,
+  `rmdir`, `del`, a program given by its full path and one GAIA has never heard
+  of all run. `git` is unrestricted, including push and history rewrites.
+- **Any shell syntax.** The line goes to the shell (`sh`, or `cmd.exe` on
+  Windows), so redirection, `$(…)`, `&`, loops, conditions and commands of
+  several lines work. On Windows, separate lines run one after another, and
+  `python -c "…"` with code of several lines is started directly.
+- **Any path.** A working folder, a `cd` or an argument outside the allowed
+  folders runs. So does a command that reads a credential file (`.env`, a
+  private key), makes a link, reaches a system folder or a cloud-metadata
+  address, or installs packages outside a virtual environment.
+- **Any Python.** `run_python` and `execute_python_file` run the code as
+  written. Its paths, links and credential reads are not checked.
+- **No refusals carried over.** GAIA makes no refusals of its own under full
+  access, so none blocks a later call.
+
+What can still fail is what can't work: a program that isn't installed fails
+with the shell's own error, and a line with nothing on it is an error.
+
+Outside full access these rules hold. A shell command or Python code that reads
+a file the file tools refuse (`.env`, a private key, `.npmrc`, `secrets.json`)
+is refused. Writing one, copying over one, or naming one as a search pattern
+still runs. Credential files never take part in a recursive search. A command
+that is just `grep -r`, `rg` or `git grep` runs with them left out, so
+`grep -rn TODO .` still searches everything else. Any other recursive search
+(piped or chained, inside a script, `findstr /s`, `Select-String` over
+`Get-ChildItem -Recurse`, `ag`, `find -exec`) is refused when the folder it
+searches holds one, and so is a `git grep` of a credential file's blob
+(`HEAD:.env`). On Windows, use `rg` or `git grep` for this: a recursive `grep`
+there is refused when the folder holds a credential file. And a cloud-metadata
+or link-local address (`169.254.169.254`, `fe80::/10`,
+`metadata.google.internal`) the web fetcher blocked stays blocked for the shell
+and Python for the rest of that turn. Private LAN addresses stay reachable from
+the shell.
+
+Four things hold in every mode, full access included. Tokens in shell and
+Python output, such as the one in a `git remote -v` URL, are masked before the
+model reads it. A call you declined stays declined for the rest of that request.
+A calendar change and an outgoing email still wait for a person. And a folder
+you removed from a chat is not used as the shell's working folder.
 
 Full access is one of three permission modes. `Shift+Tab` in the TUI cycles
 them, and the status bar shows the one that is on:
@@ -4043,7 +4088,7 @@ Options accepted by every `gaia-cli` command:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--full-access` | off | Run every tool without asking, with the shell guardrails off — arbitrary code execution. Subprocess agents only (the flagship when the TUI launches it); refused over the background service. A banner stays on screen while it is on, and `/full-access off` ends it mid-session. See [Full access](#full-access). The retired `--bypass-permissions` fails naming this flag. |
+| `--full-access` | off | Run every tool without asking, with the shell running any command — arbitrary code execution. Subprocess agents only (the flagship when the TUI launches it); refused over the background service. A banner stays on screen while it is on, and `/full-access off` ends it mid-session. See [Full access](#full-access). The retired `--bypass-permissions` fails naming this flag. |
 | `--use-claude` | off | Answer with Anthropic's Claude API instead of local Lemonade. **Your conversation is sent to Anthropic.** Needs `ANTHROPIC_API_KEY`; the local server is not started and first-run setup is skipped, so RAG, memory and the code index (which embed through Lemonade) need `gaia init --skip-chat-model` later |
 | `--claude-model <id>` | `claude-sonnet-5` | The Claude model `--use-claude` runs on. Only valid with `--use-claude`; an id the agent does not offer is refused before the TUI opens. `""` lets the agent pick |
 | `--dev` | off | Developer mode: per-turn timings, steps, tool arguments and output on screen, connection diagnostics in `~/.gaia/logs/gaia-tui.log`, and DEBUG logging for agents the TUI launches. `--debug` is an alias |
