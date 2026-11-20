@@ -511,6 +511,27 @@ def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
 _ANSWER_FIRST_RE = re.compile(r'\s*\{\s*"answer"\s*:')
 
 
+#: Longest string argument a plan item carries; a plan is re-sent every step.
+_PLAN_ARG_MAX = 300
+
+
+def _plan_item(step: Any) -> Dict[str, Any]:
+    """One plan step as ``{tool, description, args}`` for a client to narrate."""
+    if not isinstance(step, dict):
+        return {"description": str(step)}
+    item: Dict[str, Any] = {}
+    if step.get("tool"):
+        item["tool"] = str(step["tool"])
+    if step.get("description"):
+        item["description"] = str(step["description"])
+    args = step.get("tool_args")
+    if isinstance(args, dict) and args:
+        item["args"] = {
+            k: (v[:_PLAN_ARG_MAX] if isinstance(v, str) else v) for k, v in args.items()
+        }
+    return item
+
+
 class SSEOutputHandler(OutputHandler):
     """
     OutputHandler that queues agent events as JSON for SSE streaming.
@@ -828,6 +849,7 @@ class SSEOutputHandler(OutputHandler):
                 "steps": plan_strs,
                 "step_narrations": narrations,
                 "current_step": current_step,
+                "items": [_plan_item(step) for step in plan],
             }
         )
 
@@ -933,6 +955,8 @@ class SSEOutputHandler(OutputHandler):
         latency_ms = self.record_tool_result(data, success)
         event = {
             "type": "tool_result",
+            # Which call this answers, so a client can follow one tool's results.
+            "tool": self._last_tool_name,
             "title": title,
             "summary": summary,
             "success": success,
@@ -947,6 +971,9 @@ class SSEOutputHandler(OutputHandler):
         # A "denied" call nobody answered is not one the user declined.
         if isinstance(data, dict) and data.get("timed_out") is True:
             event["timed_out"] = True
+        # Nor is one GAIA's own rule stopped.
+        if isinstance(data, dict) and data.get("denied_by") == "policy":
+            event["denied_by"] = "policy"
         # Nor is one GAIA turned down itself without showing a prompt.
         if isinstance(data, dict) and data.get("declined_by") == "agent":
             event["declined_by"] = "agent"
@@ -958,6 +985,9 @@ class SSEOutputHandler(OutputHandler):
         # summary may be incomplete instead of making them infer truncation.
         if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
             event["summary_truncated"] = True
+        # The file a tool wrote, so a client can offer to open it.
+        if isinstance(data, dict) and isinstance(data.get("path"), str):
+            event["path"] = data["path"]
         # Where the tool wrote, resolved: a relayed turn's Outputs need it.
         if isinstance(data, dict):
             for key in RESULT_PATH_KEYS:
@@ -1191,16 +1221,14 @@ class SSEOutputHandler(OutputHandler):
             }
         )
 
+    def report_draft(self, tool: str, text: str):
+        self._emit({"type": "draft", "tool": tool, "text": text})
+
     # === Structured-render map (#2109) ===
 
     # Mapping from tool name to the card "kind" the frontend's render-card
-    # registry draws (spec §4.2). Shared with the sidecar's own canonical
-    # translator (``gaia_agent_email/sse_translation.py`` duplicates this map
-    # to stay dependency-light) — a test in that package
-    # (``test_render_tool_to_lang_maps_stay_in_sync``) pins the two dicts
-    # equal so the duplication can't silently drift.
+    # registry draws (spec §4.2).
     _RENDER_TOOL_TO_LANG: ClassVar[Dict[str, str]] = {
-        "pre_scan_inbox": "email_pre_scan",
         # #2765: a generic ``table`` card (no new client code) so the thread
         # view renders straight from tool data instead of model prose.
         "get_thread": "table",
@@ -2471,7 +2499,7 @@ class SSEOutputHandler(OutputHandler):
         for the whole blocking ``read()``, and ``close()`` waits on that same
         lock — so a cross-thread ``close()`` blocks until the read returns on
         its own (proven by the real-socket test in
-        ``tests/unit/test_email_sidecar_proxy.py``). ``shutdown()`` bypasses
+        ``tests/unit/test_sidecar_proxy.py``). ``shutdown()`` bypasses
         the file-object layer entirely and wakes the parked ``recv``
         immediately; the relay's stream generator then closes the response
         itself on the way out. ``resp.close()`` remains only as the fallback
@@ -2630,8 +2658,8 @@ class SSEOutputHandler(OutputHandler):
     def resolve_user_input(self, request_id: str, response: str) -> bool:
         """Unblock a pending ``request_user_input_blocking()`` call.
 
-        Called by ``POST /api/chat/user-input`` and by the email sidecar's
-        ``POST /v1/email/query/{run_id}/respond``.  Returns ``False`` if no
+        Called by ``POST /api/chat/user-input`` and by a sidecar's
+        ``POST /v1/<agent>/query/{run_id}/respond``.  Returns ``False`` if no
         request with that ID is pending, so the caller can answer 409 rather
         than report an accepted answer nothing will read.
         """
@@ -2949,6 +2977,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         lines = stdout.strip().split("\n") if stdout.strip() else []
         if rc != 0 and data.get("expected_exit"):
             return f"{data['expected_exit']} (exit {rc})"
+        if rc != 0 and isinstance(data.get("exit_code_meaning"), str):
+            # winget reports failure as a bare number and prints to stdout.
+            return f"{data['exit_code_meaning']} (exit {rc})"
         if rc != 0:
             stderr = data.get("stderr", "")
             return f"Command failed (exit {rc})" + (

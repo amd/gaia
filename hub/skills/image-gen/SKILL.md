@@ -2,7 +2,7 @@
 name: image-gen
 description: Turn a description into an image with a downloaded Lemonade model (Stable Diffusion or TheNoise), then iterate on it. Use for draw, sketch, paint, render, "make a picture of", "generate an image", concept art, game art, backgrounds, thumbnails, logos, wallpapers, mockups, and requests to change the last image rather than replace it.
 license: MIT
-version: 1.1.0
+version: 1.1.1
 metadata:
   gaia:
     security_tier: community
@@ -27,8 +27,8 @@ answer they did not ask to have illustrated.
 
 A slide, deck, presentation, poster with real copy, or chart is not a picture.
 Stable Diffusion cannot render readable text, so the user gets a blur of fake
-letters. Those are files: ask whether they want PowerPoint (.pptx) or HTML if
-they did not say, and build that instead.
+letters. Those are files: build a PowerPoint (.pptx) with the `slide-decks` skill
+unless they asked for HTML.
 
 ## Check what is loaded before you promise anything
 

@@ -88,10 +88,22 @@ on:
       - 'tests/integration/test_lemonade_health_schema.py'
   merge_group:
   workflow_dispatch:
+    inputs:
+      runner_label:
+        # stx/stx-test are the static boxes stx_driver_update.yml patches; dispatch
+        # here to validate a candidate driver before rolling it out.
+        description: 'Runner to target (devlab = the ephemeral DevLab pool)'
+        type: choice
+        options:
+          - devlab
+          - stx
+          - stx-test
+        default: devlab
 
-# Cancel in-progress runs when a new run is triggered
+# Cancel in-progress runs when a new run is triggered. The runner label keeps a
+# dispatch to one stx box from cancelling a run on the other or on the pool.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}-${{ inputs.runner_label }}
   cancel-in-progress: true
 
 permissions:
@@ -100,8 +112,8 @@ permissions:
 jobs:
   test-embeddings:
     name: Test Lemonade Embeddings API
-    # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
-    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    # The DevLab Dispatch ephemeral pool, unless a dispatch names a static stx box.
+    runs-on: ${{ contains(fromJSON('["stx","stx-test"]'), inputs.runner_label) && fromJSON(format('["{0}"]', inputs.runner_label)) || fromJSON('["self-hosted","Windows","devlab-dispatch","strix-halo"]') }}
     # Bound a wedged model pull/load — the LemonadeClient pull timeout alone
     # is 200 min; don't let one hold the self-hosted runner for the 6h default.
     timeout-minutes: 30

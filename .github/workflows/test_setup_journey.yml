@@ -6,8 +6,10 @@
 # the real backend with an empty HOME and GAIA_HOME against a fake Lemonade
 # (installer/headless/fake_model_server.py --catalog), then drives the real app
 # with Playwright. `gaia init`, the Test step's checks and a real turn through the
-# installed GAIA assistant binary (fetched from the hub, as on a user's PC) all
-# run for real; only the model server is fake.
+# installed GAIA assistant binary (the hub's published build) all run for real;
+# only the model server is fake. The assistant is fetched from the hub once per
+# job and served locally: ~20 live 150 MB downloads per OS stalled tests on a
+# slow or dropped one.
 #
 # This layer is Chromium against the UI the backend serves, not the Electron
 # shell: installers, the tray and window controls are test_installers_headless.yml's,
@@ -39,6 +41,9 @@ on:
       - 'src/gaia/apps/webui/**'
       - 'src/gaia/audio/lemonade_asr.py'
       - 'src/gaia/audio/lemonade_tts.py'
+      - 'src/gaia/hub/__init__.py'
+      - 'src/gaia/hub/catalog.py'
+      - 'src/gaia/hub/installer.py'
       - 'src/gaia/installer/**'
       - 'src/gaia/llm/gpu_memory.py'
       - 'src/gaia/llm/lemonade_client.py'
@@ -109,8 +114,13 @@ jobs:
         working-directory: src/gaia/apps/webui
         run: npx playwright install --with-deps chromium
 
+      - name: Mirror the GAIA assistant from the hub
+        run: python installer/headless/hub_mirror.py --out "$RUNNER_TEMP/hub-mirror"
+
       - name: Walk first-run setup
         working-directory: src/gaia/apps/webui
+        env:
+          GAIA_E2E_HUB_MIRROR: ${{ runner.temp }}/hub-mirror
         run: npx playwright test -c e2e/playwright.config.ts
 
       - uses: actions/upload-artifact@v7

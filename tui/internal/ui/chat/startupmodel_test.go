@@ -25,7 +25,7 @@ func startupChat(t *testing.T, kind StartupModelKind, provider, model string) (C
 	t.Helper()
 	c := &queryCapturingClient{}
 	var saves []savedCall
-	m := NewChatModelForFlagship(c, "gaia", "GAIA", false, true).
+	m := NewChatModelForFlagship(c, "gaia", "GAIA", true).
 		WithStartupModel(kind, provider, model).
 		WithModelMemory(func(p, id string) error {
 			saves = append(saves, savedCall{p, id})
@@ -91,7 +91,7 @@ func errorsIn(m ChatModel) []string {
 
 func TestInitArmsTheOpeningModelTurn(t *testing.T) {
 	armed, _, _ := startupChat(t, StartupRestore, "fireworks", flashID)
-	plain := NewChatModelForFlagship(&queryCapturingClient{}, "gaia", "GAIA", false, true)
+	plain := NewChatModelForFlagship(&queryCapturingClient{}, "gaia", "GAIA", true)
 	// Counted rather than run: Init's other commands probe the machine.
 	count := func(m ChatModel) int {
 		batch, _ := m.Init()().(tea.BatchMsg)
@@ -241,7 +241,7 @@ func TestStoppingTheRestoreDoesNotLeakIntoTheNextTurn(t *testing.T) {
 }
 
 func TestHeaderNamesTheGateModelBeforeTheFirstPing(t *testing.T) {
-	m := NewChatModelForFlagship(&queryCapturingClient{}, "gaia", "GAIA", false, true).
+	m := NewChatModelForFlagship(&queryCapturingClient{}, "gaia", "GAIA", true).
 		WithExpectedModel("Gemma-4-E4B-it-GGUF")
 	m.width, m.height = 120, 30
 	if !strings.Contains(ansi.Strip(m.renderHeader()), "│ Gemma-4-E4B-it-GGUF") {
@@ -257,7 +257,7 @@ func TestHeaderNamesTheGateModelBeforeTheFirstPing(t *testing.T) {
 			t.Fatal("the gate's name is not a model the agent was switched away from")
 		}
 	}
-	claude := NewChatModelForFlagship(&claudeLaunchStub{}, "gaia", "GAIA", false, true).
+	claude := NewChatModelForFlagship(&claudeLaunchStub{}, "gaia", "GAIA", true).
 		WithExpectedModel("Gemma-4-E4B-it-GGUF")
 	if strings.Contains(ansi.Strip(claude.renderHeader()), "Gemma") {
 		t.Fatal("a Claude session must not be labelled with the local model")
@@ -298,7 +298,7 @@ func TestUnknownSavedClaudeIDIsRefusedWithoutARoundTrip(t *testing.T) {
 
 func TestFailedSwitchIsNotSavedAndAFailedSaveIsSaid(t *testing.T) {
 	c := &queryCapturingClient{}
-	m := NewChatModelForFlagship(c, "gaia", "GAIA", false, true).
+	m := NewChatModelForFlagship(c, "gaia", "GAIA", true).
 		WithModelMemory(func(string, string) error { return errors.New("disk full") })
 	m.width, m.height = 100, 30
 
@@ -422,7 +422,7 @@ func (*warmCapturingClient) SupportsWarmUp() bool { return true }
 func warmChat(t *testing.T) (ChatModel, *warmCapturingClient) {
 	t.Helper()
 	c := &warmCapturingClient{}
-	m := NewChatModelForFlagship(c, "gaia", "GAIA", false, true).
+	m := NewChatModelForFlagship(c, "gaia", "GAIA", true).
 		WithStartupModel(StartupRestore, "local", "Qwen3-4B-GGUF")
 	m.width, m.height = 120, 30
 	return m, c
@@ -451,7 +451,7 @@ func TestNoWarmUpBeforeTheRestoreOrAfterAFailedOne(t *testing.T) {
 		batch, _ := m.Init()().(tea.BatchMsg)
 		return len(batch)
 	}
-	plain := NewChatModelForFlagship(&warmCapturingClient{}, "gaia", "GAIA", false, true)
+	plain := NewChatModelForFlagship(&warmCapturingClient{}, "gaia", "GAIA", true)
 	// plain schedules the warm-up; the restoring chat schedules the restore instead.
 	if count(m) != count(plain) {
 		t.Fatal("Init must send the restore in place of the warm-up, not both")

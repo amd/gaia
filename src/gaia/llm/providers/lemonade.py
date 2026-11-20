@@ -51,6 +51,7 @@ from ..lemonade_client import (
     runs_on_npu,
 )
 from ..lemonade_launcher import describe_client_hint
+from ..retry import StreamStalledError
 from ..surface_hints import (
     APP_WEDGED_SERVER_HINT,
     TUI_MODEL_SWITCH_HINT,
@@ -134,6 +135,8 @@ def _defang_think_tags(text: str) -> str:
 TOOL_CALL_PROGRESS_INTERVAL_S = 3.0
 #: Argument characters before a tool call is long enough to report on.
 TOOL_CALL_PROGRESS_MIN_CHARS = 1500
+#: Seconds between live drafts of a tool call's arguments.
+TOOL_CALL_DRAFT_INTERVAL_S = 0.25
 #: Seconds between word counts while the model reasons.
 REASONING_PROGRESS_INTERVAL_S = 1.0
 
@@ -430,6 +433,21 @@ class LemonadeStreamCutOffError(LemonadeError):
         "before the model finished. Send the message again. If it keeps "
         "happening, check the model server or gateway log for dropped streams."
     )
+
+
+class LemonadeReplyStalledError(LemonadeStreamCutOffError):
+    """A streamed reply went quiet partway through: a fragment, like any cut-off."""
+
+
+def _stalls_as_cut_offs(stream):
+    """Yield *stream*, turning a stall after the reply began into a cut-off."""
+    try:
+        yield from stream
+    except LemonadeClientError as e:
+        stall = e.__cause__
+        if isinstance(stall, StreamStalledError) and not stall.before_output:
+            raise LemonadeReplyStalledError(str(e)) from e
+        raise
 
 
 class LemonadeOutputCorruptedError(LemonadeError):
@@ -899,8 +917,7 @@ def _classify_lemonade_response(
         # profile's window, not a flat 64K: on NPU a correct load is 32K,
         # so a flat GPU threshold makes every real overflow look
         # retryable (#2884). NOTE (#1892): a client running under an
-        # exact ctx pin (LemonadeClient.ctx_size_override, e.g. the email
-        # eval's 16K envelope — see gaia_agent_email.context_budget)
+        # exact ctx pin (LemonadeClient.ctx_size_override)
         # legitimately sits below this threshold; the retryable hint is
         # wrong there, but the pinned eval path never consumes it.
         n_ctx_reported = 0
@@ -1113,6 +1130,10 @@ class LemonadeProvider(LLMClient):
     #: Called as (tool_name, argument_chars) while a long tool call streams:
     #: its arguments arrive as silent deltas, minutes of nothing to show.
     tool_call_progress: Optional[Callable[[str, int], None]] = None
+
+    #: Called as (tool_name, arguments_so_far) while a tool call streams, so a
+    #: client can show what is being written before the call is complete.
+    tool_call_draft: Optional[Callable[[str, str], None]] = None
 
     #: Called with the reasoning word count so far while a thinking model
     #: reasons. Its text is held back a line at a time, so a one-paragraph
@@ -1535,6 +1556,7 @@ class LemonadeProvider(LLMClient):
         thought = ""  # reasoning held back until a line is whole (see below)
         tool_calls: dict[int, dict] = {}
         next_progress = time.perf_counter()
+        next_draft = next_progress
         next_reasoning_progress: Optional[float] = None
         finish_reason = ""
         usage_seen = False
@@ -1548,7 +1570,7 @@ class LemonadeProvider(LLMClient):
             in_thinking, thought = False, ""
             return out
 
-        for chunk in response:
+        for chunk in _stalls_as_cut_offs(response):
             # The usage chunk arrives last and carries no choices. It is the
             # only token accounting a streamed turn gets — see the
             # stream_options request in lemonade_client.
@@ -1567,6 +1589,16 @@ class LemonadeProvider(LLMClient):
                 ):
                     self._last_ttft_seconds = time.perf_counter() - request_started
                 _accumulate_tool_calls(tool_calls, delta.get("tool_calls"))
+                # tool_calls stays empty when a frame holds only non-dict fragments.
+                if (
+                    delta.get("tool_calls")
+                    and tool_calls
+                    and self.tool_call_draft is not None
+                    and time.perf_counter() >= next_draft
+                ):
+                    latest = tool_calls[max(tool_calls)]["function"]
+                    self.tool_call_draft(latest["name"], latest["arguments"])
+                    next_draft = time.perf_counter() + TOOL_CALL_DRAFT_INTERVAL_S
                 if (
                     delta.get("tool_calls")
                     and self.tool_call_progress is not None

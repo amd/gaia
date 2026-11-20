@@ -1,0 +1,542 @@
+{
+  "repo": {
+    "stargazers_count": 1626,
+    "forks_count": 237
+  },
+  "releases": [
+    {
+      "tag_name": "v0.26.1-rc2",
+      "draft": false,
+      "prerelease": true,
+      "published_at": "2026-11-17T22:08:17Z",
+      "html_url": "https://github.com/amd/gaia/releases/tag/v0.26.1-rc2",
+      "assets": [
+        {
+          "name": "amd_gaia-0.26.1rc2-py3-none-any.whl",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/amd_gaia-0.26.1rc2-py3-none-any.whl",
+          "size": 5959571,
+          "download_count": 3
+        },
+        {
+          "name": "amd_gaia-0.26.1rc2-py3-none-any.whl.sigstore.json",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/amd_gaia-0.26.1rc2-py3-none-any.whl.sigstore.json",
+          "size": 10939,
+          "download_count": 4
+        },
+        {
+          "name": "amd_gaia-0.26.1rc2.tar.gz",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/amd_gaia-0.26.1rc2.tar.gz",
+          "size": 5674620,
+          "download_count": 2
+        },
+        {
+          "name": "amd_gaia-0.26.1rc2.tar.gz.sigstore.json",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/amd_gaia-0.26.1rc2.tar.gz.sigstore.json",
+          "size": 10892,
+          "download_count": 4
+        },
+        {
+          "name": "gaia-0.26.1-rc.2-darwin-arm64.pkg",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-0.26.1-rc.2-darwin-arm64.pkg",
+          "size": 239754266,
+          "download_count": 19
+        },
+        {
+          "name": "gaia-0.26.1-rc.2-darwin-x64.pkg",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-0.26.1-rc.2-darwin-x64.pkg",
+          "size": 257322138,
+          "download_count": 19
+        },
+        {
+          "name": "gaia-0.26.1-rc.2-win-x64-setup.exe",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-0.26.1-rc.2-win-x64-setup.exe",
+          "size": 471800894,
+          "download_count": 63
+        },
+        {
+          "name": "gaia-0.26.1-rc.2.x86_64.rpm",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-0.26.1-rc.2.x86_64.rpm",
+          "size": 319946233,
+          "download_count": 18
+        },
+        {
+          "name": "gaia-agent-darwin-arm64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent-darwin-arm64",
+          "size": 150219792,
+          "download_count": 19
+        },
+        {
+          "name": "gaia-agent-darwin-x64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent-darwin-x64",
+          "size": 160450896,
+          "download_count": 18
+        },
+        {
+          "name": "gaia-agent-linux-x64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent-linux-x64",
+          "size": 196779080,
+          "download_count": 59
+        },
+        {
+          "name": "gaia-agent-release.json",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent-release.json",
+          "size": 895,
+          "download_count": 122
+        },
+        {
+          "name": "gaia-agent-ui-0.26.1-rc.2-amd64.deb",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent-ui-0.26.1-rc.2-amd64.deb",
+          "size": 218637572,
+          "download_count": 34
+        },
+        {
+          "name": "gaia-agent-ui-0.26.1-rc.2-arm64.dmg",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent-ui-0.26.1-rc.2-arm64.dmg",
+          "size": 222701539,
+          "download_count": 18
+        },
+        {
+          "name": "gaia-agent-ui-0.26.1-rc.2-arm64.dmg.blockmap",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent-ui-0.26.1-rc.2-arm64.dmg.blockmap",
+          "size": 231359,
+          "download_count": 2
+        },
+        {
+          "name": "gaia-agent-ui-0.26.1-rc.2-arm64.zip",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent-ui-0.26.1-rc.2-arm64.zip",
+          "size": 216256973,
+          "download_count": 23
+        },
+        {
+          "name": "gaia-agent-ui-0.26.1-rc.2-arm64.zip.blockmap",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent-ui-0.26.1-rc.2-arm64.zip.blockmap",
+          "size": 227086,
+          "download_count": 2
+        },
+        {
+          "name": "gaia-agent-ui-0.26.1-rc.2-x64-setup.exe",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent-ui-0.26.1-rc.2-x64-setup.exe",
+          "size": 218950518,
+          "download_count": 110
+        },
+        {
+          "name": "gaia-agent-ui-0.26.1-rc.2-x64-setup.exe.blockmap",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent-ui-0.26.1-rc.2-x64-setup.exe.blockmap",
+          "size": 227887,
+          "download_count": 69
+        },
+        {
+          "name": "gaia-agent-ui-0.26.1-rc.2-x86_64.AppImage",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent-ui-0.26.1-rc.2-x86_64.AppImage",
+          "size": 260507764,
+          "download_count": 65
+        },
+        {
+          "name": "gaia-agent-win32-x64.exe",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent-win32-x64.exe",
+          "size": 163440977,
+          "download_count": 27
+        },
+        {
+          "name": "gaia-agent.yaml",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-agent.yaml",
+          "size": 4293,
+          "download_count": 19
+        },
+        {
+          "name": "gaia-cli-darwin-amd64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-cli-darwin-amd64",
+          "size": 23209568,
+          "download_count": 17
+        },
+        {
+          "name": "gaia-cli-darwin-arm64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-cli-darwin-arm64",
+          "size": 21805378,
+          "download_count": 17
+        },
+        {
+          "name": "gaia-cli-linux-amd64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-cli-linux-amd64",
+          "size": 22835362,
+          "download_count": 50
+        },
+        {
+          "name": "gaia-cli-linux-arm64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-cli-linux-arm64",
+          "size": 21364898,
+          "download_count": 2
+        },
+        {
+          "name": "gaia-cli-windows-amd64.exe",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-cli-windows-amd64.exe",
+          "size": 23778816,
+          "download_count": 19
+        },
+        {
+          "name": "gaia-cli-windows-arm64.exe",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-cli-windows-arm64.exe",
+          "size": 21965824,
+          "download_count": 2
+        },
+        {
+          "name": "gaia-core-darwin-arm64.tar.gz",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-core-darwin-arm64.tar.gz",
+          "size": 83955906,
+          "download_count": 18
+        },
+        {
+          "name": "gaia-core-darwin-x64.tar.gz",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-core-darwin-x64.tar.gz",
+          "size": 90785673,
+          "download_count": 18
+        },
+        {
+          "name": "gaia-core-linux-arm64.tar.gz",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-core-linux-arm64.tar.gz",
+          "size": 107215197,
+          "download_count": 2
+        },
+        {
+          "name": "gaia-core-linux-x64.tar.gz",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-core-linux-x64.tar.gz",
+          "size": 117733468,
+          "download_count": 52
+        },
+        {
+          "name": "gaia-core-SHA256SUMS.txt",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-core-SHA256SUMS.txt",
+          "size": 471,
+          "download_count": 122
+        },
+        {
+          "name": "gaia-core-win32-x64.tar.gz",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-core-win32-x64.tar.gz",
+          "size": 106281470,
+          "download_count": 20
+        },
+        {
+          "name": "gaia-darwin-amd64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-darwin-amd64",
+          "size": 23209568,
+          "download_count": 2
+        },
+        {
+          "name": "gaia-darwin-arm64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-darwin-arm64",
+          "size": 21805378,
+          "download_count": 2
+        },
+        {
+          "name": "gaia-installers-SHA256SUMS.txt",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-installers-SHA256SUMS.txt",
+          "size": 486,
+          "download_count": 12
+        },
+        {
+          "name": "gaia-linux-amd64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-linux-amd64",
+          "size": 22835362,
+          "download_count": 3
+        },
+        {
+          "name": "gaia-linux-arm64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-linux-arm64",
+          "size": 21364898,
+          "download_count": 1
+        },
+        {
+          "name": "gaia-tui-SHA256SUMS.txt",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-tui-SHA256SUMS.txt",
+          "size": 1048,
+          "download_count": 105
+        },
+        {
+          "name": "gaia-windows-amd64.exe",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-windows-amd64.exe",
+          "size": 23778816,
+          "download_count": 2
+        },
+        {
+          "name": "gaia-windows-arm64.exe",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia-windows-arm64.exe",
+          "size": 21965824,
+          "download_count": 1
+        },
+        {
+          "name": "gaia_0.26.1-rc.2_amd64.deb",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/gaia_0.26.1-rc.2_amd64.deb",
+          "size": 319936658,
+          "download_count": 49
+        },
+        {
+          "name": "latest-linux.yml",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/latest-linux.yml",
+          "size": 576,
+          "download_count": 66
+        },
+        {
+          "name": "latest-mac.yml",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/latest-mac.yml",
+          "size": 539,
+          "download_count": 44
+        },
+        {
+          "name": "latest.yml",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.1-rc2/latest.yml",
+          "size": 381,
+          "download_count": 197
+        }
+      ]
+    },
+    {
+      "tag_name": "v0.26.0",
+      "draft": false,
+      "prerelease": false,
+      "published_at": "2026-11-17T17:26:09Z",
+      "html_url": "https://github.com/amd/gaia/releases/tag/v0.26.0",
+      "assets": [
+        {
+          "name": "amd_gaia-0.26.0-py3-none-any.whl",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/amd_gaia-0.26.0-py3-none-any.whl",
+          "size": 5954626,
+          "download_count": 5
+        },
+        {
+          "name": "amd_gaia-0.26.0-py3-none-any.whl.sigstore.json",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/amd_gaia-0.26.0-py3-none-any.whl.sigstore.json",
+          "size": 10706,
+          "download_count": 3
+        },
+        {
+          "name": "amd_gaia-0.26.0.tar.gz",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/amd_gaia-0.26.0.tar.gz",
+          "size": 5669190,
+          "download_count": 3
+        },
+        {
+          "name": "amd_gaia-0.26.0.tar.gz.sigstore.json",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/amd_gaia-0.26.0.tar.gz.sigstore.json",
+          "size": 10659,
+          "download_count": 4
+        },
+        {
+          "name": "gaia-0.26.0-darwin-arm64.pkg",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-0.26.0-darwin-arm64.pkg",
+          "size": 239661848,
+          "download_count": 6
+        },
+        {
+          "name": "gaia-0.26.0-darwin-x64.pkg",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-0.26.0-darwin-x64.pkg",
+          "size": 257233788,
+          "download_count": 5
+        },
+        {
+          "name": "gaia-0.26.0-win-x64-setup.exe",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-0.26.0-win-x64-setup.exe",
+          "size": 471685789,
+          "download_count": 83
+        },
+        {
+          "name": "gaia-0.26.0.x86_64.rpm",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-0.26.0.x86_64.rpm",
+          "size": 319857643,
+          "download_count": 6
+        },
+        {
+          "name": "gaia-agent-ui-0.26.0-amd64.deb",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-agent-ui-0.26.0-amd64.deb",
+          "size": 218599120,
+          "download_count": 15
+        },
+        {
+          "name": "gaia-agent-ui-0.26.0-arm64.dmg",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-agent-ui-0.26.0-arm64.dmg",
+          "size": 222667012,
+          "download_count": 7
+        },
+        {
+          "name": "gaia-agent-ui-0.26.0-arm64.dmg.blockmap",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-agent-ui-0.26.0-arm64.dmg.blockmap",
+          "size": 231521,
+          "download_count": 1
+        },
+        {
+          "name": "gaia-agent-ui-0.26.0-arm64.zip",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-agent-ui-0.26.0-arm64.zip",
+          "size": 216214503,
+          "download_count": 22
+        },
+        {
+          "name": "gaia-agent-ui-0.26.0-arm64.zip.blockmap",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-agent-ui-0.26.0-arm64.zip.blockmap",
+          "size": 226938,
+          "download_count": 2
+        },
+        {
+          "name": "gaia-agent-ui-0.26.0-x64-setup.exe",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-agent-ui-0.26.0-x64-setup.exe",
+          "size": 218911218,
+          "download_count": 257
+        },
+        {
+          "name": "gaia-agent-ui-0.26.0-x64-setup.exe.blockmap",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-agent-ui-0.26.0-x64-setup.exe.blockmap",
+          "size": 227586,
+          "download_count": 92
+        },
+        {
+          "name": "gaia-agent-ui-0.26.0-x86_64.AppImage",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-agent-ui-0.26.0-x86_64.AppImage",
+          "size": 260462753,
+          "download_count": 71
+        },
+        {
+          "name": "gaia-cli-darwin-amd64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-cli-darwin-amd64",
+          "size": 23209568,
+          "download_count": 5
+        },
+        {
+          "name": "gaia-cli-darwin-arm64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-cli-darwin-arm64",
+          "size": 21805378,
+          "download_count": 5
+        },
+        {
+          "name": "gaia-cli-linux-amd64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-cli-linux-amd64",
+          "size": 22835362,
+          "download_count": 17
+        },
+        {
+          "name": "gaia-cli-linux-arm64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-cli-linux-arm64",
+          "size": 21364898,
+          "download_count": 2
+        },
+        {
+          "name": "gaia-cli-windows-amd64.exe",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-cli-windows-amd64.exe",
+          "size": 23778304,
+          "download_count": 8
+        },
+        {
+          "name": "gaia-cli-windows-arm64.exe",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-cli-windows-arm64.exe",
+          "size": 21965824,
+          "download_count": 1
+        },
+        {
+          "name": "gaia-core-darwin-arm64.tar.gz",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-core-darwin-arm64.tar.gz",
+          "size": 83912680,
+          "download_count": 5
+        },
+        {
+          "name": "gaia-core-darwin-x64.tar.gz",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-core-darwin-x64.tar.gz",
+          "size": 90751482,
+          "download_count": 5
+        },
+        {
+          "name": "gaia-core-linux-arm64.tar.gz",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-core-linux-arm64.tar.gz",
+          "size": 107172463,
+          "download_count": 1
+        },
+        {
+          "name": "gaia-core-linux-x64.tar.gz",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-core-linux-x64.tar.gz",
+          "size": 117683261,
+          "download_count": 17
+        },
+        {
+          "name": "gaia-core-SHA256SUMS.txt",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-core-SHA256SUMS.txt",
+          "size": 471,
+          "download_count": 36
+        },
+        {
+          "name": "gaia-core-win32-x64.tar.gz",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-core-win32-x64.tar.gz",
+          "size": 106230923,
+          "download_count": 10
+        },
+        {
+          "name": "gaia-darwin-amd64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-darwin-amd64",
+          "size": 23209568,
+          "download_count": 1
+        },
+        {
+          "name": "gaia-darwin-arm64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-darwin-arm64",
+          "size": 21805378,
+          "download_count": 1
+        },
+        {
+          "name": "gaia-installers-SHA256SUMS.txt",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-installers-SHA256SUMS.txt",
+          "size": 461,
+          "download_count": 6
+        },
+        {
+          "name": "gaia-linux-amd64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-linux-amd64",
+          "size": 22835362,
+          "download_count": 3
+        },
+        {
+          "name": "gaia-linux-arm64",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-linux-arm64",
+          "size": 21364898,
+          "download_count": 0
+        },
+        {
+          "name": "gaia-tui-SHA256SUMS.txt",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-tui-SHA256SUMS.txt",
+          "size": 1048,
+          "download_count": 34
+        },
+        {
+          "name": "gaia-windows-amd64.exe",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-windows-amd64.exe",
+          "size": 23778304,
+          "download_count": 3
+        },
+        {
+          "name": "gaia-windows-arm64.exe",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia-windows-arm64.exe",
+          "size": 21965824,
+          "download_count": 0
+        },
+        {
+          "name": "gaia_0.26.0_amd64.deb",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/gaia_0.26.0_amd64.deb",
+          "size": 319849448,
+          "download_count": 34
+        },
+        {
+          "name": "latest-linux.yml",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/latest-linux.yml",
+          "size": 556,
+          "download_count": 146
+        },
+        {
+          "name": "latest-mac.yml",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/latest-mac.yml",
+          "size": 519,
+          "download_count": 55
+        },
+        {
+          "name": "latest.yml",
+          "browser_download_url": "https://github.com/amd/gaia/releases/download/v0.26.0/latest.yml",
+          "size": 366,
+          "download_count": 610
+        }
+      ]
+    }
+  ]
+}

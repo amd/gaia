@@ -46,7 +46,7 @@ func TestTheLiveActionIsRenderedExactlyOnce(t *testing.T) {
 	out := ansi.Strip(m.View())
 	t.Logf("\n%s", out)
 
-	phrase := m.idlePhrase(len(collapseActivity(m.activity)))
+	phrase := strings.TrimRight(m.statusPhrase(), ".…")
 	if n := strings.Count(out, phrase); n != 1 {
 		t.Errorf("%q is on screen %d times; the live region is its only home:\n%s",
 			phrase, n, out)
@@ -76,24 +76,17 @@ func TestOnlyOneElapsedClockIsOnScreen(t *testing.T) {
 	}
 }
 
-// The step count reaches the screen through the --dev hint and nowhere else.
-// The status bar can render it too, from its own field, and that path prints in
-// user mode — it was suppressed only by the hint never happening to be empty.
-func TestUserModeNeverShowsTheStepCount(t *testing.T) {
+// The step count never reaches the screen. The status bar can render it from
+// its own field, and that path was suppressed only by the hint never happening
+// to be empty.
+func TestTheStepCountIsNeverOnScreen(t *testing.T) {
 	m := midTurn(t)
 	// Wide enough that the hint's lowest-ranked item survives the fit, so a
 	// missing step count means it was never offered, not that it was thinned.
 	m.width, m.height = 140, 30
 	m.resize()
-	m.totalSteps = 7
-
 	if out := ansi.Strip(m.View()); strings.Contains(out, "step 7") ||
-		strings.Contains(out, "steps: 7") {
-		t.Errorf("the agent loop's step count leaked into user mode:\n%s", out)
-	}
-
-	m.dev = true
-	if out := ansi.Strip(m.View()); !strings.Contains(out, "step 7") {
-		t.Errorf("--dev lost the step count entirely:\n%s", out)
+		strings.Contains(out, "steps: 7") || strings.Contains(out, "Step ") {
+		t.Errorf("the agent loop's step count reached the screen:\n%s", out)
 	}
 }

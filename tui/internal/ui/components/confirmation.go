@@ -1,6 +1,7 @@
 package components
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -85,16 +86,8 @@ func (t RiskTier) Badge() string {
 
 // confirmationRiskTiers classifies every gated tool this client knows about.
 //
-// The first group is the nine the email agent gates
-// (agent.CONFIRMATION_REQUIRED_TOOLS in
-// hub/agents/email/python/gaia_agent_email/agent.py). send/schedule/forward and
-// the calendar RSVP actions are Write — external or state-changing, but not
-// destructive on their own terms. permanent_delete and quarantine are
-// Destructive: one is irreversible by name, the other pulls a message out of
-// the inbox on the agent's own judgment about a security threat, where a false
-// positive hides real mail.
-//
-// The second group is the base set every agent gates
+// The first group is the flagship's engineering-mode tools. The second is the
+// base set every agent gates
 // (agent.TOOLS_REQUIRING_CONFIRMATION in src/gaia/agents/base/agent.py) plus
 // the flagship's own two. Left unlisted they all fell through to the cautious
 // default and rendered "DESTRUCTIVE" — including a `pwd`. A badge that says
@@ -108,21 +101,15 @@ func (t RiskTier) Badge() string {
 // current one sends `risk`, and WithRisk replaces the guess with it. The file
 // writers and CLI setup are Write — scoped, and visible afterwards.
 var confirmationRiskTiers = map[string]RiskTier{
-	"share_engineering_context":   RiskWrite,
-	"append_engineering_context":  RiskWrite,
-	"approve_engineering_code":    RiskWrite,
-	"send_now":                    RiskWrite,
-	"send_draft":                  RiskWrite,
-	"schedule_send":               RiskWrite,
-	"forward_message":             RiskWrite,
-	"reply_to_message":            RiskWrite,
-	"update_draft":                RiskWrite,
-	"accept_invite":               RiskWrite,
-	"decline_invite":              RiskWrite,
-	"create_event_from_email":     RiskWrite,
-	"permanent_delete":            RiskDestructive,
-	"discard_draft":               RiskDestructive,
-	"quarantine_phishing_message": RiskDestructive,
+	"share_engineering_context":  RiskWrite,
+	"append_engineering_context": RiskWrite,
+	"approve_engineering_code":   RiskWrite,
+	"send_now":                   RiskWrite,
+	"send_draft":                 RiskWrite,
+	"forward_message":            RiskWrite,
+	"reply_to_message":           RiskWrite,
+	"update_draft":               RiskWrite,
+	"discard_draft":              RiskDestructive,
 	// The flagship's send-email skill, under its namespaced names.
 	"send-email/send_now":         RiskWrite,
 	"send-email/send_draft":       RiskWrite,
@@ -161,6 +148,7 @@ var confirmationRiskTiers = map[string]RiskTier{
 // before showing the one thing that mattered.
 var actionTitles = map[string]string{
 	"run_shell_command":    "Run this command?",
+	"run_cli_command":      "Run this command?",
 	"wait_for_condition":   "Poll with this command?",
 	"run_python":           "Run this Python code?",
 	"execute_python_file":  "Run this Python file?",
@@ -176,6 +164,7 @@ var actionTitles = map[string]string{
 	"forget_everything":    "Erase all of GAIA's memory?",
 	"allow_path_access":    "Allow access to this location?",
 	"trust_project_folder": "Trust this folder's instructions and skills?",
+	"continue_long_turn":   "Keep going?",
 	"send_now":             "Send this email?",
 	"send_draft":           "Send this email?",
 	"reply_to_message":     "Send this reply?",
@@ -218,7 +207,7 @@ var unboundedRiskActions = map[string]string{
 
 // destructiveWarning is the sentence shown beneath a RiskDestructive summary.
 //
-// Two different claims were hiding under one tier. permanent_delete IS
+// Two different claims were hiding under one tier. forget_everything IS
 // destructive, by name. run_shell_command is not: it is *unbounded* — `pwd` on
 // one call and `rm -rf` on the next — which is exactly why it is tiered
 // cautiously (see confirmationRiskTiers). Telling someone that `pwd` "is a
@@ -274,10 +263,10 @@ const (
 // ConfirmationTimeout is how long an UNDELIVERABLE confirmation waits before
 // auto-denying.
 //
-// It applies only where the answer has nowhere to go: the email sidecar's
-// stateless D1 stub ends the run with its own refusal within the same stream
-// read the `needs_confirmation` event arrived on, so the modal there is a
-// record of intent, not a live question, and letting it expire costs nothing.
+// It applies only where the answer has nowhere to go: a stateless sidecar ends
+// the run with its own refusal within the same stream read the
+// `needs_confirmation` event arrived on, so the modal there is a record of
+// intent, not a live question, and letting it expire costs nothing.
 //
 // A person reading "run `rm -rf build`?" and deciding routinely takes longer
 // than 30s, so a deliverable prompt gets DeliverableConfirmationTimeout
@@ -396,11 +385,11 @@ var wholeTextActions = map[string]bool{
 // summary, a risk-tier badge, and a y/n/Esc prompt that auto-denies after
 // ConfirmationTimeout.
 //
-// Approving here does not by itself deliver anything. The shipping email
-// sidecar's `/query` contract is the stateless stop-and-hand-off model (spec
-// §5, D1): `needs_confirmation` is immediately followed, in the same stream
-// read, by a synthesized `final` refusal — there is no server-side pause and
-// no confirm endpoint to resume it (`ConfirmURL` is always empty). Denying is
+// Approving here does not by itself deliver anything. A sidecar on the
+// stateless stop-and-hand-off model (spec §5, D1) follows `needs_confirmation`
+// immediately, in the same stream read, with a synthesized `final` refusal —
+// there is no server-side pause and no confirm endpoint to resume it
+// (`ConfirmURL` is always empty). Denying is
 // therefore always real (nothing was ever going to be sent either way);
 // approving only becomes real delivery once a peer implements the resume
 // model documented in the spec — the caller checks ConfirmURL before treating
@@ -408,6 +397,10 @@ var wholeTextActions = map[string]bool{
 // delivery path here is exactly the mistake ui/oneshot.go's writeWithheld
 // already documents avoiding for the one-shot surface.
 type ConfirmationModel struct {
+	// titleColour overrides the question's colour for one frame; nil keeps
+	// the default. See WithTitleColour.
+	titleColour lipgloss.TerminalColor
+
 	runID     string
 	seq       uint64
 	action    string
@@ -422,6 +415,9 @@ type ConfirmationModel struct {
 	// (e.g. `gh issue list`). Empty means no grant is on offer for this call.
 	alwaysScope string
 	tier        RiskTier
+	// calendarAccount is the account a calendar change lands on, shown under
+	// the title: with several accounts connected it is half of the decision.
+	calendarAccount string
 	// riskFromAgent is set when tier came from the agent reading the call,
 	// rather than this client guessing from the tool name.
 	riskFromAgent bool
@@ -449,6 +445,8 @@ func NewConfirmationModel(runID, action, summary, confirmURL string) Confirmatio
 		tier:       ClassifyActionRisk(action),
 		state:      ConfirmationPending,
 		width:      76,
+
+		calendarAccount: calendarAccountOf(summary),
 	}
 }
 
@@ -477,6 +475,14 @@ func (m ConfirmationModel) WithRisk(risk string) ConfirmationModel {
 
 // SetModeHint sets the line that names the permission mode on this prompt.
 func (m *ConfirmationModel) SetModeHint(hint string) { m.modeHint = hint }
+
+// WithTitleColour draws the question in c for this frame — the chat view's
+// gentle pulse on a prompt that is waiting. Bold and the words are unchanged,
+// so a terminal with no colour still reads the same prompt.
+func (m ConfirmationModel) WithTitleColour(c lipgloss.TerminalColor) ConfirmationModel {
+	m.titleColour = c
+	return m
+}
 
 // Summary is the call as the agent described it — the command, the file.
 func (m ConfirmationModel) Summary() string { return m.summary }
@@ -710,8 +716,24 @@ func (m ConfirmationModel) View() string {
 	return m.fullView()
 }
 
+// calendarAccountOf reads `calendar_account` from a summary that is the call's
+// arguments as JSON, which is how the calendar skill's changes arrive.
+func calendarAccountOf(summary string) string {
+	var args struct {
+		CalendarAccount string `json:"calendar_account"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(summary)), &args) != nil {
+		return ""
+	}
+	return strings.TrimSpace(ansi.Strip(args.CalendarAccount))
+}
+
 func (m ConfirmationModel) titleLine() string {
-	return m.tier.Badge() + " " + confirmationTitleStyle.Render(ActionTitle(m.action))
+	title := confirmationTitleStyle
+	if m.titleColour != nil {
+		title = title.Foreground(m.titleColour)
+	}
+	return m.tier.Badge() + " " + title.Render(ActionTitle(m.action))
 }
 
 // windowView is a prompt too long for the screen: a window over its text, where
@@ -769,9 +791,16 @@ func (m ConfirmationModel) fullView() string {
 
 	var lines []string
 	lines = append(lines, m.titleLine())
+	if m.calendarAccount != "" {
+		lines = append(lines, confirmationBodyStyle.Render(WrapText("Calendar: "+m.calendarAccount, inner)))
+	}
 
 	// The call itself, once. The title already says what kind of action it is.
-	if summary := strings.TrimSpace(m.summary); summary != "" {
+	summary := strings.TrimSpace(m.summary)
+	if m.action == "continue_long_turn" {
+		summary = longTurnSummary(summary)
+	}
+	if summary != "" {
 		lines = append(lines, "", confirmationBodyStyle.Render(WrapText(summary, inner)))
 	}
 
@@ -790,6 +819,26 @@ func (m ConfirmationModel) fullView() string {
 	lines = append(lines, m.resultOrHint(inner))
 
 	return confirmationPanelStyle.Width(m.width - confirmationBorderCols).Render(strings.Join(lines, "\n"))
+}
+
+// longTurnSummary words the agent's every-N-steps check-in, whose arguments
+// are {steps, model}: "200 steps so far on DeepSeek-V4.1-Flash". A summary in
+// any other shape is shown as sent.
+func longTurnSummary(summary string) string {
+	var args struct {
+		Steps json.Number `json:"steps"`
+		Model string      `json:"model"`
+	}
+	dec := json.NewDecoder(strings.NewReader(summary))
+	dec.UseNumber()
+	if err := dec.Decode(&args); err != nil || args.Steps == "" {
+		return summary
+	}
+	out := args.Steps.String() + " steps so far"
+	if model := strings.TrimSpace(args.Model); model != "" {
+		out += " on " + model
+	}
+	return out
 }
 
 func (m ConfirmationModel) resultOrHint(inner int) string {

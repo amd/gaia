@@ -364,8 +364,12 @@ def test_executor_mutation_invalidates_prior_readback(agent):
         {"answer": "Saved to `summary.md`."},
     )
     result = agent.process_query("Save to `summary.md`", max_steps=4)
-    assert result["status"] == "incomplete"
-    assert "read back" in result["result"]
+    # The file exists, so the turn is done; the unread change is a caveat.
+    assert result["status"] == "success"
+    assert result["completion_gaps"] == []
+    assert any("read back" in gap for gap in result["completion_caveats"])
+    assert "Not checked: `" in result["result"] and "read back" in result["result"]
+    assert "can't confirm" not in result["result"]
 
 
 def test_executor_failure_after_write_cannot_reuse_old_evidence(agent):
@@ -513,6 +517,37 @@ def test_generated_audio_counts_as_binary_save_evidence(tool, tmp_path):
     assert gaps(ledger, "Saved to `sound.wav`.")
     ledger.record(tool, {}, {"audio_path": "sound.wav"}, True)
     assert not gaps(ledger, "Saved to `sound.wav`.")
+
+
+@pytest.mark.parametrize("tool", ["generate_music", "generate_sound_effect"])
+def test_the_users_copy_of_generated_audio_backs_a_saved_claim(tool, tmp_path):
+    saved = tmp_path / "game" / "theme.wav"
+    claim = f"Saved to `{saved}`."
+    ledger = CompletionEvidence("Make a menu theme", str(tmp_path))
+    cache_copy = str(tmp_path / "cache" / "music_1.wav")
+    ledger.record(tool, {}, {"audio_path": cache_copy}, True)
+    assert gaps(ledger, claim)
+
+    ledger.record(
+        tool,
+        {"save_to": str(saved)},
+        {"audio_path": cache_copy, "saved_to": str(saved)},
+        True,
+    )
+    assert not gaps(ledger, claim)
+
+
+@pytest.mark.parametrize("tool", ["generate_music", "generate_sound_effect"])
+def test_a_refused_audio_copy_does_not_back_a_saved_claim(tool, tmp_path):
+    saved = tmp_path / "game" / "theme.wav"
+    ledger = CompletionEvidence("Make a menu theme", str(tmp_path))
+    ledger.record(
+        tool,
+        {"save_to": str(saved)},
+        {"status": "error", "error": "save_to is outside the allowed folders"},
+        False,
+    )
+    assert gaps(ledger, f"Saved to `{saved}`.")
 
 
 def test_refused_mutation_does_not_invalidate_a_completed_save(ledger):
@@ -1090,6 +1125,16 @@ def test_loop_still_rejects_a_false_save_after_a_denied_write(agent, tmp_path):
     assert "[check:completion]" in correction
     assert "Use `write_file`" not in correction
     assert "Do not retry that write" in correction
+
+
+def test_a_write_gaias_own_rule_stopped_is_not_reported_as_declined(tmp_path):
+    ledger = _documents_ledger(tmp_path)
+    target = str(tmp_path / "Documents" / "ui_notes.txt")
+    _refuse(ledger, target, {"status": "denied", "denied_by": "policy"})
+    found = gaps(ledger, "Saved! `ui_notes.txt` is in your Documents folder.")
+    assert len(found) == 1
+    assert "was not permitted" in found[0]
+    assert "declined" not in found[0]
 
 
 def test_an_unanswered_prompt_is_not_reported_as_declined(tmp_path):

@@ -4,6 +4,8 @@
 #include "gaia/database.h"
 
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <cstdio>
 #include <filesystem>
 #include <utility>
@@ -422,12 +424,29 @@ Database::Database(const std::string& path, const Options& options) : path_(path
         // to journal, and a read-only connection cannot change the mode of one,
         // so the option simply does not apply in either case.
         if (options.walMode && !memory && !options.readOnly) {
-            auto stmt = prepare("PRAGMA journal_mode=WAL");
-            if (!stmt.step()) {
-                fail("PRAGMA journal_mode=WAL returned no result", SQLITE_ERROR,
-                     "PRAGMA journal_mode=WAL");
+            // Changing the journal mode fails at once when another process holds the file;
+            // SQLite does not apply busy_timeout to it.
+            const auto deadline = std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(options.busyTimeoutMs);
+            std::string mode;
+            for (;;) {
+                try {
+                    auto stmt = prepare("PRAGMA journal_mode=WAL");
+                    if (!stmt.step()) {
+                        fail("PRAGMA journal_mode=WAL returned no result", SQLITE_ERROR,
+                             "PRAGMA journal_mode=WAL");
+                    }
+                    mode = stmt.columnText(0);
+                    break;
+                } catch (const DatabaseError& e) {
+                    const int primary = e.code() & 0xff;
+                    if ((primary != SQLITE_BUSY && primary != SQLITE_LOCKED) ||
+                        std::chrono::steady_clock::now() >= deadline) {
+                        throw;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                }
             }
-            const std::string mode = stmt.columnText(0);
             if (mode != "wal") {
                 // Loud rather than silent: a database that could not be switched
                 // to WAL (some network mounts cannot) has different concurrency
@@ -664,7 +683,12 @@ void Database::migrate(const std::vector<Migration>& steps) {
             continue;
         }
         try {
-            Transaction txn(*this);
+            Transaction txn(*this, Transaction::Behavior::Immediate);
+            // Another process may have applied this step while we waited for the write lock.
+            if (step.version <= userVersion()) {
+                txn.commit();
+                continue;
+            }
             step.apply(*this);
             setUserVersion(step.version);
             txn.commit();

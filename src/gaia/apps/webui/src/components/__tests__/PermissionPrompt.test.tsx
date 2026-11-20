@@ -9,6 +9,12 @@ import { useChatStore } from '../../stores/chatStore';
 import type { GaiaNotification } from '../../types/agent';
 import parity from './fixtures/approval-text-parity.json';
 
+/** The approved email's header, as label and value pairs. */
+function facts(): string[][] {
+    const items = [...screen.getByTestId('perm-mail-header').children].map((el) => el.textContent ?? '');
+    return items.reduce<string[][]>((rows, text, i) => (i % 2 === 0 ? [...rows, [text]] : (rows[rows.length - 1].push(text), rows)), []);
+}
+
 const originalRespond = useNotificationStore.getState().respondToPermission;
 const respond = vi.fn();
 
@@ -30,6 +36,15 @@ afterEach(() => {
 });
 
 describe('PermissionPrompt', () => {
+    it('names the site a browser pane read would show the model', () => {
+        useNotificationStore.getState().addNotification(request({
+            tool: 'browser_snapshot', toolLabel: 'running browser snapshot',
+            toolArgs: { _site: 'https://example.org' },
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByRole('alertdialog')).toHaveTextContent('https://example.org');
+    });
+
     it.each([
         ['from the args', 'send_now', { _exact_text: 'To: a@b.co\nSubject: Hi\n\nFull body' }, ''],
         ['from a relayed summary', 'send_now', {}, 'To: a@b.co\nSubject: Hi\n\nFull body'],
@@ -38,9 +53,50 @@ describe('PermissionPrompt', () => {
     ])('shows an email whole, %s, with no way to approve a shortened one', (_name, tool, toolArgs, summary) => {
         useNotificationStore.getState().addNotification(request({ tool, toolArgs, summary }));
         render(<PermissionPrompt sessionId="chat-1" />);
-        expect(screen.getByTestId('perm-exact-text').textContent).toBe('To: a@b.co\nSubject: Hi\n\nFull body');
+        expect(facts()).toEqual([['To', 'a@b.co'], ['Subject', 'Hi']]);
+        expect(screen.getByTestId('perm-exact-text').textContent).toBe('Full body');
         expect(screen.queryByRole('button', { name: /Show all/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /always/i })).not.toBeInTheDocument();
+    });
+
+    it('names the sending account on its own row, left to right', () => {
+        const text = 'From: jane.work@example.com\nTo: priya@example.com\nCc: sam@example.com\nSubject: Deck\n\nAttached.';
+        useNotificationStore.getState().addNotification(request({ tool: 'send_now', toolArgs: { _exact_text: text } }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(facts()).toEqual([['From', 'jane.work@example.com'], ['To', 'priya@example.com'], ['Cc', 'sam@example.com'], ['Subject', 'Deck']]);
+        const from = screen.getByTestId('perm-mail-header').querySelector('.perm-mail-from bdi');
+        expect(from).toHaveAttribute('dir', 'ltr');
+        expect(screen.getByTestId('perm-exact-text').textContent).toBe('Attached.');
+    });
+
+    it('keeps a note above the header, and shows text it cannot read as a header whole', () => {
+        useNotificationStore.getState().addNotification(request({ tool: 'send_now', toolArgs: { _exact_text: 'Hidden characters shown.\n\nTo: a@b.co\nSubject: Hi\n\nBody' } }));
+        const { unmount } = render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByText('Hidden characters shown.')).toBeInTheDocument();
+        expect(facts()).toEqual([['To', 'a@b.co'], ['Subject', 'Hi']]);
+        unmount();
+        useNotificationStore.setState({ notifications: [] });
+        useNotificationStore.getState().addNotification(request({ tool: 'send_now', toolArgs: { _exact_text: 'To: a@b.co\nX-Odd: 1\n\nBody' } }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.queryByTestId('perm-mail-header')).not.toBeInTheDocument();
+        expect(screen.getByTestId('perm-exact-text').textContent).toBe('To: a@b.co\nX-Odd: 1\n\nBody');
+    });
+
+    it('reads the header behind two notes, and keeps both notes', () => {
+        const text = 'Hidden characters shown.\n\nAttachments were too large.\n\nFrom: jane@example.com\nTo: a@b.co\nSubject: Hi\n\nBody';
+        useNotificationStore.getState().addNotification(request({ tool: 'send_now', toolArgs: { _exact_text: text } }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(facts()).toEqual([['From', 'jane@example.com'], ['To', 'a@b.co'], ['Subject', 'Hi']]);
+        expect(screen.getByText(/Hidden characters shown\.\s+Attachments were too large\./)).toBeInTheDocument();
+        expect(screen.getByTestId('perm-exact-text').textContent).toBe('Body');
+    });
+
+    it('shows notes with no header after them whole', () => {
+        const text = 'First note.\n\nSecond note.\n\nJust a body, no header.';
+        useNotificationStore.getState().addNotification(request({ tool: 'send_now', toolArgs: { _exact_text: text } }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.queryByTestId('perm-mail-header')).not.toBeInTheDocument();
+        expect(screen.getByTestId('perm-exact-text').textContent).toBe(text);
     });
 
     it.each(['update_draft', 'send-email/update_draft'])('shows a relayed draft edit whole (%s)', (tool) => {
@@ -80,6 +136,21 @@ describe('PermissionPrompt', () => {
         render(<PermissionPrompt sessionId="chat-1" />);
         expect(screen.getByTestId('perm-code').textContent).toBe('print(1)\nprint(2)');
         expect(screen.queryByRole('button', { name: /Show all/ })).not.toBeInTheDocument();
+    });
+
+    it.each(['run_python', 'execute_python_file'])('says what a %s card cannot vouch for', (tool) => {
+        const toolArgs = tool === 'run_python' ? { code: 'print(1)' } : { file_path: 'C:\\p\\job.py' };
+        useNotificationStore.getState().addNotification(request({ tool, toolArgs }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByTestId('perm-code-risk')).toHaveTextContent(
+            "Can run any code with your permissions. GAIA checks the code's text, not what it does when it runs.",
+        );
+    });
+
+    it('shows no code note on a shell card, which carries its own', () => {
+        useNotificationStore.getState().addNotification(request({ toolArgs: { command: 'git status' } }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.queryByTestId('perm-code-risk')).not.toBeInTheDocument();
     });
 
     it('collapses long code and shows every line on "Show all"', () => {

@@ -61,7 +61,7 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
 
     const count = turn.files.length;
     const undone = Boolean(turn.restored_at);
-    const groups = groupUntracked(turn.untracked);
+    const groups = groupUntracked(turn.untracked, t);
 
     return (
         <div className="turn-changes" aria-label="File changes from this turn">
@@ -97,7 +97,7 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
                 <div className="turn-changes-warning" role="note">
                     <AlertTriangle size={12} aria-hidden="true" />
                     <span>
-                        {untrackedWarning(turn.untracked, { also: count > 0 })}
+                        {untrackedWarning(turn.untracked, { also: count > 0 }, t)}
                         {groups.length > 0 && (
                             <ul>
                                 {groups.map((g) => (
@@ -110,7 +110,7 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
                                                 <ul>
                                                     {g.entries.map((e) => (
                                                         <li key={e.detail} title={e.detail || undefined}>
-                                                            {e.label || 'No description'}
+                                                            {e.label || t('untracked.noDescription')}
                                                             {e.count > 1 && ` ×${e.count}`}
                                                         </li>
                                                     ))}

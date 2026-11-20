@@ -4,10 +4,12 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
+import * as api from '../services/api';
 import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId, FoundItem } from '../types';
 import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import { addCard } from '../utils/connectCards';
 import { DEFAULT_LOCALE, applyLocale, isLocaleCode } from '../i18n/registry';
 import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
 
@@ -290,6 +292,8 @@ interface ChatState {
     systemStatus: SystemStatus | null;
     backendConnected: boolean;
     setSystemStatus: (status: SystemStatus | null) => void;
+    /** Forget a failed download on the server, then clear it from the status. */
+    dismissDownloadFailure: (modelName: string) => Promise<void>;
     setBackendConnected: (connected: boolean) => void;
 
     // UI state
@@ -377,6 +381,14 @@ interface ChatState {
     setPendingPrompt: (prompt: PendingPrompt | null) => void;
 }
 
+const removedListeners = new Set<(id: string) => void>();
+
+/** Run `listener` with each chat's id when the user deletes it. Returns its unsubscribe. */
+export function onSessionRemoved(listener: (id: string) => void): () => void {
+    removedListeners.add(listener);
+    return () => removedListeners.delete(listener);
+}
+
 /** The sidebar's Memory, Scheduled tasks and Documents: opening one closes the others. */
 const NO_DESTINATION = { showMemoryDashboard: false, showSchedules: false, showDocLibrary: false };
 
@@ -460,7 +472,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     addSession: (session) =>
         set((state) => ({ sessions: [session, ...state.sessions] })),
     // The chat's queued messages go with it; the delete button says so first.
-    removeSession: (id) =>
+    removeSession: (id) => {
         set((state) => {
             const next: Partial<ChatState> = {
                 sessions: state.sessions.filter((s) => s.id !== id),
@@ -479,7 +491,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 next.queueHolds = queueHolds;
             }
             return next;
-        }),
+        });
+        for (const listener of removedListeners) listener(id);
+    },
     updateSessionInList: (id, updates) =>
         set((state) => ({
             sessions: state.sessions.map((s) => (s.id === id ? { ...s, ...updates } : s)),
@@ -627,7 +641,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Streaming cards (#2108)
     cards: [],
     appendCard: (card) =>
-        set((state) => ({ cards: [...state.cards, card] })),
+        set((state) => ({ cards: addCard(state.cards, card) })),
     clearCards: () => set({ cards: [] }),
 
     // Documents
@@ -638,6 +652,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     systemStatus: null,
     backendConnected: true, // Assume connected until proven otherwise
     setSystemStatus: (status) => set({ systemStatus: status }),
+    dismissDownloadFailure: async (modelName) => {
+        await api.dismissDownloadFailure(modelName);
+        set((state) => {
+            const status = state.systemStatus;
+            if (!status || status.download_progress?.state !== 'error') return state;
+            return { systemStatus: { ...status, download_progress: null } };
+        });
+    },
     setBackendConnected: (connected) => set({ backendConnected: connected }),
 
     // UI

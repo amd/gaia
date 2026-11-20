@@ -1051,6 +1051,17 @@ class SessionHistory(list):
         on_cut: Optional[Callable[[HistoryCut], None]] = None,
     ) -> None:
         """Rebuild the bounded view for the currently selected model."""
+        turns = self.turns(agent)
+        # Only a reporting rebuild moves the baseline; the others tell nobody.
+        self[:] = select_history(
+            turns,
+            history_budget(agent, query),
+            on_cut,
+            self._cuts if on_cut is not None else None,
+        )
+
+    def turns(self, agent: Any) -> list[list[dict]]:
+        """Every finished turn, in the form the model view is chosen from."""
         from gaia.utils.process_owner import owner_is_gone
 
         # A running turn's stand-in, ours or another live process's, is for
@@ -1067,13 +1078,7 @@ class SessionHistory(list):
             and not agent._uses_native_tool_calls()
         ):
             turns = text_tool_history(turns)
-        # Only a reporting rebuild moves the baseline; the others tell nobody.
-        self[:] = select_history(
-            turns,
-            history_budget(agent, query),
-            on_cut,
-            self._cuts if on_cut is not None else None,
-        )
+        return turns
 
     def clear(self) -> None:
         with self._db:

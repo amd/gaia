@@ -176,6 +176,33 @@ def _reset_hybrid_route(agent: Any) -> None:
         reset()
 
 
+def _forget_conversation_grants(agent: Any, state: Optional["PermissionState"]) -> None:
+    """A cleared conversation forgets its "always" answers, as a new session would.
+
+    Runs before the history is cleared, so a failure here never leaves a
+    "cleared" chat still holding its grants.
+    """
+    if state is not None:
+        state.forget_grants()
+    reset = getattr(getattr(agent, "console", None), "reset_tool_approvals", None)
+    if callable(reset):
+        reset()
+
+
+def _clear_from_host(
+    agent: Any, state: Optional["PermissionState"], index: Any
+) -> None:
+    """Perform a host ``clear_history``: the turn loop's half of the sentinel."""
+    _forget_conversation_grants(agent, state)
+    history = getattr(agent, "conversation_history", None)
+    if history is not None:
+        history.clear()
+    _reset_hybrid_route(agent)
+    if index is not None:
+        guarded(index, index.cleared)
+    logger.info("conversation history cleared by host /clear")
+
+
 #: ``cancel`` stops the running turn but not the process, so loaded skills,
 #: "always" grants, history and full access all survive it.
 CONTROL_CANCEL = "cancel"
@@ -249,10 +276,10 @@ class PermissionState:
         Two attributes, because they are two different grants that happen to be
         turned on together. ``auto_approve_gated_tools`` skips the confirmation
         prompt; ``full_access`` additionally lifts the shell guardrails — the
-        operator block, the read-only binary policy and the rate limit (#3373,
-        #3374). An unattended harness that only pre-approves prompts sets the
-        first and must not inherit the second, which is what
-        ``lifts_shell_gates=False`` buys the HTTP transport. ``grants_paths``
+        operator block, the command policy, the path checks and the rate limit
+        (#3373, #3374). An unattended harness that only pre-approves prompts
+        sets the first and must not inherit the second, which is what
+        ``lifts_shell_gates=False`` buys it. ``grants_paths``
         lets an out-of-scope path through without a prompt, but only on a run
         a person is watching (``answers_confirmations``).
         """
@@ -355,6 +382,25 @@ class PermissionState:
             ", ".join(scope.label for scope in removed),
         )
         return len(removed)
+
+    def forget_grants(self) -> int:
+        """Drop every "always" answer, the running turn's included.
+
+        Unlike :meth:`revoke`, which keeps a family another answer still
+        grants, this empties every holder outright: a cleared conversation
+        keeps none. Returns how many answers were dropped.
+        """
+        with self._lock:
+            count = len(self._live_scopes())
+            self._grants.clear()
+            self._scopes.clear()
+            if self._handler is not None:
+                self._handler.reset_tool_approvals()
+        if count:
+            audit.warning(
+                "Cleared conversation: dropped %d always-allow grant(s)", count
+            )
+        return count
 
     def _live_scopes(self) -> Dict[str, Any]:
         """The session's answers plus the running turn's. Caller holds the lock."""
@@ -574,11 +620,31 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
         # The header shows these, not an install record that may name another build.
         "agent_version": agent_version,
         "gaia_version": gaia_version,
+        "skills": _skill_commands(agent),
     }
     # Reported even on the Claude path: embeddings (RAG, memory) still run on
     # Lemonade, so "chat is remote" does not mean Lemonade being down is fine.
     event.update(_lemonade_health(_status_lemonade_url(agent)))
     return event
+
+
+def _skill_commands(agent: Any) -> List[Dict[str, str]]:
+    """Installed skills, for the TUI's ``/`` list: typing ``/<name>`` runs one.
+
+    Empty for an agent without the skill library: it cannot run them.
+    """
+    if not callable(getattr(agent, "activate_skill", None)):
+        return []
+    skills = agent.skill_manager.discover()
+    return [
+        {"name": name, "description": skills[name].description or ""}
+        for name in sorted(skills)
+    ]
+
+
+def _skills_event(agent: Any) -> Dict[str, Any]:
+    """A status line carrying only the skill list, after it may have changed."""
+    return {"type": "status", "message": "", "skills": _skill_commands(agent)}
 
 
 def _status_lemonade_url(agent: Any) -> Optional[str]:
@@ -1219,6 +1285,7 @@ def run_skills_command(agent: Any, query: str, out) -> None:
     args = query.strip()[len(SKILLS_COMMAND_PREFIX) :].split()
     if not args:
         skills = sorted(agent.skill_manager.reload())
+        _write(_skills_event(agent), out)
         listing = ", ".join(f"`{n}`" for n in skills) or "none"
         _write(
             {
@@ -1291,6 +1358,7 @@ def run_skills_command(agent: Any, query: str, out) -> None:
     # The skill catalog sits in the cached prompt head; recompose so this
     # session can see what was just added.
     agent.rebuild_system_prompt()
+    _write(_skills_event(agent), out)
     lines = [f"Added {len(result.added)} skill(s) from {link}."]
     if result.added:
         lines.append(", ".join(f"`{a['name']}`" for a in result.added))
@@ -1421,6 +1489,44 @@ def _write_if_wire_alive(event: Dict[str, Any], out) -> bool:
     except OSError as exc:
         logger.warning("stdout is gone (%s) — nothing left to report to", exc)
         return False
+
+
+def follow_settings(agent: Any, config_kwargs: Dict[str, Any]) -> Any:
+    """The agent to run the next turn on: a new one when Settings changed since.
+
+    Its model server and MCP tools are fixed as it is built. The new agent
+    runs the model this session is on, keeps its transcript, and gets what
+    the session set on the old one.
+    """
+    changed = getattr(agent, "built_settings_changed", None)
+    if not callable(changed) or changed() is not True:
+        return agent
+    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaia_agent.session_registry import _carry_session_state, close_agent
+
+    kwargs = {
+        k: v
+        for k, v in config_kwargs.items()
+        if k not in ("model_id", "claude_model", "use_claude")
+    }
+    if getattr(agent, "hybrid_router", None) is not None:
+        # model_id is the turn's routed model; the session runs on hybrid.
+        from gaia.llm.hybrid import HYBRID_MODEL_ID
+
+        kwargs["model_id"] = HYBRID_MODEL_ID
+    elif getattr(agent, "_use_claude", False):
+        kwargs["use_claude"] = True
+        kwargs["claude_model"] = agent.model_id
+    elif agent.model_id:
+        kwargs["model_id"] = agent.model_id
+    new = GaiaAgent(config=GaiaAgentConfig(**kwargs))
+    history = agent.conversation_history
+    _carry_session_state(agent, new, "terminal")
+    new.conversation_history = history
+    agent.conversation_history = []
+    close_agent(agent)
+    logger.info("rebuilt the agent for settings changed since it was built")
+    return new
 
 
 def _drain_memory(agent) -> None:
@@ -1833,6 +1939,10 @@ def run_turn(
         debug=dev,
     )
     result: Dict[str, Any] = {}
+    # Skills added or removed since the catalogue was built, e.g. in the Agent UI.
+    follow_skills = getattr(agent, "follow_installed_skills", None)
+    if callable(follow_skills):
+        follow_skills()
 
     def _run() -> None:
         try:
@@ -1925,6 +2035,7 @@ def run_turn(
                     logger.exception("Failed to preserve turn history")
                     _write(_terminal_error(exc), out)
                     return
+                _write_context(agent, out)
             _write(terminal_event, out)
             return
         if "error" in result:
@@ -1957,6 +2068,7 @@ def run_turn(
             logger.exception("Failed to preserve turn history")
             _write(_terminal_error(exc), out)
             return
+        _write_context(agent, out)
         final: Dict[str, Any] = {"type": "final", "answer": answer}
         usage = _usage_from_result(value, tool_count=getattr(handler, "_tool_count", 0))
         if usage:
@@ -2008,6 +2120,26 @@ def _history_cut_event(cut: Any) -> Dict[str, Any]:
         "message": cut.notice,
         "history_cut": {"turns": cut.turns, "tokens": cut.tokens},
     }
+
+
+def _write_context(agent: Any, out) -> None:
+    """Send ``context_usage`` for the next message, once a turn is recorded.
+
+    The same event, from the same measurement, the HTTP server streams
+    (contract 2.28), so a long file the turn read moves the meter and
+    ``at_risk`` names the turns the next ones will push out of view.
+    """
+    from gaia.agents.base.history import SessionHistory, context_usage
+
+    history = getattr(agent, "conversation_history", None)
+    if not isinstance(history, SessionHistory):
+        return
+    try:
+        usage = context_usage(agent, history.turns(agent))
+    except Exception as exc:  # noqa: BLE001 - a meter must never fail the turn
+        logger.warning("context measurement after the turn failed: %s", exc)
+        return
+    _write({"type": "context_usage", **usage}, out)
 
 
 def run_warm_up(agent: Any, out) -> None:
@@ -2084,7 +2216,11 @@ def dispatch_query(
             _write({"type": "status", "message": message}, out)
             agent._engineering_reported_setup_status = setup_status
     if query == CLEAR_CONVERSATION_QUERY:
+        _forget_conversation_grants(agent, state)
         agent.conversation_history.clear()
+        # Facts seen in the cleared chat must not ground the next one's numbers.
+        if hasattr(agent, "clear_seen_sources"):
+            agent.clear_seen_sources()
         _reset_hybrid_route(agent)
         loader = getattr(agent, "tool_loader", None)
         if loader is not None:
@@ -2181,10 +2317,9 @@ def build_parser() -> "argparse.ArgumentParser":
         dest="full_access",
         action="store_true",
         help="Start with the permission gates OFF: every gated tool runs "
-        "without asking, the shell-only operators (>, >>, <, &, `, $(), "
-        "newline) parse and run, the "
-        "read-only binary policy is replaced by the developer set (node, npm, "
-        "make, cmake, go, cargo, sed, awk, curl, python, pytest, gh, git) and "
+        "without asking, the shell runs any program with any shell syntax, "
+        "Python code runs unchecked, paths outside the allowed folders are "
+        "open and "
         "the shell rate limit is lifted. This is arbitrary code execution. Off "
         "unless passed, and the host can toggle it at any time over the "
         "control channel. Every shell command run this way is audit-logged.",
@@ -2295,15 +2430,10 @@ def main(argv: Optional[list] = None) -> int:
         if query is None:  # stdin closed
             break
         if isinstance(query, _ClearHistory):
-            history = getattr(agent, "conversation_history", None)
-            if history is not None:
-                history.clear()
-            _reset_hybrid_route(agent)
-            if index is not None:
-                guarded(index, index.cleared)
-            logger.info("conversation history cleared by host /clear")
+            _clear_from_host(agent, state, index)
             continue
         try:
+            agent = follow_settings(agent, config_kwargs)
             dispatch_query(agent, query, out, dev=args.dev, state=state, index=index)
         except BrokenPipeError:
             # The wire is the parent. It being gone is not a turn to report.

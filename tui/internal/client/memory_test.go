@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -320,5 +321,37 @@ func TestSubprocessFetchMemoryNamesTheTimeoutNotAHangUp(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "did not answer in time") {
 		t.Errorf("the error does not name the timeout: %v", err)
+	}
+}
+
+func TestMemoryDumpTellsAnAbsentConfidenceFromAZeroOne(t *testing.T) {
+	var sent MemoryDump
+	withConfidence := `{"available":true,"stats":{"entity_count":0,"avg_confidence":0},"shown":1,"total":1,"items":[{"id":"1","category":"fact","content":"likes go","context":"global","confidence":0.6,"sensitive":false,"last_used":"2026-08-14T15:36:00"}]}`
+	if err := json.Unmarshal([]byte(withConfidence), &sent); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if sent.Stats.AvgConfidence == nil || *sent.Stats.AvgConfidence != 0 {
+		t.Errorf("avg_confidence 0 decoded as %v, want a present 0", sent.Stats.AvgConfidence)
+	}
+	if sent.Items[0].Confidence == nil || *sent.Items[0].Confidence != 0.6 {
+		t.Errorf("confidence 0.6 decoded as %v", sent.Items[0].Confidence)
+	}
+	if sent.Items[0].LastUsed != "2026-08-14T15:36:00" {
+		t.Errorf("last_used decoded as %q", sent.Items[0].LastUsed)
+	}
+
+	var omitted MemoryDump
+	withoutConfidence := `{"available":true,"stats":{"entity_count":0},"shown":1,"total":1,"items":[{"id":"1","category":"fact","content":"likes go","context":"global","sensitive":false}]}`
+	if err := json.Unmarshal([]byte(withoutConfidence), &omitted); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if omitted.Stats.AvgConfidence != nil {
+		t.Errorf("a missing avg_confidence decoded as %v, want absent", *omitted.Stats.AvgConfidence)
+	}
+	if omitted.Items[0].Confidence != nil {
+		t.Errorf("a missing confidence decoded as %v, want absent", *omitted.Items[0].Confidence)
+	}
+	if omitted.Items[0].LastUsed != "" {
+		t.Errorf("a missing last_used decoded as %q, want empty", omitted.Items[0].LastUsed)
 	}
 }
