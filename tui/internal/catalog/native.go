@@ -10,8 +10,8 @@ import (
 )
 
 // The flagship has two programs behind it: the native C++ agent and the Python
-// one. The terminal UI runs the native agent when it is installed; a machine
-// that only has the Python agent keeps running that.
+// one. The terminal UI runs the Python agent unless the user chose gaiacpp,
+// as the Agent UI and the daemon do.
 const (
 	// NativeAgentBinary is the C++ agent.
 	NativeAgentBinary = "gaiacpp"
@@ -21,8 +21,8 @@ const (
 	// program opens its own interactive session.
 	NativeStdioFlag = "--stdio"
 	// AgentEnv names the agent program to run: NativeAgentBinary,
-	// PythonAgentBinary, or a path to either. Unset picks the native agent when
-	// it is installed.
+	// PythonAgentBinary, or a path to either. Unset leaves the saved choice,
+	// else the Python agent.
 	AgentEnv = "GAIA_TUI_AGENT"
 )
 
@@ -166,8 +166,9 @@ func absOr(p string) string {
 
 // SelectFlagshipAgent decides which program the flagship entry runs.
 //
-// An empty choice runs gaiacpp when FindNative finds it installed and the
-// Python agent otherwise. A named choice is a demand: when that program is not
+// An empty choice runs the Python agent, even beside an installed gaiacpp: a
+// copy the user never picked must not take away flags only the Python agent
+// has. A named choice is a demand: when that program is not
 // on the machine this fails, saying where it looked, and never runs the other
 // one. The returned notice, when not empty, is something the user must be told
 // about how their choice was honoured.
@@ -183,14 +184,6 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 	}
 	switch {
 	case choice == "":
-		if l := FindNative(false); l.Found() {
-			// A copy that fails its check stops the launch: neither another
-			// copy nor the Python agent is run in its place.
-			if err := VerifyNative(l.Path); err != nil {
-				return "", err
-			}
-			agent.useNative(l.Path)
-		}
 		return "", nil
 
 	case strings.EqualFold(name, NativeAgentBinary):

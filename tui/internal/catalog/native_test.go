@@ -85,7 +85,7 @@ func TestWithoutGaiacppTheFlagshipStaysOnThePythonAgent(t *testing.T) {
 	}
 }
 
-func TestGaiacppIsPickedWhereverTheCatalogLooks(t *testing.T) {
+func TestChosenGaiacppIsFoundWhereverTheCatalogLooks(t *testing.T) {
 	places := map[string]func(nativeFixture) string{
 		"on PATH":                  func(f nativeFixture) string { return f.path },
 		"beside the terminal UI":   func(f nativeFixture) string { return f.beside },
@@ -98,7 +98,7 @@ func TestGaiacppIsPickedWhereverTheCatalogLooks(t *testing.T) {
 			want := writeProgram(t, dir(f), NativeAgentBinary)
 
 			c := NewCatalog()
-			if err := selectAgent(c, ""); err != nil {
+			if err := selectAgent(c, NativeAgentBinary); err != nil {
 				t.Fatal(err)
 			}
 			got := c.Get(FlagshipID)
@@ -159,15 +159,29 @@ func TestABuildInTheWorkingTreeIsOnlyRunWhenAskedFor(t *testing.T) {
 	}
 }
 
-// Both installed: the native agent is the terminal UI's, unless asked otherwise.
-func TestTheOverrideRunsThePythonAgentBesideAnInstalledGaiacpp(t *testing.T) {
+// Both installed and nothing chosen: the Python agent runs, as in the Agent UI
+// and the daemon, so an upgrade that brings gaiacpp never takes away
+// --use-claude or --resume. Only a choice runs gaiacpp.
+func TestWithNoChoiceThePythonAgentRunsBesideAnInstalledGaiacpp(t *testing.T) {
 	f := isolateNative(t)
-	writeProgram(t, f.path, NativeAgentBinary)
+	native := writeProgram(t, f.path, NativeAgentBinary)
 	python := writeProgram(t, f.path, PythonAgentBinary)
+	before := *NewCatalog().Get(FlagshipID)
 
 	auto := NewCatalog()
-	if err := selectAgent(auto, ""); err != nil || !auto.Get(FlagshipID).Native {
-		t.Fatalf("with both installed the native agent was not picked: %v", err)
+	if err := selectAgent(auto, ""); err != nil {
+		t.Fatalf("with both installed and nothing chosen the launch was refused: %v", err)
+	}
+	if got := *auto.Get(FlagshipID); !reflect.DeepEqual(got, before) {
+		t.Fatalf("an unchosen gaiacpp replaced the Python agent:\n got %+v\nwant %+v", got, before)
+	}
+
+	chosen := NewCatalog()
+	if err := selectAgent(chosen, NativeAgentBinary); err != nil {
+		t.Fatal(err)
+	}
+	if got := chosen.Get(FlagshipID); !got.Native || !samePath(t, got.BinaryPath, native) {
+		t.Errorf("gaiacpp was chosen but not run: %+v", got)
 	}
 
 	c := NewCatalog()
@@ -205,9 +219,18 @@ func TestGaiacppIsSpawnedDirectlyEvenWhenTheInstallRecordSaysDaemon(t *testing.T
 	}
 
 	writeProgram(t, f.beside, NativeAgentBinary)
+	unchosen := NewCatalog()
+	unchosen.DiscoverBinaries()
+	if err := selectAgent(unchosen, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := unchosen.Get(FlagshipID); got.Transport != TransportDaemon || got.Native {
+		t.Fatalf("an unchosen gaiacpp moved a daemon install off the Python agent: %+v", got)
+	}
+
 	c := NewCatalog()
 	c.DiscoverBinaries()
-	if err := selectAgent(c, ""); err != nil {
+	if err := selectAgent(c, NativeAgentBinary); err != nil {
 		t.Fatal(err)
 	}
 	if got := c.Get(FlagshipID); got.Transport != TransportSubprocess || !got.Native {

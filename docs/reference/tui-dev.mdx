@@ -28,14 +28,15 @@ and talks to Lemonade; for `gaiacpp` the Go side asks Lemonade directly.
 
 ### Which agent program runs
 
-The flagship has two programs behind it. `gaia-cli` runs the native one,
-`gaiacpp`, when it is installed, and the Python one, `gaia-agent`, otherwise,
-so an install that only has `gaia-agent` behaves as before. The header says
+The flagship has two programs behind it: the Python one, `gaia-agent`, and the
+native one, `gaiacpp`. `gaia-cli` runs `gaia-agent` unless `gaiacpp` is asked
+for, the same default as the Agent UI and the daemon, so an installed `gaiacpp`
+the user never picked can't take away `--use-claude` or `--resume`. The header says
 which is answering: `agent gaia v<x> (gaiacpp)` for the native agent, plain
 `agent gaia v<x>` for the Python one.
 
-With nothing asked for, `gaiacpp` is looked for only where an install puts
-it, in this order, and the first match wins:
+When `gaiacpp` is asked for by name, it is looked for in this order, and the
+first match wins:
 
 1. The file `GAIA_GAIACPP_PATH` names, when it is set and is a file
 2. `~/.gaia/bin/`, where the Agent UI downloads it. This is the `bin` folder
@@ -71,7 +72,7 @@ Which program a launch runs is decided by the first of these that is set
 | 1 | `--agent-program` | A name or a path, from the table below | Pinned |
 | 2 | `GAIA_TUI_AGENT` | The same | Pinned |
 | 3 | `flagship_agent` in `~/.gaia/config.json` | `gaiapy` (runs `gaia-agent`) or `gaiacpp`; any other value stops the launch with an error naming the file and the key | Free |
-| 4 | Nothing | `gaiacpp` when found in the five places above, else `gaia-agent` | Free |
+| 4 | Nothing | `gaia-agent`, even when `gaiacpp` is installed | Free |
 
 It applies to the flagship only, so `gaia-cli run email` ignores it and never
 reads the saved choice. A named or saved program that is not found is an error

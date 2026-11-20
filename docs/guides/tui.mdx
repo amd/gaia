@@ -60,8 +60,8 @@ Every release publishes a native installer per platform at
 [amd-gaia.ai](https://amd-gaia.ai/#install) (the page picks your platform). Each puts
 `gaia-cli` (this app) and `gaia-agent` (the Python GAIA agent) on disk and on your PATH,
 so there is nothing to unzip and nothing to `chmod`. On Windows x64, Linux x64 and Apple
-silicon it also puts `gaiacpp` there, the native GAIA agent, and the terminal runs that one
-instead. See [Which agent program answers](#which-agent-program-answers).
+silicon it also puts `gaiacpp` there, the native GAIA agent, which the terminal runs once
+you choose it. See [Which agent program answers](#which-agent-program-answers).
 
 | Platform | File | How to install | Installs to |
 | --- | --- | --- | --- |
@@ -1044,8 +1044,9 @@ and `--resume` say so rather than showing an empty list. The native agent, `gaia
 
 GAIA's agent comes as two programs: `gaiacpp`, the native one, and `gaia-agent`,
 the Python one. The terminal installers and the one-line installers put `gaiacpp` next
-to `gaia-cli` on Windows x64, Linux x64 and Apple silicon, alongside `gaia-agent`. When
-`gaiacpp` is on the machine, the terminal UI runs it. It looks in `~/.gaia/bin`
+to `gaia-cli` on Windows x64, Linux x64 and Apple silicon, alongside `gaia-agent`. The
+terminal UI runs `gaia-agent` until you choose `gaiacpp`, the same default as the Agent UI,
+so `--use-claude` and `--resume` keep working. Once chosen, `gaiacpp` is looked for in `~/.gaia/bin`
 (where the Agent UI downloads it), next to `gaia-cli`, on your PATH, then in
 `~/.gaia/agents/gaia`. The header says which program is answering:
 
@@ -1097,7 +1098,7 @@ Which program a launch runs is decided in this order:
 1. `--agent-program`
 2. `GAIA_TUI_AGENT`
 3. The saved choice, `flagship_agent` (`gaiapy` or `gaiacpp`)
-4. With none of those, `gaiacpp` when it is installed, and `gaia-agent` otherwise
+4. With none of those, `gaia-agent`, even when `gaiacpp` is installed
 
 If the one named by any of the first three is not installed, `gaia-cli` stops
 and lists where it looked; it does not start the other one.

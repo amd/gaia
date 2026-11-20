@@ -274,8 +274,7 @@ func (m FlagshipModel) programListing() string {
 	case savedErr != nil:
 		fmt.Fprintf(&b, "Your saved choice could not be read: %v\n", savedErr)
 	case saved.Choice == "":
-		fmt.Fprintf(&b, "No saved choice yet: GAIA runs %s when it is installed, and %s otherwise.\n",
-			preflight.FlagshipAgentNative, preflight.FlagshipAgentPython)
+		fmt.Fprintf(&b, "No saved choice yet: GAIA runs %s.\n", preflight.FlagshipAgentPython)
 	}
 	if m.agentPin != "" {
 		fmt.Fprintf(&b, "This session is pinned to %s by %s; a switch here is saved for later launches.\n",

@@ -88,7 +88,7 @@ func writeRecord(t *testing.T, binary, body string) string {
 }
 
 // A gaiacpp the Agent UI downloaded is checked against its record before it
-// is run, for the unasked pick, for gaiacpp by name, and for its path.
+// is run, for gaiacpp by name (what a saved choice becomes) and for its path.
 func TestDownloadedGaiacppIsCheckedAgainstItsRecord(t *testing.T) {
 	type recordCase struct {
 		name string
@@ -113,7 +113,7 @@ func TestDownloadedGaiacppIsCheckedAgainstItsRecord(t *testing.T) {
 		{"a record with an empty checksum", func(string) string { return `{"sha256": ""}` }, "has no checksum"},
 	}
 	// How the program is asked for; the path form is filled in per case.
-	choices := []string{"", NativeAgentBinary, "<path>"}
+	choices := []string{NativeAgentBinary, "<path>"}
 
 	for _, tc := range cases {
 		for _, choice := range choices {

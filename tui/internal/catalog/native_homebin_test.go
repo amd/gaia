@@ -8,9 +8,8 @@ import (
 )
 
 // The Agent UI downloads gaiacpp into the bin folder of GAIA's home, and both
-// apps share one saved choice, so that folder has to be searched here too:
-// for the unasked pick and for gaiacpp asked for by name, which is what a
-// saved flagship_agent=gaiacpp becomes.
+// apps share one saved choice, so that folder has to be searched here too for
+// gaiacpp asked for by name, which is what a saved flagship_agent=gaiacpp becomes.
 func TestGaiacppOnlyInGaiaHomeBinIsFound(t *testing.T) {
 	homes := map[string]func(*testing.T, nativeFixture) string{
 		"the default ~/.gaia": func(t *testing.T, f nativeFixture) string {
@@ -28,7 +27,7 @@ func TestGaiacppOnlyInGaiaHomeBinIsFound(t *testing.T) {
 		},
 	}
 	for name, home := range homes {
-		for _, choice := range []string{"", NativeAgentBinary} {
+		for _, choice := range []string{NativeAgentBinary} {
 			t.Run(name+"/choice="+choice, func(t *testing.T) {
 				f := isolateNative(t)
 				want := writeProgram(t, filepath.Join(home(t, f), "bin"), NativeAgentBinary)
