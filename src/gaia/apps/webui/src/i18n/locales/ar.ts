@@ -1339,6 +1339,7 @@ const messages: Messages = {
     'out.kind.file': 'ملف',
     'out.kind.export': 'تصدير',
     'out.kind.image': 'صورة',
+    'out.kind.audio': 'صوت',
     'out.kind.document': 'مستند مضاف',
     'out.kind.memory': 'ذاكرة محفوظة',
     'out.kind.schedule': 'مهمة مجدولة',
