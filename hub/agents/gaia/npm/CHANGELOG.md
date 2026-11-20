@@ -27,6 +27,9 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   Both now carry such a character as `[U+XXXX]`. The grant still covers the
   real file.
 
+- **The sidecar no longer crashes on a busy Windows PC.** It died with an access
+  violation in Python's `_wmi` module when a WMI query timed out. It now reads
+  OS and CPU facts without WMI.
 - **Full access runs any command.** It used to refuse a program outside a
   short developer list (`pip`, `where`, `rmdir`, `gaia`, a program given by its
   full path), a package install outside a virtual environment, a path outside
