@@ -578,7 +578,151 @@ bool anyRemoteUrl(const json& v) {
     }
     return false;
 }
+// Why a command is too long to be checked, or "" when it can be.
+std::string tooLongToCheck(const std::string& asked) {
+    if (asked.size() > kMaxScannedBytes) {
+        return "a command of " + std::to_string(asked.size()) + " bytes: over " + std::to_string(kMaxScannedBytes) +
+               " bytes it cannot be checked for going online. Write long input to a file and have the command "
+               "read it.";
+    }
+    for (size_t start = 0; start <= asked.size();) {
+        const size_t end = (std::min)(asked.find('\n', start), asked.size());
+        if (end - start > kMaxScannedLine) {
+            return "a command with a line of " + std::to_string(end - start) + " bytes: over " +
+                   std::to_string(kMaxScannedLine) + " bytes on one line it cannot be checked for going online. "
+                   "Break the line up, or write long input to a file and have the command read it.";
+        }
+        start = end + 1;
+    }
+    return "";
+}
+
+// True when `command` runs curl, wget or a PowerShell web request at anything but this PC.
+// `bare` is the command with quotes, backslashes and ^ dropped.
+bool fetchLeavesThisPc(const std::string& command, const std::string& bare) {
+    static const std::regex fetch(R"(\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b)", std::regex::icase);
+    if (!std::regex_search(command, fetch) && !std::regex_search(bare, fetch)) return false;
+    // A proxy or a pinned address sends a "localhost" request elsewhere; -x also rides in a
+    // flag cluster (-sx) or holds its value (-xhost).
+    static const std::regex reroute(
+        R"((?:^|\s)(?:-[A-Za-z]*x\S*|--proxy|--preproxy|--socks\S*|--resolve|--connect-to|-e|--execute)(?:[\s=]|$))");
+    if (std::regex_search(command, reroute)) return true;
+    size_t urlBegin = 0, urlEnd = 0;
+    if (!nextUrl(command, 0, urlBegin, urlEnd) || command.find("$(") != std::string::npos ||
+        command.find('`') != std::string::npos || command.find("${") != std::string::npos) {
+        return true;
+    }
+    // curl and wget take a bare host as a destination too (curl http://localhost/ example.com),
+    // and that has no scheme for the URL scan to find.
+    static const std::regex bareHost(R"(^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?::[0-9]+)?(?:[/?#]|$))");
+    const auto isFetchProgram = [](const std::string& word) {
+        const std::string name = lowerAscii(word.substr(word.find_last_of("/\\") + 1));
+        return name == "curl" || name == "wget" || name == "curl.exe" || name == "wget.exe";
+    };
+    // Flags whose next word is a file or a value, not a destination.
+    static const std::set<std::string> takesValue = {
+        "-o", "-O", "--output", "--output-document", "-d", "--data", "--data-raw", "--data-binary",
+        "--data-urlencode", "-H", "--header", "-T", "--upload-file", "-F", "--form", "-u", "--user",
+        "-A", "--user-agent", "-b", "--cookie", "-c", "--cookie-jar", "-K", "--config", "-w",
+        "--write-out", "-X", "--request", "-m", "--max-time", "--retry", "--connect-timeout"};
+    std::istringstream words(bare);
+    bool fetching = false, skipNext = false;
+    for (std::string w; words >> w;) {
+        if (std::string(";|&<>").find(w[0]) != std::string::npos) {
+            fetching = false;  // a redirect target or the next command
+            skipNext = w.find_first_not_of("<>&|;") == std::string::npos && (w[0] == '<' || w[0] == '>');
+            continue;
+        }
+        if (skipNext) {
+            skipNext = false;
+            continue;
+        }
+        if (isFetchProgram(w)) {
+            fetching = true;
+            continue;
+        }
+        if (!fetching) continue;
+        if (w[0] == '-') {
+            // wget -O takes a file; curl -O takes none, and then the next word is a URL anyway.
+            skipNext = takesValue.count(w) > 0;
+            continue;
+        }
+        // Only the head is matched: std::regex recurses once per character of a long word.
+        const std::string head = w.substr(0, 300);
+        if (head.find("://") != std::string::npos || !std::regex_search(head, bareHost)) continue;
+        if (!urlIsLocal("http://" + head)) return true;
+    }
+    return false;
+}
+
+// True when a web-request program is what a command runs, not a word handed to another
+// program: `grep curl notes.md` only searches for the name. `bare` is the command with quotes,
+// backslashes and ^ dropped, which is how a shell sees `bash -c "curl ..."`.
+bool runsFetchProgram(const std::string& command, const std::string& bare) {
+    static const std::set<std::string> fetchers = {"curl", "wget", "iwr", "irm", "invoke-webrequest",
+                                                   "invoke-restmethod"};
+    // Programs that run the words after them; c and k are cmd's /c and /k as programWords leaves them.
+    static const std::set<std::string> wrappers = {"sudo", "env", "time", "nohup", "exec", "command", "xargs",
+                                                   "bash", "sh", "zsh", "cmd", "powershell", "pwsh", "call",
+                                                   "start", "then", "do", "else", "c", "k"};
+    const auto scan = [](const std::string& text) {
+        bool atCommand = true;
+        std::string word;
+        for (const char c : text + "\n") {
+            const bool space = c == ' ' || c == '\t' || c == '\r';
+            if (!space && c != '\n' && !std::strchr(";|&()<>`", c)) {
+                word.push_back(c);
+                continue;
+            }
+            if (!word.empty() && atCommand) {
+                std::string name = lowerAscii(word.substr(word.find_last_of("/\\") + 1));
+                for (const char* ext : {".exe", ".cmd", ".bat", ".com", ".ps1"}) {
+                    const size_t n = std::strlen(ext);
+                    if (name.size() > n && name.compare(name.size() - n, n, ext) == 0) {
+                        name.resize(name.size() - n);
+                        break;
+                    }
+                }
+                if (fetchers.count(name)) return true;
+                atCommand = wrappers.count(name) || word[0] == '-' || word[0] == '/' ||
+                            word.find('=') != std::string::npos;
+            }
+            word.clear();
+            if (!space) atCommand = true;
+        }
+        return false;
+    };
+    return scan(programWords(command)) || scan(bare);
+}
 }  // namespace
+
+std::string webFetchRefusal(const ToolInfo& tool, const json& args) {
+    if (tool.name != "bash_execute" || !args.is_object() || !args.contains("command") ||
+        !args["command"].is_string()) {
+        return "";
+    }
+    const std::string why = "Web access is off for this run, so GAIA didn't run ";
+    const std::string asked = args["command"].get<std::string>();
+    const std::string unchecked = tooLongToCheck(asked);
+    if (!unchecked.empty()) return why + unchecked;
+    std::string bare;
+    for (const char c : asked) {
+        if (c != '\'' && c != '"' && c != '\\' && c != '^') bare.push_back(c);
+    }
+    // A download tool, a raw socket, or a one-line script that opens a connection.
+    static const std::regex scripted(
+        R"(\b(?:start-bitstransfer\b|bitsadmin\b|certutil\b.*-urlcache|aria2c\b)"
+        R"(|(?:python3?|py|node|deno|bun|perl|ruby|php|pwsh|powershell)\b.*(?:socket|urllib|requests|httpx|aiohttp)"
+        R"(|http\.client|https?\.(?:get|request)|fetch\(|net\.connect|WebClient|Net::HTTP|LWP|fsockopen|TCPSocket)))",
+        std::regex::icase);
+    if (asked.find("/dev/tcp/") != std::string::npos || asked.find("/dev/udp/") != std::string::npos ||
+        std::regex_search(asked, scripted) || std::regex_search(bare, scripted) ||
+        (runsFetchProgram(asked, bare) && (mentionsRemoteUrl(asked) || fetchLeavesThisPc(asked, bare)))) {
+        return why + "`" + asked.substr(0, 80) + "`, which fetches from the web. Don't fetch it another way: "
+               "answer from what is on this PC, or say what you could not read.";
+    }
+    return "";
+}
 
 std::string internetRefusal(const ToolInfo& tool, const json& args) {
     const std::string& name = tool.name;
@@ -591,20 +735,8 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
     }
     if (name == "bash_execute") {
         const std::string asked = args.value("command", "");
-        if (asked.size() > kMaxScannedBytes) {
-            return why + "a command of " + std::to_string(asked.size()) + " bytes: over " +
-                   std::to_string(kMaxScannedBytes) + " bytes it cannot be checked for going online. Write long "
-                   "input to a file and have the command read it.";
-        }
-        for (size_t start = 0; start <= asked.size();) {
-            const size_t end = (std::min)(asked.find('\n', start), asked.size());
-            if (end - start > kMaxScannedLine) {
-                return why + "a command with a line of " + std::to_string(end - start) + " bytes: over " +
-                       std::to_string(kMaxScannedLine) + " bytes on one line it cannot be checked for going "
-                       "online. Break the line up, or write long input to a file and have the command read it.";
-            }
-            start = end + 1;
-        }
+        const std::string unchecked = tooLongToCheck(asked);
+        if (!unchecked.empty()) return why + unchecked;
         // An explicit offline mode (mvn -o, npm ci --offline) needs no network; the rest of the line is still checked.
         const std::string command = withoutOfflineSegments(asked);
         // Commands that go online with no URL in sight: a remote, a package index, an API.
@@ -637,7 +769,6 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
         // Build tools that resolve dependencies from a remote repository on nearly every run.
         static const std::regex buildTool(R"((?:^|[\s;&|(`])(?:mvn|mvnw|gradle|gradlew)(?=[\s;&|)`]|$))",
                                           std::regex::icase);
-        static const std::regex fetch(R"(\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b)", std::regex::icase);
         // bash opens a socket for a redirect to these names.
         const bool socketFile = asked.find("/dev/tcp/") != std::string::npos ||
                                 asked.find("/dev/udp/") != std::string::npos;
@@ -654,59 +785,7 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
             mentionsRemoteUrl(command)) {
             return why + "`" + asked.substr(0, 80) + "`, which goes online.";
         }
-        // A fetch stays local only when every destination it names is this PC.
-        if (std::regex_search(command, fetch) || std::regex_search(bare, fetch)) {
-            // A proxy or a pinned address sends a "localhost" request elsewhere; -x also rides in a
-            // flag cluster (-sx) or holds its value (-xhost).
-            static const std::regex reroute(
-                R"((?:^|\s)(?:-[A-Za-z]*x\S*|--proxy|--preproxy|--socks\S*|--resolve|--connect-to|-e|--execute)(?:[\s=]|$))");
-            if (std::regex_search(command, reroute)) return why + "`" + asked.substr(0, 80) + "`, which goes online.";
-            size_t urlBegin = 0, urlEnd = 0;
-            if (!nextUrl(command, 0, urlBegin, urlEnd) || command.find("$(") != std::string::npos ||
-                command.find('`') != std::string::npos || command.find("${") != std::string::npos) {
-                return why + "`" + asked.substr(0, 80) + "`, which goes online.";
-            }
-            // curl and wget take a bare host as a destination too (curl http://localhost/ example.com),
-            // and that has no scheme for the URL scan to find.
-            static const std::regex bareHost(R"(^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?::[0-9]+)?(?:[/?#]|$))");
-            const auto isFetchProgram = [](const std::string& word) {
-                const std::string name = lowerAscii(word.substr(word.find_last_of("/\\") + 1));
-                return name == "curl" || name == "wget" || name == "curl.exe" || name == "wget.exe";
-            };
-            // Flags whose next word is a file or a value, not a destination.
-            static const std::set<std::string> takesValue = {
-                "-o", "-O", "--output", "--output-document", "-d", "--data", "--data-raw", "--data-binary",
-                "--data-urlencode", "-H", "--header", "-T", "--upload-file", "-F", "--form", "-u", "--user",
-                "-A", "--user-agent", "-b", "--cookie", "-c", "--cookie-jar", "-K", "--config", "-w",
-                "--write-out", "-X", "--request", "-m", "--max-time", "--retry", "--connect-timeout"};
-            std::istringstream words(bare);
-            bool fetching = false, skipNext = false;
-            for (std::string w; words >> w;) {
-                if (std::string(";|&<>").find(w[0]) != std::string::npos) {
-                    fetching = false;  // a redirect target or the next command
-                    skipNext = w.find_first_not_of("<>&|;") == std::string::npos && (w[0] == '<' || w[0] == '>');
-                    continue;
-                }
-                if (skipNext) {
-                    skipNext = false;
-                    continue;
-                }
-                if (isFetchProgram(w)) {
-                    fetching = true;
-                    continue;
-                }
-                if (!fetching) continue;
-                if (w[0] == '-') {
-                    // wget -O takes a file; curl -O takes none, and then the next word is a URL anyway.
-                    skipNext = takesValue.count(w) > 0;
-                    continue;
-                }
-                // Only the head is matched: std::regex recurses once per character of a long word.
-                const std::string head = w.substr(0, 300);
-                if (head.find("://") != std::string::npos || !std::regex_search(head, bareHost)) continue;
-                if (!urlIsLocal("http://" + head)) return why + "`" + asked.substr(0, 80) + "`, which goes online.";
-            }
-        }
+        if (fetchLeavesThisPc(command, bare)) return why + "`" + asked.substr(0, 80) + "`, which goes online.";
         return "";
     }
     // Tools that fetch whatever URL they're handed.

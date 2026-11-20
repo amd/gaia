@@ -294,6 +294,10 @@ std::optional<json> GaiaAgent::switchRefusal(const ToolInfo& tool, const json& a
         const std::string why = internetRefusal(tool, args);
         if (!why.empty()) return refuse(why);
     }
+    if (options_.webOff) {
+        const std::string why = webFetchRefusal(tool, args);
+        if (!why.empty()) return refuse(why);
+    }
     static const std::set<std::string> reads = {"recall"};
     static const std::set<std::string> writes = {"remember", "update_memory", "forget"};
     if (memoryOff() && (reads.count(tool.name) || writes.count(tool.name))) {
@@ -530,6 +534,10 @@ std::string GaiaAgent::systemContext() const {
         for (const auto& r : options_.workspaceRoots) out << " " << r;
         out << ". Tools refuse other locations, so don't search the whole disk or the home "
                "folder. If a file the user needs isn't in these folders, say so.\n";
+    }
+    if (options_.webOff) {
+        out << "- Web access is off for this run. Do not search the web or fetch pages, repositories or "
+               "answers through the shell or a script either. Installing a package the task needs is fine.\n";
     }
     if (pythonCommand().empty()) {
         out << "- Python: none found on PATH. Don't plan around it; say so if a task needs it.\n";
