@@ -343,7 +343,7 @@ jobs:
         if: steps.want.outputs.run == 'true' && matrix.ca_layout == 'fedora-original'
         run: |
           # Before the files go: dnf itself verifies against them.
-          dnf install -y --setopt=install_weak_deps=False shadow-utils util-linux-core
+          dnf install -y --setopt=install_weak_deps=False shadow-utils util-linux
           rm -f /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/pki/tls/cert.pem /etc/ssl/cert.pem
           test -s /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 
