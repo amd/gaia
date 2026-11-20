@@ -70,7 +70,13 @@ export function SkillCommandMenu({ menu, onPick }: SkillCommandMenuProps) {
         };
         measure();
         window.addEventListener('resize', measure);
-        return () => window.removeEventListener('resize', measure);
+        // The message box grows with what is typed or attached, with no window resize.
+        const grown = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+        grown?.observe(composer);
+        return () => {
+            window.removeEventListener('resize', measure);
+            grown?.disconnect();
+        };
     }, [menu.open, menu.status, rows]);
 
     useEffect(() => {

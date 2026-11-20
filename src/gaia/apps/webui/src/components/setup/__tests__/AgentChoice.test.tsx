@@ -99,6 +99,29 @@ describe('AgentChoice', () => {
         expect(screen.getAllByText(why)).toHaveLength(1);
     });
 
+    it.each([
+        ['no_release', 'this GAIA release has no gaiacpp to download', 'لا يتضمّن gaiacpp للتنزيل'],
+        ['unreachable', 'Check your internet connection, or try again later', 'تحقّق من اتصالك بالإنترنت'],
+        ['unverifiable', "can't be verified, so GAIA won't install it", 'تعذّر التحقّق من gaiacpp'],
+    ] as const)('says a reason the server names by code (%s) in the language in use', async (code, en, ar) => {
+        const listing = withoutGaiacpp('english from the server');
+        mockedApi.getAgentPrograms.mockResolvedValue({
+            ...listing,
+            programs: listing.programs.map((p) => (p.id === 'gaiacpp' ? { ...p, unavailable_code: code } : p)),
+        });
+        const { unmount } = render(<AgentChoice inSettings />);
+        await radio(/gaiacpp/);
+        expect(document.querySelector('.agent-choice-why')).toHaveTextContent(en);
+        unmount();
+
+        useChatStore.setState({ locale: 'ar' });
+        render(<AgentChoice inSettings />);
+        await radio(/gaiacpp/);
+        const why = document.querySelector('.agent-choice-why');
+        expect(why).toHaveTextContent(ar);
+        expect(why).not.toHaveTextContent('english from the server');
+    });
+
     it("shows the server's refusal and puts the choice back", async () => {
         mockedApi.updateSettings.mockRejectedValue(new api.ApiError('gaiacpp is not installed on this PC.', 422, 'gaiacpp is not installed on this PC.', null));
         render(<AgentChoice inSettings />);

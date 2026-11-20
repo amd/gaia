@@ -206,6 +206,7 @@ def test_a_release_without_gaiacpp_says_why_it_cannot_be_downloaded(
     assert gaiacpp["can_download"] is False
     assert gaiacpp["size_bytes"] is None
     assert "could not read" in gaiacpp["unavailable_reason"]
+    assert gaiacpp["unavailable_code"] is None
 
 
 class _Answers:
@@ -236,6 +237,7 @@ def test_the_reason_shown_for_a_release_without_gaiacpp_has_no_address(
         "this GAIA release has no gaiacpp to download. Use the Python agent, "
         "or update GAIA."
     )
+    assert gaiacpp["unavailable_code"] == "no_release"
 
 
 def test_the_reason_shown_when_the_release_cannot_be_reached_is_plain(
@@ -247,20 +249,34 @@ def test_the_reason_shown_when_the_release_cannot_be_reached_is_plain(
     info = native_fetch.download_info
     down = _Answers(raises=requests.ConnectionError("getaddrinfo failed"))
     monkeypatch.setattr(native_fetch, "download_info", lambda: info(down))
-    reason = _program(client.get("/api/agent-programs").json(), "gaiacpp")[
-        "unavailable_reason"
-    ]
+    gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
+    reason = gaiacpp["unavailable_reason"]
     assert "internet connection" in reason
     assert "http" not in reason and "getaddrinfo" not in reason
+    assert gaiacpp["unavailable_code"] == "unreachable"
+
+
+def test_a_server_that_answers_with_an_error_is_not_blamed_on_the_connection_alone(
+    client, monkeypatch
+):
+    monkeypatch.delenv(native_fetch.ASSETS_URL_ENV, raising=False)
+    info = native_fetch.download_info
+    monkeypatch.setattr(
+        native_fetch, "download_info", lambda: info(_Answers(status=503))
+    )
+    gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
+    assert "try again later" in gaiacpp["unavailable_reason"]
+    assert "503" not in gaiacpp["unavailable_reason"]
+    assert gaiacpp["unavailable_code"] == "unreachable"
 
 
 def test_the_reason_shown_for_an_unverifiable_release_has_no_address(client, release):
     (release / native_fetch.SUMS_NAME).write_text("", encoding="utf-8")
-    reason = _program(client.get("/api/agent-programs").json(), "gaiacpp")[
-        "unavailable_reason"
-    ]
+    gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
+    reason = gaiacpp["unavailable_reason"]
     assert "can't be verified" in reason
     assert "file://" not in reason
+    assert gaiacpp["unavailable_code"] == "unverifiable"
 
 
 def test_a_hub_that_cannot_be_reached_leaves_the_size_unknown(client, monkeypatch):

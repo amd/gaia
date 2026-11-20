@@ -24,6 +24,12 @@ const OPTIONS: Option[] = [
     { id: 'gaiacpp', label: 'setup.agent.gaiacpp', more: 'setup.agent.gaiacppMore', tag: 'setup.agent.beta' },
 ];
 
+const WHY: Record<NonNullable<AgentProgram['unavailable_code']>, MessageKey> = {
+    no_release: 'setup.agent.why.noRelease',
+    unreachable: 'setup.agent.why.unreachable',
+    unverifiable: 'setup.agent.why.unverifiable',
+};
+
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /** Setup's pick: saved on Continue, and downloaded first when `download` is set. */
@@ -120,9 +126,10 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
     };
 
     const cpp = program('gaiacpp');
+    const why = cpp?.unavailable_code ? t(WHY[cpp.unavailable_code]) : cpp?.unavailable_reason;
     const cppNote: string | null = !cpp || installed(cpp) ? null
         : cpp.can_download ? t(inSettings ? 'setup.agent.downloadsOnButton' : 'setup.agent.downloadsLater')
-            : cpp.unavailable_reason ? t('setup.agent.cantDownload', { reason: cpp.unavailable_reason })
+            : why ? t('setup.agent.cantDownload', { reason: why })
                 : t('setup.agent.notInstalledMore');
 
     return (

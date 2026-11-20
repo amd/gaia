@@ -164,6 +164,23 @@ describe('Composer "/" skill commands', () => {
             expect(el).toHaveClass('is-below');
         });
 
+        it('follows the message box when it grows without the window changing', async () => {
+            const watched: { el: Element; grew: () => void }[] = [];
+            vi.stubGlobal('ResizeObserver', class {
+                constructor(private grew: () => void) {}
+                observe(el: Element) { watched.push({ el, grew: this.grew }); }
+                disconnect() {}
+            });
+            layout(660, 780, 800);
+            const el = await openMenu();
+            const box = watched.find((w) => w.el === el.parentElement);
+            expect(box).toBeDefined();
+            layout(100, 420, 800);
+            act(() => { box!.grew(); });
+            expect(el).toHaveClass('is-below');
+            vi.unstubAllGlobals();
+        });
+
         it('scrolls the row the arrow keys move to into view', async () => {
             const el = await openMenu();
             const into = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
