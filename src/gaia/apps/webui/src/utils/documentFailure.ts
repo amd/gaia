@@ -3,11 +3,6 @@
 
 import type { Translate } from '../i18n/useT';
 
-/** True when a document failed because the model server, not the file, was the problem. */
-export function isServerFailure(kind: string | null | undefined): boolean {
-    return kind === 'model_server_down' || kind === 'model_server_busy';
-}
-
 /**
  * Why a document failed when the model server, not the file, was the problem,
  * or null for any other failure. The connection error stays in the log.
@@ -21,6 +16,11 @@ export function serverFailureText(kind: string | null | undefined, t: Translate)
 /** True when GAIA retries the document by itself once the model server is back; a busy one waits on the user's Retry. */
 export function waitsForServerReturn(kind: string | null | undefined): boolean {
     return kind === 'model_server_down';
+}
+
+/** True when the model server was too busy for the document, so it waits on the user's Retry. */
+export function needsRetry(kind: string | null | undefined): boolean {
+    return kind === 'model_server_busy';
 }
 
 /** The "couldn't be added" line for a model-server failure, or null for any other failure. */

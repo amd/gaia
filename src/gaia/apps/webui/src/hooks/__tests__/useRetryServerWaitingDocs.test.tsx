@@ -25,6 +25,7 @@ const base: Document = {
 } as Document;
 const unreadable: Document = { ...base, id: 'doc-bad', filename: 'bad.pdf', error_kind: 'corrupt' } as Document;
 const busy: Document = { ...base, id: 'doc-busy', filename: 'busy.md', error_kind: 'model_server_busy' } as Document;
+const alsoDown: Document = { ...base, id: 'doc-down-2', filename: 'more.md' } as Document;
 
 function status(up: boolean): SystemStatus {
     return { lemonade_running: up } as SystemStatus;
@@ -90,14 +91,15 @@ describe('useRetryServerWaitingDocs', () => {
         expect(mockedApi.reindexDocument).not.toHaveBeenCalled();
     });
 
-    it('re-indexes only the server-failed rows when the server comes back', async () => {
+    it('re-indexes only the rows waiting for the server when it comes back', async () => {
         rows = [base, unreadable, busy];
         render(<Harness />);
         setServer(true);
 
         await waitFor(() => expect(useChatStore.getState().documents.find((d) => d.id === 'doc-down')?.indexing_status).toBe('complete'));
-        await waitFor(() => expect(useChatStore.getState().documents.find((d) => d.id === 'doc-busy')?.indexing_status).toBe('complete'));
-        expect(mockedApi.reindexDocument.mock.calls.map((c) => c[0]).sort()).toEqual(['doc-busy', 'doc-down']);
+        expect(mockedApi.reindexDocument.mock.calls.map((c) => c[0])).toEqual(['doc-down']);
+        // The busy row says "Retry in a moment", so it waits for the user's click (#8636).
+        expect(useChatStore.getState().documents.find((d) => d.id === 'doc-busy')?.indexing_status).toBe('failed');
         expect(useChatStore.getState().documents.find((d) => d.id === 'doc-bad')?.indexing_status).toBe('failed');
     });
 
@@ -132,7 +134,7 @@ describe('useRetryServerWaitingDocs', () => {
     });
 
     it('skips a document a manual Retry already picked up', async () => {
-        rows = [base, { ...busy }];
+        rows = [base, { ...alsoDown }];
         const gate = deferred();
         reindexOutcome = async (id) => { if (id === 'doc-down') await gate.promise; return 'complete'; };
         render(<Harness />);
@@ -140,7 +142,7 @@ describe('useRetryServerWaitingDocs', () => {
         await waitFor(() => expect(mockedApi.reindexDocument).toHaveBeenCalledWith('doc-down'));
 
         // The user clicks Retry on the second row while the hook is still on the first.
-        rows = rows.map((d) => (d.id === 'doc-busy' ? { ...d, indexing_status: 'indexing' } : d));
+        rows = rows.map((d) => (d.id === 'doc-down-2' ? { ...d, indexing_status: 'indexing' } : d));
         await act(async () => { gate.resolve(); });
 
         await waitFor(() => expect(useChatStore.getState().documents.find((d) => d.id === 'doc-down')?.indexing_status).toBe('complete'));
@@ -148,14 +150,14 @@ describe('useRetryServerWaitingDocs', () => {
     });
 
     it('skips a document deleted while it waited its turn', async () => {
-        rows = [base, { ...busy }];
+        rows = [base, { ...alsoDown }];
         const gate = deferred();
         reindexOutcome = async (id) => { if (id === 'doc-down') await gate.promise; return 'complete'; };
         render(<Harness />);
         setServer(true);
         await waitFor(() => expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1));
 
-        rows = rows.filter((d) => d.id !== 'doc-busy');
+        rows = rows.filter((d) => d.id !== 'doc-down-2');
         await act(async () => { gate.resolve(); });
 
         await waitFor(() => expect(useChatStore.getState().documents.map((d) => d.id)).toEqual(['doc-down']));

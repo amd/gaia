@@ -19,7 +19,7 @@ import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
 import { IndexingProgress } from './IndexingProgress';
-import { isServerFailure, serverFailureText, serverNotAddedText, waitsForServerReturn } from '../utils/documentFailure';
+import { needsRetry, serverFailureText, serverNotAddedText, waitsForServerReturn } from '../utils/documentFailure';
 import './DocumentLibrary.css';
 import { visibleName } from './CalendarApproval';
 
@@ -335,8 +335,9 @@ export function DocumentLibrary() {
     const totalSize = shownDocs.reduce((sum, d) => sum + d.file_size, 0);
     const failedDocs = shownDocs.filter((d) => d.indexing_status === 'failed');
     // A file that failed only because the model server was down isn't unreadable.
-    const serverWaitCount = failedDocs.filter((d) => isServerFailure(d.error_kind)).length;
-    const unreadableCount = failedDocs.length - serverWaitCount;
+    const serverWaitCount = failedDocs.filter((d) => waitsForServerReturn(d.error_kind)).length;
+    const retryCount = failedDocs.filter((d) => needsRetry(d.error_kind)).length;
+    const unreadableCount = failedDocs.length - serverWaitCount - retryCount;
 
     /** Attach a document where the user chose, and say where it went. */
     const attachToTarget = useCallback(async (docId: string, filename: string) => {
@@ -945,6 +946,9 @@ export function DocumentLibrary() {
                             )}
                             {serverWaitCount > 0 && (
                                 <span className="doc-stats-failed doc-stats-server">{t.plural('docs.serverWaiting', serverWaitCount)}</span>
+                            )}
+                            {retryCount > 0 && (
+                                <span className="doc-stats-failed">{t.plural('docs.needsRetry', retryCount)}</span>
                             )}
                             <span>&middot;</span>
                             <bdi dir="ltr">{formatSize(totalSize)}</bdi>

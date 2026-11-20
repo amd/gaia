@@ -1949,6 +1949,36 @@ for (const locale of ['en', 'ar']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    // A busy-server file showed Failed with Retry, was counted as waiting, and was retried behind the user's back.
+    test(`a document the model server was too busy to add (${locale})`, async ({ page }) => {
+        let retried = 0;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents/*/reindex', (route) => {
+                retried += 1;
+                return route.fulfill({ status: 500, json: { detail: 'Reindex failed; see server logs for details' } });
+            });
+            await p.route('**/api/documents', (route) => route.fulfill({ json: {
+                documents: [
+                    { id: 'd1', filename: 'busy.md', filepath: 'C:/busy.md', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'model_server_busy', last_error: 'RAG indexing failed for busy.md: Lemonade Server timed out', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 },
+                ],
+                total: 1, total_size_bytes: 1024, total_chunks: 0,
+            } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        const row = page.locator('.doc-failure');
+        await expect(row.locator('.doc-status-failed')).toBeVisible();
+        const stats = page.locator('.doc-stats');
+        await expect(stats).toContainText(locale === 'ar' ? 'بحاجة إلى إعادة المحاولة: 1' : '1 to retry');
+        await expect(stats.locator('.doc-stats-server')).toHaveCount(0);
+        if (locale === 'ar') {
+            expect(await untranslated(page, '.doc-failure', 'bdi')).toEqual([]);
+            expect(await untranslated(page, '.doc-stats', 'bdi')).toEqual([]);
+        }
+        expect(retried, 'a busy-server file waits for the Retry button').toBe(0);
+        await shot(page, `documents-${locale}-server-busy`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     // The chat's document bar called a server-down file unreadable while the library didn't.
     test(`the chat's document bar with a file waiting for the model server (${locale})`, async ({ page }) => {
         const docs = [
