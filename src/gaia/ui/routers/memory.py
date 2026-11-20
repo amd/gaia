@@ -39,6 +39,7 @@ from gaia.ui.memory_settings import MEMORY_ENABLED_KEY, memory_enabled
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
+from ..security import refuse_on_device_listener
 from ..security import require_ui_header as _require_ui_header
 
 logger = logging.getLogger(__name__)
@@ -576,7 +577,9 @@ def _require_memory_admin() -> None:
         )
 
 
-@router.post("/api/memory/admin/clear")
+@router.post(
+    "/api/memory/admin/clear", dependencies=[Depends(refuse_on_device_listener)]
+)
 def admin_clear(body: AdminClearRequest) -> Dict:
     """Wipe memory for an eval scenario reset.  Eval-only.
 
@@ -601,7 +604,9 @@ def admin_clear(body: AdminClearRequest) -> Dict:
     return {"scope": body.scope, "cleared": cleared}
 
 
-@router.post("/api/memory/admin/seed")
+@router.post(
+    "/api/memory/admin/seed", dependencies=[Depends(refuse_on_device_listener)]
+)
 def admin_seed(body: AdminSeedRequest) -> Dict:
     """Bulk-insert knowledge items, bypassing dedup.  Eval-only.
 
@@ -1047,7 +1052,10 @@ def clear_all_memory() -> Dict:
         raise HTTPException(500, f"Clear failed: {type(exc).__name__}")
 
 
-@router.post("/api/memory/reinitialize", dependencies=[Depends(_require_ui_header)])
+@router.post(
+    "/api/memory/reinitialize",
+    dependencies=[Depends(_require_ui_header), Depends(refuse_on_device_listener)],
+)
 def reinitialize_memory() -> Dict:
     """Wipe all memory and re-run initialization from scratch.
 
@@ -1136,7 +1144,10 @@ def _do_system_context_refresh() -> Dict:
     return {"stored": stored, "skipped": False}
 
 
-@router.post("/api/memory/refresh-system-context")
+@router.post(
+    "/api/memory/refresh-system-context",
+    dependencies=[Depends(refuse_on_device_listener)],
+)
 def refresh_system_context() -> Dict:
     """Re-collect OS, hardware, installed apps, and version facts.
 
@@ -1276,7 +1287,9 @@ def _downloaded_on_this_pc(model_id: str) -> bool:
     )
 
 
-@router.get("/api/memory/stream-discovery")
+@router.get(
+    "/api/memory/stream-discovery", dependencies=[Depends(refuse_on_device_listener)]
+)
 def stream_discovery():
     """Stream system discovery findings as SSE.
 
@@ -1385,7 +1398,9 @@ def stream_discovery():
     )
 
 
-@router.get("/api/memory/stream-inference")
+@router.get(
+    "/api/memory/stream-inference", dependencies=[Depends(refuse_on_device_listener)]
+)
 def stream_inference(include_browser: bool = Query(False)):
     """Stream LLM-assisted profile inference as SSE.
 
@@ -1741,7 +1756,9 @@ class InferenceCommit(BaseModel):
     insights: List[InferenceCommitItem]
 
 
-@router.post("/api/memory/commit-discovery")
+@router.post(
+    "/api/memory/commit-discovery", dependencies=[Depends(refuse_on_device_listener)]
+)
 def commit_discovery(body: DiscoveryCommit) -> Dict:
     """Store approved discovery findings. Returns ``{stored: int}``.
 
@@ -1781,7 +1798,9 @@ def commit_discovery(body: DiscoveryCommit) -> Dict:
     return {"stored": stored}
 
 
-@router.post("/api/memory/commit-inference")
+@router.post(
+    "/api/memory/commit-inference", dependencies=[Depends(refuse_on_device_listener)]
+)
 def commit_inference(body: InferenceCommit) -> Dict:
     """Store approved inference insights, replacing old inferred entries.
 

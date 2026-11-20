@@ -35,6 +35,10 @@ export interface ApiSchemas {
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
   CustomModelRequest: CustomModelRequest;
+  DeviceAccessStatus: DeviceAccessStatus;
+  DevicePairRequest: DevicePairRequest;
+  DevicePairResponse: DevicePairResponse;
+  DevicePairingOffer: DevicePairingOffer;
   DeviceUsage: DeviceUsage;
   DiscordConnectRequest: DiscordConnectRequest;
   DiscordStartRequest: DiscordStartRequest;
@@ -48,6 +52,7 @@ export interface ApiSchemas {
   EditScheduleRequest: EditScheduleRequest;
   EmbedderBody: EmbedderBody;
   EvalMailboxRequest: EvalMailboxRequest;
+  FailedRedemption: FailedRedemption;
   FileEntry: FileEntry;
   FileListResponse: FileListResponse;
   FilePreviewResponse: FilePreviewResponse;
@@ -96,6 +101,8 @@ export interface ApiSchemas {
   NetworkUsage: NetworkUsage;
   OpenFileRequest: OpenFileRequest;
   PageElement: PageElement;
+  PairedDevice: PairedDevice;
+  PairedDeviceList: PairedDeviceList;
   ParseScheduleRequest: ParseScheduleRequest;
   ParseScheduleResponse: ParseScheduleResponse;
   PermissionModeRequest: PermissionModeRequest;
@@ -521,6 +528,83 @@ export interface CreateSessionRequest {
 export interface CustomModelRequest {
   quant?: string | null;
   url: string;
+}
+/**
+ * What the PC shows about access from the home network. Carries no secret.
+ */
+export interface DeviceAccessStatus {
+  error_code?: ("port_in_use" | "unsafe_folder" | "certificate" | "start_failed") | null;
+  error_detail?: string | null;
+  failed_redemptions?: FailedRedemption[];
+  idle_expiry_days: number;
+  listening: boolean;
+  pairing_expires_at?: string | null;
+  pairing_open: boolean;
+  pending_expiry_minutes: number;
+  port: number;
+}
+/**
+ * A pairing attempt that failed, and why; the device saw one refusal.
+ */
+export interface FailedRedemption {
+  address: string;
+  at: string;
+  reason: "expired" | "used" | "wrong" | "closed" | "rate_limited";
+}
+/**
+ * A device redeeming the invitation it scanned.
+ */
+export interface DevicePairRequest {
+  device_name: string;
+  invitation: string;
+  platform: "ios" | "ipados" | "android";
+}
+/**
+ * The device's token, returned once. The device waits for Allow on the PC.
+ */
+export interface DevicePairResponse {
+  device_id: string;
+  expires_at: string;
+  pc_id: string;
+  pc_name: string;
+  status: "pending" | "allowed";
+  token: string;
+}
+/**
+ * What the PC's pairing QR code carries, as compact JSON.
+ *
+ * Everything a device needs to pair: where the PC listens, the certificate
+ * to pin, and a single-use invitation that dies at ``exp``.
+ */
+export interface DevicePairingOffer {
+  /**
+   * When the invitation dies, in Unix seconds
+   */
+  exp: number;
+  /**
+   * The single-use invitation
+   */
+  invite: string;
+  /**
+   * The PC's name, to show on the device
+   */
+  name: string;
+  /**
+   * ``https://<home-network IPv4>:<port>`` for each address
+   */
+  origins: string[];
+  /**
+   * Stays the same for this PC, across resets
+   */
+  pc_id: string;
+  /**
+   * SHA-256 of the listener's certificate, in hex
+   */
+  pin: string;
+  /**
+   * Format version
+   */
+  v: number;
 }
 export interface DeviceUsage {
   /**
@@ -1150,6 +1234,24 @@ export interface OpenFileRequest {
   launch?: boolean;
   path: string;
   reveal?: boolean;
+}
+/**
+ * A paired device, as the PC lists it. Never carries a token or its hash.
+ */
+export interface PairedDevice {
+  created_at: string;
+  expires_at?: string | null;
+  id: string;
+  last_seen_at?: string | null;
+  name: string;
+  platform: "ios" | "ipados" | "android";
+  status: "pending" | "allowed";
+}
+/**
+ * Every paired device.
+ */
+export interface PairedDeviceList {
+  devices: PairedDevice[];
 }
 /**
  * Request to parse a natural language schedule description.

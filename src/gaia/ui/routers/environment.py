@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from gaia.agents.base import file_snapshots
@@ -18,6 +18,7 @@ from .. import session_environment as env
 from .. import session_outputs
 from ..database import ChatDatabase
 from ..dependencies import get_db
+from ..security import audit_approval
 
 logger = get_logger(__name__)
 
@@ -59,7 +60,10 @@ async def get_environment(session_id: str, db: ChatDatabase = Depends(get_db)):
 
 @router.post("/api/sessions/{session_id}/environment/folders")
 async def add_folder(
-    session_id: str, body: FolderRequest, db: ChatDatabase = Depends(get_db)
+    session_id: str,
+    body: FolderRequest,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
 ):
     """Let the chat read and write a folder from its next step."""
     session = _session(db, session_id)
@@ -67,6 +71,7 @@ async def add_folder(
         await asyncio.to_thread(env.add_folder, db, session_id, body.path)
     except env.EnvironmentChangeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    audit_approval(http_request, f"folder {body.path} given to chat {session_id}")
     return await _describe(db, session)
 
 

@@ -19,9 +19,38 @@ process's ``ssl`` module patched behind their back.
 
 from __future__ import annotations
 
+import ssl
 import sys
 
 _injected = False
+# Captured before use_os_trust_store() can swap ssl.SSLContext.
+_STOCK_SSL_CONTEXT = ssl.SSLContext
+
+
+def stock_ssl_context(protocol: int, **settings) -> ssl.SSLContext:
+    """An ``ssl.SSLContext`` the OS trust store injection doesn't reach.
+
+    For TLS servers: truststore's context checks the *peer's* certificate after
+    every handshake, so a server built on it drops each client that sends none,
+    right after the handshake completes. *settings* (``minimum_version=...``)
+    are set in order through the C base class, since ``ssl.SSLContext``'s own
+    setters look up the patched class and recurse.
+
+    Raises:
+        RuntimeError: ``ssl.SSLContext`` was already patched when this module
+            was imported, so no stock class is at hand.
+    """
+    if _STOCK_SSL_CONTEXT.__module__ != "ssl":
+        raise RuntimeError(
+            f"ssl.SSLContext was replaced by {_STOCK_SSL_CONTEXT.__module__} "
+            "before gaia.tls was imported, so GAIA can't build a TLS server "
+            "context. Import gaia.tls before anything that patches ssl."
+        )
+    context = _STOCK_SSL_CONTEXT(protocol)
+    base = _STOCK_SSL_CONTEXT.__mro__[1]
+    for name, value in settings.items():
+        getattr(base, name).__set__(context, value)
+    return context
 
 
 def use_os_trust_store() -> bool:

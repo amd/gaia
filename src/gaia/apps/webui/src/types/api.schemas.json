@@ -1273,6 +1273,216 @@
     "title": "CustomModelRequest",
     "type": "object"
   },
+  "DeviceAccessStatus": {
+    "description": "What the PC shows about access from the home network. Carries no secret.",
+    "properties": {
+      "error_code": {
+        "anyOf": [
+          {
+            "enum": [
+              "port_in_use",
+              "unsafe_folder",
+              "certificate",
+              "start_failed"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error Code"
+      },
+      "error_detail": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error Detail"
+      },
+      "failed_redemptions": {
+        "items": {
+          "$ref": "#/components/schemas/FailedRedemption"
+        },
+        "title": "Failed Redemptions",
+        "type": "array"
+      },
+      "idle_expiry_days": {
+        "title": "Idle Expiry Days",
+        "type": "integer"
+      },
+      "listening": {
+        "title": "Listening",
+        "type": "boolean"
+      },
+      "pairing_expires_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Pairing Expires At"
+      },
+      "pairing_open": {
+        "title": "Pairing Open",
+        "type": "boolean"
+      },
+      "pending_expiry_minutes": {
+        "title": "Pending Expiry Minutes",
+        "type": "integer"
+      },
+      "port": {
+        "title": "Port",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "listening",
+      "port",
+      "pairing_open",
+      "idle_expiry_days",
+      "pending_expiry_minutes"
+    ],
+    "title": "DeviceAccessStatus",
+    "type": "object"
+  },
+  "DevicePairRequest": {
+    "description": "A device redeeming the invitation it scanned.",
+    "properties": {
+      "device_name": {
+        "maxLength": 256,
+        "minLength": 1,
+        "title": "Device Name",
+        "type": "string"
+      },
+      "invitation": {
+        "maxLength": 64,
+        "minLength": 1,
+        "title": "Invitation",
+        "type": "string"
+      },
+      "platform": {
+        "enum": [
+          "ios",
+          "ipados",
+          "android"
+        ],
+        "title": "Platform",
+        "type": "string"
+      }
+    },
+    "required": [
+      "invitation",
+      "device_name",
+      "platform"
+    ],
+    "title": "DevicePairRequest",
+    "type": "object"
+  },
+  "DevicePairResponse": {
+    "description": "The device's token, returned once. The device waits for Allow on the PC.",
+    "properties": {
+      "device_id": {
+        "title": "Device Id",
+        "type": "string"
+      },
+      "expires_at": {
+        "title": "Expires At",
+        "type": "string"
+      },
+      "pc_id": {
+        "title": "Pc Id",
+        "type": "string"
+      },
+      "pc_name": {
+        "title": "Pc Name",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "pending",
+          "allowed"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "token": {
+        "title": "Token",
+        "type": "string"
+      }
+    },
+    "required": [
+      "device_id",
+      "token",
+      "pc_name",
+      "pc_id",
+      "status",
+      "expires_at"
+    ],
+    "title": "DevicePairResponse",
+    "type": "object"
+  },
+  "DevicePairingOffer": {
+    "description": "What the PC's pairing QR code carries, as compact JSON.\n\nEverything a device needs to pair: where the PC listens, the certificate\nto pin, and a single-use invitation that dies at ``exp``.",
+    "properties": {
+      "exp": {
+        "description": "When the invitation dies, in Unix seconds",
+        "title": "Exp",
+        "type": "integer"
+      },
+      "invite": {
+        "description": "The single-use invitation",
+        "title": "Invite",
+        "type": "string"
+      },
+      "name": {
+        "description": "The PC's name, to show on the device",
+        "title": "Name",
+        "type": "string"
+      },
+      "origins": {
+        "description": "``https://<home-network IPv4>:<port>`` for each address",
+        "items": {
+          "type": "string"
+        },
+        "title": "Origins",
+        "type": "array"
+      },
+      "pc_id": {
+        "description": "Stays the same for this PC, across resets",
+        "title": "Pc Id",
+        "type": "string"
+      },
+      "pin": {
+        "description": "SHA-256 of the listener's certificate, in hex",
+        "title": "Pin",
+        "type": "string"
+      },
+      "v": {
+        "description": "Format version",
+        "title": "V",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "v",
+      "name",
+      "pc_id",
+      "origins",
+      "pin",
+      "invite",
+      "exp"
+    ],
+    "title": "DevicePairingOffer",
+    "type": "object"
+  },
   "DeviceUsage": {
     "properties": {
       "history": {
@@ -1730,6 +1940,37 @@
       "attached"
     ],
     "title": "EvalMailboxRequest",
+    "type": "object"
+  },
+  "FailedRedemption": {
+    "description": "A pairing attempt that failed, and why; the device saw one refusal.",
+    "properties": {
+      "address": {
+        "title": "Address",
+        "type": "string"
+      },
+      "at": {
+        "title": "At",
+        "type": "string"
+      },
+      "reason": {
+        "enum": [
+          "expired",
+          "used",
+          "wrong",
+          "closed",
+          "rate_limited"
+        ],
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "at",
+      "address",
+      "reason"
+    ],
+    "title": "FailedRedemption",
     "type": "object"
   },
   "FileEntry": {
@@ -3734,6 +3975,88 @@
       "rect"
     ],
     "title": "PageElement",
+    "type": "object"
+  },
+  "PairedDevice": {
+    "description": "A paired device, as the PC lists it. Never carries a token or its hash.",
+    "properties": {
+      "created_at": {
+        "title": "Created At",
+        "type": "string"
+      },
+      "expires_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Expires At"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "last_seen_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Last Seen At"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "platform": {
+        "enum": [
+          "ios",
+          "ipados",
+          "android"
+        ],
+        "title": "Platform",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "pending",
+          "allowed"
+        ],
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "platform",
+      "status",
+      "created_at"
+    ],
+    "title": "PairedDevice",
+    "type": "object"
+  },
+  "PairedDeviceList": {
+    "description": "Every paired device.",
+    "properties": {
+      "devices": {
+        "items": {
+          "$ref": "#/components/schemas/PairedDevice"
+        },
+        "title": "Devices",
+        "type": "array"
+      }
+    },
+    "required": [
+      "devices"
+    ],
+    "title": "PairedDeviceList",
     "type": "object"
   },
   "ParseScheduleRequest": {

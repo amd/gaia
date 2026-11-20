@@ -24,6 +24,7 @@ from gaia.hub import installer as installer_mod
 from gaia.logger import get_logger
 from gaia.utils.file_lock import FileLockError
 
+from ..security import refuse_on_device_listener
 from ..security import require_ui_header as _require_ui_header
 
 logger = get_logger(__name__)
@@ -158,7 +159,11 @@ def _record_failure(agent_id: str, version: Optional[str], exc: Exception) -> No
 @router.post(
     "/api/agents/install",
     status_code=202,
-    dependencies=[Depends(_require_localhost), Depends(_require_ui_header)],
+    dependencies=[
+        Depends(_require_localhost),
+        Depends(_require_ui_header),
+        Depends(refuse_on_device_listener),
+    ],
 )
 def install_agent(request: Request, body: InstallRequest):
     """Start an install in the background; poll install-status for progress.
@@ -244,7 +249,11 @@ async def install_status(agent_id: str):
 
 @router.delete(
     "/api/agents/{agent_id}",
-    dependencies=[Depends(_require_localhost), Depends(_require_ui_header)],
+    dependencies=[
+        Depends(_require_localhost),
+        Depends(_require_ui_header),
+        Depends(refuse_on_device_listener),
+    ],
 )
 def uninstall_agent(agent_id: str, request: Request):
     """Uninstall a hub-installed agent. Refuses builtins (400)."""

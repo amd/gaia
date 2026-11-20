@@ -42,7 +42,12 @@ from ..dependencies import get_db
 from ..models import ChatRequest, ChatResponse
 from ..restart_recovery import CANCELLED_TURN_NOTICE
 from ..run_manager import run_manager
-from ..security import flagship_only, require_local_pc
+from ..security import (
+    audit_approval,
+    flagship_only,
+    refuse_on_device_listener,
+    require_local_pc,
+)
 from ..sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THOUGHT_JSON_SUB_RE,
@@ -367,12 +372,21 @@ class ToolConfirmRequest(BaseModel):
 
 
 @router.post("/api/chat/confirm-tool")
-async def confirm_tool(request: ToolConfirmRequest):
+async def confirm_tool(request: ToolConfirmRequest, http_request: Request):
     """Answer the tool confirmation the agent is blocked on.
 
     The agent waits in ``SSEOutputHandler.confirm_tool_execution()`` until this
     endpoint resolves it with allow once, always allow in this chat, or deny.
     """
+    answer = await _answer_tool_prompt(request)
+    verdict = "allowed" if request.approved else "denied"
+    if request.approved and request.always:
+        verdict = "always allowed"
+    audit_approval(http_request, f"tool call {verdict} in chat {request.session_id}")
+    return answer
+
+
+async def _answer_tool_prompt(request: ToolConfirmRequest):
     from .._chat_helpers import _active_sse_handlers
 
     handler = _active_sse_handlers.get(request.session_id)
@@ -553,7 +567,10 @@ async def get_permissions(session_id: str, db: ChatDatabase = Depends(get_db)):
 
 @router.put("/api/chat/permissions/{session_id}")
 async def set_permission_mode(
-    session_id: str, body: PermissionModeRequest, db: ChatDatabase = Depends(get_db)
+    session_id: str,
+    body: PermissionModeRequest,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
 ):
     """Switch between ask and full access; applies to the next gated tool."""
     _require_session(db, session_id)
@@ -564,6 +581,7 @@ async def set_permission_mode(
     await _sync_relayed_mode(
         session_id, body.mode == session_permissions.MODE_FULL_ACCESS
     )
+    audit_approval(http_request, f"chat {session_id} set to {body.mode}")
     return _permissions_view(session_id)
 
 
@@ -711,7 +729,9 @@ class ScriptedUserRequest(BaseModel):
     decline_commands: List[str] = []
 
 
-@router.post("/api/eval/scripted-user")
+@router.post(
+    "/api/eval/scripted-user", dependencies=[Depends(refuse_on_device_listener)]
+)
 async def set_scripted_user(request: ScriptedUserRequest):
     """Script a user who declines these commands and answers nothing (#4447).
 

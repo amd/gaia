@@ -4,11 +4,12 @@
 
 A leaf module — standard library only — so :mod:`gaia.logger`, which every
 other module imports, can resolve the home without an import cycle.
-:mod:`gaia.config` re-exports both functions.
+:mod:`gaia.config` re-exports these functions.
 """
 
 import os
 from pathlib import Path
+from typing import Optional
 
 
 def gaia_home() -> Path:
@@ -35,3 +36,10 @@ def default_gaia_home() -> Path:
     """``~/.gaia``: the home of a process with no ``GAIA_HOME``, and so of the
     machine's default daemon and its Lemonade Server."""
     return Path.home() / ".gaia"
+
+
+def devices_dir(home: Optional[Path] = None) -> Path:
+    """The owner-only folder for paired devices: the listener's key, its
+    certificate and the device table, under *home* (default: :func:`gaia_home`).
+    """
+    return (home or gaia_home()) / "devices"

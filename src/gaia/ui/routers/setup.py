@@ -20,7 +20,7 @@ from gaia.logger import get_logger
 from .. import setup_plan as plan_api
 from ..database import ChatDatabase
 from ..dependencies import get_db
-from ..security import require_local_pc, require_ui_header
+from ..security import refuse_on_device_listener, require_local_pc, require_ui_header
 from ..setup_plan import (
     CantRunHere,
     ServerNotRunning,
@@ -206,7 +206,10 @@ def setup_vision_model(
         raise _plan_error(e, f"{body.model_id} can't read images.") from e
 
 
-@router.post("/api/setup/report", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/api/setup/report",
+    dependencies=[Depends(require_ui_header), Depends(refuse_on_device_listener)],
+)
 def setup_report() -> Dict[str, Any]:
     """Bundle setup's record, every GAIA log and a system snapshot for a bug report."""
     record = runner.report()
@@ -222,7 +225,10 @@ def setup_report() -> Dict[str, Any]:
     return {"name": path.name, "path": str(path), "size_bytes": path.stat().st_size}
 
 
-@router.get("/api/setup/report/{name}", dependencies=[Depends(require_ui_header)])
+@router.get(
+    "/api/setup/report/{name}",
+    dependencies=[Depends(require_ui_header), Depends(refuse_on_device_listener)],
+)
 def setup_report_file(name: str) -> FileResponse:
     """A troubleshooting report written by ``POST /api/setup/report``."""
     from gaia.home import gaia_home

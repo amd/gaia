@@ -51,7 +51,7 @@ from ..models import (
     UpdateSessionRequest,
 )
 from ..run_manager import run_manager
-from ..security import flagship_only
+from ..security import flagship_only, is_local_pc
 from ..utils import UPLOAD_LINK_RE, message_to_response, session_to_response
 from .memory import _get_store as get_memory_store
 
@@ -168,6 +168,15 @@ class _SystemSseEmitter:
 
 
 _system_emitter = _SystemSseEmitter()
+
+#: Marks an event only the PC's own windows may receive.
+_PC_ONLY = "pc_only"
+
+
+async def emit_pc_event(event: dict) -> None:
+    """Tell the PC's windows something no remote caller may see, such as a
+    device pairing; the stream drops it for everyone else."""
+    await _system_emitter.emit({**event, _PC_ONLY: True})
 
 
 # ── Session CRUD ─────────────────────────────────────────────────────────────
@@ -294,13 +303,16 @@ async def create_session(
 
 
 @router.get("/api/sessions/events")
-async def session_events():
+async def session_events(request: Request):
     """SSE stream for system-level session events (activation etc.).
 
     Frontend subscribes on mount; events are emitted by activate_session().
-    Event shape: {"type": "set_active_session", "session_id": "<id>"}
+    Event shape: {"type": "set_active_session", "session_id": "<id>"}. The
+    PC also gets the events :func:`emit_pc_event` sends.
     """
     from fastapi.responses import StreamingResponse
+
+    at_the_pc = is_local_pc(request)
 
     async def generate():
         q = await _system_emitter.subscribe()
@@ -309,6 +321,8 @@ async def session_events():
             while True:
                 try:
                     event = await asyncio.wait_for(q.get(), timeout=30.0)
+                    if event.get(_PC_ONLY) and not at_the_pc:
+                        continue
                     yield f"data: {json.dumps(event)}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"  # prevent proxy timeout

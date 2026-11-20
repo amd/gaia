@@ -47,7 +47,12 @@ from gaia.logger import get_logger
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
-from ..security import require_ui_header, via_tunnel
+from ..security import (
+    on_device_listener,
+    refuse_on_device_listener,
+    require_ui_header,
+    via_tunnel,
+)
 
 logger = get_logger(__name__)
 
@@ -1009,7 +1014,10 @@ def _known(provider: str) -> None:
 
 
 # Re-sends a stored key to Lemonade, so a cross-site GET must not reach it.
-@router.get("/api/providers", dependencies=[Depends(require_ui_header)])
+@router.get(
+    "/api/providers",
+    dependencies=[Depends(require_ui_header), Depends(refuse_on_device_listener)],
+)
 def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     """Every provider with its connection state, and the active model."""
     from gaia.connectors.credential_wait import (
@@ -1164,6 +1172,12 @@ def connect_provider(
     provider: str, body: ConnectRequest, request: Request
 ) -> Dict[str, Any]:
     """Register the provider and hand Lemonade the key; keep a key that works."""
+    if on_device_listener(request) and body.model_fields_set:
+        raise HTTPException(
+            status_code=403,
+            detail="A paired device reconnects with what the PC saved. Enter "
+            "keys and connection settings on the PC running GAIA.",
+        )
     # A new key gets its own settle window.
     _key_settle_started.pop(provider, None)
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated, remember_key
@@ -1396,7 +1410,9 @@ def _connect_on_users_server(provider: str) -> Dict[str, Any]:
     }
 
 
-@router.delete("/api/providers/{provider}/key")
+@router.delete(
+    "/api/providers/{provider}/key", dependencies=[Depends(refuse_on_device_listener)]
+)
 def forget_provider_key(provider: str) -> Dict[str, Any]:
     """Clear the key from Lemonade and from the OS credential store."""
     from gaia.connectors.credential_wait import discard
@@ -1424,7 +1440,8 @@ def forget_provider_key(provider: str) -> Dict[str, Any]:
 
 
 @router.post(
-    "/api/providers/key-store/retry", dependencies=[Depends(require_ui_header)]
+    "/api/providers/key-store/retry",
+    dependencies=[Depends(require_ui_header), Depends(refuse_on_device_listener)],
 )
 def retry_key_store() -> Dict[str, Any]:
     """Let the next read ask the OS to unlock the key store again (Try again)."""
