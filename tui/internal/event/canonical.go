@@ -190,12 +190,18 @@ const (
 	TaskCompleted  = "completed"
 )
 
+// TaskSourcePlan marks a list derived from the reply's plan field.
+const TaskSourcePlan = "plan"
+
 // CanonicalTaskListEvent — the agent's whole task list after a change. Not
 // terminal. Times are epoch seconds; CurrentAction is meaningful only while a
-// turn runs, so a receiver drops it at the turn's final or error.
+// turn runs, so a receiver drops it at the turn's final or error. Source is
+// TaskSourcePlan when the agent derived the list from its reply's plan field
+// because the model kept none.
 type CanonicalTaskListEvent struct {
 	Type            string         `json:"type"`
 	Items           []TaskListItem `json:"items"`
+	Source          string         `json:"source,omitempty"`
 	CurrentAction   string         `json:"current_action,omitempty"`
 	ActionStartedAt float64        `json:"action_started_at,omitempty"`
 	// StepsSinceUpdate counts tool calls since the model last changed the list.

@@ -102,4 +102,16 @@ describe('TaskListCard', () => {
         expect(screen.getByText('3 of 3 done')).toBeTruthy();
     });
 
+    it("labels a list derived from the plan field as the agent's plan", () => {
+        render(<TaskListCard taskList={list({ source: 'plan' })} running />);
+        expect(screen.getByRole('region', { name: "Agent's plan" })).toBeTruthy();
+        expect(screen.queryByRole('region', { name: 'Tasks' })).toBeNull();
+        expect(screen.getByText('1 of 3')).toBeTruthy();
+    });
+
+    it('labels a list the agent keeps as tasks', () => {
+        render(<TaskListCard taskList={list({ source: 'agent' })} running />);
+        expect(screen.getByRole('region', { name: 'Tasks' })).toBeTruthy();
+    });
+
 });

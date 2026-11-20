@@ -23,8 +23,11 @@ from gaia.agents.tools.task_list_tools import (
     IN_PROGRESS,
     MAX_ITEMS,
     PENDING,
+    SOURCE_AGENT,
+    SOURCE_PLAN,
     TaskList,
     TaskListMixin,
+    plan_step_text,
 )
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
@@ -155,6 +158,7 @@ class TestTaskList:
         tl.update(advance=True)
         assert len(events) == 2
         assert events[-1]["items"][1]["status"] == IN_PROGRESS
+        assert events[-1]["source"] == SOURCE_AGENT
 
     def test_the_action_line_follows_tool_calls_but_not_its_own_tool(self):
         events = []
@@ -187,6 +191,48 @@ class TestTaskList:
     def test_a_malformed_saved_list_fails_loudly(self):
         with pytest.raises(ValueError, match="malformed"):
             TaskList().restore({"items": [{"content": "a", "status": "running"}]})
+
+
+# -- the plan-field fallback --------------------------------------------------
+
+
+class TestPlanFallback:
+    def test_the_plan_is_mirrored_when_the_model_kept_no_list(self):
+        events = []
+        tl = TaskList(on_change=events.append)
+        tl.begin_turn()
+        tl.mirror_plan(["Search the web", "Summarize"], 0)
+        assert _statuses(tl) == [IN_PROGRESS, PENDING]
+        assert tl.state()["source"] == SOURCE_PLAN
+        tl.mirror_plan(["Search the web", "Summarize"], 1)
+        assert _statuses(tl) == [COMPLETED, IN_PROGRESS]
+        tl.mirror_plan(["Search the web", "Summarize"], 2)
+        assert _statuses(tl) == [COMPLETED, COMPLETED]
+        assert len(events) == 3
+        assert all(event["source"] == SOURCE_PLAN for event in events)
+
+    def test_a_list_the_model_keeps_always_wins(self):
+        tl = TaskList()
+        tl.begin_turn()
+        tl.update(items=["My own step"])
+        tl.mirror_plan(["Plan step"], 0)
+        assert [item["content"] for item in tl.items] == ["My own step"]
+        assert tl.state()["source"] == SOURCE_AGENT
+
+    def test_a_restored_plan_list_stays_labelled_a_plan(self):
+        tl = TaskList()
+        tl.begin_turn()
+        tl.mirror_plan(["a", "b"], 1)
+        restored = TaskList()
+        restored.restore(json.loads(json.dumps(tl.state())))
+        assert restored.state()["source"] == SOURCE_PLAN
+
+    def test_plan_steps_read_as_plain_lines(self):
+        assert plan_step_text({"description": "  Read   the file "}) == "Read the file"
+        assert plan_step_text(
+            {"tool": "read_file", "tool_args": {"file_path": "a.txt"}}
+        )
+        assert plan_step_text("  two\nlines ") == "two lines"
 
 
 # -- the tool -----------------------------------------------------------------
@@ -339,6 +385,7 @@ class TestEventContract:
         assert event["type"] == "task_list"
         assert set(event) >= {
             "items",
+            "source",
             "current_action",
             "action_started_at",
             "updated_at",
@@ -395,6 +442,7 @@ class TestChatDatabase:
         before = db.get_session(session["id"])["updated_at"]
         state = {
             "items": [{"content": "a", "status": "in_progress"}],
+            "source": "agent",
         }
         db.set_session_task_list(session["id"], state)
         row = db.get_session(session["id"])

@@ -13,7 +13,11 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   `update_tasks` tool keeps the steps and marks them done as it goes; every
   change streams a `task_list` event carrying the whole list, and the list is
   saved with the session. The Agent UI and the terminal UI pin it above the
-  message box.
+  message box. A model that answers with a `plan` field but keeps no list gets
+  a card derived from that plan, sent with `source: "plan"` and titled
+  "Agent's plan". The occasional reminder to start or advance the list rides on
+  the tool result that triggered it and is saved with it, so it never breaks
+  the prompt cache between turns.
 - **Full access runs any command.** It used to refuse a program outside a
   short developer list (`pip`, `where`, `rmdir`, `gaia`, a program given by its
   full path), a package install outside a virtual environment, a path outside

@@ -97,6 +97,7 @@ export interface StreamEvent {
     /** What a tool call does, in plain words (for tool_start and tool_args). */
     narration?: string;
     /** Task list fields (for task_list events) — see TaskListState. */
+    source?: 'agent' | 'plan' | null;
     current_action?: string | null;
     action_started_at?: number | null;
     steps_since_update?: number | null;

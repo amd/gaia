@@ -100,6 +100,29 @@ describe('ChatView task list', () => {
         expect(useChatStore.getState().agentSteps).toEqual([]);
     });
 
+    it("pins a list derived from the plan field as the agent's plan, and keeps the label on reopen", async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'fix the bug' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        act(() => {
+            capturedCallbacks!.onAgentEvent({ type: 'task_list', ...LIST, source: 'plan' } as unknown as StreamEvent);
+        });
+        const card = await screen.findByTestId('task-list-card');
+        expect(card.getAttribute('aria-label')).toBe("Agent's plan");
+        expect(card.querySelector('.task-list-title')?.textContent).toBe("Agent's plan");
+    });
+
+    it("labels a saved plan-derived list as the agent's plan", async () => {
+        useChatStore.setState({
+            sessions: [{ ...SESSION, task_list: { ...LIST, source: 'plan', current_action: null, action_started_at: null } }],
+        });
+        render(<ChatView sessionId={SESSION.id} />);
+        const card = await waitFor(() => screen.getByTestId('task-list-card'));
+        expect(card.getAttribute('aria-label')).toBe("Agent's plan");
+    });
+
     it('keeps the last good list when a malformed event arrives', async () => {
         render(<ChatView sessionId={SESSION.id} />);
         await act(async () => {

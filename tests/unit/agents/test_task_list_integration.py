@@ -21,6 +21,8 @@ from gaia.agents.tools.task_list_tools import (
     COMPLETED,
     IN_PROGRESS,
     PENDING,
+    SOURCE_AGENT,
+    SOURCE_PLAN,
     TaskListMixin,
 )
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
@@ -268,6 +270,45 @@ def test_stop_mid_step_keeps_the_step_unfinished(clean_registry):
     assert final["current_action"] is None
 
 
+def test_the_plan_field_and_the_tool_together_leave_the_tool_in_charge():
+    from gaia.agents.tools.task_list_tools import TaskList
+
+    tl = TaskList()
+    tl.begin_turn()
+    tl.mirror_plan(["Plan a", "Plan b"], 0)
+    assert tl.state()["source"] == SOURCE_PLAN
+    tl.update(items=["Mine 1", "Mine 2"])
+    tl.mirror_plan(["Plan a", "Plan b"], 1)
+    assert [i["content"] for i in tl.items] == ["Mine 1", "Mine 2"]
+    assert tl.state()["source"] == SOURCE_AGENT
+
+
+def test_a_later_turns_plan_does_not_overwrite_an_unfinished_kept_list():
+    from gaia.agents.tools.task_list_tools import TaskList
+
+    tl = TaskList()
+    tl.begin_turn()
+    tl.update(items=STEPS)
+    tl.begin_turn()
+    tl.mirror_plan(["Something else"], 0)
+    assert [i["content"] for i in tl.items] == STEPS
+    # Once everything is done, a new plan may take over.
+    tl.update(done=[1, 2, 3])
+    tl.begin_turn()
+    tl.mirror_plan(["Something else"], 0)
+    assert tl.state()["source"] == SOURCE_PLAN
+
+
+def test_clearing_the_list_stops_the_plan_from_rebuilding_it():
+    from gaia.agents.tools.task_list_tools import TaskList
+
+    tl = TaskList()
+    tl.begin_turn()
+    tl.clear(by_model=True)
+    tl.mirror_plan(["a"], 0)
+    assert tl.items == []
+
+
 def test_a_mid_turn_follow_up_does_not_disturb_the_list(clean_registry):
     # pylint: disable=unused-argument
     import queue
@@ -447,38 +488,96 @@ def test_an_earlier_requests_unfinished_list_gets_no_advance_reminder():
     assert tl.nudge() is None
 
 
-def test_the_agent_sends_the_reminder_to_the_model_but_not_into_history(clean_registry):
-    # pylint: disable=unused-argument
-    from gaia.agents.tools.task_list_tools import NUDGE_START
+def _text(message):
+    content = message.get("content")
+    if isinstance(content, list):
+        return "".join(str(block.get("text", "")) for block in content)
+    return str(content or "")
 
-    agent = _agent()
-    _wire(agent)
-    seen = []
-    replies = [
-        _calls(("read_tli", {"path": "a"})),
-        _calls(("read_tli", {"path": "b"})),
-        _calls(("read_tli", {"path": "c"})),
-        _calls(("update_tasks", {"items": STEPS, "done": [1]})),
-        "done",
-    ]
+
+def _two_turns(agent, first_replies, second_replies):
+    """Run two turns over a saved history; returns every request sent."""
+    agent.conversation_history = SessionHistory()
+    sent = []
+    replies = list(first_replies) + list(second_replies)
 
     def send(messages, *_, **__):
-        seen.append([m.get("content") for m in messages if m.get("role") == "user"])
+        sent.append(json.loads(json.dumps(messages)))
         return SimpleNamespace(text=replies.pop(0), stats={})
 
     agent.chat = MagicMock(
         get_stats=MagicMock(return_value={}), send_messages=MagicMock(side_effect=send)
     )
-    result = agent.process_query("go")
-    reminded = [i for i, users in enumerate(seen) if NUDGE_START in users]
-    assert reminded and reminded[0] == 3, seen
+    results = []
+    for query in ("read the three files", "thanks"):
+        agent.conversation_history.prepare(agent, query)
+        result = agent.process_query(query)
+        agent.conversation_history.record(result["model_messages"])
+        results.append(result)
+    assert not replies, f"turns ended before using their script: {replies}"
+    return sent, results
+
+
+def test_the_reminder_rides_in_the_tool_result_and_is_saved_with_it(clean_registry):
+    # pylint: disable=unused-argument
+    from gaia.agents.tools.task_list_tools import NUDGE_START
+
+    agent = _agent()
+    _wire(agent)
+    sent, results = _two_turns(
+        agent,
+        [
+            _calls(("read_tli", {"path": "a"})),
+            _calls(("read_tli", {"path": "b"})),
+            _calls(("read_tli", {"path": "c"})),
+            _calls(("update_tasks", {"items": STEPS, "done": [1]})),
+            "done",
+        ],
+        ["You're welcome."],
+    )
+    reminded = [
+        i
+        for i, request in enumerate(sent)
+        if any(NUDGE_START in _text(m) for m in request)
+    ]
+    assert reminded and reminded[0] == 3, sent
+    # On the third call's result, never as a message of its own.
+    [carrier] = [m for m in sent[3] if NUDGE_START in _text(m)]
+    assert carrier["role"] == "tool" and _text(carrier).endswith(NUDGE_START)
     assert [i["status"] for i in agent.task_list.items] == [
         COMPLETED,
         IN_PROGRESS,
         PENDING,
     ]
-    saved = json.dumps(result.get("model_messages") or [])
-    assert NUDGE_START not in saved
+    saved = json.dumps(results[0]["model_messages"])
+    assert saved.count(NUDGE_START) == 1
+
+
+def test_turns_after_a_reminder_extend_each_other(clean_registry):
+    """llama.cpp reuses only the prefix two requests share: a reminder dropped
+    after the request that carried it made the next turn re-read everything."""
+    # pylint: disable=unused-argument
+    from gaia.agents.tools.task_list_tools import NUDGE_START
+
+    agent = _agent()
+    _wire(agent)
+    sent, _results = _two_turns(
+        agent,
+        [
+            _calls(("read_tli", {"path": "a"})),
+            _calls(("read_tli", {"path": "b"})),
+            _calls(("read_tli", {"path": "c"})),
+            "They all say hello world.",
+        ],
+        ["You're welcome."],
+    )
+    assert any(NUDGE_START in _text(m) for m in sent[3])
+    first_turn_last, second_turn_first = sent[3], sent[4]
+    assert second_turn_first[: len(first_turn_last)] == first_turn_last
+    for step, (before, after) in enumerate(zip(sent, sent[1:]), start=1):
+        assert (
+            after[: len(before)] == before
+        ), f"request {step + 1} drops part of {step}"
 
 
 # -- other readers of the wire ----------------------------------------------------
@@ -567,3 +666,49 @@ def test_a_saved_list_that_is_not_an_object_is_refused_loudly():
 
     with pytest.raises(ValueError, match="not an object"):
         ChatDatabase.decode_task_list({"id": "s", "task_list": "[]"})
+
+
+def test_a_model_that_keeps_no_list_gets_its_plan_pinned_as_a_plan(clean_registry):
+    """#5315: small models rarely call update_tasks; their plan field fills in."""
+    # pylint: disable=unused-argument
+    agent = _agent()
+    ui_events = _wire(agent)
+    agent._uses_native_tool_calls = lambda: False
+    plan = [
+        {"tool": "read_tli", "tool_args": {"path": "a"}},
+        {"tool": "read_tli", "tool_args": {"path": "b"}},
+    ]
+    replies = [
+        json.dumps(
+            {
+                "thought": "Read both files.",
+                "goal": "Summarize a and b.",
+                "plan": plan,
+                "tool": "read_tli",
+                "tool_args": {"path": "a"},
+            }
+        )
+    ]
+
+    def send(*_, **__):
+        text = replies.pop(0) if replies else json.dumps({"answer": "Both say hello."})
+        return SimpleNamespace(text=text, stats={})
+
+    agent.chat = MagicMock(
+        get_stats=MagicMock(return_value={}), send_messages=MagicMock(side_effect=send)
+    )
+    agent.process_query("summarize a and b")
+
+    lists = _lists(ui_events)
+    assert lists, ui_events
+    assert all(e["source"] == SOURCE_PLAN for e in lists)
+    assert all(_one_running(e) for e in lists)
+    assert len(lists[-1]["items"]) == 2
+    assert _statuses(lists[-1]) == [COMPLETED, COMPLETED]
+    canonical = [
+        c
+        for e in ui_events
+        for c in CanonicalTranslator(run_id=None, agent_id="gaia").translate(e)
+        if c.get("type") == "task_list"
+    ]
+    assert canonical and canonical[0]["source"] == SOURCE_PLAN

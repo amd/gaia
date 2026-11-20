@@ -31,6 +31,10 @@ const maxTaskItems = 50
 // say the list is stale.
 const staleAfterSteps = 4
 
+// planTaskTitle heads a list derived from the reply's plan field, so it never
+// reads as a list the agent is keeping.
+const planTaskTitle = "Agent's plan"
+
 // setTaskList replaces the pinned list; an empty one takes it down. Step text
 // is cleaned here, once: it is model output and reaches the terminal verbatim.
 func (m *ChatModel) setTaskList(e *event.CanonicalTaskListEvent) {
@@ -98,6 +102,9 @@ func (m ChatModel) renderTaskList(maxRows int) string {
 		}
 	}
 	title := "Tasks"
+	if tl.Source == event.TaskSourcePlan {
+		title = planTaskTitle
+	}
 	total := len(tl.Items) + m.taskHidden
 	count := fmt.Sprintf("%d of %d", done, total)
 	allDone := done == len(tl.Items) && m.taskHidden == 0

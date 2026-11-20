@@ -228,7 +228,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 | `context_usage` | `{window, used, turns_in_view, turns_hidden, ...}` | update the composer's context meter; **not terminal**. The sidecar streams it before the answer for a caller that sent `turns` (contract ≥ 2.28), in the same shape an in-process turn streams at turn start, so the meter fills during a long turn instead of waiting for `final` |
 | `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
-| `task_list` | `{items, current_action, action_started_at, steps_since_update, updated_at}` (§4.5) | replace the pinned task list above the composer. **Not terminal** |
+| `task_list` | `{items, source, current_action, action_started_at, steps_since_update, updated_at}` (§4.5) | replace the pinned task list above the composer. **Not terminal** |
 | `final` | `{answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?, route?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `failure: "model_server_down"` means the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25), and `route` is a `hybrid` session's routing decision, whose `model` is the concrete model the turn ran on: bill and label the turn by it (contract >= 2.29) |
 | `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
 
@@ -361,6 +361,7 @@ indistinguishable from a dead one.
   "properties": {
     "type":               { "const": "task_list" },
     "items":              { "type": "array" },             // the whole list; replace, never merge
+    "source":             { "enum": ["agent", "plan"] },   // absent means "agent"
     "current_action":     { "type": ["string", "null"] },
     "action_started_at":  { "type": ["number", "null"] },
     "steps_since_update": { "type": "integer" },
@@ -509,6 +510,7 @@ turn: it is saved with the session and carried into later turns.
 | `items[].content` | string | A short imperative step. |
 | `items[].status` | string | `pending`, `in_progress` or `completed`. While any step is unfinished exactly one is `in_progress`; when all are done none is. |
 | `items[].started_at` / `completed_at` | number? | Epoch seconds, `null` until it happens. |
+| `source` | string | `agent` when the model keeps the list with `update_tasks`; `plan` when the agent derived it from the reply's own `plan` field because the model did not call `update_tasks` that turn (never over an unfinished list the model kept earlier). A receiver labels a `plan` list as the agent's plan, not a list it keeps. Absent means `agent`. |
 | `current_action` | string? | What the agent is doing now ("Running command: pytest"). |
 | `action_started_at` | number? | Epoch seconds the current action began. |
 | `steps_since_update` | int | Tool calls since the model last changed the list. A receiver shows the list as stale once this passes a few steps, so a list the model stopped keeping never sits there looking current. |
@@ -710,7 +712,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 | `step` | `print_step_header` | **fold** | `status` | Step counter is progress narration; render as a `status` line (e.g. `"Step 3/20"`). No dedicated canonical type. |
 | `thinking` | `print_thought`, `print_streaming_text` (`<think>…</think>`) | **fold** / **map** | `status`, or `reasoning` | Reasoning narration, not final assistant text — never `token` (which is answer text the UI commits to the message). Folds to `status` unless the request set `reasoning: true` (contract ≥ 2.22), which maps it to `reasoning` unchanged, `retracts_answer` included. See §9 Q1, now resolved. |
 | `commentary` | `_emit` (before a `tool_start`) | **drop** | — | Re-derived from the `token` text by the receiving host's own handler, so the sidecar's copy would double it. |
-| `plan` | `print_plan` | **fold** | `status` | Plan preview is progress narration; join `steps` into one `status` message. |
+| `plan` | `print_plan` | **fold** | `status` | Plan preview is progress narration; join `steps` into one `status` message. When the model keeps no list, the same plan also reaches the pinned card as a `task_list` with `source: "plan"`. |
 | `task_list` | `print_task_list` | **map** | `task_list` | Passed through unchanged (§4.5). Handled before dispatch, like `tool_args`, so it never splits a `tool_call` from its arguments. |
 | `tool_args` | `pretty_print_json` (`title == "Arguments"`) | **fold** | `tool_call` | Merged into the preceding `tool_call` as `args` (§6.3), not a standalone event. |
 | `tool_result` | `pretty_print_json` (result branch) | **map** | `tool_result` | Direct. `result_data` (incl. nested `file_list` / `search_results`) → canonical `data`; `render` set from the sidecar's declared card type (replaces the #1000 fence hack). |

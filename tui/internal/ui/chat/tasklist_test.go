@@ -95,6 +95,39 @@ func TestTaskListFoldsToOneLineBetweenTurns(t *testing.T) {
 	}
 }
 
+// A list derived from the reply's plan field never reads as one the agent keeps.
+func TestAPlanDerivedListIsLabelledTheAgentsPlan(t *testing.T) {
+	plan := threeSteps()
+	plan.Source = event.TaskSourcePlan
+	m := newTestChat(t)
+	m.width = 40
+	m.resize()
+	m = feed(t, m, plan)
+
+	lines := cardLines(m)
+	if lines[1] != " "+planTaskTitle+" 1 of 3" {
+		t.Errorf("plan-derived head reads %q", lines[1])
+	}
+	for _, l := range strings.Split(m.renderTaskList(m.taskRows), "\n") {
+		if w := lipgloss.Width(l); w > 40 {
+			t.Errorf("a row is %d cells wide on a 40-column terminal: %q", w, ansi.Strip(l))
+		}
+	}
+
+	m.streaming = false
+	m.resize()
+	if got := cardLines(m)[1]; !strings.HasPrefix(got, " "+planTaskTitle+" 1 of 3 · next:") {
+		t.Errorf("folded plan-derived head reads %q", got)
+	}
+
+	kept := threeSteps()
+	kept.Source = "agent"
+	m = feed(t, m, kept)
+	if got := cardLines(m)[1]; !strings.HasPrefix(got, " Tasks ") {
+		t.Errorf("a list the agent keeps reads %q", got)
+	}
+}
+
 // Readable with no colour and no symbol font: the state is in the ASCII mark.
 func TestTaskListMarksNeedNoColourOrSymbolFont(t *testing.T) {
 	m := feed(t, newTestChat(t), threeSteps())

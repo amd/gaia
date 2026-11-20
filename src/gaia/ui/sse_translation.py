@@ -456,6 +456,7 @@ class CanonicalTranslator:
             {
                 "type": "task_list",
                 "items": event.get("items") or [],
+                "source": event.get("source"),
                 "current_action": event.get("current_action"),
                 "action_started_at": event.get("action_started_at"),
                 "steps_since_update": event.get("steps_since_update", 0),

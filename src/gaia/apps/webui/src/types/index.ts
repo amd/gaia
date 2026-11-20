@@ -75,6 +75,8 @@ export interface TaskListItem {
 /** The agent's task list — the payload of a `task_list` event. */
 export interface TaskListState {
     items: TaskListItem[];
+    /** `agent` when the model keeps it, `plan` when derived from its plan field. */
+    source?: 'agent' | 'plan' | null;
     /** What the agent is doing right now; meaningful only while a turn runs. */
     current_action?: string | null;
     action_started_at?: number | null;

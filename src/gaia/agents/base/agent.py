@@ -5450,22 +5450,32 @@ Do NOT wrap conversational replies in JSON.
         behind a once-per-session guard inside the override, not here.
         """
 
-    def _remind_task_list(self, messages: List[Dict], conversation: List[Dict]) -> None:
-        """Remind the model to start or advance its task list, at most once a turn.
+    def _task_list_reminder(self) -> Optional[str]:
+        """The task-list reminder due now, at most once a turn, or ``None``.
 
-        Per-turn guidance, like the step-budget notices: in this turn's
-        request, never in saved history.
+        It rides at the end of the tool result being built, so it is saved
+        with the turn and every later request still extends this one.
         """
         task_list = getattr(self, "task_list", None)
-        if task_list is None:
+        note = task_list.nudge() if task_list is not None else None
+        if note is not None:
+            logger.debug("Task list reminder: %s", note)
+        return note
+
+    def _mirror_plan_to_task_list(self) -> None:
+        """Derive the task list from the reply's ``plan`` field.
+
+        Only for a model that did not keep the list with ``update_tasks`` this
+        turn; the task list itself decides and logs that it did.
+        """
+        task_list = getattr(self, "task_list", None)
+        if task_list is None or not self.current_plan:
             return
-        note = task_list.nudge()
-        if note is None:
-            return
-        transient = getattr(messages, "append_transient", messages.append)
-        transient({"role": "user", "content": note})
-        conversation.append({"role": "user", "content": note})
-        logger.debug("Task list reminder: %s", note)
+        from gaia.agents.tools.task_list_tools import plan_step_text
+
+        task_list.mirror_plan(
+            [plan_step_text(step) for step in self.current_plan], self.current_step
+        )
 
     def _admit_skill_tools(  # pylint: disable=unused-argument
         self, names: List[str]
@@ -11403,6 +11413,9 @@ Do NOT wrap conversational replies in JSON.
                 if block.get("type") == "text":
                     block["text"] += _SINGLE_TOOL_DONE_SUFFIX
                     break
+        reminder = self._task_list_reminder()
+        if reminder is not None:
+            msg["content"][-1]["text"] += "\n\n" + reminder
         return msg
 
     def _recast_unpaired_tool_results(self, messages: List[Dict[str, Any]]) -> None:
@@ -13573,7 +13586,6 @@ Do NOT wrap conversational replies in JSON.
             # as the drain above: appended at the step boundary so the next
             # model call sees it.
             self._announce_step_budget(messages, conversation, steps_taken, steps_limit)
-            self._remind_task_list(messages, conversation)
             if self._time_is_up(messages, conversation):
                 time_limit_reached = True
                 break
@@ -13618,6 +13630,7 @@ Do NOT wrap conversational replies in JSON.
                 # Display the current plan with the current step highlighted
                 if self.current_plan:
                     self.console.print_plan(self.current_plan, self.current_step)
+                    self._mirror_plan_to_task_list()
 
                 # Extract next step from plan
                 next_step = self.current_plan[self.current_step]
@@ -13781,6 +13794,7 @@ Do NOT wrap conversational replies in JSON.
                         # Check if we've completed the plan
                         if self.current_step >= self.total_plan_steps:
                             logger.debug("Plan execution completed")
+                            self._mirror_plan_to_task_list()
                             self.execution_state = self.STATE_COMPLETION
                             self.console.print_state_info(
                                 "COMPLETION: Plan fully executed"
@@ -15214,6 +15228,7 @@ Do NOT wrap conversational replies in JSON.
                 # Display the current plan with the current step highlighted
                 if self.current_plan:
                     self.console.print_plan(self.current_plan, self.current_step)
+                    self._mirror_plan_to_task_list()
 
                 # When both plan and tool are present, prioritize the plan execution
                 # If we have a plan, we should execute from the plan, not the standalone tool call

@@ -47,6 +47,21 @@ def test_a_200_step_plan_is_refused_whole_and_changes_nothing():
     assert len(tl.items) == MAX_ITEMS
 
 
+def test_a_200_step_envelope_plan_stays_bounded_around_the_running_step():
+    tl = TaskList()
+    tl.begin_turn()
+    steps = [f"step {i}" for i in range(200)]
+    for current in range(0, 201, 7):
+        tl.mirror_plan(steps, current)
+        items = tl.items
+        assert len(items) <= MAX_ITEMS
+        assert _one_running(items)
+        if current < 200:
+            assert any(
+                i["id"] == current + 1 and i["status"] == IN_PROGRESS for i in items
+            )
+
+
 def test_a_burst_of_updates_arrives_complete_and_in_order():
     """1,000 changes as fast as the agent can make them (well past 100/s)."""
     handler = SSEOutputHandler()
