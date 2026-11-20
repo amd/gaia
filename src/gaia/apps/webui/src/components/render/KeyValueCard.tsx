@@ -2,29 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { UnsupportedCard } from './UnsupportedCard';
-import { MAX_ITEMS, isScalar, isOptionalString, scalarText, truncationLabel } from './primitiveShared';
-import type { Scalar } from './primitiveShared';
-
-interface KeyValuePayload {
-    title?: string;
-    items: Array<{ key: string; value: Scalar }>;
-}
-
-function isKeyValuePayload(value: unknown): value is KeyValuePayload {
-    if (!value || typeof value !== 'object') return false;
-    const v = value as Record<string, unknown>;
-    return (
-        isOptionalString(v.title) &&
-        Array.isArray(v.items) &&
-        v.items.every(
-            (item) =>
-                item &&
-                typeof item === 'object' &&
-                typeof (item as Record<string, unknown>).key === 'string' &&
-                isScalar((item as Record<string, unknown>).value),
-        )
-    );
-}
+import { MAX_ITEMS, isKeyValuePayload, scalarText, truncationLabel } from '../../utils/renderCards.core';
 
 export function KeyValueCard({ data }: { data: unknown }) {
     if (!isKeyValuePayload(data)) {

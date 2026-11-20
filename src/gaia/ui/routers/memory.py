@@ -39,6 +39,8 @@ from gaia.ui.memory_settings import MEMORY_ENABLED_KEY, memory_enabled
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
+from ..models import WireModel
+from ..security import refuse_on_device_listener
 from ..security import require_ui_header as _require_ui_header
 
 logger = logging.getLogger(__name__)
@@ -224,6 +226,260 @@ class KnowledgeUpdate(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Response models
+# ---------------------------------------------------------------------------
+
+
+class MemoryEmbeddingCoverage(WireModel):
+    """Share of active knowledge rows that have an embedding."""
+
+    total_items: int
+    with_embedding: int
+    without_embedding: int
+    coverage_pct: float
+
+
+class MemoryKnowledgeStats(WireModel):
+    """Knowledge-table aggregates for the dashboard header."""
+
+    total: int
+    total_retrievals: int
+    by_category: Dict[str, int]
+    by_context: Dict[str, int]
+    sensitive_count: int
+    entity_count: int
+    avg_confidence: float
+    oldest: Optional[str]
+    newest: Optional[str]
+
+
+class MemoryConversationStats(WireModel):
+    """Conversation-table aggregates."""
+
+    total_turns: int
+    total_sessions: int
+    first_session: Optional[str]
+    last_session: Optional[str]
+
+
+class MemoryToolStats(WireModel):
+    """Tool-history aggregates."""
+
+    total_calls: int
+    unique_tools: int
+    overall_success_rate: float
+    total_errors: int
+    denied_calls: int
+
+
+class MemoryTemporalStats(WireModel):
+    """Counts of time-sensitive knowledge rows."""
+
+    upcoming_count: int
+    overdue_count: int
+
+
+class MemoryProcedureStats(WireModel):
+    """Procedural-memory aggregates."""
+
+    total: int
+    active: int
+    last_recalled: Optional[str]
+
+
+class MemoryStatsResponse(WireModel):
+    """Memory dashboard header stats."""
+
+    knowledge: MemoryKnowledgeStats
+    conversations: MemoryConversationStats
+    tools: MemoryToolStats
+    temporal: MemoryTemporalStats
+    procedures: MemoryProcedureStats
+    db_size_bytes: int
+    embedding: Optional[MemoryEmbeddingCoverage]
+    embedding_error: Optional[str] = None
+
+
+class MemoryActivityDay(WireModel):
+    """One day of the activity chart."""
+
+    date: str
+    conversations: int
+    tool_calls: int
+    knowledge_added: int
+    errors: int
+
+
+class MemoryKnowledgeItem(WireModel):
+    """One knowledge row (the embedding BLOB is never sent)."""
+
+    id: str
+    category: str
+    content: str
+    domain: Optional[str]
+    source: str
+    confidence: float
+    metadata: Any  # free-form per-row JSON, None when absent or corrupt
+    use_count: int
+    context: str
+    sensitive: bool
+    entity: Optional[str]
+    created_at: str
+    updated_at: str
+    last_used: Optional[str]
+    due_at: Optional[str]
+    reminded_at: Optional[str]
+    superseded_by: Optional[str]
+
+
+class MemoryKnowledgePage(WireModel):
+    """A page of knowledge rows."""
+
+    items: List[MemoryKnowledgeItem]
+    total: int
+    offset: int
+    limit: int
+
+
+class MemoryKnowledgeWriteResponse(WireModel):
+    """Result of creating, editing or deleting a knowledge row."""
+
+    status: Literal["created", "updated", "deleted"]
+    knowledge_id: str
+    embedded: Optional[bool] = None
+    embed_error: Optional[str] = None
+    knowledge_ids: Optional[List[str]] = None
+
+
+class MemoryEntity(WireModel):
+    """An entity with how many rows mention it."""
+
+    entity: str
+    count: int
+    last_updated: str
+
+
+class MemoryToolSummary(WireModel):
+    """Per-tool performance stats."""
+
+    tool_name: str
+    total_calls: int
+    success_count: int
+    failure_count: int
+    denied_count: int
+    success_rate: float
+    avg_duration_ms: Optional[int]
+    last_used: str
+    last_error: Optional[str]
+
+
+class MemorySession(WireModel):
+    """A conversation session summary."""
+
+    session_id: str
+    turn_count: int
+    started_at: str
+    last_activity: str
+    first_message: str
+
+
+class MemoryConversationTurn(WireModel):
+    """One stored conversation turn."""
+
+    id: int
+    session_id: str
+    role: str
+    content: str
+    context: Optional[str]
+    timestamp: str
+
+
+class MemoryConsolidateResponse(WireModel):
+    """Counts from a consolidation run."""
+
+    consolidated: int
+    windows: int
+    extracted_items: int
+
+
+class MemoryRebuildEmbeddingsResponse(WireModel):
+    """Counts from an embedding backfill."""
+
+    backfilled: int
+    total_without: int
+
+
+class MemoryReconcileResponse(WireModel):
+    """Counts from a reconciliation run."""
+
+    pairs_checked: int
+    reinforced: int
+    contradicted: int
+    weakened: int
+    neutral: int
+
+
+class MemoryRebuildFtsResponse(WireModel):
+    """Result of an FTS rebuild."""
+
+    status: Literal["rebuilt"]
+
+
+class MemoryClearCounts(WireModel):
+    """Rows deleted per table."""
+
+    knowledge: int
+    tool_history: int
+    conversations: int
+
+
+class MemoryPruneResponse(WireModel):
+    """Rows pruned per table, and conversation turns kept for pending summaries."""
+
+    tool_history_deleted: int
+    conversations_deleted: int
+    knowledge_deleted: int
+    conversations_retained: int
+
+
+class MemorySystemContextRefresh(WireModel):
+    """Result of a system-context refresh; ``error`` only when discovery failed."""
+
+    stored: int
+    skipped: Optional[bool] = None
+    reason: Optional[str] = None
+    error: Optional[str] = None
+
+
+class MemoryReinitializeResponse(WireModel):
+    """Result of wiping memory and re-running discovery."""
+
+    cleared: MemoryClearCounts
+    system_context: MemorySystemContextRefresh
+
+
+class MemoryCommitResponse(WireModel):
+    """How many approved items were stored."""
+
+    stored: int
+
+
+class MemorySettingsResponse(WireModel):
+    """Memory feature settings."""
+
+    memory_enabled: bool
+    mcp_memory_enabled: bool
+    system_discovery_consent: bool
+
+
+class MemorySettingsUpdateResponse(MemorySettingsResponse):
+    """Settings after an update, plus the consent-triggered refresh outcome."""
+
+    system_context_refresh: Optional[MemorySystemContextRefresh] = None
+    system_context_error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
 # MemoryStore access
 # ---------------------------------------------------------------------------
 
@@ -286,7 +542,11 @@ def close_store() -> None:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/memory/stats")
+@router.get(
+    "/api/memory/stats",
+    response_model=MemoryStatsResponse,
+    response_model_exclude_unset=True,
+)
 def memory_stats() -> Dict:
     """Aggregate stats for dashboard header cards.
 
@@ -309,7 +569,11 @@ def memory_stats() -> Dict:
     return stats
 
 
-@router.get("/api/memory/activity")
+@router.get(
+    "/api/memory/activity",
+    response_model=List[MemoryActivityDay],
+    response_model_exclude_unset=True,
+)
 def memory_activity(days: int = Query(30, ge=1, le=365)) -> List[Dict]:
     """Daily activity timeline for the activity chart."""
     return _get_store().get_activity_timeline(days=days)
@@ -320,7 +584,11 @@ def memory_activity(days: int = Query(30, ge=1, le=365)) -> List[Dict]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/memory/knowledge")
+@router.get(
+    "/api/memory/knowledge",
+    response_model=MemoryKnowledgePage,
+    response_model_exclude_unset=True,
+)
 def list_knowledge(
     category: Optional[List[str]] = Query(None),
     context: Optional[str] = None,
@@ -455,7 +723,11 @@ def _embed_row(store, knowledge_id: str) -> Dict[str, Any]:
     return {"embedded": True}
 
 
-@router.post("/api/memory/knowledge")
+@router.post(
+    "/api/memory/knowledge",
+    response_model=MemoryKnowledgeWriteResponse,
+    response_model_exclude_unset=True,
+)
 def create_knowledge(body: KnowledgeCreate) -> Dict:
     """Create a knowledge entry from the dashboard and embed it."""
     store = _get_store()
@@ -481,7 +753,11 @@ def create_knowledge(body: KnowledgeCreate) -> Dict:
     }
 
 
-@router.put("/api/memory/knowledge/{knowledge_id}")
+@router.put(
+    "/api/memory/knowledge/{knowledge_id}",
+    response_model=MemoryKnowledgeWriteResponse,
+    response_model_exclude_unset=True,
+)
 def edit_knowledge(knowledge_id: str, body: KnowledgeUpdate) -> Dict:
     """Edit a knowledge entry from the dashboard; re-embed changed content."""
     kwargs = {k: v for k, v in body.model_dump().items() if v is not None}
@@ -502,7 +778,11 @@ def edit_knowledge(knowledge_id: str, body: KnowledgeUpdate) -> Dict:
     return result
 
 
-@router.delete("/api/memory/knowledge/{knowledge_id}")
+@router.delete(
+    "/api/memory/knowledge/{knowledge_id}",
+    response_model=MemoryKnowledgeWriteResponse,
+    response_model_exclude_unset=True,
+)
 def delete_knowledge(knowledge_id: str) -> Dict:
     """Delete an entry; one about the user is also recorded as forgotten.
 
@@ -528,7 +808,11 @@ def delete_knowledge(knowledge_id: str) -> Dict:
     return result
 
 
-@router.get("/api/memory/knowledge/{knowledge_id}")
+@router.get(
+    "/api/memory/knowledge/{knowledge_id}",
+    response_model=MemoryKnowledgeItem,
+    response_model_exclude_unset=True,
+)
 def get_knowledge_item(knowledge_id: str) -> Dict:
     """Fetch one knowledge entry by ID, including superseded rows.
 
@@ -576,7 +860,9 @@ def _require_memory_admin() -> None:
         )
 
 
-@router.post("/api/memory/admin/clear")
+@router.post(
+    "/api/memory/admin/clear", dependencies=[Depends(refuse_on_device_listener)]
+)
 def admin_clear(body: AdminClearRequest) -> Dict:
     """Wipe memory for an eval scenario reset.  Eval-only.
 
@@ -601,7 +887,9 @@ def admin_clear(body: AdminClearRequest) -> Dict:
     return {"scope": body.scope, "cleared": cleared}
 
 
-@router.post("/api/memory/admin/seed")
+@router.post(
+    "/api/memory/admin/seed", dependencies=[Depends(refuse_on_device_listener)]
+)
 def admin_seed(body: AdminSeedRequest) -> Dict:
     """Bulk-insert knowledge items, bypassing dedup.  Eval-only.
 
@@ -634,7 +922,11 @@ def admin_seed(body: AdminSeedRequest) -> Dict:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/memory/entities")
+@router.get(
+    "/api/memory/entities",
+    response_model=List[MemoryEntity],
+    response_model_exclude_unset=True,
+)
 def list_entities(limit: int = Query(100, ge=1, le=500)) -> List[Dict]:
     """List all unique entities with their knowledge counts."""
     return _get_store().get_entities(limit=limit)
@@ -651,7 +943,11 @@ def get_entity(entity: str, limit: int = Query(20, ge=1, le=200)) -> List[Dict]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/memory/tools")
+@router.get(
+    "/api/memory/tools",
+    response_model=List[MemoryToolSummary],
+    response_model_exclude_unset=True,
+)
 def tool_summary() -> List[Dict]:
     """Per-tool performance stats."""
     return _get_store().get_tool_summary()
@@ -662,13 +958,21 @@ def tool_summary() -> List[Dict]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/memory/conversations")
+@router.get(
+    "/api/memory/conversations",
+    response_model=List[MemorySession],
+    response_model_exclude_unset=True,
+)
 def list_sessions(limit: int = Query(20, ge=1, le=100)) -> List[Dict]:
     """List conversation sessions with timestamps and turn counts."""
     return _get_store().get_sessions(limit=limit)
 
 
-@router.get("/api/memory/conversations/search")
+@router.get(
+    "/api/memory/conversations/search",
+    response_model=List[MemoryConversationTurn],
+    response_model_exclude_unset=True,
+)
 def search_conversations(
     query: str = Query(..., min_length=1, max_length=500),
     limit: int = Query(20, ge=1, le=100),
@@ -677,7 +981,11 @@ def search_conversations(
     return _get_store().search_conversations(query, limit=limit)
 
 
-@router.get("/api/memory/conversations/{session_id}")
+@router.get(
+    "/api/memory/conversations/{session_id}",
+    response_model=List[MemoryConversationTurn],
+    response_model_exclude_unset=True,
+)
 def get_session(
     session_id: str,
     limit: int = Query(200, ge=1, le=500),
@@ -691,7 +999,11 @@ def get_session(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/memory/upcoming")
+@router.get(
+    "/api/memory/upcoming",
+    response_model=List[MemoryKnowledgeItem],
+    response_model_exclude_unset=True,
+)
 def upcoming_items(
     days: int = Query(7, ge=1, le=90),
     include_sensitive: bool = Query(
@@ -713,7 +1025,11 @@ def upcoming_items(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/memory/consolidate")
+@router.post(
+    "/api/memory/consolidate",
+    response_model=MemoryConsolidateResponse,
+    response_model_exclude_unset=True,
+)
 def trigger_consolidation(
     max_sessions: int = Query(5, ge=1, le=50),
 ) -> Dict:
@@ -738,7 +1054,11 @@ def trigger_consolidation(
         raise HTTPException(500, f"Consolidation failed: {type(exc).__name__}")
 
 
-@router.post("/api/memory/rebuild-embeddings")
+@router.post(
+    "/api/memory/rebuild-embeddings",
+    response_model=MemoryRebuildEmbeddingsResponse,
+    response_model_exclude_unset=True,
+)
 def rebuild_embeddings() -> Dict:
     """Trigger embedding backfill for items missing embeddings.
 
@@ -771,7 +1091,11 @@ Item B (stored {date_b}): {content_b}"""
 _RECONCILE_SIMILARITY_THRESHOLD = 0.85
 
 
-@router.post("/api/memory/reconcile")
+@router.post(
+    "/api/memory/reconcile",
+    response_model=MemoryReconcileResponse,
+    response_model_exclude_unset=True,
+)
 def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
     """Manually trigger background memory reconciliation.
 
@@ -986,7 +1310,11 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
         raise HTTPException(500, f"Reconciliation failed: {type(exc).__name__}: {exc}")
 
 
-@router.get("/api/memory/embedding-coverage")
+@router.get(
+    "/api/memory/embedding-coverage",
+    response_model=MemoryEmbeddingCoverage,
+    response_model_exclude_unset=True,
+)
 def embedding_coverage() -> Dict:
     """Return embedding status for all knowledge items.
 
@@ -1003,7 +1331,11 @@ def embedding_coverage() -> Dict:
         )
 
 
-@router.post("/api/memory/rebuild-fts")
+@router.post(
+    "/api/memory/rebuild-fts",
+    response_model=MemoryRebuildFtsResponse,
+    response_model_exclude_unset=True,
+)
 def rebuild_fts() -> Dict:
     """Rebuild all FTS5 indexes from source tables.
 
@@ -1017,7 +1349,11 @@ def rebuild_fts() -> Dict:
         raise HTTPException(500, f"FTS rebuild failed: {type(exc).__name__}")
 
 
-@router.post("/api/memory/prune")
+@router.post(
+    "/api/memory/prune",
+    response_model=MemoryPruneResponse,
+    response_model_exclude_unset=True,
+)
 def prune_memory(days: int = Query(90, ge=7, le=365)) -> Dict:
     """Prune old tool history, conversations, and low-confidence knowledge.
 
@@ -1030,7 +1366,12 @@ def prune_memory(days: int = Query(90, ge=7, le=365)) -> Dict:
         raise HTTPException(500, f"Prune failed: {type(exc).__name__}")
 
 
-@router.delete("/api/memory/all", dependencies=[Depends(_require_ui_header)])
+@router.delete(
+    "/api/memory/all",
+    dependencies=[Depends(_require_ui_header)],
+    response_model=MemoryClearCounts,
+    response_model_exclude_unset=True,
+)
 def clear_all_memory() -> Dict:
     """Permanently delete all knowledge, tool history, and conversation data.
 
@@ -1047,7 +1388,12 @@ def clear_all_memory() -> Dict:
         raise HTTPException(500, f"Clear failed: {type(exc).__name__}")
 
 
-@router.post("/api/memory/reinitialize", dependencies=[Depends(_require_ui_header)])
+@router.post(
+    "/api/memory/reinitialize",
+    dependencies=[Depends(_require_ui_header), Depends(refuse_on_device_listener)],
+    response_model=MemoryReinitializeResponse,
+    response_model_exclude_unset=True,
+)
 def reinitialize_memory() -> Dict:
     """Wipe all memory and re-run initialization from scratch.
 
@@ -1136,7 +1482,12 @@ def _do_system_context_refresh() -> Dict:
     return {"stored": stored, "skipped": False}
 
 
-@router.post("/api/memory/refresh-system-context")
+@router.post(
+    "/api/memory/refresh-system-context",
+    dependencies=[Depends(refuse_on_device_listener)],
+    response_model=MemorySystemContextRefresh,
+    response_model_exclude_unset=True,
+)
 def refresh_system_context() -> Dict:
     """Re-collect OS, hardware, installed apps, and version facts.
 
@@ -1276,7 +1627,9 @@ def _downloaded_on_this_pc(model_id: str) -> bool:
     )
 
 
-@router.get("/api/memory/stream-discovery")
+@router.get(
+    "/api/memory/stream-discovery", dependencies=[Depends(refuse_on_device_listener)]
+)
 def stream_discovery():
     """Stream system discovery findings as SSE.
 
@@ -1385,7 +1738,9 @@ def stream_discovery():
     )
 
 
-@router.get("/api/memory/stream-inference")
+@router.get(
+    "/api/memory/stream-inference", dependencies=[Depends(refuse_on_device_listener)]
+)
 def stream_inference(include_browser: bool = Query(False)):
     """Stream LLM-assisted profile inference as SSE.
 
@@ -1741,7 +2096,12 @@ class InferenceCommit(BaseModel):
     insights: List[InferenceCommitItem]
 
 
-@router.post("/api/memory/commit-discovery")
+@router.post(
+    "/api/memory/commit-discovery",
+    dependencies=[Depends(refuse_on_device_listener)],
+    response_model=MemoryCommitResponse,
+    response_model_exclude_unset=True,
+)
 def commit_discovery(body: DiscoveryCommit) -> Dict:
     """Store approved discovery findings. Returns ``{stored: int}``.
 
@@ -1781,7 +2141,12 @@ def commit_discovery(body: DiscoveryCommit) -> Dict:
     return {"stored": stored}
 
 
-@router.post("/api/memory/commit-inference")
+@router.post(
+    "/api/memory/commit-inference",
+    dependencies=[Depends(refuse_on_device_listener)],
+    response_model=MemoryCommitResponse,
+    response_model_exclude_unset=True,
+)
 def commit_inference(body: InferenceCommit) -> Dict:
     """Store approved inference insights, replacing old inferred entries.
 
@@ -1989,7 +2354,11 @@ def set_embedder(body: EmbedderBody) -> Dict[str, Any]:
     return {**_embedder_view(), "changed": changed}
 
 
-@router.get("/api/memory/settings")
+@router.get(
+    "/api/memory/settings",
+    response_model=MemorySettingsResponse,
+    response_model_exclude_unset=True,
+)
 def get_memory_settings(db: ChatDatabase = Depends(get_db)) -> Dict:
     """Return memory-related feature settings.
 
@@ -2002,7 +2371,12 @@ def get_memory_settings(db: ChatDatabase = Depends(get_db)) -> Dict:
     return _get_memory_settings_dict(db)
 
 
-@router.put("/api/memory/settings", dependencies=[Depends(_require_ui_header)])
+@router.put(
+    "/api/memory/settings",
+    dependencies=[Depends(_require_ui_header)],
+    response_model=MemorySettingsUpdateResponse,
+    response_model_exclude_unset=True,
+)
 def update_memory_settings(
     body: MemorySettingsBody,
     db: ChatDatabase = Depends(get_db),

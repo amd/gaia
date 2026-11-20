@@ -21,13 +21,58 @@ TOKEN = "daemon-client-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 UI = {"X-Gaia-UI": "1"}
 
-PLAN = {
-    "profile": "gaia",
-    "lemonade": {"mode": "gaia", "url": "http://127.0.0.1:9/api/v1", "reachable": True},
-    "chat_model": {"id": "Gemma-4-E4B-it-GGUF", "user_set": False},
-    "catalog": [],
-    "models": [],
-}
+
+def _full_plan(**over):
+    """A complete plan, as ``build_plan`` returns it; *over* sets what a test checks."""
+    plan = {
+        "profile": "gaia",
+        "lemonade": {"mode": "gaia", "url": None, "reachable": False},
+        "chat_model": {
+            "id": "Gemma-4-E4B-it-GGUF",
+            "user_set": False,
+            "size_gb": None,
+            "downloaded": None,
+        },
+        "recommended_model": None,
+        "decided_after_server": True,
+        "memory_gb": None,
+        "memory_source": None,
+        "capacity_gb": None,
+        "disk": {"path": None, "free_gb": None, "source": None},
+        "download_gb": None,
+        "disk_warning": None,
+        "skipped_models": [],
+        "options": [],
+        "models": [],
+        "catalog": [],
+        "components": [],
+        "backends": [],
+        "npu": {"present": False, "ready": False, "problems": []},
+        "system": {
+            "gaia_build": {
+                "version": "0.0.0",
+                "kind": "source",
+                "rc": None,
+                "commit": None,
+            },
+            "gaia_version": "0.0.0",
+            "gaia_home": "/home/gaia",
+            "agent_version": None,
+            "lemonade_version": None,
+            "os": None,
+            "processor": None,
+            "physical_memory": None,
+            "devices": [],
+        },
+        "vision_model": None,
+    }
+    plan.update(over)
+    return plan
+
+
+PLAN = _full_plan(
+    lemonade={"mode": "gaia", "url": "http://127.0.0.1:9/api/v1", "reachable": True},
+)
 
 NO_FIT = {
     "code": "no_fit",

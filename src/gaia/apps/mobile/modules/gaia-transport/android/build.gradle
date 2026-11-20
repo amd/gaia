@@ -1,0 +1,33 @@
+// Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'ai.amd.gaia'
+version = '0.1.0'
+
+android {
+  namespace "ai.amd.gaia.transport"
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+  }
+  testOptions {
+    // android.util.Log is a stub in local unit tests; the transport's log lines become no-ops there.
+    unitTests.returnDefaultValues = true
+  }
+}
+
+dependencies {
+  // React Native's own OkHttp, so the app carries one copy.
+  implementation 'com.squareup.okhttp3:okhttp:4.9.2'
+
+  testImplementation 'junit:junit:4.13.2'
+  testImplementation 'com.squareup.okhttp3:mockwebserver:4.9.2'
+  testImplementation 'com.squareup.okhttp3:okhttp-tls:4.9.2'
+  // android.jar's org.json is stubs only in local unit tests.
+  testImplementation 'org.json:json:20240303'
+}

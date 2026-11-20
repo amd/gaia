@@ -1,0 +1,236 @@
+# iOS build lanes for the GAIA phone app. Every account value comes from the environment;
+# fastlane/README.md lists the variables and which lane needs each one.
+#
+#   bundle exec fastlane ios check      prebuild and an unsigned simulator build, no credentials
+#   bundle exec fastlane ios device     a development-signed build for a registered iPhone
+#   bundle exec fastlane ios sideload   installs the last `ios device` build over the cable
+
+require 'fileutils'
+require 'json'
+require 'open3'
+require 'securerandom'
+require 'shellwords'
+require 'tmpdir'
+
+opt_out_usage
+skip_docs
+default_platform :ios
+
+README = 'src/gaia/apps/mobile/fastlane/README.md'
+
+VARIABLES = {
+  'GAIA_APPLE_TEAM_ID' => 'the 10-character Apple Developer team id to sign with',
+  'GAIA_ASC_KEY_ID' => 'the App Store Connect API key id',
+  'GAIA_ASC_ISSUER_ID' => 'the App Store Connect API issuer id (a UUID)',
+  'GAIA_ASC_KEY_PATH' => 'the path to the App Store Connect API key file (.p8)',
+  'GAIA_MATCH_GIT_URL' => 'the private git repository match keeps the certificates and profiles in',
+  'GAIA_MATCH_PASSWORD' => 'the passphrase that encrypts the match repository',
+  'GAIA_IOS_BUNDLE_ID' => 'the bundle id of the production app (APP_ENV=production in app.config.ts)',
+  'GAIA_IOS_BUNDLE_ID_DEV' => 'the bundle id of the development app (APP_ENV=development in app.config.ts)',
+  'GAIA_IOS_DEVICE' => 'the iPhone\'s device id, from `xcrun devicectl list devices`'
+}.freeze
+
+SIGNING_VARIABLES = %w[GAIA_APPLE_TEAM_ID GAIA_ASC_KEY_ID GAIA_ASC_ISSUER_ID GAIA_ASC_KEY_PATH
+                       GAIA_MATCH_GIT_URL GAIA_MATCH_PASSWORD].freeze
+
+# Taken out of the environment as the Fastfile loads, so no lane's prebuild, CocoaPods or Xcode
+# inherits it; match gets it as MATCH_PASSWORD for its own call only.
+MATCH_PASSPHRASE = ENV.delete('GAIA_MATCH_PASSWORD').to_s.strip
+ENV.delete('MATCH_PASSWORD')
+
+APP_ENVS = {
+  'production' => { configuration: 'Release', bundle_id_variable: 'GAIA_IOS_BUNDLE_ID' },
+  'development' => { configuration: 'Debug', bundle_id_variable: 'GAIA_IOS_BUNDLE_ID_DEV' }
+}.freeze
+
+# Fails with every missing variable named, what it is, and where they are all listed.
+def env_value(name)
+  name == 'GAIA_MATCH_PASSWORD' ? MATCH_PASSPHRASE : ENV.fetch(name, '').strip
+end
+
+def require_env!(*names)
+  missing = names.select { |name| env_value(name).empty? }
+  unless missing.empty?
+    lines = missing.map { |name| "  #{name}: #{VARIABLES.fetch(name)}" }
+    UI.user_error!("Missing environment variables:\n#{lines.join("\n")}\n" \
+                   "Set them (fastlane/fastlane.env.example shows each one) and run the lane again. See #{README}.")
+  end
+  names.to_h { |name| [name, env_value(name)] }
+end
+
+def app_dir
+  dir = File.expand_path(ENV.fetch('GAIA_MOBILE_APP_DIR', '').strip.empty? ? '..' : ENV['GAIA_MOBILE_APP_DIR'], __dir__)
+  UI.user_error!("GAIA_MOBILE_APP_DIR is #{dir}, which has no app.config.ts. Point it at src/gaia/apps/mobile.") unless File.exist?(File.join(dir, 'app.config.ts'))
+  dir
+end
+
+def build_dir(*parts)
+  base = ENV.fetch('GAIA_IOS_BUILD_DIR', '').strip
+  File.join(base.empty? ? File.join(app_dir, 'build', 'ios') : File.expand_path(base), *parts)
+end
+
+def app_env_from(options)
+  env = (options[:app_env] || 'production').to_s
+  UI.user_error!("app_env must be one of #{APP_ENVS.keys.join(', ')}, not '#{env}'.") unless APP_ENVS.key?(env)
+  env
+end
+
+def xcode_jobs
+  jobs = ENV.fetch('GAIA_BUILD_JOBS', '').strip
+  return '' if jobs.empty?
+  UI.user_error!("GAIA_BUILD_JOBS must be a whole number of 1 or more, not '#{jobs}'. Unset it to let Xcode decide.") unless jobs.match?(/\A[1-9][0-9]*\z/)
+  "-jobs #{jobs}"
+end
+
+# app.config.ts reads APP_ENV at prebuild and again in Xcode's bundle phase, so it stays set for the lane.
+def prebuild(app_env)
+  ENV['APP_ENV'] = app_env
+  Dir.chdir(app_dir) { sh('npx', 'expo', 'prebuild', '--platform', 'ios', '--clean') }
+  workspace = Dir[File.join(app_dir, 'ios', '*.xcworkspace')].first
+  UI.user_error!("expo prebuild made no Xcode workspace in #{File.join(app_dir, 'ios')}.") if workspace.nil?
+  scheme = File.basename(workspace, '.xcworkspace')
+  project = File.join(File.dirname(workspace), "#{scheme}.xcodeproj")
+  { workspace: workspace, project: project, scheme: scheme }
+end
+
+def app_target(project_path, configuration)
+  target = Xcodeproj::Project.open(project_path).native_targets.find { |t| t.product_type == 'com.apple.product-type.application' }
+  UI.user_error!("#{project_path} has no app target.") if target.nil?
+  bundle_id = target.build_configurations.find { |c| c.name == configuration }&.build_settings&.fetch('PRODUCT_BUNDLE_IDENTIFIER', nil)
+  { name: target.name, bundle_id: bundle_id }
+end
+
+def device_udid_and_name(device)
+  Dir.mktmpdir do |dir|
+    json = File.join(dir, 'device.json')
+    out, status = Open3.capture2e('xcrun', 'devicectl', 'device', 'info', 'details', '--device', device, '--json-output', json)
+    UI.user_error!("devicectl can't read GAIA_IOS_DEVICE (#{device}); connect the iPhone and check `xcrun devicectl list devices`.\n#{out}") unless status.success?
+    result = JSON.parse(File.read(json)).fetch('result')
+    [result.dig('hardwareProperties', 'udid'), result.dig('deviceProperties', 'name')]
+  end
+end
+
+# The signing certificate goes in a keychain made for this run, never the login keychain.
+class RunKeychain
+  attr_reader :path, :password
+
+  def initialize(fastfile)
+    @fastfile = fastfile
+    @dir = Dir.mktmpdir('gaia-keychain')
+    @path = File.join(@dir, "gaia-run-#{Process.pid}.keychain-db")
+    @password = SecureRandom.alphanumeric(48)
+  end
+
+  def create!
+    options = { path: path, password: password, default_keychain: false, unlock: true,
+                timeout: 0, lock_when_sleeps: false, add_to_search_list: true }
+    @fastfile.create_keychain(options)
+  end
+
+  def destroy!
+    @fastfile.delete_keychain(keychain_path: path) if File.exist?(path)
+  ensure
+    FileUtils.rm_rf(@dir)
+  end
+end
+
+# Sets an environment variable for the block only, then restores or removes it.
+def with_env_var(name, value)
+  had = ENV.key?(name)
+  previous = ENV[name]
+  ENV[name] = value
+  yield
+ensure
+  had ? ENV[name] = previous : ENV.delete(name)
+end
+
+def match_branch
+  branch = ENV.fetch('GAIA_MATCH_GIT_BRANCH', '').strip
+  branch.empty? ? 'main' : branch
+end
+
+def device_archive(app_env)
+  build_dir('device', app_env, 'GAIA.xcarchive')
+end
+
+platform :ios do
+  desc 'Prebuild (APP_ENV=production) and an unsigned simulator build. Needs no credentials.'
+  lane :check do
+    paths = prebuild('production')
+    build_app(workspace: paths[:workspace], scheme: paths[:scheme], configuration: 'Release',
+              sdk: 'iphonesimulator', destination: 'generic/platform=iOS Simulator',
+              derived_data_path: build_dir('check', 'DerivedData'), buildlog_path: build_dir('check', 'logs'),
+              output_directory: build_dir('check'), skip_archive: true, skip_package_ipa: true,
+              skip_codesigning: true, skip_profile_detection: true, xcargs: xcode_jobs)
+    UI.success("Check passed: the app prebuilds and builds for the simulator. Output in #{build_dir('check')}.")
+  end
+
+  desc 'A development-signed build for a registered iPhone, signed with match (read-only by default).'
+  desc 'Options: app_env (production, the default, or development), create_profiles:true (let match create'
+  desc 'the certificate and profile, first run), register_device:true (add GAIA_IOS_DEVICE to the team first).'
+  lane :device do |options|
+    app_env = app_env_from(options)
+    bundle_id_variable = APP_ENVS.fetch(app_env)[:bundle_id_variable]
+    register = options[:register_device] == true || options[:register_device].to_s == 'true'
+    readonly = !(options[:create_profiles] == true || options[:create_profiles].to_s == 'true')
+    settings = require_env!(*SIGNING_VARIABLES, bundle_id_variable, *(register ? ['GAIA_IOS_DEVICE'] : []))
+    key_path = File.expand_path(settings['GAIA_ASC_KEY_PATH'])
+    UI.user_error!("GAIA_ASC_KEY_PATH is #{key_path}, which does not exist. Download the key from App Store Connect, Users and Access, Integrations.") unless File.file?(key_path)
+    bundle_id = settings[bundle_id_variable]
+    configuration = APP_ENVS.fetch(app_env)[:configuration]
+
+    paths = prebuild(app_env)
+    target = app_target(paths[:project], configuration)
+    if target[:bundle_id] != bundle_id
+      UI.user_error!("#{bundle_id_variable} is #{bundle_id}, but app.config.ts builds #{target[:bundle_id].inspect} for APP_ENV=#{app_env}. Set #{bundle_id_variable} to the app's bundle id.")
+    end
+
+    app_store_connect_api_key(key_id: settings['GAIA_ASC_KEY_ID'], issuer_id: settings['GAIA_ASC_ISSUER_ID'],
+                              key_filepath: key_path, in_house: false)
+    if register
+      udid, name = device_udid_and_name(settings['GAIA_IOS_DEVICE'])
+      UI.user_error!("devicectl reported no UDID for GAIA_IOS_DEVICE (#{settings['GAIA_IOS_DEVICE']}).") if udid.to_s.empty?
+      register_device(udid: udid, name: name || udid, team_id: settings['GAIA_APPLE_TEAM_ID'])
+    end
+
+    archive = device_archive(app_env)
+    FileUtils.rm_rf(archive)
+    keychain = RunKeychain.new(self)
+    begin
+      keychain.create!
+      with_env_var('MATCH_PASSWORD', settings.fetch('GAIA_MATCH_PASSWORD')) do
+        sync_code_signing(type: 'development', readonly: readonly, force_for_new_devices: !readonly,
+                          app_identifier: [bundle_id], team_id: settings['GAIA_APPLE_TEAM_ID'],
+                          storage_mode: 'git', git_url: settings['GAIA_MATCH_GIT_URL'], git_branch: match_branch,
+                          keychain_name: keychain.path, keychain_password: keychain.password, skip_docs: true)
+      end
+      mapping = lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING]
+      profile = mapping && mapping[bundle_id]
+      UI.user_error!("match returned no development profile for #{bundle_id}. Run once with create_profiles:true.") if profile.nil?
+      # Only the app target signs manually; the Pods' resource bundles keep their own settings.
+      update_code_signing_settings(path: paths[:project], use_automatic_signing: false, targets: [target[:name]],
+                                   build_configurations: [configuration], team_id: settings['GAIA_APPLE_TEAM_ID'],
+                                   bundle_identifier: bundle_id, profile_name: profile, code_sign_identity: 'Apple Development')
+      build_app(workspace: paths[:workspace], scheme: paths[:scheme], configuration: configuration,
+                destination: 'generic/platform=iOS', archive_path: archive,
+                derived_data_path: build_dir('device', app_env, 'DerivedData'),
+                buildlog_path: build_dir('device', app_env, 'logs'), output_directory: build_dir('device', app_env),
+                output_name: paths[:scheme], export_method: 'development', export_team_id: settings['GAIA_APPLE_TEAM_ID'],
+                export_options: { provisioningProfiles: mapping }, skip_profile_detection: true,
+                xcargs: [xcode_jobs, "OTHER_CODE_SIGN_FLAGS=--keychain #{keychain.path}".shellescape].reject(&:empty?).join(' '))
+    ensure
+      keychain.destroy!
+    end
+    UI.success("Signed #{bundle_id} for development: #{lane_context[SharedValues::IPA_OUTPUT_PATH]}. Install it with `bundle exec fastlane ios sideload#{app_env == 'production' ? '' : " app_env:#{app_env}"}`.")
+  end
+
+  desc 'Install the last `ios device` build on GAIA_IOS_DEVICE over the cable. Option: app_env (as for `ios device`).'
+  lane :sideload do |options|
+    app_env = app_env_from(options)
+    device = require_env!('GAIA_IOS_DEVICE')['GAIA_IOS_DEVICE']
+    app = Dir[File.join(device_archive(app_env), 'Products', 'Applications', '*.app')].first
+    UI.user_error!("No `ios device` build for app_env #{app_env} in #{device_archive(app_env)}. Run `bundle exec fastlane ios device` first.") if app.nil?
+    sh('xcrun', 'devicectl', 'device', 'install', 'app', '--device', device, app)
+    UI.success("Installed #{File.basename(app)} on #{device}.")
+  end
+end

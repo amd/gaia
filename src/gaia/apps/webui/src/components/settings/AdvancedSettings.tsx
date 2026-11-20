@@ -13,20 +13,13 @@ import { useT, type Translate } from '../../i18n/useT';
 import { isolate, type MessageKey } from '../../i18n/registry';
 import { SaveAllLogs } from '../LogsDialog';
 import { useLogsStore } from '../../stores/logsStore';
-import type { SystemStatus, MCPServerStatus, ModelStatus } from '../../types';
+import type { SystemStatus, MCPServerStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
 import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton, startInstructionText } from './ErrorNotice';
+import { customModelNote } from '../../utils/modelServer.core';
 import { ModelServerPanel } from './ModelServerPanel';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../SettingsModal.css';
-
-type CustomModelNote = { kind: 'unlisted' | 'unchecked'; id: string };
-
-/** The warning a saved custom ID carries: the model server doesn't list it, or couldn't be asked. */
-function customModelNote(id: string, status: ModelStatus | null | undefined): CustomModelNote | null {
-    if (!id || !status || status.found) return null;
-    return { kind: status.checked ? 'unlisted' : 'unchecked', id };
-}
 
 /** Model server status and choice, context size, custom model id, beta flags, MCP status. */
 export function AdvancedSettings() {

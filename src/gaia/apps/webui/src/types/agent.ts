@@ -52,6 +52,8 @@ export interface GaiaNotification {
   ruleIds?: string[];
   policyVersion?: string;
   receiptId?: string;
+  /** For a device pairing notice: the paired device the Review and Deny actions act on. */
+  deviceId?: string;
   actions?: string[];
   timeoutSeconds?: number;
   /** When the prompt times out, in ms since the epoch. */

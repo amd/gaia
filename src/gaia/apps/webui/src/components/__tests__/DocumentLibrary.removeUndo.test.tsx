@@ -7,6 +7,7 @@ import { DocumentLibrary, REMOVE_UNDO_MS } from '../DocumentLibrary';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { Document } from '../../types';
+import { stripIsolates } from '../../i18n/registry';
 
 vi.mock('../../services/api');
 
@@ -64,12 +65,12 @@ describe('removing a document', () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [NOTES, second], total: 2, total_size_bytes: 14540, total_chunks: 14 });
         const { container } = render(<DocumentLibrary />);
         await screen.findByText('garden-notes.txt');
-        expect(container.querySelector('.doc-stats')).toHaveTextContent('2 documents');
+        expect(stripIsolates(container.querySelector('.doc-stats')?.textContent ?? '')).toContain('2 documents');
 
         fireEvent.click(screen.getByRole('button', { name: 'Remove garden-notes.txt' }));
 
         expect(screen.getByRole('button', { name: /Undo/ })).toBeInTheDocument();
-        expect(container.querySelector('.doc-stats')).toHaveTextContent('1 document');
+        expect(stripIsolates(container.querySelector('.doc-stats')?.textContent ?? '')).toContain('1 document');
     });
 
     it('replaces the last add\'s line rather than stacking under it', async () => {

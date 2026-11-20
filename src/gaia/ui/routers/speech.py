@@ -157,7 +157,11 @@ def _speak(text: str, voice: str, speed: int) -> bytes:
     return buffer.getvalue()
 
 
-@router.post("/api/speech")
+@router.post(
+    "/api/speech",
+    response_class=Response,
+    responses={200: {"content": {"audio/wav": {}}, "description": "The spoken text."}},
+)
 async def speak(body: SpeakRequest) -> Response:
     """Speak *text* as a 16-bit mono WAV, in the saved voice unless one is named."""
     from gaia.audio.lemonade_tts import DEFAULT_VOICE, LemonadeTTSError

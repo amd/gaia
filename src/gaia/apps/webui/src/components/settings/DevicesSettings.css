@@ -1,0 +1,104 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+   SPDX-License-Identifier: MIT */
+
+.devices-pairing {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+}
+
+.devices-qr {
+    flex: none;
+    width: 200px;
+    height: 200px;
+}
+
+.devices-qr img {
+    display: block;
+}
+
+.devices-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.devices-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.devices-row-icon {
+    flex: none;
+    color: var(--text-secondary);
+}
+
+.devices-row-text {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+/* The page's direction aligns the name; the inner bdi keeps its own script's order. */
+.devices-name {
+    color: var(--text-primary);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.devices-row-actions {
+    display: flex;
+    flex: none;
+    gap: 8px;
+}
+
+.devices-failed {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.devices-failed svg {
+    flex: none;
+}
+
+@media (max-width: 768px) {
+    .devices-pairing {
+        flex-direction: column;
+        align-items: center;
+    }
+}
+
+@media (max-width: 480px) {
+    .devices-row {
+        flex-wrap: wrap;
+    }
+
+    .devices-row-actions {
+        flex-basis: 100%;
+    }
+
+    .devices-row-actions > button {
+        flex: 1;
+        min-height: 44px;
+    }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .devices-row {
+        animation: devices-row-in var(--duration) var(--ease);
+    }
+}
+
+@keyframes devices-row-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: none; }
+}

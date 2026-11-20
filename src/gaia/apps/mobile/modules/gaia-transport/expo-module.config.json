@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["GaiaTransportModule"]
+  },
+  "android": {
+    "modules": ["ai.amd.gaia.transport.GaiaTransportModule"]
+  }
+}

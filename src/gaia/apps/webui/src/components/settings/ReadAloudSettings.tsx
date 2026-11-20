@@ -8,20 +8,7 @@ import * as speechApi from '../../services/speechApi';
 import { useReadAloudStore } from '../../stores/readAloudStore';
 import { useT } from '../../i18n/useT';
 import { ReadAloudError } from '../ReadAloudButton';
-
-/** Speeds offered, as percent of normal; the server accepts any in its range. */
-const SPEEDS = [50, 75, 100, 125, 150, 175, 200];
-
-const GROUPS: Array<{ accent: speechApi.Voice['accent']; gender: speechApi.Voice['gender'] }> = [
-    { accent: 'american', gender: 'female' },
-    { accent: 'american', gender: 'male' },
-    { accent: 'british', gender: 'female' },
-    { accent: 'british', gender: 'male' },
-];
-
-const PREVIEW_ID = 'settings:preview';
-// Spoken, not shown, and every Kokoro voice speaks English, so it is not translated.
-const PREVIEW_TEXT = "Hello, I'm GAIA. This is how I'll read my replies to you.";
+import { PREVIEW_ID, PREVIEW_TEXT, VOICE_GROUPS, speedChoices } from '../../utils/readAloudSettings.core';
 
 function errorText(err: unknown): string {
     return err instanceof api.ApiError ? err.detail || err.message : String(err);
@@ -82,7 +69,7 @@ export function ReadAloudSettings() {
                         disabled={saving}
                         onChange={(e) => save({ voice: e.target.value })}
                     >
-                        {GROUPS.map((g) => (
+                        {VOICE_GROUPS.map((g) => (
                             <optgroup key={`${g.accent}-${g.gender}`} label={t(`readAloud.group.${g.accent}.${g.gender}`)}>
                                 {settings.voices
                                     .filter((v) => v.accent === g.accent && v.gender === g.gender)
@@ -116,7 +103,7 @@ export function ReadAloudSettings() {
                     disabled={saving}
                     onChange={(e) => save({ speed: Number(e.target.value) })}
                 >
-                    {(SPEEDS.includes(settings.speed) ? SPEEDS : [...SPEEDS, settings.speed].sort((a, b) => a - b)).map((s) => (
+                    {speedChoices(settings.speed).map((s) => (
                         <option key={s} value={s}>
                             {/* <option> holds text only, so isolate marks stand in for <bdi dir="ltr">. */}
                             {s === 100 ? t.bare('readAloud.settings.normalSpeed') : `⁦${(s / 100).toLocaleString(t.locale)}×⁩`}

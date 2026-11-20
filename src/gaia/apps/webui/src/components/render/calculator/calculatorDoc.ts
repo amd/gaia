@@ -9,8 +9,8 @@
 
 import { pluralKey } from '../../../i18n/registry';
 import type { MessageKey } from '../../../i18n/registry';
-import { tEn } from '../../../i18n/useT';
-import type { Translate } from '../../../i18n/useT';
+import { tEn } from '../../../i18n/translator';
+import type { Translate } from '../../../i18n/translator';
 
 export type CalculatorType = 'tip' | 'loan';
 export type ValueFormat = 'currency' | 'percent' | 'count' | 'years';

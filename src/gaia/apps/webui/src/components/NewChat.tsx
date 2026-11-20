@@ -271,7 +271,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
             if (held.length > 0 && sessionId) {
                 // The chat is open now; if its first message never went out, the rest wait for Send again.
                 const add = (items: messageQueue.QueuedMessage[], text: string) => sent === false
-                    ? [...items, { ...messageQueue.item(text, 'failed'), error: 'The first message was not sent.' }]
+                    ? [...items, { ...messageQueue.item(text, 'failed'), error: t('newChat.firstNotSent') }]
                     : messageQueue.enqueue(items, text, 'queued');
                 useChatStore.getState().updateQueue(sessionId, (q) => held.reduce(add, q));
             }
@@ -285,7 +285,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
             sendingRef.current = false;
             setSending(false);
         }
-    }, [attachments, onSend]);
+    }, [attachments, onSend, t]);
 
     const submit = useCallback(() => send(attachments.compose(text.trim()), text.trim()), [attachments, send, text]);
 

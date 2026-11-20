@@ -1180,7 +1180,7 @@ describe('Chat App Integration', () => {
       expectTranslated(composerContent, "aria-label={t('composer.send')}", 'composer.send', 'Send');
       expectTranslated(composerContent, "aria-label={t('composer.stop')}", 'composer.stop', 'Stop');
       expectTranslated(composerContent, "aria-label={t('composer.attach')}", 'composer.attach', 'Attach files');
-      expect(chatContent).toContain('aria-label="Chat title"');
+      expectTranslated(chatContent, "aria-label={t('chat.titleLabel')}", 'chat.titleLabel', 'Chat title');
       expectTranslated(chatContent, "aria-label={t('chat.exportLabel')}", 'chat.exportLabel', 'Export chat');
       expectTranslated(chatContent, "aria-label={t('chat.browseFiles')}", 'chat.browseFiles', 'Browse files on this PC');
     });
@@ -1260,8 +1260,13 @@ describe('Chat App Integration', () => {
     });
 
     it('should detect error messages', () => {
+      const answerErrors = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/utils/answerErrors.core.ts'),
+        'utf8'
+      );
       expect(msgContent).toContain('isErrorContent');
-      expect(msgContent).toContain("startsWith('error:')");
+      expect(answerErrors).toContain('export function isErrorContent');
+      expect(answerErrors).toContain("startsWith('error:')");
     });
 
     it('should render error banner with AlertTriangle icon', () => {

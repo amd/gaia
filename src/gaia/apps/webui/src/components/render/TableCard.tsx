@@ -2,26 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { UnsupportedCard } from './UnsupportedCard';
-import { MAX_ITEMS, isScalar, isOptionalString, scalarText, truncationLabel } from './primitiveShared';
-import type { Scalar } from './primitiveShared';
-
-interface TablePayload {
-    title?: string;
-    columns: string[];
-    rows: Scalar[][];
-}
-
-function isTablePayload(value: unknown): value is TablePayload {
-    if (!value || typeof value !== 'object') return false;
-    const v = value as Record<string, unknown>;
-    return (
-        isOptionalString(v.title) &&
-        Array.isArray(v.columns) &&
-        v.columns.every((c) => typeof c === 'string') &&
-        Array.isArray(v.rows) &&
-        v.rows.every((r) => Array.isArray(r) && r.every(isScalar))
-    );
-}
+import { MAX_ITEMS, isTablePayload, scalarText, truncationLabel } from '../../utils/renderCards.core';
 
 export function TableCard({ data }: { data: unknown }) {
     if (!isTablePayload(data)) {

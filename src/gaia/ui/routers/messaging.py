@@ -14,13 +14,15 @@ token, could make itself the approver of commands on this PC.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from gaia.logger import get_logger
+from gaia.messaging.discord import state as bridge_state
 
+from ..models import WireModel
 from ..security import require_local_pc, require_ui_header
 
 log = get_logger(__name__)
@@ -42,6 +44,64 @@ class DiscordStartRequest(BaseModel):
     take_over: bool = False
 
 
+DiscordState = Literal[  # type: ignore[valid-type]
+    (
+        bridge_state.STATE_STOPPED,
+        bridge_state.STATE_STARTING,
+        bridge_state.STATE_PAIRING,
+        bridge_state.STATE_CONNECTED,
+        bridge_state.STATE_TAKEN_OVER,
+        bridge_state.STATE_TOKEN_INVALID,
+        bridge_state.STATE_CREDENTIALS_UNAVAILABLE,
+        bridge_state.STATE_CONFLICT,
+        bridge_state.STATE_ERROR,
+    )
+]
+
+
+class DiscordStatus(WireModel):
+    """Connection, pairing and bridge state, plus every link setup opens."""
+
+    connected: bool
+    paired: bool
+    running: bool
+    state: DiscordState
+    detail: str
+    bot_name: str
+    owner_name: str
+    autostart: bool
+    #: What "Always allow" was given for; empty until paired.
+    always_allowed: List[str]
+    model: str
+    portal_url: str
+    bot_page_url: str
+    invite_url: str
+    bot_profile_url: str
+    pairing_code: str
+    pairing_expires_at: Union[int, float]
+    discord_installed: bool
+    should_offer_setup: bool
+
+
+class DiscordConnectResult(WireModel):
+    """What a stored bot token gives the apps to show next."""
+
+    connected: bool
+    bot_name: str
+    application_id: str
+    invite_url: str
+    bot_page_url: str
+    bot_public: bool
+
+
+class DiscordConnectResponse(WireModel):
+    """The stored token's bot, and the bridge's state once it started."""
+
+    connect: DiscordConnectResult
+    status: DiscordStatus
+    status: DiscordStatus
+
+
 def _cli():
     from gaia.messaging.discord import cli
 
@@ -52,13 +112,18 @@ def _status() -> Dict[str, Any]:
     return _cli().status(detect=False)
 
 
-@router.get("/discord")
+@router.get("/discord", response_model=DiscordStatus, response_model_exclude_unset=True)
 def discord_status() -> Dict[str, Any]:
     """Connection, pairing and bridge state, plus every link setup opens."""
     return _status()
 
 
-@router.post("/discord/connect", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/discord/connect",
+    dependencies=[Depends(require_ui_header)],
+    response_model=DiscordConnectResponse,
+    response_model_exclude_unset=True,
+)
 def discord_connect(body: DiscordConnectRequest) -> Dict[str, Any]:
     """Check and store a bot token, then start the bridge in pairing mode."""
     from gaia.messaging.discord.transport import DiscordTokenError
@@ -74,7 +139,12 @@ def discord_connect(body: DiscordConnectRequest) -> Dict[str, Any]:
     return {"connect": result, "status": _status()}
 
 
-@router.post("/discord/start", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/discord/start",
+    dependencies=[Depends(require_ui_header)],
+    response_model=DiscordStatus,
+    response_model_exclude_unset=True,
+)
 def discord_start(body: DiscordStartRequest) -> Dict[str, Any]:
     """Start the bridge (or take the lease from another PC)."""
     cli = _cli()
@@ -88,7 +158,12 @@ def discord_start(body: DiscordStartRequest) -> Dict[str, Any]:
     return _status()
 
 
-@router.post("/discord/stop", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/discord/stop",
+    dependencies=[Depends(require_ui_header)],
+    response_model=DiscordStatus,
+    response_model_exclude_unset=True,
+)
 def discord_stop() -> Dict[str, Any]:
     cli = _cli()
     if not cli.stop(stay_stopped=True):
@@ -99,7 +174,12 @@ def discord_stop() -> Dict[str, Any]:
     return _status()
 
 
-@router.post("/discord/restart", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/discord/restart",
+    dependencies=[Depends(require_ui_header)],
+    response_model=DiscordStatus,
+    response_model_exclude_unset=True,
+)
 def discord_restart() -> Dict[str, Any]:
     cli = _cli()
     if not cli.stop():
@@ -112,27 +192,35 @@ def discord_restart() -> Dict[str, Any]:
     return _status()
 
 
-@router.post("/discord/forget-always", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/discord/forget-always",
+    dependencies=[Depends(require_ui_header)],
+    response_model=DiscordStatus,
+    response_model_exclude_unset=True,
+)
 def discord_forget_always() -> Dict[str, Any]:
     """Forget every "Always allow"; GAIA asks again from the next request."""
-    from gaia.messaging.discord import state
-
     cli = _cli()
     # The running agent holds its own copy of the answers, so it is restarted.
-    was_running = state.is_running()
+    was_running = bridge_state.is_running()
     if was_running and not cli.stop():
         raise HTTPException(
             status_code=500,
             detail="The Discord bridge did not stop, so nothing was forgotten. "
             + cli.stop_failed_hint(),
         )
-    state.forget_always()
+    bridge_state.forget_always()
     if was_running:
         cli.start_detached(emit=lambda _line: None)
     return _status()
 
 
-@router.post("/discord/pair", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/discord/pair",
+    dependencies=[Depends(require_ui_header)],
+    response_model=DiscordStatus,
+    response_model_exclude_unset=True,
+)
 def discord_pair() -> Dict[str, Any]:
     """Forget the paired account and show a new code."""
     cli = _cli()
@@ -147,7 +235,12 @@ def discord_pair() -> Dict[str, Any]:
     return _status()
 
 
-@router.post("/discord/disconnect", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/discord/disconnect",
+    dependencies=[Depends(require_ui_header)],
+    response_model=DiscordStatus,
+    response_model_exclude_unset=True,
+)
 def discord_disconnect() -> Dict[str, Any]:
     """Stop the bridge and forget the token, the pairing and the status."""
     try:

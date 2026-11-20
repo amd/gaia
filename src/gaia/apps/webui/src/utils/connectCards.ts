@@ -2,54 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import type { RenderCardData } from '../types';
-
-export const CONNECT_ACCOUNT_RENDER = 'connect_account';
-
-export interface ConnectAccountPayload {
-    kind: typeof CONNECT_ACCOUNT_RENDER;
-    providers: string[];
-    agent_id?: string;
-    /** Providers connected already, whose fault is something signing in again fixes. */
-    reconnect?: string[];
-    /** Per provider, the access the failed call needs. */
-    scopes?: Record<string, string[]>;
-    /** Per provider, the account the failed call used: its stable id or its address. */
-    account?: Record<string, string>;
-}
-
-function isScopeMap(value: unknown, providers: unknown[]): boolean {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    return Object.entries(value as Record<string, unknown>).every(
-        ([p, s]) =>
-            providers.includes(p)
-            && Array.isArray(s)
-            && s.length > 0
-            && s.every((x) => typeof x === 'string' && x.length > 0),
-    );
-}
-
-function isAccountMap(value: unknown, providers: unknown[]): boolean {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    return Object.entries(value as Record<string, unknown>).every(
-        ([p, a]) => providers.includes(p) && typeof a === 'string' && a.length > 0,
-    );
-}
-
-export function isConnectAccountPayload(value: unknown): value is ConnectAccountPayload {
-    if (!value || typeof value !== 'object') return false;
-    const v = value as Record<string, unknown>;
-    return (
-        v.kind === CONNECT_ACCOUNT_RENDER &&
-        Array.isArray(v.providers) &&
-        v.providers.length > 0 &&
-        v.providers.every((p) => typeof p === 'string' && p.length > 0) &&
-        (v.agent_id === undefined || typeof v.agent_id === 'string') &&
-        (v.reconnect === undefined
-            || (Array.isArray(v.reconnect) && v.reconnect.every((p) => typeof p === 'string'))) &&
-        (v.scopes === undefined || isScopeMap(v.scopes, v.providers)) &&
-        (v.account === undefined || isAccountMap(v.account, v.providers))
-    );
-}
+import {
+    CONNECT_ACCOUNT_RENDER,
+    isConnectAccountPayload,
+    type ConnectAccountPayload,
+} from './connectAccountCard.core';
 
 /**
  * One Connect card for two failed steps that ask the same agent for an account.

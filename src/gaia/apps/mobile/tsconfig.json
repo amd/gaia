@@ -1,0 +1,10 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "jsx": "react-jsx",
+    "types": ["jest", "node", "expo/types"],
+    "paths": { "@/*": ["./src/*"], "@webui/*": ["../webui/src/*"] }
+  },
+  "include": ["src", "app.config.ts", "expo-env.d.ts", ".expo/types/**/*.ts"]
+}

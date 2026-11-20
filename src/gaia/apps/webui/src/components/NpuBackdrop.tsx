@@ -68,10 +68,13 @@ export function NpuBackdrop({ activity, progress = 0, pulse, docked, contentRef,
         let raf = 0;
         let last = 0;
         let running = false;
+        let disposed = false;
         let holeKey = '';
         const pointer = { x: 0, y: 0, at: 0, speed: 0 };
 
-        const draw = () => field.draw(ctx, palette);
+        const draw = () => {
+            if (!disposed) field.draw(ctx, palette);
+        };
         // Track the content box; it moves when the composer docks at the bottom.
         const syncHole = (box: DOMRect, force = false) => {
             const el = dockedRef.current ? composerRef.current : contentRef.current;
@@ -84,6 +87,7 @@ export function NpuBackdrop({ activity, progress = 0, pulse, docked, contentRef,
             return null;
         };
         const size = () => {
+            if (disposed) return;
             const box = surface.getBoundingClientRect();
             if (!box.width || !box.height) return;
             const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -94,6 +98,7 @@ export function NpuBackdrop({ activity, progress = 0, pulse, docked, contentRef,
             draw();
         };
         const tick = (now: number) => {
+            if (disposed) return;
             raf = requestAnimationFrame(tick);
             if (now - last < FRAME_MS - 1.5) return;
             const dt = Math.min(0.1, (now - last) / 1000);
@@ -106,7 +111,7 @@ export function NpuBackdrop({ activity, progress = 0, pulse, docked, contentRef,
             if (field.cleared) stop();
         };
         const start = () => {
-            if (running || document.hidden || reduced?.matches || field.cleared) return;
+            if (disposed || running || document.hidden || reduced?.matches || field.cleared) return;
             running = true;
             last = performance.now();
             raf = requestAnimationFrame(tick);
@@ -162,6 +167,7 @@ export function NpuBackdrop({ activity, progress = 0, pulse, docked, contentRef,
         start();
 
         return () => {
+            disposed = true;
             stop();
             resizer?.disconnect();
             themeWatch.disconnect();

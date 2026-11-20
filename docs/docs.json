@@ -81,6 +81,7 @@
               "guides/install",
               "setup",
               "quickstart",
+              "guides/mobile",
               "guides/tui",
               "guides/memory",
               {

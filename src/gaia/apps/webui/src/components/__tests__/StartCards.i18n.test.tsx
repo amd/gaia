@@ -3,7 +3,8 @@
 
 import { act, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { StartCards, cardText } from '../StartCards';
+import { StartCards } from '../StartCards';
+import { cardText } from '../startCardText';
 import { stripIsolates } from '../../i18n/registry';
 import { translator } from '../../i18n/useT';
 import { useChatStore } from '../../stores/chatStore';

@@ -89,9 +89,21 @@ export type Params = { readonly [name: string]: Param };
 /** A message in one language with no English brackets, for assembling a longer line. */
 export type Say = (key: MessageKey, params?: Params) => string;
 
+let variantPrefix: string | null = null;
+
+/** Opt in to a variant of every message that has a `<prefix><key>` entry, e.g. the phone's "your PC" wording; the web never sets one. */
+export function setVariantPrefix(prefix: string | null): void {
+    variantPrefix = prefix;
+}
+
+function messageText(locale: Locale, key: MessageKey): string {
+    const variant = variantPrefix === null ? undefined : (locale.messages as Readonly<Record<string, string>>)[variantPrefix + key];
+    return variant ?? locale.messages[key];
+}
+
 /** `isolateText`: wrap string params (names, folders, paths) so their own direction can't spill into the label. */
 function fill(locale: Locale, key: MessageKey, params: Params | undefined, isolateText = false): string {
-    return locale.messages[key].replace(/\{(\w+)\}/g, (_, name: string) => {
+    return messageText(locale, key).replace(/\{(\w+)\}/g, (_, name: string) => {
         const value = params?.[name];
         if (value === undefined) {
             throw new Error(`Message "${key}" needs a {${name}} param, and the caller passed none.`);

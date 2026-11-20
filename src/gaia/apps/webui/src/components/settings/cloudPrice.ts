@@ -1,10 +1,10 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { tEn, type Translate } from '../../i18n/useT';
+import { tEn, type Translate } from '../../i18n/translator';
 import type { ModelPrice } from '../../types';
 
-function usd(n: number): string {
+export function usd(n: number): string {
     return n < 0.1 ? `$${n.toFixed(3)}` : `$${n.toFixed(2)}`;
 }
 
