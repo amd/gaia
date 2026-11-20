@@ -64,7 +64,7 @@ import { useChatExport } from '../hooks/useChatExport';
 import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
-import { isPlaceholderTitle } from '../utils/sessionTitle';
+import { isPlaceholderTitle, shownTitle } from '../utils/sessionTitle';
 import { laterTurns, lastSentMessage } from '../utils/editLast';
 import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
 import { requestErrorParam } from '../utils/requestErrors';
@@ -1640,7 +1640,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            aria-label={session?.title || 'Chat'}
+            aria-label={shownTitle(session?.title) || 'Chat'}
         >
             <TurnAnnouncer busy={busy} />
             <header className="task-header">
@@ -1663,7 +1663,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         />
                     ) : (
                         <button type="button" className="task-title" onClick={startEditTitle} title={t('row.rename')}>
-                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : session?.title}</span>
+                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : shownTitle(session?.title)}</span>
                             <Edit3 size={12} aria-hidden="true" className="task-title-edit" />
                         </button>
                     )}

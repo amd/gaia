@@ -72,6 +72,12 @@ from gaia_agent.tool_requests import requested_tools
 from gaia.agents.base.agent import Agent, _withheld_skill_tools, default_max_steps
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, READ, call_risk
 from gaia.agents.base.checks import attach_check, check_from_python_run, snippet_target
+from gaia.agents.base.code_path_screen import (
+    python_code_preflight,
+    python_code_refusal,
+    python_file_preflight,
+    python_file_refusal,
+)
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_KEEP_STEPS,
@@ -98,6 +104,7 @@ from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 # dynamic_tools_env_override is re-exported so callers importing it from
 # this module keep working; its canonical home is the core tool_loader
 # so the UI settings router shares it without depending on this wheel (#1102).
+from gaia.agents.base.script_preview import changed_script_refusal
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
 from gaia.agents.base.tool_loader import (
     ToolLoader,
@@ -2910,7 +2917,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except Exception as e:
                     return {"status": "error", "error": str(e)}
 
-            @tool(timeout_arg="timeout")
+            @tool(
+                timeout_arg="timeout",
+                preflight=python_file_preflight(self, may_write_files),
+            )
             @_lists_script_libraries
             def execute_python_file(
                 file_path: str, args: str = "", timeout: int = DEFAULT_PYTHON_TIMEOUT
@@ -2946,6 +2956,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 file_path = str(
                     _resolve_target(file_path, None, _workspace_default(self))
                 )
+                refused = python_file_refusal(self, file_path, may_write_files, args)
+                if refused is not None:
+                    return refused
                 full_access = self._full_access_on()
                 if _python_path_refused(self, file_path, full_access):
                     return {
@@ -2964,13 +2977,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     p.resolve(), shlex.split(args) if args.strip() else []
                 )
                 try:
-                    source = p.read_text(encoding="utf-8", errors="replace")
+                    data = p.read_bytes()
                 except OSError as e:
                     return {
                         "status": "error",
                         "error": f"Could not read {file_path}: {e}",
                         "has_errors": True,
                     }
+                changed = changed_script_refusal(self, file_path, data)
+                if changed is not None:
+                    return changed
+                # Line endings as read_text would give them.
+                source = "\n".join(data.decode("utf-8", errors="replace").splitlines())
                 refused = (
                     None
                     if full_access
@@ -3075,7 +3093,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except Exception as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
-            @tool(timeout_arg="timeout")
+            @tool(
+                timeout_arg="timeout",
+                preflight=python_code_preflight(self, may_write_files),
+            )
             @_lists_script_libraries
             def run_python(
                 code: str = "",
@@ -3138,6 +3159,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 timeout = self.time_capped_run_seconds(timeout)
                 if not timeout:
                     return dict(OUT_OF_TIME)
+
+                refused = python_code_refusal(self, code, may_write_files)
+                if refused is not None:
+                    return refused
 
                 tool_names = set(_TOOL_REGISTRY) | set(
                     getattr(self, "_tools_registry", None) or ()
