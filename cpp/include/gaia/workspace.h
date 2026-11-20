@@ -20,6 +20,11 @@
 
 namespace gaia {
 
+/// Where a write to `path` (UTF-8, relative to the working directory) lands: every link
+/// and junction on the way is followed, including one whose target doesn't exist yet.
+/// "" when that can't be worked out (an unreadable link, a loop); treat "" as outside.
+GAIA_API std::string resolveWriteTarget(const std::string& path);
+
 class GAIA_API Workspace {
 public:
     /// Roots and every path checked against them are UTF-8

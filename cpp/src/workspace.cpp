@@ -19,16 +19,7 @@ namespace gaia {
 namespace {
 
 // Folders and paths are UTF-8 strings here, as a model and the UI write them.
-std::string normalized(const fs::path& p, int depth = 0) {
-    std::error_code ec;
-    // A link to a file not there yet keeps its own name in weakly_canonical; a write lands on its target.
-    const fs::path given = fs::absolute(p, ec);
-    if (!ec && depth < 8 && fs::is_symlink(given, ec) && !fs::exists(given, ec)) {
-        const fs::path target = fs::read_symlink(given, ec);
-        if (!ec) return normalized(target.is_absolute() ? target : given.parent_path() / target, depth + 1);
-    }
-    fs::path abs = fs::weakly_canonical(fs::absolute(p, ec), ec);
-    if (ec) abs = fs::absolute(p).lexically_normal();
+std::string spelled(const fs::path& abs) {
     std::string s = abs.generic_u8string();
 #ifdef _WIN32
     std::transform(s.begin(), s.end(), s.begin(),
@@ -36,6 +27,15 @@ std::string normalized(const fs::path& p, int depth = 0) {
 #endif
     while (s.size() > 1 && s.back() == '/') s.pop_back();
     return s;
+}
+
+std::string normalized(const fs::path& p) {
+    const std::string target = resolveWriteTarget(p.u8string());
+    if (!target.empty()) return spelled(fs::u8path(target));
+    std::error_code ec;
+    fs::path abs = fs::weakly_canonical(fs::absolute(p, ec), ec);
+    if (ec) abs = fs::absolute(p).lexically_normal();
+    return spelled(abs);
 }
 
 bool under(const std::string& path, const std::string& root) {
@@ -128,6 +128,70 @@ bool looksLikePattern(const std::string& abs) {
 
 }  // namespace
 
+namespace {
+bool isLink(const fs::file_status& st) {
+#ifdef _MSC_VER
+    if (st.type() == fs::file_type::junction) return true;
+#endif
+    return fs::is_symlink(st);
+}
+}  // namespace
+
+std::string resolveWriteTarget(const std::string& path) {
+    if (path.empty()) return "";
+    std::error_code ec;
+    const fs::path abs = fs::absolute(fs::u8path(path), ec);
+    if (ec) return "";
+    // Walked one name at a time, so a link anywhere is followed even when what it names isn't there yet.
+    const fs::path rel = abs.relative_path();
+    std::vector<fs::path> todo(rel.begin(), rel.end());
+    std::reverse(todo.begin(), todo.end());
+    fs::path at = abs.root_path();
+    int hops = 0;
+    while (!todo.empty()) {
+        const fs::path name = todo.back();
+        todo.pop_back();
+        if (name.empty() || name == ".") continue;
+        if (name == "..") {
+            at = at.parent_path();
+            continue;
+        }
+        // Every name is looked at, even under a folder not there yet: `..` can climb back out of it.
+        const fs::path next = at / name;
+        const fs::file_status st = fs::symlink_status(next, ec);
+        if (ec && st.type() != fs::file_type::not_found) return "";
+        if (st.type() == fs::file_type::not_found) {
+            at = next;
+            continue;
+        }
+        if (!isLink(st)) {
+            // Some other reparse point: judged by where it opens, or refused when it opens nowhere.
+            if (st.type() == fs::file_type::unknown && !fs::exists(next, ec)) return "";
+            at = next;
+            continue;
+        }
+        if (++hops > 40) return "";  // a loop, or a chain too long to trust
+        if (fs::exists(next, ec) && !ec) {
+            // A link to something that exists: the system says where it leads.
+            at = fs::canonical(next, ec);
+            if (ec) return "";
+            continue;
+        }
+        const fs::path target = fs::read_symlink(next, ec);
+        if (ec || target.empty()) return "";
+        const fs::path targetRel = target.relative_path();
+        std::vector<fs::path> parts(targetRel.begin(), targetRel.end());
+        for (auto it = parts.rbegin(); it != parts.rend(); ++it) todo.push_back(*it);
+        if (target.has_root_path()) {
+            if (!target.is_absolute()) return "";  // drive- or root-relative: not relative to the link
+            at = target.root_path();
+        }
+    }
+    const fs::path real = fs::weakly_canonical(at, ec);
+    if (ec) return "";
+    return real.u8string();
+}
+
 Workspace::Workspace(std::vector<std::string> roots) {
     if (roots.empty()) {
         std::error_code ec;
@@ -140,7 +204,9 @@ bool Workspace::contains(const std::string& path) const {
     const std::string expanded = expandHome(path);
     if (outsideNetworkPath(expanded, roots_)) return false;
     // Against the working directory, which is where a tool opens a relative path.
-    const std::string abs = normalized(fs::u8path(expanded));
+    const std::string target = resolveWriteTarget(expanded);
+    if (target.empty()) return false;  // can't tell where it lands
+    const std::string abs = spelled(fs::u8path(target));
     return std::any_of(roots_.begin(), roots_.end(),
                        [&](const std::string& r) { return under(abs, r); });
 }

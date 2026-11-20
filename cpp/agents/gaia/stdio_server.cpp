@@ -16,6 +16,7 @@
 #include <gaia/http_client.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
+#include <gaia/workspace.h>
 
 #include "gaia_agent.h"
 
@@ -327,12 +328,10 @@ std::string workingFolderUtf8() {
 }
 
 bool editIsInside(const std::string& target, const std::vector<std::string>& roots) {
-    if (target.empty()) return false;
-    std::error_code ec;
-    const fs::path absolute = fs::absolute(fs::u8path(target), ec);
-    if (ec) return false;
-    const fs::path resolved = fs::weakly_canonical(absolute, ec);
-    if (ec) return false;
+    // Judged where the write lands, past every link and junction, even one to a file not there yet.
+    const std::string landing = resolveWriteTarget(target);
+    if (landing.empty()) return false;
+    const fs::path resolved = fs::u8path(landing);
     if (landsWhereCodeRuns(resolved)) return false;
     const std::string key = pathKey(resolved);
     for (const auto& r : roots) {

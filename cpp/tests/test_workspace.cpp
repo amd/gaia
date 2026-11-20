@@ -3,12 +3,14 @@
 
 #include <gtest/gtest.h>
 
+#include <gaia/file_tools.h>
 #include <gaia/security.h>
 #include <gaia/tool_registry.h>
 #include <gaia/workspace.h>
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <random>
 
@@ -43,6 +45,26 @@ struct InFolder {
         fs::current_path(before, ec);
     }
 };
+
+// A folder link at `link` to `target`, which may not exist. A junction on Windows: it needs no privilege.
+void makeFolderLink(const fs::path& target, const fs::path& link) {
+#ifdef _WIN32
+    std::error_code ec;
+    const bool made = fs::create_directories(target, ec);
+    const std::string cmd = "cmd /c mklink /J \"" + link.string() + "\" \"" + target.string() + "\" >nul 2>&1";
+    ASSERT_EQ(std::system(cmd.c_str()), 0) << cmd;
+    if (made) fs::remove_all(target, ec);
+#else
+    std::error_code ec;
+    fs::create_directory_symlink(target, link, ec);
+    ASSERT_FALSE(ec) << ec.message();
+#endif
+}
+
+bool sameFile(const std::string& a, const fs::path& b) {
+    std::error_code ec;
+    return !a.empty() && fs::equivalent(fs::u8path(a), b, ec) && !ec;
+}
 
 }  // namespace
 
@@ -284,6 +306,85 @@ TEST(WorkspaceTest, ALinkToAFileNotThereYetIsJudgedByItsTarget) {
 }
 #endif
 
+
+TEST(WorkspaceTest, AWriteThroughADanglingLinkInAnyPartOfThePathIsJudgedByItsTarget) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    makeFolderLink(d.other / "not-yet", d.work / "gone");
+    ASSERT_FALSE(fs::exists(d.work / "gone")) << "the link dangles";
+    EXPECT_NE(ws.checkPath((d.work / "gone" / "new.txt").string()), "");
+    EXPECT_NE(ws.checkPath((d.work / "gone" / "a" / "b" / "new.txt").string()), "") << "the folders would be made outside";
+    EXPECT_NE(ws.checkPath((d.work / "fresh" / ".." / "gone" / "new.txt").string()), "")
+        << "a folder not there yet doesn't hide a link after `..`";
+    const std::string landing = resolveWriteTarget((d.work / "gone" / "a" / "new.txt").string());
+    ASSERT_FALSE(landing.empty());
+    EXPECT_EQ(fs::u8path(landing).filename().u8string(), "new.txt");
+    EXPECT_TRUE(sameFile(fs::u8path(landing).parent_path().parent_path().parent_path().u8string(), d.other))
+        << landing << " is under " << d.other;
+
+    // A link inside a linked folder, the inner one dangling: nested junctions on Windows.
+    fs::create_directories(d.other / "inner");
+    makeFolderLink(d.other, d.work / "outer");
+    makeFolderLink(d.base / "far", d.other / "inner" / "next");
+    EXPECT_NE(ws.checkPath((d.work / "outer" / "inner" / "next" / "new.txt").string()), "");
+    EXPECT_NE(ws.checkPath((d.work / "outer" / "new.txt").string()), "");
+
+    // A link that stays inside is still inside.
+    makeFolderLink(d.work / "sub", d.work / "alias");
+    EXPECT_EQ(ws.checkPath((d.work / "alias" / "new.txt").string()), "");
+
+    std::error_code ec;
+    for (const fs::path& link : {d.work / "gone", d.work / "outer", d.other / "inner" / "next", d.work / "alias"}) {
+        fs::remove(link, ec);
+    }
+}
+
+TEST(WorkspaceTest, ResolveWriteTargetAgreesWithWhereTheSystemPutsTheFile) {
+    Dirs d;
+    fs::create_directories(d.other / "deep");
+    makeFolderLink(d.other / "deep", d.work / "up");
+    // `..` after a link: POSIX climbs from where the link leads, Windows from the link's own folder.
+    const fs::path through = d.work / "up" / ".." / "landed.txt";
+    const std::string predicted = resolveWriteTarget(through.string());
+    ASSERT_FALSE(predicted.empty());
+    { std::ofstream(through) << "x"; }
+    const fs::path posixPlace = d.other / "landed.txt", windowsPlace = d.work / "landed.txt";
+    ASSERT_NE(fs::exists(posixPlace), fs::exists(windowsPlace)) << "the write landed in exactly one place";
+    EXPECT_TRUE(sameFile(predicted, fs::exists(posixPlace) ? posixPlace : windowsPlace)) << predicted;
+    Workspace ws({d.work.string()});
+    EXPECT_EQ(ws.contains(through.string()), fs::exists(windowsPlace));
+    std::error_code ec;
+    fs::remove(d.work / "up", ec);
+}
+
+#ifndef _WIN32
+TEST(WorkspaceTest, AChainOfRelativeLinksAndALoopAreFollowedOrRefused) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    fs::create_symlink("hop", d.work / "chain.md");
+    fs::create_symlink(fs::path("..") / "other" / "chained.txt", d.work / "hop");
+    EXPECT_NE(ws.checkPath((d.work / "chain.md").string()), "");
+    fs::create_symlink("loop-b", d.work / "loop-a");
+    fs::create_symlink("loop-a", d.work / "loop-b");
+    EXPECT_EQ(resolveWriteTarget((d.work / "loop-a").string()), "") << "a loop leads nowhere";
+    EXPECT_NE(ws.checkPath((d.work / "loop-a" / "x.txt").string()), "");
+}
+#endif
+
+TEST(WorkspaceTest, ALinkMadeAfterTheCheckIsCaughtWhenTheWriteRuns) {
+    Dirs d;
+    auto ws = std::make_shared<const Workspace>(std::vector<std::string>{d.work.string()});
+    const ToolInfo write = Workspace::confine(FileIOTools::fileWrite(), ws, {"path"});
+    const fs::path target = d.work / "late" / "new.txt";
+    EXPECT_EQ(ws->checkPath(target.string()), "") << "nothing there yet: inside";
+    makeFolderLink(d.other / "late", d.work / "late");
+    const json result = write.callback({{"path", target.u8string()}, {"content", "x"}});
+    ASSERT_TRUE(result.contains("error")) << result.dump();
+    EXPECT_NE(result["error"].get<std::string>().find("Refused"), std::string::npos) << result.dump();
+    EXPECT_FALSE(fs::exists(d.other / "late" / "new.txt"));
+    std::error_code ec;
+    fs::remove(d.work / "late", ec);
+}
 #ifndef _WIN32
 TEST(WorkspaceTest, AWildcardOrLinkFollowingReadAsksWhenALinkLeadsOut) {
     Dirs d;
