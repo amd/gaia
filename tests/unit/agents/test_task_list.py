@@ -32,6 +32,12 @@ from gaia.agents.tools.task_list_tools import (
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
 
+@pytest.fixture(autouse=True)
+def _model_kept_list(monkeypatch):
+    """These cover the list the model keeps with update_tasks: plans off."""
+    monkeypatch.setenv("GAIA_AGENT_PLANS", "0")
+
+
 def _statuses(task_list):
     return [item["status"] for item in task_list.items]
 

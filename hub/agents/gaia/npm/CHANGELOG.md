@@ -8,6 +8,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **The agent loop ticks the task list, so a plan costs no extra model turns.**
+  For a request of three or more steps, a model that calls tools natively
+  opens its reply with a short plan next to its first tool call. The agent
+  reads the plan out of the reply, keeps it off the screen, and marks each
+  step from the results of the tool calls. A step whose action failed has
+  the new status `failed` in the `task_list` event until a retry succeeds,
+  and a step nothing was done about stays to do: the model cannot tick a
+  step by saying it did it. If the model answers with a step still to do, it
+  is sent back once. `update_tasks` is no longer registered by default;
+  `GAIA_AGENT_PLANS=0` brings it back and turns the plan instruction off.
 - **The agent keeps a task list for multi-step requests.** Its plan used to
   scroll away with the step list and was gone after a reload. A new
   `update_tasks` tool keeps the steps and marks them done as it goes; every

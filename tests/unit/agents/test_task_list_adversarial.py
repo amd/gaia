@@ -24,6 +24,12 @@ from gaia.agents.tools.task_list_tools import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _model_kept_list(monkeypatch):
+    """These cover the list the model keeps with update_tasks: plans off."""
+    monkeypatch.setenv("GAIA_AGENT_PLANS", "0")
+
+
 def _list(*steps):
     tl = TaskList()
     tl.update(items=list(steps))

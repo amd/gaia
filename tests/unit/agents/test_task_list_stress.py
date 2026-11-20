@@ -31,6 +31,12 @@ from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 
 
+@pytest.fixture(autouse=True)
+def _model_kept_list(monkeypatch):
+    """These cover the list the model keeps with update_tasks: plans off."""
+    monkeypatch.setenv("GAIA_AGENT_PLANS", "0")
+
+
 def _one_running(items):
     s = [i["status"] for i in items]
     return s.count(IN_PROGRESS) == (1 if (PENDING in s or IN_PROGRESS in s) else 0)

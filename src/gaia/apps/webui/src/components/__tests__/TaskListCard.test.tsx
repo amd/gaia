@@ -3,7 +3,7 @@
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TaskListCard, formatElapsed, pickTaskList } from '../TaskListCard';
+import { TaskListCard, formatElapsed, parseTaskListEvent, pickTaskList } from '../TaskListCard';
 import type { TaskListState } from '../../types';
 
 const NOW = 1_800_000_000; // epoch seconds
@@ -114,4 +114,26 @@ describe('TaskListCard', () => {
         expect(screen.getByRole('region', { name: 'Tasks' })).toBeTruthy();
     });
 
+});
+
+describe('a failed step', () => {
+    const failed = list({
+        items: [
+            { id: 1, content: 'Read the config', status: 'completed', started_at: NOW - 100, completed_at: NOW - 88 },
+            { id: 2, content: 'Save the report', status: 'failed', started_at: NOW - 60, completed_at: null },
+        ],
+        current_action: null,
+        action_started_at: null,
+    });
+
+    it('is accepted from the stream', () => {
+        expect(parseTaskListEvent({ type: 'task_list', ...failed })).toHaveProperty('state');
+    });
+
+    it('is shown as failed and not counted as done', () => {
+        const { container } = render(<TaskListCard taskList={failed} running={false} />);
+        expect(container.querySelector('.task-item-failed .task-mark-failed')).not.toBeNull();
+        expect(screen.getByText(', failed')).toBeTruthy();
+        expect(container.querySelectorAll('.task-item-completed')).toHaveLength(1);
+    });
 });

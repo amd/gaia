@@ -54,7 +54,7 @@ mixin and calling its `register_*_tools()` method. Each row is the exact
 | `audio_generation` | `from gaia.agents.tools.audio_generation_tools import AudioGenerationToolsMixin` | Generate WAV music and sound effects via Lemonade (`init_audio_generation`) |
 | `wait` | `from gaia.agents.tools.wait_tools import WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 | `reasoning_effort` | `from gaia.agents.tools.reasoning_tools import ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
-| `task_list` | `from gaia.agents.tools.task_list_tools import TaskListMixin` | `update_tasks`, a plan the agent keeps up to date; pinned above the message box (§9.7) |
+| `task_list` | `from gaia.agents.tools.task_list_tools import TaskListMixin` | A plan pinned above the message box: written once by the model, ticked by the agent loop (§9.7) |
 
 The sections below show usage patterns for the most common mixins; the
 `file_io` mixin has its own spec at [FileIOToolsMixin](/spec/file-io-tools-mixin).
@@ -290,9 +290,26 @@ extraction? Register your own `@tool` that calls `self.vlm_client` directly; see
 
 **Import:** `from gaia.agents.tools.task_list_tools import TaskListMixin`
 
-Gives the agent a plan it keeps up to date while it works. The Agent UI and the
-TUI pin the list just above the message box. The flagship `GaiaAgent` has it on
-its `full` profile.
+Gives the agent a plan for multi-step requests. The Agent UI and the TUI pin the
+list just above the message box. The flagship `GaiaAgent` has it on its `full`
+profile.
+
+**By default the agent loop keeps the list.** One instruction in the system
+prompt asks the model to open its reply to a multi-step request with `Plan:` and
+a numbered list, next to its first tool call. The loop reads the list out of the
+reply (or out of the model's first thinking text), keeps it off the screen, and
+marks each step from the results of the tool calls: done once a call on the file
+or page the step names succeeded, `failed` while its action has failed, left to
+do when nothing shows it was done. The model never updates the list, so it costs
+no extra model turns. If the model answers while a step that needs a tool call
+is still to do, the loop sends it back once. This applies to models that call
+tools natively; a model that writes its tool calls as text keeps getting its
+card from the reply's `plan` field (below). A step with nothing to check, such
+as "compare the two", is marked once a later step is reached. A request that
+asks only for a plan is answered with the plan and nothing is tracked.
+`GAIA_AGENT_PLANS=0` turns all of this off and registers `update_tasks`, so the
+model keeps the list itself. `update_tasks` is not registered otherwise, for any
+model.
 
 ```python
 from gaia.agents.base.agent import Agent
@@ -304,10 +321,11 @@ class MyAgent(TaskListMixin, Agent):
 
     def _register_tools(self):
         self.register_task_list_tools()
-        # Registers: update_tasks(items=None, advance=False, done=None, start=None)
+        # With GAIA_AGENT_PLANS=0 this registers:
+        # update_tasks(items=None, advance=False, done=None, start=None)
 ```
 
-**`update_tasks`:**
+**`update_tasks`** (registered only with `GAIA_AGENT_PLANS=0`):
 - `items=[...]` sets the whole list (12 steps at most). Steps kept word for word
   keep their status; `items=[]` clears the list.
 - `advance=true` finishes the running step and starts the next one.
@@ -333,10 +351,14 @@ steps run. The event carries `source: "plan"` and both apps title the card
 "Agent's plan" instead of "Tasks", so it never reads as a list the agent is
 keeping. A list the model keeps always wins, and a plan never replaces an
 unfinished list kept in an earlier turn. Models that call tools natively send
-no `plan` field, so for them only `update_tasks` fills the card.
+no `plan` field; for them the loop reads the plan from the reply, as above.
 
-**Reminders.** Models often skip the tool description's guidance, so the
-agent reminds them, at most once per turn: after three tool calls with no list (start one, marking
+**Reminders.** By default a model that calls tools natively gets one: after two
+tool calls into a request with no plan, a line appended to the tool result asks
+it to open its next reply with the plan. A model that writes its tool calls as
+text gets none, and neither does a turn that asked only for a plan. With
+`GAIA_AGENT_PLANS=0`, models often skip the tool description's
+guidance, so the agent reminds them, at most once per turn: after three tool calls with no list (start one, marking
 what is already done), or after three tool calls since the last change to the
 unfinished list this turn is keeping (advance it). An earlier request's list
 gets no reminder. The reminder is appended to the result of the tool call

@@ -498,8 +498,9 @@ state, not narration.
 
 ### 4.5 `task_list` (additive)
 
-The plan the agent keeps for a multi-step request (`update_tasks`, from
-`TaskListMixin`). Every change sends the **whole** list, so a receiver replaces
+The plan for a multi-step request (`TaskListMixin`). By default the agent loop
+reads it from the model's reply and ticks it from tool results; with
+`GAIA_AGENT_PLANS=0` the model keeps it with `update_tasks`. Every change sends the **whole** list, so a receiver replaces
 what it shows; it never merges. The list belongs to the conversation, not the
 turn: it is saved with the session and carried into later turns.
 
@@ -508,9 +509,9 @@ turn: it is saved with the session and carried into later turns.
 | `items` | array | The steps, in order. Empty means the list was cleared. |
 | `items[].id` | int | 1-based position. |
 | `items[].content` | string | A short imperative step. |
-| `items[].status` | string | `pending`, `in_progress` or `completed`. While any step is unfinished exactly one is `in_progress`; when all are done none is. |
+| `items[].status` | string | `pending`, `in_progress`, `completed` or `failed`. `failed` is set only by the agent loop, for a step whose action failed and has not been retried successfully. While any step is still to do exactly one is `in_progress`; when none is, none is. |
 | `items[].started_at` / `completed_at` | number? | Epoch seconds, `null` until it happens. |
-| `source` | string | `agent` when the model keeps the list with `update_tasks`; `plan` when the agent derived it from the reply's own `plan` field because the model did not call `update_tasks` that turn (never over an unfinished list the model kept earlier). A receiver labels a `plan` list as the agent's plan, not a list it keeps. Absent means `agent`. |
+| `source` | string | `agent` when the model keeps the list with `update_tasks`; `plan` when the agent derived it from the reply's own `plan` field because the model did not call `update_tasks` that turn (never over an unfinished list the model kept earlier). A receiver labels a `plan` list as the agent's plan, not a list it keeps. Absent means `agent`. A list the agent loop read from a `Plan:` block in the reply and ticks from tool results is also `plan`. |
 | `current_action` | string? | What the agent is doing now ("Running command: pytest"). |
 | `action_started_at` | number? | Epoch seconds the current action began. |
 | `steps_since_update` | int | Tool calls since the model last changed the list. A receiver shows the list as stale once this passes a few steps, so a list the model stopped keeping never sits there looking current. |

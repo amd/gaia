@@ -32,6 +32,12 @@ from gaia.ui.sse_translation import CanonicalTranslator
 STEPS = ["Read the file", "Write the summary", "Report the count"]
 
 
+@pytest.fixture(autouse=True)
+def _model_kept_list(monkeypatch):
+    """These cover the list the model keeps with update_tasks: plans off."""
+    monkeypatch.setenv("GAIA_AGENT_PLANS", "0")
+
+
 class _TaskAgent(TaskListMixin, Agent):
     def _get_system_prompt(self) -> str:
         return "test"

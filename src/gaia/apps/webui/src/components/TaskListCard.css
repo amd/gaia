@@ -135,6 +135,11 @@
     color: var(--text-muted);
 }
 
+.task-mark-failed,
+.task-item-failed .task-item-text {
+    color: var(--danger);
+}
+
 .task-list-action {
     display: flex;
     align-items: center;

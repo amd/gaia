@@ -286,7 +286,9 @@ def test_manifest_tools_count_matches_real_registry(manifest, registered_tools):
     # advertised full-capability count rather than the machine's PATH.
     has_npx = shutil.which("npx") is not None
     assert ("search_documentation" in registered_tools) == has_npx
-    full_count = len(registered_tools) + int(not has_npx)
+    # update_tasks is registered only with GAIA_AGENT_PLANS=0; the count includes it.
+    assert "update_tasks" not in registered_tools
+    full_count = len(registered_tools) + int(not has_npx) + 1
     assert manifest["tools_count"] == full_count, (
         f"gaia-agent.yaml tools_count={manifest['tools_count']} but the real "
         f"registry has {len(registered_tools)} tools "

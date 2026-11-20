@@ -212,3 +212,17 @@ func TestTaskElapsed(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskListShowsAFailedStepAsFailed(t *testing.T) {
+	e := threeSteps()
+	e.Items[1].Status = event.TaskFailed
+	e.CurrentAction = ""
+	m := feed(t, newTestChat(t), e)
+	joined := strings.Join(cardLines(m), "\n")
+	if !strings.Contains(joined, "[!] Fix the off-by-one in the pager") {
+		t.Fatalf("a failed step must keep its failed mark, got:\n%s", joined)
+	}
+	if strings.Contains(joined, "[x] Fix the off-by-one") {
+		t.Fatalf("a failed step must not read as done, got:\n%s", joined)
+	}
+}

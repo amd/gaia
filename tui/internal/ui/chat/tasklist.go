@@ -21,6 +21,7 @@ var (
 	taskRunningStyle = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true)
 	taskCurrentStyle = lipgloss.NewStyle().Foreground(theme.Text).Bold(true)
 	taskStaleStyle   = lipgloss.NewStyle().Foreground(theme.Warning)
+	taskFailedStyle  = lipgloss.NewStyle().Foreground(theme.Danger)
 )
 
 // maxTaskItems caps what the card keeps from one event; the agent sends at
@@ -51,7 +52,7 @@ func (m *ChatModel) setTaskList(e *event.CanonicalTaskListEvent) {
 		for i := 0; i < n; i++ {
 			item := e.Items[i]
 			item.Content = oneLine(item.Content)
-			if item.Status != event.TaskCompleted && item.Status != event.TaskInProgress {
+			if item.Status != event.TaskCompleted && item.Status != event.TaskInProgress && item.Status != event.TaskFailed {
 				item.Status = event.TaskPending
 			}
 			clean.Items[i] = item
@@ -183,6 +184,8 @@ func (m ChatModel) renderTaskItem(item event.TaskListItem) string {
 		mark, text = taskDoneStyle.Render("[x]"), activityStyle.Render(item.Content)
 	case event.TaskInProgress:
 		mark, text = taskRunningStyle.Render("[>]"), taskCurrentStyle.Render(item.Content)
+	case event.TaskFailed:
+		mark, text = taskFailedStyle.Render("[!]"), taskFailedStyle.Render(item.Content)
 	default:
 		mark, text = activityStyle.Render("[ ]"), item.Content
 	}

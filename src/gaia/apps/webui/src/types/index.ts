@@ -67,7 +67,8 @@ export interface ActiveRuns {
 export interface TaskListItem {
     id: number;
     content: string;
-    status: 'pending' | 'in_progress' | 'completed';
+    /** `failed`: the step's action failed and no retry has succeeded. */
+    status: 'pending' | 'in_progress' | 'completed' | 'failed';
     started_at: number | null;
     completed_at: number | null;
 }

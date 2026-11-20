@@ -188,6 +188,8 @@ const (
 	TaskPending    = "pending"
 	TaskInProgress = "in_progress"
 	TaskCompleted  = "completed"
+	// TaskFailed: the step's action failed and no retry has succeeded.
+	TaskFailed = "failed"
 )
 
 // TaskSourcePlan marks a list derived from the reply's plan field.

@@ -4,7 +4,8 @@
 /** The agent's task list, pinned above the composer while it works. */
 
 import { useEffect, useState } from 'react';
-import { Check, ChevronDown, ChevronUp, Circle, Loader2 } from 'lucide-react';
+import { useT } from '../i18n/useT';
+import { Check, ChevronDown, ChevronUp, Circle, Loader2, X } from 'lucide-react';
 import type { TaskListItem, TaskListState } from '../types';
 import { log } from '../utils/logger';
 import './TaskListCard.css';
@@ -24,7 +25,7 @@ const MAX_CONTENT_CHARS = 200;
 /** Tool calls without a list update before the card says the list is stale. */
 export const STALE_AFTER_STEPS = 4;
 
-const STATUSES = new Set(['pending', 'in_progress', 'completed']);
+const STATUSES = new Set(['pending', 'in_progress', 'completed', 'failed']);
 
 function timeOrNull(v: unknown): number | null {
     return typeof v === 'number' && Number.isFinite(v) ? v : null;
@@ -90,14 +91,16 @@ export function pickTaskList(
 function StepMark({ status }: { status: TaskListItem['status'] }) {
     if (status === 'completed') return <Check size={14} className="task-mark task-mark-done" aria-hidden="true" />;
     if (status === 'in_progress') return <Loader2 size={14} className="task-mark task-mark-running spin" aria-hidden="true" />;
+    if (status === 'failed') return <X size={14} className="task-mark task-mark-failed" aria-hidden="true" />;
     return <Circle size={12} className="task-mark task-mark-pending" aria-hidden="true" />;
 }
 
-const STATUS_WORDS: Record<TaskListItem['status'], string> = {
-    completed: 'done',
-    in_progress: 'in progress',
-    pending: 'to do',
-};
+const STATUS_KEYS = {
+    completed: 'taskList.status.completed',
+    in_progress: 'taskList.status.in_progress',
+    failed: 'taskList.status.failed',
+    pending: 'taskList.status.pending',
+} as const;
 
 function stepDuration(item: TaskListItem): string | null {
     if (item.status !== 'completed' || item.started_at == null || item.completed_at == null) return null;
@@ -111,6 +114,7 @@ interface TaskListCardProps {
 }
 
 export function TaskListCard({ taskList, running }: TaskListCardProps) {
+    const t = useT();
     const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
     const [now, setNow] = useState(() => Date.now() / 1000);
 
@@ -130,21 +134,23 @@ export function TaskListCard({ taskList, running }: TaskListCardProps) {
     const done = items.filter((i) => i.status === 'completed').length;
     const current = items.find((i) => i.status === 'in_progress');
     const allDone = done === items.length && !taskList.hidden;
-    const expanded = userExpanded ?? running;
+    // A failed step is the one thing the user must not miss, so it keeps the list open.
+    const expanded = userExpanded ?? (running || items.some((i) => i.status === 'failed'));
     const actionLine = action
         ? `${action}${actionStart != null ? ` · ${formatElapsed(now - actionStart)}` : ''}`
         : null;
     const total = items.length + (taskList.hidden ?? 0);
     // Never claim "done" while the agent is still working.
     // A list finished in an earlier turn carries no live action and stays "done".
+    const counts = { done, total };
     const progress = allDone
-        ? (running && taskList.current_action ? `${done} of ${total} · still working` : `${done} of ${total} done`)
-        : `${done} of ${total}`;
+        ? t(running && taskList.current_action ? 'taskList.progressWorking' : 'taskList.progressDone', counts)
+        : t('taskList.progress', counts);
     const staleSteps = running ? taskList.steps_since_update ?? 0 : 0;
     const stale = staleSteps >= STALE_AFTER_STEPS;
     const oneLine = actionLine ?? (allDone ? null : current?.content ?? null);
     // A list derived from the reply's plan field is not one the agent keeps.
-    const title = taskList.source === 'plan' ? "Agent's plan" : 'Tasks';
+    const title = t(taskList.source === 'plan' ? 'taskList.titlePlan' : 'taskList.title');
 
     return (
         <section
@@ -162,7 +168,7 @@ export function TaskListCard({ taskList, running }: TaskListCardProps) {
                 <span className="task-list-progress" aria-live="polite">{progress}</span>
                 {stale && (
                     <span className="task-list-stale" data-testid="task-list-stale">
-                        · not updated for {staleSteps} steps
+                        {t('taskList.stale', { n: staleSteps })}
                     </span>
                 )}
                 {!expanded && oneLine && <span className="task-list-oneline">· {oneLine}</span>}
@@ -181,13 +187,13 @@ export function TaskListCard({ taskList, running }: TaskListCardProps) {
                                 <li key={item.id} className={`task-item task-item-${status}`}>
                                     <StepMark status={status} />
                                     <span className="task-item-text">{item.content}</span>
-                                    <span className="visually-hidden">, {STATUS_WORDS[status]}</span>
+                                    <span className="visually-hidden">, {t(STATUS_KEYS[status])}</span>
                                     {duration && <span className="task-item-time">{duration}</span>}
                                 </li>
                             );
                         })}
                         {(taskList.hidden ?? 0) > 0 && (
-                            <li className="task-item task-item-more">+{taskList.hidden} more steps not shown</li>
+                            <li className="task-item task-item-more">{t('taskList.more', { n: taskList.hidden ?? 0 })}</li>
                         )}
                     </ol>
                     {actionLine && (

@@ -28,7 +28,9 @@ logger = get_logger(__name__)
 PENDING = "pending"
 IN_PROGRESS = "in_progress"
 COMPLETED = "completed"
-STATUSES = (PENDING, IN_PROGRESS, COMPLETED)
+#: Set only by the loop, for a step whose action failed (see ``plan_tracker``).
+FAILED = "failed"
+STATUSES = (PENDING, IN_PROGRESS, COMPLETED, FAILED)
 
 #: The model keeps the list; ``plan`` is the fallback derived from the reply
 #: envelope's ``plan`` field when the model never called ``update_tasks``.
@@ -192,6 +194,9 @@ class TaskList:
         self._steps_since_update = 0
         self._calls_this_turn = 0
         self._nudged = False
+        # A plan the loop ticks (``track``): whose it is, and whether this turn wrote it.
+        self._tracked = False
+        self._tracked_this_turn = False
 
     # -- reminders ------------------------------------------------------------
 
@@ -250,7 +255,12 @@ class TaskList:
         with self._lock:
             if not self._items:
                 return "The task list is empty."
-            marks = {COMPLETED: "[x]", IN_PROGRESS: "[>]", PENDING: "[ ]"}
+            marks = {
+                COMPLETED: "[x]",
+                IN_PROGRESS: "[>]",
+                PENDING: "[ ]",
+                FAILED: "[!]",
+            }
             lines = [
                 f"{i}. {marks[item['status']]} {item['content']}"
                 for i, item in enumerate(self._items, 1)
@@ -332,6 +342,7 @@ class TaskList:
                 return self.state()
             self._items = items_after
             self._source = SOURCE_AGENT
+            self._tracked = False
             self._touch()
         return self._changed()
 
@@ -360,6 +371,7 @@ class TaskList:
         """A new request started; the model has not touched the list yet."""
         with self._lock:
             self._kept_this_turn = False
+            self._tracked_this_turn = False
             self._calls_this_turn = 0
             self._nudged = False
             self._steps_since_update = 0
@@ -383,8 +395,14 @@ class TaskList:
             self._calls_this_turn += 1
             # An earlier request's list, finished or not, is not this turn's
             # work until the model touches it (or the plan fallback rebuilds it).
-            this_turns = self._kept_this_turn or (
-                self._source == SOURCE_PLAN and self.is_active()
+            this_turns = (
+                self._kept_this_turn
+                or self._tracked_this_turn
+                or (
+                    self._source == SOURCE_PLAN
+                    and not self._tracked
+                    and self.is_active()
+                )
             )
             if not self._items or not this_turns:
                 return
@@ -449,11 +467,56 @@ class TaskList:
                 )
             self._items = items
             self._source = SOURCE_PLAN
+            self._tracked = False
             self._steps_since_update = 0
             self._touch()
         logger.info(
             "Task list derived from the reply's plan field (%d steps)", len(steps)
         )
+        self._changed()
+
+    def track(self, steps: Sequence[Sequence[str]]) -> None:
+        """Show a plan the loop ticks from tool results (see ``plan_tracker``).
+
+        *steps* is ``(text, state)`` pairs with state ``open``, ``done`` or
+        ``failed``. The first open step is shown as the one in progress.
+        """
+        status_of = {"open": PENDING, "done": COMPLETED, "failed": FAILED}
+        with self._lock:
+            now = _now()
+            previous = {item["content"]: item for item in self._items}
+            items = []
+            for i, (text, state) in enumerate(steps, 1):
+                status = status_of[state]
+                old = previous.get(text) or {}
+                started = old.get("started_at")
+                completed = None
+                if status == COMPLETED:
+                    started = started or now
+                    completed = old.get("completed_at") or now
+                items.append(
+                    {
+                        "id": i,
+                        "content": text,
+                        "status": status,
+                        "started_at": started,
+                        "completed_at": completed,
+                    }
+                )
+            running = _index_of(items, PENDING)
+            if running is not None:
+                items[running]["status"] = IN_PROGRESS
+                items[running]["started_at"] = items[running]["started_at"] or now
+            self._tracked_this_turn = True
+            if self._source == SOURCE_PLAN and _shape(items) == _shape(self._items):
+                self._tracked = True
+                return
+            self._items = items
+            self._source = SOURCE_PLAN
+            self._tracked = True
+            self._tracked_this_turn = True
+            self._steps_since_update = 0
+            self._touch()
         self._changed()
 
     def restore(self, state: Optional[Mapping[str, Any]]) -> None:
@@ -468,6 +531,7 @@ class TaskList:
         with self._lock:
             self._items = restored
             self._source = source
+            self._tracked = False
             self._steps_since_update = 0
             # A restored list was saved by a finished or interrupted turn;
             # nothing of it is running now.
@@ -488,6 +552,7 @@ class TaskList:
                 return
             self._items = []
             self._source = SOURCE_AGENT
+            self._tracked = False
             self._current_action = None
             self._action_started_at = None
             self._touch()
@@ -621,6 +686,13 @@ class TaskListMixin:
             self.task_list = TaskList(
                 on_change=self._task_list_changed, narrate=derive_narration
             )
+
+        from gaia.agents.base.plan_tracker import plans_enabled
+
+        if plans_enabled():
+            # The loop reads the plan from the reply and ticks it itself, so the
+            # model has nothing to call.
+            return
 
         @tool(display_label="Updating the task list")
         def update_tasks(

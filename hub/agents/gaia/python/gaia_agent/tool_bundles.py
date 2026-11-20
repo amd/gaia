@@ -630,6 +630,8 @@ FULL_BUNDLES = [
 FULL_OPTIONAL_TOOLS = frozenset(
     {
         "search_documentation",
+        # Registered only with GAIA_AGENT_PLANS=0: otherwise the loop ticks the plan.
+        "update_tasks",
         # Registered only on a model that grades its reasoning (gpt-oss).
         "set_reasoning_effort",
         # Browser-use: registered only when the [browser] extra is installed,
