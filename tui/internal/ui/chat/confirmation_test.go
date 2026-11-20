@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -65,23 +66,95 @@ func TestNeedsConfirmationPutsUpTheModal(t *testing.T) {
 	}
 }
 
-// While the confirmation is pending, keys drive it rather than the composer —
-// mirrors TestKeysRouteToThePendingQuestion for the confirmation modal.
+// While the confirmation is pending, its answer keys drive it rather than the
+// composer — mirrors TestKeysRouteToThePendingQuestion for the confirmation modal.
 func TestKeysRouteToThePendingConfirmation(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
 	m = feed(t, m, needsConfirmation(""))
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	m = updated.(ChatModel)
 	if cmd != nil {
-		t.Error("an unrecognized key must not resolve the confirmation")
+		t.Error("a scroll key must not resolve the confirmation")
 	}
 	if m.confirmation == nil || !m.confirmation.Pending() {
 		t.Fatal("the confirmation must still be pending")
 	}
 	if got := m.input.Value(); got != "" {
-		t.Errorf("the keystroke leaked into the composer: %q", got)
+		t.Errorf("the prompt's key leaked into the composer: %q", got)
+	}
+}
+
+// typeText sends s one key at a time, as a terminal does, with the clock
+// advancing step between keys.
+func typeText(t *testing.T, m ChatModel, s string, now *time.Time, step time.Duration) ChatModel {
+	t.Helper()
+	for _, r := range s {
+		*now = now.Add(step)
+		key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+		if r == ' ' {
+			key = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{r}}
+		}
+		updated, _ := m.handleKey(key)
+		m = updated.(ChatModel)
+	}
+	return m
+}
+
+// A prompt that appears mid-sentence must not take the sentence as its answer:
+// the y of "year" approved a folder grant and the message lost its start.
+func TestTypingWhenAConfirmationAppearsKeepsTheMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name, before, after string
+	}{
+		{"typing under way", "/research What ", "year was it"},
+		{"typing starts after the prompt", "", "/research What year was it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTestModel(t)
+			m.streaming = true
+			now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+			m.clock = func() time.Time { return now }
+
+			m = typeText(t, m, tc.before, &now, 120*time.Millisecond)
+			e := needsConfirmation("")
+			e.AlwaysScope = "~/Documents"
+			e.ConfirmID = "c-1"
+			m = feed(t, m, e)
+			m = typeText(t, m, tc.after, &now, 120*time.Millisecond)
+
+			if m.confirmation == nil || !m.confirmation.Pending() {
+				t.Fatal("typing answered the confirmation")
+			}
+			if got, want := m.input.Value(), tc.before+tc.after; got != want {
+				t.Errorf("composer = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// Once the keyboard has been still, y answers the prompt again.
+func TestConfirmationAnswersAfterTypingPauses(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+
+	m = typeText(t, m, "hello", &now, 100*time.Millisecond)
+	m = feed(t, m, needsConfirmation(""))
+	now = now.Add(components.TypingQuietPeriod)
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = updated.(ChatModel)
+	if cmd == nil {
+		t.Fatal("y after a pause must answer the prompt")
+	}
+	if msg, ok := cmd().(components.ConfirmationDecidedMsg); !ok || !msg.Approved {
+		t.Errorf("expected an approval, got %#v", cmd())
+	}
+	if got := m.input.Value(); got != "hello" {
+		t.Errorf("composer = %q, want %q", got, "hello")
 	}
 }
 

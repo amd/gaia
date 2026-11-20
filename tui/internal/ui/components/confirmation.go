@@ -595,6 +595,22 @@ func (m *ConfirmationModel) scrollBy(delta int) {
 	m.markSeen()
 }
 
+// TypingQuietPeriod is how long the keyboard must be still before a key can
+// answer a prompt. Typing faster than this is meant for the message box.
+const TypingQuietPeriod = time.Second
+
+// IsConfirmationKey reports whether a typed key is one the prompt answers or
+// scrolls with. Any other letter means the user is typing a message.
+func IsConfirmationKey(msg tea.KeyMsg) bool {
+	if msg.Type == tea.KeySpace {
+		return true
+	}
+	if msg.Type != tea.KeyRunes || len(msg.Runes) != 1 {
+		return false
+	}
+	return strings.ContainsRune("yYaAnNjk", msg.Runes[0])
+}
+
 // Update handles one key while the confirmation is pending. Only y/Y (approve
 // once), a/A (approve and stop asking) and n/N/Esc (deny) resolve it; every
 // other key is swallowed so nothing approves — or denies — by accident. Once

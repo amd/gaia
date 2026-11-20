@@ -455,6 +455,9 @@ type ChatModel struct {
 	goalFresh bool
 	// clock is time.Now, swappable so a frame test can pin elapsed times.
 	clock func() time.Time
+	// lastTypedAt is when a typed key last went to the composer; while it is
+	// recent, an approval prompt leaves the user's typing alone.
+	lastTypedAt time.Time
 	// motion is what the animation tick draws — see motion.go.
 	motion motionState
 	// syncedChrome is the chrome height the viewport was last sized against.
@@ -1323,6 +1326,21 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// isTypedKey reports whether a key is plain typing: a letter, a space or a
+// Backspace, not a paste or a shortcut.
+func isTypedKey(msg tea.KeyMsg) bool {
+	if msg.Paste || msg.Alt {
+		return false
+	}
+	return msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace || msg.Type == tea.KeyBackspace
+}
+
+// typingUnderWay reports whether the user typed into the composer within the
+// last components.TypingQuietPeriod.
+func (m ChatModel) typingUnderWay() bool {
+	return !m.lastTypedAt.IsZero() && m.clock().Sub(m.lastTypedAt) < components.TypingQuietPeriod
+}
+
 func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// An open help panel owns the keyboard: navigation scrolls it, anything
 	// else closes it. Never a trap, whatever the user reaches for.
@@ -1354,12 +1372,18 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// A pending confirmation owns the keyboard too, but UNLIKE a question, Esc
 	// belongs to it: the issue's contract is "Esc denies", not "Esc cancels the
-	// turn". Ctrl+C is still the universal way out.
-	if m.confirmation != nil && msg.Type != tea.KeyCtrlC {
+	// turn". Ctrl+C is still the universal way out. Typing meant for the
+	// message box is the exception: a y in a sentence must never approve.
+	typed := isTypedKey(msg)
+	if m.confirmation != nil && msg.Type != tea.KeyCtrlC &&
+		!(m.confirmation.Pending() && typed && (m.typingUnderWay() || !components.IsConfirmationKey(msg))) {
 		c, cmd := m.confirmation.Update(msg)
 		m.confirmation = &c
 		m.updateViewport()
 		return m, cmd
+	}
+	if typed {
+		m.lastTypedAt = m.clock()
 	}
 
 	// A pending question owns the keyboard: the run is blocked on it, so a
