@@ -358,8 +358,13 @@ it is granted. If the session has full access
 (enabled through the session bypass route) and the caller can answer for the
 session, that path is granted without a separate path prompt; this is the same
 full-access behavior as in-process. Full access does not override
-`GAIA_ALLOWED_PATHS`, the secret-path denylist, the write denylist, or the
-refusal of grants that cover the home folder or a drive root. Omit
+`GAIA_ALLOWED_PATHS`, the secret-path denylist, the write denylist, the
+refusal of grants that cover the home folder or a drive root, or GAIA's chat
+data (`$GAIA_HOME/chat`: every chat's attachments and document copies), where
+the file tools open only a path sent in this turn's `documents` or
+`allowed_paths`, and only to read (full access still runs shell and Python
+code unchecked). A refused path there, or a file taken off the chat, is
+reported to the model with "attach it to this chat (again)" as the remedy. Omit
 `allowed_paths` for the agent's default scope. Pre-2.18 binaries `422` the
 field. Whatever the scope, its existing folders are named once in the session
 context at the start of the first user message, when the session is built, with GAIA's documents folder first; a folder

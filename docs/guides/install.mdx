@@ -390,7 +390,8 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Electron app | Platform-specific (Program Files / /Applications / /opt/GAIA) |
 | Backend (`gaia`) | Inside the app, in `resources/core/` |
 | Chat database | `~/.gaia/chat/gaia_chat.db` |
-| Document Library uploads | `~/.gaia/documents/` |
+| Document Library uploads | `~/.gaia/chat/documents/` (each chat reads only the ones attached to it) |
+| Files the agent saves to GAIA's documents folder | `~/.gaia/documents/` |
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
 | Logs | `~/.gaia/gaia.log` (`$GAIA_HOME/gaia.log` when `GAIA_HOME` is set), or the path in `GAIA_LOG_FILE` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |

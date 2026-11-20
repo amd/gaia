@@ -994,9 +994,10 @@ def _grant_unloaded(agent: Any, documents: List[str]) -> None:
 def _granted_only_as_gaias_copy(validator: Any, doc: str) -> bool:
     """Whether *doc* is still readable only because it sits in GAIA's documents folder.
 
-    The Agent UI grants that whole folder to every chat as its scratch space,
-    and keeps the copy of every document dropped into it there. A folder the
-    user granted is any other entry, and keeps covering *doc*.
+    The Agent UI grants that whole folder to every chat as its scratch space.
+    An Agent UI older than 0.27 also kept its document copies there; newer ones
+    keep them in its chat data, which no folder grant opens. A folder the user
+    granted is any other entry, and keeps covering *doc*.
     """
     if not validator.is_path_allowed(doc, prompt_user=False):
         return False
@@ -1021,8 +1022,8 @@ def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
     """Take the documents attached last turn but not this one out of the index.
 
     Their grants go too: a grant left behind lets ``query_specific_file``
-    index the file again from disk. GAIA's own copy of a document is refused
-    until it is attached again, since its folder stays granted.
+    index the file again from disk. A copy in GAIA's documents folder is
+    refused until it is attached again, since that folder stays granted.
     """
     validator = agent.path_validator
     withheld = getattr(agent, "_withheld_documents", set())
