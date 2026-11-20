@@ -13,7 +13,7 @@ import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -1600,7 +1600,11 @@ class ChatDatabase:
             now = self._now()
             replied_at = now
             if dated_last_alive:
-                replied_at = row["updated_at"] or row["started_at"]
+                replied_at = self._before_a_tie(
+                    row["session_id"],
+                    question_id,
+                    row["updated_at"] or row["started_at"],
+                )
             cursor = self._conn.execute(
                 "INSERT INTO messages (session_id, role, content, created_at) "
                 "VALUES (?, 'assistant', ?, ?)",
@@ -1611,6 +1615,28 @@ class ChatDatabase:
                 (now, row["session_id"]),
             )
             return cursor.lastrowid
+
+    def _before_a_tie(self, session_id: str, question_id: int, replied_at: str) -> str:
+        """*replied_at*, moved just ahead of a later message saved at that same time.
+
+        Messages sort by time then id, and a coarse clock (Windows) can give the
+        turn's last save and a later message one timestamp, which would put the
+        reply after that message.
+        """
+        tie = self._conn.execute(
+            "SELECT 1 FROM messages WHERE session_id = ? AND id > ? "
+            "AND created_at = ? LIMIT 1",
+            (session_id, question_id, replied_at),
+        ).fetchone()
+        question = self._conn.execute(
+            "SELECT created_at FROM messages WHERE id = ?", (question_id,)
+        ).fetchone()
+        # Saved at its question's own time, any earlier would put it above it.
+        if tie is None or question is None or question["created_at"] == replied_at:
+            return replied_at
+        return (
+            datetime.fromisoformat(replied_at) - timedelta(microseconds=1)
+        ).isoformat()
 
     # ── Documents ───────────────────────────────────────────────────────
 
