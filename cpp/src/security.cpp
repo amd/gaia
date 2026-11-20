@@ -656,31 +656,43 @@ bool fetchLeavesThisPc(const std::string& command, const std::string& bare) {
 }
 
 // True when a web-request program is what a command runs, not a word handed to another
-// program: `grep curl notes.md` only searches for the name.
-bool runsFetchProgram(const std::string& command) {
+// program: `grep curl notes.md` only searches for the name. `bare` is the command with quotes,
+// backslashes and ^ dropped, which is how a shell sees `bash -c "curl ..."`.
+bool runsFetchProgram(const std::string& command, const std::string& bare) {
     static const std::set<std::string> fetchers = {"curl", "wget", "iwr", "irm", "invoke-webrequest",
                                                    "invoke-restmethod"};
-    // Programs that run the words after them.
+    // Programs that run the words after them; c and k are cmd's /c and /k as programWords leaves them.
     static const std::set<std::string> wrappers = {"sudo", "env", "time", "nohup", "exec", "command", "xargs",
                                                    "bash", "sh", "zsh", "cmd", "powershell", "pwsh", "call",
-                                                   "start", "then", "do", "else",
-                                                   "c", "k"};  // cmd /c, reduced to its last path part
-    bool atCommand = true;
-    std::string word;
-    for (const char c : programWords(command) + "\n") {
-        if (c != ' ' && c != '\n' && !std::strchr(";|&()<>`", c)) {
-            word.push_back(c);
-            continue;
+                                                   "start", "then", "do", "else", "c", "k"};
+    const auto scan = [](const std::string& text) {
+        bool atCommand = true;
+        std::string word;
+        for (const char c : text + "\n") {
+            const bool space = c == ' ' || c == '\t' || c == '\r';
+            if (!space && c != '\n' && !std::strchr(";|&()<>`", c)) {
+                word.push_back(c);
+                continue;
+            }
+            if (!word.empty() && atCommand) {
+                std::string name = lowerAscii(word.substr(word.find_last_of("/\\") + 1));
+                for (const char* ext : {".exe", ".cmd", ".bat", ".com", ".ps1"}) {
+                    const size_t n = std::strlen(ext);
+                    if (name.size() > n && name.compare(name.size() - n, n, ext) == 0) {
+                        name.resize(name.size() - n);
+                        break;
+                    }
+                }
+                if (fetchers.count(name)) return true;
+                atCommand = wrappers.count(name) || word[0] == '-' || word[0] == '/' ||
+                            word.find('=') != std::string::npos;
+            }
+            word.clear();
+            if (!space) atCommand = true;
         }
-        if (!word.empty() && atCommand) {
-            if (fetchers.count(word)) return true;
-            atCommand = wrappers.count(word) || word[0] == '-' || word[0] == '/' ||
-                        word.find('=') != std::string::npos;
-        }
-        word.clear();
-        if (c != ' ') atCommand = true;
-    }
-    return false;
+        return false;
+    };
+    return scan(programWords(command)) || scan(bare);
 }
 }  // namespace
 
@@ -704,7 +716,8 @@ std::string webFetchRefusal(const ToolInfo& tool, const json& args) {
         R"(|http\.client|https?\.(?:get|request)|fetch\(|net\.connect|WebClient|Net::HTTP|LWP|fsockopen|TCPSocket)))",
         std::regex::icase);
     if (asked.find("/dev/tcp/") != std::string::npos || asked.find("/dev/udp/") != std::string::npos ||
-        std::regex_search(asked, scripted) || std::regex_search(bare, scripted) || (runsFetchProgram(asked) && (mentionsRemoteUrl(asked) || fetchLeavesThisPc(asked, bare)))) {
+        std::regex_search(asked, scripted) || std::regex_search(bare, scripted) ||
+        (runsFetchProgram(asked, bare) && (mentionsRemoteUrl(asked) || fetchLeavesThisPc(asked, bare)))) {
         return why + "`" + asked.substr(0, 80) + "`, which fetches from the web. Don't fetch it another way: "
                "answer from what is on this PC, or say what you could not read.";
     }
