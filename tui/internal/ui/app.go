@@ -51,7 +51,8 @@ func prepareTerminal() {
 // program. fullAccess starts the agent with confirmation prompts off.
 // useClaude/claudeModel run it against Anthropic's Claude API instead of the
 // local Lemonade backend. A non-nil trace records every agent event to a JSONL
-// file; the caller owns it and closes it after this returns.
+// file; the caller owns it and closes it after this returns. agentChoice names
+// the agent program to run (see catalog.SelectFlagshipAgent); empty picks one.
 // Resume is --resume: Pick opens the session list at launch, ID reopens one
 // session directly (a full id or a unique prefix). Zero starts a new session.
 type Resume struct {
@@ -59,17 +60,18 @@ type Resume struct {
 	ID   string
 }
 
-func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, fullAccessSaved bool, useClaude bool, claudeModel string, trace *event.TraceWriter, resume Resume) error {
-	cat := catalog.NewCatalog()
-	if mockAgent != "" {
-		cat.SetMockBinary(mockAgent)
-	} else {
-		cat.DiscoverBinaries()
+func RunFlagship(dev bool, mockAgent, agentChoice string, ctrl *control.Options, fullAccess, fullAccessSaved bool, useClaude bool, claudeModel string, trace *event.TraceWriter, resume Resume) error {
+	cat, agentNotice, err := loadCatalog(mockAgent, agentChoice, catalog.FlagshipID)
+	if err != nil {
+		return err
 	}
 	agent := cat.Get(catalog.FlagshipID)
 	if agent == nil {
 		return fmt.Errorf("the catalog has no %q entry, so there is nothing to launch. "+
 			"Report this with GAIA diagnostics", catalog.FlagshipID)
+	}
+	if err := checkClaudeSupported(*agent, useClaude); err != nil {
+		return err
 	}
 	fullAccess, notice, err := launchFullAccess(*agent, fullAccess, fullAccessSaved)
 	if err != nil {
@@ -96,7 +98,7 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
-		WithFullAccessNotice(notice).
+		WithFullAccessNotice(joinNotices(notice, agentNotice)).
 		WithClaude(useClaude, claudeModel).
 		WithTerminalVersion(update.Current)).
 		WithTrace(trace).
@@ -104,7 +106,7 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 		WithLocalPreflight(preflight.LocalOptions{
 			// The gate has to answer about the binary this launch will actually
 			// spawn — with --mock that is the mock, not the name the seed carries.
-			Binary: agent.BinaryPath, ClaudeMode: useClaude,
+			Binary: agent.BinaryPath, ClaudeMode: useClaude, Native: agent.Native,
 		})
 	if resumed != nil {
 		m = m.WithResume(resumed.session, resumed.turns)
@@ -113,6 +115,49 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 		m = m.WithSessionPicker()
 	}
 	return run(m, dev, ctrl)
+}
+
+// loadCatalog builds the catalog for launching agentID: the mock when one was
+// given, else what is installed. agentChoice names the flagship's agent
+// program, so it is applied only when the flagship is what is being launched;
+// the notice is what the user must be told about how it was honoured.
+func loadCatalog(mockAgent, agentChoice, agentID string) (*catalog.Catalog, string, error) {
+	cat := catalog.NewCatalog()
+	if mockAgent != "" {
+		cat.SetMockBinary(mockAgent)
+		return cat, "", nil
+	}
+	cat.DiscoverBinaries()
+	if agentID != catalog.FlagshipID {
+		return cat, "", nil
+	}
+	notice, err := cat.SelectFlagshipAgent(agentChoice)
+	if err != nil {
+		return nil, "", err
+	}
+	return cat, notice, nil
+}
+
+func joinNotices(notices ...string) string {
+	var out []string
+	for _, n := range notices {
+		if n != "" {
+			out = append(out, n)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// checkClaudeSupported refuses --use-claude for the native agent before any
+// screen opens: it would exit on the flag, and nothing else may be run in its
+// place without the user asking.
+func checkClaudeSupported(agent catalog.Agent, useClaude bool) error {
+	if !useClaude || !agent.Native {
+		return nil
+	}
+	return fmt.Errorf("--use-claude cannot be used here. %s Or run the Python agent, which has a "+
+		"Claude provider, by setting %s=%s. See %s",
+		client.NativeClaudeUnavailable, catalog.AgentEnv, catalog.PythonAgentBinary, catalog.AgentChoiceDocsURL)
 }
 
 // RunChat launches the chat TUI directly with a subprocess agent (standalone mode).
@@ -131,7 +176,16 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 		return fmt.Errorf("cannot start --subprocess %q: %w", argv[0], err)
 	}
 
-	c := client.NewSubprocessClient(bin, argv[1:], dev).WithTrace(trace).WithLogf(control.DevLogf)
+	c := client.NewSubprocessClient(bin, argv[1:], dev)
+	if catalog.IsNativeAgentBinary(bin) {
+		if !hasArg(argv[1:], catalog.NativeStdioFlag) {
+			return fmt.Errorf("--subprocess %q starts gaiacpp without %s, so it would open its own "+
+				"interactive session instead of talking to the terminal UI. Add %s to the command",
+				subprocess, catalog.NativeStdioFlag, catalog.NativeStdioFlag)
+		}
+		c = client.NewNativeSubprocessClient(bin, argv[1:], dev)
+	}
+	c = c.WithTrace(trace).WithLogf(control.DevLogf)
 	defer func() {
 		if err := closeSession(c, os.Stderr, slowCloseNotice); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -330,12 +384,10 @@ func beforeExit(m tea.Model) {
 // that overrode the binary for one entry point and not the other let a test
 // spawn the real agent while believing it had substituted a stand-in.
 // Returns the process exit code.
-func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, fullAccess bool, useClaude bool, claudeModel, mockAgent string, trace *event.TraceWriter) (int, error) {
-	cat := catalog.NewCatalog()
-	if mockAgent != "" {
-		cat.SetMockBinary(mockAgent)
-	} else {
-		cat.DiscoverBinaries()
+func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, fullAccess bool, useClaude bool, claudeModel, mockAgent, agentChoice string, trace *event.TraceWriter) (int, error) {
+	cat, agentNotice, err := loadCatalog(mockAgent, agentChoice, agentID)
+	if err != nil {
+		return 1, err
 	}
 
 	agent := cat.Get(agentID)
@@ -344,6 +396,9 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	}
 
 	if err := client.CheckFullAccessSupported(*agent, fullAccess); err != nil {
+		return 1, err
+	}
+	if err := checkClaudeSupported(*agent, useClaude); err != nil {
 		return 1, err
 	}
 
@@ -364,6 +419,9 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	}
 
 	if query != "" {
+		if agentNotice != "" {
+			fmt.Fprintln(os.Stderr, agentNotice)
+		}
 		var notice string
 		model, notice = oneShotModel(agent.ID, model, useClaude, preflight.ReadLastModel)
 		if notice != "" {
@@ -386,7 +444,7 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 			rep = ReportReadiness(context.Background(), t, cfg, os.Stderr)
 		} else {
 			rep = ReportLocalReadiness(context.Background(),
-				preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: useClaude, Model: model},
+				preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: useClaude, Model: model, Native: agent.Native},
 				cfg, os.Stderr)
 		}
 		// Every row, not just the blocker: a turn that answers nothing is
@@ -452,6 +510,7 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
+		WithFullAccessNotice(agentNotice).
 		WithClaude(useClaude, claudeModel).
 		WithModel(model).
 		WithTerminalVersion(update.Current)).
@@ -489,6 +548,15 @@ func orDefault(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func hasArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
 }
 
 func agentNameFromPath(path string) string {
@@ -580,6 +648,10 @@ func resumeTarget(agent catalog.Agent, resume Resume) (*resumedSession, error) {
 	if agent.ID != catalog.FlagshipID || agent.Transport != catalog.TransportSubprocess {
 		return nil, fmt.Errorf("--resume needs the built-in GAIA agent the TUI starts itself; "+
 			"this install runs %q over the %s transport, which keeps no sessions to reopen", agent.ID, agent.Transport)
+	}
+	if agent.Native {
+		return nil, fmt.Errorf("--resume needs the Python agent: gaiacpp, the native agent this launch would run, " +
+			"doesn't keep sessions yet. Start with GAIA_TUI_AGENT=gaia-agent (or --agent-program gaia-agent) to reopen one")
 	}
 	if pinned := os.Getenv(client.HistoryFileEnv); pinned != "" {
 		return nil, fmt.Errorf("--resume cannot be used while %s=%s pins every launch to that "+

@@ -48,6 +48,11 @@ using ReplOutputSink = std::function<void(const std::string& text)>;
 ///   repl.addCommand("/lint", "Run linter", [](const std::string& args, Agent& a) { ... });
 ///   repl.run();  // blocking — runs until /exit or EOF
 /// @endcode
+/// What Ctrl+C does while a ReplRunner is running: the first press asks the
+/// agent to stop its turn; a second press before the next prompt ends the
+/// program with code 130, so a call that won't stop can't hold the terminal.
+GAIA_API void replHandleInterrupt();
+
 class GAIA_API ReplRunner {
 public:
     /// Construct a REPL for the given agent.

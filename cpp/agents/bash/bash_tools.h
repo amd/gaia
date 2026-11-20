@@ -6,9 +6,11 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
 
 #include "gaia/export.h"
+#include "gaia/process.h"
 #include "gaia/tool_registry.h"
 #include "gaia/types.h"
 
@@ -34,6 +36,24 @@ public:
     /// On error: {"error": string}
     static ToolInfo bashExecute();
 
+    /// The same tool running in `session` instead of the process-wide one, so
+    /// two chats in one process keep separate folders and variables.
+    static ToolInfo bashExecute(std::shared_ptr<ShellSession> session);
+
+    /// A new session in `dir` ("" = the process's folder) using detectShell().
+    static std::shared_ptr<ShellSession> newSession(const std::string& dir = "");
+
+    /// The process-wide session bashExecute() runs in.
+    static ShellSession& defaultSession();
+
+    /// Move the shared shell session to `dir` before its next command.
+    /// False when `dir` isn't a directory.
+    static bool setWorkingDirectory(const std::string& dir);
+
+    /// The shell commands run in: on Windows Git Bash / MSYS2 by quoted full
+    /// path (never the WSL launcher), "" for cmd.exe; elsewhere bash, else sh.
+    static std::string detectShell();
+
     /// env_inspect: Inspect the shell environment.
     /// Args: {} (no args)
     /// Policy: ALLOW (read-only inspection)
@@ -42,13 +62,8 @@ public:
 
 private:
     // Implementation callbacks
-    static json doBashExecute(const json& args);
+    static json doBashExecute(ShellSession& session, const json& args);
     static json doEnvInspect(const json& args);
-
-    /// Detect the best available shell on this system.
-    /// Returns the shell command prefix (e.g. "bash", "sh", "/usr/bin/bash").
-    /// On Windows, checks for bash (WSL, Git Bash, MSYS2) then falls back to sh.
-    static std::string detectShell();
 
     /// Check if a command is available on PATH.
     /// Uses "which" on POSIX, "where" on Windows.

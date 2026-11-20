@@ -384,6 +384,7 @@ func (c *Catalog) SetMockBinary(binaryPath string) {
 		c.agents[i].BinaryArgs = nil
 		c.agents[i].DevArgs = nil
 		c.agents[i].CanonicalEvents = false
+		c.agents[i].Native = false
 		c.agents[i].Status = StatusInstalled
 	}
 }
@@ -581,7 +582,7 @@ func seedAgents() []Agent {
 			Category: "General", Tags: []string{"general", "chat", "rag", "memory", "skills"},
 			Icon: "✨", Status: StatusInstalled,
 			Transport:       TransportSubprocess,
-			BinaryPath:      "gaia-agent",
+			BinaryPath:      PythonAgentBinary,
 			CanonicalEvents: true,
 			// `gaia-cli --dev` or `--trace` also puts the child at DEBUG in
 			// ~/.gaia/logs/gaia-agent.log: a run recorded for debugging should

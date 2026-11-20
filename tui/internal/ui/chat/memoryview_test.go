@@ -53,6 +53,8 @@ func findMemoryDumpMsg(msg tea.Msg) (memoryDumpMsg, bool) {
 	return memoryDumpMsg{}, false
 }
 
+func memConf(v float64) *float64 { return &v }
+
 func sampleMemoryDump() client.MemoryDump {
 	return client.MemoryDump{
 		Available: true,
@@ -62,17 +64,17 @@ func sampleMemoryDump() client.MemoryDump {
 			ByContext:      map[string]int{"global": 3},
 			SensitiveCount: 1,
 			EntityCount:    1,
-			AvgConfidence:  0.71,
+			AvgConfidence:  memConf(0.71),
 		},
 		Contexts: []client.MemoryContext{{Context: "global", Count: 3}},
 		Shown:    3,
 		Total:    3,
 		Items: []client.MemoryItem{
-			{ID: "1", Category: "fact", Content: "likes go", Context: "global", Confidence: 0.8},
-			{ID: "2", Category: "fact", Content: "works at AMD", Context: "global", Confidence: 0.6},
+			{ID: "1", Category: "fact", Content: "likes go", Context: "global", Confidence: memConf(0.8)},
+			{ID: "2", Category: "fact", Content: "works at AMD", Context: "global", Confidence: memConf(0.6)},
 			{
 				ID: "3", Category: "preference", Content: "wifi password is hunter2",
-				Context: "global", Confidence: 0.9, Sensitive: true,
+				Context: "global", Confidence: memConf(0.9), Sensitive: true,
 			},
 		},
 	}
@@ -228,7 +230,7 @@ func TestHelpListsMemoryCommand(t *testing.T) {
 func TestMemoryViewNeverExceedsThePaneWidth(t *testing.T) {
 	dump := sampleMemoryDump()
 	dump.Items = append(dump.Items, client.MemoryItem{
-		ID: "4", Category: "note", Entity: "person:kalin", Context: "work", Confidence: 0.55,
+		ID: "4", Category: "note", Entity: "person:kalin", Context: "work", Confidence: memConf(0.55),
 		Content: strings.Repeat("a very long note about the user that keeps going ", 20),
 	})
 
@@ -360,6 +362,71 @@ func TestFormatMemoryTimestampRendersLocalTime(t *testing.T) {
 	for in, want := range cases {
 		if got := formatMemoryTimestamp(in); got != want {
 			t.Errorf("formatMemoryTimestamp(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestMemoryViewPrintsConfidenceTheAgentSent(t *testing.T) {
+	out := ansi.Strip(renderMemoryView(sampleMemoryDump(), 88))
+
+	for _, want := range []string{
+		"1 entities · avg confidence 0.71",
+		"confidence 0.80",
+		"confidence 0.60",
+		"confidence 0.90 · sensitive",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("view is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestMemoryViewKeepsAReportedZeroConfidence(t *testing.T) {
+	dump := sampleMemoryDump()
+	dump.Stats.AvgConfidence = memConf(0)
+	dump.Items = []client.MemoryItem{{
+		ID: "1", Category: "fact", Content: "likes go", Context: "global", Confidence: memConf(0),
+	}}
+
+	out := ansi.Strip(renderMemoryView(dump, 88))
+	if !strings.Contains(out, "avg confidence 0.00") {
+		t.Errorf("a reported average of zero was dropped:\n%s", out)
+	}
+	if !strings.Contains(out, "  confidence 0.00") {
+		t.Errorf("a reported item confidence of zero was dropped:\n%s", out)
+	}
+}
+
+func TestMemoryViewOmitsConfidenceTheAgentDidNotSend(t *testing.T) {
+	dump := sampleMemoryDump()
+	dump.Stats.AvgConfidence = nil
+	dump.Items = []client.MemoryItem{
+		{ID: "1", Category: "fact", Content: "likes go", Context: "global"},
+		{
+			ID: "2", Category: "fact", Content: "works at AMD", Entity: "org:amd",
+			Context: "work", UpdatedAt: "2026-08-14T15:36:00", Sensitive: true,
+		},
+	}
+
+	out := ansi.Strip(renderMemoryView(dump, 88))
+	if strings.Contains(out, "confidence") {
+		t.Errorf("view prints a confidence nobody reported:\n%s", out)
+	}
+	if strings.Contains(out, "0.00") {
+		t.Errorf("view prints a made-up 0.00:\n%s", out)
+	}
+	if !strings.Contains(out, "1 entities") {
+		t.Errorf("the entity count went missing with the average:\n%s", out)
+	}
+	if !strings.Contains(out, "org:amd · work · 2026-08-14 15:36 · sensitive") {
+		t.Errorf("the rest of the metadata line changed:\n%s", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "likes go") {
+			continue
+		}
+		if strings.TrimSpace(line) == "·" || strings.HasSuffix(strings.TrimSpace(line), "·") {
+			t.Errorf("a dangling separator was left behind: %q", line)
 		}
 	}
 }
