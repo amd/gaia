@@ -8,6 +8,41 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **Clearing a conversation forgets its "always" answers.** `/clear` in the
+  terminal UI, `clear_history` from a host, and `/reset` in `gaia chat` used to
+  keep them, so a command approved "always" in the cleared chat still ran
+  unasked in the next one. Now the same command asks again. Other sessions keep
+  their answers, and full access and loaded skills are unchanged.
+- **Code that names a credential folder or reads a credential file is refused before it runs.**
+  `run_python`, `execute_python_file` (the script and its arguments) and a shell
+  line that hands code to an interpreter could open `.env` or files inside
+  `~/.ssh` after one approval, though the file tools refuse them outright. Such
+  code is now refused before the prompt, whatever "always" was granted, and the
+  prompt for a code tool says GAIA checks the code's text, not what it does when
+  it runs. A credential file is refused only when the
+  code reads it; code that writes or only names one runs. `execute_python_file`
+  pointed at a credential file itself, or at a
+  path no approval can grant, is refused the same way: no `needs_confirmation`
+  is sent for it and the file is never read into one.
+
+- **An "always allow" label can no longer read reversed.** `always_scope` and
+  `always_label` name a file or skill the model chose, and a name holding a
+  right-to-left override or a zero-width character was sent raw, so a button
+  built from it showed `invoice<U+202E>txt.exe` as a name ending in `exe.txt`.
+  Both now carry such a character as `[U+XXXX]`. The grant still covers the
+  real file.
+- **Generated music and sound effects can be saved into a folder of the
+  user's.** `generate_music` and `generate_sound_effect` take `save_to`, an
+  absolute folder or a new `.wav` path, and write a copy there as
+  `saved_to`; the original stays in GAIA's audio folder as `audio_path`, so
+  the chat still plays it. Relative paths, missing folders, existing files and
+  places the write policy forbids are refused before anything is generated.
+  The track is listed under the session panel's Outputs, and the work log
+  reads "Composing 30 s of music" or "Generating a 3 s sound effect".
+
+- **The sidecar no longer crashes on a busy Windows PC.** It died with an access
+  violation in Python's `_wmi` module when a WMI query timed out. It now reads
+  OS and CPU facts without WMI.
 - **Full access runs any command.** It used to refuse a program outside a
   short developer list (`pip`, `where`, `rmdir`, `gaia`, a program given by its
   full path), a package install outside a virtual environment, a path outside
@@ -500,6 +535,18 @@ Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   in its consent.
 
 ### Changed
+
+- **The prompt to run a Python file shows the file.** `execute_python_file`
+  asked with only a path, so a script the agent had just written to its
+  scratch folder was approved unread. `needs_confirmation` now carries
+  `prompt_context.script`: `{ text, hidden_lines }` with up to 400 lines (48,000
+  characters) of the file as it was when the prompt was built, or
+  `{ unreadable }` (`missing`, `not_text`, `too_large`, `unreadable`) when there
+  is nothing to show. `summary` shows the first lines under the path and, when
+  it leaves lines out, the file's full path to read them at. If the
+  file differs from what the prompt showed when the run starts, the run is refused and the agent
+  asks again with the new content. `args` still holds exactly the model's
+  arguments.
 
 - **The standalone email agent is gone; mail is this agent's job.**
   `@amd-gaia/agent-email` and `gaia-agent-email` are removed, along with

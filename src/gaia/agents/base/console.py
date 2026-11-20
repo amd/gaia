@@ -495,6 +495,9 @@ class OutputHandler(ABC):
         the same thing in words for clients that only show text. Optional.
         """
 
+    def report_draft(self, tool: str, text: str) -> None:
+        """The text a tool call is being written with, so far. Optional."""
+
     def restart_answer(self, message: str) -> None:
         """The reply streamed so far was cut off and the step starts over.
 

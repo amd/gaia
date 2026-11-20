@@ -83,11 +83,14 @@ def _carry_session_state(old: Any, new: Any, session_id: str) -> None:
     A retained session keeps these until the caller changes them, so a
     rebuild that dropped them would quietly put an offline chat back online,
     or a private one back into memory: the conversation, loaded skills, the
-    internet switch, the memory mode, granted, read-only and withheld paths,
-    which documents are attached, the working folder, and which skills were
-    auto-loaded or unloaded, so a rebuild never auto-loads one the user dropped.
+    internet switch, the memory mode, the sources it has seen, granted,
+    read-only and withheld paths, which documents are attached, the working
+    folder, and which skills were auto-loaded or unloaded, so a rebuild never
+    auto-loads one the user dropped.
     """
     new.conversation_history = list(getattr(old, "conversation_history", None) or [])
+    # What the chat has seen, so a skill's fact check still knows its sources.
+    new._seen_sources = list(getattr(old, "_seen_sources", None) or [])
     if hasattr(old, "internet_off"):
         new.internet_off = old.internet_off
     if getattr(old, "_incognito", False) and hasattr(new, "_incognito"):

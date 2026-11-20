@@ -52,7 +52,7 @@ func TestTheQueuedRowNamesAbandonmentOnceACancelIsPending(t *testing.T) {
 // the code underneath changed.
 func TestEscOnAQueuedLineDoesBothThingsTheRowPromises(t *testing.T) {
 	c := &cancelingClient{}
-	m := NewChatModel(c, "notes", "", false)
+	m := NewChatModel(c, "notes", "")
 	m.width, m.height = 100, 30
 	m.resize()
 	m.streaming = true

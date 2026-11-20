@@ -192,7 +192,7 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 		}
 	}()
 
-	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, dev), dev, ctrl)
+	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query), dev, ctrl)
 }
 
 // slowCloseNotice is how long quit runs before it says what it is waiting on.
@@ -483,7 +483,7 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		sigs := make(chan os.Signal, 2)
 		signal.Notify(sigs, interruptSignals...)
 		defer signal.Stop(sigs)
-		res := runOneShotInterruptible(ctx, c, query, os.Stdout, os.Stderr, dev, logf,
+		res := runOneShotInterruptible(ctx, c, query, os.Stdout, os.Stderr, logf,
 			interruptOptions{
 				sigs:        sigs,
 				cancelGrace: interruptCancelGrace,

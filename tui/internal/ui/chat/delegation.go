@@ -6,6 +6,7 @@ package chat
 import (
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -14,9 +15,10 @@ import (
 )
 
 // Delegated work is one step in the log like any other tool: progress rides on
-// its live row, its `└` line is the result's summary, and Ctrl+O lists each
-// helper under it. Recognised by the result's shape (a `summary` and a
-// `helpers` list), never by the narration, which differs between agents.
+// the status line while it runs, its `└` line is the result's summary, and
+// Ctrl+O lists each helper under it. Recognised by the result's shape (a
+// `summary` and a `helpers` list), never by the narration, which differs
+// between agents.
 
 // phaseHelpers is the status phase a running delegation reports progress on.
 const phaseHelpers = "helpers"
@@ -42,6 +44,7 @@ const (
 var (
 	helperOKStyle   = lipgloss.NewStyle().Foreground(theme.Success)
 	helperTextStyle = lipgloss.NewStyle().Foreground(theme.Text)
+	helperWarnStyle = lipgloss.NewStyle().Foreground(theme.Warning)
 )
 
 // helperOutcome is one helper's result as the work log shows it.
@@ -158,27 +161,13 @@ func (m *ChatModel) setHelperProgress(message string) bool {
 	return false
 }
 
-// helperProgress splits "3 of 4 helpers done, 1 failed" into the row's suffix
-// ("3 of 4 done, 1 failed") and the part of it that reports failures
-// (", 1 failed"). The row already says "helpers".
-func helperProgress(message string) (suffix, failTail string) {
-	suffix = message
+// helperProgress turns "3 of 4 helpers done, 1 failed" into the status
+// line's suffix, "3 of 4 done, 1 failed": the step already says "helpers".
+func helperProgress(message string) string {
 	for _, word := range []string{" helpers done", " helper done"} {
-		suffix = strings.Replace(suffix, word, " done", 1)
+		message = strings.Replace(message, word, " done", 1)
 	}
-	if i := strings.LastIndex(suffix, ", "); i >= 0 && strings.HasSuffix(suffix, " failed") {
-		failTail = suffix[i:]
-	}
-	return suffix, failTail
-}
-
-// paintRow styles one work-log row, with a trailing failure count in the
-// danger colour.
-func paintRow(row string, style lipgloss.Style, failTail string) string {
-	if failTail == "" || !strings.HasSuffix(row, failTail) {
-		return style.Render(row)
-	}
-	return style.Render(strings.TrimSuffix(row, failTail)) + failStyle.Render(failTail)
+	return message
 }
 
 // helperReason is why a helper stopped, in plain words.
@@ -238,7 +227,7 @@ func (m ChatModel) renderHelperLines(item ActivityItem, maxRows int) []string {
 
 	idWidth, longestTask, longestOutcome := 1, 1, 1
 	for _, h := range helpers {
-		idWidth = max(idWidth, len(itoa(h.ID)))
+		idWidth = max(idWidth, len(strconv.Itoa(h.ID)))
 		longestTask = max(longestTask, displayWidth(h.Task))
 		longestOutcome = max(longestOutcome, displayWidth(helperOutcomeText(h)))
 	}
@@ -253,11 +242,11 @@ func (m ChatModel) renderHelperLines(item ActivityItem, maxRows int) []string {
 		glyph, glyphStyle, outcomeStyle := glyphHelperOK, helperOKStyle, helperTextStyle
 		switch h.Status {
 		case helperPartial:
-			glyph, glyphStyle, outcomeStyle = glyphHelperPartial, retryStyle, retryStyle
+			glyph, glyphStyle, outcomeStyle = glyphHelperPartial, helperWarnStyle, helperWarnStyle
 		case helperFailed:
 			glyph, glyphStyle, outcomeStyle = glyphHelperFailed, failStyle, failStyle
 		}
-		id := itoa(h.ID)
+		id := strconv.Itoa(h.ID)
 		task := truncateRunes(h.Task, taskWidth)
 		line := indent + glyphStyle.Render(glyph) + " " +
 			activityStyle.Render(strings.Repeat(" ", idWidth-len(id))+id+"  "+task)
@@ -268,7 +257,7 @@ func (m ChatModel) renderHelperLines(item ActivityItem, maxRows int) []string {
 	}
 	if hidden > 0 {
 		lines = append(lines, indent+activityStyle.Render(
-			truncateRunes("… "+itoa(hidden)+" more", avail)))
+			truncateRunes("… "+strconv.Itoa(hidden)+" more", avail)))
 	}
 	return lines
 }

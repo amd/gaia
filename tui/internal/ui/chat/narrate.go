@@ -109,8 +109,10 @@ var toolPhrases = map[string]toolPhrase{
 	"read_email":   {With: "Opening message %s", Without: "Opening a message", Arg: "message_id"},
 	"search_email": {With: "Searching your mail for %s", Without: "Searching your mail", Arg: "query"},
 
-	// Not a tool: the agent asking to reach a path outside the session.
-	"allow_path_access": {With: "Asking for access to %s", Without: "Asking for access to a location", Arg: "path"},
+	// Not tools: the agent checking in on a long turn, and asking to reach a
+	// path outside the session.
+	"continue_long_turn": {Without: "Asking whether to keep going"},
+	"allow_path_access":  {With: "Asking for access to %s", Without: "Asking for access to a location", Arg: "path"},
 
 	// Not a tool: the agent asking whether to read a folder's CLAUDE.md, AGENTS.md and skills.
 	"trust_project_folder": {With: "Asking to trust %s", Without: "Asking to trust this folder", Arg: "folder"},
@@ -156,6 +158,10 @@ func toolNarration(tool string, args json.RawMessage, narration string) string {
 func narrationFor(tool string, args json.RawMessage, narration string) string {
 	if n := clean(narration); n != "" {
 		return truncateRunes(unclipArg(n, args), narrationMax)
+	}
+
+	if line, ok := audioNarration(tool, args); ok {
+		return truncateRunes(line, narrationMax)
 	}
 
 	// The command is the narration — anything wrapped round it is noise.
@@ -494,6 +500,8 @@ func clean(s string) string {
 	if strings.ContainsRune(s, 0x1b) {
 		s = ansi.Strip(s)
 	}
+	// C1 controls and bidi overrides too: model text reaches every row here.
+	s = scrubDisplayControls(s)
 	s = strings.Map(func(r rune) rune {
 		switch {
 		case r == '\t' || r == '\n' || r == '\r':

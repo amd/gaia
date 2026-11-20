@@ -52,6 +52,7 @@ QUERIES: dict[str, list[str]] = {
     "research-report": ["research report with sources", "literature scan"],
     "rss-digest": ["summarizing RSS feeds", "atom feed"],
     "send-email": ["send an email", "draft an email"],
+    "slide-decks": ["make a slide deck", "powerpoint presentation"],
     "source-watch": ["monitor a website", "watch a URL for changes"],
     "summarize": ["summarize a pdf", "key decisions"],
     "transcribe-meeting": ["meeting notes", "transcribe a recording"],

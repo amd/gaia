@@ -319,6 +319,58 @@ TEST(InternetRefusalTest, RefusesWhatGoesOnline) {
     EXPECT_EQ(internetRefusal(write, {{"path", "README.md"}, {"content", "see https://example.com"}}), "");
 }
 
+TEST(InternetRefusalTest, PackageManagersAndBuildToolsGoOnlineHoweverTheyAreNamed) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* online :
+         {"dotnet restore", "dotnet add package Newtonsoft.Json", "dotnet tool install -g x", "nuget restore",
+          "conda install numpy", "mamba create -n env python", "micromamba install x", "gem install rails",
+          "bundle install", "mvn package", "./mvnw -q verify", "gradle build", "gradlew.bat build", "cd app && mvn test",
+          "poetry install", "pdm sync", "uv lock", "uv python install 3.12", "pipx install x", "pip wheel .",
+          "cargo add serde", "go mod tidy", "composer require x", "yarn dlx x", "pnpm dlx x", "npm create vite",
+          "npm init vite", "podman pull x", "zypper install x", "apk add x", "pacman -S x", "Install-Module Az",
+          "hf download x", "certutil -urlcache -f http://localhost/a a",
+          // A full path, a quoted path, a Windows suffix or another case runs the same program.
+          "C:\\tools\\Conda.EXE install x", "\"C:\\Program Files\\dotnet\\dotnet.exe\" restore",
+          "/usr/local/bin/pip3 install x", "pip.exe install x", "NPM.CMD install", "CONDA INSTALL x",
+          "C:\\Ruby\\bin\\gem.cmd install x", "yarn.cmd add x", "c''onda install x",
+          "\"conda\" install x", "echo ok\nmvn -q package"}) {
+        EXPECT_NE(internetRefusal(sh, {{"command", online}}), "") << online;
+    }
+    for (const char* local : {"cat build.gradle", "cat pom.xml", "dotnet build", "dotnet --version", "npm init -y",
+                              "npm test", "cargo build", "conda list", "gem list", "pip list", "echo mvnfoo"}) {
+        EXPECT_EQ(internetRefusal(sh, {{"command", local}}), "") << local;
+    }
+}
+
+// The table the Python runtime's tests read too, so both refuse and allow the same commands.
+TEST(InternetRefusalTest, SplicedNamesAndOfflineFlagsJudgedAsThePythonAgentDoes) {
+    std::ifstream in(fs::path(GAIA_REPO_FIXTURES_DIR) / "offline_commands.json");
+    ASSERT_TRUE(in) << "tests/fixtures/offline_commands.json";
+    const json table = json::parse(in);
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    ASSERT_FALSE(table["refused"].empty());
+    ASSERT_FALSE(table["allowed"].empty());
+    ASSERT_FALSE(table["refused_harmless"].empty());
+    for (const auto& list : {table["refused"], table["refused_harmless"]}) {
+        for (const auto& c : list) {
+            EXPECT_NE(internetRefusal(sh, {{"command", c}}), "") << c.get<std::string>();
+        }
+    }
+    for (const auto& c : table["allowed"]) {
+        EXPECT_EQ(internetRefusal(sh, {{"command", c}}), "") << c.get<std::string>();
+    }
+}
+
+TEST(InternetRefusalTest, ARefusalQuotesTheCommandAsAsked) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    // The original command is what the refusal quotes, not the copy the check read.
+    const std::string why = internetRefusal(sh, {{"command", "mvn -o package && npm install"}});
+    EXPECT_NE(why.find("mvn -o package && npm install"), std::string::npos) << why;
+}
+
 TEST(SplitShellCommandTest, SegmentsAndWords) {
     std::vector<std::vector<std::string>> s;
     ASSERT_TRUE(splitShellCommand("cd src && cat 'a b.txt' | wc -l; ls", true, s));

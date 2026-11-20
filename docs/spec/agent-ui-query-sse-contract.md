@@ -226,7 +226,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
 | `context_usage` | `{window, used, turns_in_view, turns_hidden, ...}` | update the composer's context meter; **not terminal**. The sidecar streams it before the answer for a caller that sent `turns` (contract ≥ 2.28), in the same shape an in-process turn streams at turn start, so the meter fills during a long turn instead of waiting for `final` |
-| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
+| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) `risk_note` (why the agent's checks don't cover the call), `file_path` (where a relative write lands) and `script` (for `execute_python_file`, the file's content as read when the prompt was built, capped at 400 lines with the rest counted in `hidden_lines`, or `unreadable` saying why there is none) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
 | `final` | `{answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?, route?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `failure: "model_server_down"` means the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25), and `route` is a `hybrid` session's routing decision, whose `model` is the concrete model the turn ran on: bill and label the turn by it (contract >= 2.29) |
 | `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
@@ -302,7 +302,8 @@ indistinguishable from a dead one.
       "properties": {
         "working_directory": { "type": "string" },
         "risk_note":         { "type": "string" },
-        "file_path":         { "type": "string" }   // where a relative write lands
+        "file_path":         { "type": "string" },  // where a relative write lands
+        "script":            { "type": "object" }   // execute_python_file: {text, hidden_lines} or {unreadable}
       } },
     "confirm_url": { "type": "string" }    // resume-model only (§0.4); omitted under stateless
   } }
@@ -799,7 +800,7 @@ sides in the same change.
 - `{"gaia_query": "<text>"}` is one query whose text may contain newlines.
 - Three sentinel queries never reach the chat:
   - `"\u0000gaia:clear_conversation\u0000"` clears the agent's conversation
-    history. The agent answers with `{"type": "final", "answer": "conversation_cleared"}`,
+    history and forgets the session's "always" grants (full access stays). The agent answers with `{"type": "final", "answer": "conversation_cleared"}`,
     and the TUI keeps the transcript on screen unless it gets exactly that answer.
   - `"\u0000gaia:memory_dump\u0000"` returns a snapshot of the agent's memory
     as JSON in the `answer` of a `final`.
@@ -823,7 +824,7 @@ turn is running. A control message never writes to stdout.
 | `full_access` | `enabled` | Turns full access on or off for the session: gated tools run unasked and the shell guardrails come off. (`bypass`, the retired name, turns it off.) |
 | `accept_edits` | `enabled` | Turns "accept edits" on or off: file edits inside the agent's starting folder run unasked; everything else still asks. |
 | `cancel` | — | Stops the running turn but keeps the process, so skills, grants and history survive. |
-| `clear_history` | — | Clears history after the current turn. The agent accepts it, but the TUI sends the `clear_conversation` sentinel instead, because only the sentinel gets an acknowledgement. |
+| `clear_history` | — | Clears history and the session's "always" grants after the current turn. The agent accepts it, but the TUI sends the `clear_conversation` sentinel instead, because only the sentinel gets an acknowledgement. |
 
 ### 10.3 `status` extension fields
 

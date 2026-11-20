@@ -31,7 +31,8 @@ export type StreamEventType =
     | 'followup_taken'    // The running turn took a message sent mid-turn
     | 'followup_returned' // The turn ended without taking these mid-turn messages
     | 'followup_unavailable' // The running turn can't take a message mid-turn
-    | 'context_usage';    // What this turn's model call holds, by kind
+    | 'context_usage'     // What this turn's model call holds, by kind
+    | 'draft';            // A tool call's text so far, while the model writes it
 
 /** One thing found in a recording section, before the whole recording is read. */
 export interface FoundItem {

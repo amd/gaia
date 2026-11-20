@@ -23,9 +23,11 @@
 
 #include "gaia/agent.h"
 #include "gaia/console.h"
+#include "gaia/secrets.h"
 #include "gaia/session.h"
 #include "gaia/tool_registry.h"
 #include "gaia/types.h"
+#include "masked_or_withheld.h"
 
 #ifndef GAIA_CORE_VERSION
 #error "GAIA_CORE_VERSION must be defined by the build (see cpp/CMakeLists.txt)"
@@ -904,13 +906,28 @@ struct ApiServer::Impl {
             return;
         }
         const BusySlot slot(busy);
+        json result;
         try {
-            json result = agent.toolRegistry().executeTool(toolName, args);
-            res.set_content(json({{"tool", toolName}, {"result", result}}).dump(-1, ' ', false, json::error_handler_t::replace),
-                            "application/json");
+            result = agent.toolRegistry().executeTool(toolName, args);
         } catch (const std::exception& e) {
-            sendError(res, 500, "Tool execution error: " + std::string(e.what()), "server_error");
+            // Masked as command output: the message can quote a line the tool read from a credential file.
+            const auto why = detail::maskedOrWithheld([](json v) { return redactToolOutput(std::move(v)); },
+                                                      json(std::string(e.what())));
+            sendError(res, 500,
+                      why ? "Tool execution error: " + why->get<std::string>()
+                          : std::string("The tool failed, and its error could not be checked for secrets, so it is withheld."),
+                      "server_error");
+            return;
         }
+        const auto masked = detail::maskedOrWithheld(
+            [&toolName](json v) { return redactToolResult(toolName, std::move(v)); }, std::move(result));
+        if (!masked) {
+            sendError(res, 500, "The tool ran, but its output could not be checked for secrets, so it is withheld.",
+                      "server_error");
+            return;
+        }
+        res.set_content(json({{"tool", toolName}, {"result", *masked}}).dump(-1, ' ', false, json::error_handler_t::replace),
+                        "application/json");
     }
 
     // ---- Sessions ----

@@ -107,8 +107,17 @@ For a dev run against your checkout:
 scripts/dev/run-tui.sh --dev --control
 ```
 
-`--dev` shows per-turn timings, steps, and tool arguments **on screen**;
-`--trace=<path>` writes the same events to JSONL instead. They are independent.
+There is one screen. `--dev` changes nothing on it: it turns on the control API
+(like `--control`), logs that API's input counts, state changes and waits, and
+the transport's diagnostics, to `$GAIA_TUI_HOME/gaia-tui.log`, and puts agents
+the TUI spawns at DEBUG in `~/.gaia/logs/gaia-agent.log`. Debug detail lives
+elsewhere:
+
+| Where | What |
+|---|---|
+| `Ctrl+O` | Each call's command or code, timings, full outcomes, and the turn's metrics (when the agent ran with `GAIA_TURN_LOG`) |
+| `--trace=<path>` | Every event as JSONL, tool arguments and results included. A traced launch also puts agents the TUI spawns at DEBUG in `~/.gaia/logs/gaia-agent.log` |
+| `gaia-tui.log` | Transport diagnostics under `--dev`. Metadata only, never input contents |
 
 To profile the TUI's own startup and rendering, add `--pprof 127.0.0.1:6060`
 (loopback addresses only) and read it with Go's profiler:
@@ -169,13 +178,44 @@ upstream has the fix.
 
 A status or error line is one sentence on what is wrong plus the one next step.
 Daemon errors implement `daemon.Briefer`; render `daemon.Brief(err)` on the line
-and keep `err.Error()` (route, alternatives, log path) for a `d details` pane. In
-`--dev`, harness lines the user view hides (`Step 4/50`) show as they are, with
-no `[harness]` tag.
+and keep `err.Error()` (route, alternatives, log path) for a `d details` pane.
+Harness lines (`Step 4/50`, a plan's "Following the plan to …" headline,
+`Plan: a → b`) never reach the screen in any mode; they are in the trace.
+
+### The chat view
+
+A turn renders as one bullet per event (`internal/ui/chat/workview.go`), led by
+what the action does in plain words. `headline()` picks the words, best first:
+
+1. the call's `description` (or `purpose`) argument, sanitised by
+   `cleanDescription` and refused if it is placeholder text;
+2. the goal the agent announced before the call, if it reads as a goal
+   (`goalLike`): not a stage line ending in `-ing`, not the model musing, not a
+   template;
+3. a summary derived from the tool and its parsed arguments (`describeCall` in
+   `actions.go`), e.g. `Run a 42-line Python script that reads 3 spreadsheets`.
+
+What is running now is not a bullet but the status line, drawn by `View()`
+outside the viewport (`statusLine`). Motion (`motion.go`) rides the spinner's
+20 fps tick and redraws only that line, a pending prompt's title, and the
+finished turn's recap for one sweep. A tick never rebuilds the transcript.
+Turn it off with `reduced_motion` in `~/.gaia/config.json` or
+`GAIA_TUI_REDUCED_MOTION=1`; `NO_COLOR` and a non-TTY stdout turn it off too.
+
+Files a turn changed are found by `findDeliverables` (`deliverables.go`) and
+peeked without running anything: sheet names and row counts for xlsx, slide
+count for pptx, word count for docx and text, rows for csv.
+
+Golden frames of whole screens live in `internal/ui/chat/testdata/frames/`.
+After an intended change, regenerate them and review the diff:
+
+```bash
+cd tui && go test ./internal/ui/chat -run TestFrame -update
+```
 
 ### Delegated work in the work log
 
-`delegate_task` is drawn as one step, like any other tool
+`delegate_task` is drawn as one bullet, like any other tool
 (`internal/ui/chat/delegation.go`). It is recognised by the shape of its
 result — a `summary` string and a `helpers` list — never by its narration,
 which differs between `gaiacpp` ("Handing 4 tasks to helpers") and
@@ -183,14 +223,13 @@ which differs between `gaiacpp` ("Handing 4 tasks to helpers") and
 
 | When | What is drawn |
 |---|---|
-| Running | A `status` with `phase: "helpers"` goes on the newest open tool row as a suffix, with the word "helpers" dropped: `Handing 4 tasks to helpers · 3 of 4 done, 1 failed`. The failure count is in the danger colour. It is never a status row and never replaces the spinner line, in folded, `Ctrl+O` and `--dev` views alike. With no tool row open it is shown as an ordinary status |
-| Finished, folded | The `└` line is the result's `summary`. `status: "partial"` draws it in the warning colour and leaves the step unfailed; `status: "error"` is a failed step (`failed — 0 of 4 helpers finished, 4 failed.`). When any helper is not `ok`, a faint `· Ctrl+O details` follows the summary if the row has room for all of it |
-| Finished, `Ctrl+O` | One clipped row per helper, in id order: `✓` / `~` / `✗`, the id, the task in a column of about two fifths of the row, then the first line of `conclusion`. A `partial` helper reads `stopped short (<reason>): …` and a `failed` one `failed: <reason>`, with `reason` in plain words (`step_limit` is "out of steps"). Mid-turn the list is cut to the live region's height and ends `… N more` |
+| Running | A `status` with `phase: "helpers"` is stored on the newest open tool and shown on the status line after its headline, with the word "helpers" dropped: `Handing 4 tasks to helpers · 3 of 4 done, 1 failed…`. It is never a bullet of its own and never becomes the model phase. With no tool open it is an ordinary status |
+| Finished, folded | The `└` line is the result's `summary`. `status: "partial"` draws it in the warning colour and leaves the bullet unfailed; `status: "error"` is a failed step (`error: …` while the turn runs, `✗ failed: …` once it ends). When any helper is not `ok`, a faint `· Ctrl+O details` follows the summary if the row has room for all of it. Two delegations in a row are never joined into one bullet |
+| Finished, `Ctrl+O` | The summary, then one clipped row per helper, in id order: `✓` / `~` / `✗`, the id, the task in a column of about two fifths of the row, then the first line of `conclusion`. A `partial` helper reads `stopped short (<reason>): …` and a `failed` one `failed: <reason>`, with `reason` in plain words (`step_limit` is "out of steps"). Past 16 helpers the list ends `… N more` |
 
-The result's `advice` and `error` are written for the model and are not shown
-outside the raw `out` row of `--dev`. A result the agent cut down on the wire
-(`{"truncated": true, …}`) has no `helpers`, so only the `└` line is drawn,
-from the event's `preview`.
+The result's `advice` and `error` are written for the model and are never
+drawn. A result the agent cut down on the wire (`{"truncated": true, …}`) has
+no `helpers`, so only the summary line is drawn, from the event's `preview`.
 
 ## The control API
 

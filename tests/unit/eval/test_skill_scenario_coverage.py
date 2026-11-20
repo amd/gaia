@@ -74,6 +74,10 @@ DEFERRED: dict[str, str] = {
         "Every send needs a person to approve the exact message; the email eval "
         "lane's fixture mailbox covers its tools once a scenario drives them."
     ),
+    "slide-decks": (
+        "Needs a rubric that opens the saved .pptx; tests/unit/slide_decks covers "
+        "the engine end to end."
+    ),
 }
 
 

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -1032,4 +1033,26 @@ TEST(DelegateTaskStress, SixteenTasksAtWidthEightRepeated) {
     }
     EXPECT_EQ(served.load(), 160);
     EXPECT_LE(server.peakInFlight(), 8);
+}
+
+// Sizing the folder never walks a folder link: a junction or symlink can lead anywhere on the disk.
+TEST(DelegateTask, TheReadingSizeNeverFollowsAFolderLink) {
+    Workdir w;
+    Workdir outside;
+    for (int i = 0; i < 2; ++i) w.write("note_" + std::to_string(i) + ".md", std::string(4000, 'a'));
+    for (int i = 0; i < 6; ++i) outside.write("secret_" + std::to_string(i) + ".md", std::string(400000, 'b'));
+    const fs::path link = w.path / "linked";
+#ifdef _WIN32
+    // A junction needs no privilege, unlike a Windows symlink.
+    const std::string cmd =
+        "cmd /c mklink /J \"" + link.string() + "\" \"" + outside.path.string() + "\" >nul 2>&1";
+    ASSERT_EQ(std::system(cmd.c_str()), 0) << cmd;
+#else
+    std::error_code made;
+    fs::create_directory_symlink(outside.path, link, made);
+    ASSERT_FALSE(made) << made.message();
+#endif
+    EXPECT_EQ(GaiaAgent::textSizeOf(w.path), "about 2,000 tokens of text in 2 files");
+    std::error_code ec;
+    fs::remove(link, ec);  // the link, not what it points at
 }

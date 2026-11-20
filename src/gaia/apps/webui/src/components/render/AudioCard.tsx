@@ -6,6 +6,7 @@ import { useT } from '../../i18n/useT';
 import { UnsupportedCard } from './UnsupportedCard';
 import { isOptionalString } from './primitiveShared';
 import { resolveMediaSrc } from './mediaSrc';
+import { visibleName } from '../CalendarApproval';
 
 /** Audio GAIA generated, played from `/api/media/audio/<name>` only. */
 interface AudioPayload {
@@ -54,7 +55,7 @@ export function AudioCard({ data }: { data: unknown }) {
                 {data.caption && <span className="render-audio__text">{data.caption}</span>}
                 {(fileName || data.duration_seconds !== undefined) && (
                     <span className="render-audio__meta">
-                        {fileName}
+                        {fileName && visibleName(fileName)}
                         {fileName && data.duration_seconds !== undefined && ' · '}
                         {data.duration_seconds !== undefined && <bdi dir="ltr">{formatDuration(data.duration_seconds)}</bdi>}
                     </span>

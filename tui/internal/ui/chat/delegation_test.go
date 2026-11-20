@@ -67,10 +67,10 @@ var mixedHelpers = []helperFixture{
 	{ID: 4, Task: "Find the budget in notes_04.md", Status: "failed", Reason: "timeout", Error: "No answer within 600 s."},
 }
 
-// modelAt is a streaming chat at one width, folded or expanded, dev or not.
-func modelAt(t *testing.T, width int, expanded, dev bool) ChatModel {
+// modelAt is a streaming chat at one width, folded or expanded.
+func modelAt(t *testing.T, width int, expanded bool) ChatModel {
 	t.Helper()
-	m := NewChatModel(&nullClient{}, "gaia", "", dev)
+	m := NewChatModel(&nullClient{}, "gaia", "")
 	m.width, m.height = width, 60
 	m.resize()
 	m.streaming = true
@@ -100,12 +100,9 @@ func noRowWider(t *testing.T, rows []string, width int) {
 	}
 }
 
-// Progress rides on the step's own row in every view, and adds no row.
-func TestHelperProgressLandsOnTheRunningToolRow(t *testing.T) {
-	views := []struct {
-		name          string
-		expanded, dev bool
-	}{{"folded", false, false}, {"expanded", true, false}, {"dev", false, true}, {"dev expanded", true, true}}
+// Progress rides on the status line while the helpers run, in every view, and
+// adds no row to the work log.
+func TestHelperProgressRidesOnTheStatusLine(t *testing.T) {
 	narrations := []string{"Handing 4 tasks to helpers", "Handing work to helpers"}
 	steps := []struct{ message, suffix string }{
 		{"", ""},
@@ -113,10 +110,10 @@ func TestHelperProgressLandsOnTheRunningToolRow(t *testing.T) {
 		{"2 of 4 helpers done", " · 2 of 4 done"},
 		{"3 of 4 helpers done, 1 failed", " · 3 of 4 done, 1 failed"},
 	}
-	for _, v := range views {
+	for _, expanded := range []bool{false, true} {
 		for _, narration := range narrations {
-			t.Run(v.name+"/"+narration, func(t *testing.T) {
-				m := feed(t, modelAt(t, 100, v.expanded, v.dev), delegateCall(narration))
+			t.Run(fmt.Sprint(expanded)+"/"+narration, func(t *testing.T) {
+				m := feed(t, modelAt(t, 100, expanded), delegateCall(narration))
 				for _, s := range steps {
 					if s.message != "" {
 						m = feed(t, m, helpersStatus(s.message))
@@ -125,27 +122,14 @@ func TestHelperProgressLandsOnTheRunningToolRow(t *testing.T) {
 						t.Fatalf("after %q the log holds %d status rows: %+v", s.message, n, m.activity)
 					}
 					if m.phase.name != "" {
-						t.Fatalf("after %q the helpers phase replaced the spinner line: %+v", s.message, m.phase)
+						t.Fatalf("after %q the helpers phase replaced the step: %+v", s.message, m.phase)
 					}
-					rows := liveRows(m)
-					var hits []string
-					for _, r := range rows {
-						if strings.Contains(r, narration) {
-							hits = append(hits, r)
-						}
+					line := ansi.Strip(m.statusLine(m.now()))
+					if !strings.Contains(line, narration+s.suffix+"…") {
+						t.Errorf("after %q the status line reads %q, want %q", s.message, line, narration+s.suffix)
 					}
-					if len(hits) != 1 {
-						t.Fatalf("after %q want one tool row, got %q", s.message, rows)
-					}
-					got := strings.TrimSpace(liveClock.ReplaceAllString(hits[0], ""))
-					if !strings.HasSuffix(got, narration+s.suffix) {
-						t.Errorf("after %q the row reads %q, want it to end %q", s.message, got, narration+s.suffix)
-					}
-					if !liveClock.MatchString(hits[0]) {
-						t.Errorf("the tool row lost its clock: %q", hits[0])
-					}
-					if strings.Contains(strings.Join(rows, "\n"), "helpers done") {
-						t.Errorf("the raw status is on screen as well: %q", rows)
+					if live := strings.Join(liveRows(m), "\n"); strings.Contains(live, "helpers done") || strings.Contains(live, narration) {
+						t.Errorf("the running delegation is in the work log as well: %q", live)
 					}
 				}
 			})
@@ -154,34 +138,17 @@ func TestHelperProgressLandsOnTheRunningToolRow(t *testing.T) {
 }
 
 func TestOneHelperProgressDropsTheWordToo(t *testing.T) {
-	if got, tail := helperProgress("1 of 1 helper done"); got != "1 of 1 done" || tail != "" {
-		t.Errorf("got %q, %q", got, tail)
+	if got := helperProgress("1 of 1 helper done"); got != "1 of 1 done" {
+		t.Errorf("got %q", got)
 	}
-	if got, tail := helperProgress("16 of 16 helpers done, 12 failed"); got != "16 of 16 done, 12 failed" || tail != ", 12 failed" {
-		t.Errorf("got %q, %q", got, tail)
-	}
-}
-
-// The failure count is red on the live row; the rest keeps the live colour.
-func TestFailedHelpersAreInTheDangerColourOnTheLiveRow(t *testing.T) {
-	prev := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
-
-	m := feed(t, modelAt(t, 100, false, false), delegateCall("Handing 4 tasks to helpers"),
-		helpersStatus("3 of 4 helpers done, 1 failed"))
-	out := m.renderLiveRegion()
-	if !strings.Contains(out, failStyle.Render(", 1 failed")) {
-		t.Errorf("the failure count is not in the danger colour:\n%q", out)
-	}
-	if !strings.Contains(out, thinkingStyle.Render("Handing 4 tasks to helpers · 3 of 4 done")) {
-		t.Errorf("the rest of the row lost the live colour:\n%q", out)
+	if got := helperProgress("16 of 16 helpers done, 12 failed"); got != "16 of 16 done, 12 failed" {
+		t.Errorf("got %q", got)
 	}
 }
 
-// Any other phase still drives the spinner line and nothing else.
-func TestOtherPhasesStillDriveTheSpinnerLine(t *testing.T) {
-	m := feed(t, modelAt(t, 100, false, false),
+// Any other phase still drives the status line and nothing else.
+func TestOtherPhasesStillDriveTheStatusLine(t *testing.T) {
+	m := feed(t, modelAt(t, 100, false),
 		event.CanonicalStatusEvent{Type: "status", Message: "Reasoning", Phase: "reasoning", Words: 1200})
 	if len(m.activity) != 0 {
 		t.Fatalf("a phase report landed in the work log: %+v", m.activity)
@@ -189,11 +156,11 @@ func TestOtherPhasesStillDriveTheSpinnerLine(t *testing.T) {
 	if m.phase.name != "reasoning" || m.phase.words != 1200 {
 		t.Fatalf("phase not recorded: %+v", m.phase)
 	}
-	if rows := liveRows(m); !strings.Contains(strings.Join(rows, "\n"), "Reasoning · 1,200 words") {
-		t.Errorf("spinner line: %q", rows)
+	if line := ansi.Strip(m.statusLine(m.now())); !strings.Contains(line, "Reasoning · 1,200 words") {
+		t.Errorf("status line: %q", line)
 	}
 
-	// With a tool open, another phase is still not put on its row.
+	// With a tool open, another phase is still not put on its step.
 	m = feed(t, m, delegateCall("Handing 4 tasks to helpers"),
 		event.CanonicalStatusEvent{Type: "status", Message: "Loading more tools", Phase: "loading_tools"})
 	if m.activity[0].Progress != "" || m.phase.name != "loading_tools" {
@@ -214,14 +181,14 @@ func TestHelperProgressWithNoOpenToolIsANormalStatus(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := feed(t, modelAt(t, 100, true, false), tc.prep...)
+			m := feed(t, modelAt(t, 100, true), tc.prep...)
 			m = feed(t, m, helpersStatus("2 of 4 helpers done"))
 			last := m.activity[len(m.activity)-1]
 			if last.Kind != "status" || last.Content != "2 of 4 helpers done" {
 				t.Fatalf("the status was not kept as a normal one: %+v", m.activity)
 			}
 			if m.phase.name != "" {
-				t.Errorf("it also became the spinner line: %+v", m.phase)
+				t.Errorf("it also became a phase: %+v", m.phase)
 			}
 			if rows := liveRows(m); !strings.Contains(strings.Join(rows, "\n"), "2 of 4 helpers done") {
 				t.Errorf("not on screen when expanded: %q", rows)
@@ -249,11 +216,11 @@ func TestFinishedDelegationRow(t *testing.T) {
 		{"partial", "partial", "2 of 4 helpers finished, 1 stopped short, 1 failed.", mixedHelpers,
 			"└ 2 of 4 helpers finished, 1 stopped short, 1 failed.", false, true, true},
 		{"error", "error", "0 of 2 helpers finished, 2 failed.", allFailed,
-			"└ failed — 0 of 2 helpers finished, 2 failed.", true, false, true},
+			"└ ✗ failed: 0 of 2 helpers finished, 2 failed.", true, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := feed(t, modelAt(t, 100, false, false), delegateCall("Handing work to helpers"),
+			m := feed(t, modelAt(t, 100, false), delegateCall("Handing work to helpers"),
 				helpersStatus("1 of 2 helpers done"), delegateResult(t, tc.status, tc.summary, tc.helpers))
 			item := m.activity[0]
 			if !item.Done || item.Progress != "" {
@@ -291,17 +258,16 @@ func TestFinishedDelegationRow(t *testing.T) {
 				t.Errorf("detail row %q, want %q", detail, wantRow)
 			}
 			for style, want := range map[string]bool{
-				failStyle.Render(tc.wantDetail):     tc.wantFailed,
-				retryStyle.Render(tc.wantDetail):    tc.wantWarn,
-				activityStyle.Render(tc.wantDetail): !tc.wantFailed && !tc.wantWarn,
+				failStyle.Render(tc.wantDetail):       tc.wantFailed,
+				helperWarnStyle.Render(tc.wantDetail): tc.wantWarn,
+				detailStyle.Render(tc.wantDetail):     !tc.wantFailed && !tc.wantWarn,
 			} {
 				if strings.Contains(styled, style) != want {
 					t.Errorf("detail colour wrong (want %v for %q) in:\n%q", want, style, styled)
 				}
 			}
-			headFailed := strings.Contains(styled, failStyle.Render("Handing work to helpers"))
-			if headFailed != tc.wantFailed {
-				t.Errorf("row marked failed = %v, want %v", headFailed, tc.wantFailed)
+			if red := strings.Contains(styled, dotFailStyle.Render(glyphDot)); red != tc.wantFailed {
+				t.Errorf("bullet marked failed = %v, want %v", red, tc.wantFailed)
 			}
 		})
 	}
@@ -310,7 +276,7 @@ func TestFinishedDelegationRow(t *testing.T) {
 // While the turn runs, a delegation with nothing usable is an error the agent
 // may still work past, in the same words every failed step uses.
 func TestAllFailedDelegationWhileTheTurnRuns(t *testing.T) {
-	m := feed(t, modelAt(t, 100, false, false), delegateCall("Handing 2 tasks to helpers"),
+	m := feed(t, modelAt(t, 100, false), delegateCall("Handing 2 tasks to helpers"),
 		delegateResult(t, "error", "0 of 2 helpers finished, 2 failed.", []helperFixture{
 			{ID: 1, Task: "a", Status: "failed", Reason: "error"}, {ID: 2, Task: "b", Status: "failed", Reason: "error"}}))
 	plain := strings.Join(liveRows(m), "\n")
@@ -324,7 +290,7 @@ func TestAllFailedDelegationWhileTheTurnRuns(t *testing.T) {
 
 func expandedRows(t *testing.T, width int, res event.CanonicalToolResultEvent) (ChatModel, []string) {
 	t.Helper()
-	m := feed(t, modelAt(t, width, true, false), delegateCall("Handing 4 tasks to helpers"), res)
+	m := feed(t, modelAt(t, width, true), delegateCall("Handing 4 tasks to helpers"), res)
 	work := Message{Role: RoleWork, Work: m.activity}
 	return m, strings.Split(ansi.Strip(m.renderWork(&work)), "\n")
 }
@@ -334,8 +300,8 @@ func TestExpandedDelegationListsEachHelper(t *testing.T) {
 	_, rows := expandedRows(t, 120, delegateResult(t, "partial",
 		"2 of 4 helpers finished, 1 stopped short, 1 failed.", mixedHelpers))
 	want := []string{
-		"  ▪ Handing 4 tasks to helpers",
-		"    └ 2 of 4 helpers finished, 1 stopped short, 1 failed.",
+		"  ● Handing 4 tasks to helpers",
+		"      2 of 4 helpers finished, 1 stopped short, 1 failed.",
 		"       ✓ 1  Who owns notes_01.md and when is it due?   Owner: Ada Okonkwo; due 14 March",
 		"       ✓ 2  Who owns notes_02.md and when is it due?   Owner: Li Wei; due 3 April",
 		"       ~ 3  Summarise the Q3 pricing change            stopped short (out of steps): Pricing rises 4% in the third qu…",
@@ -354,12 +320,15 @@ func TestExpandedDelegationListsEachHelper(t *testing.T) {
 
 // Folded shows no helper rows; the hint says where they are.
 func TestFoldedDelegationShowsNoHelperRows(t *testing.T) {
-	m := feed(t, modelAt(t, 120, false, false), delegateCall("Handing 4 tasks to helpers"),
+	m := feed(t, modelAt(t, 120, false), delegateCall("Handing 4 tasks to helpers"),
 		delegateResult(t, "partial", "2 of 4 helpers finished, 1 stopped short, 1 failed.", mixedHelpers))
 	work := Message{Role: RoleWork, Work: m.activity}
 	plain := ansi.Strip(m.renderWork(&work))
 	if strings.ContainsAny(plain, "✓✗~") || strings.Contains(plain, "notes_01") {
 		t.Errorf("helper rows shown while folded:\n%s", plain)
+	}
+	if !strings.Contains(plain, "Ctrl+O details") {
+		t.Errorf("no hint at full width:\n%s", plain)
 	}
 	// Too narrow for the whole hint: it is left out, not clipped.
 	m.width = 62
@@ -427,8 +396,15 @@ func TestHelperRowsClipAtAnyWidth(t *testing.T) {
 	for _, width := range []int{60, 100, 160} {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
 			m, rows := expandedRows(t, width, delegateResult(t, "partial", "1 of 3 helpers finished, 1 stopped short, 1 failed.", nasty))
-			if len(rows) != 5 {
-				t.Fatalf("want 5 rows (step, detail, 3 helpers), got %d:\n%s", len(rows), strings.Join(rows, "\n"))
+			// The step, its summary (wrapped on a narrow window), then one row per helper.
+			if len(rows) < 5 {
+				t.Fatalf("want the step, its summary and 3 helper rows, got %d:\n%s", len(rows), strings.Join(rows, "\n"))
+			}
+			helperRows := rows[len(rows)-3:]
+			for i, mark := range []string{"✓ 1", "~ 2", "✗ 3"} {
+				if !strings.HasPrefix(strings.TrimSpace(helperRows[i]), mark) {
+					t.Fatalf("helper row %d is not one row: %q\n%s", i+1, helperRows[i], strings.Join(rows, "\n"))
+				}
 			}
 			noRowWider(t, rows, width)
 			all := strings.Join(rows, "\n")
@@ -437,28 +413,28 @@ func TestHelperRowsClipAtAnyWidth(t *testing.T) {
 					t.Errorf("control text %q reached the screen", bad)
 				}
 			}
-			if flatTask := "Line one line two with a tab and red bell W"; !strings.Contains(rows[2], flatTask[:13]) ||
-				(width == 160 && !strings.Contains(rows[2], flatTask)) {
-				t.Errorf("task not flattened to one line: %q", rows[2])
+			if flatTask := "Line one line two with a tab and red bell W"; !strings.Contains(helperRows[0], flatTask[:13]) ||
+				(width == 160 && !strings.Contains(helperRows[0], flatTask)) {
+				t.Errorf("task not flattened to one line: %q", helperRows[0])
 			}
-			if !strings.Contains(rows[2], "…") {
-				t.Errorf("a clipped task shows no ellipsis: %q", rows[2])
+			if !strings.Contains(helperRows[0], "…") {
+				t.Errorf("a clipped task shows no ellipsis: %q", helperRows[0])
 			}
-			if !strings.Contains(rows[2], "First real") || strings.Contains(rows[2], "second line") {
-				t.Errorf("conclusion is not its first line: %q", rows[2])
+			if !strings.Contains(helperRows[0], "First real") || strings.Contains(helperRows[0], "second line") {
+				t.Errorf("conclusion is not its first line: %q", helperRows[0])
 			}
-			if !strings.Contains(rows[3], "stopped short (kept") || !strings.HasSuffix(rows[3], "…") {
-				t.Errorf("partial row: %q", rows[3])
+			if !strings.Contains(helperRows[1], "stopped short (kept") || !strings.HasSuffix(helperRows[1], "…") {
+				t.Errorf("partial row: %q", helperRows[1])
 			}
-			if !strings.HasSuffix(rows[4], "failed: no answer") {
-				t.Errorf("failed row: %q", rows[4])
+			if !strings.HasSuffix(helperRows[2], "failed: no answer") {
+				t.Errorf("failed row: %q", helperRows[2])
 			}
 			// Outcomes start in one column.
 			col := -1
 			for i, marker := range []string{"First real", "stopped short", "failed: no answer"} {
-				at := displayWidth(rows[i+2][:strings.Index(rows[i+2], marker)])
+				at := displayWidth(helperRows[i][:strings.Index(helperRows[i], marker)])
 				if col >= 0 && at != col {
-					t.Errorf("outcome column %d on row %d, %d above it:\n%s", at, i+2, col, all)
+					t.Errorf("outcome column %d on helper row %d, %d above it:\n%s", at, i+1, col, all)
 				}
 				col = at
 			}
@@ -488,14 +464,13 @@ func TestSixteenHelpersAreAllListed(t *testing.T) {
 	}
 	noRowWider(t, rows, 100)
 
-	// Mid-turn the list is cut to the live region's height, and says so.
+	// Mid-turn the list is cut to the live region's height, step row first.
 	live := liveRows(m)
 	if len(live) > m.logRows() {
 		t.Fatalf("live region is %d rows, budget %d:\n%s", len(live), m.logRows(), strings.Join(live, "\n"))
 	}
-	joined := strings.Join(live, "\n")
-	if !strings.Contains(joined, "Handing 4 tasks to helpers") || !strings.Contains(joined, " more") {
-		t.Errorf("the cut list lost its step row or its count:\n%s", joined)
+	if joined := strings.Join(live, "\n"); !strings.Contains(joined, "Handing 4 tasks to helpers") {
+		t.Errorf("the cut list lost its step row:\n%s", joined)
 	}
 }
 
@@ -524,7 +499,7 @@ func TestTruncatedDelegationShowsOnlyTheDetailRow(t *testing.T) {
 			if len(m.activity[0].Helpers) != 0 {
 				t.Fatalf("helpers read out of a result with no list: %+v", m.activity[0].Helpers)
 			}
-			if len(rows) != 2 || strings.TrimSpace(rows[1]) != "└ 2 of 2 helpers finished." {
+			if len(rows) != 2 || strings.TrimSpace(rows[1]) != "2 of 2 helpers finished." {
 				t.Errorf("rows: %q", rows)
 			}
 			if strings.Contains(strings.Join(rows, "\n"), "yourself") {
@@ -534,23 +509,24 @@ func TestTruncatedDelegationShowsOnlyTheDetailRow(t *testing.T) {
 	}
 }
 
-// Two delegations in a row keep a row each: folding would lose a helper list.
+// Two delegations in a row keep a bullet each: joined, one helper list would
+// hide the other's.
 func TestConsecutiveDelegationsDoNotFold(t *testing.T) {
 	ok := []helperFixture{{ID: 1, Task: "a", Status: "ok", Conclusion: "x"}}
-	m := feed(t, modelAt(t, 100, true, false),
+	m := feed(t, modelAt(t, 100, true),
+		delegateCall("Handing 1 task to helpers"), delegateResult(t, "success", "1 of 1 helper finished.", ok),
 		delegateCall("Handing 1 task to helpers"), delegateResult(t, "success", "1 of 1 helper finished.", ok),
 		delegateCall("Handing 1 task to helpers"), helpersStatus("1 of 1 helper done"))
-	rows := liveRows(m)
 	steps := 0
-	for _, r := range rows {
+	for _, r := range liveRows(m) {
 		if strings.Contains(r, "Handing 1 task to helpers") {
 			steps++
 		}
 	}
 	if steps != 2 {
-		t.Errorf("want two step rows, got %d:\n%s", steps, strings.Join(rows, "\n"))
+		t.Errorf("want two finished bullets, got %d:\n%s", steps, strings.Join(liveRows(m), "\n"))
 	}
-	if !strings.Contains(rows[len(rows)-1], "· 1 of 1 done") {
-		t.Errorf("the running one lost its progress: %q", rows[len(rows)-1])
+	if line := ansi.Strip(m.statusLine(m.now())); !strings.Contains(line, "Handing 1 task to helpers · 1 of 1 done") {
+		t.Errorf("the running one lost its progress: %q", line)
 	}
 }

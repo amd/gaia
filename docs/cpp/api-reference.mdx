@@ -467,7 +467,7 @@ public:
 | `POST /v1/chat/completions` | Run the agent on the request's conversation, streamed or not |
 | `GET /v1/models` | The served model id |
 | `GET /v1/tools` | The agent's registered tools |
-| `POST /v1/tools/:name` | Run a tool directly. Only with `exposeToolRoutes` |
+| `POST /v1/tools/:name` | Run a tool directly. Only with `exposeToolRoutes`. Output and error text are masked for credentials, as in chat |
 | `GET /health` | Liveness and version. Never needs the key |
 | `GET /sessions`, `DELETE /sessions/:id` | List and delete sessions, when a store is set |
 

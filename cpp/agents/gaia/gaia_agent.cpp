@@ -428,13 +428,21 @@ std::string GaiaAgent::textSizeOf(const fs::path& dir) {
         ++files;
         bytes += size;
     };
-    auto skipped = [](const fs::path& p) {
-        const std::string name = p.filename().u8string();
-        return name.empty() || name[0] == '.' || name == "node_modules" || name == "__pycache__";
+    // A link or junction is never followed, file or folder: it can lead anywhere on the disk.
+    auto skipped = [](const fs::directory_entry& e) {
+        const std::string name = e.path().filename().u8string();
+        if (name.empty() || name[0] == '.' || name == "node_modules" || name == "__pycache__") return true;
+        std::error_code ec;
+        const fs::file_status st = e.symlink_status(ec);
+        if (ec || fs::is_symlink(st)) return true;
+#ifdef _MSC_VER
+        if (st.type() == fs::file_type::junction) return true;
+#endif
+        return false;
     };
     for (fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
          !ec && it != end && files < kMaxFiles; it.increment(ec)) {
-        if (skipped(it->path())) continue;
+        if (skipped(*it)) continue;
         std::error_code sub;
         if (!fs::is_directory(it->path(), sub)) {
             count(it->path());
@@ -443,7 +451,7 @@ std::string GaiaAgent::textSizeOf(const fs::path& dir) {
         for (fs::directory_iterator in(it->path(), fs::directory_options::skip_permission_denied, sub), last;
              !sub && in != last && files < kMaxFiles; in.increment(sub)) {
             std::error_code kind;
-            if (!skipped(in->path()) && !fs::is_directory(in->path(), kind)) count(in->path());
+            if (!skipped(*in) && !fs::is_directory(in->path(), kind)) count(in->path());
         }
     }
     if (files < 2) return "";

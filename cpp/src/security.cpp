@@ -447,6 +447,128 @@ bool mentionsRemoteUrl(const std::string& text) {
     return false;
 }
 
+// The command with each word reduced to the program name it would run: quotes and cmd.exe's
+// ^ escapes dropped, folders and a Windows suffix stripped, lowercased: "C:\Tools\Conda.EXE"
+// install and co^nda install are conda install.
+// Never longer than the command, line for line, so it is as safe to scan.
+std::string programWords(const std::string& command) {
+    std::string out, word;
+    bool afterWord = false, escaped = false;
+    const auto flush = [&] {
+        if (word.empty()) return;
+        std::string name = lowerAscii(word.substr(word.find_last_of("/\\") + 1));
+        for (const char* ext : {".exe", ".cmd", ".bat", ".com", ".ps1"}) {
+            const size_t n = std::strlen(ext);
+            if (name.size() > n && name.compare(name.size() - n, n, ext) == 0) {
+                name.resize(name.size() - n);
+                break;
+            }
+        }
+        if (afterWord) out.push_back(' ');
+        out += name;
+        afterWord = true;
+        word.clear();
+    };
+    char quote = 0;
+    for (const char c : command) {
+        if (escaped) {
+            escaped = false;
+            if (c != '\n') word.push_back(c);  // ^ then a line break joins the lines
+        } else if (quote) {
+            if (c == quote) quote = 0;
+            else word.push_back(c);
+        } else if (c == '^') {
+            escaped = true;
+        } else if (c == '\'' || c == '"') {
+            quote = c;
+        } else if (c == ' ' || c == '\t' || c == '\r') {
+            flush();
+        } else if (c == '\n' || std::strchr(";|&()<>`", c)) {
+            flush();
+            out.push_back(c);
+            afterWord = false;
+        } else {
+            word.push_back(c);
+        }
+    }
+    flush();
+    return out;
+}
+
+// One command that a documented flag keeps off the network: mvn -o, mvn -v, gradle --offline,
+// gradle --version, npm ci/install --offline, pip install --no-index. Only those exact flags count.
+// Not judged here, so still checked: anything quoted or expanded, a URL, a requirements file, a
+// wrapper (mvnw and gradlew download a build tool first), and a goal that publishes.
+// Kept in step with _explicitly_offline in src/gaia/agents/base/offline.py.
+bool explicitlyOffline(const std::string& segment) {
+    // bash opens a socket for a redirect to /dev/tcp/host/port.
+    if (segment.find_first_of("'\"$%!`") != std::string::npos || segment.find("://") != std::string::npos ||
+        segment.find("/dev/tcp/") != std::string::npos || segment.find("/dev/udp/") != std::string::npos) {
+        return false;
+    }
+    std::vector<std::string> words;
+    std::string word;
+    for (const char c : segment + " ") {
+        if (c == '^') continue;
+        if (c == ' ' || c == '\t' || c == '\r') {
+            if (!word.empty()) words.push_back(word);
+            word.clear();
+        } else {
+            word.push_back(c);
+        }
+    }
+    if (words.empty()) return false;
+    std::string program = lowerAscii(words[0].substr(words[0].find_last_of("/\\") + 1));
+    for (const char* ext : {".exe", ".cmd", ".bat", ".com", ".ps1"}) {
+        const size_t n = std::strlen(ext);
+        if (program.size() > n && program.compare(program.size() - n, n, ext) == 0) program.resize(program.size() - n);
+    }
+    const auto has = [&words](const char* flag) { return std::find(words.begin() + 1, words.end(), flag) != words.end(); };
+    const auto versionOnly = [&words] { return words.size() == 2 && (words[1] == "-v" || words[1] == "--version"); };
+    const bool publishes = std::any_of(words.begin() + 1, words.end(), [](const std::string& w) {
+        const std::string l = lowerAscii(w);
+        for (const char* goal : {"deploy", "publish", "upload", "release", "scm:", "wagon:"}) {
+            if (l.find(goal) != std::string::npos) return true;
+        }
+        return false;
+    });
+    if (program == "mvn") return versionOnly() || ((has("-o") || has("--offline")) && !publishes);
+    if (program == "gradle") return versionOnly() || (has("--offline") && !publishes);
+    if (program == "npm") {
+        return words.size() > 2 && (words[1] == "ci" || words[1] == "install" || words[1] == "i") && has("--offline");
+    }
+    size_t sub = 1;
+    static const std::regex pip(R"(pip[0-9.]*)");
+    static const std::regex python(R"((?:python[0-9.]*|py))");
+    if (std::regex_match(program, python) && words.size() > 2 && words[1] == "-m" && lowerAscii(words[2]) == "pip") {
+        sub = 3;
+    } else if (!std::regex_match(program, pip)) {
+        return false;
+    }
+    if (words.size() <= sub || words[sub] != "install" || !has("--no-index")) return false;
+    // A requirements or constraints file can name a URL this check cannot see.
+    return std::none_of(words.begin() + 1, words.end(), [](const std::string& w) {
+        return w.rfind("-r", 0) == 0 || w.rfind("-c", 0) == 0 || w.rfind("--requirement", 0) == 0 ||
+               w.rfind("--constraint", 0) == 0;
+    });
+}
+
+// The command with every explicitly offline command blanked out, so the checks below skip it.
+// Split on every separator, quoted or not: a command that hides one in quotes is not blanked, and
+// neither is one beside a backtick substitution.
+std::string withoutOfflineSegments(std::string command) {
+    size_t start = 0;
+    for (size_t i = 0; i <= command.size(); ++i) {
+        if (i < command.size() && std::string("\n;|&()").find(command[i]) == std::string::npos) continue;
+        if (explicitlyOffline(command.substr(start, i - start))) {
+            std::fill(command.begin() + static_cast<std::ptrdiff_t>(start),
+                      command.begin() + static_cast<std::ptrdiff_t>(i), ' ');
+        }
+        start = i + 1;
+    }
+    return command;
+}
+
 bool anyRemoteUrl(const json& v) {
     if (v.is_string()) return mentionsRemoteUrl(v.get<std::string>());
     if (v.is_array() || v.is_object()) {
@@ -468,14 +590,14 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
         return "";
     }
     if (name == "bash_execute") {
-        const std::string command = args.value("command", "");
-        if (command.size() > kMaxScannedBytes) {
-            return why + "a command of " + std::to_string(command.size()) + " bytes: over " +
+        const std::string asked = args.value("command", "");
+        if (asked.size() > kMaxScannedBytes) {
+            return why + "a command of " + std::to_string(asked.size()) + " bytes: over " +
                    std::to_string(kMaxScannedBytes) + " bytes it cannot be checked for going online. Write long "
                    "input to a file and have the command read it.";
         }
-        for (size_t start = 0; start <= command.size();) {
-            const size_t end = (std::min)(command.find('\n', start), command.size());
+        for (size_t start = 0; start <= asked.size();) {
+            const size_t end = (std::min)(asked.find('\n', start), asked.size());
             if (end - start > kMaxScannedLine) {
                 return why + "a command with a line of " + std::to_string(end - start) + " bytes: over " +
                        std::to_string(kMaxScannedLine) + " bytes on one line it cannot be checked for going "
@@ -483,33 +605,54 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
             }
             start = end + 1;
         }
+        // An explicit offline mode (mvn -o, npm ci --offline) needs no network; the rest of the line is still checked.
+        const std::string command = withoutOfflineSegments(asked);
         // Commands that go online with no URL in sight: a remote, a package index, an API.
+        // Kept in step with _ONLINE_COMMAND_RE in src/gaia/agents/base/offline.py.
         static const std::regex online(
             R"(\b(?:git\b.*\b(?:clone|fetch|pull|push|ls-remote|submodule\s+update)\b)"
             R"(|git\b.*\bremote\s+update\b)"
-            R"(|(?:pip[0-9.]*|uv\s+pip|(?:python[0-9.]*|py)\s+-m\s+pip)\s+(?:install|download)\b)"
-            R"(|(?:npm|pnpm|yarn|bun)\s+(?:install|add|i|ci|update|publish)\b|(?:npx|uvx|pipx|bunx)\s)"
-            R"(|uv\s+(?:add|sync|tool\s+install|run\s+--with)\b|cargo\s+(?:install|fetch|update)\b)"
-            R"(|go\s+(?:get|install|mod\s+download)\b|docker\s+(?:pull|push|login)\b)"
-            R"(|(?:winget|choco|scoop|apt|apt-get|brew|dnf|yum)\s+(?:install|upgrade|update)\b)"
+            R"(|(?:pip[0-9.]*|uv\s+pip|(?:python[0-9.]*|py)\s+-m\s+pip)\s+(?:install|download|wheel|index|search)\b)"
+            R"(|(?:npm|pnpm|yarn|bun)\s+(?:install|add|i|ci|update|upgrade|up|publish|dlx|exec|create|x|audit)"
+            R"(|outdated|view|info|search|login)\b|(?:npm|pnpm|yarn|bun)\s+init\s+[^-\s])"
+            R"(|(?:npx|uvx|pipx|bunx|pnpx)\s)"
+            R"(|uv\s+(?:add|sync|lock|tool\s+(?:install|upgrade)|python\s+install|run\s+--with|self\s+update)\b)"
+            R"(|(?:poetry|pdm)\s+(?:install|add|update|lock|sync|publish|self\s+update)\b)"
+            R"(|(?:conda|mamba|micromamba)\s+(?:install|create|update|upgrade|search|env\s+(?:create|update))\b)"
+            R"(|cargo\s+(?:install|fetch|update|publish|search|add|login)\b|go\s+(?:get|install|mod\s+(?:download|tidy))\b)"
+            R"(|gem\s+(?:install|update|fetch|push|search|sources)\b|bundler?\s+(?:install|update|add|outdated|lock)\b)"
+            R"(|composer\s+(?:install|update|require|create-project)\b)"
+            R"(|dotnet\s+(?:restore|add|new\s+install|tool\s+(?:install|update|restore)|workload|nuget)\b)"
+            R"(|nuget\s+(?:install|restore|update|push)\b|(?:docker|podman)\s+(?:pull|push|login|search)\b)"
+            R"(|(?:winget|choco|scoop|apt|apt-get|brew|dnf|yum|zypper|apk|snap|flatpak)\s+)"
+            R"((?:install|reinstall|upgrade|update|download|search|add|fetch|tap|source|dist-upgrade|full-upgrade)\b)"
+            R"(|pacman\s+-S|(?:install|update|find|save)-(?:module|package|script)\b|start-bitstransfer\b|bitsadmin\b)"
+            R"(|certutil\b.*-urlcache|aria2c\b|(?:huggingface-cli|hf)\s+(?:download|upload|login)\b|ollama\s+(?:pull|push)\b)"
             R"(|gh\s|ssh\b|scp\b|sftp\b|ftp\b|rsync\b|nc\b|ncat\b|telnet\b|socat\b)"
             R"(|nslookup\b|dig\b|ping\b|traceroute\b|tracert\b|/dev/(?:tcp|udp)/)"
             R"(|(?:https?|all|ftp)_proxy=)"
             R"(|(?:python3?|py|node|deno|bun|perl|ruby|php|pwsh|powershell)\b.*(?:socket|urllib|requests|httpx|aiohttp)"
             R"(|http\.client|https?\.(?:get|request)|fetch\(|net\.connect|WebClient|Net::HTTP|LWP|fsockopen|TCPSocket)))",
             std::regex::icase);
+        // Build tools that resolve dependencies from a remote repository on nearly every run.
+        static const std::regex buildTool(R"((?:^|[\s;&|(`])(?:mvn|mvnw|gradle|gradlew)(?=[\s;&|)`]|$))",
+                                          std::regex::icase);
         static const std::regex fetch(R"(\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b)", std::regex::icase);
         // bash opens a socket for a redirect to these names.
-        const bool socketFile = command.find("/dev/tcp/") != std::string::npos ||
-                                command.find("/dev/udp/") != std::string::npos;
-        // The shell drops quotes and backslashes before it looks a program up: cu''rl runs curl.
+        const bool socketFile = asked.find("/dev/tcp/") != std::string::npos ||
+                                asked.find("/dev/udp/") != std::string::npos;
+        // bash drops quotes and backslashes, and cmd.exe drops ^, before a program is looked up: cu''rl and
+        // cu^rl run curl.
         std::string bare;
         for (const char c : command) {
-            if (c != '\'' && c != '"' && c != '\\') bare.push_back(c);
+            if (c != '\'' && c != '"' && c != '\\' && c != '^') bare.push_back(c);
         }
+        // A full path, a quoted name or a Windows suffix still runs the program: C:\Tools\conda.exe is conda.
+        const std::string programs = programWords(command);
         if (socketFile || std::regex_search(command, online) || std::regex_search(bare, online) ||
+            std::regex_search(programs, online) || std::regex_search(programs, buildTool) ||
             mentionsRemoteUrl(command)) {
-            return why + "`" + command.substr(0, 80) + "`, which goes online.";
+            return why + "`" + asked.substr(0, 80) + "`, which goes online.";
         }
         // A fetch stays local only when every destination it names is this PC.
         if (std::regex_search(command, fetch) || std::regex_search(bare, fetch)) {
@@ -517,11 +660,11 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
             // flag cluster (-sx) or holds its value (-xhost).
             static const std::regex reroute(
                 R"((?:^|\s)(?:-[A-Za-z]*x\S*|--proxy|--preproxy|--socks\S*|--resolve|--connect-to|-e|--execute)(?:[\s=]|$))");
-            if (std::regex_search(command, reroute)) return why + "`" + command.substr(0, 80) + "`, which goes online.";
+            if (std::regex_search(command, reroute)) return why + "`" + asked.substr(0, 80) + "`, which goes online.";
             size_t urlBegin = 0, urlEnd = 0;
             if (!nextUrl(command, 0, urlBegin, urlEnd) || command.find("$(") != std::string::npos ||
                 command.find('`') != std::string::npos || command.find("${") != std::string::npos) {
-                return why + "`" + command.substr(0, 80) + "`, which goes online.";
+                return why + "`" + asked.substr(0, 80) + "`, which goes online.";
             }
             // curl and wget take a bare host as a destination too (curl http://localhost/ example.com),
             // and that has no scheme for the URL scan to find.
@@ -561,7 +704,7 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
                 // Only the head is matched: std::regex recurses once per character of a long word.
                 const std::string head = w.substr(0, 300);
                 if (head.find("://") != std::string::npos || !std::regex_search(head, bareHost)) continue;
-                if (!urlIsLocal("http://" + head)) return why + "`" + command.substr(0, 80) + "`, which goes online.";
+                if (!urlIsLocal("http://" + head)) return why + "`" + asked.substr(0, 80) + "`, which goes online.";
             }
         }
         return "";
