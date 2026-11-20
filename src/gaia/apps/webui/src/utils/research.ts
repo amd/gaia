@@ -23,8 +23,31 @@ export function isResearchMessage(text: string): boolean {
     });
 }
 
-/** The message to send: prefixed with `/research` while research mode is on. */
-export function withResearchCommand(text: string, researchOn: boolean): string {
-    if (!researchOn || !text.trim() || isResearchMessage(text)) return text;
+/** `/<name>` at the start, followed by space or the end: the shape the agent reads as a skill command. */
+const SKILL_COMMAND = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)(?:\s|$)/;
+
+let installedSkills: ReadonlySet<string> = new Set();
+
+/** Record the installed skills, so research mode leaves their `/<name>` commands alone. */
+export function rememberInstalledSkills(names: Iterable<string>): void {
+    installedSkills = new Set(names);
+}
+
+/** True when *text* starts with `/<name>` and *name* is an installed skill. */
+export function isSkillCommand(text: string, skills: ReadonlySet<string>): boolean {
+    const match = SKILL_COMMAND.exec(text.trimStart());
+    return match !== null && skills.has(match[1]);
+}
+
+/**
+ * The message to send: prefixed with `/research` while research mode is on,
+ * unless it already is a research command or runs an installed skill.
+ */
+export function withResearchCommand(
+    text: string,
+    researchOn: boolean,
+    skills: ReadonlySet<string> = installedSkills,
+): string {
+    if (!researchOn || !text.trim() || isResearchMessage(text) || isSkillCommand(text, skills)) return text;
     return `${RESEARCH_COMMAND} ${text}`;
 }

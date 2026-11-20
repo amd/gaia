@@ -1,14 +1,33 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { ResearchChip } from '../ResearchChip';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ResearchChip, withResearch } from '../ResearchChip';
 import { NEW_CHAT_RESEARCH, researchOn, useChatStore } from '../../stores/chatStore';
+import * as api from '../../services/api';
+import { rememberInstalledSkills } from '../../utils/research';
+
+vi.mock('../../services/api', () => ({ listSkills: vi.fn() }));
+const listSkills = vi.mocked(api.listSkills);
 
 beforeEach(() => {
     useChatStore.setState({ research: {} });
+    rememberInstalledSkills([]);
+    listSkills.mockReset();
+    listSkills.mockResolvedValue({ skills: [{ name: 'docx' }] as Awaited<ReturnType<typeof api.listSkills>>['skills'], invalid: {} });
+});
+
+describe('ResearchChip and skill commands', () => {
+    it('sends an installed skill command as typed while research mode is on', async () => {
+        render(<ResearchChip sessionId={null} />);
+        await userEvent.click(screen.getByRole('button', { name: 'Research' }));
+        await waitFor(() => expect(withResearch('/docx draft a memo', null)).toBe('/docx draft a memo'));
+        expect(listSkills).toHaveBeenCalled();
+        expect(withResearch('draft a memo', null)).toBe('/research draft a memo');
+        expect(withResearch('/pptx a deck', null)).toBe('/research /pptx a deck');
+    });
 });
 
 describe('ResearchChip', () => {

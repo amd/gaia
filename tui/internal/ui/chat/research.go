@@ -4,6 +4,7 @@
 package chat
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -60,12 +61,32 @@ func researchTopic(query string) string {
 	return strings.TrimSpace(trimmed[n:])
 }
 
-// withResearch is the line to send: prefixed while research mode is on.
+// withResearch is the line to send: prefixed while research mode is on,
+// unless the line already runs research or an installed skill.
 func (m ChatModel) withResearch(query string) string {
-	if !m.researchMode || strings.TrimSpace(query) == "" || isResearchCommand(query) {
+	if !m.researchMode || strings.TrimSpace(query) == "" || isResearchCommand(query) || m.isSkillCommand(query) {
 		return query
 	}
 	return researchCommand + " " + query
+}
+
+// skillCommandRE is the shape the agent reads as a skill command: /<name>
+// followed by space or the end of the line.
+var skillCommandRE = regexp.MustCompile(`^/([a-z0-9]+(?:-[a-z0-9]+)*)(?:\s|$)`)
+
+// isSkillCommand reports whether a line starts with /<name> for an installed
+// skill. A mistyped name or a path such as /tmp/notes.txt is not one.
+func (m ChatModel) isSkillCommand(query string) bool {
+	match := skillCommandRE.FindStringSubmatch(strings.TrimLeftFunc(query, unicode.IsSpace))
+	if match == nil {
+		return false
+	}
+	for _, s := range m.skillCommands {
+		if s.Name == match[1] {
+			return true
+		}
+	}
+	return false
 }
 
 // runResearchCommand handles a line that starts with /research.

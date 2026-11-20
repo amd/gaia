@@ -27,6 +27,7 @@ beforeEach(() => {
     useChatStore.setState({ systemStatus: null });
     vi.mocked(api.requestWarmUp).mockResolvedValue({ state: 'ready' });
     vi.mocked(api.getStartScreen).mockResolvedValue(START);
+    vi.mocked(api.listSkills).mockResolvedValue({ skills: [], invalid: {} });
     vi.mocked(api.listDocuments).mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
     useChatStore.setState({ documents: [], draftDocumentIds: [], showDocLibrary: false });
 });

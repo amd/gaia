@@ -6,6 +6,8 @@ package chat
 import (
 	"strings"
 	"testing"
+
+	"github.com/amd/gaia/tui/internal/event"
 )
 
 func flagshipModel(t *testing.T) ChatModel {
@@ -105,6 +107,23 @@ func TestResearchModeLeavesOtherCommandsAlone(t *testing.T) {
 	}
 	if got := m.withResearch("   "); got != "   " {
 		t.Fatalf("prefixed an empty line: %q", got)
+	}
+}
+
+func TestResearchModeLeavesSkillCommandsAlone(t *testing.T) {
+	m := flagshipModel(t)
+	m.researchMode = true
+	m.skillCommands = []event.SkillCommand{{Name: "docx", Description: "Word documents."}}
+	if got := m.withResearch("/docx draft a memo"); got != "/docx draft a memo" {
+		t.Fatalf("researched a skill command: %q", got)
+	}
+	if got := m.withResearch("/docx"); got != "/docx" {
+		t.Fatalf("researched a bare skill command: %q", got)
+	}
+	for _, line := range []string{"/docs draft a memo", "/docx.txt notes", "/tmp/notes.txt", "plain question"} {
+		if got := m.withResearch(line); got != "/research "+line {
+			t.Fatalf("%q was sent as %q, want the research prefix", line, got)
+		}
 	}
 }
 

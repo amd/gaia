@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from 'vitest';
-import { isResearchMessage, withResearchCommand } from '../research';
+import { isResearchMessage, isSkillCommand, withResearchCommand } from '../research';
 
 describe('research mode', () => {
     it('recognises a leading /research command only', () => {
@@ -24,5 +24,16 @@ describe('research mode', () => {
         expect(withResearchCommand('/research jwst', true)).toBe('/research jwst');
         expect(withResearchCommand('/research-report jwst', true)).toBe('/research-report jwst');
         expect(withResearchCommand('   ', true)).toBe('   ');
+    });
+
+    it('leaves a command for an installed skill alone and researches anything else', () => {
+        const skills = new Set(['docx', 'research-report']);
+        expect(withResearchCommand('/docx draft a memo', true, skills)).toBe('/docx draft a memo');
+        expect(withResearchCommand('/docx', true, skills)).toBe('/docx');
+        expect(withResearchCommand('/docs draft a memo', true, skills)).toBe('/research /docs draft a memo');
+        expect(withResearchCommand('/tmp/notes.txt', true, skills)).toBe('/research /tmp/notes.txt');
+        expect(withResearchCommand('/docx.txt notes', true, skills)).toBe('/research /docx.txt notes');
+        expect(withResearchCommand('plain question', true, skills)).toBe('/research plain question');
+        expect(isSkillCommand('/docx memo', new Set())).toBe(false);
     });
 });
