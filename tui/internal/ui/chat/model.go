@@ -2821,12 +2821,13 @@ func (m ChatModel) turnElapsed(now time.Time) time.Duration {
 // only. Time-to-first-token, tokens/sec, the step and tool counts and the
 // fixed prefill measure the machinery, not the answer: printed under every
 // reply they train the eye to skip the line, so the default footnote is the
-// recap (recapLine) and this waits until someone asks.
+// recap (recapLine) and this waits until someone asks. The turn's time and
+// token count are left to the recap drawn directly above.
 func (m ChatModel) answerStats(msg *Message) string {
 	if msg.Duration <= 0 || !m.expandWork {
 		return ""
 	}
-	stats := []string{fmt.Sprintf("%.1fs", msg.Duration.Seconds())}
+	var stats []string
 
 	// Every figure below is the inference backend's own measurement, passed
 	// through untouched. Zero means it reported none — a remote
@@ -2835,9 +2836,6 @@ func (m ChatModel) answerStats(msg *Message) string {
 	// includes tool time and agent overhead.
 	if msg.TTFT > 0 {
 		stats = append(stats, fmt.Sprintf("ttft %.1fs", msg.TTFT.Seconds()))
-	}
-	if msg.Tokens > 0 {
-		stats = append(stats, fmt.Sprintf("%d tokens", msg.Tokens))
 	}
 	if msg.TokPerS > 0 {
 		stats = append(stats, fmt.Sprintf("%.1f tok/s", msg.TokPerS))

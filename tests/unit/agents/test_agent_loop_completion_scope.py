@@ -384,9 +384,13 @@ def test_the_work_a_completion_check_asks_for_is_not_refused(agent, tmp_path):
         call("write_file", file_path="out/summary.md", content="three rows\n"),
         call("read_file", file_path="out/summary.md"),
         {"answer": "Saved the summary to `out/summary.md`: three rows."},
+        # The file now exists, so the turn's one self-check is asked for.
+        {"answer": "RESULT: PASS"},
     )
     result = agent.process_query("Summarize the data and save it to `out/summary.md`")
     assert "[check:completion]" in str(sent[1][-1]["content"])
+    assert "[check:self]" in str(sent[-1][-1]["content"])
+    assert result["result"].startswith("Saved the summary to `out/summary.md`")
     results = " ".join(
         str(m["content"]) for turn in sent for m in turn if m.get("role") == "tool"
     )

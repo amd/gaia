@@ -314,9 +314,15 @@ func TestAnswerTelemetryIsQuietByDefaultAndFullUnderCtrlO(t *testing.T) {
 	dev := NewChatModel(&nullClient{}, "GAIA", "")
 	dev.expandWork = true
 	full := dev.answerStats(msg)
-	for _, want := range []string{"12.4s", "ttft 0.9s", "420 tokens", "44.2 tok/s", "4 steps", "3 tools"} {
+	for _, want := range []string{"ttft 0.9s", "44.2 tok/s", "4 steps", "3 tools"} {
 		if !strings.Contains(full, want) {
 			t.Errorf("the Ctrl+O footnote lost %q: %q", want, full)
+		}
+	}
+	// The recap above already carries the time and the token count.
+	for _, dup := range []string{"12.4s", "420 tokens"} {
+		if strings.Contains(full, dup) {
+			t.Errorf("the Ctrl+O footnote repeats the recap's %q: %q", dup, full)
 		}
 	}
 }

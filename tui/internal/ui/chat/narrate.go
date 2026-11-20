@@ -160,6 +160,10 @@ func narrationFor(tool string, args json.RawMessage, narration string) string {
 		return truncateRunes(unclipArg(n, args), narrationMax)
 	}
 
+	if line, ok := audioNarration(tool, args); ok {
+		return truncateRunes(line, narrationMax)
+	}
+
 	// The command is the narration — anything wrapped round it is noise.
 	if shellTools[tool] {
 		if cmd := argValue(args, "command", "cmd"); cmd != "" {

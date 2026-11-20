@@ -2122,6 +2122,7 @@ _USER_DATA_DIRS = (
     "cache/rag",
     "logs",
     "seeder",
+    "backend-pids",
 )
 
 

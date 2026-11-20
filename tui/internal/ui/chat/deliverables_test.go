@@ -151,7 +151,7 @@ func TestTheDeliverableIsALinkThatFits(t *testing.T) {
 	}
 }
 
-// Ctrl+G opens documents only. A script or an executable the agent wrote is
+// Ctrl+F opens documents only. A script or an executable the agent wrote is
 // never launched by a keystroke.
 func TestOnlyDocumentsOpenFromTheKeyboard(t *testing.T) {
 	for _, name := range []string{"run.bat", "setup.exe", "x.ps1", "page.html", "evil.lnk", "macro.xlsm", "old.doc", "old.xls"} {
@@ -163,7 +163,42 @@ func TestOnlyDocumentsOpenFromTheKeyboard(t *testing.T) {
 	m := ChatModel{messages: []Message{{Role: RoleAssistant, Deliverables: []deliverable{
 		{Path: "C:/x/run.bat"}, {Path: "C:/x/report.xlsx"},
 	}}}}
-	if d, ok := m.lastDeliverable(); !ok || filepath.Base(d.Path) != "report.xlsx" {
-		t.Errorf("lastDeliverable = %+v, %v; want the document, skipping the script", d, ok)
+	if d, ok := m.newerDeliverable(); !ok || filepath.Base(d.Path) != "report.xlsx" {
+		t.Errorf("newerDeliverable = %+v, %v; want the document, skipping the script", d, ok)
+	}
+}
+
+// Ctrl+F refuses what the media opener refuses: an SSH session, where the
+// viewer would launch on the far machine, and paths a Windows launcher would
+// reinterpret (a share, a device path, an NTFS stream, a %VAR%).
+func TestOpenFileRefusesWhatMediaRefuses(t *testing.T) {
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("SSH_TTY", "")
+	for _, p := range []string{
+		`\\server\share\report.xlsx`, `//server/share/report.pdf`, `\??\C:\x\notes.txt`,
+		`C:\x\run.exe:hidden.txt`, `C:\%TEMP%\report.csv`,
+	} {
+		msg := openFile(p)().(fileOpenResultMsg)
+		if msg.err == nil {
+			t.Errorf("%s was handed to the system opener", p)
+		}
+	}
+
+	m := newTestChat(t)
+	m.streaming = false
+	m.messages = append(m.messages, Message{Role: RoleAssistant, Deliverables: []deliverable{{Path: "C:/x/report.xlsx"}}})
+	if !strings.Contains(joinHints(m.statusHints()), "Ctrl+F open file") {
+		t.Fatalf("locally the hint bar should offer Ctrl+F: %q", joinHints(m.statusHints()))
+	}
+
+	t.Setenv("SSH_CONNECTION", "10.0.0.1 22 10.0.0.2 22")
+	msg := openFile(filepath.Join(t.TempDir(), "report.xlsx"))().(fileOpenResultMsg)
+	if msg.err == nil || !strings.Contains(msg.err.Error(), "SSH") {
+		t.Errorf("over SSH Ctrl+F should refuse with a reason, got %v", msg.err)
+	}
+	for _, h := range m.statusHints() {
+		if strings.Contains(h.text, "Ctrl+F open file") {
+			t.Errorf("the hint bar offers Ctrl+F over SSH: %q", h.text)
+		}
 	}
 }

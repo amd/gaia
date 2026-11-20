@@ -105,7 +105,11 @@ const AgentProcessManager = require("./services/agent-process-manager.cjs");
 const NotificationService = require("./services/notification-service.cjs");
 const KeepAwake = require("./services/keep-awake.cjs");
 const PortManager = require("./services/port-manager.cjs");
-const { isGaiaBackendProcess } = require("./services/backend-orphan.cjs");
+const {
+  cleanupOrphanedBackends,
+  forgetBackend,
+  recordBackend,
+} = require("./services/backend-orphan.cjs");
 const { showBackendCrashDialog } = require("./services/backend-crash-dialog.cjs");
 const { showRendererGoneDialog } = require("./services/renderer-gone-dialog.cjs");
 const { createBackendSupervisor } = require("./services/backend-supervisor.cjs");
@@ -320,54 +324,25 @@ function quitStarted() {
 // ── Backend Process ────────────────────────────────────────────────────────
 
 /**
- * Terminate a backend left running from a previous launch.
+ * Terminate backends left running by a previous launch.
  *
- * The desktop app may be double-clicked multiple times or crash, leaving an
- * orphaned `gaia chat --ui` process. On Windows that process keeps an open
- * handle on `gaia.exe`, so the next upgrade's `uv pip install --refresh` fails
- * with `os error 32` (file in use) — issue #1388. We MUST run this BEFORE the
- * installer (`engineInstall.run()`), not just before spawning the new backend,
- * so the executable can be replaced.
+ * The desktop app may crash, leaving an orphaned `gaia chat --ui` process. On
+ * Windows that process keeps an open handle on `gaia.exe`, so the next
+ * upgrade's `uv pip install --refresh` fails with `os error 32` (file in use)
+ * — issue #1388. We MUST run this BEFORE the installer (`engineInstall.run()`),
+ * not just before spawning the new backend, so the executable can be replaced.
  *
- * The PID is read from ~/.gaia/backend.pid and verified to be a GAIA backend
- * (conservative match) before signalling, so we never kill unrelated user
- * processes (issue #782 TOCTOU mitigation). Idempotent: the pidfile is removed
- * after the first call, so later calls are no-ops.
+ * Each app records its backend under ~/.gaia/backend-pids/<app pid>.pid. Only
+ * backends whose app is gone are stopped, and only once verified to be a GAIA
+ * backend (issue #782): another copy of the app sharing ~/.gaia keeps its own
+ * (issue #7062).
  */
 async function cleanupOrphanedBackend() {
-  try {
-    const pidFile = path.join(_GAIA_DIR, "backend.pid");
-    if (!fs.existsSync(pidFile)) return;
-    try {
-      const existingPid = parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
-      if (!Number.isNaN(existingPid)) {
-        console.log(`[main] Found existing backend pidfile (${existingPid}) — verifying process identity`);
-
-        let isBackend = false;
-        try {
-          isBackend = isGaiaBackendProcess(existingPid);
-        } catch (err) {
-          console.warn(`[main] Could not verify pid ${existingPid}: ${err.message}`);
-        }
-
-        if (!isBackend) {
-          console.log(`[main] PID ${existingPid} does not appear to be a GAIA backend; skipping kill`);
-        } else {
-          try {
-            await portManager.killBackend(existingPid);
-            console.log(`[main] Cleaned up previous backend pid ${existingPid}`);
-          } catch (err) {
-            console.warn(`[main] Could not clean previous backend pid ${existingPid}: ${err.message}`);
-          }
-        }
-      }
-    } catch (err) {
-      console.warn(`[main] Failed reading backend pidfile: ${err.message}`);
-    }
-    try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
-  } catch (err) {
-    console.warn(`[main] PID cleanup check failed: ${err.message}`);
-  }
+  await cleanupOrphanedBackends({
+    gaiaDir: _GAIA_DIR,
+    killBackend: (pid) => portManager.killBackend(pid),
+    logger: console,
+  });
 }
 
 /**
@@ -402,8 +377,7 @@ async function startBackend() {
   }
   healthCheckUrl = `http://localhost:${backendPort}/api/health`;
   // Defensively clean up any orphaned backend in case bootstrap was skipped
-  // on this path. cleanupOrphanedBackend() is idempotent and a no-op once the
-  // pidfile has already been consumed earlier in app startup.
+  // on this path. A no-op once earlier startup removed the orphans' records.
   // Dev QA mode leaves it alone: it belongs to the installed app's backend.
   if (!devQa) await cleanupOrphanedBackend();
 
@@ -465,15 +439,12 @@ async function startBackend() {
     console.error("Failed to start backend:", err.message);
   });
 
-  // Write a PID file so subsequent AppImage launches can detect and
-  // cleanup this backend if it becomes orphaned. The pidfile is removed
-  // when the child exits.
+  // Record this backend so a later launch can stop it if this app dies
+  // without stopping it. The record is removed when the child exits.
   if (!devQa) {
     try {
-      try { fs.mkdirSync(_GAIA_DIR, { recursive: true }); } catch { /* ignore */ }
-      const pidFile = path.join(_GAIA_DIR, "backend.pid");
-      fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
-      console.log(`[main] Wrote backend pidfile ${pidFile} (pid=${child.pid})`);
+      const file = recordBackend({ gaiaDir: _GAIA_DIR, ownerPid: process.pid, backendPid: child.pid });
+      console.log(`[main] Wrote backend pidfile ${file} (pid=${child.pid})`);
     } catch (err) {
       console.warn(`[main] Could not write backend pidfile: ${err.message}`);
     }
@@ -491,18 +462,13 @@ async function startBackend() {
     // Once restarts run out, the supervisor's onStopped shows the crash dialog.
     if (crashed) backendSupervisor.crashed({ code, signal });
 
-    // Remove pidfile on exit to avoid leaving stale PID behind.
-    try {
-      const pidFile = path.join(_GAIA_DIR, "backend.pid");
-      if (fs.existsSync(pidFile)) {
-        const p = fs.readFileSync(pidFile, "utf8").trim();
-        if (p && parseInt(p, 10) === child.pid) {
-          try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
-        }
+    // Remove this app's record, unless a newer backend already replaced it.
+    if (!devQa) {
+      try {
+        forgetBackend({ gaiaDir: _GAIA_DIR, ownerPid: process.pid, backendPid: child.pid });
+      } catch (err) {
+        console.warn(`[main] Failed to remove backend pidfile: ${err.message}`);
       }
-    } catch (err) {
-      // Non-fatal — just log and continue.
-      console.warn(`[main] Failed to remove backend pidfile: ${err.message}`);
     }
   });
 

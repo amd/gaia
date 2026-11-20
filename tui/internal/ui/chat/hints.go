@@ -145,7 +145,7 @@ func (m ChatModel) statusHints() []hint {
 		}
 		// One key to the result, offered only once there is one to open.
 		if _, ok := m.newerDeliverable(); ok {
-			if !m.streaming && m.confirmation == nil {
+			if !m.streaming && m.confirmation == nil && !remoteSession() {
 				hints = append(hints, hint{text: "Ctrl+F open file", rank: rankAffordance})
 			}
 		} else if _, ok := m.latestMediaCandidate(); ok {

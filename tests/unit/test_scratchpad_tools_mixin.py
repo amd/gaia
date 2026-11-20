@@ -229,6 +229,23 @@ class TestInsertData:
         assert "Inserted 1 row(s) into 'inventory'" in result
         self.agent._scratchpad.insert_rows.assert_called_once_with("inventory", data)
 
+    def test_result_states_the_rows_the_table_now_holds(self):
+        """Rows a batch or an earlier session left show up in the total."""
+        self.agent._scratchpad.insert_rows.return_value = 2
+        self.agent._scratchpad.row_count.return_value = 14
+        result = self.tools["insert_data"]("sales", [{"a": 1}, {"a": 2}])
+        assert result == "Inserted 2 row(s) into 'sales'; it now holds 14 row(s)."
+        self.agent._scratchpad.row_count.assert_called_once_with("sales")
+
+    def test_a_failed_count_still_reports_the_insert(self):
+        """The rows are written; a retry would add them twice."""
+        self.agent._scratchpad.insert_rows.return_value = 2
+        self.agent._scratchpad.row_count.side_effect = RuntimeError("db locked")
+        result = self.tools["insert_data"]("sales", [{"a": 1}, {"a": 2}])
+        assert result.startswith("Inserted 2 row(s) into 'sales'")
+        assert "could not be read: db locked" in result
+        assert "Error" not in result
+
     def test_invalid_json_string(self):
         """insert_data returns error for malformed JSON string."""
         result = self.tools["insert_data"]("test", "{not valid json")
