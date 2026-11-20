@@ -4303,9 +4303,10 @@ JSON string would replace each bad byte with `U+FFFD` and lose what went wrong.
 A reader must check all three keys. Events are flushed one at a time, so a run
 that crashes mid-turn still leaves everything it received.
 
-`--trace` and `--dev` are independent: `--dev` chooses what is rendered on
-screen, `--trace` chooses what is written to disk. Use both together to watch a
-run and keep it.
+`--trace` and `--dev` are independent: `--dev` turns on the control API and the
+TUI's diagnostic log without changing the screen, `--trace` chooses what is
+written to disk. Use both together to drive a run over the control API and keep
+a record of it.
 
 <Note>
   This records the agent's externally visible behaviour — tool calls, arguments,

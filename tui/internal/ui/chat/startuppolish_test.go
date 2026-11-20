@@ -82,11 +82,12 @@ func TestTheRestoreNeverPrintsASwitchTime(t *testing.T) {
 	}
 }
 
+// The time is said once: by the recap, not again by the Ctrl+O stats under it.
 func TestAnOrdinaryAnswerKeepsItsTimeUnderCtrlO(t *testing.T) {
 	m := ChatModel{expandWork: true}
 	msg := Message{Duration: 2 * time.Second}
-	if s := m.answerStats(&msg); s != "2.0s" {
-		t.Fatalf("the expanded stats lost the bare time: %q", s)
+	if s := m.answerStats(&msg); s != "" {
+		t.Fatalf("the expanded stats repeat the recap's time: %q", s)
 	}
 	if s := m.recapLine(&msg); s != "2.0s" {
 		t.Fatalf("a turn with no work recaps as its time alone: %q", s)

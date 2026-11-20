@@ -482,18 +482,6 @@ func textLines(path string) int {
 
 // --- opening -----------------------------------------------------------------
 
-// lastDeliverable is the newest openable file any answer produced.
-func (m ChatModel) lastDeliverable() (deliverable, bool) {
-	for i := len(m.messages) - 1; i >= 0; i-- {
-		for _, d := range m.messages[i].Deliverables {
-			if openableExts[extOf(d.Path)] {
-				return d, true
-			}
-		}
-	}
-	return deliverable{}, false
-}
-
 // newerDeliverable is the newest created document, unless a generated media
 // card came after it: Ctrl+F opens whichever a turn made last.
 func (m ChatModel) newerDeliverable() (deliverable, bool) {
@@ -516,11 +504,18 @@ type fileOpenResultMsg struct {
 }
 
 // openFile hands a deliverable to the platform's opener. Documents only — see
-// openableExts — and only a path this session saw a turn produce.
+// openableExts — and only a path this session saw a turn produce. It refuses
+// the same sessions and paths the media opener does.
 func openFile(path string) tea.Cmd {
 	return func() tea.Msg {
 		if !openableExts[extOf(path)] {
 			return fileOpenResultMsg{path: path, err: fmt.Errorf("only documents open from here")}
+		}
+		if remoteSession() {
+			return fileOpenResultMsg{path: path, err: fmt.Errorf("opening local files is unavailable over SSH; use the displayed path")}
+		}
+		if isRemoteOrDevicePath(path) || hasStreamOrExpansion(path) {
+			return fileOpenResultMsg{path: path, err: fmt.Errorf("this path can't be opened from here")}
 		}
 		var cmd *exec.Cmd
 		switch runtime.GOOS {
