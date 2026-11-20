@@ -25,7 +25,7 @@ func TestAPromptIsLiveOnlyWhenThePeerCanAnswerIt(t *testing.T) {
 		live bool
 		want bool
 	}{{true, true}, {false, false}} {
-		m := NewChatModel(&reportingClient{live: tc.live}, "gaia", "", false)
+		m := NewChatModel(&reportingClient{live: tc.live}, "gaia", "")
 		if got := m.canRespondToPermission(); got != tc.want {
 			t.Errorf("peer live=%t: canRespondToPermission() = %t, want %t", tc.live, got, tc.want)
 		}
@@ -34,7 +34,7 @@ func TestAPromptIsLiveOnlyWhenThePeerCanAnswerIt(t *testing.T) {
 
 func TestATransportThatDoesNotReportIsStillAble(t *testing.T) {
 	// The stdio child always has its control channel.
-	m := NewChatModel(&permissionClient{}, "gaia", "", false)
+	m := NewChatModel(&permissionClient{}, "gaia", "")
 	if !m.canRespondToPermission() {
 		t.Error("a responder that does not report must keep answering live")
 	}
@@ -42,7 +42,7 @@ func TestATransportThatDoesNotReportIsStillAble(t *testing.T) {
 
 func TestFullAccessIsRefusedWhenThePeerCannotCarryIt(t *testing.T) {
 	c := &reportingClient{live: false}
-	m := NewChatModel(c, "gaia", "", false)
+	m := NewChatModel(c, "gaia", "")
 	m.width, m.height = 100, 30
 
 	updated, _ := m.setFullAccess(true)

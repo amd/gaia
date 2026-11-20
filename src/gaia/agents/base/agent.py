@@ -51,6 +51,7 @@ from gaia.agents.base.call_risk import (
     EXACT_TEXT_ARG,
     NEEDS_PERSON_ARG,
     RISK_NOTE_ARG,
+    SCRIPT_ARG,
     SHELL_TOOLS,
 )
 from gaia.agents.base.chunk_index import OUTPUT_TOOLS
@@ -141,6 +142,7 @@ from gaia.agents.base.planted_instructions import (
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.python_human_only import python_human_only_refusal
 from gaia.agents.base.python_scope import python_scope_refusal
+from gaia.agents.base.script_preview import script_prompt_args
 from gaia.agents.base.self_check import (
     BUILT_SUFFIXES,
     PROSE_SUFFIXES,
@@ -227,6 +229,7 @@ from gaia.agents.base.verification import (
 )
 
 # First-party imports
+from gaia.canonical_path import UncheckablePathError, canonical_path
 from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
 from gaia.credential_shapes import redact_file_content, redact_tool_output
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
@@ -3280,6 +3283,17 @@ def _with_resolved_target(prompt_args: Any, preflight: Any) -> Any:
     return {**prompt_args, "file_path": target}
 
 
+def _judged_path(path: str) -> str:
+    """*path* as the path validator judges it, or as given when it cannot.
+
+    One the validator cannot canonicalise is refused by it, with the reason.
+    """
+    try:
+        return canonical_path(path)
+    except UncheckablePathError:
+        return path
+
+
 def _record_refused_write(
     agent: Any, tool_name: str, tool_args: Any, result: Any
 ) -> None:
@@ -3303,7 +3317,7 @@ def _record_refused_write(
         return
     try:
         target = os.path.abspath(str(target_of(tool_args)))
-        real = os.path.realpath(target)
+        real = _judged_path(target)
     except (KeyError, TypeError, ValueError, OSError) as e:
         logger.debug("could not resolve the refused write's target: %s", e)
         return
@@ -5014,7 +5028,7 @@ Do NOT wrap conversational replies in JSON.
         ):
             return None
         try:
-            target = Path(os.path.realpath(str(target_of(prompt_args))))
+            target = Path(_judged_path(str(target_of(prompt_args))))
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.debug("could not resolve the write's target: %s", e)
             return None
@@ -9364,6 +9378,7 @@ Do NOT wrap conversational replies in JSON.
                 NEEDS_PERSON_ARG,
                 EXACT_TEXT_ARG,
                 RESOLVED_PATH_ARG,
+                SCRIPT_ARG,
                 SITE_ARG,
             )
         )
@@ -9456,6 +9471,8 @@ Do NOT wrap conversational replies in JSON.
         scratch = _scratch_reached_by(self, tool_name, prompt_args)
         if scratch:
             prompt_args = {**prompt_args, SCRATCH_ARG: scratch}
+        # A path does not say what a script does, so its prompt shows the script.
+        prompt_args = script_prompt_args(self, tool_name, prompt_args)
         # A write outside the chat's folders is asked about once: its own
         # prompt says so, and a person's yes to it grants that one file.
         outside = self._write_target_outside_scope(tool_name, prompt_args)

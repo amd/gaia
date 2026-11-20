@@ -148,7 +148,7 @@ func TestEscDeniesTheConfirmationRatherThanCancellingTheTurn(t *testing.T) {
 // draws the identical line for the one-shot surface.
 func TestApprovingWithNoConfirmURLDoesNotClaimDelivery(t *testing.T) {
 	c := &confirmingClient{}
-	m := NewChatModel(c, "notes", "", false)
+	m := NewChatModel(c, "notes", "")
 	m.width, m.height = 100, 30
 	m.streaming = true
 	m = feed(t, m, needsConfirmation(""))
@@ -174,7 +174,7 @@ func TestApprovingWithNoConfirmURLDoesNotClaimDelivery(t *testing.T) {
 // carry a confirm_url gets a real delivery attempt through AgentConfirmer.
 func TestApprovingWithConfirmURLDeliversViaConfirmer(t *testing.T) {
 	c := &confirmingClient{}
-	m := NewChatModel(c, "notes", "", false)
+	m := NewChatModel(c, "notes", "")
 	m.width, m.height = 100, 30
 	m.streaming = true
 	m = feed(t, m, needsConfirmation("/v1/notes/query/run-1/confirm"))
@@ -205,7 +205,7 @@ func TestApprovingWithConfirmURLDeliversViaConfirmer(t *testing.T) {
 // A failed delivery is surfaced, never swallowed.
 func TestFailedConfirmDeliveryIsSurfaced(t *testing.T) {
 	c := &confirmingClient{err: errors.New("the 'notes' run had already ended")}
-	m := NewChatModel(c, "notes", "", false)
+	m := NewChatModel(c, "notes", "")
 	m.width, m.height = 100, 30
 	m.streaming = true
 	m = feed(t, m, needsConfirmation("/v1/notes/query/run-1/confirm"))

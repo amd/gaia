@@ -713,6 +713,30 @@ func TestDestructiveWarningForCodeRunnersPointsAtTheCode(t *testing.T) {
 	}
 }
 
+// The long-turn check-in is a plain question, never a generic tool prompt, and
+// a check-in in a shape this build does not know is still shown as sent.
+func TestTheLongTurnCheckInReadsAsAQuestion(t *testing.T) {
+	m := NewConfirmationModel("r", "continue_long_turn", `{"steps":200,"model":"DeepSeek-V4.1-Flash"}`, "")
+	m.SetWidth(80)
+	view := ansi.Strip(m.View())
+	for _, want := range []string{"Keep going?", "200 steps so far on DeepSeek-V4.1-Flash"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the check-in lost %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Allow continue_long_turn") || strings.Contains(view, `"steps"`) {
+		t.Errorf("the check-in reads as a raw tool prompt:\n%s", view)
+	}
+	for _, odd := range []string{"", "steps=200", `{"model":"x"}`, "not json"} {
+		if got := longTurnSummary(odd); got != odd {
+			t.Errorf("longTurnSummary(%q) = %q; an unknown shape must pass through", odd, got)
+		}
+	}
+	if got := longTurnSummary(`{"steps":400}`); got != "400 steps so far" {
+		t.Errorf("a check-in without a model = %q", got)
+	}
+}
+
 // Every prompt carries its own number, so one run's earlier timer cannot
 // resolve a later prompt on the same run.
 func TestATimerOnlyResolvesThePromptItWasArmedFor(t *testing.T) {

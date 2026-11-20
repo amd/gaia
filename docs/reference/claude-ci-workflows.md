@@ -93,7 +93,9 @@ reviews the PR it opens. Others wait for a maintainer to add the `bug` label.
 Every third night, security only. A semgrep pass (Python, TypeScript, Go and the workflows
 themselves) plus a Claude taint/authz pass that re-verifies every `# noqa: S*` / `# nosec`.
 Findings go to the private **Security → Code scanning** tab, never a public issue;
-high-severity ones ping @kovtcharov-amd.
+high-severity ones ping @kovtcharov-amd. Each night's Claude upload carries forward the
+alerts that run didn't re-report, so an alert closes only when its file is deleted or a
+maintainer dismisses it — never because one night's sample missed it.
 
 ## 6. `claude-weekly-doc-walkthrough.yml` — live "act like a real user" ("Claude Doc Walkthrough")
 
