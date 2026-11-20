@@ -854,6 +854,22 @@ reported once. The model is told on every such turn, not once: the oldest user
 message it is sent opens with a one-sentence note that earlier turns exist and
 are no longer shown.
 
+A turn that runs a plan sends `plan` on a `status` each time the plan is made or
+its current step moves: `{"steps": [...], "current_step": N}`, where each step is
+`{tool?, description?, args?}` (string arguments clipped to 300 characters) and
+`current_step` is 0-based. `message` is then the plan headline, or empty when it
+repeats the last one. The TUI draws it as a checklist and replaces it when the
+steps change.
+
+Once a turn is recorded, and before its terminal event, the agent sends
+`context_usage`: the same event, in the same shape, the HTTP server streams by
+contract 2.28 (§4), measured for the next message. The TUI's meter reads
+`system + tool_definitions + history_used` against
+`system + tool_definitions + history_budget`, so 100% is where older turns start
+to drop, not the end of the window. `at_risk` previews the turns the next ones
+will push out of view; the TUI warns once each time it grows, and `history_cut`
+still reports the cut once it has happened.
+
 ### 10.4 Session listing
 
 Launched with `--history-file <dir>/<id>.sqlite3 --session-kind <kind>`, the

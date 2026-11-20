@@ -102,6 +102,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			break
 		}
 
+		if e.Plan != nil {
+			m.updatePlan(planFromWire(e.Plan.Steps, e.Plan.CurrentStep))
+		}
+
 		// Kept in the transcript, not the live line: it explains later answers.
 		if e.HistoryCut != nil {
 			m.messages = append(m.messages, Message{
@@ -155,6 +159,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			Goal:     m.takeGoal(),
 			At:       m.now(),
 			RetryKey: retryKey(e.Tool, e.Args),
+			Sources:  callSources(e.Tool, e.Args),
 		})
 
 	case event.CanonicalToolResultEvent:
@@ -307,6 +312,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				Metrics:      usage.Metrics,
 				Recap:        workRecap(work),
 				Deliverables: findDeliverables(work, content, m.queryStart),
+				Provenance:   turnProvenance(work, m.turnPlace()),
 				FinishedAt:   m.now(),
 				CostUSD:      m.turnCostUSD(usage.InputTokens, usage.CachedTokens, usage.Tokens),
 			})
@@ -369,6 +375,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.settleTurn()
 		m.updateViewport()
 		return m, nil, true
+
+	case event.CanonicalContextUsageEvent:
+		m.takeContextUsage(e)
 
 	case event.CanonicalUnsupportedEvent:
 		// Contract §7: a newer agent's event type is shown, never dropped.
@@ -583,7 +592,9 @@ func (m ChatModel) confirmAction(runID, action string, approved bool) tea.Cmd {
 // to the render card in the transcript — this line only says it came back, how
 // much of it, and how long it took.
 func (m *ChatModel) markToolDone(e event.CanonicalToolResultEvent) {
-	at := m.setOpenToolOutcome(e.Tool, toolResultSucceeded(e.Data), toolResultDetail(e))
+	ok := toolResultSucceeded(e.Data)
+	at := m.setOpenToolOutcome(e.Tool, ok, toolResultDetail(e))
+	m.planToolFinished(e.Tool, ok)
 	m.setToolOutputAt(at, e)
 }
 
@@ -600,6 +611,7 @@ func (m *ChatModel) setToolOutputAt(at int, e event.CanonicalToolResultEvent) {
 	item := &m.activity[at]
 	item.End = m.now()
 	item.OutLines = outputLines(e.Data)
+	item.Sources = append(item.Sources, resultSources(item.Tool, e.Data)...)
 	if c := item.Call.Change; c != nil && !c.Created && item.Success != nil && *item.Success {
 		c.StartLine = locateEdit(c)
 	}

@@ -45,6 +45,10 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   built from it showed `invoice<U+202E>txt.exe` as a name ending in `exe.txt`.
   Both now carry such a character as `[U+XXXX]`. The grant still covers the
   real file.
+- **The terminal UI can show the plan and how full the context is.** Over
+  stdio, a planned turn's `status` now carries the plan and its current step,
+  and every recorded turn is followed by the `context_usage` event the HTTP
+  server already streams, measured for the next message.
 - **Generated music and sound effects can be saved into a folder of the
   user's.** `generate_music` and `generate_sound_effect` take `save_to`, an
   absolute folder or a new `.wav` path, and write a copy there as

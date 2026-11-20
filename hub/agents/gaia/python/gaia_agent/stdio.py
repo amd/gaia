@@ -2035,6 +2035,7 @@ def run_turn(
                     logger.exception("Failed to preserve turn history")
                     _write(_terminal_error(exc), out)
                     return
+                _write_context(agent, out)
             _write(terminal_event, out)
             return
         if "error" in result:
@@ -2067,6 +2068,7 @@ def run_turn(
             logger.exception("Failed to preserve turn history")
             _write(_terminal_error(exc), out)
             return
+        _write_context(agent, out)
         final: Dict[str, Any] = {"type": "final", "answer": answer}
         usage = _usage_from_result(value, tool_count=getattr(handler, "_tool_count", 0))
         if usage:
@@ -2118,6 +2120,26 @@ def _history_cut_event(cut: Any) -> Dict[str, Any]:
         "message": cut.notice,
         "history_cut": {"turns": cut.turns, "tokens": cut.tokens},
     }
+
+
+def _write_context(agent: Any, out) -> None:
+    """Send ``context_usage`` for the next message, once a turn is recorded.
+
+    The same event, from the same measurement, the HTTP server streams
+    (contract 2.28), so a long file the turn read moves the meter and
+    ``at_risk`` names the turns the next ones will push out of view.
+    """
+    from gaia.agents.base.history import SessionHistory, context_usage
+
+    history = getattr(agent, "conversation_history", None)
+    if not isinstance(history, SessionHistory):
+        return
+    try:
+        usage = context_usage(agent, history.turns(agent))
+    except Exception as exc:  # noqa: BLE001 - a meter must never fail the turn
+        logger.warning("context measurement after the turn failed: %s", exc)
+        return
+    _write({"type": "context_usage", **usage}, out)
 
 
 def run_warm_up(agent: Any, out) -> None:
