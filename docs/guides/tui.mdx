@@ -730,7 +730,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | Command | What it does |
 |---|---|
 | `/help` | Show the shortcut overlay (scrolls with `↑`/`↓`/`PgUp`/`PgDn` if it doesn't fit) |
-| `/clear` | Clear the conversation |
+| `/clear` | Clear the conversation, and forget every "always" you answered in it |
 | `/setup` | Re-run first-time setup for the flagship agent: choose the models, download them, then test them |
 | `/models` | The models on this PC: tick one to download it, untick to stop using it, `x` removes one (it asks first), `c` picks the chat model, `a` applies. Downloads keep going when you close it, and the status line shows `downloading 38%` |
 | `/gpu` | Give the GPU more memory so bigger models fit. Offered only on a PC with an integrated GPU |
@@ -841,7 +841,7 @@ saying what it can do.
 A command GAIA doesn't run unasked — `python script.py`, `git commit`, `npm test`
 with no skill loaded for it — gets this prompt rather than an error. `a` covers
 that one command family (`git commit`, `python (any script)`) for the session and
-nothing wider. If you deny it, the agent is told that this one command is off:
+nothing wider, until `/clear` starts the conversation over. If you deny it, the agent is told that this one command is off:
 it must not run it through another tool or script, and it carries on with the
 rest of the task by other means and says what it could not do.
 
