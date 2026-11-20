@@ -176,6 +176,41 @@ def _reset_hybrid_route(agent: Any) -> None:
         reset()
 
 
+def _forget_conversation_grants(agent: Any, state: Optional["PermissionState"]) -> None:
+    """A cleared conversation forgets its "always" answers, as a new session would.
+
+    Runs before the history is cleared, so a failure here never leaves a
+    "cleared" chat still holding its grants.
+    """
+    if state is not None:
+        state.forget_grants()
+    reset = getattr(getattr(agent, "console", None), "reset_tool_approvals", None)
+    if callable(reset):
+        reset()
+
+
+def _forget_web_calls(agent: Any) -> None:
+    """Pages read before a clear no longer back a research citation."""
+    web_calls = getattr(agent, "_web_calls", None)
+    if web_calls is not None:
+        web_calls.clear()
+
+
+def _clear_from_host(
+    agent: Any, state: Optional["PermissionState"], index: Any
+) -> None:
+    """Perform a host ``clear_history``: the turn loop's half of the sentinel."""
+    _forget_conversation_grants(agent, state)
+    history = getattr(agent, "conversation_history", None)
+    if history is not None:
+        history.clear()
+    _forget_web_calls(agent)
+    _reset_hybrid_route(agent)
+    if index is not None:
+        guarded(index, index.cleared)
+    logger.info("conversation history cleared by host /clear")
+
+
 #: ``cancel`` stops the running turn but not the process, so loaded skills,
 #: "always" grants, history and full access all survive it.
 CONTROL_CANCEL = "cancel"
@@ -355,6 +390,25 @@ class PermissionState:
             ", ".join(scope.label for scope in removed),
         )
         return len(removed)
+
+    def forget_grants(self) -> int:
+        """Drop every "always" answer, the running turn's included.
+
+        Unlike :meth:`revoke`, which keeps a family another answer still
+        grants, this empties every holder outright: a cleared conversation
+        keeps none. Returns how many answers were dropped.
+        """
+        with self._lock:
+            count = len(self._live_scopes())
+            self._grants.clear()
+            self._scopes.clear()
+            if self._handler is not None:
+                self._handler.reset_tool_approvals()
+        if count:
+            audit.warning(
+                "Cleared conversation: dropped %d always-allow grant(s)", count
+            )
+        return count
 
     def _live_scopes(self) -> Dict[str, Any]:
         """The session's answers plus the running turn's. Caller holds the lock."""
@@ -2057,13 +2111,6 @@ def _end_turn(handler: Any, state: Optional[PermissionState]) -> None:
 CLEAR_CONVERSATION_QUERY = "\x00gaia:clear_conversation\x00"
 
 
-def _forget_web_calls(agent: Any) -> None:
-    """Pages read before a clear no longer back a research citation."""
-    web_calls = getattr(agent, "_web_calls", None)
-    if web_calls is not None:
-        web_calls.clear()
-
-
 #: Sent by the host before the chat opens, so the first question does not pay
 #: for loading the model and reading the system prompt. Answered with a `final`
 #: whose answer is WARMED_UP, or WARM_UP_SKIPPED for a remote model, where
@@ -2156,6 +2203,7 @@ def dispatch_query(
             _write({"type": "status", "message": message}, out)
             agent._engineering_reported_setup_status = setup_status
     if query == CLEAR_CONVERSATION_QUERY:
+        _forget_conversation_grants(agent, state)
         agent.conversation_history.clear()
         # Facts seen in the cleared chat must not ground the next one's numbers.
         if hasattr(agent, "clear_seen_sources"):
@@ -2370,14 +2418,7 @@ def main(argv: Optional[list] = None) -> int:
         if query is None:  # stdin closed
             break
         if isinstance(query, _ClearHistory):
-            history = getattr(agent, "conversation_history", None)
-            if history is not None:
-                history.clear()
-            _forget_web_calls(agent)
-            _reset_hybrid_route(agent)
-            if index is not None:
-                guarded(index, index.cleared)
-            logger.info("conversation history cleared by host /clear")
+            _clear_from_host(agent, state, index)
             continue
         try:
             agent = follow_settings(agent, config_kwargs)

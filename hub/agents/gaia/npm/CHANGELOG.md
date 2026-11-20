@@ -24,6 +24,11 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   change gets a search for newer developments, and a refused web search is
   stated in the report.
 
+- **Clearing a conversation forgets its "always" answers.** `/clear` in the
+  terminal UI, `clear_history` from a host, and `/reset` in `gaia chat` used to
+  keep them, so a command approved "always" in the cleared chat still ran
+  unasked in the next one. Now the same command asks again. Other sessions keep
+  their answers, and full access and loaded skills are unchanged.
 - **Code that names a credential folder or reads a credential file is refused before it runs.**
   `run_python`, `execute_python_file` (the script and its arguments) and a shell
   line that hands code to an interpreter could open `.env` or files inside

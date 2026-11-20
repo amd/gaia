@@ -8,7 +8,8 @@ SPDX-License-Identifier: MIT
 Each subdirectory here holds a `gaia-agent.yaml` packaging manifest for a native
 (C++) agent. The manifests are the contract between the C++ sources in
 [`../examples/`](../examples) and the Agent Hub: they declare identity, target
-platforms, and the packaged binary filename per platform.
+platforms, and the packaged binary filename per platform. `gaia` and `bash`
+keep their sources here too.
 
 | id | source | platforms |
 |----|--------|-----------|
@@ -18,12 +19,17 @@ platforms, and the packaged binary filename per platform.
 | `security-demo` | `examples/security_demo.cpp` | win-x64, linux-x64, darwin-arm64 |
 | `vlm` | `examples/vlm_agent.cpp` | win-x64, linux-x64, darwin-arm64 |
 | `bash` | `agents/bash/` | win-x64, linux-x64, darwin-arm64 |
+| `gaia` | `agents/gaia/` (binary `gaiacpp`) | win-x64, linux-x64, darwin-arm64 |
 
 `health`, `wifi`, and `process` use Windows-only APIs (`windows.h`, `psapi`,
 `netsh`/PowerShell), so they are built only on the `win-x64` matrix leg.
-`security-demo`, `vlm`, and `bash` are portable and prove the Linux and macOS
-legs. `bash` is the full coding agent (multi-file, in `agents/bash/`); the
-others are single-file demos in `examples/`.
+`security-demo`, `vlm`, `bash`, and `gaia` are portable and prove the Linux and
+macOS legs. `bash` is the full coding agent and `gaia` is `gaiacpp`, the
+general-purpose GAIA agent (both multi-file, in `agents/`); the others are
+single-file demos in `examples/`.
+
+`gaiacpp` is also packaged for Lemonade's agent host, as a release archive with
+a pinned checksum, by [`packaging/package_lemonade.py`](../packaging/package_lemonade.py).
 
 ## How packaging works
 

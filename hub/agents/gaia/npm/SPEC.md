@@ -803,7 +803,9 @@ a JSON line carrying a `gaia_control` key: a back-channel that answers a
 confirmation prompt *while* a turn is in flight, toggles full access or
 "accept edits" (file edits inside the starting folder run unasked; commands still
 ask), and stops a turn (`cancel`) without ending the process — so loaded skills,
-"always" grants, history and the permission mode survive a cancel. When stdin
+"always" grants, history and the permission mode survive a cancel. Clearing the
+conversation (the `clear_conversation` query or the `clear_history` control) drops
+its "always" grants with its history; full access and loaded skills stay. When stdin
 closes mid-turn (the host has gone), the running turn is cancelled and saved in
 the session history as interrupted: "This answer was interrupted when GAIA
 closed." The question is saved when the turn starts, so it survives even if the

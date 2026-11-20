@@ -6,6 +6,11 @@
 #include <gtest/gtest.h>
 #include <gaia/lemonade_client.h>
 
+#include <chrono>
+#include <thread>
+
+#include "support/mock_llm_server.h"
+
 using namespace gaia;
 
 // ---------------------------------------------------------------------------
@@ -298,4 +303,116 @@ TEST(LemonadeHealthTest, MissingRecipeOptions) {
 
     EXPECT_EQ(h.modelId, "SomeModel");
     EXPECT_EQ(h.contextSize, 0);  // no recipe_options → default 0
+}
+
+TEST(LemonadeClientPull, CheckpointOrRecipeNeedsUserPrefix) {
+    LemonadeClient c(LemonadeClientConfig{"http://127.0.0.1:9/api/v1"});
+    EXPECT_THROW(c.pullModel("Gemma-4-E4B-it-GGUF", "", "llamacpp"), std::invalid_argument);
+    EXPECT_THROW(c.pullModel("Some-Model", "org/repo:Q4"), std::invalid_argument);
+    EXPECT_THROW(c.pullModel(""), std::invalid_argument);
+}
+
+TEST(LemonadeClientPull, BuiltInPullSendsNameOnly) {
+    httplib::Server srv;
+    std::string seen;
+    srv.Post("/api/v1/pull", [&seen](const httplib::Request& req, httplib::Response& res) {
+        seen = req.body;
+        res.set_content(R"({"status":"success"})", "application/json");
+    });
+    const int port = srv.bind_to_any_port("127.0.0.1");
+    std::thread t([&srv] { srv.listen_after_bind(); });
+    while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    LemonadeClient c(LemonadeClientConfig{"http://127.0.0.1:" + std::to_string(port) + "/api/v1"});
+    c.pullModel("Gemma-4-E4B-it-GGUF");
+    const json built = json::parse(seen);
+    EXPECT_EQ(built, json({{"model_name", "Gemma-4-E4B-it-GGUF"}})) << "no recipe for a built-in (#1655)";
+    c.pullModel("user.My-Model", "org/repo:Q4_K_M", "llamacpp");
+    const json reg = json::parse(seen);
+    EXPECT_EQ(reg["recipe"], "llamacpp");
+    EXPECT_EQ(reg["checkpoint"], "org/repo:Q4_K_M");
+    srv.stop();
+    t.join();
+}
+
+TEST(LemonadeClientRequests, InvalidUtf8InAMessageIsSentNotThrown) {
+    bench::MockLlmServer mock;
+    LemonadeClient c(LemonadeClientConfig{mock.baseUrl()});
+    const json request = {{"model", "mock-model"},
+                          {"messages", json::array({{{"role", "user"}, {"content", "bad byte \xFF here"}}})}};
+    EXPECT_NO_THROW(c.chatCompletions(request));
+    ASSERT_EQ(mock.receivedBodies().size(), 1u);
+    const json sent = json::parse(mock.receivedBodies()[0]);
+    EXPECT_EQ(sent["messages"][0]["content"], "bad byte \xEF\xBF\xBD here");
+
+    mock.enableSseStreaming(true);
+    EXPECT_NO_THROW(c.chatCompletionsStreaming(request, [](const std::string&) {}));
+    EXPECT_EQ(mock.receivedBodies().size(), 2u);
+}
+
+TEST(LemonadeClientLoad, ALargerLoadedWindowIsNotReloaded) {
+    bench::MockLlmServer mock;  // reports mock-model loaded at ctx_size 16384
+    LemonadeClient c(LemonadeClientConfig{mock.baseUrl(), "mock-model"});
+    c.ensureModelLoaded("mock-model", 8192);
+    EXPECT_EQ(mock.loadRequestCount(), 0) << "a smaller request must not evict a larger loaded window";
+    c.ensureModelLoaded("mock-model", 16384);
+    EXPECT_EQ(mock.loadRequestCount(), 0);
+    c.ensureModelLoaded("mock-model", 32768);
+    EXPECT_EQ(mock.loadRequestCount(), 1) << "a window too small for the request is still reloaded";
+}
+
+TEST(LemonadeClientLoad, AServerThatFailsItsHealthCheckIsNotAskedToLoad) {
+    httplib::Server srv;
+    int loads = 0;
+    srv.Get("/api/v1/health", [](const httplib::Request&, httplib::Response& res) { res.status = 503; });
+    srv.Post("/api/v1/load", [&loads](const httplib::Request&, httplib::Response& res) {
+        ++loads;
+        res.set_content("{}", "application/json");
+    });
+    const int port = srv.bind_to_any_port("127.0.0.1");
+    std::thread t([&srv] { srv.listen_after_bind(); });
+    while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    LemonadeClient c(LemonadeClientConfig{"http://127.0.0.1:" + std::to_string(port) + "/api/v1", "m"});
+    try {
+        c.ensureModelLoaded("m", 8192);
+        ADD_FAILURE() << "a failed health check must stop the load";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("did not answer its health check"), std::string::npos) << e.what();
+    }
+    EXPECT_EQ(loads, 0);
+    srv.stop();
+    t.join();
+}
+
+TEST(LemonadeClientEmbeddings, ItemsWithoutAnIndexKeepTheirOrderAndClashesFail) {
+    httplib::Server srv;
+    std::string reply;
+    srv.Post("/api/v1/embeddings", [&reply](const httplib::Request&, httplib::Response& res) {
+        res.set_content(reply, "application/json");
+    });
+    const int port = srv.bind_to_any_port("127.0.0.1");
+    std::thread t([&srv] { srv.listen_after_bind(); });
+    while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    LemonadeClient c(LemonadeClientConfig{"http://127.0.0.1:" + std::to_string(port) + "/api/v1"});
+
+    reply = R"({"data":[{"embedding":[1.0]},{"embedding":[2.0]}]})";
+    std::vector<std::vector<float>> vectors;
+    EXPECT_NO_THROW(vectors = c.embeddings("embed-model", {"first", "second"}));
+    ASSERT_EQ(vectors.size(), 2u);
+    ASSERT_EQ(vectors[0].size(), 1u);
+    ASSERT_EQ(vectors[1].size(), 1u);
+    EXPECT_FLOAT_EQ(vectors[0][0], 1.0f);
+    EXPECT_FLOAT_EQ(vectors[1][0], 2.0f);
+
+    reply = R"({"data":[{"index":0,"embedding":[1.0]},{"index":0,"embedding":[2.0]}]})";
+    try {
+        c.embeddings("embed-model", {"first", "second"});
+        ADD_FAILURE() << "two vectors for one input were accepted";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("index 0 twice"), std::string::npos) << e.what();
+    }
+
+    reply = R"({"data":[{"index":0,"embedding":[1.0]},{"index":5,"embedding":[2.0]}]})";
+    EXPECT_THROW(c.embeddings("embed-model", {"first", "second"}), std::runtime_error);
+    srv.stop();
+    t.join();
 }

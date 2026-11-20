@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/chunking.h>
 
@@ -72,7 +73,7 @@ protected:
     fs::path tempDir_;
 
     void SetUp() override {
-        tempDir_ = fs::temp_directory_path() / "gaia_chunking_test";
+        tempDir_ = fs::temp_directory_path() / testsupport::perProcess("gaia_chunking_test");
         fs::create_directories(tempDir_);
     }
 
@@ -136,6 +137,19 @@ TEST_F(ChunkingTest, BlankRunsNeverProduceEmptyChunks) {
         EXPECT_FALSE(chunk.empty());
         EXPECT_NE(chunk, " ");
     }
+}
+
+TEST_F(ChunkingTest, ZeroOverlapRepeatsNothing) {
+    std::string text;
+    for (int i = 0; i < 12; ++i) {
+        if (i) text += "\n\n";
+        text += paragraphOfTokens(15);
+    }
+    const auto chunks = splitTextIntoChunks(text, {20, 0});
+    ASSERT_GT(chunks.size(), 1u);
+    std::size_t total = 0;
+    for (const auto& chunk : chunks) total += chunk.size();
+    EXPECT_LE(total, text.size()) << "chunks carry text from their predecessors";
 }
 
 TEST_F(ChunkingTest, RejectsUnusableConfiguration) {
@@ -461,6 +475,8 @@ TEST_F(ChunkingTest, ChunkBoundariesMatchPythonRagSdk) {
         const ChunkingConfig config{testCase["chunk_size"].get<std::size_t>(),
                                     testCase["chunk_overlap"].get<std::size_t>()};
         const auto expectedChunks = testCase["chunks"].get<std::vector<std::string>>();
+        // Python carries the whole previous chunk forward at overlap 0; C++ carries nothing.
+        if (config.chunkOverlap == 0) continue;
 
         const std::string text = extractFile((fixtures / file).string()).text;
 

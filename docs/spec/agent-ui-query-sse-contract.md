@@ -799,7 +799,7 @@ sides in the same change.
 - `{"gaia_query": "<text>"}` is one query whose text may contain newlines.
 - Three sentinel queries never reach the chat:
   - `"\u0000gaia:clear_conversation\u0000"` clears the agent's conversation
-    history. The agent answers with `{"type": "final", "answer": "conversation_cleared"}`,
+    history and forgets the session's "always" grants (full access stays). The agent answers with `{"type": "final", "answer": "conversation_cleared"}`,
     and the TUI keeps the transcript on screen unless it gets exactly that answer.
   - `"\u0000gaia:memory_dump\u0000"` returns a snapshot of the agent's memory
     as JSON in the `answer` of a `final`.
@@ -823,7 +823,7 @@ turn is running. A control message never writes to stdout.
 | `full_access` | `enabled` | Turns full access on or off for the session: gated tools run unasked and the shell guardrails come off. (`bypass`, the retired name, turns it off.) |
 | `accept_edits` | `enabled` | Turns "accept edits" on or off: file edits inside the agent's starting folder run unasked; everything else still asks. |
 | `cancel` | — | Stops the running turn but keeps the process, so skills, grants and history survive. |
-| `clear_history` | — | Clears history after the current turn. The agent accepts it, but the TUI sends the `clear_conversation` sentinel instead, because only the sentinel gets an acknowledgement. |
+| `clear_history` | — | Clears history and the session's "always" grants after the current turn. The agent accepts it, but the TUI sends the `clear_conversation` sentinel instead, because only the sentinel gets an acknowledgement. |
 
 ### 10.3 `status` extension fields
 

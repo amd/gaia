@@ -141,8 +141,14 @@ void TuiTranscript::printPlan(const json& plan, int currentStep) {
     oss << "[--] plan (" << plan.size() << " steps):";
     int idx = 0;
     for (const auto& step : plan) {
+        std::string name = "???";
+        if (step.is_string()) {
+            name = step.get<std::string>();
+        } else if (step.is_object() && step.contains("tool") && step["tool"].is_string()) {
+            name = step["tool"].get<std::string>();
+        }
         oss << "\n  " << ((idx == currentStep) ? ">" : " ") << " " << (idx + 1)
-            << ". " << step.value("tool", "???");
+            << ". " << name;
         ++idx;
     }
     append(TuiEntryKind::INFO, oss.str());
@@ -165,7 +171,7 @@ void TuiTranscript::prettyPrintJson(const json& data, const std::string& title) 
     std::ostringstream oss;
     oss << "[--] ";
     if (!title.empty()) oss << title << ":\n";
-    oss << data.dump(2);
+    oss << data.dump(2, ' ', false, json::error_handler_t::replace);
     append(TuiEntryKind::INFO, oss.str());
 }
 
