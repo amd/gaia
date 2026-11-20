@@ -10,7 +10,7 @@ import (
 
 func flagshipModel(t *testing.T) ChatModel {
 	t.Helper()
-	m := NewChatModel(&nullClient{}, modelSwitchAgentID, "GAIA", false)
+	m := NewChatModel(&nullClient{}, modelSwitchAgentID, "GAIA")
 	m.width, m.height = 100, 30
 	return m
 }
