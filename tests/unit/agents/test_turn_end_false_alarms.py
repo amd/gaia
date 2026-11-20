@@ -384,6 +384,15 @@ def test_sample_data_the_user_asked_for_is_not_reported(query):
         "for example, save the regional totals to sales.csv",
         "test that the totals are right and save the data to sales.csv",
         "what sample size do I need? save the regional figures to sales.csv",
+        # The adjective names the subject, not the data: the prices are real.
+        "write a price comparison of toy drones to sales.csv",
+        "Price out the demo kit BOM in sales.csv",
+        "pick a random laptop and save its price and specs to sales.csv",
+        "write sales.csv for our demo day with current venue prices",
+        "Write a market report on the toy industry to sales.csv with revenue figures",
+        # A file name is not the data noun: "sales" here is sales.csv.
+        "list the toy drones to sales.csv",
+        "save a mock test of the sales.csv totals",
     ],
 )
 def test_a_request_for_real_figures_is_still_reported(query):

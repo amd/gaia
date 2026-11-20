@@ -1889,15 +1889,16 @@ def _mentioned(claim: _Claim, answer: str) -> bool:
 _DATA_NOUN = (
     r"(?:data(?:set)?s?|rows?|records?|entries|figures?|numbers?|values?|amounts?|"
     r"sales|prices?|transactions?|orders?|invoices?|expenses?|budgets?|"
-    r"spreadsheets?|tables?|workbooks?|csv|content)\b"
+    r"spreadsheets?|tables?|workbooks?|csv|content)\b(?!\.\w)"
 )
 #: "5 rows of sample sales", "fill it with made-up numbers", "some test data".
 #: "A sample of my data" and "sample size" are about real data.
 _INVENTED = re.compile(
     r"\b(?:(?:sample|fake|dummy|mock|made[- ]up|invented|fictional|fictitious|"
     r"synthetic|placeholder|imaginary|hypothetical|illustrative|random|demo|toy)"
-    r"\s+(?!(?:of|from|in|size|rate|mean|variance|standard|std)\b)[a-z]"
-    r"|(?<!for )(?:example|test)\s+(?:[a-z-]+\s+){0,2}" + _DATA_NOUN + r"|"
+    r"\s+(?!(?:of|from|in|size|rate|mean|variance|standard|std)\b)"
+    r"(?:[a-z-]+\s+){0,2}" + _DATA_NOUN + r"|"
+    r"(?<!for )(?:example|test)\s+(?:[a-z-]+\s+){0,2}" + _DATA_NOUN + r"|"
     r"(?:make\s+up|invent|fabricate)\s+(?:[a-z0-9-]+\s+){0,3}" + _DATA_NOUN + r")",
     re.I,
 )
