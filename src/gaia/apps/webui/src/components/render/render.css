@@ -206,6 +206,10 @@
     color: var(--danger);
 }
 
+.render-audio__where {
+    overflow-wrap: anywhere;
+}
+
 .render-image__caption {
     color: var(--text-secondary);
     font-size: 12px;

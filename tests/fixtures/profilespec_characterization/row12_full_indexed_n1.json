@@ -10,6 +10,7 @@
     "browse_directory",
     "check_cli_setup",
     "create_table",
+    "dictate_document",
     "download_file",
     "drop_table",
     "dump_document",

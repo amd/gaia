@@ -3130,6 +3130,17 @@ func (m ChatModel) phasePhrase() string {
 	return m.phase.label
 }
 
+// toolProgress is what the running tool last reported about itself: a phase
+// that is not one of the model's own, in the agent's words. "" when the tool
+// has said nothing.
+func (m ChatModel) toolProgress() string {
+	switch m.phase.name {
+	case "", "loading_model", "downloading_model", "reading", "loading_tools", "reasoning", "tool_call":
+		return ""
+	}
+	return m.phase.label
+}
+
 // collapseActivity drops step markers (the header carries the current one) and
 // folds runs of the same tool into "name xN", so a triage that calls one tool
 // twenty times shows the repetition instead of flickering on a single line.

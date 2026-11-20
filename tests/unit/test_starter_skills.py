@@ -60,6 +60,7 @@ STARTER_PACK = frozenset(
         "coding",
         "daily-brief",
         "data-explore",
+        "dictation",
         "document-brief",
         "file-ops",
         "github-triage",
@@ -207,6 +208,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
     from gaia.agents.tools.audio_tools import AudioToolsMixin
     from gaia.agents.tools.browser_tools import BrowserToolsMixin
     from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+    from gaia.agents.tools.dictation_tools import DictationToolsMixin
     from gaia.agents.tools.email_tools import EmailToolsMixin
     from gaia.agents.tools.file_io_tools import FileIOToolsMixin
     from gaia.agents.tools.file_tools import FileSearchToolsMixin
@@ -243,6 +245,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
         (MemoryMixin, "register_memory_tools"),
         (EmailToolsMixin, "register_email_tools"),
         (WaitToolsMixin, "register_wait_tools"),
+        (DictationToolsMixin, "register_dictation_tools"),
     ]
 
     before = dict(_TOOL_REGISTRY)
@@ -290,7 +293,13 @@ def _chat_agent_inline_tools() -> frozenset[str]:
     source = (Path(gaia_agent.__file__).parent / "chat_agent.py").read_text(
         encoding="utf-8"
     )
-    inline = {"execute_python_file", "run_python", "list_files", "request_user_input"}
+    inline = {
+        "execute_python_file",
+        "run_python",
+        "list_files",
+        "request_user_input",
+        "text_to_speech",
+    }
     return frozenset(t for t in inline if f"def {t}(" in source)
 
 

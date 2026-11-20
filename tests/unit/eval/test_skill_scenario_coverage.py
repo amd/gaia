@@ -60,6 +60,10 @@ DEFERRED: dict[str, str] = {
         "Requires a Google or Outlook calendar connection; the eval mailbox "
         "fixture has no calendar, and every change needs a person to approve."
     ),
+    "dictation": (
+        "Needs the Kokoro voice on the runner and a listen-back check of the "
+        "audio; the text lanes can only judge whether the tool was called."
+    ),
     "guides": (
         "The answer is a card the client draws; a skill scenario needs a judge "
         "that reads the card payload rather than the short reply."

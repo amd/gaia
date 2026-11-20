@@ -757,6 +757,11 @@ func (m ChatModel) statusPhrase() string {
 		return "Waiting for your answer"
 	}
 	if it, ok := m.liveItem(); ok {
+		// A long tool says where it is ("Recording part 12 of 60"); that is
+		// what is happening now, and the step's own words return when it ends.
+		if progress := m.toolProgress(); progress != "" && it.Kind == "tool" {
+			return clean(progress)
+		}
 		head, _ := headline(it)
 		if it.Progress != "" {
 			progress := helperProgress(it.Progress)
