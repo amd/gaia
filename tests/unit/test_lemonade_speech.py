@@ -173,7 +173,7 @@ class TestTTSRequestShape:
             assert handle.getsampwidth() == 2
             assert handle.getnframes() == TTS_SAMPLE_RATE
 
-    def test_missing_model_preflight_names_the_talk_download_command(self, monkeypatch):
+    def test_missing_model_preflight_offers_the_download_in_the_apps(self, monkeypatch):
         wire = Wire(
             monkeypatch,
             [
@@ -184,12 +184,20 @@ class TestTTSRequestShape:
         )
         with pytest.raises(
             LemonadeTTSError,
-            match=r"not downloaded.*Read aloud.*gaia download --agent talk",
-        ):
+            match=r"not downloaded.*Read aloud under a reply.*/read-aloud in the TUI",
+        ) as refusal:
             LemonadeTTSClient(base_url=BASE).check_model_available()
+        # The apps recover; a chat reply never sends the user to a terminal.
+        assert "gaia download" not in str(refusal.value)
         assert [request.url for request in wire.requests] == [
             f"{BASE}/models?show_all=true"
         ]
+
+    def test_a_voice_missing_from_the_catalog_points_at_setup(self, monkeypatch):
+        Wire(monkeypatch, [catalog()])
+        with pytest.raises(LemonadeTTSError, match=r"no TTS model.*Run setup") as e:
+            LemonadeTTSClient(base_url=BASE).check_model_available()
+        assert "gaia download" not in str(e.value)
 
     def test_long_speech_is_split_and_joined(self, monkeypatch, tmp_path):
         wire = Wire(
