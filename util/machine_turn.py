@@ -79,6 +79,15 @@ def _raise_on_sigterm(signum, _frame):
     raise SystemExit(128 + signum)
 
 
+def _restore_handler(signum: int, handler) -> None:
+    # None means the old handler came from C (embedding); Python can't reinstall it.
+    if handler is None:
+        handler = (
+            signal.default_int_handler if signum == signal.SIGINT else signal.SIG_DFL
+        )
+    signal.signal(signum, handler)
+
+
 def _deliver_held_stop(signum: int, sigint_handler) -> None:
     if signum != signal.SIGINT:
         _raise_on_sigterm(signum, None)
@@ -102,7 +111,7 @@ def _run_to_completion(command: list[str], env: dict[str, str]) -> int:
     proc = None
     try:
         proc = subprocess.Popen(command, env=env)
-        signal.signal(signal.SIGINT, previous_int)
+        _restore_handler(signal.SIGINT, previous_int)
         signal.signal(signal.SIGTERM, _raise_on_sigterm)
         for signum in held:
             _deliver_held_stop(signum, previous_int)
@@ -123,8 +132,8 @@ def _run_to_completion(command: list[str], env: dict[str, str]) -> int:
                 proc.wait(timeout=_STOP_GRACE_S)
         raise
     finally:
-        signal.signal(signal.SIGINT, previous_int)
-        signal.signal(signal.SIGTERM, previous_term)
+        _restore_handler(signal.SIGINT, previous_int)
+        _restore_handler(signal.SIGTERM, previous_term)
 
 
 def main(argv: list[str] | None = None) -> int:

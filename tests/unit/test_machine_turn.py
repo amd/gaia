@@ -296,3 +296,48 @@ def test_a_held_ctrl_c_is_still_ignored_when_ctrl_c_is_ignored(turn, monkeypatch
     finally:
         signal.signal(signal.SIGINT, previous)
         _reap(started)
+
+
+def _old_handlers_came_from_c(turn, monkeypatch):
+    """signal.signal() returns None when the old handler was installed from C."""
+    real_signal = signal.signal
+    seen = set()
+
+    def signal_from_c(signum, handler):
+        previous = real_signal(signum, handler)
+        if signum not in seen:
+            seen.add(signum)
+            return None
+        return previous
+
+    monkeypatch.setattr(turn.signal, "signal", signal_from_c)
+    return signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
+
+
+def test_a_handler_installed_outside_python_does_not_break_the_restore(
+    turn, monkeypatch
+):
+    before = _old_handlers_came_from_c(turn, monkeypatch)
+    try:
+        assert turn.main(["--", sys.executable, "-c", "pass"]) == 0
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+        assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+    finally:
+        signal.signal(signal.SIGINT, before[0])
+        signal.signal(signal.SIGTERM, before[1])
+
+
+def test_a_held_ctrl_c_still_stops_the_command_when_the_old_handler_came_from_c(
+    turn, tmp_path, monkeypatch
+):
+    started = _stop_lands_inside_popen(turn, monkeypatch, _thread.interrupt_main)
+    before = _old_handlers_came_from_c(turn, monkeypatch)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            turn.main(["--", sys.executable, "-c", _SLEEPER, str(tmp_path / "p")])
+        assert started[0].poll() is not None, "the command outlived its Ctrl-C"
+        assert _lock_is_free(turn)
+    finally:
+        signal.signal(signal.SIGINT, before[0])
+        signal.signal(signal.SIGTERM, before[1])
+        _reap(started)
