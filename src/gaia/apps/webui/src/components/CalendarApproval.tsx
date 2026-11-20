@@ -3,9 +3,13 @@
 
 import { Fragment } from 'react';
 import { useT } from '../i18n/useT';
-import { calendarFacts, calendarWhen, CALENDAR_WRITE_TOOLS, unseenWith, visibleWith } from '../utils/calendarApproval.core';
+import {
+    calendarFacts, calendarWhen, CALENDAR_WRITE_TOOLS, markStrayDirection, unseen, unseenWith, visibleName, visibleText, visibleWith,
+} from '../utils/calendarApproval.core';
 
-export { CALENDAR_WRITE_TOOLS, unseenWith, visibleWith };
+export {
+    CALENDAR_WRITE_TOOLS, markStrayDirection, unseen, unseenWith, visibleName, visibleText, visibleWith,
+};
 
 function Name({ value }: { value: string }) {
     return <bdi dir="auto">{value}</bdi>;

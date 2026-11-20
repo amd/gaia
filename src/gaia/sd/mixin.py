@@ -227,6 +227,9 @@ class SDToolsMixin:
                 {"status": "success", "image_path": str, ...} or
                 {"status": "error", "error": str}.
             """
+            refusal = self._slide_image_refusal()
+            if refusal is not None:
+                return refusal
             return self._generate_image(prompt, model, size, steps, cfg_scale, seed)
 
         @tool(atomic=True)
@@ -485,6 +488,51 @@ class SDToolsMixin:
         }
         self.sd_generations.append({**result, "created_at": datetime.now().isoformat()})
         return result
+
+    #: A request about a slide, deck or chart: its image is the built file, drawn.
+    _SLIDE_REQUEST = re.compile(
+        r"\b(?:slides?|decks?|presentations?|powerpoint|pptx|keynote|charts?)\b", re.I
+    )
+
+    def _slide_image_refusal(self) -> Optional[Dict[str, Any]]:
+        """Turn the first image call for a slide toward the slide-decks skill.
+
+        Stable Diffusion cannot draw a slide's text or numbers. A second call in
+        the same turn goes through: the model has judged it a real picture.
+        """
+        # The user's own words: _current_query also holds recalled memory text.
+        request = str(
+            getattr(self, "_original_user_input", None)
+            or getattr(self, "_current_query", "")
+            or ""
+        )
+        if not self._SLIDE_REQUEST.search(request):
+            return None
+        if getattr(self, "_slide_image_redirected", None) == request:
+            return None
+        self.__dict__["_slide_image_redirected"] = request
+        if self._slide_skill_installed():
+            instead = (
+                "Load the slide-decks skill, build the slide, then save it with "
+                "slide-decks/export_slide_image (PNG, or JPEG if asked)."
+            )
+        else:
+            instead = "Build it as a file (a .pptx or .html) instead."
+        return {
+            "status": "error",
+            "error": (
+                "This request is about a slide, deck or chart, and image generation "
+                f"cannot draw its words or numbers. {instead} If the user really "
+                "wants an artwork, call generate_image again."
+            ),
+        }
+
+    def _slide_skill_installed(self) -> bool:
+        """True when this agent can load the slide-decks skill."""
+        manager = getattr(self, "skill_manager", None)
+        if manager is None:
+            return False
+        return any(s.name == "slide-decks" for s in manager.list_skills())
 
     def _generate_image(
         self,

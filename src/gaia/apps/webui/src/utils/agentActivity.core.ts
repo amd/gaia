@@ -6,6 +6,7 @@
 import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
 import { tEn, type Translate } from '../i18n/translator';
 import type { AgentStep } from '../types';
+import { markStrayDirection, visibleName } from './calendarApproval.core';
 
 export const SKILL_USE_TOOLS = new Set(['load_skill', 'use_skill']);
 
@@ -73,10 +74,10 @@ export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     // Narration can only humanize the prefixed tool id; the connector's own name says more.
     if (step.mcpServerLabel) return toolFallbackLabel(step, t);
     // GAIA writes this row itself, so it can say it in the UI's language.
-    if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: step.detail });
+    if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: visibleName(step.detail) });
     // A present-tense narration would read as if a call that never ran had run.
     if ((step.declined || step.timedOut || step.refused || step.autoDeclined) && !step.active) return toolFallbackLabel(step, t);
-    return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step, t);
+    return step.narration ? compactNarration(markStrayDirection(step.narration)) : toolFallbackLabel(step, t);
 }
 
 const COMPACT_DETAIL_CHARS = 48;

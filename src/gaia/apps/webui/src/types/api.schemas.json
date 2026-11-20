@@ -9769,6 +9769,7 @@
           "file",
           "export",
           "image",
+          "audio",
           "document",
           "memory",
           "schedule"

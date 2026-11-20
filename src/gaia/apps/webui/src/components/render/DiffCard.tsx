@@ -3,6 +3,7 @@
 
 import { UnsupportedCard } from './UnsupportedCard';
 import { DIFF_HUNK_GAP, diffBodyLines, isDiffPayload, diffTitle } from '../../utils/renderCards.core';
+import { visibleName } from '../CalendarApproval';
 
 /** FIXED prefix -> class lookup — classes must never be derived from
  *  line content (content is untrusted). */
@@ -30,10 +31,10 @@ export function DiffCard({ data }: { data: unknown }) {
             {(title || data.badge) && (
                 <div className="render-diff__title">
                     {data.badge && <span className="render-diff__badge">{data.badge}</span>}
-                    {title}
+                    {title && visibleName(title)}
                 </div>
             )}
-            {data.path && <div className="render-diff__path" dir="ltr">{wrappablePath(data.path)}</div>}
+            {data.path && <div className="render-diff__path" dir="ltr">{wrappablePath(visibleName(data.path))}</div>}
             {data.note && <div className="render-diff__note">{data.note}</div>}
             {data.unified && (
                 <pre className="render-diff__body">
@@ -42,7 +43,7 @@ export function DiffCard({ data }: { data: unknown }) {
                             className={line === DIFF_HUNK_GAP ? 'render-diff__line render-diff__line--hunk' : lineClass(line)}
                             key={i}
                         >
-                            {line}
+                            {visibleName(line)}
                         </div>
                     ))}
                 </pre>
