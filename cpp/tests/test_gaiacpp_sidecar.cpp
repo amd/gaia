@@ -690,6 +690,9 @@ TEST_F(GaiacppSidecar, ReadOnlyToolStreamsToolCallThenResultThenFinal) {
     EXPECT_EQ(events.back()["answer"], "The note says hello.");
     EXPECT_EQ(events.back()["usage"]["tools_used"], 1);
     EXPECT_EQ(events.back()["usage"]["steps"], 2);
+    // Two calls of 120 in / 8 out: `tokens` is output only, or the UI prices the prompt at the output rate.
+    EXPECT_EQ(events.back()["usage"]["tokens"], 16);
+    EXPECT_EQ(events.back()["usage"]["input_tokens"], 240);
 
     auto sent = modelRequests();
     ASSERT_EQ(sent.size(), 2u);
