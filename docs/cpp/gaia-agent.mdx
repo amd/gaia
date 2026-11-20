@@ -163,7 +163,7 @@ Tasks beyond that number wait their turn. `--max-helpers N` (or `maxHelpers` in 
 
 `reason` is `step_limit` (out of steps), `loop` (stopped for repeating a tool call), `empty` (the model returned no text), `error` (the model server failed, or the helper could not start), `timeout` or `cancelled`.
 
-The result's own `status` is `success` only when every helper is `ok`, `partial` when some are not, and `error` when none returned anything. Its `summary` counts them in one line a person can read ("3 of 4 helpers finished, 1 failed."), and `advice` tells the agent to redo failed parts itself or say they are missing. While helpers run, the agent reports progress ("2 of 4 helpers done") as a `status` with the `helpers` phase, which the terminal UI and the Agent UI show on the running tool's row. Stopping the agent stops its helpers: each ends when the model request it has in flight returns.
+The result's own `status` is `success` only when every helper is `ok`, `partial` when some are not, and `error` when none returned anything. Its `summary` counts them in one line a person can read ("3 of 4 helpers finished, 1 failed."), and `advice` tells the agent to redo failed parts itself or say they are missing. While helpers run, the agent reports progress ("2 of 4 helpers done") as a `status` with the `helpers` phase, which the terminal UI shows on its status line next to the running step. The Agent UI shows each update as its own status line for now. Stopping the agent stops its helpers: each ends when the model request it has in flight returns.
 
 A compact model is not offered `delegate_task` unless `--max-helpers` names a number above 0.
 
