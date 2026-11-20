@@ -15,7 +15,7 @@ func (*nativeTransport) Native() bool { return true }
 
 func nativeChat(t *testing.T) ChatModel {
 	t.Helper()
-	m := NewChatModelForCatalogAgent(&nativeTransport{}, setupAgentID, "GAIA", false)
+	m := NewChatModelForCatalogAgent(&nativeTransport{}, setupAgentID, "GAIA")
 	m.width, m.height = 120, 30
 	return m
 }
