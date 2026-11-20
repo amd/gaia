@@ -861,13 +861,13 @@ TEST(DelegateTask, ATaskNamingManyFilesIsSharedAmongHelpers) {
     EXPECT_EQ(withOwnFileOnly, 6);
 
     // Small files fit one helper and stay together; a folder is never split.
-    json small = json::array();
+    json notes = json::array();
     for (int i = 0; i < 6; ++i) {
         const std::string name = "note_" + std::to_string(i) + ".md";
         w.write(name, "short");
-        small.push_back(w.str(name));
+        notes.push_back(w.str(name));
     }
-    json one = delegate(agent, {{"tasks", json::array({{{"task", "Read the notes"}, {"paths", small}}})}});
+    json one = delegate(agent, {{"tasks", json::array({{{"task", "Read the notes"}, {"paths", notes}}})}});
     EXPECT_EQ(one["helpers"].size(), 1u);
     EXPECT_FALSE(one.contains("shared_out"));
     EXPECT_EQ(one["helpers"][0]["task"], "Read the notes");
@@ -903,7 +903,7 @@ TEST(DelegateTask, ATaskNamingManyFilesIsSharedAmongHelpers) {
     GaiaAgent roomy(wide, eight);
     const json spreadOut = delegate(roomy, {{"tasks", json::array({{{"task", "Summarise each document"}, {"paths", paths}}})}});
     EXPECT_EQ(spreadOut["helpers"].size(), 6u) << "six files, eight helpers free: one file each";
-    const json together = delegate(roomy, {{"tasks", json::array({{{"task", "Read the notes"}, {"paths", small}}})}});
+    const json together = delegate(roomy, {{"tasks", json::array({{{"task", "Read the notes"}, {"paths", notes}}})}});
     EXPECT_EQ(together["helpers"].size(), 1u) << "a few short notes are not worth spreading";
 }
 
