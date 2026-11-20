@@ -30,7 +30,7 @@ func nativeAgent(t *testing.T) catalog.Agent {
 }
 
 // gaiacppParser is where gaiacpp declares the flags it accepts.
-const gaiacppParser = "cpp/agents/gaia/main.cpp"
+const gaiacppParser = "cpp/agents/gaiacpp/main.cpp"
 
 var gaiacppFlagRe = regexp.MustCompile(`\ba == "(--?[A-Za-z][A-Za-z0-9-]*)"`)
 

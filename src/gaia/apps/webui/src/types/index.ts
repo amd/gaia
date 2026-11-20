@@ -579,6 +579,8 @@ export interface AgentProgram {
     can_download: boolean;
     /** Why gaiacpp can't be had here, when it isn't installed and can't be downloaded. */
     unavailable_reason: string | null;
+    /** Set when the reason is one the UI has its own words for; any other reason is shown as it is. */
+    unavailable_code?: 'no_release' | 'unreachable' | 'unverifiable' | null;
     /** A newer build is offered; not shown yet. */
     update_available?: boolean;
 }

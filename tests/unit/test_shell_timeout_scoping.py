@@ -276,3 +276,65 @@ def test_a_host_without_a_turn_ledger_gets_the_generic_hint(tmp_path):
 )
 def test_repo_wide_forms_keep_their_class_default(command, expected):
     assert classify_command(command) is TIMEOUT_CLASSES[expected]
+
+
+# ---------------------------------------------------------------------------
+# A slow script that is not a check gets the longer-timeout and background run
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["python build_data.py", "python train.py --epochs 5", "node scripts/seed.js"],
+)
+def test_a_slow_script_is_offered_a_background_run_and_a_longer_timeout(
+    monkeypatch, unrestricted, tmp_path, command
+):
+    run = _run_shell(_Host([str(tmp_path / "a.py")]))
+    _hangs(monkeypatch)
+
+    result = run(command, working_directory=str(tmp_path))
+
+    assert result["timeout_class"] == "script"
+    hint = result["hint"]
+    assert "wait_for_condition" in hint
+    assert f"larger timeout, up to {MAX_COMMAND_TIMEOUT}s" in hint
+    assert "Files changed this turn" not in hint
+    assert "linter" not in hint
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["python util/lint.py --all", "python -m flake8 src", "python -m pylint src"],
+)
+def test_a_lint_run_as_a_script_is_still_scoped_to_the_change(
+    monkeypatch, unrestricted, tmp_path, command
+):
+    run = _run_shell(_Host([str(tmp_path / "a.py")]))
+    _hangs(monkeypatch)
+
+    hint = run(command, working_directory=str(tmp_path))["hint"]
+
+    assert "Files changed this turn: `a.py`" in hint
+    _no_bigger_timeout(hint)
+
+
+def test_a_test_run_is_never_offered_a_longer_timeout(
+    monkeypatch, unrestricted, tmp_path
+):
+    run = _run_shell(_Host([str(tmp_path / "a.py")]))
+    _hangs(monkeypatch)
+
+    hint = run("python -m pytest tests", working_directory=str(tmp_path))["hint"]
+
+    assert "Files changed this turn" in hint
+    _no_bigger_timeout(hint)
+
+
+def test_a_script_hint_without_the_command_offers_the_longer_run(tmp_path):
+    class _Bare(ShellToolsMixin):
+        pass
+
+    hint = _Bare()._timeout_hint("script", str(tmp_path))
+
+    assert "larger timeout" in hint and "wait_for_condition" in hint

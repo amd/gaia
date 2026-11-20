@@ -32,7 +32,7 @@ readonly ICON_DIR="usr/share/icons/hicolor/256x256/apps"
 readonly SUMMARY="AMD GAIA Terminal UI - local AI assistant"
 # Not `readonly`: bash 3.2 rejects `readonly name=(...)`.
 PAYLOAD_BINARIES=(gaia-cli gaia-agent)
-# gaiacpp, the native agent gaia-cli runs in place of gaia-agent, is packaged
+# gaiacpp, the native agent a user can switch gaia-cli to, is packaged
 # when the payload holds it. tui_installers.yml stages it wherever one is built,
 # and its smoke test fails a package that should carry it and does not.
 readonly NATIVE_AGENT="gaiacpp"

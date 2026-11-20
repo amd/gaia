@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/ui/components"
 )
@@ -147,7 +146,7 @@ func TestResolvingTheConfirmationReturnsTheRowsToTheTranscript(t *testing.T) {
 			tall, m.viewport.Height)
 	}
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	updated, cmd := answerKey(t, m, "n")
 	m = updated.(ChatModel)
 	updated2, _ := m.Update(cmd().(components.ConfirmationDecidedMsg))
 	m = updated2.(ChatModel)

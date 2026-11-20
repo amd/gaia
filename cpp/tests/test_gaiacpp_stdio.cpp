@@ -28,8 +28,8 @@
 #include <vector>
 
 #include "../agents/bash/bash_tools.h"
-#include "../agents/gaia/gaia_agent.h"
-#include "../agents/gaia/stdio_server.h"
+#include "../agents/gaiacpp/gaia_agent.h"
+#include "../agents/gaiacpp/stdio_server.h"
 #include "gaia/memory_store.h"
 #include "gaia/process.h"
 #include "support/mock_llm_server.h"
