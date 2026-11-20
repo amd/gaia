@@ -371,6 +371,40 @@ TEST(InternetRefusalTest, ARefusalQuotesTheCommandAsAsked) {
     EXPECT_NE(why.find("mvn -o package && npm install"), std::string::npos) << why;
 }
 
+TEST(WebFetchRefusalTest, RefusesShellFetchesButNotInstallsOrLocalRequests) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* fetched :
+         {"curl -s -L https://example.com", "curl example.com", "wget https://example.com/a.html",
+          "cu''rl https://example.com", "bash -c \"wget x.com\"", "curl $(cat url)",
+          "Invoke-WebRequest https://example.com", "iwr https://example.com -OutFile a.html",
+          "python -c \"import urllib.request; print(urllib.request.urlopen('https://example.com').read())\"",
+          "node -e \"fetch('https://example.com')\"", "cat < /dev/tcp/203.0.113.5/80",
+          "bitsadmin /transfer j https://example.com/a a", "certutil -urlcache -f https://example.com/a a",
+          "curl -x http://proxy:8080 http://localhost/x"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    // The run may still install what the task needs and talk to this PC.
+    for (const char* allowed :
+         {"ls -la", "git status", "pip install requests", "npm install", "python build.py",
+          "curl http://localhost:13305/api/v1/health", "curl http://127.0.0.1:8000/x", "python -m pytest tests",
+          "grep -r curl docs"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+    EXPECT_NE(webFetchRefusal(sh, {{"command", "echo " + std::string(300000, 'a')}}), "");
+    EXPECT_EQ(webFetchRefusal(sh, {{"command", 7}}), "");
+
+    // Only the shell is judged: the flag withholds web_fetch itself, and connectors stay on.
+    ToolInfo mcp;
+    mcp.name = "search";
+    mcp.mcpServer = "github";
+    EXPECT_EQ(webFetchRefusal(mcp, json::object()), "");
+    ToolInfo write;
+    write.name = "file_write";
+    EXPECT_EQ(webFetchRefusal(write, {{"path", "a.md"}, {"content", "curl https://example.com"}}), "");
+}
+
 TEST(SplitShellCommandTest, SegmentsAndWords) {
     std::vector<std::vector<std::string>> s;
     ASSERT_TRUE(splitShellCommand("cd src && cat 'a b.txt' | wc -l; ls", true, s));

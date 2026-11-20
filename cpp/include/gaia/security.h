@@ -64,6 +64,12 @@ struct ToolInfo;
 /// command that goes online, or a fetch of a remote URL.
 GAIA_API std::string internetRefusal(const ToolInfo& tool, const json& args);
 
+/// Why a shell command must not run while web access is off for a run, or ""
+/// when it does not fetch from the web: curl, wget or a PowerShell web request
+/// to another host, a download tool, or a one-line script that opens a
+/// connection. Package installs and connectors are not judged here.
+GAIA_API std::string webFetchRefusal(const ToolInfo& tool, const json& args);
+
 /// The folder GAIA keeps this user's files in: $GAIA_HOME when set, else
 /// .gaia under the home folder (USERPROFILE on Windows, HOME elsewhere).
 /// Empty when neither is set. Every per-user default path starts here.
