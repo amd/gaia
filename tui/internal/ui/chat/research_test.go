@@ -120,7 +120,10 @@ func TestResearchModeLeavesSkillCommandsAlone(t *testing.T) {
 	if got := m.withResearch("/docx"); got != "/docx" {
 		t.Fatalf("researched a bare skill command: %q", got)
 	}
-	for _, line := range []string{"/docs draft a memo", "/docx.txt notes", "/tmp/notes.txt", "plain question"} {
+	if got := m.withResearch("/docx\nthe memo"); got != "/docx\nthe memo" {
+		t.Fatalf("researched a skill command with its request on the next line: %q", got)
+	}
+	for _, line := range []string{"/docs draft a memo", "/docx.txt notes", "/tmp/notes.txt", "plain question", "/DOCX memo", "/docx-pro memo", "/docx/notes", "see /docx memo"} {
 		if got := m.withResearch(line); got != "/research "+line {
 			t.Fatalf("%q was sent as %q, want the research prefix", line, got)
 		}

@@ -34,6 +34,11 @@ describe('research mode', () => {
         expect(withResearchCommand('/tmp/notes.txt', true, skills)).toBe('/research /tmp/notes.txt');
         expect(withResearchCommand('/docx.txt notes', true, skills)).toBe('/research /docx.txt notes');
         expect(withResearchCommand('plain question', true, skills)).toBe('/research plain question');
+        expect(withResearchCommand('/docx\nthe memo', true, skills)).toBe('/docx\nthe memo');
+        for (const text of ['/DOCX memo', '/docx-pro memo', '/docx/notes', 'see /docx memo']) {
+            expect(withResearchCommand(text, true, skills)).toBe(`/research ${text}`);
+        }
+        expect(withResearchCommand('/docx memo', false, skills)).toBe('/docx memo');
         expect(isSkillCommand('/docx memo', new Set())).toBe(false);
     });
 });
