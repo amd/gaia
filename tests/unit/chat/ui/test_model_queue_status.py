@@ -11,6 +11,7 @@ ends that wait.
 import asyncio
 import json
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -180,9 +181,11 @@ class _TurnClock:
         with self._checks:
             seen = self._checked
             self._now += seconds
-            assert self._checks.wait_for(
-                lambda: self._checked > seen or stopped.is_set(), timeout=10
-            ), "the turn's idle check never ran"
+            deadline = time.monotonic() + 10
+            # Short waits: nothing notifies when the turn is stopped.
+            while self._checked <= seen and not stopped.is_set():
+                assert time.monotonic() < deadline, "the turn's idle check never ran"
+                self._checks.wait(0.05)
 
 
 class _LongQueueAgent(_QueuedAgent):
