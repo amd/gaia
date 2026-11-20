@@ -200,6 +200,8 @@ def _secret_directories() -> Set[str]:
         and key files, ``~/.aws/credentials`` is the key itself, and neither has
         a name the extension/name denylists would catch.
     """
+    from gaia.home import default_gaia_home, devices_dir
+
     home = Path.home()
     candidates = [
         home / ".ssh",
@@ -210,6 +212,9 @@ def _secret_directories() -> Set[str]:
         home / ".docker",
         home / ".config" / "gcloud",
         home / "AppData" / "Roaming" / "gcloud",
+        # The paired-device listener's private key and the device table.
+        devices_dir(),
+        devices_dir(default_gaia_home()),
     ]
     return _with_resolved_forms(candidates)
 
@@ -528,6 +533,52 @@ def protected_directory_of(path: Any) -> Optional[str]:
         if _path_is_within(Path(real), Path(secret_dir)):
             return secret_dir
     return None
+
+
+def secret_read_refusal(path: Any) -> str:
+    """Why *path* holds secrets GAIA never reads back, or "" when it doesn't.
+
+    The one copy of the read policy: a credential's file name, a certificate
+    or key extension, or a place inside a credential folder.
+
+    Raises:
+        OSError, UncheckablePathError: When the path can't be resolved;
+            callers fail closed.
+    """
+    real_path = Path(_real_path(path))
+    file_name = real_path.name.lower()
+    file_ext = real_path.suffix.lower()
+
+    if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
+        return (
+            f"Read blocked: '{real_path.name}' holds credentials, keys or "
+            f"secrets. Open it yourself if you need its contents — the "
+            f"agent is not allowed to read it into the conversation."
+        )
+
+    if file_ext in SENSITIVE_EXTENSIONS:
+        return (
+            f"Read blocked: files with extension '{file_ext}' are "
+            f"certificates or private keys. The agent is not allowed to "
+            f"read them into the conversation."
+        )
+
+    for secret_dir in SECRET_DIRECTORIES:
+        if _path_is_within(real_path, Path(secret_dir)):
+            return (
+                f"Read blocked: '{real_path}' is inside '{secret_dir}', "
+                f"which holds credentials. The agent is not allowed to "
+                f"read from it."
+            )
+
+    shared = secret_folder_sharing(real_path)
+    if shared:
+        return (
+            f"Read blocked: '{real_path}' is the same file as one inside "
+            f"'{shared}', which holds credentials. The agent is not "
+            f"allowed to read it."
+        )
+    return ""
 
 
 def is_credential_file_name(name: str) -> bool:
@@ -1001,46 +1052,8 @@ def read_block(path: str) -> Tuple[bool, str]:
         Tuple of (is_blocked, reason). If blocked, reason explains why.
     """
     try:
-        real_path = Path(_real_path(path))
-        file_name = real_path.name.lower()
-        file_ext = real_path.suffix.lower()
-
-        if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
-            return (
-                True,
-                f"Read blocked: '{real_path.name}' holds credentials, keys or "
-                f"secrets. Open it yourself if you need its contents — the "
-                f"agent is not allowed to read it into the conversation.",
-            )
-
-        if file_ext in SENSITIVE_EXTENSIONS:
-            return (
-                True,
-                f"Read blocked: files with extension '{file_ext}' are "
-                f"certificates or private keys. The agent is not allowed to "
-                f"read them into the conversation.",
-            )
-
-        for secret_dir in SECRET_DIRECTORIES:
-            if _path_is_within(real_path, Path(secret_dir)):
-                return (
-                    True,
-                    f"Read blocked: '{real_path}' is inside '{secret_dir}', "
-                    f"which holds credentials. The agent is not allowed to "
-                    f"read from it.",
-                )
-
-        shared = secret_folder_sharing(real_path)
-        if shared:
-            return (
-                True,
-                f"Read blocked: '{real_path}' is the same file as one inside "
-                f"'{shared}', which holds credentials. The agent is not "
-                f"allowed to read it.",
-            )
-
-        return (False, "")
-
+        reason = secret_read_refusal(path)
+        return (bool(reason), reason)
     except UncheckablePathError as e:
         return (True, f"Read blocked: {e}")
     except Exception as e:

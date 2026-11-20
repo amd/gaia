@@ -21,6 +21,8 @@ from pydantic import BaseModel
 
 from gaia.mcp.client.config import MCPConfig
 
+from ..models import WireModel
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["mcp"])
@@ -39,11 +41,33 @@ class MCPServerInfo(BaseModel):
     enabled: bool
 
 
+class MCPServerList(WireModel):
+    servers: List[MCPServerInfo]
+
+
+class MCPToolInfo(WireModel):
+    name: str
+    description: str
+
+
+class MCPServerTools(WireModel):
+    """The tools an MCP server offers."""
+
+    name: str
+    tools: List[MCPToolInfo]
+
+
 class MCPServerStatus(BaseModel):
     name: str
     connected: bool
     tool_count: int
     error: Optional[str] = None
+
+
+class MCPStatusResponse(WireModel):
+    """Result of ``GET /api/mcp/status``."""
+
+    servers: List[MCPServerStatus]
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +94,9 @@ def _mask_env(env: Dict[str, str]) -> Dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/mcp/servers")
+@router.get(
+    "/api/mcp/servers", response_model=MCPServerList, response_model_exclude_unset=True
+)
 async def list_mcp_servers():
     """List all configured MCP servers and their enabled/disabled state."""
     config = _load_config()
@@ -89,7 +115,11 @@ async def list_mcp_servers():
     return {"servers": [s.model_dump() for s in result]}
 
 
-@router.get("/api/mcp/servers/{name}/tools")
+@router.get(
+    "/api/mcp/servers/{name}/tools",
+    response_model=MCPServerTools,
+    response_model_exclude_unset=True,
+)
 async def list_mcp_server_tools(name: str):
     """List tools provided by an MCP server (requires a transient connection)."""
     config = _load_config()
@@ -131,7 +161,11 @@ async def list_mcp_server_tools(name: str):
         )
 
 
-@router.get("/api/mcp/status")
+@router.get(
+    "/api/mcp/status",
+    response_model=MCPStatusResponse,
+    response_model_exclude_unset=True,
+)
 async def get_mcp_runtime_status():
     """Return runtime MCP server connection status from the most recent chat session.
 

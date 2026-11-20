@@ -42,6 +42,8 @@ src/gaia/ui/
   models.py            # Pydantic request/response models
   sse_handler.py       # SSE output handler for streaming agent events
   tunnel.py            # Tunnel manager for mobile access via ngrok
+  security.py          # Request guards and who a request is from (principal)
+  devices/             # Paired devices: TLS listener, device auth, tokens, pairing
   dispatch.py          # Background task dispatcher (agent jobs, session GC, etc.)
   document_monitor.py  # Watches the library for new/changed files
   dependencies.py      # FastAPI dependency-injection helpers (shared registry/db)
@@ -69,6 +71,7 @@ literal path prefix. Additional routers exist beyond the core set below
 | `mcp.py` | `/mcp` | Configure and inspect MCP servers used by agents. |
 | `system.py` | `/system` | Health, version, model status, diagnostics. |
 | `tunnel.py` | `/tunnel` | Ngrok/Cloudflared tunnel lifecycle. |
+| `devices.py` | `/devices` | Paired devices: the listener, pairing, allow and unpair. |
 
 ---
 
@@ -267,6 +270,17 @@ All 14 Pydantic models:
 - **Host:** A request whose `Host` is a name the server does not know is refused with 400, which blocks DNS rebinding. IP literals and loopback names always pass, so `--host 0.0.0.0` LAN access keeps working; add named hosts with `GAIA_UI_ALLOWED_HOSTS`
 - **CORS:** An allowlist of localhost dev origins. No tunnel origin is listed: the mobile flow serves the SPA *from* the tunnel, so those requests are same-origin and CORS never applies. The standalone server (`python -m gaia.ui.server`) binds to `localhost` by default
 - **No authentication:** Designed for single-user local use. Do not expose to untrusted networks
+- **Who a request is from:** `principal()` answers `pc`, `device:<id>` or `tunnel`, decided by the listener a request reached. Nothing on the device listener is the PC; on the main listener a loopback peer with no `X-Forwarded-*` header is. `require_local_pc` means `principal == "pc"`, and every route's class is pinned by `tests/unit/chat/ui/test_route_access.py` (see [What a paired device may call](/sdk/sdks/agent-ui#what-a-paired-device-may-call))
+- **Paired devices** (in development; off unless `device_pairing` is true in `~/.gaia/config.json`, which no environment variable or `.env` can set):
+  - A second uvicorn server in the backend's own process and loop serves the same app over TLS 1.2 or later, IPv4 only, off until the PC turns it on. A pure-ASGI wrapper stamps every request it serves with `scope["gaia.listener"]`, so none of them is ever the PC
+  - Device auth on that listener is pure ASGI, websockets included, and denies by default: only `Authorization: Bearer <device token>`, never a cookie, query parameter or the mobile access token; only home-network IPv4 peers (10/8, 172.16/12, 192.168/16, 169.254/16); a 404 outside `/api/` and `/v1/`; JSON bodies capped at 8 MB; the pairing redemption is the one route without a token; an allowed device reaches only the routes `DEVICE_ROUTES` (`gaia/ui/devices/routes.py`) lists, and any other is a 403. The main app refuses any listener request that skipped device auth, and any device token sent over plain http
+  - The certificate is self-signed EC P-256; a device pins the SHA-256 of its DER during the handshake, before it sends anything, and checks nothing else. Reset pairing makes a new key and pin and unpairs every device; a pin mismatch fails hard
+  - A pairing code holds a 128-bit invitation that lasts 10 minutes, is kept only as a hash, and closes the window at its first use. Failed redemptions get one uniform 403, are shown to the PC with their reason (the last 20), and 5 in a minute lock that address out for 5 minutes
+  - The code offers only `https://<address>:<port>` origins on 10/8, 172.16/12 and 192.168/16 (`OFFERED_NETWORKS`).
+  - A device token is 256 random bits with a `gaiad_` prefix, stored only as its SHA-256, looked up by hash and compared in constant time. A new device stays pending, refused, until someone allows it on the PC; it expires after 10 minutes unallowed, and an allowed device unused for 90 days is unpaired. Unpairing ends its open requests and streams at once
+  - The key, certificate and device table live in `~/.gaia/devices`, created 0700 (an owner-only, inherited ACL on Windows) with 0600 files written through a temp file and a rename. The listener refuses to start once anyone else can reach them. Agent tools can't read the folder, and `gaia diagnostics` never bundles it
+  - Logs name devices by id, never a token, an invitation or any part of one; the listener writes no access log. Approvals (tool calls, folder grants, permission modes, goals, schedules, allowing a device) go to the audit log with who made them
+  - Scheduled runs and goals keep running while the listener is on: their pause is keyed on the public tunnel alone
 - **File path validation:** The `upload-path` endpoint sanitizes all user-provided paths:
   - Null byte rejection (prevents path injection)
   - Path resolution to absolute canonical paths (eliminates `..` traversal)

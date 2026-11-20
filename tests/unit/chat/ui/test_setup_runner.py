@@ -1174,13 +1174,20 @@ def client(monkeypatch):
     return TestClient(app, headers={"X-Gaia-UI": "1"}), runner
 
 
+def _check_result(**over):
+    """What ``gaia init --check --json`` prints."""
+    from gaia.installer.init_command import SetupStatus
+
+    return {**SetupStatus(ready=False, reasons=["x"], stage="setup").to_json(), **over}
+
+
 def test_check_route_adds_the_steps(client, monkeypatch):
     test_client, _ = client
     seen = {}
 
     def check(skip_chat_model, load, **_k):
         seen.update(skip_chat_model=skip_chat_model, load=load)
-        return {"ready": False, "stage": "models", "reasons": ["x"]}
+        return _check_result(stage="models")
 
     monkeypatch.setattr(setup_router, "check", check)
     resp = test_client.get(
@@ -1196,9 +1203,7 @@ def test_check_route_adds_the_steps(client, monkeypatch):
 def test_check_route_also_returns_the_cloud_steps(client, monkeypatch):
     """A local check still tells the UI what a cloud choice would download."""
     test_client, _ = client
-    monkeypatch.setattr(
-        setup_router, "check", lambda **_k: {"ready": False, "reasons": ["x"]}
-    )
+    monkeypatch.setattr(setup_router, "check", lambda **_k: _check_result())
     body = test_client.get("/api/setup/check").json()
     assert body["steps"] == sr.step_labels(False)
     assert body["cloud_steps"] == sr.step_labels(True)
@@ -1211,7 +1216,7 @@ def test_check_route_says_whether_setup_was_ever_seen_ready(
 ):
     """A set-up PC whose model server is down must not read as a first run."""
     test_client, _ = client
-    down = {"ready": False, "stage": "server", "reasons": ["not reachable"]}
+    down = _check_result(stage="server", reasons=["not reachable"])
     monkeypatch.setattr(setup_router, "check", lambda **_k: dict(down))
     monkeypatch.setattr(setup_router, "is_initialized", lambda: seen_ready)
     body = test_client.get("/api/setup/check").json()
@@ -1233,7 +1238,7 @@ def test_check_route_needs_the_ui_header(client, monkeypatch):
 
 def test_check_route_steps_follow_use_mine(client, monkeypatch):
     test_client, _ = client
-    monkeypatch.setattr(setup_router, "check", lambda **_k: {"ready": False})
+    monkeypatch.setattr(setup_router, "check", lambda **_k: _check_result())
     monkeypatch.setattr(
         setup_router, "users_lemonade_url", lambda: "http://localhost:13305/api/v1"
     )
@@ -1280,7 +1285,9 @@ def test_run_route_passes_the_switch_to_gaias_own(client, monkeypatch):
     test_client, runner = client
     seen = []
     monkeypatch.setattr(
-        runner, "start", lambda skip, gaia, **_k: seen.append((skip, gaia)) or {}
+        runner,
+        "start",
+        lambda skip, gaia, **_k: seen.append((skip, gaia)) or {"state": "running"},
     )
     test_client.post("/api/setup/run", json={"gaia_lemonade": True})
     test_client.post("/api/setup/run", json={})

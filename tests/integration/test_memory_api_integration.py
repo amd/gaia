@@ -675,12 +675,12 @@ class TestMaintenanceEndpoints:
 
         def _consolidate(max_sessions):
             calls.append(max_sessions)
-            return {"consolidated": 2, "extracted_items": 3}
+            return {"consolidated": 2, "windows": 1, "extracted_items": 3}
 
         monkeypatch.setattr(memory_mod, "_consolidate_fn", _consolidate)
         resp = api_client.post("/api/memory/consolidate?max_sessions=7")
         assert resp.status_code == 200
-        assert resp.json() == {"consolidated": 2, "extracted_items": 3}
+        assert resp.json() == {"consolidated": 2, "windows": 1, "extracted_items": 3}
         assert calls == [7]
 
     def test_rebuild_embeddings_endpoint(self, api_client, memory_store):
