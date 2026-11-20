@@ -27,7 +27,7 @@ func TestClearWaitsForAgentAcknowledgment(t *testing.T) {
 		if fail {
 			c.err = errors.New("agent refused")
 		}
-		m := NewChatModel(c, "gaia", "GAIA", false)
+		m := NewChatModel(c, "gaia", "GAIA")
 		m.messages = []Message{{Role: RoleUser, Content: "prior instruction"}}
 		next, cmd := m.submit("/clear")
 		m = next.(ChatModel)
@@ -61,7 +61,7 @@ func TestClearLegacyAndMockTransportsKeepsViewClearAvailable(t *testing.T) {
 	for _, mode := range []string{"subprocess", "mock"} {
 		t.Run(mode, func(t *testing.T) {
 			c := client.NewSubprocessClient("unused-"+mode, nil, false)
-			m := NewChatModel(c, "legacy", "Legacy", false)
+			m := NewChatModel(c, "legacy", "Legacy")
 			m.messages = []Message{{Role: RoleUser, Content: "old visible text"}}
 			next, cmd := m.submit("/clear")
 			m = next.(ChatModel)
@@ -76,17 +76,17 @@ func TestClearLegacyAndMockTransportsKeepsViewClearAvailable(t *testing.T) {
 }
 
 func TestClearShowsFreshProgressWhileAwaitingAcknowledgment(t *testing.T) {
-	m := NewChatModel(&clearClient{}, "gaia", "GAIA", false)
+	m := NewChatModel(&clearClient{}, "gaia", "GAIA")
 	m.width, m.height = 100, 30
 	m.activity = []ActivityItem{{Kind: "tool", Content: "old work"}}
 	m.buffer = "old partial output"
 	m.queryStart = time.Now().Add(-time.Hour)
 	m.logPeakRows = 20
-	m.totalSteps = 12
+	m.goalFresh = true
 	started := time.Now()
 	next, cmd := m.submit("/clear")
 	m = next.(ChatModel)
-	if m.queryStart.Before(started) || m.buffer != "" || m.totalSteps != 0 {
+	if m.queryStart.Before(started) || m.buffer != "" || m.goalFresh {
 		t.Fatal("clear retained timing or output from the previous turn")
 	}
 	view := m.View()

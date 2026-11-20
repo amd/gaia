@@ -67,7 +67,7 @@ func relayedChat(t *testing.T) (ChatModel, *relayClient, *[]savedCall) {
 	t.Helper()
 	c := &relayClient{}
 	var saves []savedCall
-	m := NewChatModelForFlagship(c, "gaia", "GAIA", false, true).
+	m := NewChatModelForFlagship(c, "gaia", "GAIA", true).
 		WithModelMemory(func(p, id string) error {
 			saves = append(saves, savedCall{p, id})
 			return nil

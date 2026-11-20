@@ -132,7 +132,6 @@ func runOneShotInterruptible(
 	c client.AgentClient,
 	query string,
 	out, errW io.Writer,
-	dev bool,
 	debugf func(format string, args ...any),
 	opts interruptOptions,
 ) OneShotResult {
@@ -161,7 +160,7 @@ func runOneShotInterruptible(
 		tracker.interrupt()
 	default:
 	}
-	go func() { done <- RunOneShot(turnCtx, tracker, query, sOut, sErr, dev, debugf) }()
+	go func() { done <- RunOneShot(turnCtx, tracker, query, sOut, sErr, debugf) }()
 
 	if sig == nil {
 		select {
