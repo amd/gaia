@@ -53,6 +53,7 @@ from gaia.connectors.errors import (
 )
 from gaia.connectors.store import (
     DEFAULT_ACCOUNT,
+    connection_slot_in_use,
     delete_connection,
     peek_connection,
     save_connection,
@@ -457,7 +458,7 @@ def remove_all_accounts(connector_id: str) -> int:
     The ``default`` slot goes first, so an unreadable account list (which
     raises) still never leaves the first account's token behind.
     """
-    had_legacy = peek_connection(connector_id, slot=LEGACY_SLOT) is not None
+    had_legacy = connection_slot_in_use(connector_id, slot=LEGACY_SLOT)
     _delete_slot(connector_id, LEGACY_SLOT)
     section = _load_index()["connectors"].get(connector_id) or {}
     slots = {e["slot"] for e in section.get("accounts", [])}

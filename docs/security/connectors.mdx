@@ -20,9 +20,12 @@ operator should know about.
 
 Plaintext fallbacks (`keyrings.alt.PlaintextKeyring`,
 `EncryptedKeyring`, `Win32CryptoKeyring`, and anything derived from them) are
-explicitly **refused** at the entry of every save and load (plan amendment A4).
-When keyring chains several backends, every backend in the chain is checked,
-and a chain GAIA cannot inspect is refused rather than trusted. A Linux user
+explicitly **refused** before every keyring read and write, by every GAIA
+feature that keeps a secret there (plan amendment A4). Deletes still go ahead,
+with a warning, so secrets saved there earlier can be removed. When keyring chains
+several backends, every backend in the chain is checked, and a chain GAIA cannot
+inspect, or one holding something that is not a keyring backend, is refused
+rather than trusted. A Linux user
 without SecretService sees an actionable error pointing at this page rather
 than silently writing tokens to disk.
 
