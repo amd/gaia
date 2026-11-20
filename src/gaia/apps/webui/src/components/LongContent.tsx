@@ -8,6 +8,7 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useT } from '../i18n/useT';
 import { STEP_COLLAPSE_CHARS, STEP_COLLAPSE_LINES, countLines, sizeLabel } from '../utils/longContent';
 import './LongContent.css';
+import { markStrayDirection } from './CalendarApproval';
 
 export {
     USER_COLLAPSE_LINES, USER_COLLAPSE_CHARS, CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES,
@@ -135,7 +136,7 @@ export function StepResult({ text, renderShort }: { text: string; renderShort: (
                 id={bodyId}
                 className={`detail-result-content${collapsible && !expanded ? ' is-collapsed' : ''}`}
             >
-                {envelope || collapsible ? shown : renderShort(shown)}
+                {envelope || collapsible ? markStrayDirection(shown) : renderShort(shown)}
             </div>
             {collapsible && (
                 <ExpandToggle

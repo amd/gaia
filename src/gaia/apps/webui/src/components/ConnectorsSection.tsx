@@ -10,7 +10,7 @@
  */
 
 import ReactMarkdown from 'react-markdown';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react';
 import {
     CheckCircle2,
     AlertCircle,
@@ -224,7 +224,8 @@ export function ConnectorsSection() {
     useEffect(() => { void load(); }, [load]);
 
     // The tile left the group it was in; keep it in view, and keep focus on it if it went with the tile.
-    useEffect(() => {
+    // A layout effect, so focus and scroll land in the commit that moves the tile, before paint.
+    useLayoutEffect(() => {
         if (!movedBack) return;
         const tile = [...document.querySelectorAll<HTMLElement>('.connector-tile')].find((el) => el.dataset.connectorId === movedBack);
         const header = tile?.querySelector<HTMLElement>('.connector-tile-header');

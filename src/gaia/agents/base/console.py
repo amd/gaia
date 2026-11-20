@@ -345,9 +345,9 @@ class OutputHandler(ABC):
     pre-approval: an unattended harness that merely pre-approves prompts must
     not also get an unguarded shell. In
     exchange it lifts the shell guardrails too: the operator block, the
-    read-only binary policy (replaced by ``DEVELOPER_COMMANDS``) and the rate
-    limit, and it runs commands outside ``run_shell_command``'s no-prompt list
-    without asking. See
+    command policy, the path checks and the rate limit. ``run_shell_command``
+    runs any program without asking, and the Python tools run their code
+    unchecked. See
     ``gaia.agents.tools.shell_tools.ShellToolsMixin.full_access_active``.
 
     Mutable for the life of the session: the host can toggle it mid-run over the
@@ -494,6 +494,9 @@ class OutputHandler(ABC):
         ``phase`` is a stable id a client can phrase for itself; ``message`` is
         the same thing in words for clients that only show text. Optional.
         """
+
+    def report_draft(self, tool: str, text: str) -> None:
+        """The text a tool call is being written with, so far. Optional."""
 
     def restart_answer(self, message: str) -> None:
         """The reply streamed so far was cut off and the step starts over.

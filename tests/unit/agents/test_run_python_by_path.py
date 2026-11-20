@@ -155,6 +155,55 @@ def test_where_running_files_is_withheld_a_path_is_refused_and_says_why(agent, p
     assert agent.ran == []
 
 
+class _SnippetOnlyAgent(Agent):
+    """An agent that has run_python and no execute_python_file at all."""
+
+    ran: list = []
+
+    def _get_system_prompt(self):
+        return "probe"
+
+    def _register_tools(self):
+        ran = self.ran
+
+        @tool
+        def run_python(code: str = "", path: str = "", args: str = "") -> dict:
+            """Run a Python snippet."""
+            ran.append(("snippet", code, path))
+            return {"status": "success", "stdout": ""}
+
+
+@pytest.mark.parametrize("approve", [False, True])
+@pytest.mark.parametrize("entry", ["_execute_tool", "_execute_tool_timed"])
+def test_with_no_file_tool_a_path_meets_the_approval_gate(project, entry, approve):
+    saved = dict(_TOOL_REGISTRY)
+    _TOOL_REGISTRY.pop("execute_python_file", None)
+    _SnippetOnlyAgent.ran = []
+    try:
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            built = _SnippetOnlyAgent(silent_mode=True, skip_lemonade=True)
+        built._tools_registry.pop("execute_python_file", None)
+        asked = []
+        built.console.auto_approve_gated_tools = False
+        built.console.confirm_tool_execution = lambda name, args: (
+            asked.append(name) or approve
+        )
+        script = project / "load.py"
+        script.write_text("print(1)\n")
+
+        result = getattr(built, entry)("run_python", {"path": str(script)})
+
+        assert asked == ["run_python"]
+        if approve:
+            assert built.ran == [("snippet", "", str(script))]
+        else:
+            assert result.get("status") == "denied", result
+            assert built.ran == []
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+
 def test_a_denial_of_the_script_covers_it_by_either_route(project):
     script = project / "cleanup.py"
     script.write_text("print(1)\n")

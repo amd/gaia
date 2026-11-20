@@ -74,7 +74,7 @@ class OutputItem(WireModel):
     """Something the chat produced, tied to the answer that made it."""
 
     id: str
-    kind: Literal["file", "export", "image", "document", "memory", "schedule"]
+    kind: Literal["file", "export", "image", "audio", "document", "memory", "schedule"]
     name: str
     path: Optional[str]
     detail: Optional[str]

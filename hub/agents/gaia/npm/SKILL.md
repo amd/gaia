@@ -351,7 +351,7 @@ The canonical event shapes, as emitted:
 | `tool_call` | `{ type, tool, args, mcp_server?, mcp_server_label?, mcp_tool? }` — an MCP tool names its connector (`mcp_server_label`, e.g. `"Git"`) and the server's own tool name (`mcp_tool`, e.g. `"git_log"`); label the call with those, not the prefixed `tool` |
 | `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`); a `search_web` result lists its hits in `data.sources` (`[{ title, url }]`); `render` names the card to draw — `guide` for the bundled `guides` skill's tools, `calculator` for the `calculators` skill's — and a host without a renderer for a key draws its generic result card |
 | `context_usage` | `{ type, window, used, turns_in_view, turns_hidden, ... }`: the context meter, not terminal. A request that sent `turns` gets it before the answer (contract ≥ 2.28), so the meter fills during a long turn; `final.context` follows with the loaded model's own count |
-| `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) and `file_path` (the absolute path a write lands at, when the model gave a relative one) |
+| `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) `file_path` (the absolute path a write lands at, when the model gave a relative one) and `script` (for `execute_python_file`, the file as read when the prompt was built: `{ text, hidden_lines }`, or `{ unreadable }` saying why there is none; show it, and expect an error instead of a run if the file changes before it starts) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
 | `final` | `{ type, answer, usage?, failed?, failure?, context?, context_error?, performance?, model_messages?, route? }` — terminal. `route` (contract ≥ 2.29, `hybrid` sessions only): the turn's routing decision; `route.model` is the model it ran on, so bill and label by it. `failed: true`: the turn did not complete (a model call broke, or a gated tool was refused on a run nobody can answer) and `answer` says what was and wasn't done; show it as an error, not a result. `failure: "model_server_down"`: the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
 | `error` | `{ type, detail, status }` — terminal, surface `detail` verbatim |
@@ -483,7 +483,8 @@ is `pytest` on one call and `rm -rf` on the next. `always` grants the family
 named in `always_scope` for the rest of the session (`pytest` covers every
 spelling of a test run) — say so in your UI, because it stops asking; no
 `always_scope` means don't offer it. `always_label` (when present) says the same
-grant in plain words, e.g. `editing notes.md`. If your prompt expires unanswered, send
+grant in plain words, e.g. `editing notes.md`. Both arrive with any hidden or
+reordering character in the name written as `[U+XXXX]`, so show them as sent. If your prompt expires unanswered, send
 `timeout`, not `deny`: it still refuses, but the agent tells the user the
 request timed out instead of claiming they said no. Unknown run → **404**; a
 prompt that is no longer pending → **409**; any other decision → **422**. All loud,
@@ -538,20 +539,18 @@ DELETE /v1/gaia/sessions/{session_id}   → { session_id, deleted: true }
 An unknown session is a **404**. One running a turn is a **409**: cancel the
 run, then delete again.
 
-**That bypass stops the prompts; it does not open the shell.** The stdio
-transport's `--full-access` does both — it runs gated tools unasked *and*
-lifts the shell tool's guardrails (redirection and the other shell-only
-operators, the read-only binary allowlist, the rate limit). That second half is
-arbitrary code execution, appropriate for one local parent on a private pipe and
-not for a bound socket, so it stays on stdio: HTTP sessions never lift the shell
-gates, and the request body rejects unknown fields so a client cannot ask. See
-SPEC §5.5.
+**That bypass is full access: it stops the prompts and opens the shell.** It
+is the same mode as the stdio transport's `--full-access`. Gated tools run
+unasked, `run_shell_command` runs any command (a delete, `git add`, a program
+by its full path, redirection, loops), and `run_python` runs its code
+unchecked. That is arbitrary code execution with the user's account, so turn it
+on only when the person asked for it. A sidecar started without a caller-auth
+token refuses to turn it on (**403**). The query body rejects unknown fields, so
+a client cannot ask for it there. See SPEC §5.5.
 
-So a shell command past those gates (a delete, `git add`) is never run unasked
-under bypass. On a run someone can answer (`can_answer_questions` not `false`,
-with a `session_id`) it emits `needs_confirmation` and waits for
-`/tool_decision`, exactly as with bypass off; commands that need no approval
-still run unasked. A run nobody can answer refuses it, as below.
+With bypass off, a shell command past the gates (a delete, `git add`) emits
+`needs_confirmation` on a run someone can answer (`can_answer_questions` not
+`false`, with a `session_id`) and waits for `/tool_decision`.
 
 **A run nobody can answer is still refused.** With `can_answer_questions: false`,
 or with no `session_id`, the server emits `needs_confirmation`, follows it
@@ -608,7 +607,9 @@ the conversation's scope without that extra prompt, but still cannot widen this
 environment-level restriction. The scratch directory stays writable. An empty,
 relative or missing entry stops the sidecar at startup. It confines the agent's
 tools, not code they run: a `run_python` script or shell command can still read
-anything the OS user can, so isolating a run from files it must not see needs a
+anything the OS user can (code whose text names a credential folder or file is refused before it runs,
+a credential file only when the code reads it, but code that works a path out while it runs is not
+caught), so isolating a run from files it must not see needs a
 separate OS user, container or VM. Embedding `GaiaAgent` lets you pass an explicit
 list instead (the variable still narrows it):
 

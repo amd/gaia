@@ -178,3 +178,17 @@ describe('files the turn wrote', () => {
         expect(document.querySelector('code.inline-code')?.textContent).toBe(code);
     });
 });
+
+describe('answer file paths with hidden characters', () => {
+    it('shows a right-to-left override in a path chip as a code, and opens the real path', () => {
+        const path = 'C:\\Users\\me\\documents\\invoice\u202Etxt.md';
+        renderAnswer(`Saved to \`${path}\`.`);
+
+        expect(links()).toHaveLength(1);
+        expect(links()[0].textContent).toBe('C:\\Users\\me\\documents\\invoice[U+202E]txt.md');
+        expect(links()[0].getAttribute('title')).not.toContain('\u202E');
+
+        fireEvent.click(links()[0]);
+        expect(mockedApi.openFileOrFolder).toHaveBeenCalledWith(path);
+    });
+});
