@@ -13,6 +13,7 @@ never resolved, read or written.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Callable
 
@@ -94,6 +95,13 @@ def _isolated(tmp_path, monkeypatch):
         "PYTHON_KEYRING_BACKEND",
     ):
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_warnings():
+    keyring_access._warned.clear()
+    yield
+    keyring_access._warned.clear()
 
 
 def _activate(monkeypatch, backend) -> None:
@@ -272,16 +280,18 @@ class Caller:
     build: Callable
 
 
-CALLERS = [
+READ_WRITE_CALLERS = [
     Caller("slack", _slack),
-    Caller("slack-clear", _slack_clear),
     Caller("discord", _discord),
     Caller("browser-session", _browser_session),
     Caller("mcp-keyring-ref", _mcp_keyring_ref),
     Caller("hub-publisher", _hub_publisher),
     Caller("connector-store", _connector_store),
-    Caller("mcp-server-slots", _mcp_server_slots),
     Caller("daemon-keychain", _daemon_keychain),
+]
+CALLERS = READ_WRITE_CALLERS + [
+    Caller("slack-clear", _slack_clear),
+    Caller("mcp-server-slots", _mcp_server_slots),
 ]
 
 
@@ -293,7 +303,7 @@ def test_strong_backend_round_trips(caller, strong):
     assert strong.calls, "the strong backend was never used"
 
 
-@pytest.mark.parametrize("caller", CALLERS, ids=lambda c: c.name)
+@pytest.mark.parametrize("caller", READ_WRITE_CALLERS, ids=lambda c: c.name)
 def test_refused_backend_is_never_read_or_written(caller, refused):
     save, load, _, errors = caller.build()
     with pytest.raises(errors):
@@ -334,13 +344,159 @@ def test_messaging_load_on_a_refused_backend_gives_only_the_refusal_remedy(
     assert "again" not in msg and "re-run" not in msg
 
 
-def test_discord_clear_on_a_refused_backend_raises_what_disconnect_catches(refused):
+# ---------------------------------------------------------------------------
+# Deletes: allowed on a weak backend (removing a secret only reduces exposure)
+# ---------------------------------------------------------------------------
+
+
+def _daemon_delete(username):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from gaia.daemon.custody.auth import CustodyAuth
+    from gaia.daemon.custody.keychain_routes import build_keychain_router
+    from gaia.daemon.custody.routes import install_custody_exception_handler
+
+    auth = CustodyAuth()
+    app = FastAPI()
+    install_custody_exception_handler(app)
+    app.include_router(build_keychain_router(auth))
+    resp = TestClient(app).post(
+        "/host/v1/keychain/delete",
+        json={"service": SERVICE, "username": username},
+        headers={"Authorization": f"Bearer {auth.mint('gaia')}"},
+    )
+    assert resp.status_code == 200, resp.text
+
+
+def _slack_clear_delete():
+    from gaia.messaging.slack import credentials
+
+    credentials.clear()
+
+
+def _discord_clear_delete():
     from gaia.messaging.discord import credentials
 
-    with pytest.raises(RuntimeError) as exc:
-        credentials.clear()
-    assert isinstance(exc.value, credentials.DiscordCredentialsError)
-    assert refused.calls == []
+    credentials.clear()
+
+
+def _mcp_server_delete():
+    from gaia.connectors import mcp_server
+
+    mcp_server._delete_keyring_slots(["mcp-demo:TOKEN"])
+
+
+def cloud_keys_slot():
+    from gaia.llm import cloud_keys
+
+    return cloud_keys._check(sorted(cloud_keys.PROVIDERS)[0])
+
+
+def _forget_cloud_key():
+    from gaia.llm import cloud_keys
+
+    provider = sorted(cloud_keys.PROVIDERS)[0]
+    assert cloud_keys.forget_key(provider) is True
+
+
+def _remove_all_accounts(provider):
+    from gaia.connectors import accounts
+
+    assert accounts.remove_all_accounts(provider) == 1
+
+
+DELETERS = {
+    "helper": (["x:y"], lambda: keyring_access.delete(SERVICE, "x:y")),
+    "slack-clear": (["slack:bot_token", "slack:app_token"], _slack_clear_delete),
+    "discord-clear": (["discord:bot_token"], _discord_clear_delete),
+    "mcp-server-slots": (["mcp-demo:TOKEN"], _mcp_server_delete),
+    "store-secret": (
+        [store._secret_username("demo")],
+        lambda: store.delete_secret("demo"),
+    ),
+    "store-chunked-secret": (
+        [
+            store._secret_username("big"),
+            store._secret_username("big") + "#0",
+            store._secret_username("big") + "#1",
+        ],
+        lambda: store.delete_secret("big"),
+    ),
+    "store-connection": (
+        [store._connection_username("google", store.DEFAULT_ACCOUNT)],
+        lambda: store.delete_connection("google"),
+    ),
+    "store-provider-credentials": (
+        [store._provider_credentials_username("google")],
+        lambda: store.clear_provider_credentials("google"),
+    ),
+    "daemon-keychain": (["d"], lambda: _daemon_delete("d")),
+    "cloud-key": (
+        [store._secret_username(cloud_keys_slot())],
+        _forget_cloud_key,
+    ),
+    "accounts-remove-all": (
+        [store._connection_username("google", store.DEFAULT_ACCOUNT)],
+        lambda: _remove_all_accounts("google"),
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(DELETERS))
+def test_refused_backend_still_deletes_and_warns(name, refused, caplog):
+    usernames, delete = DELETERS[name]
+    for username in usernames:
+        value = "plaintext-secret"
+        if name == "store-chunked-secret" and "#" not in username:
+            value = "gaia-chunked-v2:2:00000000"
+        refused.items[(SERVICE, username)] = value
+
+    with caplog.at_level(logging.WARNING, logger="gaia.connectors.keyring_access"):
+        delete()
+
+    assert refused.items == {}
+    assert {op for op, *_ in refused.calls} <= {"get", "delete"}
+    assert "insecure keyring backend" in caplog.text
+    assert keyring_access.DOCS_URL in caplog.text
+
+
+def test_weak_backend_delete_warns_once_per_process(monkeypatch, caplog):
+    backend = PlaintextKeyring()
+    backend.items[(SERVICE, "a")] = backend.items[(SERVICE, "b")] = "v"
+    _activate(monkeypatch, backend)
+    with caplog.at_level(logging.WARNING, logger="gaia.connectors.keyring_access"):
+        keyring_access.delete(SERVICE, "a")
+        keyring_access.delete(SERVICE, "b")
+    assert caplog.text.count("insecure keyring backend") == 1
+
+
+def test_strong_backend_delete_does_not_warn(strong, caplog):
+    strong.items[(SERVICE, "a")] = "v"
+    with caplog.at_level(logging.WARNING, logger="gaia.connectors.keyring_access"):
+        keyring_access.delete(SERVICE, "a")
+    assert strong.items == {}
+    assert "insecure" not in caplog.text
+
+
+def test_delete_with_no_usable_keyring_still_fails_loudly(monkeypatch):
+    def broken():
+        raise RuntimeError("backend failed to load")
+
+    monkeypatch.setattr(keyring, "get_keyring", broken)
+    with pytest.raises(ConnectorsError, match="Could not initialize"):
+        keyring_access.delete(SERVICE, "a")
+
+
+def test_read_for_delete_never_serves_a_normal_read(monkeypatch):
+    """Only the delete path may read on a weak backend; ``read`` still refuses."""
+    backend = PlaintextKeyring()
+    backend.items[(SERVICE, "a")] = "v"
+    _activate(monkeypatch, backend)
+    with pytest.raises(ConnectorsError):
+        keyring_access.read(SERVICE, "a")
+    with pytest.raises(ConnectorsError):
+        store.peek_secret("a")
 
 
 def test_helper_delete_of_absent_entry_raises_keyring_error(strong):

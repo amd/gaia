@@ -36,7 +36,7 @@ from gaia.connectors._keyring import keyring  # actionable error if missing (#16
 from gaia.connectors.errors import ConnectorsError, InvalidConfigValueError
 from gaia.connectors.handler import register_handler
 from gaia.connectors.spec import ConnectorSpec
-from gaia.connectors.store import SERVICE_NAME, verify_keyring_backend
+from gaia.connectors.store import SERVICE_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -368,8 +368,8 @@ class McpServerHandler:
         account_id: Optional[str] = None,
     ) -> None:
         """Remove the MCP server entry, keyring slots, and per-agent grants."""
-        # Checked first so a refused backend leaves mcp_servers.json untouched.
-        verify_keyring_backend()
+        # Checked first so an unusable keyring leaves mcp_servers.json untouched.
+        keyring_access.check_delete()
         # Remove from mcp_servers.json.
         servers = _read_mcp_servers_json()
         usernames = {f"{spec.id}:{env_key}" for env_key in spec.mcp_env_keys}

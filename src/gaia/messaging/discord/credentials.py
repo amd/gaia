@@ -76,7 +76,7 @@ def clear() -> None:
     """Remove the stored token. A missing entry is not an error.
 
     Raises:
-        DiscordCredentialsError: the keyring refused the delete, with why.
+        DiscordCredentialsError: the keyring could not be reached, with why.
     """
     from gaia.connectors.errors import ConnectorsError
 

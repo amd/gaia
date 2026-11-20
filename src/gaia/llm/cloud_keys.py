@@ -124,10 +124,10 @@ def recall_key(provider: str) -> Optional[str]:
 
 def forget_key(provider: str) -> bool:
     """Remove the kept key. True when one was stored."""
-    from gaia.connectors.store import delete_secret
+    from gaia.connectors.store import delete_secret, secret_in_use
 
     slot = _check(provider)
-    had = recall_key(provider) is not None
+    had = secret_in_use(slot)
     delete_secret(slot)
     return had
 
