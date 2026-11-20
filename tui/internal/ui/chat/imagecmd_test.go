@@ -56,7 +56,7 @@ func imageModel(t *testing.T, config string) (ChatModel, string, *int32) {
 		}
 	}
 	t.Setenv("GAIA_CONFIG_FILE", path)
-	m := NewChatModel(&nullClient{}, "gaia", "", false)
+	m := NewChatModel(&nullClient{}, "gaia", "")
 	m.width, m.height = 100, 30
 	m.lemonadeBaseURL = srv.URL
 	return m, path, &reads
@@ -286,7 +286,7 @@ func TestTheImagePathIsATerminalLink(t *testing.T) {
 	m := newTestChat(t)
 	m.noteCreatedImage("generate_image", "", imageResult(path).Data)
 	msg := m.messages[len(m.messages)-1]
-	out := m.renderMessage(&msg, nil)
+	out := m.renderMessage(&msg)
 	if !strings.Contains(out, osc8Prefix+fileURL(runtime.GOOS, path)+osc8Sep+path+osc8Close) {
 		t.Errorf("no hyperlink around the path:\n%q", out)
 	}
