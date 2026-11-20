@@ -228,7 +228,7 @@ def test_cmake_lets_a_release_set_the_version():
 
 
 def test_the_binary_prints_the_string_the_release_check_looks_for():
-    main = (REPO_ROOT / "cpp" / "agents" / "gaia" / "main.cpp").read_text("utf-8")
+    main = (REPO_ROOT / "cpp" / "agents" / "gaiacpp" / "main.cpp").read_text("utf-8")
     assert '"gaiacpp " GAIACPP_VERSION "\\n"' in main
 
 

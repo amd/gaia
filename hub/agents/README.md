@@ -10,7 +10,7 @@ contributors follow the exact same pattern AMD uses for its own agents.
 
 One package ships: [`gaia/`](gaia/python/), the flagship, including its
 `ChatAgent` base class. This is `gaiapy`, the Python harness of the GAIA agent.
-Its native counterpart, `gaiacpp`, lives in [`cpp/agents/gaia/`](../../cpp/agents/gaia/),
+Its native counterpart, `gaiacpp`, lives in [`cpp/agents/gaiacpp/`](../../cpp/agents/gaiacpp/),
 not under `hub/`. It reads and triages mail itself, so there is no separate
 email agent.
 Per-task agents were collapsed into skills the flagship loads on demand, so a new
