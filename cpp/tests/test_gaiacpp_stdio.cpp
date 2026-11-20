@@ -597,6 +597,59 @@ TEST_F(GaiacppStdio, TheFinalUsageCountsToolCallsAndOmitsAZeroCount) {
     EXPECT_FALSE(plain["usage"].contains("tools_used")) << plain.dump();
 }
 
+TEST_F(GaiacppStdio, ADelegationReportsProgressOnTheHelpersPhaseAndPreviewsItsSummary) {
+    const json tasks = json::array({{{"task", "Who owns notes_01.md?"}}, {{"task", "Who owns notes_02.md?"}}});
+    mock_.pushResponse(toolCall("delegate_task", {{"tasks", tasks}}));
+    mock_.pushResponse(answer("Owner: Ada"));
+    mock_.pushResponse(answer("Owner: Li"));
+    mock_.pushResponse(answer("Ada and Li."));
+    start();
+    ask("who owns the notes?");
+    const json final = waitTerminal(1);
+    ASSERT_TRUE(final.is_object());
+    EXPECT_EQ(final["answer"], "Ada and Li.");
+
+    std::vector<std::string> progress;
+    json call, result;
+    for (const auto& e : events()) {
+        const std::string type = e.value("type", "");
+        if (type == "status" && e.value("phase", "") == "helpers") progress.push_back(e.value("message", ""));
+        if (type == "tool_call") call = e;
+        if (type == "tool_result") result = e;
+    }
+    ASSERT_TRUE(call.is_object());
+    EXPECT_EQ(call["narration"], "Handing 2 tasks to helpers");
+    ASSERT_EQ(progress.size(), 2u) << "one progress status per helper that ends";
+    EXPECT_EQ(progress[0], "1 of 2 helpers done");
+    EXPECT_EQ(progress[1], "2 of 2 helpers done");
+    ASSERT_TRUE(result.is_object());
+    EXPECT_EQ(result["data"]["status"], "success") << result.dump();
+    EXPECT_EQ(result["preview"], "2 of 2 helpers finished.");
+    EXPECT_EQ(result["preview"], result["data"]["summary"]);
+}
+
+TEST_F(GaiacppStdio, ADelegationWhereEveryHelperFailedPreviewsTheSummaryWithoutTheAdvice) {
+    const json tasks = json::array({{{"task", "Who owns notes_01.md?"}}, {{"task", "Who owns notes_02.md?"}}});
+    mock_.pushResponse(toolCall("delegate_task", {{"tasks", tasks}}));
+    mock_.pushResponse(R"({"error":"boom"})", 500);
+    mock_.pushResponse(R"({"error":"boom"})", 500);
+    start();
+    ask("who owns the notes?");
+    ASSERT_TRUE(waitTerminal(1).is_object());
+
+    const json result = waitFor("tool_result");
+    ASSERT_TRUE(result.is_object());
+    EXPECT_EQ(result["data"]["status"], "error") << result.dump();
+    ASSERT_TRUE(result["data"].contains("advice"));
+    const std::string advice = result["data"]["advice"].get<std::string>();
+    EXPECT_NE(result["data"]["error"].get<std::string>().find(advice), std::string::npos);
+    EXPECT_EQ(result["preview"], "0 of 2 helpers finished, 2 failed.");
+    const json last = waitEvent(
+        [](const json& e) { return e.value("type", "") == "status" && e.value("phase", "") == "helpers"; }, 2);
+    ASSERT_TRUE(last.is_object());
+    EXPECT_EQ(last["message"], "2 of 2 helpers done, 2 failed");
+}
+
 TEST_F(GaiacppStdio, AStreamedAnswerArrivesAsTokensWithReasoningLeftOut) {
     mock_.enableSseStreaming(true);
     mock_.pushSseStream(sse({"<thi", "nk>secret plan</th", "ink>Hi", " there"}));

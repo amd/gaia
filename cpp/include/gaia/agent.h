@@ -186,6 +186,9 @@ public:
     /// so a turn that is killed or hangs still leaves a record.
     void setStepLogger(std::function<void(const json&)> logger) { stepLogger_ = std::move(logger); }
 
+    /// Seconds one model request may take, asked before each request; unset = the client's own limit.
+    void setRequestTimeout(std::function<int()> seconds) { requestTimeout_ = std::move(seconds); }
+
     /// Check whether a cancel has been requested.
     bool isCancelled() const { return cancelRequested(); }
 
@@ -346,6 +349,9 @@ protected:
     /// capture what the system prompt should hold fixed for the whole query.
     virtual void onTurnStart() {}
 
+    /// Model usage this turn outside the agent's own calls (its helpers'), added to the turn's usage.
+    virtual UsageStats sideUsage() const { return {}; }
+
     /// One tool call made during the current query.
     struct ToolCallRecord {
         std::string name;
@@ -364,6 +370,14 @@ protected:
 
     /// The user's request for the query in progress, as text (for answer review).
     const std::string& turnRequest() const { return turnRequest_; }
+
+    /// Keep text for read_tool_output and return its output_id.
+    int storeToolOutput(const std::string& text);
+
+    /// Write one line to the step log, if one is set. The caller serializes concurrent writers.
+    void logStep(const json& line) {
+        if (stepLogger_) stepLogger_(line);
+    }
 
 private:
     /// Unified entry point for all processQuery overloads. Owns the full
@@ -408,6 +422,9 @@ private:
     /// Serialize a tool result for the conversation, keeping the full text in
     /// the output store when it has to be clipped.
     std::string recordToolOutput(const json& toolResult, int maxChars);
+
+    /// The most characters of `tool`'s result that go into the conversation.
+    int resultCharLimit(const std::string& tool, const AgentConfig& cfg) const;
 
     /// Replace older tool outputs in `messages` with a pointer to the store,
     /// keeping the newest `keepRecent`. Returns the characters freed.
@@ -464,6 +481,7 @@ private:
     std::atomic<bool> cancelled_{false};
     std::function<bool()> cancelCheck_;
     std::function<void(const json&)> stepLogger_;
+    std::function<int()> requestTimeout_;
     bool cancelRequested() const { return cancelled_.load() || (cancelCheck_ && cancelCheck_()); }
 
     AgentState executionState_ = AgentState::PLANNING;

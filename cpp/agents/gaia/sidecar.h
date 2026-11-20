@@ -16,6 +16,7 @@ struct SidecarOptions {
     std::string host = "127.0.0.1";
     int port = 0;
     std::string defaultModel;  // used when a /query names none
+    int maxHelpers = -1;       // delegate_task: -1 = sized to the model, 0 = no tool
 };
 
 /// Serve until stopped. Throws std::runtime_error when the token is missing

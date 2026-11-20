@@ -151,6 +151,9 @@ type ChatModel struct {
 	setupChoices *modelsetup.Choices
 	// gpuApplies is whether /gpu means anything on this PC (an integrated GPU).
 	gpuApplies bool
+	// agentProgramHost is set when the host answers AgentProgramMsg (/agent).
+	agentProgramHost bool
+
 	// agentsPanel is the in-chat "/agents" listing (nil unless open). It only
 	// lists and selects (agents.SelectedMsg's own doc comment); switching to
 	// the picked agent is the root model's job, so a SelectedMsg is left to
@@ -1785,6 +1788,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	if isVoiceCommand(query) {
 		return m.runVoiceCommand(commandArg(query, voiceCommand))
 	}
+	if isAgentCommand(query) {
+		return m.runAgentCommand(commandArg(query, agentCommand))
+	}
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
@@ -3126,7 +3132,7 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 			// Nor does a failed row, retried or not: folded, the next call's
 			// outcome would replace its error line. A failure folds under an
 			// earlier row only when it is a retry of that same call.
-			keep := stepFailed(*last) ||
+			keep := stepFailed(*last) || len(last.Helpers) > 0 || len(item.Helpers) > 0 ||
 				(stepFailed(item) && (item.RetryKey == "" || item.RetryKey != last.RetryKey))
 			if last.Kind == item.Kind && activityKey(*last) == activityKey(item) &&
 				last.Approval == item.Approval && !keep {
