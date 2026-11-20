@@ -18,15 +18,15 @@ from gaia.hub.packager import PackResult
 
 
 class _FakeKeyring:
-    """Minimal in-memory keyring backend."""
+    """Minimal in-memory stand-in for ``gaia.connectors.keyring_access``."""
 
     def __init__(self):
         self.store = {}
 
-    def set_password(self, service, username, password):
+    def write(self, service, username, password):
         self.store[(service, username)] = password
 
-    def get_password(self, service, username):
+    def read(self, service, username):
         return self.store.get((service, username))
 
 

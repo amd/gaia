@@ -1,16 +1,18 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """MCP server secrets go through the same insecure-backend refusal as every
-other connector secret: nothing is read, written or deleted on a plaintext
-keyring, and a refused disconnect leaves ``mcp_servers.json`` as it was."""
+other connector secret: nothing is read or written on a plaintext keyring, and
+a disconnect still deletes, with a warning, since that only reduces exposure."""
 
 from __future__ import annotations
 
 import json
+import logging
 
 import keyring
 import pytest
 
+from gaia.connectors import keyring_access
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.mcp_server import McpServerHandler
 from gaia.connectors.spec import ConnectorSpec
@@ -56,6 +58,17 @@ class PlaintextKeyring(keyring.backend.KeyringBackend):
         raise AssertionError("must not touch a plaintext backend")
 
 
+class _DeletablePlaintextKeyring(PlaintextKeyring):
+    """A plaintext backend a delete may still reach."""
+
+    def __init__(self):
+        super().__init__()
+        self.deleted = []
+
+    def delete_password(self, service, username):
+        self.deleted.append((service, username))
+
+
 @pytest.fixture
 def plaintext_backend():
     previous = keyring.get_keyring()
@@ -79,8 +92,8 @@ async def test_get_credential_refuses_a_plaintext_backend(plaintext_backend):
 
 
 @pytest.mark.asyncio
-async def test_disconnect_refuses_before_changing_the_server_list(
-    tmp_path, plaintext_backend
+async def test_disconnect_on_a_plaintext_backend_still_deletes_and_warns(
+    tmp_path, plaintext_backend, caplog
 ):
     path = tmp_path / ".gaia" / "mcp_servers.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,11 +111,17 @@ async def test_disconnect_refuses_before_changing_the_server_list(
         }
     }
     path.write_text(json.dumps(saved), encoding="utf-8")
+    backend = _DeletablePlaintextKeyring()
+    keyring.set_keyring(backend)
+    keyring_access._warned.clear()
 
-    with pytest.raises(ConnectorsError, match="Insecure keyring backend"):
+    with caplog.at_level(logging.WARNING, logger="gaia.connectors.keyring_access"):
         await McpServerHandler().disconnect(_spec())
 
-    assert json.loads(path.read_text(encoding="utf-8")) == saved
+    assert json.loads(path.read_text(encoding="utf-8")) == {"mcpServers": {}}
+    assert backend.deleted == [(SERVICE_NAME, "mcp-github:GITHUB_TOKEN")]
+    assert "insecure keyring backend" in caplog.text
+    assert keyring_access.DOCS_URL in caplog.text
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,7 @@
     contract_review.xlsx  1 KB · 3 sheets: Register (9 rows), Clauses (65 rows), Summary
     summary.md            45 B · 6 words
   ✓ Read 4 files · ran 1 Python script · 43s · ↓ 9.8k tokens
-
+  ran on this PC
 
 
 

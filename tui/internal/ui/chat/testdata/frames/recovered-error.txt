@@ -10,7 +10,7 @@
 
   Installed formulas for your user.
   ✓ Ran 1 command · 9.0s
-
+  ran on this PC
 
 
 

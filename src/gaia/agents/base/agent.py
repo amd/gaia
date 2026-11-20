@@ -153,6 +153,16 @@ from gaia.agents.base.self_check import (
     read_verdict,
     self_check_prompt,
 )
+from gaia.agents.base.skill_budget import (
+    SUMMARIZED_THIS_TURN_HEADER,
+    SUMMARY_HEADER,
+    fit_skill_filter,
+    note_skill_request,
+    render_key,
+    skill_budget_report,
+    summarized_skills,
+    summary_line,
+)
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
 from gaia.agents.base.task_lessons import attach as attach_task_lessons
@@ -366,19 +376,36 @@ def local_max_output_tokens(ctx_size: int) -> int:
 _SKILLS_PROMPT_FRAGMENT = "get_skills_system_prompt"
 
 
-def _skill_change_note(before: Dict[str, str], after: Dict[str, str]) -> str:
-    """What changed in the shown skills, as a message for the model."""
+def _skill_change_note(
+    before: Dict[str, str],
+    after: Dict[str, str],
+    summaries: Optional[Dict[str, str]] = None,
+) -> str:
+    """What changed in the shown skills, as a message for the model.
+
+    *summaries* maps each loaded skill cut to one line to fit the context
+    window to that line: it is still loaded, so it is never called inactive.
+    """
+    summaries = summaries or {}
     added = [text for name, text in after.items() if before.get(name) != text]
     removed = sorted(set(before) - set(after))
+    shrunk = [name for name in removed if name in summaries]
+    dropped = [name for name in removed if name not in summaries]
     parts = []
     if added:
         parts.append(
             "==== SKILLS LOADED THIS TURN (follow them from here on) ====\n"
             + "\n\n".join(added)
         )
-    if removed:
+    if shrunk:
         parts.append(
-            f"Skills no longer active: {', '.join(removed)}. "
+            SUMMARIZED_THIS_TURN_HEADER
+            + "\n"
+            + "\n".join(summaries[name] for name in shrunk)
+        )
+    if dropped:
+        parts.append(
+            f"Skills no longer active: {', '.join(dropped)}. "
             "Stop following their instructions."
         )
     return "\n\n".join(parts)
@@ -3533,6 +3560,17 @@ class Agent(abc.ABC):
     # are exempt and always render in full — see ``_always_on_skill_names``.
     _active_skill_filter: Optional[List[str]] = None
 
+    #: Scale loaded-skill bodies to the model's context window
+    #: (``gaia.agents.base.skill_budget``); a loaded skill's tools stay listed.
+    #: Off by default, so every agent that has not opted in renders as before.
+    SKILL_CONTEXT_BUDGET: ClassVar[bool] = False
+    #: This turn's skill budget plan; ``None`` until the first opted-in turn.
+    _skill_budget: Optional[Any] = None
+    #: Skills explicitly loaded since the last turn began, most recent first.
+    _skill_requests: Optional[List[str]] = None
+    #: ``(model key, (window, source, budget))`` for the skill budget.
+    _skill_window_cache: Optional[Any] = None
+
     #: Explicit re-activations (``load_skill`` on an already-loaded skill)
     #: pinned active for this many upcoming turns. Without it the escape
     #: hatch survived less than one exchange: the next turn's fresh selection
@@ -4379,6 +4417,7 @@ Do NOT wrap conversational replies in JSON.
                     else list(self._active_tool_filter)
                 ),
                 skills_active=sorted(getattr(self, "loaded_skills", {}) or {}),
+                skill_budget=skill_budget_report(self),
                 history_messages=len(getattr(self, "conversation_history", []) or []),
                 started=min((t0 for _, t0, _ in pre_spans), default=None),
                 prompt_fragments={
@@ -4639,6 +4678,16 @@ Do NOT wrap conversational replies in JSON.
             if skill.body and (active is None or skill.name in active)
         }
 
+    def _skill_summaries_shown(self) -> Dict[str, str]:
+        """Each loaded skill summarized to fit the window, as its one line."""
+        skills = getattr(self, "_loaded_skills", None) or {}
+        return {
+            name: summary_line(
+                skills[name], _skill_menu_description(skills[name].description)
+            )
+            for name in summarized_skills(self)
+        }
+
     def _turn_session_context(
         self, messages: List[Dict[str, Any]]
     ) -> Tuple[str, List[Dict[str, Any]]]:
@@ -4664,7 +4713,7 @@ Do NOT wrap conversational replies in JSON.
                     "shown": shown,
                 }
             return live, []
-        note = _skill_change_note(pin["shown"], shown)
+        note = _skill_change_note(pin["shown"], shown, self._skill_summaries_shown())
         if not note:
             return pin["context"], []
         message = {"role": "user", "content": note}
@@ -5669,6 +5718,11 @@ Do NOT wrap conversational replies in JSON.
         # pylint: disable-next=assignment-from-none
         new_filter = self._select_skills_for_turn(user_input)
         new_filter = self._union_sticky_skills(new_filter)
+        summarized = summarized_skills(self)
+        new_filter = fit_skill_filter(self, new_filter, new_turn=True)
+        if summarized_skills(self) != summarized:
+            self._apply_skill_filter(new_filter)
+            return
         if new_filter == self._active_skill_filter:
             return
         if self._rendered_skill_bodies(new_filter) == self._rendered_skill_bodies(
@@ -5736,17 +5790,23 @@ Do NOT wrap conversational replies in JSON.
         skill always brings its instructions back, even when the per-turn
         selector missed it — mirrors ``search_tools`` for tools.
         Callers still need to call :meth:`rebuild_system_prompt` themselves.
+
+        Under a skill context budget the explicit ask ranks first, so its body
+        shows in full even if that summarizes another loaded skill.
         """
+        note_skill_request(self, name)
         current = self._active_skill_filter
-        if current is None:
-            return
-        # Pin the explicit ask for the next few turns too — a follow-up like
-        # "yes, continue" scores nothing against the skill's description, and
-        # collapsing the body one turn after the user asked for it strands
-        # the model mid-recipe.
-        self._pin_skill_body(name)
-        if name not in current:
-            self._active_skill_filter = sorted(set(current) | {name})
+        if current is not None:
+            # Pin the explicit ask for the next few turns too — a follow-up
+            # like "yes, continue" scores nothing against the skill's
+            # description, and collapsing the body one turn after the user
+            # asked for it strands the model mid-recipe.
+            self._pin_skill_body(name)
+            if name not in current:
+                current = sorted(set(current) | {name})
+        fitted = fit_skill_filter(self, current)
+        if fitted != self._active_skill_filter:
+            self._active_skill_filter = fitted
 
     @property
     def _always_on_skill_names(self) -> FrozenSet[str]:
@@ -6072,11 +6132,10 @@ Do NOT wrap conversational replies in JSON.
             # the sticky pin is set even when the body is ALREADY active this
             # turn, or an explicit ask made while selection happened to match
             # would still collapse on the next low-scoring follow-up.
-            if self._active_skill_filter is not None:
-                filter_changed = name not in self._active_skill_filter
-                self._note_skill_active(name)
-                if filter_changed:
-                    self.rebuild_system_prompt()
+            before = render_key(self)
+            self._note_skill_active(name)
+            if render_key(self) != before:
+                self.rebuild_system_prompt()
             _offer_skill_tools(self, self.loaded_skills[name])
             return self.loaded_skills[name]
 
@@ -6675,13 +6734,19 @@ Do NOT wrap conversational replies in JSON.
             )
 
         active = self._active_skill_names()
+        summarized = set(summarized_skills(self))
         body_sections = []
+        summary_lines = []
         menu_lines = []
         for skill in sorted(skills.values(), key=lambda s: s.name):
             if skill.name in active:
                 if skill.body:
                     body = _skill_prompt_body(self, skill)
                     body_sections.append(f"--- SKILL: {skill.name} ---\n{body}")
+            elif skill.name in summarized:
+                summary_lines.append(
+                    summary_line(skill, _skill_menu_description(skill.description))
+                )
             else:
                 menu_lines.append(
                     f"- {skill.name}: {_skill_menu_description(skill.description)}"
@@ -6693,6 +6758,8 @@ Do NOT wrap conversational replies in JSON.
                 f"==== LOADED SKILLS (active this turn) ====\n{SKILL_LIMITS_RULE}\n\n"
                 + "\n\n".join(body_sections)
             )
+        if summary_lines:
+            parts.append(SUMMARY_HEADER + "\n" + "\n".join(summary_lines))
         if menu_lines:
             rule = "" if parts else f"{SKILL_LIMITS_RULE}\n"
             parts.append(
@@ -16637,6 +16704,8 @@ Do NOT wrap conversational replies in JSON.
                 for gap in completion_gaps
                 if gap not in blocking_gaps(completion_gaps)
             ],
+            # How this turn's skill bodies were fitted to the model's window.
+            "skill_budget": skill_budget_report(self),
             # Retries behind this turn's model calls, and whether the model
             # stayed unreachable (the run is then "failed", never "success").
             "model_retries": {

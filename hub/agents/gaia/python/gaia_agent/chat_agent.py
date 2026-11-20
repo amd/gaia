@@ -4460,6 +4460,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         """
         Load a saved session.
 
+        Every "always" answer given so far is forgotten once the session is
+        found, so the loaded conversation starts with none. A session that is
+        missing or unreadable leaves the current one, and its answers, as is.
+
         Args:
             session_id: Session ID to load
 
@@ -4472,6 +4476,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 logger.error(f"Session not found: {session_id}")
                 return False
 
+            # "Always" answers belong to the conversation they were given in;
+            # drop them before any of the other conversation is loaded.
+            reset_approvals = getattr(
+                getattr(self, "console", None), "reset_tool_approvals", None
+            )
+            if callable(reset_approvals):
+                reset_approvals()
             self.current_session = session
 
             # Restore indexed documents (only if RAG is available)

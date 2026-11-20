@@ -566,12 +566,25 @@ GAIA │ agent gaia v0.2.0 │ Gemma-4-E4B-it-GGUF
 Welcome to GAIA
 Connected to: agent gaia v0.2.0 (GAIA core 0.25.0)
 
-Type a message and press Enter to start chatting.
-Type /help for available commands.
+Try one — press its number:
+  1  Today's tech news in brief
+  2  Research a topic, with sources
+  3  What fills up this folder
+  4  Book recommendations
+
+Ask a question, or type /help for what else this can do.
 ────────────────────────────────────────────────────────────────────────────────
 ┃ Ask anything... (Enter to send, Ctrl+C to quit)
   ● agent gaia v0.2.0 connected                                     Ctrl+C quit
 ```
+
+The first screen suggests up to four things to try, one per installed skill
+that works without further setup (no file, link or connected account needed
+first). Press a suggestion's number on an empty composer to send it; once you
+start typing, digits are just text. On a local model the list moves into the
+line that says the model is ready, and the numbers keep working until your
+first message. The list comes from the skills in
+`~/.gaia/skills`, so it costs no model call.
 
 The `agent <id>` segment is always the stable id, lowercased — the same string
 `--agent <id>` takes, so you can read it straight off the header and pass it back.
@@ -681,6 +694,19 @@ inside each one, and one line sums the turn up:
   on it.
 - **A long turn** folds its middle once it has more than eight steps:
   `… 23 more actions · Ctrl+O to expand`.
+- **Where the turn ran** is the quiet line under the summary of any turn that
+  used tools: `ran on this PC`, or the cloud provider's name when the model runs
+  remotely, then what went online — `read 3 pages from nps.gov and 1 more site
+  · 1 document`. An answer that used no tools gets nothing added.
+- **Sources** lists the web pages and documents an answer drew on, each a link
+  your terminal can open. If every web search and page fetch failed, a `[!]`
+  line says the answer could not get live data, so it is not mistaken for a
+  sourced one.
+- **A plan** the agent makes shows as a checklist right above the running step:
+  `✓` done, `▸` running, `○` still to do, with `Plan · 1 of 3 done` on top. It
+  updates in place as the agent moves through it, and a new plan replaces the
+  old one rather than adding a second list. A long plan keeps the running step
+  in view and folds the rest into `… N more`.
 - **Each file in the Created list is a link.** In a terminal that supports them
   (Windows Terminal, iTerm2, WezTerm, kitty), clicking one opens the file.
   `Ctrl+F` opens the newest one from the keyboard.
@@ -758,6 +784,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/read-aloud` | Read the last reply aloud through Lemonade's voice model, played by the PC's own player. Run it again, or `/read-aloud stop`, to stop. Works while the agent is still answering |
 | `/voice` | Show the read-aloud voice, speed and auto-read, and list the voices (American or British English, female or male). `/voice bm_george` picks one, `/voice speed 125` sets the speed in percent (50–200), `/voice auto on` reads each finished reply. Saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui/chat#read-aloud) |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
+| `/context` | How full the model's context is, split into instructions, tool definitions, conversation, files and pages, and other tool calls and results |
 | `/cost help` | Where the rates come from, and how to set your own |
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
 | `/copy all` | Copy the whole conversation as markdown |
@@ -766,6 +793,31 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/sessions` | Reopen a past session — see [Reopening a session](#reopening-a-session) |
 | `/sessions all` | The same list with eval and scheduled runs included |
 | `/<skill-name>` | Run an installed skill on the rest of the line, as in Claude Code: `/pdf turn notes.md into a report`. The palette lists your skills after the commands above. See [Skills](/guides/gaia#skills) |
+
+### How full the context is
+
+Local models see a limited window, so the status bar shows how full it is after
+each answer: `ctx 41%`. The figure counts what the model sees before older turns
+leave its view, so 100% is the point where they start to drop. Past 80% it reads
+`ctx 86% nearly full` and stays visible ahead of the scroll hints; on a narrow
+terminal it is the first thing to give way. `/context` prints the breakdown.
+The meter needs an agent the TUI launches itself, such as the flagship; an agent
+reached through the daemon doesn't report it to the TUI yet, so there the meter
+stays hidden.
+
+Once the history is three quarters of the way there, one line under the answer
+says which turns the next messages will push out of the model's view, oldest
+first. It is said again only when that list grows:
+
+```
+  [!] Context is nearly full: the next messages push the oldest 2 turns, from "Review the 8
+  contracts in ./contracts and build…" out of the model's view. It stays saved, and GAIA can
+  recall it if you ask.
+```
+
+Nothing is summarised or compacted. Turns that leave the view stay in the
+session's saved history, and GAIA's memory and document search are how it finds
+them again.
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
 their own — `/model`, `/skills`, `/research`, `/setup`, `/models`, `/gpu` and `/provider` are flagship-only (`/gpu` only on an integrated-GPU PC), and `/memory`
@@ -844,7 +896,8 @@ saying what it can do.
 A command GAIA doesn't run unasked — `python script.py`, `git commit`, `npm test`
 with no skill loaded for it — gets this prompt rather than an error. `a` covers
 that one command family (`git commit`, `python (any script)`) for the session and
-nothing wider, until `/clear` starts the conversation over. If you deny it, the agent is told that this one command is off:
+nothing wider, until `/clear` starts the conversation over or `/sessions`
+reopens another one. If you deny it, the agent is told that this one command is off:
 it must not run it through another tool or script, and it carries on with the
 rest of the task by other means and says what it could not do.
 
@@ -1049,7 +1102,9 @@ they were active, and where they stand:
 
 Pick one with `Enter` and its conversation is redrawn, the agent restarts on
 that session, and you carry on where you left off — the model remembers what
-was said, not just the screen. `gaia-cli --resume=<id>` reopens one directly; a
+was said, not just the screen. It starts with no "always" answers, neither the
+ones from the chat you left nor any given in that session before.
+`gaia-cli --resume=<id>` reopens one directly; a
 unique prefix of the id is enough. A session that is still open in another
 window can't be reopened until you close it there. If a turn is still running
 when you pick a session, GAIA asks first: `s` stops the turn and switches (the

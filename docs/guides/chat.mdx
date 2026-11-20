@@ -90,7 +90,10 @@ gaia chat --stats
 </AccordionGroup>
 
 `/reset` also forgets every "always" you answered in the conversation, so the next
-action that asks will ask again.
+action that asks will ask again. So does `/resume`: the conversation you switch to
+starts with no "always" answers, including one you resume after leaving it. If
+the session can't be found or read, you stay in the current conversation and keep
+its answers.
 
 `/quit` and `/reset` save the current session first. If saving fails, the
 conversation stays open and unchanged so you can fix the storage problem and

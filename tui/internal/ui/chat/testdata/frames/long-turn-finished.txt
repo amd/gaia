@@ -1,6 +1,5 @@
  GAIA  │ agent gaia
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-    └ python reconcile.py --batch 0
   ● Reconcile batch 1 against its invoices · 10s
     └ python reconcile.py --batch 1
     … 24 more actions · Ctrl+O to expand
@@ -17,6 +16,7 @@
 
   All 30 batches reconcile.
   ✓ Ran 30 commands · ran 1 Python script · 1h 18m 8s · ↓ 216.1k tokens
+  ran on this PC
 
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────

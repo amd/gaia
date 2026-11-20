@@ -59,6 +59,7 @@ func (m ChatModel) handleConversationCleared(msg conversationClearedMsg) (tea.Mo
 	} else {
 		m.messages = nil
 		m.clearSelection()
+		m.ctxMeter = contextMeter{}
 	}
 	m.updateViewport()
 	return m, nil

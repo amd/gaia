@@ -24,11 +24,25 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   change gets a search for newer developments, and a refused web search is
   stated in the report.
 
+- **Skills fit the model's context window.** On a 64K local model, two or
+  three loaded skills and their tools took each request from ~23K to ~40K
+  tokens and the model followed its instructions less well. Loaded skill
+  bodies now share 5% of the window (1,000 to 6,000 tokens: ~3,300 at 64K,
+  6,000 at 120K and up), and auto-load uses the same budget. Over that, the
+  skill loaded most recently or most relevant to the request is shown in full
+  and the rest as one line each, with how to bring one back. A summarized
+  skill keeps all its tools, so only the text shrinks. On a 64K window or
+  smaller, at most one skill auto-loads per turn; large windows keep two.
 - **Clearing a conversation forgets its "always" answers.** `/clear` in the
   terminal UI, `clear_history` from a host, and `/reset` in `gaia chat` used to
   keep them, so a command approved "always" in the cleared chat still ran
   unasked in the next one. Now the same command asks again. Other sessions keep
   their answers, and full access and loaded skills are unchanged.
+- **Resuming a conversation forgets the current one's "always" answers.**
+  `/resume` in `gaia chat` kept them, so a command approved "always" in one
+  conversation ran unasked in the one resumed after it. The resumed
+  conversation now starts with none. A resume that fails (unknown or unreadable
+  session) leaves the current conversation and its answers as they were.
 - **Code that names a credential folder or reads a credential file is refused before it runs.**
   `run_python`, `execute_python_file` (the script and its arguments) and a shell
   line that hands code to an interpreter could open `.env` or files inside
@@ -47,6 +61,10 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   built from it showed `invoice<U+202E>txt.exe` as a name ending in `exe.txt`.
   Both now carry such a character as `[U+XXXX]`. The grant still covers the
   real file.
+- **The terminal UI can show the plan and how full the context is.** Over
+  stdio, a planned turn's `status` now carries the plan and its current step,
+  and every recorded turn is followed by the `context_usage` event the HTTP
+  server already streams, measured for the next message.
 - **Generated music and sound effects can be saved into a folder of the
   user's.** `generate_music` and `generate_sound_effect` take `save_to`, an
   absolute folder or a new `.wav` path, and write a copy there as
@@ -182,8 +200,9 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   - A skill that grants a command-line program stays a suggestion in Ask mode.
     Under full access it loads, with a warning naming the program. Switch full
     access off and the skill is unloaded at the next turn.
-  - The skill bodies in the prompt, plus the new one, must fit in 18% of the
-    model's context window (about 5,900 tokens of the default 32,768).
+  - The skill bodies in the prompt, plus the new one, must fit in the
+    model's skill body budget (5% of its context window, 1,000 to 6,000
+    tokens).
   - A skill unloaded earlier in the session is not auto-loaded again.
   - `GAIA_SKILL_AUTOLOAD_TAU` and `GAIA_SKILL_AUTOLOAD_MARGIN` (or
     `skill_autoload_threshold` and `skill_autoload_margin`) set the 0.40 and

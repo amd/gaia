@@ -32,11 +32,10 @@ class DiscordCredentialsError(RuntimeError):
 
 
 def _keyring():
-    """Import keyring through the connectors guard for an actionable error."""
-    from gaia.connectors._keyring import keyring, normalize_keyring_backend_env
+    """The checked keyring access, imported through the connectors guard."""
+    from gaia.connectors import keyring_access
 
-    normalize_keyring_backend_env()
-    return keyring
+    return keyring_access
 
 
 #: Said when this PC has nowhere secure to keep the token.
@@ -62,7 +61,7 @@ def save(bot_token: str) -> None:
         log.info("The Discord bot token comes from %s; not stored", BOT_TOKEN_ENV_VAR)
         return
     try:
-        _keyring().set_password(SERVICE_NAME, BOT_TOKEN_KEY, bot_token)
+        _keyring().write(SERVICE_NAME, BOT_TOKEN_KEY, bot_token)
     except Exception as e:  # noqa: BLE001 - re-raised with the remedy below
         raise DiscordCredentialsError(NO_STORE_HINT.format(detail=_short(e))) from e
     log.info("Stored the Discord bot token in the OS keyring under %s", SERVICE_NAME)
@@ -74,12 +73,22 @@ def _short(error: Exception) -> str:
 
 
 def clear() -> None:
-    """Remove the stored token. A missing entry is not an error."""
+    """Remove the stored token. A missing entry is not an error.
+
+    Raises:
+        DiscordCredentialsError: the keyring could not be reached, with why.
+    """
+    from gaia.connectors.errors import ConnectorsError
+
     keyring = _keyring()
     try:
-        keyring.delete_password(SERVICE_NAME, BOT_TOKEN_KEY)
+        keyring.delete(SERVICE_NAME, BOT_TOKEN_KEY)
     except keyring.errors.PasswordDeleteError:
         log.debug("No stored Discord bot token to remove")
+    except ConnectorsError as e:
+        raise DiscordCredentialsError(
+            f"Could not remove the Discord bot token from the OS keyring: {e}"
+        ) from e
 
 
 def load() -> str:
@@ -91,8 +100,12 @@ def load() -> str:
     token = os.environ.get(BOT_TOKEN_ENV_VAR)
     if token:
         return token
+    from gaia.connectors.errors import ConnectorsError
+
     try:
-        token = _keyring().get_password(SERVICE_NAME, BOT_TOKEN_KEY)
+        token = _keyring().read(SERVICE_NAME, BOT_TOKEN_KEY)
+    except ConnectorsError as e:
+        raise DiscordCredentialsError(str(e)) from e
     except Exception as e:  # noqa: BLE001 - re-raised with the remedy below
         raise DiscordCredentialsError(
             f"Could not read the Discord bot token from the OS keyring: {e}. "
@@ -124,7 +137,7 @@ def connector_token() -> Optional[str]:
     connector could not have saved one either, so the answer is "none".
     """
     try:
-        return _keyring().get_password(SERVICE_NAME, CONNECTOR_TOKEN_KEY)
+        return _keyring().read(SERVICE_NAME, CONNECTOR_TOKEN_KEY)
     except Exception as e:  # noqa: BLE001 - no keyring means no saved connector token
         log.info("No keyring to look up the Discord connector's token in: %s", e)
         return None

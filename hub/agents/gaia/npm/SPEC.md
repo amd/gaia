@@ -812,6 +812,12 @@ closed." The question is saved when the turn starts, so it survives even if the
 host kills the process before the turn ends. Another process sharing the
 history file leaves a turn that is still running out of its model view.
 
+Over stdio, a recorded turn is followed by the same `context_usage` event,
+measured for the next message, so the terminal UI's context meter moves with
+every answer; and a turn that runs a plan sends it on a `status` as
+`plan: {steps, current_step}`. Both are in §10.3 of
+`docs/spec/agent-ui-query-sse-contract.md`.
+
 Contract 2.14 gave the HTTP surface the same three capabilities per run and per
 session — `/tool_decision`, `/sessions/{id}/bypass` (the route keeps its
 original spelling), and `provider: "claude"`. What remains stdio-only is the
@@ -822,7 +828,8 @@ of the process (embeddings stay on Lemonade either way).
 Sessions a host can list and reopen are stdio-only too: `--history-file` plus
 `--session-kind` keeps the session's title, status (`running`, `waiting` on a
 permission prompt, `done`, `failed`) and a readable transcript beside the
-transcript file. The terminal UI's `/sessions` and `--resume` read it. The
+transcript file. The terminal UI's `/sessions` and `--resume` read it, and
+reopen a session in a new process, so it starts with no "always" grants. The
 layout is §10.4 of `docs/spec/agent-ui-query-sse-contract.md`.
 
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through

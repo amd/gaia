@@ -454,6 +454,11 @@ class GaiaAgent(
     SKILL_DIRS: ClassVar[List[str]] = _bundled_skill_roots()
     SKILL_MANIFEST: ClassVar[Optional[str]] = _locate_agent_manifest()
 
+    # Loaded skill bodies share ~5% of the model's window (their tools stay
+    # listed): on a 64K local model, two or three full skill bodies took each
+    # request from ~23K to ~40K tokens and instruction following dropped.
+    SKILL_CONTEXT_BUDGET: ClassVar[bool] = True
+
     # Declared, not acquired: the user consents once via `gaia connectors`, and
     # nothing here reaches a mailbox until an email tool is actually called.
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = list(
@@ -896,6 +901,7 @@ class GaiaAgent(
 
     #: Share of the model's context window the skill bodies rendering this turn
     #: may fill for an auto-load to go ahead: ~5,900 tokens of the default 32,768.
+    #: Only with ``SKILL_CONTEXT_BUDGET`` off; with it on, that budget decides.
     SKILL_AUTOLOAD_CONTEXT_SHARE: ClassVar[float] = 0.18
 
     #: Lowest hub tier whose skills load without the model asking.
@@ -1057,8 +1063,12 @@ class GaiaAgent(
           shell then runs that program without a prompt, so the model has to
           ask for it. Under full access everything is pre-approved already, so
           it loads, with a warning naming what it pre-approves;
-        * its body would push the bodies rendering this turn past
+        * its body would push the bodies rendering this turn past the skill
+          body budget (:mod:`gaia.agents.base.skill_budget`) when
+          :attr:`SKILL_CONTEXT_BUDGET` is on, else past
           :attr:`SKILL_AUTOLOAD_CONTEXT_SHARE` of the context window;
+        * a window of 64K or less already auto-loaded its one skill this turn
+          (skill context budget only);
         * loading it fails — logged as a warning, and the model's own
           ``load_skill`` call then reports why.
 
@@ -1067,12 +1077,22 @@ class GaiaAgent(
         """
         if not names:
             return [], []
-        from gaia.agents.tools.skill_library_tools import estimate_prompt_tokens
+        from gaia.agents.base.skill_budget import (
+            SMALL_WINDOW_AUTOLOADS,
+            body_tokens,
+            is_small_window,
+            window_budget,
+        )
         from gaia.skills.binaries import binary_permissions
         from gaia.skills.errors import SkillError
 
-        window = context_window(self)
-        budget = int(window * self.SKILL_AUTOLOAD_CONTEXT_SHARE)
+        if self.SKILL_CONTEXT_BUDGET:
+            window, _source, budget = window_budget(self)
+            most = SMALL_WINDOW_AUTOLOADS if is_small_window(window) else len(names)
+        else:
+            window = context_window(self)
+            budget = int(window * self.SKILL_AUTOLOAD_CONTEXT_SHARE)
+            most = len(names)
         used = self._rendering_skill_body_tokens(user_input)
         full_access = self.full_access_active()
         done = self._session_skill_set("_autoloaded_skills")
@@ -1088,6 +1108,11 @@ class GaiaAgent(
 
         for name in names:
             if name in self.loaded_skills:
+                continue
+            if len(loaded) >= most:
+                suggest_instead(
+                    name, f"a {window}-token window auto-loads {most} skill per turn"
+                )
                 continue
             if name in unloaded or name in done:
                 # The model or user dropped it; bringing it back is their call.
@@ -1115,18 +1140,17 @@ class GaiaAgent(
                     name, f"it would grant {', '.join(programs)} without a prompt"
                 )
                 continue
-            cost = estimate_prompt_tokens(skill.body or "")
+            cost = body_tokens(skill)
             if used + cost > budget:
                 logger.warning(
                     "[skills] suggesting '%s' instead of auto-loading it: its "
                     "~%d-token body on top of the ~%d tokens of skill bodies "
-                    "already rendering is over the budget of %d (%.0f%% of the "
-                    "%d-token context window)",
+                    "already rendering is over the %d-token budget (%s-token "
+                    "context window)",
                     name,
                     cost,
                     used,
                     budget,
-                    self.SKILL_AUTOLOAD_CONTEXT_SHARE * 100,
                     window,
                 )
                 left.append(name)
@@ -1320,11 +1344,23 @@ class GaiaAgent(
         matches on the prior turn's context, not just its own few words.
         """
         if not self._dynamic_skills_active():
+            if self.skill_loader is not None:
+                # No scores this turn: an earlier turn's must not rank bodies.
+                self.skill_loader.last_scores = {}
             return None
         query = self._build_tool_selection_query(user_input)
         return self.skill_loader.select(
             query, self.loaded_skills, always_on=self._always_on_skill_names
         )
+
+    def _skill_relevance(self) -> dict:
+        """This turn's score per loaded skill, which ranks bodies over budget.
+
+        Empty when selection is off or did not score this turn; the budget
+        then ranks by explicit loads and load order alone.
+        """
+        loader = getattr(self, "skill_loader", None)
+        return dict(loader.last_scores) if loader is not None else {}
 
     def select_skill_set(self) -> Optional[str]:
         """Resolve which declared skill set to load at startup.
