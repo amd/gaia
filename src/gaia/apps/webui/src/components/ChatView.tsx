@@ -37,7 +37,7 @@ import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { SessionFolderChip } from './FolderChip';
 import { PermissionModeChip } from './PermissionModeChip';
-import { ResearchChip, useResearchMode, withResearch } from './ResearchChip';
+import { readSkillsForResearch, researchNeedsSkills, ResearchChip, useResearchMode, withResearch } from './ResearchChip';
 import { HistoryNotice, LibraryNotices } from './ChatNotices';
 import { PermissionPrompt } from './PermissionPrompt';
 import { QueuedMessages } from './QueuedMessages';
@@ -195,6 +195,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const toolOccurredRef = useRef(false);
     const sendMessageRef = useRef<(text?: string, options?: SendOptions) => Promise<boolean>>(async () => false);
     const checkingModelRef = useRef(false);
+    const readingSkillsRef = useRef(false);
     // Messages typed while a reply runs, kept per chat in the store, and whether the user stopped that reply.
     const queue = useChatStore((s) => s.messageQueues[sessionId] ?? NO_QUEUE);
     const setQueue = useCallback(
@@ -504,6 +505,20 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const text = (fromComposer ? input : givenText ?? '').trim();
         const hasAttachments = fromComposer && attach.hasUploaded;
         const hasImage = fromComposer && attach.hasImage;
+        if (fromComposer && readingSkillsRef.current) return false;
+        if (fromComposer && researchNeedsSkills(text, sessionId)) {
+            readingSkillsRef.current = true;
+            setActionError(null);
+            try {
+                await readSkillsForResearch(text, sessionId);
+            } catch (err) {
+                setActionError(t('composer.researchSkillsUnavailable', { error: requestErrorParam(err) }));
+                return false;
+            } finally {
+                readingSkillsRef.current = false;
+            }
+            if (isStale()) return false;
+        }
         const takeDraft = () => {
             if (!fromComposer) return text;
             const composed = attach.compose(withResearch(text, sessionId));
@@ -1227,7 +1242,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         streamController = controller;
         abortRef.current = controller;
         return true;
-    }, [input, attach, isStreaming, sessionId, session, retiredAgent, addMessage, removeMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, addNotification, isStale]);
+    }, [input, attach, isStreaming, sessionId, session, retiredAgent, addMessage, removeMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, addNotification, isStale, t]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;

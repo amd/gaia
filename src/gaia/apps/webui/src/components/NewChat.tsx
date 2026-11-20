@@ -10,7 +10,7 @@ import { ModelChip } from './ModelChip';
 import { NpuBackdrop } from './NpuBackdrop';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
-import { ResearchChip } from './ResearchChip';
+import { readSkillsForResearch, researchNeedsSkills, ResearchChip } from './ResearchChip';
 import { TryChips } from './TryChips';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
@@ -22,7 +22,7 @@ import { displayModelName, useModelNames, useModelStore } from '../stores/modelS
 import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { log } from '../utils/logger';
-import { requestErrorText } from '../utils/requestErrors';
+import { requestErrorParam, requestErrorText } from '../utils/requestErrors';
 import { FlagshipMissing } from '../utils/newTask';
 import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
@@ -290,10 +290,24 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
         }
     }, [attachments, onSend]);
 
-    const submit = useCallback(
-        () => send(attachments.compose(withResearchCommand(text.trim(), researchOn(useChatStore.getState(), null))), text.trim()),
-        [attachments, send, text],
-    );
+    const readingSkillsRef = useRef(false);
+    const submit = useCallback(async () => {
+        const typed = text.trim();
+        if (readingSkillsRef.current) return;
+        if (researchNeedsSkills(typed, null)) {
+            readingSkillsRef.current = true;
+            setError(null);
+            try {
+                await readSkillsForResearch(typed, null);
+            } catch (err) {
+                setError(t('composer.researchSkillsUnavailable', { error: requestErrorParam(err) }));
+                return;
+            } finally {
+                readingSkillsRef.current = false;
+            }
+        }
+        await send(attachments.compose(withResearchCommand(typed, researchOn(useChatStore.getState(), null))), typed);
+    }, [attachments, send, text, t]);
 
     useEffect(() => {
         if (focusRequest) inputRef.current?.focus();
