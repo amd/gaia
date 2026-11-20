@@ -12082,6 +12082,16 @@ Do NOT wrap conversational replies in JSON.
         explicit = getattr(getattr(self, "config", None), "project_root", None)
         return resolve_project_root(explicit)
 
+    def _session_folder(self) -> str:
+        """The chat's working folder, or the process folder when no chat set one.
+
+        The Agent UI backend and the daemon's sidecar start in the home folder,
+        so there the process folder is not where the chat works.
+        """
+        from gaia.agents.tools.workspace_paths import _workspace_default
+
+        return _workspace_default(self) or os.getcwd()
+
     def _turn_errors(self) -> List[Any]:
         """The errors recorded since the current query began."""
         return self.error_history[getattr(self, "_turn_error_start", 0) :]
@@ -12242,7 +12252,8 @@ Do NOT wrap conversational replies in JSON.
             return None
         written_keys = {evidence.key(path) for path in written}
         # Files a tool read, a script named, or the request names.
-        locate = path_locator([os.getcwd(), self._verification_project_root()])
+        folder = self._session_folder()
+        locate = path_locator([folder, os.getcwd(), self._verification_project_root()])
         records = getattr(self, "_turn_tool_executions", None) or []
         request = self._request_text(getattr(self, "_current_query", "") or "")
         named = (locate(raw) for raw in input_paths(records) + mentioned_paths(request))
@@ -12264,7 +12275,7 @@ Do NOT wrap conversational replies in JSON.
             written,
             self._pending_deliverables(),
             prose=next(iter(prose.values())) if len(prose) == 1 else "",
-            folder=os.getcwd(),
+            folder=folder,
             # An empty file the request asks for is not a miss.
             empty_ok=[
                 path
