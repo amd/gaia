@@ -696,6 +696,7 @@ def relay_query(
     surface: Optional[str] = None,
     turns: Optional[List[List[Dict[str, Any]]]] = None,
     reasoning: bool = False,
+    mood: bool = False,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
 
@@ -820,6 +821,9 @@ def relay_query(
         body["context"] = []
     if reasoning:
         body["reasoning"] = True
+    if mood:
+        # Only to a contract that takes it (profiles.mood_supported).
+        body["mood"] = True
 
     syncs_mode = full_access is not None and bool(session_id)
     enable_after_start = False

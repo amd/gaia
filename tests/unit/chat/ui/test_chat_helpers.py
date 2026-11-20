@@ -688,6 +688,7 @@ class TestSessionAgentKwargsShape:
             "ui_session_id",
             "memory_incognito",
             "surface",
+            "express_mood",
         }
 
     def test_memory_off_reaches_the_agent_at_construction(self):

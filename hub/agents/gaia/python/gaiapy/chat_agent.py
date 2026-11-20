@@ -807,6 +807,9 @@ class ChatAgentConfig:
     # The front-end serving this session: "agent_ui", "tui", "cli", or None
     # when the caller didn't say. Only "agent_ui" changes the prompt today.
     surface: Optional[str] = None
+    # Ask the model to open a reply with a mood tag (``mood.py``); the caller
+    # plays the word and never sees the tag.
+    express_mood: bool = False
     # Memory starts off (private chat / memory off in the UI): the embedder
     # loads only once memory is actually used.
     memory_incognito: bool = False
@@ -4064,8 +4067,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
     @property
     def expresses_mood(self) -> bool:
-        """The Agent UI draws GAIA's eyes; other surfaces have nowhere to show a mood."""
-        return getattr(self.config, "surface", None) == "agent_ui"
+        """The caller asked for the model's mood, to play on GAIA's eyes."""
+        return bool(getattr(self.config, "express_mood", False))
 
     def _offers_scheduling(self) -> bool:
         """The Agent UI has a Scheduled tasks panel; other surfaces don't."""

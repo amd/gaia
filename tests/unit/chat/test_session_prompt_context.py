@@ -188,10 +188,10 @@ def test_in_process_agent_ui_chats_say_they_are_the_agent_ui():
     assert kwargs["surface"] == "agent_ui"
 
 
-def test_the_agent_ui_prompt_asks_for_a_mood_tag(gaia_docs):
+def test_a_caller_that_asks_gets_the_mood_line(gaia_docs):
     from gaia.agents.base.mood import MOOD_PROMPT
 
-    agent = _build(allowed_paths=[str(gaia_docs)], surface="agent_ui")
+    agent = _build(allowed_paths=[str(gaia_docs)], express_mood=True)
     try:
         assert agent.expresses_mood
         assert agent._get_system_prompt().rstrip().endswith(MOOD_PROMPT)
@@ -199,8 +199,8 @@ def test_the_agent_ui_prompt_asks_for_a_mood_tag(gaia_docs):
         agent.__del__()
 
 
-@pytest.mark.parametrize("surface", [None, "tui", "cli"])
-def test_surfaces_with_no_eyes_get_no_mood_line(gaia_docs, surface):
+@pytest.mark.parametrize("surface", [None, "tui", "cli", "agent_ui"])
+def test_no_surface_gets_the_mood_line_unasked(gaia_docs, surface):
     agent = _build(allowed_paths=[str(gaia_docs)], surface=surface)
     try:
         assert not agent.expresses_mood

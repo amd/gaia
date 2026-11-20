@@ -333,6 +333,12 @@
             "description": "Model id for this turn. A Claude model id implies provider 'claude' when provider is omitted; otherwise it is served by the local Lemonade backend. Omit to keep a retained session's current model, or to use the backend's default on a new session.",
             "title": "Model"
           },
+          "mood": {
+            "default": false,
+            "description": "Ask the model to name its mood (contract >= 2.31). The prompt then asks for a one-word tag at the start of a reply; the agent removes the tag from the text and sends the word as a `mood` event. Send the same value on every turn of a session: it is part of the prompt.",
+            "title": "Mood",
+            "type": "boolean"
+          },
           "provider": {
             "anyOf": [
               {

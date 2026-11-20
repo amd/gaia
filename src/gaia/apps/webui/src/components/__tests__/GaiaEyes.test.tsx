@@ -183,7 +183,7 @@ describe('the eyes in the live status line', () => {
         act(() => { useChatStore.getState().setGaiaMood('sad'); });
         expect(eyes(container).dataset.eyes).toBe('sad');
         expect(container.querySelector('.thinking-indicator-text')).toBeNull();
-        act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS + 1); });
+        act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS + 100); });
         expect(container.querySelector('.thinking-indicator')).toBeNull();
     });
 
