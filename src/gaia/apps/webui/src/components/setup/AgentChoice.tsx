@@ -162,6 +162,15 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                                     )}
                                 </button>
                             );
+                            // In view under the row: a greyed-out row that doesn't say why reads as broken.
+                            if (unavailable) {
+                                return (
+                                    <div key={o.id} className="agent-choice-blocked">
+                                        {row}
+                                        <p id={offId} className="agent-choice-why" dir="auto">{cppNote}</p>
+                                    </div>
+                                );
+                            }
                             // While its download runs, or after it failed, the card below has the bar or Retry instead.
                             if (!getIt || downloading || job?.state === 'failed') return row;
                             // Beside the radio, not inside it: a control inside a radio can't be reached.
@@ -193,12 +202,12 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                     <button type="button" className="agent-choice-more" aria-expanded={open} aria-controls={moreId} onClick={() => setOpen((v) => !v)}>
                         <ChevronDown size={13} className={`agent-choice-chevron${open ? ' is-open' : ''}`} aria-hidden="true" /> {t('setup.agent.compare')}
                     </button>
-                    {/* Kept mounted while hidden: the unavailable row is described by its note here. */}
+                    {/* Kept mounted while hidden: the row waiting on Download is described by its note here. */}
                     <div id={moreId} className="agent-choice-detail" hidden={!open}>
                         {OPTIONS.map((o) => (
                             <p key={o.id}>
                                 {t(o.more, { name: o.id })}
-                                {o.id === 'gaiacpp' && cppNote && <> <span id={offId}>{cppNote}</span></>}
+                                {o.id === 'gaiacpp' && cppNote && !off(cpp) && <> <span id={offId}>{cppNote}</span></>}
                             </p>
                         ))}
                         <p>{t(inSettings ? 'settings.agent.nextMessage' : 'setup.agent.hint')}</p>

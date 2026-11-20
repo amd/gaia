@@ -150,9 +150,11 @@ def _read_text(url: str, session) -> str:
     except requests.RequestException as e:
         raise RuntimeError(f"could not reach {url}: {e}") from e
     if resp.status_code == 404:
+        # The address stays in the log: this message is shown in Settings.
+        logger.warning("gaiacpp: %s is not there (HTTP 404)", url)
         raise PlatformError(
-            f"this GAIA release has no gaiacpp to download ({url} is not there). "
-            "Use the Python agent, or update GAIA."
+            "this GAIA release has no gaiacpp to download. Use the Python "
+            "agent, or update GAIA."
         )
     if resp.status_code != 200:
         raise RuntimeError(f"{url} answered HTTP {resp.status_code}")

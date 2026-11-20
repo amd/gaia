@@ -208,6 +208,61 @@ def test_a_release_without_gaiacpp_says_why_it_cannot_be_downloaded(
     assert "could not read" in gaiacpp["unavailable_reason"]
 
 
+class _Answers:
+    """A stand-in for requests: every GET answers *status*, or raises."""
+
+    def __init__(self, status=None, raises=None):
+        self.status_code = status
+        self.text = ""
+        self._raises = raises
+
+    def get(self, url, timeout=None):
+        if self._raises:
+            raise self._raises
+        return self
+
+
+def test_the_reason_shown_for_a_release_without_gaiacpp_has_no_address(
+    client, monkeypatch
+):
+    monkeypatch.delenv(native_fetch.ASSETS_URL_ENV, raising=False)
+    info = native_fetch.download_info
+    monkeypatch.setattr(
+        native_fetch, "download_info", lambda: info(_Answers(status=404))
+    )
+    gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
+    assert gaiacpp["can_download"] is False
+    assert gaiacpp["unavailable_reason"] == (
+        "this GAIA release has no gaiacpp to download. Use the Python agent, "
+        "or update GAIA."
+    )
+
+
+def test_the_reason_shown_when_the_release_cannot_be_reached_is_plain(
+    client, monkeypatch
+):
+    import requests
+
+    monkeypatch.delenv(native_fetch.ASSETS_URL_ENV, raising=False)
+    info = native_fetch.download_info
+    down = _Answers(raises=requests.ConnectionError("getaddrinfo failed"))
+    monkeypatch.setattr(native_fetch, "download_info", lambda: info(down))
+    reason = _program(client.get("/api/agent-programs").json(), "gaiacpp")[
+        "unavailable_reason"
+    ]
+    assert "internet connection" in reason
+    assert "http" not in reason and "getaddrinfo" not in reason
+
+
+def test_the_reason_shown_for_an_unverifiable_release_has_no_address(client, release):
+    (release / native_fetch.SUMS_NAME).write_text("", encoding="utf-8")
+    reason = _program(client.get("/api/agent-programs").json(), "gaiacpp")[
+        "unavailable_reason"
+    ]
+    assert "can't be verified" in reason
+    assert "file://" not in reason
+
+
 def test_a_hub_that_cannot_be_reached_leaves_the_size_unknown(client, monkeypatch):
     def _down():
         raise RuntimeError("hub unreachable")

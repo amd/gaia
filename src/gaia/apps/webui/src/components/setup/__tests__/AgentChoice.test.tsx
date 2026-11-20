@@ -75,14 +75,20 @@ describe('AgentChoice', () => {
         expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
     });
 
-    it("can't pick gaiacpp where it can't be had, and says why behind the toggle", async () => {
+    it.each([true, false])("can't pick gaiacpp where it can't be had, and says why in view under its row (inSettings %s)", async (inSettings) => {
         mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp('This is a development build; gaiacpp comes with releases.'));
-        render(<AgentChoice inSettings />);
+        render(<AgentChoice inSettings={inSettings} onPending={vi.fn()} />);
         const cpp = await radio(/gaiacpp/);
         expect(cpp).toHaveAttribute('aria-disabled', 'true');
         expect(within(cpp).getByText('Not installed')).toBeVisible();
         const why = "It isn't on this PC and can't be downloaded here: This is a development build; gaiacpp comes with releases.";
         expect(cpp).toHaveAccessibleDescription(why);
+        // Read without opening anything: the comparison stays shut, and the reason is said once.
+        expect(screen.getByRole('button', { name: 'Compare the two' })).toHaveAttribute('aria-expanded', 'false');
+        expect(screen.getAllByText(why)).toHaveLength(1);
+        expect(screen.getByText(why)).toBeVisible();
+        expect(screen.getByText(why).closest('[hidden]')).toBeNull();
+        expect(cpp.nextElementSibling).toBe(screen.getByText(why));
         fireEvent.click(cpp);
         const py = screen.getByRole('radio', { name: /gaiapy/ });
         py.focus();
@@ -90,7 +96,7 @@ describe('AgentChoice', () => {
         expect(mockedApi.updateSettings).not.toHaveBeenCalled();
         expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole('button', { name: 'Compare the two' }));
-        expect(screen.getByText(why)).toBeVisible();
+        expect(screen.getAllByText(why)).toHaveLength(1);
     });
 
     it("shows the server's refusal and puts the choice back", async () => {

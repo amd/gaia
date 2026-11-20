@@ -32,6 +32,15 @@ _lock = threading.Lock()
 _measuring = threading.Lock()
 # "at" is None when nothing is cached: 0.0 would read as fresh on a just-booted PC.
 _sizes: Dict[str, Any] = {"at": None, "values": {}, "reasons": {}}
+# Shown under the gaiacpp option; the addresses and error text go to the log.
+_UNREACHABLE = (
+    "GAIA couldn't reach the download server. Check your internet connection "
+    "and try again."
+)
+_UNVERIFIABLE = (
+    "this GAIA release's gaiacpp can't be verified, so GAIA won't install it. "
+    "Use the Python agent, or update GAIA."
+)
 _job: Dict[str, Any] = {
     "state": "idle",
     "bytes_done": 0,
@@ -60,15 +69,19 @@ def _measure() -> None:
     try:
         values[fetch.NATIVE_FLAGSHIP] = native_fetch.download_info().size
         reasons[fetch.NATIVE_FLAGSHIP] = None
-    except (PlatformError, IntegrityError) as e:
+    except PlatformError as e:
         logger.warning("agent programs: gaiacpp cannot be downloaded: %s", e)
         values[fetch.NATIVE_FLAGSHIP] = None
         reasons[fetch.NATIVE_FLAGSHIP] = str(e)
+    except IntegrityError as e:
+        logger.warning("agent programs: gaiacpp cannot be verified: %s", e)
+        values[fetch.NATIVE_FLAGSHIP] = None
+        reasons[fetch.NATIVE_FLAGSHIP] = _UNVERIFIABLE
     except (SidecarError, RuntimeError) as e:
         # The network, not the release: asked again on the next request.
         logger.warning("agent programs: gaiacpp release not reachable: %s", e)
         values[fetch.NATIVE_FLAGSHIP] = None
-        reasons[fetch.NATIVE_FLAGSHIP] = str(e)
+        reasons[fetch.NATIVE_FLAGSHIP] = _UNREACHABLE
         lasting = False
     with _lock:
         _sizes.update(
