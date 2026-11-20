@@ -239,7 +239,9 @@ _SHARED_TABLE = json.loads(
 class TestSharedWithNativeAgent:
     """Spliced program names and explicit offline flags, judged as the native agent does."""
 
-    @pytest.mark.parametrize("command", _SHARED_TABLE["refused"])
+    @pytest.mark.parametrize(
+        "command", _SHARED_TABLE["refused"] + _SHARED_TABLE["refused_harmless"]
+    )
     def test_refused(self, command):
         assert _refused("run_shell_command", command=command), command
 

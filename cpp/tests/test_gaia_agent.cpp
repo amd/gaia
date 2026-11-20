@@ -1494,10 +1494,10 @@ TEST(GaiaAgentTest, AnAlwaysGrantMadeOnlineDoesNotRunAnOnlineCommandOnceTheInter
         return ToolConfirmResult::DENY;
     });
     // Each is harmless if it did run, so a regression shows as a failed check, not a download.
-    const std::vector<std::string> commands = {
-        "dotnet restore --help", "Dotnet.EXE restore --help", "conda install --help", "mvn -v",
-        "gem.cmd install --help", "\"C:\\Tools\\Conda.EXE\" install --help", "/opt/maven/bin/mvn -v",
-        "./gradlew --version", "pip.exe install --help", "NPM.CMD install --help"};
+    std::ifstream in(fs::path(GAIA_REPO_FIXTURES_DIR) / "offline_commands.json");
+    ASSERT_TRUE(in) << "tests/fixtures/offline_commands.json";
+    const std::vector<std::string> commands = json::parse(in)["refused_harmless"].get<std::vector<std::string>>();
+    ASSERT_FALSE(commands.empty());
     // Granted "always" while the internet was on.
     for (const auto& c : commands) grants->addAlwaysAllowed("bash_execute:" + shellCommandScope(c));
     o.internetOff->store(true);

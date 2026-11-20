@@ -1,5 +1,17 @@
 {
-  "_comment": "Shell commands both runtimes judge the same with the internet off: tests/unit/agents/test_offline_loopback.py and cpp/tests/test_security.cpp read this table.",
+  "_comment": "Shell commands both runtimes judge the same with the internet off: tests/unit/agents/test_offline_loopback.py and cpp/tests/test_security.cpp read this table. refused_harmless also feeds cpp/tests/test_gaia_agent.cpp, which really runs each one if the check regresses, so every entry must do nothing when run.",
+  "refused_harmless": [
+    "dotnet restore --help",
+    "Dotnet.EXE restore --help",
+    "conda install --help",
+    "mvn --help",
+    "gem.cmd install --help",
+    "\"C:\\Tools\\Conda.EXE\" install --help",
+    "/opt/maven/bin/mvn --help",
+    "./gradlew --version",
+    "pip.exe install --help",
+    "NPM.CMD install --help"
+  ],
   "refused": [
     "c''onda install x",
     "co\"n\"da install x",

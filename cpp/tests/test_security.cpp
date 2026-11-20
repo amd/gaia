@@ -352,8 +352,11 @@ TEST(InternetRefusalTest, SplicedNamesAndOfflineFlagsJudgedAsThePythonAgentDoes)
     sh.name = "bash_execute";
     ASSERT_FALSE(table["refused"].empty());
     ASSERT_FALSE(table["allowed"].empty());
-    for (const auto& c : table["refused"]) {
-        EXPECT_NE(internetRefusal(sh, {{"command", c}}), "") << c.get<std::string>();
+    ASSERT_FALSE(table["refused_harmless"].empty());
+    for (const auto& list : {table["refused"], table["refused_harmless"]}) {
+        for (const auto& c : list) {
+            EXPECT_NE(internetRefusal(sh, {{"command", c}}), "") << c.get<std::string>();
+        }
     }
     for (const auto& c : table["allowed"]) {
         EXPECT_EQ(internetRefusal(sh, {{"command", c}}), "") << c.get<std::string>();
