@@ -13,6 +13,9 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   another library setup offers now fails with a hint to run
   `gaia init --data-libraries`, instead of saying pip is not available. The
   desktop app's binary bundles its libraries, so its hint is unchanged.
+- **The sidecar no longer crashes on a busy Windows PC.** It died with an access
+  violation in Python's `_wmi` module when a WMI query timed out. It now reads
+  OS and CPU facts without WMI.
 - **Full access runs any command.** It used to refuse a program outside a
   short developer list (`pip`, `where`, `rmdir`, `gaia`, a program given by its
   full path), a package install outside a virtual environment, a path outside
