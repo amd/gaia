@@ -1387,10 +1387,14 @@ def _render_relock(result: "RelockResult", root: Path, *, as_json: bool) -> int:
 
 
 def _handle_publish(args: argparse.Namespace) -> int:
-    from gaia.hub.publisher import get_hub_token
+    from gaia.hub.publisher import PublisherError, get_hub_token
     from gaia.skills.publish import publish_skill
 
-    token = get_hub_token() or ""
+    try:
+        token = get_hub_token() or ""
+    except PublisherError as exc:
+        sys.stderr.write(f"❌ {exc}\n")
+        return EXIT_INVALID
     result = publish_skill(
         Path(args.directory),
         token=token,

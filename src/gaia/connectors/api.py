@@ -63,6 +63,12 @@ from gaia.connectors.grants import (
     load_grants,
     revoke_agent_grant,
 )
+from gaia.connectors.store import (
+    UninspectableKeyringError,
+    WeakKeyringError,
+    connection_slot_in_use,
+    keyring_read_refusal,
+)
 from gaia.connectors.store import list_connections as _store_list
 from gaia.connectors.store import (
     peek_connection,
@@ -521,10 +527,25 @@ def get_connection(
     return None
 
 
-async def _revoke_one(provider: str, acct: Account) -> Dict[str, Any]:
-    from gaia.connectors.flow import revoke_provider_token
+async def _revoke_one(
+    provider: str, acct: Account, *, refusal: Optional[WeakKeyringError] = None
+) -> Dict[str, Any]:
+    from gaia.connectors.flow import (
+        not_revoked_on_weak_keyring,
+        nothing_to_revoke,
+        revoke_provider_token,
+    )
 
-    result = await revoke_provider_token(provider, slot=acct.slot)
+    if refusal is not None and connection_slot_in_use(provider, slot=acct.slot):
+        result = not_revoked_on_weak_keyring(
+            provider,
+            uninspectable=isinstance(refusal, UninspectableKeyringError),
+            account_type=acct.account_type,
+        )
+    elif refusal is not None:
+        result = nothing_to_revoke(provider)
+    else:
+        result = await revoke_provider_token(provider, slot=acct.slot)
     remaining = await locked_write(
         provider, _accounts.remove_account, provider, acct.slot
     )
@@ -566,24 +587,33 @@ async def revoke_connection_async(
     "remaining_accounts": int}`` (see ``flow.revoke_provider_token``) —
     never bare success for what was only a local keyring delete. Reporting
     a full revoke when the provider-side grant is still live was the
-    literal #2591 bug this replaces. Per-agent grants are not touched here;
+    literal #2591 bug this replaces. On a keyring that refuses reads (weak
+    or uninspectable) the provider revoke is skipped, since it needs the
+    token, and the account is still removed locally; ``revoke_error`` says
+    where to revoke by hand. Per-agent grants are not touched here;
     disconnecting through the connector handler clears them once the last
     account is gone. Call this directly from async code already on an event
     loop; use ``revoke_connection`` (sync) otherwise.
     """
+    if all_accounts and account is not None:
+        raise ConnectorsError(
+            "revoke_connection: name one account or pass all_accounts=True, "
+            "not both."
+        )
+    # Revoking reads the token, which a weak keyring refuses; delete anyway.
+    refusal = keyring_read_refusal()
     if all_accounts:
-        if account is not None:
-            raise ConnectorsError(
-                "revoke_connection: name one account or pass all_accounts=True, "
-                "not both."
-            )
-        stored = _accounts.list_accounts(provider) or [_nothing_stored(provider)]
-        results = [await _revoke_one(provider, acct) for acct in stored]
+        stored = _accounts.accounts_for_delete(provider) or [_nothing_stored(provider)]
+        results = [
+            await _revoke_one(provider, acct, refusal=refusal) for acct in stored
+        ]
         await locked_write(provider, _accounts.remove_all_accounts, provider)
         return _combine_revokes(results)
     slot = _accounts.resolve_slot(provider, account)
-    match = [a for a in _accounts.list_accounts(provider) if a.slot == slot]
-    return await _revoke_one(provider, match[0] if match else _nothing_stored(provider))
+    match = [a for a in _accounts.accounts_for_delete(provider) if a.slot == slot]
+    return await _revoke_one(
+        provider, match[0] if match else _nothing_stored(provider), refusal=refusal
+    )
 
 
 def _nothing_stored(provider: str) -> Account:
