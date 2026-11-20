@@ -381,7 +381,11 @@ TEST(WebFetchRefusalTest, RefusesShellFetchesButNotInstallsOrLocalRequests) {
           "python -c \"import urllib.request; print(urllib.request.urlopen('https://example.com').read())\"",
           "node -e \"fetch('https://example.com')\"", "cat < /dev/tcp/203.0.113.5/80",
           "bitsadmin /transfer j https://example.com/a a", "certutil -urlcache -f https://example.com/a a",
-          "curl -x http://proxy:8080 http://localhost/x"}) {
+          "curl -x http://proxy:8080 http://localhost/x",
+          // Wrapped, chained or named by its full path, it is still the program that runs.
+          "bash -c \"curl -s https://example.com\"", "powershell -Command \"iwr https://example.com\"",
+          "cmd /c curl https://example.com", "C:\\Tools\\curl.exe https://example.com",
+          "echo start && curl https://example.com", "sudo wget https://example.com"}) {
         const std::string why = webFetchRefusal(sh, {{"command", fetched}});
         EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
     }
@@ -389,7 +393,8 @@ TEST(WebFetchRefusalTest, RefusesShellFetchesButNotInstallsOrLocalRequests) {
     for (const char* allowed :
          {"ls -la", "git status", "pip install requests", "npm install", "python build.py",
           "curl http://localhost:13305/api/v1/health", "curl http://127.0.0.1:8000/x", "python -m pytest tests",
-          "grep -r curl docs"}) {
+          "grep -r curl docs", "cat curl-notes.txt", "git log --grep wget",
+          "echo see https://example.com for curl"}) {
         EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
     }
     EXPECT_NE(webFetchRefusal(sh, {{"command", "echo " + std::string(300000, 'a')}}), "");
