@@ -319,3 +319,112 @@ def test_figures_a_script_built_into_the_file_are_its_output():
 def test_figures_typed_into_the_script_are_still_reported():
     found = _findings(_TYPES, built=["summary.md"])
     assert found and "48215" in found[0].note
+
+
+# ---------------------------------------------------------------------------
+# Sample data the user asked for has no source to find
+# ---------------------------------------------------------------------------
+
+_SALES = "| Region | Amount |\n|---|---|\n| North | $12,500 |\n| South | $9,800 |\n"
+_SALES_SCRIPT = (
+    "import csv\n"
+    "rows = [('North', 12500), ('South', 9800)]\n"
+    "csv.writer(open('sales.csv', 'w')).writerows(rows)\n"
+)
+
+
+def _sales(query, records=None, **kw):
+    return file_findings(
+        {"sales.csv": text_blocks(_SALES, ".md")},
+        [_ran(_SALES_SCRIPT)] if records is None else records,
+        query=query,
+        built=["sales.csv"],
+        **kw,
+    )
+
+
+def _read_record(path, text):
+    result = {"status": "success", "content": text}
+    record = verification_record(
+        "read_file", {"file_path": path}, result, errored=False
+    )
+    record.update(args={"file_path": path}, output=text, observed=observed_text(result))
+    return record
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "create sales.csv holding 5 rows of sample sales (region, amount) using a "
+        "Python script, then read it back and tell me the total",
+        "Make sales.csv with some fake numbers so I can try the chart",
+        "write sales.csv filled with dummy data",
+        "I need mock sales figures in sales.csv",
+        "put made-up amounts for two regions into sales.csv",
+        "generate synthetic transactions and save them as sales.csv",
+        "create sales.csv with example data for a demo",
+        "build sales.csv with a few rows of test data",
+        "just make up some sales numbers and save them to sales.csv",
+        "Create sales.csv with random amounts per region using gen.py",
+    ],
+)
+def test_sample_data_the_user_asked_for_is_not_reported(query):
+    assert _sales(query) == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "create sales.csv with last quarter's sales by region",
+        "write our real regional sales to sales.csv, not sample data",
+        "save sales.csv with the actual amounts - no made-up numbers",
+        "put a sample of my real data into sales.csv",
+        "copy a sample from orders.csv into sales.csv",
+        "write 5 sample rows from ledger.xlsx to sales.csv",
+        "for example, save the regional totals to sales.csv",
+        "test that the totals are right and save the data to sales.csv",
+        "what sample size do I need? save the regional figures to sales.csv",
+    ],
+)
+def test_a_request_for_real_figures_is_still_reported(query):
+    found = _sales(query)
+    assert found and "12,500" in found[0].note
+
+
+def test_sample_wording_does_not_excuse_figures_meant_to_come_from_a_file_read():
+    records = [
+        _read_record("ledger.csv", "region,units\nNorth,3\n"),
+        _ran(_SALES_SCRIPT),
+    ]
+
+    assert _sales("turn my ledger into sample sales rows in sales.csv", records)
+    assert _sales(
+        "write sample sales to sales.csv",
+        input_names=["C:/work/ledger.csv"],
+        inputs=["region,units\nNorth,3\n"],
+    )
+
+
+def test_sample_wording_does_not_excuse_figures_the_turn_looked_up():
+    result = {"summary": "Acme regional revenue: North 11,000, South 9,100"}
+    search = verification_record(
+        "search_web", {"query": "acme sales"}, result, errored=False
+    )
+    search.update(
+        args={"query": "acme sales"}, output="", observed=observed_text(result)
+    )
+
+    assert _sales(
+        "look up Acme's sales and write a sample report to sales.csv",
+        [search, _ran(_SALES_SCRIPT)],
+    )
+
+
+def test_reading_the_skill_or_the_file_back_keeps_the_sample_exemption():
+    records = [
+        _read_record("skills/office-docs/SKILL.md", "Use openpyxl. Limit 100 rows."),
+        _ran(_SALES_SCRIPT),
+        _read_record("sales.csv", "North,12500\nSouth,9800\n"),
+    ]
+
+    assert _sales("create sales.csv with 5 rows of sample sales", records) == []

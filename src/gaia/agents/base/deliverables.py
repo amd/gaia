@@ -1886,6 +1886,62 @@ def _mentioned(claim: _Claim, answer: str) -> bool:
     return claim.value.number in named
 
 
+_DATA_NOUN = (
+    r"(?:data(?:set)?s?|rows?|records?|entries|figures?|numbers?|values?|amounts?|"
+    r"sales|prices?|transactions?|orders?|invoices?|expenses?|budgets?|"
+    r"spreadsheets?|tables?|workbooks?|csv|content)\b"
+)
+#: "5 rows of sample sales", "fill it with made-up numbers", "some test data".
+#: "A sample of my data" and "sample size" are about real data.
+_INVENTED = re.compile(
+    r"\b(?:(?:sample|fake|dummy|mock|made[- ]up|invented|fictional|fictitious|"
+    r"synthetic|placeholder|imaginary|hypothetical|illustrative|random|demo|toy)"
+    r"\s+(?!(?:of|from|in|size|rate|mean|variance|standard|std)\b)[a-z]"
+    r"|(?<!for )(?:example|test)\s+(?:[a-z-]+\s+){0,2}" + _DATA_NOUN + r"|"
+    r"(?:make\s+up|invent|fabricate)\s+(?:[a-z0-9-]+\s+){0,3}" + _DATA_NOUN + r")",
+    re.I,
+)
+_NOT_INVENTED = re.compile(
+    r"\b(?:no|not|never|don'?t|do\s+not|without|avoid|instead\s+of|rather\s+than|"
+    r"isn'?t|aren'?t)\s+(?:[a-z-]+\s+){0,2}$",
+    re.I,
+)
+_NAMED_FILE = re.compile(r"(?<![\w.])[\w-]+(?:\.[\w-]+)*\.[A-Za-z][A-Za-z0-9]{1,5}\b")
+#: A script the request names is how the file gets built, not where figures come from.
+_CODE_SUFFIXES = frozenset({".py", ".js", ".ts", ".sh", ".ps1", ".bat", ".ipynb"})
+
+
+#: Tools that bring in outside data: a web page, a download, an indexed document.
+_LOOKUP_WORDS = ("web", "fetch", "download", "query")
+
+
+def _data_source(name: str) -> bool:
+    """A file figures could come from: not a script, not a skill's instructions."""
+    return (
+        os.path.splitext(name)[1].lower() not in _CODE_SUFFIXES
+        and name.lower() != "skill.md"
+    )
+
+
+def asks_for_invented_data(query: str, written: Collection[str] = ()) -> bool:
+    """*query* asks for sample, fake or made-up data to be put in a file.
+
+    Not when it names a file other than the ones in *written* (basenames):
+    "5 sample rows from sales.csv" is real data.
+    """
+    text = query or ""
+    if not any(
+        not _NOT_INVENTED.search(text[: m.start()]) for m in _INVENTED.finditer(text)
+    ):
+        return False
+    known = {name.lower() for name in written}
+    for match in _NAMED_FILE.finditer(text):
+        name = match.group(0).lower()
+        if _data_source(name) and name not in known:
+            return False
+    return True
+
+
 def file_findings(
     files: Mapping[str, Sequence[Block]],
     records: Sequence[Dict[str, Any]],
@@ -1904,7 +1960,9 @@ def file_findings(
     (*context*). A script's output sources an amount only when it computed
     from files read this turn (*input_names* are the files *inputs* hold).
     An answer that says its figures are unverified and names a
-    value has already told the user about it.
+    value has already told the user about it. A request for sample or made-up
+    data has no source to find, so nothing is reported, unless the turn read
+    another file or looked something up: the figures were meant to come from it.
 
     *built* are the paths in *files* a script or a tool produced, rather than
     the model typing their text. A figure in one of those is the program's
@@ -1918,6 +1976,17 @@ def file_findings(
     read_names = _read_names(records, written) | (
         {_basename(n) for n in input_names} - written
     )
+    sources = read_names | {_basename(n) for n in input_names}
+    looked_up = any(
+        _ran(r) and not r.get("failed") and _has(_name(r), _LOOKUP_WORDS)
+        for r in records
+    )
+    if (
+        not looked_up
+        and not any(_data_source(n) for n in sources - written)
+        and asks_for_invented_data(query, written)
+    ):
+        return []
     input_texts = [_spelled_out(t) for t in inputs]
     copied = _copied_numbers(
         _source_records(records, written),
