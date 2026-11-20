@@ -319,6 +319,21 @@ def test_discord_connector_token_is_none_on_a_refused_backend(refused):
     assert refused.calls == []
 
 
+@pytest.mark.parametrize("module", ["slack", "discord"])
+def test_messaging_load_on_a_refused_backend_gives_only_the_refusal_remedy(
+    module, monkeypatch
+):
+    import importlib
+
+    credentials = importlib.import_module(f"gaia.messaging.{module}.credentials")
+    _activate(monkeypatch, PlaintextKeyring())
+    with pytest.raises(RuntimeError) as exc:
+        credentials.load()
+    msg = str(exc.value)
+    assert "Insecure keyring backend" in msg
+    assert "again" not in msg and "re-run" not in msg
+
+
 def test_discord_clear_on_a_refused_backend_raises_what_disconnect_catches(refused):
     from gaia.messaging.discord import credentials
 

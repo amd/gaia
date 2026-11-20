@@ -100,8 +100,12 @@ def load() -> str:
     token = os.environ.get(BOT_TOKEN_ENV_VAR)
     if token:
         return token
+    from gaia.connectors.errors import ConnectorsError
+
     try:
         token = _keyring().read(SERVICE_NAME, BOT_TOKEN_KEY)
+    except ConnectorsError as e:
+        raise DiscordCredentialsError(str(e)) from e
     except Exception as e:  # noqa: BLE001 - re-raised with the remedy below
         raise DiscordCredentialsError(
             f"Could not read the Discord bot token from the OS keyring: {e}. "

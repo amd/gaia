@@ -84,10 +84,14 @@ def load() -> SlackCredentials:
     bot = os.environ.get(BOT_TOKEN_ENV_VAR)
     app = os.environ.get(APP_TOKEN_ENV_VAR)
     if not (bot and app):
+        from gaia.connectors.errors import ConnectorsError
+
         try:
             keyring = _keyring()
             bot = bot or keyring.read(SERVICE_NAME, BOT_TOKEN_KEY)
             app = app or keyring.read(SERVICE_NAME, APP_TOKEN_KEY)
+        except ConnectorsError as e:
+            raise SlackCredentialsError(str(e)) from e
         except Exception as e:  # noqa: BLE001 - re-raised with the remedy below
             raise SlackCredentialsError(
                 f"Could not read the Slack tokens from the OS keyring: {e}. "
