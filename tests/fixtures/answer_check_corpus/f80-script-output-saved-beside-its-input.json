@@ -51,7 +51,7 @@
     }
   ],
   "expect": {
-    "model_calls": 4,
+    "model_calls": 5,
     "answer_lacks": [
       "No successful write to `recon_tables.xlsx`"
     ]

@@ -32,7 +32,7 @@ beforeEach(() => {
 });
 
 describe('SkillsSection', () => {
-    it('starts open and lists each skill with how it was loaded', async () => {
+    it('starts open and lists each skill, with how it was loaded on hover', async () => {
         mocked.getCapabilities.mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: [], skills: SKILLS });
         render(<SkillsSection sessionId={SID} busy={false} />);
 
@@ -40,40 +40,42 @@ describe('SkillsSection', () => {
         const items = within(list).getAllByRole('listitem');
         expect(items.map((li) => li.querySelector('code')?.textContent))
             .toEqual(['gaia-voice', 'analyze-recording', 'summarize']);
-        expect(items[0]).toHaveTextContent(tEn('skills.how.always'));
-        expect(items[1]).toHaveTextContent(tEn('skills.how.auto'));
-        expect(items[2]).toHaveTextContent(tEn('skills.how.model'));
+        expect(items[0]).toHaveAttribute('title', tEn('skills.how.always'));
+        expect(items[1]).toHaveAttribute('title', tEn('skills.how.auto'));
+        expect(items[2]).toHaveAttribute('title', tEn('skills.how.model'));
     });
 
-    it('says so when no skill is in use', async () => {
-        render(<SkillsSection sessionId={SID} busy={false} />);
-        expect(await screen.findByText(tEn('skills.empty'))).toBeInTheDocument();
+    it('shows no section while no skill is in use', async () => {
+        const { container } = render(<SkillsSection sessionId={SID} busy={false} />);
+        await waitFor(() => expect(mocked.getCapabilities).toHaveBeenCalled());
+        await act(async () => {});
+        expect(container).toBeEmptyDOMElement();
     });
 
-    it('hides the section for an agent running elsewhere, which does not report skills', async () => {
+    it('shows no section for an agent running elsewhere, which does not report skills', async () => {
         mocked.getCapabilities.mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: [], skills: null });
-        render(<SkillsSection sessionId={SID} busy={false} />);
-
-        await waitFor(() => expect(screen.queryByText(tEn('sp.checking'))).not.toBeInTheDocument());
-        expect(screen.queryByText(tEn('skills.title'))).not.toBeInTheDocument();
-        expect(screen.queryByText(tEn('skills.empty'))).not.toBeInTheDocument();
+        const { container } = render(<SkillsSection sessionId={SID} busy={false} />);
+        await waitFor(() => expect(mocked.getCapabilities).toHaveBeenCalled());
+        await act(async () => {});
+        expect(container).toBeEmptyDOMElement();
     });
 
-    it('says the agent has not started yet on a 409', async () => {
+    it('shows no section before the agent has started (409)', async () => {
         mocked.getCapabilities.mockRejectedValue(httpError(409, 'not running'));
-        render(<SkillsSection sessionId={SID} busy={false} />);
-
-        expect(await screen.findByRole('status')).toHaveTextContent(tEn('skills.notRunning'));
+        const { container } = render(<SkillsSection sessionId={SID} busy={false} />);
+        await waitFor(() => expect(mocked.getCapabilities).toHaveBeenCalled());
+        await act(async () => {});
+        expect(container).toBeEmptyDOMElement();
     });
 
-    it('reads again while a reply runs, so a turn paused on a permission prompt is not called "not running"', async () => {
+    it('reads again while a reply runs, so skills show once a starting agent answers', async () => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
         try {
             mocked.getCapabilities
                 .mockRejectedValueOnce(httpError(409, 'not running'))
                 .mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: [], skills: SKILLS });
             render(<SkillsSection sessionId={SID} busy />);
-            expect(await screen.findByRole('status')).toHaveTextContent(tEn('skills.notRunning'));
+            await waitFor(() => expect(mocked.getCapabilities).toHaveBeenCalledTimes(1));
 
             await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
 
@@ -92,7 +94,7 @@ describe('SkillsSection', () => {
 
     it('reads again when a skill is picked up mid-reply', async () => {
         render(<SkillsSection sessionId={SID} busy />);
-        await screen.findByText(tEn('skills.empty'));
+        await waitFor(() => expect(mocked.getCapabilities).toHaveBeenCalled());
         mocked.getCapabilities.mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: [], skills: SKILLS });
 
         act(() => useChatStore.getState().addSkillStep(null));

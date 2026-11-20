@@ -72,6 +72,12 @@ from gaia_agent.tool_requests import requested_tools
 from gaia.agents.base.agent import Agent, _withheld_skill_tools, default_max_steps
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, READ, call_risk
 from gaia.agents.base.checks import attach_check, check_from_python_run, snippet_target
+from gaia.agents.base.code_path_screen import (
+    python_code_preflight,
+    python_code_refusal,
+    python_file_preflight,
+    python_file_refusal,
+)
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_KEEP_STEPS,
@@ -98,6 +104,7 @@ from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 # dynamic_tools_env_override is re-exported so callers importing it from
 # this module keep working; its canonical home is the core tool_loader
 # so the UI settings router shares it without depending on this wheel (#1102).
+from gaia.agents.base.script_preview import changed_script_refusal
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
 from gaia.agents.base.tool_loader import (
     ToolLoader,
@@ -325,6 +332,17 @@ def _with_project_paths(env: Dict[str, str], project: os.PathLike | str) -> None
     env["PYTHONPATH"] = os.pathsep.join(
         _project_import_paths(project) + ([existing] if existing else [])
     )
+
+
+def _python_path_refused(agent: Any, path: str, full_access: bool) -> bool:
+    """Whether a Python tool may not run *path*, or run in it.
+
+    Full access opens every folder but one the user removed from the chat.
+    """
+    validator = agent.path_validator
+    if full_access:
+        return validator.withheld_root(path) is not None
+    return not validator.is_path_allowed(path)
 
 
 def _server_refusal(
@@ -1610,13 +1628,16 @@ class ChatAgent(
     def _standing_skill_tools(self) -> List[str]:
         """Tools that join the list for the skills in use, without a jump.
 
-        A loaded skill's own tools are registered whether or not its body renders
-        this turn, and an undeclared one cannot be called.
+        Every loaded skill counts, whether or not its body renders this turn:
+        its instructions name these tools, and an undeclared one cannot be
+        called.
         """
         tools = self._loaded_skill_tools()
         for skill in getattr(self, "loaded_skills", {}).values():
+            # getattr: test stubs stand in for a skill with a bare namespace.
+            tools.extend(getattr(getattr(skill, "gaia", None), "tools_required", ()))
             tools.extend(skill.namespaced_tool_name(tool) for tool in skill.tool_names)
-        return tools
+        return list(dict.fromkeys(tools))
 
     def _select_tools_for_turn(self, user_input: str) -> Optional[List[str]]:
         """Return this turn's tool list, or ``None`` for every tool.
@@ -2282,7 +2303,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             unsupported += " Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process."
         data_file_rules += unsupported + "\n"
         data_file_rules += """
-**SLIDES / DECKS:** Asked to make one (not just mentioned) → a file, never an image. No .pptx or HTML named → always ask "PowerPoint (.pptx) or HTML?" (alongside any other question) and build nothing until they answer. Then build it (`run_python` with python-pptx, or `write_file` one self-contained .html) and give the path.
+**SLIDES / DECKS:** Asked to make one (not just mentioned) → a file, never an image. Make a .pptx unless asked for HTML; never ask which. For .pptx, load `slide-decks` and use its tools (no hand-written python-pptx); without that skill, load `office-docs`. HTML: `write_file` one self-contained .html. Give the path.
 """
         # A rule about a tool the session lacks made the model offer images.
         if self._offers_image_generation():
@@ -2896,7 +2917,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except Exception as e:
                     return {"status": "error", "error": str(e)}
 
-            @tool(timeout_arg="timeout")
+            @tool(
+                timeout_arg="timeout",
+                preflight=python_file_preflight(self, may_write_files),
+            )
             @_lists_script_libraries
             def execute_python_file(
                 file_path: str, args: str = "", timeout: int = DEFAULT_PYTHON_TIMEOUT
@@ -2932,7 +2956,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 file_path = str(
                     _resolve_target(file_path, None, _workspace_default(self))
                 )
-                if not self.path_validator.is_path_allowed(file_path):
+                refused = python_file_refusal(self, file_path, may_write_files, args)
+                if refused is not None:
+                    return refused
+                full_access = self._full_access_on()
+                if _python_path_refused(self, file_path, full_access):
                     return {
                         "status": "error",
                         "error": f"Access denied: {file_path}."
@@ -2949,14 +2977,23 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     p.resolve(), shlex.split(args) if args.strip() else []
                 )
                 try:
-                    source = p.read_text(encoding="utf-8", errors="replace")
+                    data = p.read_bytes()
                 except OSError as e:
                     return {
                         "status": "error",
                         "error": f"Could not read {file_path}: {e}",
                         "has_errors": True,
                     }
-                refused = _server_refusal(self, source, str(p.resolve().parent))
+                changed = changed_script_refusal(self, file_path, data)
+                if changed is not None:
+                    return changed
+                # Line endings as read_text would give them.
+                source = "\n".join(data.decode("utf-8", errors="replace").splitlines())
+                refused = (
+                    None
+                    if full_access
+                    else _server_refusal(self, source, str(p.resolve().parent))
+                )
                 if refused is not None:
                     return refused
                 start = time.monotonic()
@@ -2964,6 +3001,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 try:
                     project = self._script_project_root()
                     run_dir, env = _python_script_run_context(p, project)
+                    if full_access:
+                        env.pop(GUARDED_FOLDERS_ENV, None)
                     if not run_dir.is_dir():
                         # The project folder went away; the script's own
                         # folder exists, since the script was just read.
@@ -3002,6 +3041,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             should_stop=lambda: stop_requested(self),
                             watch=watch,
                             ignore=[p.resolve()],
+                            marked=not full_access,
                         )
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
@@ -3053,7 +3093,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except Exception as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
-            @tool(timeout_arg="timeout")
+            @tool(
+                timeout_arg="timeout",
+                preflight=python_code_preflight(self, may_write_files),
+            )
             @_lists_script_libraries
             def run_python(
                 code: str = "",
@@ -3117,6 +3160,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 if not timeout:
                     return dict(OUT_OF_TIME)
 
+                refused = python_code_refusal(self, code, may_write_files)
+                if refused is not None:
+                    return refused
+
                 tool_names = set(_TOOL_REGISTRY) | set(
                     getattr(self, "_tools_registry", None) or ()
                 )
@@ -3134,7 +3181,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         ),
                         "has_errors": True,
                     }
-                refused = _server_refusal(self, code, None)
+                full_access = self._full_access_on()
+                refused = None if full_access else _server_refusal(self, code, None)
                 if refused is not None:
                     return refused
 
@@ -3160,7 +3208,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 chosen_root = getattr(
                     self.config, "project_root", None
                 ) or os.environ.get(PROJECT_ROOT_ENV)
-                if chosen_root and not project:
+                if chosen_root and not project and not full_access:
                     return {
                         "status": "error",
                         "error": f"Access denied: the project root {chosen_root} "
@@ -3203,7 +3251,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     except OSError as e:
                         logger.error("run_python: scratch dir unusable: %s", e)
                         return _start_failure("Python", Path(run_dir), e)
-                if not self.path_validator.is_path_allowed(str(run_dir)):
+                if _python_path_refused(self, str(run_dir), full_access):
                     return {
                         "status": "error",
                         "error": f"Access denied: {run_dir} is not in allowed "
@@ -3214,7 +3262,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     }
                 env = child_env(relaunch_self=True)
                 env["PYTHONIOENCODING"] = "utf-8"
-                env[GUARDED_FOLDERS_ENV] = _guarded_folders()
+                if not full_access:
+                    env[GUARDED_FOLDERS_ENV] = _guarded_folders()
                 env["PYTHONUTF8"] = "1"
                 env.setdefault("PYTHONUNBUFFERED", "1")
                 if project:
@@ -3258,6 +3307,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             should_stop=lambda: stop_requested(self),
                             watch=watch,
                             ignore=[snippet],
+                            marked=not full_access,
                         )
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote

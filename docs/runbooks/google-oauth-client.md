@@ -169,9 +169,10 @@ Trouble: "Connect button does nothing in AgentUI."
 ## Security boundaries
 
 - Refresh tokens NEVER cross the public Python API or the FastAPI router.
-- The keyring backend allowlist (`PlaintextKeyring`/`EncryptedKeyring`
-  refused) prevents silent fallback to plaintext file storage on Linux
-  without SecretService.
+- The keyring backend allowlist (`PlaintextKeyring`/`EncryptedKeyring`/
+  `Win32CryptoKeyring` refused, including inside a chained keyring)
+  prevents silent fallback to plaintext file storage on Linux without
+  SecretService.
 - The `client_id_hash` is a CRC32 fingerprint of the client id
   (`gaia.connectors.providers.google`), NOT the client id itself; it is
   for log correlation and the rotation tripwire only, not security.

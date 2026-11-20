@@ -1658,7 +1658,7 @@ of that router's connector types.
 ### Session environment, outputs and agent info
 
 What one chat may reach, what it produced, and which tools and skills its agent
-has, behind the session panel's Folders and access, Outputs, Skills and Agent info sections. Folder and internet changes are stored with
+has, behind the session panel's Environment, Outputs, Skills and Agent info sections. Folder and internet changes are stored with
 the chat, applied to its agent before every turn, and applied to a running
 agent at once, so they take effect on its next step.
 
@@ -2031,7 +2031,7 @@ else's:
 
   <Accordion title="PUT /api/chat/permissions/{session_id}">
     Switch the chat between `ask` (every gated tool prompts) and `full_access`
-    (gated tools run unasked and shell guardrails are lifted, as the TUI's
+    (gated tools run unasked and the shell runs any command, as the TUI's
     `/full-access`). Takes effect on the next gated tool, including mid-turn.
 
     **Request:** `{"mode": "full_access"}` — any value other than `ask` or

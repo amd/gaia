@@ -1426,7 +1426,7 @@ def test_a_one_time_call_says_how_it_may_run():
     """Accurate to the model: approved once by the user, or not at all."""
     error, _ = _Gated("gh")._validate_shell_command("gh auth token")
     assert "exact command once" in error["hint"]
-    assert "do not reach the same result another way" in error["hint"]
+    assert "do not run it through another tool or script" in error["hint"]
 
 
 def test_the_always_grant_is_scoped_to_the_command_class_not_the_tool():
@@ -1696,7 +1696,7 @@ def _run_capturing_subprocess(host, command):
         )
         return _FakeProcess()
 
-    def fake_pipeline(segments, modes, envs, cwd, timeout, waiter=None):
+    def fake_pipeline(segments, modes, envs, cwd, timeout, waiter=None, marked=True):
         seen["pipeline"] = segments
         return subprocess_module.CompletedProcess(segments, 0, "", "")
 

@@ -62,7 +62,7 @@ import { useChatExport } from '../hooks/useChatExport';
 import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
-import { isPlaceholderTitle } from '../utils/sessionTitle';
+import { isPlaceholderTitle, shownTitle } from '../utils/sessionTitle';
 import { laterTurns, lastSentMessage } from '../utils/editLast';
 import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
 import { requestErrorParam } from '../utils/requestErrors';
@@ -71,6 +71,7 @@ import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { ModelServerDownNotice } from './ModelServerDownNotice';
 import { useChatDraft } from '../hooks/useSavedDraft';
+import { followSlideEvent, settleSlideDraft, SLIDE_PREVIEW_ENABLED } from '../stores/slideDraftStore';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
 import { useOpeningMessage } from '../hooks/useOpeningMessage';
 import { getT, useT } from '../i18n/useT';
@@ -765,6 +766,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onAgentEvent: (event) => {
                 // The client's own "waiting to start" notice is not the server taking the message.
                 if (!(event.type === 'status' && event.phase === 'waiting')) accepted();
+                // A draft event is only the preview's; nothing else draws it.
+                if (SLIDE_PREVIEW_ENABLED ? followSlideEvent(sessionId, event) : event.type === 'draft') return;
                 // The queue is this chat's, so it stays current even after the view moved on.
                 if (event.type === 'followup_taken' && event.text) {
                     const takenText = event.text;
@@ -986,6 +989,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             },
             onDone: (event) => {
                 accepted();
+                settleSlideDraft(sessionId);
                 useNotificationStore.getState().dismissSessionPrompts(sessionId);
                 useChatStore.getState().closeSessionQuestions(sessionId);
                 if (doneHandled) return;
@@ -1106,6 +1110,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             },
             onError: (err) => {
                 const interrupted = isStreamInterrupted(err);
+                // An interrupted stream may be picked up again; any other error ends the turn.
+                if (!interrupted) settleSlideDraft(sessionId);
                 // A queued message the server never took goes back in line, or shows as failed with a retry.
                 // So does a direct send a busy chat refused.
                 const requeued = queuedSettled && !reattach && !interrupted && !!optimisticUser
@@ -1631,7 +1637,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            aria-label={session?.title || 'Chat'}
+            aria-label={shownTitle(session?.title) || 'Chat'}
         >
             <TurnAnnouncer busy={busy} />
             <header className="task-header">
@@ -1654,7 +1660,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         />
                     ) : (
                         <button type="button" className="task-title" onClick={startEditTitle} title={t('row.rename')}>
-                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : session?.title}</span>
+                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : shownTitle(session?.title)}</span>
                             <Edit3 size={12} aria-hidden="true" className="task-title-edit" />
                         </button>
                     )}
@@ -1807,6 +1813,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 sessionId={sessionId}
                 messages={messages}
                 busy={busy}
+                usage={contextUsage}
                 onUsage={showContextUsage}
                 onJumpToMessage={jumpToMessage}
             />

@@ -28,7 +28,7 @@ npm run migrate:local
 printf 'ADMIN_DEV_NO_AUTH=1\nGITHUB_TOKEN=%s\nMAINTAINER_LOGINS=<your-login>\n' "<read-only token>" > .dev.vars
 npm run dev                                   # http://127.0.0.1:8787<basePath>
 curl -X POST -H "x-admin-action: collect" "http://127.0.0.1:8787<basePath>/api/collect?days=14&full=1"
-python scripts/audit_numbers.py http://127.0.0.1:8787<basePath> --repo <owner/name>
+GITHUB_TOKEN="$(gh auth token)" python scripts/audit_numbers.py http://127.0.0.1:8787<basePath> --repo <owner/name>
 ```
 
 - Use the same read-only fine-grained token as production (below). `gh auth token` works for a quick look but is a
@@ -130,7 +130,7 @@ for skip in 0 30 60; do
   curl -X POST -H "x-admin-action: collect" -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
     -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" "$URL/api/collect?days=30&skip=$skip&only=runs,tests"
 done
-python scripts/audit_numbers.py "$URL" --repo <owner/name>
+GITHUB_TOKEN="$(gh auth token)" python scripts/audit_numbers.py "$URL" --repo <owner/name>
 ```
 
 On a busy repository (the probe warns past 1,000 runs a day) read one day per call instead: `days=1&skip=N` for N
