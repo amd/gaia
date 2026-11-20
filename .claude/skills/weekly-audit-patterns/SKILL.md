@@ -34,7 +34,9 @@ invariants a future editor will otherwise break.
 `days since 1970-01-01 mod len(ROTATION)` in `scripts/audit/audit_rotation.py`. Each audit
 therefore runs every third night. Keyed on the epoch day so it never resets at a month or
 year end. **Adding an audit = append it to `ROTATION`** and give it a `rotation_night`
-input plus the `run-name` the others use. None of the audits may carry its own `schedule:`
+input plus the `run-name` the others use: `scripts/audit/audit_dispatch.py` confirms
+the dispatch by finding that run-name, so an audit without it fails every night and files a
+"not confirmed" issue. None of the audits may carry its own `schedule:`
 (a contract test fails if one does): three audits every night spent the subscription's
 **weekly** cap mid-week (both daily audits failed 5 of 10 nights in October 2026).
 
