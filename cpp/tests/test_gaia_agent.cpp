@@ -15,6 +15,7 @@
 #include "../agents/gaia/gaia_agent.h"
 #include <gaia/file_tools.h>
 #include <gaia/process.h>
+#include <gaia/security.h>
 #include "support/mock_llm_server.h"
 
 using namespace gaia;
@@ -1477,4 +1478,35 @@ TEST(GaiaAgentTest, AVeryLongAnswerIsStillCheckedAtItsEnd) {
     const auto bodies = mock.receivedBodies();
     ASSERT_EQ(bodies.size(), 2u);
     EXPECT_NE(bodies[1].find("no such file exists"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, AnAlwaysGrantMadeOnlineDoesNotRunAnOnlineCommandOnceTheInternetIsOff) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    GaiaAgent::Options o = optionsFor(w);
+    o.internetOff = std::make_shared<std::atomic<bool>>(false);
+    GaiaAgent agent(cfgFor(mock), o);
+    auto grants = std::make_shared<AllowedToolsStore>("");
+    agent.setAllowedToolsStore(grants);
+    int asked = 0;
+    agent.toolRegistry().setConfirmCallback([&asked](const std::string&, const json&) {
+        ++asked;
+        return ToolConfirmResult::DENY;
+    });
+    // Each is harmless if it did run, so a regression shows as a failed check, not a download.
+    const std::vector<std::string> commands = {
+        "dotnet restore --help", "Dotnet.EXE restore --help", "conda install --help", "mvn -v",
+        "gem.cmd install --help", "\"C:\\Tools\\Conda.EXE\" install --help", "/opt/maven/bin/mvn -v",
+        "./gradlew --version", "pip.exe install --help", "NPM.CMD install --help"};
+    // Granted "always" while the internet was on.
+    for (const auto& c : commands) grants->addAlwaysAllowed("bash_execute:" + shellCommandScope(c));
+    o.internetOff->store(true);
+    for (const auto& c : commands) {
+        ASSERT_TRUE(grants->isAlwaysAllowed("bash_execute:" + shellCommandScope(c))) << c;
+        json r = agent.toolRegistry().executeTool("bash_execute", json{{"command", c}});
+        EXPECT_EQ(r.value("status", ""), "error") << c << ": " << r.dump();
+        EXPECT_EQ(r.value("executed", true), false) << c << ": " << r.dump();
+        EXPECT_NE(r.value("error", "").find("internet is off"), std::string::npos) << c << ": " << r.dump();
+    }
+    EXPECT_EQ(asked, 0) << "refused before any approval, grant or not";
 }
