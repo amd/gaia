@@ -127,7 +127,8 @@ def forget_key(provider: str) -> bool:
     from gaia.connectors.store import delete_secret, secret_in_use
 
     slot = _check(provider)
-    had = secret_in_use(slot)
+    # A weak keyring refuses the read but not the delete.
+    had = recall_key(provider) is not None or secret_in_use(slot)
     delete_secret(slot)
     return had
 
