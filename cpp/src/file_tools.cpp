@@ -1840,7 +1840,14 @@ json FileIOTools::doFileSearch(const json& args) {
             const std::string filename = entryPath.filename().u8string();
 
             if (it->is_directory(ec) && !ec) {
-                if (!resolvesInsideRoot(entryPath)) {
+                // A folder link is never walked, even one that stays inside: it can loop back on itself.
+                const fs::file_status linkStatus = it->symlink_status(ec);
+                bool folderLink = ec || fs::is_symlink(linkStatus);
+#ifdef _MSC_VER
+                folderLink = folderLink || linkStatus.type() == fs::file_type::junction;
+#endif
+                ec.clear();
+                if (folderLink || !resolvesInsideRoot(entryPath)) {
                     it.disable_recursion_pending();
                     continue;
                 }

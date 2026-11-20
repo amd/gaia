@@ -157,7 +157,24 @@ size_t countIndexableUnder(const fs::path& dir, bool withDocuments) {
     return n;
 }
 
-// Files worth indexing under root: skips VCS/build folders, ignored paths and unreadable folders.
+// A folder link (a symlink, or a Windows junction) is never walked into, wherever it leads;
+// any other folder only when it resolves under @p rootReal.
+bool walkInto(const fs::directory_entry& entry, const fs::path& rootReal) {
+    std::error_code ec;
+    const fs::file_status st = entry.symlink_status(ec);
+    if (ec || fs::is_symlink(st)) return false;
+#ifdef _MSC_VER
+    if (st.type() == fs::file_type::junction) return false;
+#endif
+    if (rootReal.empty()) return false;
+    const fs::path real = fs::canonical(entry.path(), ec);
+    if (ec) return false;
+    const fs::path rel = real.lexically_relative(rootReal);
+    return !rel.empty() && *rel.begin() != fs::path("..");
+}
+
+// Files worth indexing under root: skips VCS/build folders, ignored paths, unreadable folders and
+// folder links.
 std::vector<std::string> indexableFiles(const std::string& root, bool withDocuments,
                                         SkippedFiles* skipped = nullptr) {
     static const std::set<std::string> skipDirs = {
@@ -166,10 +183,17 @@ std::vector<std::string> indexableFiles(const std::string& root, bool withDocume
     const GitignoreMatcher ignore = GitignoreMatcher::forDirectory(root);
     std::error_code ec;
     std::vector<std::string> files;
+    std::error_code rootEc;
+    fs::path rootReal = fs::canonical(root, rootEc);
+    if (rootEc) rootReal.clear();
     fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
     for (; it != end && !ec; it.increment(ec)) {
         const fs::path& p = it->path();
         const bool dir = it->is_directory(ec);
+        if (dir && !walkInto(*it, rootReal)) {
+            it.disable_recursion_pending();
+            continue;
+        }
         const bool skipDir = dir && skipDirs.count(p.filename().string()) != 0;
         if (skipDir || (dir && ignore.isIgnored(p.u8string(), true))) {
             it.disable_recursion_pending();

@@ -1226,6 +1226,42 @@ TEST_F(FileToolsTest, FileSearch_DoesNotLeaveTheFolderThroughALink) {
     fs::remove_all(outside, ec);
 }
 
+// Junctions need no privilege, so on Windows this runs everywhere rather than skipping.
+TEST_F(FileToolsTest, FileSearch_DoesNotWalkIntoAFolderLinkOutOrBackIn) {
+    const fs::path outside = fs::temp_directory_path() / testsupport::perProcess("gaia_file_tools_far");
+    std::error_code ec;
+    fs::remove_all(outside, ec);
+    fs::create_directories(outside / "deeper");
+    std::ofstream(outside / "deeper" / "beyond.txt", std::ios::binary) << "ORCHID\n";
+    writeFile("inside.txt", "ORCHID\n");
+    fs::create_directories(tempDir_ / "sub");
+    const fs::path out = tempDir_ / "sub" / "far";
+    const fs::path back = tempDir_ / "sub" / "circular";
+    for (const auto& [link, target] : {std::pair{out, outside}, std::pair{back, tempDir_}}) {
+#ifdef _WIN32
+        const std::string make = "cmd /c mklink /J \"" + link.string() + "\" \"" + target.string() + "\" >nul";
+        ASSERT_EQ(std::system(make.c_str()), 0) << make;
+#else
+        fs::create_directory_symlink(target, link, ec);
+        ASSERT_FALSE(ec) << ec.message();
+#endif
+    }
+    for (const json& args : {json{{"pattern", "*.txt"}, {"path", tempDir_.u8string()}},
+                             json{{"pattern", "**/*.txt"}, {"path", tempDir_.u8string()}},
+                             json{{"pattern", "*"}, {"path", tempDir_.u8string()}, {"content_pattern", "ORCHID"}}}) {
+        json found = FileIOTools::fileSearch().callback(args);
+        ASSERT_FALSE(found.contains("error")) << found.dump();
+        ASSERT_EQ(found["matches"].size(), 1u) << found.dump();
+        EXPECT_EQ(fs::u8path(found["matches"][0]["path"].get<std::string>()).filename().u8string(), "inside.txt");
+        EXPECT_EQ(found.dump().find("beyond"), std::string::npos) << found.dump();
+        EXPECT_EQ(found.dump().find("circular"), std::string::npos) << found.dump();
+    }
+    // The links first, so cleaning up cannot reach through them.
+    fs::remove(out, ec);
+    fs::remove(back, ec);
+    fs::remove_all(outside, ec);
+}
+
 TEST_F(FileToolsTest, FileWrite_ReplacesTheFileWholeAndLeavesNoTemporaryFile) {
     const std::string path = writeFile("keep.sh", "old\n");
 #ifndef _WIN32
