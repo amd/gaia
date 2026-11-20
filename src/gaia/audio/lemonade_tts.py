@@ -281,12 +281,14 @@ class LemonadeTTSClient(LemonadeAudioService):
         user choice in Settings, not something a speech request may download
         invisibly in the middle of a turn.
         """
+        from gaia.llm.surface_hints import SPEECH_DOWNLOAD_HINT, SPEECH_SETUP_HINT
+
         catalog = self.catalog()
         entry = next((item for item in catalog if item.get("id") == self.model), None)
         if entry is None:
             raise LemonadeTTSError(
-                f"Lemonade has no TTS model '{self.model}' in its catalog. "
-                "Run `gaia download --agent talk`, then retry."
+                f"Lemonade has no TTS model '{self.model}' in its catalog, so "
+                f"it cannot record speech yet. {SPEECH_SETUP_HINT}"
             )
         if "tts" not in (entry.get("labels") or []):
             raise LemonadeTTSError(
@@ -300,9 +302,8 @@ class LemonadeTTSClient(LemonadeAudioService):
             )
             raise LemonadeTTSError(
                 f"TTS model '{self.model}' is not downloaded{size_hint}, and GAIA "
-                "will not download speech models during a chat. Using Read aloud "
-                "on any reply in the app downloads it; so does "
-                "`gaia download --agent talk`. Then retry."
+                "will not download speech models during a chat. "
+                f"{SPEECH_DOWNLOAD_HINT}"
             )
 
     def synthesize_long(

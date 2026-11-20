@@ -61,12 +61,12 @@ def test_tts_tool_returns_missing_model_as_structured_error(tts_tool):
     tool, allowed = tts_tool
     with patch("gaia.audio.lemonade_tts.LemonadeTTSClient") as client:
         client.return_value.check_model_available.side_effect = LemonadeTTSError(
-            "TTS model is not downloaded. Run `gaia download --agent talk`, then retry."
+            "TTS model is not downloaded. Press Read aloud under a reply."
         )
         result = tool("hello", str(allowed / "speech.wav"))
 
     assert result["status"] == "error"
-    assert "gaia download --agent talk" in result["error"]
+    assert "Press Read aloud" in result["error"]
     assert not (allowed / "speech.wav").exists()
 
 

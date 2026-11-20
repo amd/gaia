@@ -238,10 +238,12 @@ class AudioGenerationToolsMixin:
                 "duration_requested": duration,
             }
             if copy_to is not None:
-                copy_error = _copy_for_user(destination, copy_to, kind)
-                if copy_error is not None:
-                    return copy_error
-                result["saved_to"] = str(copy_to)
+                not_saved = _copy_for_user(destination, copy_to, kind)
+                if not_saved is None:
+                    result["saved_to"] = str(copy_to)
+                else:
+                    # Still a success: the track exists and plays from audio_path.
+                    result["copy_not_saved"] = not_saved
             return result
         except (LemonadeClientError, OSError, SnapshotError) as exc:
             return {"status": "error", "error": f"Audio generation failed: {exc}"}
@@ -316,7 +318,7 @@ def _copy_for_user(source: Path, destination: Path, kind: str):
 
     Exclusive create closes the minutes-long window between the save_to check
     and the copy; a failed copy removes its partial file. Returns ``None`` on
-    success, or an error result that says where the original is.
+    success, or why the copy is missing and where the original is.
     """
     try:
         before_change(destination, f"generate_{kind}")
@@ -333,10 +335,7 @@ def _copy_for_user(source: Path, destination: Path, kind: str):
         reason = f"the copy to {destination} could not be saved: {exc}"
     else:
         return None
-    return {
-        "status": "error",
-        "error": (
-            f"The audio was made, but {reason}. The original is at {source}. "
-            "Ask the user for a new file name or folder."
-        ),
-    }
+    return (
+        f"The audio was made and is kept at {source}, but {reason}. Tell the "
+        "user where it is and ask for a new file name or folder for the copy."
+    )
