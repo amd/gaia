@@ -749,7 +749,10 @@ def sweep_stale_scratch_dirs() -> int:
                 continue
         try:
             info = os.lstat(path)
-            if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            if (
+                hasattr(os, "getuid")
+                and info.st_uid != os.getuid()  # pylint: disable=no-member
+            ):
                 continue
             if _last_activity(path) > cutoff:
                 continue

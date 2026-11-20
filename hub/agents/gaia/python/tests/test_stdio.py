@@ -1080,7 +1080,9 @@ def test_model_switch_unknown_local_id_is_refused_not_accepted(monkeypatch):
     assert agent.rebuild_count == 0
 
 
-def test_missing_cloud_model_is_listed_again_after_its_key_is_replayed(monkeypatch):
+def test_missing_cloud_model_is_listed_again_after_its_key_is_replayed(
+    monkeypatch, stub_lemonade
+):
     """A restarted Lemonade forgot the gateway key; the readiness probe hands it back."""
     from gaia_agent import stdio as stdio_mod
 
@@ -1779,7 +1781,10 @@ def test_model_list_names_the_command_that_connects_a_missing_provider(
     assert answer.count("run `/provider` to connect it") == 2
 
 
-def test_undiscovered_cloud_model_is_refused_without_changing_session(stub_lemonade):
+def test_undiscovered_cloud_model_is_refused_without_changing_session(
+    monkeypatch, stub_lemonade
+):
+    monkeypatch.setattr(stdio, "probe_model_present", lambda base, model_id: False)
     agent = _ModelSwitchAgent()
     previous = agent.chat.llm_client
     events = _events(_model_run(agent, "/model fireworks.not-discovered"))
