@@ -815,13 +815,19 @@ json StdioServer::runTurn(const std::string& query) {
     return terminal;
 }
 
+// A fresh conversation starts with nothing pre-approved: the "always" answers went with the old one.
+void StdioServer::clearConversation() {
+    agent_.clearHistory();
+    grants_->clearAll();
+}
+
 void StdioServer::runQuery(const std::string& query) {
     json terminal;
     try {
         if (cancelled_) {
             terminal = {{"type", "final"}, {"answer", ""}};
         } else if (query == kClearQuery) {
-            agent_.clearHistory();
+            clearConversation();
             terminal = {{"type", "final"}, {"answer", "conversation_cleared"}};
         } else if (query == kMemoryDumpQuery) {
             terminal = {{"type", "final"}, {"answer", dumps(memoryDump())}};
@@ -884,7 +890,7 @@ int StdioServer::run() {
             }
             if (item.kind == Item::Stop) break;
             if (item.kind == Item::Clear) {
-                agent_.clearHistory();
+                clearConversation();
                 continue;
             }
             if (item.kind == Item::Reject) {

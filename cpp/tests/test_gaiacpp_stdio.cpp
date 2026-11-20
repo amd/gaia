@@ -1158,6 +1158,89 @@ TEST_F(GaiacppStdio, ClearConversationSentinelAndControlBothForgetTheHistory) {
     }
 }
 
+TEST_F(GaiacppStdio, ClearingTheConversationDropsItsAlwaysGrants) {
+    for (const char* dir : {"one", "two", "three"}) {
+        mock_.pushResponse(toolCall("bash_execute", {{"command", std::string("mkdir ") + dir}}));
+        mock_.pushResponse(answer("Made."));
+    }
+    Start s;
+    s.shell = true;
+    start(s);
+    ask("make one");
+    const json first = waitFor("needs_confirmation");
+    ASSERT_TRUE(first.is_object());
+    decide("always", first["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    ASSERT_FALSE(agent_->allowedToolsStore()->allAllowed().empty()) << "mkdir was granted";
+
+    control({{"gaia_control", "clear_history"}});
+    ask("make two");
+    const json second = waitFor("needs_confirmation", 2);
+    ASSERT_TRUE(second.is_object()) << "the grant went with the cleared conversation";
+    decide("always", second["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(2).is_object());
+    EXPECT_TRUE(fs::is_directory(work_ / "two"));
+
+    ask(std::string("\0gaia:clear_conversation\0", 25));
+    ASSERT_TRUE(waitTerminal(3).is_object());
+    EXPECT_TRUE(agent_->allowedToolsStore()->allAllowed().empty()) << "the sentinel clears grants too";
+    ask("make three");
+    const json third = waitFor("needs_confirmation", 3);
+    ASSERT_TRUE(third.is_object());
+    decide("deny", third["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(4).is_object());
+    EXPECT_FALSE(fs::exists(work_ / "three"));
+}
+
+TEST_F(GaiacppStdio, ClearingOneConversationLeavesAnotherSessionsGrants) {
+    start();
+    // Once the status is out, the agent holds this session's in-memory grants, not the saved ones.
+    ASSERT_TRUE(waitFor("status").is_object());
+    // A second session: its own agent, server and pipes.
+    AgentConfig c;
+    c.baseUrl = mock_.baseUrl();
+    c.modelId = "mock-model";
+    c.silentMode = true;
+    c.llmRetries = 0;
+    GaiaAgent::Options o;
+    o.skills = false;
+    o.webTools = false;
+    o.documents = false;
+    o.vision = false;
+    o.memory = false;
+    o.workspaceRoots = {work_.string()};
+    GaiaAgent otherAgent(c, o);
+    otherAgent.setConfig(c);
+    PipeBuf otherIn;
+    LineSink otherOut, otherLog;
+    std::istream otherInStream(&otherIn);
+    std::ostream otherOutStream(&otherOut), otherLogStream(&otherLog);
+    StdioOptions so;
+    so.editRoots = {work_.string()};
+    so.log = &otherLogStream;
+    StdioServer other(otherAgent, otherInStream, otherOutStream, so);
+    std::thread otherThread([&] { other.run(); });
+    struct Joiner {
+        PipeBuf& in;
+        std::thread& t;
+        ~Joiner() {
+            in.close();
+            if (t.joinable()) t.join();
+        }
+    } joiner{otherIn, otherThread};
+    ASSERT_TRUE(::waitEvent(otherOut, [](const json& e) { return e.is_object() && e.value("type", "") == "status"; })
+                    .is_object());
+    otherAgent.allowedToolsStore()->addAlwaysAllowed("bash_execute:mkdir");
+    agent_->allowedToolsStore()->addAlwaysAllowed("bash_execute:mkdir");
+    ASSERT_NE(otherAgent.allowedToolsStore(), agent_->allowedToolsStore()) << "each session keeps its own grants";
+
+    ask(std::string("\0gaia:clear_conversation\0", 25));
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    EXPECT_TRUE(agent_->allowedToolsStore()->allAllowed().empty());
+    EXPECT_EQ(otherAgent.allowedToolsStore()->allAllowed(), std::vector<std::string>{"bash_execute:mkdir"})
+        << "the other session's grant is untouched";
+}
+
 TEST_F(GaiacppStdio, MemoryDumpSentinelAnswersWithTheStoredMemories) {
     {
         MemoryStore store((work_ / "memory.db").string());

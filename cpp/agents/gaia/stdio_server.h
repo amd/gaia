@@ -106,6 +106,8 @@ private:
     void cancelInFlightLocked(const std::string& why);
     void hostLeft(const std::string& why);
     void watchHost();
+    /// Forget the history and this session's "always" grants.
+    void clearConversation();
     /// Exactly one terminal event per query, whatever fails.
     void runQuery(const std::string& query);
     json runTurn(const std::string& query);
