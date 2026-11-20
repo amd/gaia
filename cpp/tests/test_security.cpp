@@ -385,7 +385,10 @@ TEST(WebFetchRefusalTest, RefusesShellFetchesButNotInstallsOrLocalRequests) {
           // Wrapped, chained or named by its full path, it is still the program that runs.
           "bash -c \"curl -s https://example.com\"", "powershell -Command \"iwr https://example.com\"",
           "cmd /c curl https://example.com", "C:\\Tools\\curl.exe https://example.com",
-          "echo start && curl https://example.com", "sudo wget https://example.com"}) {
+          "echo start && curl https://example.com", "sudo wget https://example.com",
+          "py -c \"import requests; print(requests.get('https://example.com').text)\"",
+          "powershell -Command \"(New-Object Net.WebClient).DownloadString('https://example.com')\"",
+          "ruby -e \"require 'net/http'; puts Net::HTTP.get(URI('https://example.com'))\""}) {
         const std::string why = webFetchRefusal(sh, {{"command", fetched}});
         EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
     }
@@ -394,7 +397,10 @@ TEST(WebFetchRefusalTest, RefusesShellFetchesButNotInstallsOrLocalRequests) {
          {"ls -la", "git status", "pip install requests", "npm install", "python build.py",
           "curl http://localhost:13305/api/v1/health", "curl http://127.0.0.1:8000/x", "python -m pytest tests",
           "grep -r curl docs", "cat curl-notes.txt", "git log --grep wget",
-          "echo see https://example.com for curl"}) {
+          "echo see https://example.com for curl",
+          // A library's name outside inline code is a package or a file, not a connection.
+          "python -m pip install requests", "py -m pip install httpx", "python -m pytest tests/test_requests.py",
+          "cat setup.py | grep requests", "python fetch_requests.py", "node build.js --socket-path x"}) {
         EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
     }
     EXPECT_NE(webFetchRefusal(sh, {{"command", "echo " + std::string(300000, 'a')}}), "");

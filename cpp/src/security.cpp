@@ -709,15 +709,22 @@ std::string webFetchRefusal(const ToolInfo& tool, const json& args) {
     for (const char c : asked) {
         if (c != '\'' && c != '"' && c != '\\' && c != '^') bare.push_back(c);
     }
-    // A download tool, a raw socket, or a one-line script that opens a connection.
+    static const std::regex downloader(R"(\b(?:start-bitstransfer\b|bitsadmin\b|certutil\b.*-urlcache|aria2c\b))",
+                                       std::regex::icase);
+    // Code handed to an interpreter on the command line that opens a connection. A library's name
+    // anywhere else is not one: `pip install requests` and `pytest test_requests.py` stay allowed.
     static const std::regex scripted(
-        R"(\b(?:start-bitstransfer\b|bitsadmin\b|certutil\b.*-urlcache|aria2c\b)"
-        R"(|(?:python3?|py|node|deno|bun|perl|ruby|php|pwsh|powershell)\b.*(?:socket|urllib|requests|httpx|aiohttp)"
-        R"(|http\.client|https?\.(?:get|request)|fetch\(|net\.connect|WebClient|Net::HTTP|LWP|fsockopen|TCPSocket)))",
+        R"((?:^|[\s;&|(`/\\])(?:python[0-9.]*|py|node|deno|bun|perl|ruby|php|pwsh|powershell)(?:\.exe)?\s)"
+        R"((?:[^\n]*\s)?(?:-c|-e|-r|-p|--eval|-command|eval)\s[^\n]*)"
+        R"((?:socket|urllib|requests|httpx|aiohttp|http\.client|https?\.(?:get|request)|fetch\(|net\.connect)"
+        R"(|WebClient|Net::HTTP|LWP|fsockopen|TCPSocket))",
         std::regex::icase);
-    if (asked.find("/dev/tcp/") != std::string::npos || asked.find("/dev/udp/") != std::string::npos ||
-        std::regex_search(asked, scripted) || std::regex_search(bare, scripted) ||
-        (runsFetchProgram(asked, bare) && (mentionsRemoteUrl(asked) || fetchLeavesThisPc(asked, bare)))) {
+    const bool socketFile = asked.find("/dev/tcp/") != std::string::npos ||
+                            asked.find("/dev/udp/") != std::string::npos;
+    const bool download = std::regex_search(asked, downloader) || std::regex_search(bare, downloader);
+    const bool script = std::regex_search(asked, scripted) || std::regex_search(bare, scripted);
+    const bool fetch = runsFetchProgram(asked, bare) && (mentionsRemoteUrl(asked) || fetchLeavesThisPc(asked, bare));
+    if (socketFile || download || script || fetch) {
         return why + "`" + asked.substr(0, 80) + "`, which fetches from the web. Don't fetch it another way: "
                "answer from what is on this PC, or say what you could not read.";
     }
