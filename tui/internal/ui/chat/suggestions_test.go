@@ -4,6 +4,8 @@
 package chat
 
 import (
+	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/event"
 )
 
 // installSkills lays out a skills folder the way `gaia init` leaves it.
@@ -56,6 +59,130 @@ func TestFlagshipReadsTheSkillsFolder(t *testing.T) {
 	m := NewChatModelForFlagship(&nullClient{}, "gaia", "gaia", true)
 	if len(m.starters) != 1 {
 		t.Errorf("flagship starters = %+v", m.starters)
+	}
+}
+
+// reportSkills is the agent's startup ping, naming the skills it has.
+func reportSkills(names ...string) event.CanonicalStatusEvent {
+	skills := []event.SkillCommand{}
+	for _, n := range names {
+		skills = append(skills, event.SkillCommand{Name: n, Description: n + " skill."})
+	}
+	return event.CanonicalStatusEvent{Type: "status", ModelID: "m", ModelDisplay: "M", Skills: skills}
+}
+
+// A normal install has no skills folder: the starters are built into the agent,
+// which names them in its startup ping.
+func TestSkillsBuiltIntoTheAgentAreSuggested(t *testing.T) {
+	m := NewChatModelForFlagship(&nullClient{}, "gaia", "gaia", true)
+	m.width, m.height = 100, 30
+	m.resize()
+	if len(m.starters) != 0 || strings.Contains(screen(m), "Try one") {
+		t.Fatalf("suggestions before the agent reported any skill: %+v", m.starters)
+	}
+	m = feed(t, m, reportSkills(starterPack...))
+	got := screen(m)
+	for _, want := range []string{"Try one", "1  Today's tech news in brief", "4  Book recommendations"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("first screen lacks %q:\n%s", want, got)
+		}
+	}
+	next, _ := m.handleKey(digitKey('3'))
+	if picked := next.(ChatModel); !picked.streaming || picked.messages[0].Content != starters[2].prompt {
+		t.Errorf("3 did not start the third suggestion: %+v", picked.messages)
+	}
+	// They are still there for the next new chat.
+	cleared, _ := m.submit("/clear")
+	if got := screen(cleared.(ChatModel)); !strings.Contains(got, "Try one") {
+		t.Errorf("/clear lost the suggestions:\n%s", got)
+	}
+}
+
+// The agent's report is the truth: a skill it does not have is not offered,
+// whatever the skills folder holds.
+func TestTheAgentsReportReplacesTheFolder(t *testing.T) {
+	dir := installSkills(t, "daily-brief", "check-in")
+	old := skillsDir
+	skillsDir = func() string { return dir }
+	t.Cleanup(func() { skillsDir = old })
+	m := NewChatModelForFlagship(&nullClient{}, "gaia", "gaia", true)
+	m = feed(t, m, reportSkills("check-in", "summarize"))
+	if len(m.starters) != 1 || m.starters[0].skill != "check-in" {
+		t.Errorf("after the report, starters = %+v", m.starters)
+	}
+	// A status line that says nothing about skills changes nothing.
+	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Message: "Working"})
+	if len(m.starters) != 1 {
+		t.Errorf("a plain status line dropped the suggestions: %+v", m.starters)
+	}
+	// An agent running without skills offers none.
+	m = feed(t, m, reportSkills())
+	if len(m.starters) != 0 {
+		t.Errorf("an agent with no skills still suggests %+v", m.starters)
+	}
+}
+
+// skillListingClient is the daemon relay: its agent has to be asked.
+type skillListingClient struct {
+	nullClient
+	skills []event.SkillCommand
+	err    error
+}
+
+func (c *skillListingClient) ListSkills(context.Context) ([]event.SkillCommand, error) {
+	return c.skills, c.err
+}
+
+// Over the daemon relay no startup ping carries the skills, so the chat asks.
+func TestTheRelayIsAskedForItsSkills(t *testing.T) {
+	c := &skillListingClient{skills: reportSkills(starterPack...).Skills}
+	m := NewChatModelForFlagship(c, "gaia", "gaia", true)
+	m.width, m.height = 100, 30
+	m.resize()
+	cmd := m.listSkillsCmd()
+	if cmd == nil {
+		t.Fatal("a transport that lists skills was not asked")
+	}
+	next, _ := m.Update(cmd())
+	got := next.(ChatModel)
+	if view := ansi.Strip(got.View()); !strings.Contains(view, "Try one") || !strings.Contains(view, "2  Research a topic, with sources") {
+		t.Fatalf("the answer did not reach the first screen:\n%s", view)
+	}
+	if len(got.skillCommands) != len(starterPack) {
+		t.Errorf("the / list has %d skills, want %d", len(got.skillCommands), len(starterPack))
+	}
+
+	// A failed listing keeps what the skills folder gave.
+	before := got.starters
+	next, _ = got.Update(skillsListedMsg{err: errors.New("relay down")})
+	if after := next.(ChatModel).starters; len(after) != len(before) {
+		t.Errorf("a failed listing changed the suggestions: %+v", after)
+	}
+
+	// A transport whose agent reports by itself is not asked.
+	if NewChatModelForFlagship(&nullClient{}, "gaia", "gaia", true).listSkillsCmd() != nil {
+		t.Error("the subprocess transport was asked for its skills")
+	}
+}
+
+func TestOnlyTheFlagshipSuggests(t *testing.T) {
+	m := NewChatModelForCatalogAgent(&nullClient{}, "notes", "notes")
+	m = feed(t, m, reportSkills(starterPack...))
+	if len(m.starters) != 0 {
+		t.Errorf("a catalog agent suggests %+v", m.starters)
+	}
+}
+
+func TestSkillsFolderFollowsGaiaHome(t *testing.T) {
+	home, cfg := t.TempDir(), t.TempDir()
+	t.Setenv("GAIA_HOME", home)
+	t.Setenv("GAIA_CONFIG_DIR", cfg)
+	if got, want := userSkillsDir(), filepath.Join(home, "skills"); got != want {
+		t.Errorf("with GAIA_HOME set: %q, want %q", got, want)
+	}
+	t.Setenv("GAIA_HOME", " ")
+	if got, want := userSkillsDir(), filepath.Join(cfg, "skills"); got != want {
+		t.Errorf("with only GAIA_CONFIG_DIR set: %q, want %q", got, want)
 	}
 }
 
@@ -107,6 +234,20 @@ func TestSuggestionsLeaveOnceTheConversationStarts(t *testing.T) {
 	}
 	if _, _, ok := m.pickSuggestion(digitKey('1')); ok {
 		t.Error("a number picked a suggestion that is no longer on screen")
+	}
+}
+
+// A notice that replaces the welcome screen hides the list; a number the user
+// cannot see must be typed, not run.
+func TestHiddenSuggestionsAreNotPicked(t *testing.T) {
+	m := suggestingChat(t, 100, 30)
+	m.messages = append(m.messages, Message{Role: RoleStatus, Content: discordOfferText()})
+	if strings.Contains(screen(*m), "Try one") {
+		t.Fatal("the notice was expected to replace the welcome screen")
+	}
+	next, _ := m.handleKey(digitKey('1'))
+	if got := next.(ChatModel); got.streaming || got.input.Value() != "1" {
+		t.Errorf("1 with no list on screen: input %q streaming=%v", got.input.Value(), got.streaming)
 	}
 }
 

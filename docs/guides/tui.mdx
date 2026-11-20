@@ -578,13 +578,13 @@ Ask a question, or type /help for what else this can do.
   ● agent gaia v0.2.0 connected                                     Ctrl+C quit
 ```
 
-The first screen suggests up to four things to try, one per installed skill
-that works without further setup (no file, link or connected account needed
+The first screen suggests up to four things to try, one per skill the agent
+has that works without further setup (no file, link or connected account needed
 first). Press a suggestion's number on an empty composer to send it; once you
 start typing, digits are just text. On a local model the list moves into the
 line that says the model is ready, and the numbers keep working until your
-first message. The list comes from the skills in
-`~/.gaia/skills`, so it costs no model call.
+first message. The list comes from the skills the agent reports when it
+starts, built-in ones included, so it costs no model call.
 
 The `agent <id>` segment is always the stable id, lowercased — the same string
 `--agent <id>` takes, so you can read it straight off the header and pass it back.
