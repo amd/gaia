@@ -151,7 +151,10 @@ class ChatAgent(
         pass
 
     def load_session(self, session_id: str) -> bool:
-        """Load saved session, restoring indexed docs and history."""
+        """Load saved session, restoring indexed docs and history.
+
+        Forgets every "always" answer given so far once the session is found.
+        """
         pass
 
     def save_current_session(self) -> bool:

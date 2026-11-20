@@ -13,6 +13,11 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   keep them, so a command approved "always" in the cleared chat still ran
   unasked in the next one. Now the same command asks again. Other sessions keep
   their answers, and full access and loaded skills are unchanged.
+- **Resuming a conversation forgets the current one's "always" answers.**
+  `/resume` in `gaia chat` kept them, so a command approved "always" in one
+  conversation ran unasked in the one resumed after it. The resumed
+  conversation now starts with none. A resume that fails (unknown or unreadable
+  session) leaves the current conversation and its answers as they were.
 - **Code that names a credential folder or reads a credential file is refused before it runs.**
   `run_python`, `execute_python_file` (the script and its arguments) and a shell
   line that hands code to an interpreter could open `.env` or files inside
