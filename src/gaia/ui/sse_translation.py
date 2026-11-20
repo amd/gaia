@@ -717,6 +717,10 @@ class CanonicalTranslator:
         # control channel, not this event stream.
         return []
 
+    def _on_mood(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Pass the model's mood for this reply through unchanged (contract 2.31)."""
+        return [{"type": "mood", "mood": str(event.get("mood") or "")}]
+
     def _on_context_usage(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Pass a live measurement through unchanged (contract 2.28).
 
@@ -782,6 +786,7 @@ class CanonicalTranslator:
         "agent_created": _on_agent_created,
         "skill_use": _on_skill_use,
         "context_usage": _on_context_usage,
+        "mood": _on_mood,
         # tool_args is handled before dispatch (merges into the pending tool_call).
     }
 

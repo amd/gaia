@@ -467,6 +467,10 @@ def _dispatch_one(
             }
         )
 
+    elif etype == "mood":
+        # Contract 2.31: the mood the model opened its reply with.
+        handler._emit({"type": "mood", "mood": str(event.get("mood") or "")})
+
     elif etype == "context_usage":
         # A live measurement from a sidecar on contract 2.28, streamed before
         # the answer so the composer fills during a long turn. Its shape is the

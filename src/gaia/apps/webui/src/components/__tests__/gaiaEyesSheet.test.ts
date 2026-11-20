@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import committedMeta from '../gaiaEyesSheet.ts?raw';
 import eyesCss from '../GaiaEyes.css?raw';
 import { EYES_ANIMATIONS, EYES_CELL, EYES_SHEET_HEIGHT, EYES_SHEET_WIDTH, EYES_VARIANTS } from '../gaiaEyesSheet';
-import { MATCHED_MOODS } from '../../utils/gaiaEyes';
+import { EYES_MOODS, MATCHED_MOODS, asEyesMood } from '../../utils/gaiaEyes';
 import { REGENERATE_HINT, SHEET_PATH, buildSheet, decodePng, encodePng, metaSource } from '../../../scripts/gen-gaia-eyes.mjs';
 
 const stale = `GAIA's eye sprite is stale. Regenerate it: ${REGENERATE_HINT}`;
@@ -80,5 +80,20 @@ describe("GAIA's eye sprite sheet", () => {
     it('can reach every mood it draws from a message', () => {
         const drawn = Object.keys(EYES_VARIANTS).filter((state) => !['think', 'read', 'tool', 'wait'].includes(state));
         expect([...MATCHED_MOODS].sort()).toEqual(drawn.sort());
+    });
+
+    it('draws exactly the moods the agent lets GAIA name for her own reply', () => {
+        const source = readFileSync(new URL('../../../../../agents/base/mood.py', import.meta.url), 'utf8');
+        const list = /^MOODS: Tuple\[str, \.\.\.\] = \(([^)]*)\)/m.exec(source);
+        expect(list, 'MOODS in src/gaia/agents/base/mood.py').not.toBeNull();
+        const named = [...list![1].matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
+        expect(named.sort()).toEqual([...EYES_MOODS].sort());
+    });
+
+    it('accepts only a mood it can draw', () => {
+        expect(asEyesMood('proud')).toBe('proud');
+        expect(asEyesMood('think')).toBeNull();
+        expect(asEyesMood('calm')).toBeNull();
+        expect(asEyesMood(undefined)).toBeNull();
     });
 });

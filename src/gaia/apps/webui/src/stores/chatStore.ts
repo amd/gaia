@@ -10,6 +10,7 @@ import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, S
 import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import { asEyesMood, type EyesMood } from '../utils/gaiaEyes';
 import { addCard } from '../utils/connectCards';
 import { DEFAULT_LOCALE, applyLocale, isLocaleCode } from '../i18n/registry';
 import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
@@ -248,6 +249,10 @@ interface ChatState {
     /** Counts skill_use events, so the session panel's Skills section re-reads mid-reply. */
     skillUses: number;
     clearAgentSteps: () => void;
+    /** The mood GAIA named for the reply in progress, and when it arrived; null until she names one. */
+    gaiaMood: { mood: EyesMood; at: number } | null;
+    /** Note a mood event; a word the eyes can't draw is ignored. */
+    setGaiaMood: (word: string | undefined) => void;
     /** What the model is doing right now, from the latest phase status event; null before one arrives. */
     liveStatus: string | null;
     /** The backend's phase for `liveStatus` (`loading_model`, `reasoning`, `tool`…); null when it sent none. */
@@ -548,7 +553,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setStreaming: (streaming) => set({ isStreaming: streaming }),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
-    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], gaiaMood: null, liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
 
     // Agent activity
     agentSteps: [],
@@ -609,7 +614,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     addStepBeforeRunningCall: (step) =>
         set((state) => ({ agentSteps: beforeRunningCall(state.agentSteps, step) })),
     skillUses: 0,
-    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
+    clearAgentSteps: () => set({ agentSteps: [], gaiaMood: null, liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
+    gaiaMood: null,
+    setGaiaMood: (word) => {
+        const mood = asEyesMood(word);
+        if (mood) set({ gaiaMood: { mood, at: Date.now() } });
+    },
     liveStatus: null,
     livePhase: null,
     setLiveStatus: (status, phase = null) => set({ liveStatus: status, livePhase: phase }),

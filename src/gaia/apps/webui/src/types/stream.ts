@@ -32,7 +32,8 @@ export type StreamEventType =
     | 'followup_returned' // The turn ended without taking these mid-turn messages
     | 'followup_unavailable' // The running turn can't take a message mid-turn
     | 'context_usage'     // What this turn's model call holds, by kind
-    | 'draft';            // A tool call's text so far, while the model writes it
+    | 'draft'             // A tool call's text so far, while the model writes it
+    | 'mood';             // The mood GAIA opened her reply with (mood)
 
 /** One thing found in a recording section, before the whole recording is read. */
 export interface FoundItem {
@@ -94,6 +95,8 @@ export interface StreamEvent {
     current_step?: number;
     /** What a tool call does, in plain words (for tool_start and tool_args). */
     narration?: string;
+    /** GAIA's own one-word mood for this reply (mood). */
+    mood?: string;
     /** The skill a turn runs on (skill_use). */
     skill?: string;
     /** How that skill came to be loaded (skill_use): 'model', 'user' (typed /name), 'auto' or 'loaded'. */

@@ -83,9 +83,10 @@ def test_openapi_and_human_contract_document_emitted_final_fields():
         assert field in contract, field
 
 
-def test_contract_declares_ten_canonical_types():
+def test_contract_declares_eleven_canonical_types():
     contract = CONTRACT.read_text(encoding="utf-8")
-    assert "The ten canonical event types" in contract
+    assert "The eleven canonical event types" in contract
+    assert '"const": "mood"' in contract
     assert '"const": "reasoning"' in contract
     assert '"const": "context_usage"' in contract
     assert '"const": "final"' in contract
