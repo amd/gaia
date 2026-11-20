@@ -203,9 +203,9 @@ class GaiaConfig:
             Takes effect on the next load; the embedding model keeps its own.
         flagship_agent: which program is the GAIA agent in the Agent UI and
             the terminal UI: ``gaiapy`` (the Python agent) or ``gaiacpp`` (the
-            native C++ agent, beta). ``None`` means the user has not chosen:
-            the Agent UI then runs the Python agent and the terminal UI runs
-            ``gaiacpp`` when it is installed.
+            native C++ agent, beta). ``None`` means the user has not chosen,
+            and both the Agent UI and the terminal UI run the Python agent;
+            an installed ``gaiacpp`` runs only once it is chosen.
         cloud_reasoning_effort: ``off`` (the default) sends cloud models no
             ``reasoning_effort``, leaving each at its provider's default.
             ``low``, ``medium`` or ``high`` turns on a one-time probe per cloud
