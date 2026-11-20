@@ -273,7 +273,9 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   instead of ending the turn; the work done so far is kept either way.
 - A file a script wrote and the agent then showed whole with `cat` counts as
   read back. Before, the answer still carried "has not been read back
-  completely" and the turn was marked unfinished.
+  completely" and the turn was marked unfinished. The Windows ways of showing
+  a file count too: `type`, `more`, and `Get-Content` or `gc`, on their own or
+  inside `powershell -Command "..."`.
 - A cloud model that spends a whole reply reasoning and returns nothing is
   asked for its lowest reasoning level on the next request, so the turn moves
   on; after a second such reply in one turn, that level holds for the rest of
