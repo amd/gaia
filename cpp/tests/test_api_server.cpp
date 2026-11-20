@@ -16,6 +16,7 @@
 #include <fstream>
 #include <future>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -25,6 +26,9 @@
 using namespace gaia;
 
 namespace {
+
+// Shaped like a provider token, assembled so no scanner reads it as a real one.
+const std::string kFakeToken = std::string("ghp_") + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4";
 
 class ServedAgent : public Agent {
 public:
@@ -43,6 +47,18 @@ protected:
         toolRegistry().registerTool(
             "binary", "Return bytes that are not valid UTF-8",
             [](const json&) -> json { return json{{"data", std::string("ok \xff\xfe end")}}; },
+            {});
+        toolRegistry().registerTool(
+            "nested", "Return a token deep inside nested JSON",
+            [](const json&) -> json {
+                return json{{"outer", {{"rows", json::array({json{{"note", "key=" + kFakeToken}},
+                                                              json{{"url", "https://user:" + kFakeToken + "@example.com/x"}}})}}},
+                            {"error", "auth failed for " + kFakeToken}};
+            },
+            {});
+        toolRegistry().registerTool(
+            "throws", "Fail with a token in the message",
+            [](const json&) -> json { throw std::runtime_error("request with token " + kFakeToken + " was refused"); },
             {});
     }
     std::string getSystemPrompt() const override { return "You are a served test agent."; }
@@ -305,6 +321,27 @@ TEST(ApiServerTest, ToolRouteWhenOptedIn) {
     EXPECT_EQ(res->status, 200);
     EXPECT_EQ(json::parse(res->body)["result"]["echoed"], "x");
     EXPECT_EQ(h.agent->echoCalls.load(), 1);
+}
+
+TEST(ApiServerTest, ToolRouteMasksSecretsInNestedOutputAndInErrors) {
+    ServerOptions o;
+    o.exposeToolRoutes = true;
+    Harness h(o);
+    auto res = h.client().Post("/v1/tools/nested", "{}", "application/json");
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->status, 200);
+    EXPECT_EQ(res->body.find(kFakeToken.substr(4)), std::string::npos) << res->body;
+    const json body = json::parse(res->body);
+    EXPECT_NE(body["result"]["outer"]["rows"][0]["note"].get<std::string>().find("[redacted]"), std::string::npos)
+        << res->body;
+    EXPECT_NE(body["result"]["error"].get<std::string>().find("[redacted]"), std::string::npos) << res->body;
+
+    // The registry turns the throw into an error result; its text is masked like any other.
+    auto failed = h.client().Post("/v1/tools/throws", "{}", "application/json");
+    ASSERT_TRUE(failed);
+    EXPECT_EQ(failed->status, 200);
+    EXPECT_EQ(failed->body.find(kFakeToken.substr(4)), std::string::npos) << failed->body;
+    EXPECT_NE(failed->body.find("[redacted]"), std::string::npos) << failed->body;
 }
 
 TEST(ApiServerTest, NonLoopbackWithoutKeyRefused) {

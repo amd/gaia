@@ -54,4 +54,8 @@ GAIA_API json redactToolOutput(json value);
 /// File content: redactFileText() on every string in @p value; lines are never hidden.
 GAIA_API json redactFileContent(json value);
 
+/// @p value as the model may see it from @p tool: redactToolOutput() for a tool
+/// that prints what a command wrote (bash_execute, git_*), else redactFileContent().
+GAIA_API json redactToolResult(const std::string& tool, json value);
+
 }  // namespace gaia

@@ -23,6 +23,7 @@
 
 #include "gaia/agent.h"
 #include "gaia/console.h"
+#include "gaia/secrets.h"
 #include "gaia/session.h"
 #include "gaia/tool_registry.h"
 #include "gaia/types.h"
@@ -904,13 +905,23 @@ struct ApiServer::Impl {
             return;
         }
         const BusySlot slot(busy);
+        json result;
         try {
-            json result = agent.toolRegistry().executeTool(toolName, args);
-            res.set_content(json({{"tool", toolName}, {"result", result}}).dump(-1, ' ', false, json::error_handler_t::replace),
-                            "application/json");
+            result = agent.toolRegistry().executeTool(toolName, args);
         } catch (const std::exception& e) {
-            sendError(res, 500, "Tool execution error: " + std::string(e.what()), "server_error");
+            // The same masking as a tool result the model reads in chat.
+            sendError(res, 500, "Tool execution error: " + redactCredentials(e.what()), "server_error");
+            return;
         }
+        try {
+            result = redactToolResult(toolName, std::move(result));
+        } catch (const std::exception&) {
+            sendError(res, 500, "The tool ran, but its output could not be checked for secrets, so it is withheld.",
+                      "server_error");
+            return;
+        }
+        res.set_content(json({{"tool", toolName}, {"result", result}}).dump(-1, ' ', false, json::error_handler_t::replace),
+                        "application/json");
     }
 
     // ---- Sessions ----
