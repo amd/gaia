@@ -21,6 +21,7 @@ import { pluralKey } from '../i18n/registry';
 import { IndexingProgress } from './IndexingProgress';
 import { isServerFailure, serverFailureText, serverNotAddedText, waitsForServerReturn } from '../utils/documentFailure';
 import './DocumentLibrary.css';
+import { visibleName } from './CalendarApproval';
 
 /** Split a stored indexing error into a one-line summary and the rest. */
 function splitFailureReason(lastError: string): { summary: string; more: string } {
@@ -342,7 +343,7 @@ export function DocumentLibrary() {
         noticeDocId.current = docId;
         if (!targetSessionId) {
             addDraftDocuments([docId]);
-            setNotice(t('docs.willAttach', { name: filename }));
+            setNotice(t('docs.willAttach', { name: visibleName(filename) }));
             log.doc.info(`"${filename}" will be attached to the next new chat`);
             return;
         }
@@ -359,7 +360,7 @@ export function DocumentLibrary() {
                 d.id === docId ? { ...d, sessions_using: (d.sessions_using ?? 0) + 1 } : d
             )));
         }
-        setNotice(t('docs.attached', { name: filename, chat: targetChatName }));
+        setNotice(t('docs.attached', { name: visibleName(filename), chat: targetChatName }));
         log.doc.info(`Attached "${filename}" to session ${targetSessionId}`);
     }, [targetSessionId, targetChatName, updateSessionInList, addDraftDocuments, t]);
 
@@ -534,7 +535,7 @@ export function DocumentLibrary() {
         } catch (err) {
             log.doc.error(`Failed to delete document: ${name}`, err);
             setPendingRemoval((p) => (p?.id === id ? null : p));
-            setActionError(t('docs.deleteFailed', { name, error: requestErrorParam(err) }));
+            setActionError(t('docs.deleteFailed', { name: visibleName(name), error: requestErrorParam(err) }));
             return;
         }
         indexingStartTimes.current.delete(id);
@@ -587,7 +588,7 @@ export function DocumentLibrary() {
             await api.openFileOrFolder(filepath, true);
         } catch (err) {
             log.doc.error(`Failed to open folder for: ${filename}`, err);
-            setActionError(t('docs.openFolderFailed', { name: filename, error: requestErrorParam(err) }));
+            setActionError(t('docs.openFolderFailed', { name: visibleName(filename), error: requestErrorParam(err) }));
         }
     }, [t]);
 
@@ -599,7 +600,7 @@ export function DocumentLibrary() {
             await api.cancelIndexing(id);
         } catch (err) {
             log.doc.error(`Failed to cancel indexing: ${name}`, err);
-            setActionError(t('docs.cancelFailed', { name, error: requestErrorParam(err) }));
+            setActionError(t('docs.cancelFailed', { name: visibleName(name), error: requestErrorParam(err) }));
             return;
         }
         indexingStartTimes.current.delete(id);
@@ -692,7 +693,7 @@ export function DocumentLibrary() {
                             className="btn-cancel"
                             onClick={(e) => { e.stopPropagation(); handleCancelIndexing(doc.id); }}
                             title={t('docs.cancelIndexing')}
-                            aria-label={t('docs.cancelIndexingAria', { name: doc.filename })}
+                            aria-label={t('docs.cancelIndexingAria', { name: visibleName(doc.filename) })}
                         >
                             <StopCircle size={14} />
                             {t('docs.cancel')}
@@ -720,7 +721,7 @@ export function DocumentLibrary() {
                                 className={hint ? 'btn-retry btn-retry-quiet' : 'btn-retry'}
                                 onClick={(e) => { e.stopPropagation(); handleReindex(doc.id); }}
                                 title={hint ? t('docs.retryTitleFix') : t('docs.retryTitle')}
-                                aria-label={t('docs.retryAria', { name: doc.filename })}
+                                aria-label={t('docs.retryAria', { name: visibleName(doc.filename) })}
                                 disabled={reindexingIds.has(doc.id)}
                             >
                                 <RefreshCcw size={hint ? 12 : 14} />
@@ -988,7 +989,7 @@ export function DocumentLibrary() {
                         {documents.filter((d) => d.id !== pendingRemoval?.id).map((doc) => (
                             <div key={doc.id} hidden={!matchesFilter(doc)} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
-                                    <DocName name={doc.filename} />
+                                    <DocName name={visibleName(doc.filename)} />
                                     {renderDocStatus(doc)}
                                     {renderUsage(doc)}
                                 </div>
@@ -997,8 +998,8 @@ export function DocumentLibrary() {
                                         <button
                                             className="btn-icon-sm doc-open-folder"
                                             onClick={() => handleOpenFolder(doc.filepath, doc.filename)}
-                                            title={t('docs.openFolder', { path: doc.filepath })}
-                                            aria-label={t('docs.openFolderAria', { name: doc.filename })}
+                                            title={t('docs.openFolder', { path: visibleName(doc.filepath) })}
+                                            aria-label={t('docs.openFolderAria', { name: visibleName(doc.filename) })}
                                         >
                                             <FolderOpen size={14} />
                                         </button>
@@ -1012,8 +1013,8 @@ export function DocumentLibrary() {
                                             onClick={() => handleAttachDoc(doc.id)}
                                             title={targetSessionId ? t('docs.useIn', { chat: targetChatName }) : t('docs.useNext')}
                                             aria-label={targetSessionId
-                                                ? t('docs.attachAria', { name: doc.filename, chat: targetChatName })
-                                                : t('docs.attachNextAria', { name: doc.filename })}
+                                                ? t('docs.attachAria', { name: visibleName(doc.filename), chat: targetChatName })
+                                                : t('docs.attachNextAria', { name: visibleName(doc.filename) })}
                                         >
                                             <Link2 size={14} />
                                             {targetSessionId ? t('docs.addToThisChat') : t('docs.addToNextChat')}
@@ -1024,7 +1025,7 @@ export function DocumentLibrary() {
                                             className="btn-icon-sm doc-delete"
                                             onClick={() => handleDeleteDoc(doc.id)}
                                             title={t('docs.remove')}
-                                            aria-label={t('docs.removeAria', { name: doc.filename })}
+                                            aria-label={t('docs.removeAria', { name: visibleName(doc.filename) })}
                                         >
                                             <Trash2 size={14} />
                                         </button>

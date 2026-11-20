@@ -211,3 +211,143 @@ def test_prefix_matching_is_limited_to_git():
     """pflag (gh) has no abbreviations, so a prefix there is a different flag."""
     assert not BINARY_POLICIES["gh"].abbreviated_options
     assert BINARY_POLICIES["git"].abbreviated_options
+
+
+# --- per-subcommand exact options ----------------------------------------------
+
+#: The subcommands that define each exempted option, per git's own docs. Only
+#: these may spell it; anywhere else git reads it as an abbreviation.
+_GIT_EXACT_OPTIONS = {
+    "diff": {"--text"},
+    "log": {"--text", "--filter"},
+    "show": {"--text"},
+    "grep": {"--text"},
+    "stash": {"--text"},
+}
+
+
+def test_git_exact_options_are_pinned_to_the_subcommands_that_define_them():
+    policy = BINARY_POLICIES["git"]
+    actual = {
+        name: set(rule.exact_options)
+        for name, rule in policy.subcommands.items()
+        if rule.exact_options
+    }
+    assert actual == _GIT_EXACT_OPTIONS
+    assert not hasattr(policy, "exact_options")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git diff --text",
+        "git diff --text HEAD~1 -- f.bin",
+        "git diff --text --stat",
+        "git log -p --text",
+        "git log --text -SOAuth",
+        "git log --filter=blob:none",
+        "git log --filter blob:none",
+        "git show --text HEAD",
+        "git grep --text foo",
+        "git grep --text -eOpen x",
+        "git stash show --text",
+        "git stash list --text",
+    ],
+)
+def test_a_subcommand_that_defines_the_option_may_spell_it(command):
+    assert _decide(command).outcome == ALLOW
+
+
+def _git_call(subcommand: str) -> str:
+    """``git <subcommand>``, plus the action a rule with actions needs first."""
+    return "git stash show" if subcommand == "stash" else f"git {subcommand}"
+
+
+@pytest.mark.parametrize(
+    "subcommand",
+    sorted(set(BINARY_POLICIES["git"].subcommands) - set(_GIT_EXACT_OPTIONS)),
+)
+def test_text_is_refused_where_git_reads_it_as_textconv(subcommand):
+    decision = _decide(f"{_git_call(subcommand)} --text")
+    assert decision.outcome == REFUSE
+    assert "--textconv" in decision.message
+
+
+@pytest.mark.parametrize(
+    "subcommand",
+    sorted(set(BINARY_POLICIES["git"].subcommands) - {"log"}),
+)
+def test_filter_is_refused_where_git_may_read_it_as_filters(subcommand):
+    decision = _decide(f"{_git_call(subcommand)} --filter=blob:none")
+    assert decision.outcome == REFUSE
+    assert "--filters" in decision.message
+
+
+@pytest.mark.parametrize(
+    ("command", "read_as"),
+    [
+        # git releases before `cat-file --filter` expand it to --filters.
+        ("git cat-file --filter blob HEAD:f.txt", "--filters"),
+        ("git cat-file --filter=blob:none --batch-all-objects", "--filters"),
+        ("git cat-file --filt blob HEAD:f.txt", "--filters"),
+        ("git cat-file --text HEAD:f.txt", "--textconv"),
+        ("git cat-file --tex HEAD:f.txt", "--textconv"),
+        ("git blame --text f.py", "--textconv"),
+        ("git blame --text=1 f.py", "--textconv"),
+        ("git blame -L1,5 --text f.py", "--textconv"),
+        ("git blame -C --tex f.py", "--textconv"),
+        ("git shortlog --text", "--textconv"),
+        # A strict prefix of an exempt option is still an abbreviation, and
+        # ambiguous ones are refused rather than guessed at.
+        ("git diff --tex", "--textconv"),
+        ("git diff --te", "--textconv"),
+        ("git diff --textc", "--textconv"),
+        ("git grep --textco foo", "--textconv"),
+        ("git log --tex", "--textconv"),
+        ("git log --filte=blob:none", "--filters"),
+        ("git log --filt", "--filters"),
+        ("git show --t HEAD", "--textconv"),
+        # The exemption is the exact name, not anything that starts with it.
+        ("git diff --textconv", "--textconv"),
+        ("git log --filters", "--filters"),
+    ],
+)
+def test_abbreviations_of_a_denied_option_stay_refused(command, read_as):
+    decision = _decide(command)
+    assert decision.outcome == REFUSE
+    assert read_as in decision.message
+
+
+@pytest.mark.parametrize(
+    ("command", "outcome"),
+    [
+        # Short clusters: -a is --text, harmless; the letters after a
+        # value-taking option are its value.
+        ("git diff -aw", ALLOW),
+        ("git grep -an foo", ALLOW),
+        ("git log -pSfoo", ALLOW),
+        ("git log -SOAuth", ALLOW),
+        ("git grep -eOpen x", ALLOW),
+        ("git log -L:Open:f.py", ALLOW),
+        ("git log -n5 --text", ALLOW),
+        ("git diff --no-textconv", ALLOW),
+        ("git log --no-ext-diff --text", ALLOW),
+        ("git grep -naO foo", REFUSE),
+        ("git grep -aO foo", REFUSE),
+        ("git log -pS x --textc", REFUSE),
+    ],
+)
+def test_clusters_and_attached_values_around_the_exemption(command, outcome):
+    assert _decide(command).outcome == outcome
+
+
+def test_an_exact_option_must_shadow_a_denied_flag():
+    Subcommand(
+        denied_flags=frozenset({"--textconv"}), exact_options=frozenset({"--text"})
+    )
+    for idle in ("--text", "-t", "--textconv"):
+        with pytest.raises(ValueError, match="exact_options"):
+            Subcommand(
+                denied_flags=frozenset({"--textconv"} if idle != "--text" else set()),
+                exact_options=frozenset({idle}),
+            )
