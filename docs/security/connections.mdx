@@ -14,6 +14,8 @@ GAIA never writes tokens or API keys to plaintext files. All secrets live exclus
 | Linux | gnome-keyring or kwallet |
 | Windows | Credential Locker |
 
+GAIA refuses a plaintext or weakly encrypted keyring backend (`keyrings.alt`'s `PlaintextKeyring`, `EncryptedKeyring`, `Win32CryptoKeyring`, or anything derived from them) before every read, write and delete — for connector tokens, API keys, Slack and Discord bot tokens, the browser session key, MCP server secrets and Agent Hub publisher tokens alike. If keyring chains several backends, every one of them is checked, and a chain GAIA cannot fully inspect is refused. To fix the error, install a system credential store (gnome-keyring or kwallet on Linux), or point `PYTHON_KEYRING_BACKEND` at one, and restart GAIA.
+
 On macOS, the GAIA daemon reads the keychain for the flagship agent, using a credential only that agent receives. The keychain ties approval to the exact build asking, so this keeps agent updates from prompting again. The trade-off: when macOS asks, **Always Allow** now approves the daemon's Python interpreter, not the agent, and any script that same interpreter runs can then read these items without a prompt. An agent started without the daemon reads the keychain itself.
 
 Each connector occupies a dedicated keyring slot keyed by `gaia.connections:<connector-id>:<secret-name>`. MCP server tokens use `$keyring:<slot>` references in `~/.gaia/mcp_servers.json` — the JSON file itself contains no actual secrets.

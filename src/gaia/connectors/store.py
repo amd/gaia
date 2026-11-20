@@ -39,6 +39,7 @@ import time
 import zlib
 from typing import List, Optional
 
+from gaia.connectors import keyring_access
 from gaia.connectors._keyring import (  # actionable error if missing (#1621)
     _KEYRING_BACKEND_ENV_VAR,
     _NULL_KEYRING_ALIASES,
@@ -93,13 +94,34 @@ def _is_chain(backend: object) -> bool:
 
     if isinstance(backend, ChainerBackend):
         return True
+    if "backends" in getattr(backend, "__dict__", {}):
+        return True
     return any("backends" in vars(klass) for klass in type(backend).__mro__)
 
 
-def _write_targets(backend: object, depth: int = 0) -> List[object]:
-    """``backend`` plus every backend a chain under it can write to."""
+def _chain_error(detail: str) -> ConnectorsError:
+    return ConnectorsError(
+        f"{detail} GAIA will not store credentials until it can confirm every "
+        "backend in the chain is secure. Configure a single system credential "
+        f"store (set {_KEYRING_BACKEND_ENV_VAR} to it) and restart GAIA. See "
+        "docs/security/connections.mdx."
+    )
+
+
+def _write_targets(
+    backend: object, depth: int = 0, expanded: Optional[set] = None
+) -> List[object]:
+    """``backend`` plus every backend a chain under it can write to.
+
+    ``expanded`` holds the ids of chains already walked, so a chain repeated
+    across the tree is expanded once rather than once per path to it.
+    """
     if not _is_chain(backend):
         return [backend]
+    if expanded is None:
+        expanded = set()
+    if id(backend) in expanded:
+        return []
     if depth >= _MAX_CHAIN_DEPTH:
         raise ConnectorsError(
             f"The chained keyring backend is nested more than {_MAX_CHAIN_DEPTH} "
@@ -111,17 +133,22 @@ def _write_targets(backend: object, depth: int = 0) -> List[object]:
     try:
         members = list(backend.backends)
     except Exception as e:  # noqa: BLE001 - fail closed with context below
-        raise ConnectorsError(
+        raise _chain_error(
             f"Could not inspect the chained keyring backend "
-            f"{type(backend).__name__!r}: {e}. GAIA will not store credentials "
-            "until it can confirm every backend in the chain is secure. "
-            f"Configure a single system credential store (set "
-            f"{_KEYRING_BACKEND_ENV_VAR} to it) and restart GAIA. See "
-            "docs/security/connections.mdx."
+            f"{type(backend).__name__!r}: {e}."
         ) from e
+    from keyring.backend import KeyringBackend
+
     targets: List[object] = [backend]
     for member in members:
-        targets.extend(_write_targets(member, depth + 1))
+        if not isinstance(member, KeyringBackend):
+            raise _chain_error(
+                f"Could not inspect the chained keyring backend "
+                f"{type(backend).__name__!r}: it holds "
+                f"{type(member).__name__!r}, which is not a keyring backend."
+            )
+        targets.extend(_write_targets(member, depth + 1, expanded))
+    expanded.add(id(backend))
     return targets
 
 
@@ -145,8 +172,9 @@ def verify_keyring_backend() -> None:
     Raise ``ConnectorsError`` if the active keyring is, or derives from, one of
     the refused backends. A chained keyring is expanded and every backend it
     can write to is checked; a chain that cannot be inspected is refused.
-    Called eagerly at every save and at every load — cheap, and
-    closes the silent-plaintext-fallback path (A4).
+    Runs before every keyring read, write and delete through
+    ``keyring_access`` — cheap, and closes the silent-plaintext-fallback
+    path (A4).
 
     Also the single eager choke point where an unresolvable
     ``PYTHON_KEYRING_BACKEND`` first surfaces (#2441): keyring resolves the var
@@ -250,7 +278,7 @@ def _chunk_username(username: str, idx: int) -> str:
 def _kr_raw_set(username: str, value: str) -> None:
     @_wrap_keyring_call("set_password")
     def _set():
-        keyring.set_password(SERVICE_NAME, username, value)
+        keyring_access.write(SERVICE_NAME, username, value)
 
     _set()
 
@@ -319,7 +347,7 @@ def _kr_raw_get(username: str) -> Optional[str]:
         if probe:
             _probing = True
     try:
-        value = keyring.get_password(SERVICE_NAME, username)
+        value = keyring_access.read(SERVICE_NAME, username)
     except (keyring.errors.KeyringLocked, keyring.errors.InitError) as e:
         raise _refuse(e) from e
     except keyring.errors.KeyringError as e:
@@ -343,7 +371,7 @@ def _kr_raw_get(username: str) -> Optional[str]:
 
 def _kr_raw_delete(username: str) -> None:
     try:
-        keyring.delete_password(SERVICE_NAME, username)
+        keyring_access.delete(SERVICE_NAME, username)
     except keyring.errors.PasswordDeleteError:
         pass
     except keyring.errors.KeyringError as e:
