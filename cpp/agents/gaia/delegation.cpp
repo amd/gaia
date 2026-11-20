@@ -279,7 +279,13 @@ json GaiaAgent::delegateTasks(const json& args) {
                         allFiles = false;
                         break;
                     }
-                    sizes.push_back(fs::file_size(file, ec));
+                    const std::uintmax_t size = fs::file_size(file, ec);
+                    // An unreadable size would count as an enormous file and skew every group after it.
+                    if (ec) {
+                        allFiles = false;
+                        break;
+                    }
+                    sizes.push_back(size);
                 }
                 if (!allFiles) {
                     spread.push_back(t);

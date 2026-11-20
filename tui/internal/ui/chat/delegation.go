@@ -23,7 +23,8 @@ import (
 // phaseHelpers is the status phase a running delegation reports progress on.
 const phaseHelpers = "helpers"
 
-// maxHelperRows is the most helpers one step lists; the agent's own limit.
+// maxHelperRows is the most helpers one step lists; a shared-out task can run
+// more, and those are counted on a closing "… N more" line.
 const maxHelperRows = 16
 
 // foldedHelpersHint points at the per-helper lines; the status bar's wording.
