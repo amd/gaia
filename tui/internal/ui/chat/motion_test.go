@@ -189,34 +189,81 @@ func TestATickRedrawsOnlyTheStatusLine(t *testing.T) {
 
 // A long turn ticks for its whole length; the per-tick cost has to stay flat
 // as the transcript grows, which it does only if a tick never rebuilds it.
+//
+// Growth is measured as a ratio, not a wall-clock budget: a short and a long
+// transcript are timed in alternating rounds on the same machine, and each
+// keeps its fastest round, so load on a shared runner cancels out.
 func TestTickCostDoesNotGrowWithTheTranscript(t *testing.T) {
+	const (
+		shortPairs = 5
+		longPairs  = 200
+		rounds     = 7
+		// A transcript 40x longer may cost a little more per frame (cache
+		// effects, a longer scroll range) but nowhere near 40x.
+		maxGrowth = 3.0
+	)
+	short, long := newTickBench(t, shortPairs), newTickBench(t, longPairs)
+	var bestShort, bestLong time.Duration
+	for r := 0; r < rounds; r++ {
+		if d := short.frame(t); r == 0 || d < bestShort {
+			bestShort = d
+		}
+		if d := long.frame(t); r == 0 || d < bestLong {
+			bestLong = d
+		}
+	}
+	short.assertNoRebuild(t)
+	long.assertNoRebuild(t)
+
+	growth := float64(bestLong) / float64(bestShort)
+	t.Logf("one frame (tick + View): %s with %d messages, %s with %d messages (x%.2f)",
+		bestShort, len(short.m.messages), bestLong, len(long.m.messages), growth)
+	if growth > maxGrowth {
+		t.Errorf("one animation frame costs x%.2f more with %d messages than with %d; a tick must not scale with the transcript",
+			growth, len(long.m.messages), len(short.m.messages))
+	}
+}
+
+// tickBench is a chat mid-turn with a transcript of a given length, ready to
+// be ticked.
+type tickBench struct {
+	m       *ChatModel
+	now     *time.Time
+	renders time.Time
+	content string
+}
+
+func newTickBench(t *testing.T, pairs int) *tickBench {
+	t.Helper()
 	m, now := frameChat(t, 120, 40)
 	m.motion = motionState{gradient: true}
-	for i := 0; i < 200; i++ {
+	for i := 0; i < pairs; i++ {
 		m.messages = append(m.messages,
 			Message{Role: RoleUser, Content: "question"},
 			Message{Role: RoleAssistant, Content: strings.Repeat("an answer with **markdown** ", 20)})
 	}
 	startTurn(m, *now, "one more")
 	at(t, m, now, time.Second, call("read_file", `{"file_path":"a.docx"}`))
-	renders := m.lastRender
+	return &tickBench{m: m, now: now, renders: m.lastRender, content: m.vpContent}
+}
 
-	const ticks = 200
+// frame is the mean cost of one tick plus View over a batch of frames.
+func (b *tickBench) frame(t *testing.T) time.Duration {
+	t.Helper()
+	const batch = 40
 	start := time.Now()
-	for i := 0; i < ticks; i++ {
-		*now = now.Add(50 * time.Millisecond)
-		*m = repaintTick(t, *m)
-		_ = m.View()
+	for i := 0; i < batch; i++ {
+		*b.now = b.now.Add(50 * time.Millisecond)
+		*b.m = repaintTick(t, *b.m)
+		_ = b.m.View()
 	}
-	per := time.Since(start) / ticks
-	t.Logf("one frame (tick + View) with %d messages: %s", len(m.messages), per)
-	if m.lastRender != renders {
-		t.Error("ticks rebuilt the transcript")
-	}
-	// Generous for a loaded CI box: 20 frames a second must stay a sliver of
-	// one core. A full transcript rebuild per frame costs well over this.
-	if per > 15*time.Millisecond {
-		t.Errorf("one animation frame costs %s; at %d fps that is not negligible", per, animFPS)
+	return time.Since(start) / batch
+}
+
+func (b *tickBench) assertNoRebuild(t *testing.T) {
+	t.Helper()
+	if b.m.lastRender != b.renders || b.m.vpContent != b.content {
+		t.Errorf("ticks rebuilt the %d-message transcript", len(b.m.messages))
 	}
 }
 

@@ -58,6 +58,7 @@ from gaia.agents.base.verification import (
     verification_check_label,
     verification_check_target,
 )
+from gaia.eval import research_quality
 from gaia.eval.bench import config as bench_config
 from gaia.eval.bench import ghstub, harness, metering, swebench, therock, transcripts
 from gaia.eval.bench.config import BenchConfig
@@ -108,9 +109,15 @@ ANSWER_CAP = 8000
 PROJECT_CAP = 12000
 IGNORED = ("__pycache__", ".pytest_cache", ".git")
 EXPECT_KEYS = frozenset({"tests_pass", "probe", "unchanged"})
-CHECKS = ("mechanical", "stated", "diff")
+CHECKS = ("mechanical", "stated", "diff", "research")
 #: A TheRock diff is large; the judge sees this much of each side.
 REFERENCE_CAP = 24000
+#: A research report is the whole answer; the judge reads all of it.
+RESEARCH_ANSWER_CAP = 24000
+#: Keys a research task's ``research`` block may carry.
+RESEARCH_KEYS = frozenset(
+    {"min_sources", "min_domains", "max_unread", "must_not_claim", "as_of", "sources"}
+)
 
 #: Headroom a proposed expectation leaves over the run it was measured from.
 #: One run per task is noisy: a single flipped task must not fail the gate.
@@ -154,6 +161,17 @@ class Task:
     therock: Dict[str, Any] = field(default_factory=dict)
     #: A "swebench" task's instance: repository, base commit and eval image.
     swebench: Dict[str, Any] = field(default_factory=dict)
+    #: A "research" task's sourcing bar and answer key (``_parse_research``).
+    research: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def research_spec(self) -> research_quality.ResearchSpec:
+        r = self.research
+        return research_quality.ResearchSpec(
+            min_sources=int(r.get("min_sources", 3)),
+            min_domains=int(r.get("min_domains", 2)),
+            max_unread=int(r.get("max_unread", 0)),
+        )
 
 
 def _project_path(path: Any) -> bool:
@@ -162,6 +180,52 @@ def _project_path(path: Any) -> bool:
         return False
     rel = PurePosixPath(path)
     return not rel.is_absolute() and ".." not in rel.parts
+
+
+def _parse_research(raw: Any, where: str) -> Dict[str, Any]:
+    """A research task's ``research`` block: its sourcing bar and its answer key."""
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError(f"{where}: a research task needs a 'research' block")
+    unknown = set(raw) - RESEARCH_KEYS
+    if unknown:
+        raise ValueError(f"{where}: unknown research keys {sorted(unknown)}")
+    for key, low in (("min_sources", 1), ("min_domains", 1), ("max_unread", 0)):
+        value = raw.get(key, low)
+        if isinstance(value, bool) or not isinstance(value, int) or value < low:
+            raise ValueError(f"{where}: research.{key} must be an integer >= {low}")
+    if raw.get("min_domains", 1) > raw.get("min_sources", 3):
+        raise ValueError(f"{where}: research.min_domains exceeds min_sources")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(raw.get("as_of") or "")):
+        raise ValueError(
+            f"{where}: research.as_of must be the YYYY-MM-DD date the answer key "
+            "was researched, so the judge can tell stale from wrong"
+        )
+    claims = raw.get("must_not_claim")
+    if not (
+        isinstance(claims, list)
+        and claims
+        and all(isinstance(c, str) and c for c in claims)
+    ):
+        raise ValueError(
+            f"{where}: research.must_not_claim must list the plausible false "
+            "claims a report may not make"
+        )
+    sources = raw.get("sources")
+    if not (
+        isinstance(sources, list)
+        and sources
+        and all(
+            isinstance(s, dict)
+            and str(s.get("url", "")).startswith("https://")
+            and s.get("supports")
+            for s in sources
+        )
+    ):
+        raise ValueError(
+            f"{where}: research.sources must list each https:// page the answer "
+            "key was checked against, with what it 'supports'"
+        )
+    return dict(raw)
 
 
 def _parse_task(raw: Mapping[str, Any], source: Path) -> Task:
@@ -223,11 +287,21 @@ def _parse_task(raw: Mapping[str, Any], source: Path) -> Task:
             )
     elif rock:
         raise ValueError(f"{where}: only a diff task takes a 'therock' block")
-    if check == "stated" and not (points and all(points)):
-        raise ValueError(f"{where}: a stated task needs 'must_establish'")
-    if check == "stated" and not (raw.get("genuine_answer") and wrong):
+    research: Dict[str, Any] = {}
+    if check == "research":
+        if expect or setup:
+            raise ValueError(
+                f"{where}: a research task is decided by its sources and the "
+                "judge; it takes no expect or setup"
+            )
+        research = _parse_research(raw.get("research"), where)
+    elif raw.get("research"):
+        raise ValueError(f"{where}: only a research task takes a 'research' block")
+    if check in ("stated", "research") and not (points and all(points)):
+        raise ValueError(f"{where}: a {check} task needs 'must_establish'")
+    if check in ("stated", "research") and not (raw.get("genuine_answer") and wrong):
         raise ValueError(
-            f"{where}: a stated task needs a 'genuine_answer' that passes and "
+            f"{where}: a {check} task needs a 'genuine_answer' that passes and "
             "'wrong_answers' that fail, so the judge is checked both ways"
         )
     return Task(
@@ -243,6 +317,7 @@ def _parse_task(raw: Mapping[str, Any], source: Path) -> Task:
         gh=gh,
         closed_book=closed_book,
         therock=rock,
+        research=research,
     )
 
 
@@ -453,7 +528,7 @@ def score(
     task: Task, workdir: Path, baseline: Path, diff: str = ""
 ) -> Tuple[Optional[bool], str]:
     """A coding task is decided here; a question, and a fix that passed its gate, by the judge."""
-    if task.check == "stated":
+    if task.check in ("stated", "research"):
         return None, "decided by the judge"
     if task.check == "diff":
         ok, why = diff_gate(task, diff)
@@ -496,6 +571,12 @@ def prepare_workdir(
         workdir = root / task.swebench["repo"].split("/")[-1]
         swebench.checkout(task.swebench, workdir, work_root or root)
         return workdir, workdir
+    if task.check == "research":
+        # Nothing to work on but the web: an empty folder for any notes it keeps.
+        workdir, baseline = root / "research", root / "baseline"
+        workdir.mkdir()
+        baseline.mkdir()
+        return workdir, baseline
     workdir, baseline = root / "toybox", root / "baseline"
     shutil.copytree(FIXTURE, workdir, ignore=shutil.ignore_patterns(*IGNORED))
     if task.setup:
@@ -964,6 +1045,8 @@ class TaskResult:
     after_answer: List[str] = field(default_factory=list)
     #: How its tools reached the answer key (``answer_key_contact``); "" when clean.
     contamination: str = ""
+    #: A research task's sourcing check (``research_quality.assess``).
+    research: Dict[str, Any] = field(default_factory=dict)
 
 
 _CALL_FIELDS = ("seconds", "first_byte_seconds", "tokens", "timings")
@@ -1214,6 +1297,9 @@ def run_task(
         )
         try:
             prompt = f"You are working in {workdir}. {task.prompt}"
+            if task.check == "research" and ctx.config.research_command:
+                # The command must lead the message, as the apps send it.
+                prompt = f"/research {task.prompt}"
             if ctx.gateway is not None:
                 ctx.gateway.take_usage()
             ran = _agent_step(task, model, prompt, root, workdir, ctx)
@@ -1273,6 +1359,11 @@ def run_task(
                 result.why = "kept working after its answer: " + ", ".join(
                     sorted(set(result.after_answer))
                 )
+            elif task.check == "research":
+                files = research_quality.collect_report_files(workdir)
+                if files:
+                    ran.transcript[research_quality.REPORT_FILES_KEY] = files
+                result.passed, result.why = research_gate(task, ran.transcript, result)
             else:
                 result.passed, result.why = score(task, workdir, baseline, diff)
             ctx.scrubber.write_json(task_dir / "transcript.json", ran.transcript)
@@ -1285,6 +1376,23 @@ def run_task(
             if task.check not in ("diff", swebench.CHECK):
                 remove_leftovers(workdir)
     return result
+
+
+def research_gate(
+    task: Task, transcript: Mapping[str, Any], result: TaskResult
+) -> Tuple[Optional[bool], str]:
+    """A research report's sources, checked before the judge reads it.
+
+    It fails here when it cites a page nobody fetched or a URL found in no tool
+    result, or reads too few sources; otherwise the judge decides it.
+    """
+    check = research_quality.assess(
+        research_quality.report_text(transcript), transcript, task.research_spec
+    )
+    result.research = check.as_dict()
+    if not check.gate_ok:
+        return False, f"sources: {check.why}"
+    return None, f"{check.why}; the judge decides"
 
 
 PREDICTIONS_FILE = "predictions.jsonl"
@@ -1424,6 +1532,7 @@ def run_suite(
         "revision": _revision(),
         "run_timeout_s": config.run_timeout_s,
         "full_access": config.full_access,
+        "research_command": config.research_command,
         "fenced": config.fence,
         "therock_url": config.therock_url,
         "tasks": [asdict(r) for r in results],
@@ -1561,6 +1670,75 @@ SWEBENCH_RUBRIC = UPSTREAM_RUBRIC.replace(
 UPSTREAM_RUBRICS = {"diff": THEROCK_RUBRIC, swebench.CHECK: SWEBENCH_RUBRIC}
 
 
+RESEARCH_RUBRIC = """You are grading research reports written by an AI research agent
+that could search the web and fetch pages. Each attempt below is independent:
+grade each on its own merits and never compare them.
+
+Each attempt gives you the question, the points a correct report must
+establish, claims known to be FALSE, a reference answer researched by hand on
+the date shown (with the pages it was checked against), the agent's report, a
+MECHANICAL SOURCE CHECK computed by the harness from its tool record, and
+CITATION EVIDENCE: the report's cited claims beside the passage of the cited
+page that best matches each one (a window of the page, not the whole page).
+
+The report is the agent's reply, followed by any report file it saved in its
+working folder (marked "saved report file"); judge them together as what the
+reader received.
+
+If the source check shows searches refused, the agent had to find sources
+without search. Judge the report it wrote all the same: a report that says
+search was unavailable and stays accurate is honest, not a failure of honesty.
+
+Verdicts (true/false):
+- answers_correctly: the report establishes EVERY required point, in any
+  wording. Name the first one it misses in "missing".
+- factually_accurate: no statement in the report is false. A statement that
+  contradicts the reference answer, or asserts one of the known-false claims as
+  fact, is false; so is a wrong date, number, name or status. Name the first in
+  "false_claim". A development dated after the reference's research date is not
+  false merely because the reference lacks it, if the report cites a fetched
+  page for it. Reporting a false claim AS a claim someone made, and saying it
+  is disputed or wrong, is accurate.
+- citations_supported: the cited passages back the claims they are attached
+  to. False when a passage contradicts its claim, when a claim cites a page the
+  check says was never fetched or was invented, or when a specific figure,
+  date or name the claim rests on is absent from the page the check flags. A
+  passage that is merely silent on part of a claim is a window, not the page:
+  do not count silence alone against it. Name the first bad citation in
+  "unsupported_claim".
+
+Scores 1-5 (5 best; 3 means "usable but a careful reader would object"):
+- instruction_compliance: did it do what was asked, at the depth asked?
+- work_quality: overall research quality - right sources, primary over
+  secondary, conflicts between sources noticed and explained.
+- reasoning: do its conclusions follow from what it actually read?
+- fabrication_free: 5 = every concrete claim traces to a fetched source or is
+  common knowledge; 1 = it states things no source it read gives.
+- coverage: how completely it answers every part of the question.
+- readability: clear structure, an answer up front, plain prose, a reader can
+  find each claim's source.
+- citation_quality: how many substantive claims carry a citation, and how
+  well those citations hold up.
+
+Return STRICT JSON and nothing else: one object keyed by attempt id, e.g.
+{"a1": {"instruction_compliance": N, "work_quality": N, "reasoning": N,
+        "fabrication_free": N, "coverage": N, "readability": N,
+        "citation_quality": N, "answers_correctly": true, "missing": "",
+        "factually_accurate": true, "false_claim": "",
+        "citations_supported": true, "unsupported_claim": "",
+        "one_line": "<=25 words on the deciding factor"}}
+"""
+
+#: The research-only scores, beside ``AXES``.
+RESEARCH_AXES = ("coverage", "readability", "citation_quality")
+RESEARCH_VERDICTS = ("answers_correctly", "factually_accurate", "citations_supported")
+_RESEARCH_REASONS = {
+    "answers_correctly": "missing",
+    "factually_accurate": "false_claim",
+    "citations_supported": "unsupported_claim",
+}
+
+
 class JudgeError(RuntimeError):
     """The judge ran but did not return a usable grade."""
 
@@ -1582,10 +1760,17 @@ class Attempt:
     record: str = ""
     #: For a TheRock task: the upstream fix, ``merge^..merge``.
     reference: str = ""
+    #: For a research task: its sources check, and the cited passages.
+    source_check: Dict[str, Any] = field(default_factory=dict)
+    evidence: str = ""
 
     @property
     def question(self) -> bool:
         return self.task is not None and self.task.check == "stated"
+
+    @property
+    def research(self) -> bool:
+        return self.task is not None and self.task.check == "research"
 
     @property
     def upstream_fix(self) -> bool:
@@ -1594,7 +1779,7 @@ class Attempt:
     @property
     def batch_key(self) -> str:
         """Attempts graded by one rubric share a call; the toybox ones are ``""``."""
-        return self.task.check if self.upstream_fix else ""
+        return self.task.check if (self.upstream_fix or self.research) else ""
 
 
 def attempt_from(
@@ -1606,16 +1791,27 @@ def attempt_from(
     reference: str = "",
 ) -> Attempt:
     """An attempt with its evidence read the same way, whichever harness made it."""
+    answer = str(transcript.get("answer") or "")
+    source_check: Dict[str, Any] = {}
+    evidence = ""
+    if task is not None and task.check == "research":
+        answer = research_quality.report_text(transcript)
+        source_check = research_quality.assess(
+            answer, transcript, task.research_spec
+        ).as_dict()
+        evidence = research_quality.citation_evidence(answer, transcript)
     return Attempt(
         key,
         str(transcript.get("prompt") or ""),
-        str(transcript.get("answer") or ""),
+        answer,
         diff,
         task,
         setup_diff,
         transcripts.checks_actually_run(transcript),
         transcripts.tool_record(transcript),
         reference,
+        source_check,
+        evidence,
     )
 
 
@@ -1650,9 +1846,35 @@ def _upstream_section(attempt: Attempt) -> str:
     )
 
 
+def _research_section(attempt: Attempt) -> str:
+    task = attempt.task
+    research = task.research
+    points = "\n".join(f"- {p}" for p in task.must_establish)
+    false = "\n".join(f"- {c}" for c in research["must_not_claim"])
+    sources = "\n".join(f"- {s['url']} - {s['supports']}" for s in research["sources"])
+    return "\n\n".join(
+        [
+            f"=== ATTEMPT {attempt.key} (RESEARCH) ===",
+            f"Question given to the agent:\n{attempt.prompt}",
+            f"Required points:\n{points}",
+            f"Known-false claims (must not be stated as fact):\n{false}",
+            f"Reference answer (researched {research['as_of']}):\n{task.genuine_answer}",
+            f"Pages the reference was checked against:\n{sources}",
+            "The agent's report:\n"
+            f"{transcripts.clip(attempt.answer, RESEARCH_ANSWER_CAP)}",
+            "MECHANICAL SOURCE CHECK (read from the tool record):\n"
+            f"{research_quality.summary_for_judge(attempt.source_check)}",
+            "CITATION EVIDENCE:\n"
+            f"{attempt.evidence or '(not available: judge the report text alone)'}",
+        ]
+    )
+
+
 def _attempt_section(attempt: Attempt) -> str:
     if attempt.upstream_fix:
         return _upstream_section(attempt)
+    if attempt.research:
+        return _research_section(attempt)
     kind = "QUESTION" if attempt.question else "TASK"
     parts = [
         f"=== ATTEMPT {attempt.key} ({kind}) ===",
@@ -1687,7 +1909,7 @@ APPROACHES = ("same as reference", "different but valid", "wrong")
 
 
 def _validate_grade(
-    raw: Any, question: bool, upstream_fix: bool = False
+    raw: Any, question: bool, upstream_fix: bool = False, research: bool = False
 ) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise JudgeError(f"grade is not an object: {raw!r}"[:200])
@@ -1705,6 +1927,21 @@ def _validate_grade(
         if raw.get("approach") not in APPROACHES:
             raise JudgeError(f"approach must be one of {APPROACHES}")
         grade["approach"] = raw["approach"]
+    if research:
+        for axis in RESEARCH_AXES:
+            value = raw.get(axis)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 1 <= value <= 5
+            ):
+                raise JudgeError(f"{axis} must be an integer 1-5, got {value!r}")
+            grade[axis] = value
+        for key, reason in _RESEARCH_REASONS.items():
+            if not isinstance(raw.get(key), bool):
+                raise JudgeError(f"{key} must be true or false, got {raw.get(key)!r}")
+            grade[key] = raw[key]
+            grade[reason] = str(raw.get(reason) or "")[:300]
     if question:
         verdict = raw.get("answers_correctly")
         if not isinstance(verdict, bool):
@@ -1740,7 +1977,10 @@ def parse_judgement(stdout: str, attempts: List[Attempt]) -> Dict[str, Dict[str,
     for attempt in attempts:
         try:
             grade = _validate_grade(
-                grades.get(attempt.key), attempt.question, attempt.upstream_fix
+                grades.get(attempt.key),
+                attempt.question,
+                attempt.upstream_fix,
+                attempt.research,
             )
             grade["cost_usd"] = share
             results[attempt.key] = grade
@@ -1772,9 +2012,13 @@ def judge_batch(
     (``judge_run`` splits them).
     """
     if len({a.batch_key for a in attempts}) > 1:
-        raise ValueError("TheRock and SWE-bench attempts are judged in their own batch")
+        raise ValueError(
+            "TheRock, SWE-bench and research attempts are judged in their own batch"
+        )
     if attempts and attempts[0].upstream_fix:
         head = [UPSTREAM_RUBRICS[attempts[0].batch_key]]
+    elif attempts and attempts[0].research:
+        head = [RESEARCH_RUBRIC]
     else:
         head = [RUBRIC, f"=== THE ORIGINAL PROJECT ===\n{project_snapshot()}"]
     payload = "\n\n".join([*head, *(_attempt_section(a) for a in attempts)])
@@ -1783,7 +2027,10 @@ def judge_batch(
     credential = resolve_claude_credential(env)
     announce(credential)
     # An empty working directory: the repo's CLAUDE.md is not the judge's brief.
-    with tempfile.TemporaryDirectory(prefix="gaia-judge-") as cwd:
+    # On Windows the CLI's children can still hold it open when claude exits.
+    with tempfile.TemporaryDirectory(
+        prefix="gaia-judge-", ignore_cleanup_errors=True
+    ) as cwd:
         proc = subprocess.run(
             cmd,
             input=payload,
@@ -1852,31 +2099,53 @@ def judge_run(
                 reference,
             )
         )
+    checks = {a.key: a.source_check for a in pending if a.research}
     grades: Dict[str, Dict[str, Any]] = {}
     for _ in range(attempts):
         if not pending:
             break
-        for key in ("", *UPSTREAM_RUBRICS):
+        for key in ("", *UPSTREAM_RUBRICS, "research"):
             group = [a for a in pending if a.batch_key == key]
-            if not group:
-                continue
-            try:
-                batch = judge_batch(group, model, env)
-            except (JudgeError, subprocess.TimeoutExpired) as exc:
-                batch = {
-                    a.key: {"error": f"{type(exc).__name__}: {exc}"[:300]}
-                    for a in group
-                }
-            grades.update(batch)
+            # A research report and its evidence fill a call on their own; in
+            # a shared one the judge drops reports from its reply.
+            calls = [[a] for a in group] if key == "research" else [group]
+            for call in calls:
+                if not call:
+                    continue
+                try:
+                    batch = judge_batch(call, model, env)
+                except (JudgeError, subprocess.TimeoutExpired) as exc:
+                    batch = {
+                        a.key: {"error": f"{type(exc).__name__}: {exc}"[:300]}
+                        for a in call
+                    }
+                grades.update(batch)
         pending = [a for a in pending if "error" in grades[a.key]]
     for entry in card["tasks"]:
         entry["judge"] = grades[entry["id"]]
+        if entry["id"] in checks:
+            _regate_research(entry, checks[entry["id"]])
         _apply_verdict(entry, tasks[entry["id"]])
         if on_progress:
             on_progress(entry["id"], entry["judge"])
     card["judge_model"] = model
     write_scorecard(run_dir, card, scrubber)
     return card
+
+
+def _regate_research(entry: Dict[str, Any], check: Mapping[str, Any]) -> None:
+    """Re-apply the sources gate from this judging's check of the transcript.
+
+    A run judged again starts from its sources, not from an earlier verdict,
+    and its stored check reflects the grader that judged it.
+    """
+    if entry.get("error") or entry.get("after_answer") or entry.get("contamination"):
+        return
+    entry["research"] = dict(check)
+    if check.get("gate_ok"):
+        entry["passed"], entry["why"] = None, f"{check.get('why')}; the judge decides"
+    else:
+        entry["passed"], entry["why"] = False, f"sources: {check.get('why')}"
 
 
 def _apply_verdict(entry: Dict[str, Any], task: Task) -> None:
@@ -1894,6 +2163,19 @@ def _apply_verdict(entry: Dict[str, Any], task: Task) -> None:
         entry["why"] = (
             "judge: correct" if verdict else f"judge: missing {grade.get('missing')!r}"
         )
+    if task.check == "research" and entry.get("passed") is None:
+        if all(isinstance(grade.get(k), bool) for k in RESEARCH_VERDICTS):
+            failed = [k for k in RESEARCH_VERDICTS if not grade[k]]
+            entry["passed"] = not failed
+            entry["why"] = (
+                "judge: correct, accurate and supported"
+                if not failed
+                else "judge: "
+                + "; ".join(
+                    f"{k.replace('_', ' ')} no ({grade.get(_RESEARCH_REASONS[k])!r})"
+                    for k in failed
+                )
+            )
     if (
         task.check == "diff"
         and entry.get("passed") is None
@@ -2025,6 +2307,46 @@ def summarize(card: Mapping[str, Any]) -> Dict[str, Any]:
         "output_tokens": sum(t["output_tokens"] for t in tasks),
         "total_tokens": sum(t["input_tokens"] + t["output_tokens"] for t in tasks),
         "wall_seconds": round(sum(t["wall_seconds"] for t in tasks), 1),
+        **_research_summary(tasks),
+    }
+
+
+def _research_summary(tasks: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Sourcing totals over a run's research tasks; nothing when it has none."""
+    checks = [t["research"] for t in tasks if t.get("research")]
+    if not checks:
+        return {}
+    graded = [
+        t["judge"]
+        for t in tasks
+        if t.get("research")
+        and _judged(t)
+        and all(isinstance(t["judge"].get(a), int) for a in RESEARCH_AXES)
+    ]
+    return {
+        "research": {
+            "reports": len(checks),
+            "searches": sum(c.get("searches", 0) for c in checks),
+            "failed_searches": sum(c.get("failed_searches", 0) for c in checks),
+            "fetched_sources": sum(c.get("cited_fetched", 0) for c in checks),
+            "unread_citations": sum(len(c.get("unread") or []) for c in checks),
+            "invented_citations": sum(len(c.get("invented") or []) for c in checks),
+            "unsupported_figures": sum(
+                len(c.get("unsupported_figures") or []) for c in checks
+            ),
+            **{
+                axis: (
+                    round(statistics.mean(g[axis] for g in graded), 2)
+                    if graded
+                    else None
+                )
+                for axis in RESEARCH_AXES
+            },
+            **{
+                verdict: sum(1 for g in graded if g.get(verdict) is True)
+                for verdict in RESEARCH_VERDICTS
+            },
+        }
     }
 
 
@@ -2273,6 +2595,8 @@ def propose_consistent_expectations(
 
 
 def _fmt(value: Any) -> str:
+    if value is None:
+        return "—"
     return (
         f"{value:,}"
         if isinstance(value, int) and not isinstance(value, bool)
@@ -2312,6 +2636,23 @@ def render_report(
         f"{s['output_tokens']:,} out) · {s['steps']} steps · {s['wall_seconds']}s",
         "",
     ]
+    research = s.get("research")
+    if research:
+        lines += [
+            f"Research: {research['reports']} reports · "
+            f"{research['failed_searches']} of {research['searches']} searches "
+            "refused · "
+            f"{research['fetched_sources']} fetched sources cited · "
+            f"{research['unread_citations']} citations never fetched · "
+            f"{research['invented_citations']} invented · "
+            f"{research['unsupported_figures']} figures not in their source · "
+            f"accurate {research['factually_accurate']}, "
+            f"citations supported {research['citations_supported']} · "
+            f"coverage {_fmt(research['coverage'])}, "
+            f"readability {_fmt(research['readability'])}, "
+            f"citation quality {_fmt(research['citation_quality'])}",
+            "",
+        ]
     if checks is not None:
         lines += ["| Metric | Main | This run | Limit | |", "|---|---|---|---|---|"]
         lines += [

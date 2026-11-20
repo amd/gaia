@@ -453,6 +453,7 @@
             "group": "Infrastructure",
             "pages": [
               "plans/browser-use",
+              "plans/deep-research",
               "plans/cua",
               "plans/docker-containers",
               "plans/mcp-docs",

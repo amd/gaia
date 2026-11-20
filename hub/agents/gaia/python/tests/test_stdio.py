@@ -2537,6 +2537,7 @@ def test_clear_conversation_resets_only_history(monkeypatch):
     agent.conversation_history = []
     agent.model_id = "chosen-model"
     agent.loaded_skills = {"coding": "loaded"}
+    agent._web_calls = [("fetch_page", {"url": "https://old.example"}, "page")]
     state = stdio.PermissionState(full_access=True)
     seen = []
 
@@ -2551,6 +2552,8 @@ def test_clear_conversation_resets_only_history(monkeypatch):
     stdio.dispatch_query(agent, "\x00gaia:clear_conversation\x00", wire, state=state)
     stdio.dispatch_query(agent, "second", wire, state=state)
     assert seen == [[], []]
+    # A page read before the clear must not back a later report's citation.
+    assert agent._web_calls == []
     assert agent.model_id == "chosen-model"
     assert agent.loaded_skills == {"coding": "loaded"}
     assert state.full_access
