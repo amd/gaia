@@ -1608,6 +1608,38 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
     });
 }
 
+for (const locale of ['ar', 'en']) {
+    test(`the queued-message strip and its buttons stay inside the message area at 800x500 (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 500 });
+        await page.addInitScript(holdOnReading);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Summarize the minutes');
+        await box.press('Enter');
+        await expect(page.locator('.thinking-indicator').last()).toBeVisible();
+        await box.fill('And what if the rate were 5%?');
+        await box.press('Enter');
+        const strip = page.locator('.queued-message');
+        await expect(strip).toHaveCount(1);
+        await expect(strip.locator('.queued-message-steer')).toBeVisible();
+        await expect(strip.locator('.queued-message-text')).toHaveAttribute('dir', 'auto');
+        const spills = await strip.evaluate((row) => {
+            const box = row.getBoundingClientRect();
+            const problems: string[] = [];
+            if (box.left < 0 || box.right > window.innerWidth) problems.push('the strip runs off the screen');
+            for (const el of Array.from(row.children) as HTMLElement[]) {
+                const r = el.getBoundingClientRect();
+                if (r.left < box.left - 1 || r.right > box.right + 1) problems.push(`${el.className} spills out of the strip`);
+                if (!el.classList.contains('queued-message-text') && el.scrollWidth > el.clientWidth + 1) problems.push(`${el.className} is cut`);
+            }
+            return problems;
+        });
+        expect(spills).toEqual([]);
+        await shot(page, `queued-strip-800-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const QUESTION_EVENTS = [
     {
         type: 'needs_input', request_id: 'q-1', question: 'Which colour do you prefer?',

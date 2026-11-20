@@ -397,6 +397,15 @@
     color: var(--danger);
 }
 
+/* The gloss's own muting drops the already-muted note below 4.5:1 on a selected row. */
+.sb-row-queue .i18n-gloss.i18n-gloss {
+    color: var(--text-secondary);
+}
+
+.sb-row-queue.is-failed .i18n-gloss.i18n-gloss {
+    color: inherit;
+}
+
 .sb-group.is-needs-you .sb-group-label {
     color: var(--accent-yellow);
 }
