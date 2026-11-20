@@ -1234,3 +1234,66 @@ class TestConnectCallbackPort:
         assert rc == 0, err
         assert "Remote session detected (SSH)" in out
         assert "ssh -L 8085:127.0.0.1:8085 <user>@<host>" in out
+
+
+class TestUserAddedMcpServer:
+    """A server the user added to mcp_servers.json is listed and can be turned
+    off and on for GAIA with the same commands as a catalog server (#8668)."""
+
+    FLAGSHIP = "installed:gaia"
+
+    @pytest.fixture(autouse=True)
+    def toy_entry(self, tmp_path, monkeypatch):
+        gaia_dir = tmp_path / ".gaia"
+        gaia_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("GAIA_HOME", str(gaia_dir))
+        (gaia_dir / "mcp_servers.json").write_text(
+            json.dumps({"mcpServers": {"toy": {"command": "python", "args": []}}}),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _row(connector_id):
+        rc, out, err = _run("connectors", "list", "--json")
+        assert rc == 0, err
+        return next(r for r in json.loads(out) if r["id"] == connector_id)
+
+    def test_it_is_listed_on_for_gaia(self):
+        row = self._row("toy")
+        assert row["type"] == "mcp_server"
+        assert row["custom"] is True and row["configured"] is True
+        assert row["activations"] == {self.FLAGSHIP: True}
+        assert self._row("mcp-github")["custom"] is False
+
+    def test_deactivate_then_activate(self):
+        rc, out, err = _run(
+            "connectors", "activations", "deactivate", "toy", self.FLAGSHIP
+        )
+        assert rc == 0, err
+        assert self._row("toy")["activations"] == {self.FLAGSHIP: False}
+
+        rc, out, err = _run(
+            "connectors",
+            "activations",
+            "activate",
+            "toy",
+            self.FLAGSHIP,
+            "--scopes",
+            "use",
+        )
+        assert rc == 0, err
+        assert out == f"Activated toy for {self.FLAGSHIP}.\n"
+        assert self._row("toy")["activations"] == {self.FLAGSHIP: True}
+
+    def test_activations_list_shows_the_default(self):
+        rc, out, _err = _run("connectors", "activations", "list")
+        assert rc == 0
+        assert f"toy {self.FLAGSHIP}: active" in out
+
+    def test_a_name_that_is_nowhere_says_where_it_looked(self):
+        rc, _out, err = _run(
+            "connectors", "activations", "activate", "nope", self.FLAGSHIP
+        )
+        assert rc != 0
+        assert "Unknown connector 'nope'" in err
+        assert "mcp_servers.json" in err

@@ -588,7 +588,7 @@ function ConnectorTile({
                             onClearCheck={onClearCheck}
                         />
                     )}
-                    {connector.configured && connector.enabled !== false && (
+                    {connector.configured && connector.enabled !== false && !connector.custom && (
                         <div className={`connector-personalize${justConnected ? ' connector-personalize--offer' : ''}`} role={justConnected ? 'status' : undefined}>
                             <p>{t(justConnected ? 'settings.connectors.personalize.offer' : 'settings.connectors.personalize.tile', { source: personalizeSourceRef(connector), name: connector.display_name })}</p>
                             <PersonalizeButton connector={connector} primary={justConnected} onStarted={onPersonalizeStarted} />
@@ -1293,6 +1293,11 @@ function MCPServerConfigureBody({
             {connector.description && (
                 <p className="connector-desc"><bdi>{connectorDescription(t, connector)}</bdi></p>
             )}
+            {connector.custom && (
+                <p className="connector-desc">
+                    {t('settings.connectors.customServer', { file: ltrIn(t.locale, 'mcp_servers.json') })}
+                </p>
+            )}
             {err && (
                 <div className="configure-error">
                     <AlertCircle size={12} /> {err}
@@ -1379,7 +1384,7 @@ function MCPServerConfigureBody({
                 );
             })}
             <div className="configure-actions">
-                {!(keyless && connector.configured) && (
+                {!(keyless && connector.configured) && !connector.custom && (
                     <button
                         className="btn-primary"
                         disabled={busy || (!keyless && nothingTyped)}
@@ -1405,7 +1410,7 @@ function MCPServerConfigureBody({
                         {t('settings.connectors.check')}
                     </button>
                 )}
-                {connector.configured && (
+                {connector.configured && !connector.custom && (
                     <button
                         className="btn-secondary"
                         disabled={busy}

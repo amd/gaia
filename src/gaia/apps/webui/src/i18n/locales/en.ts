@@ -2739,6 +2739,7 @@ export const enMessages = {
     'settings.connectors.accountsHint': 'Sign in so GAIA can reach your mail, calendar and files.',
     'settings.connectors.servers': 'MCP servers',
     'settings.connectors.serversHint': 'Add tools from other services.',
+    'settings.connectors.customServer': 'You added this server in {file}. Edit or remove it there.',
     'settings.connectors.agentServers': 'Custom agent servers',
     'settings.connectors.unavailable': 'Unavailable',
     'settings.connectors.unavailableHint': "GAIA couldn't read these connectors. Restart GAIA. If it keeps happening, save a troubleshooting report under Settings → Privacy and attach it to a bug report.",

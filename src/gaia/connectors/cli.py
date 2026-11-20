@@ -243,7 +243,9 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
             "visibility) for the connector. Activations apply to "
             "mcp_server connectors only — OAuth connectors have no MCP "
             "tool surface and are rejected with exit code 3 (use "
-            "'gaia connectors grants' to control OAuth access per agent)."
+            "'gaia connectors grants' to control OAuth access per agent). "
+            "An MCP server you added to mcp_servers.json yourself is on for "
+            "GAIA (installed:gaia) until you deactivate it."
         ),
     )
     a = p_acts.add_subparsers(dest="activations_action", metavar="<subcommand>")
@@ -265,7 +267,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p_aa.add_argument("connector_id")
     p_aa.add_argument(
         "agent_id",
-        help="Namespaced agent id, e.g. 'builtin:chat' or 'custom:abc:inbox'",
+        help="Namespaced agent id, e.g. 'installed:gaia' or 'custom:abc:inbox'",
     )
     p_aa.add_argument(
         "--scopes",
@@ -324,19 +326,22 @@ def handle(args: argparse.Namespace) -> int:
 def _handle_list(args: argparse.Namespace) -> int:
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
     from gaia.connectors.accounts import list_accounts
-    from gaia.connectors.activations import load_activations
+    from gaia.connectors.activations import effective_activations, load_activations
     from gaia.connectors.mcp_server import (
+        custom_mcp_specs,
+        find_connector_spec,
         is_mcp_server_configured,
         is_mcp_server_enabled,
     )
     from gaia.connectors.registry import REGISTRY
     from gaia.connectors.store import peek_connection
 
-    specs = REGISTRY.all()
+    # The catalog, then the MCP servers the user added to mcp_servers.json.
+    specs = REGISTRY.all() + custom_mcp_specs()
     connector_id = getattr(args, "connector_id", None)
     if connector_id:
         try:
-            specs = [REGISTRY.get(connector_id)]
+            specs = [find_connector_spec(connector_id)]
         except KeyError:
             sys.stderr.write(f"gaia connectors: unknown connector {connector_id!r}\n")
             return 1
@@ -351,7 +356,8 @@ def _handle_list(args: argparse.Namespace) -> int:
 
     # Which agents may use each MCP server's tools, so a front-end can show
     # (and offer to revoke) a standing activation. A corrupt ledger raises.
-    ledger = load_activations() if any(s.type == "mcp_server" for s in specs) else {}
+    if any(s.type == "mcp_server" for s in specs):
+        load_activations()
     rows = []
     for spec in specs:
         configured = False
@@ -377,7 +383,7 @@ def _handle_list(args: argparse.Namespace) -> int:
         elif spec.type == "mcp_server":
             configured = is_mcp_server_configured(spec.id)
             enabled = is_mcp_server_enabled(spec.id)
-            activations = dict(ledger.get(spec.id, {}))
+            activations = effective_activations(spec.id)
 
         rows.append(
             {
@@ -387,6 +393,7 @@ def _handle_list(args: argparse.Namespace) -> int:
                 "category": spec.category,
                 "tier": spec.tier,
                 "configured": configured,
+                "custom": spec.id not in REGISTRY,
                 "enabled": enabled,
                 "account_id": account_id,
                 "accounts": accounts,
@@ -974,10 +981,12 @@ def _handle_grants(args: argparse.Namespace) -> int:
 def _handle_activations(args: argparse.Namespace) -> int:
     """Handle ``gaia connectors activations {list|activate|deactivate}``."""
     from gaia.connectors.activations import (
+        effective_activations,
         list_agent_activations,
         load_activations,
     )
     from gaia.connectors.api import activate, deactivate
+    from gaia.connectors.mcp_server import custom_mcp_specs
 
     sub = getattr(args, "activations_action", None)
     if sub == "list":
@@ -986,6 +995,10 @@ def _handle_activations(args: argparse.Namespace) -> int:
             listing = {connector_id: list_agent_activations(connector_id)}
         else:
             listing = load_activations()
+        # A server the user added themselves is on for GAIA until turned off.
+        for spec in custom_mcp_specs():
+            if connector_id in (None, spec.id):
+                listing[spec.id] = effective_activations(spec.id)
 
         if getattr(args, "as_json", False):
             sys.stdout.write(json.dumps(listing, indent=2, sort_keys=True) + "\n")

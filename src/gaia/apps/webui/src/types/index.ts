@@ -166,6 +166,11 @@ export interface ConnectorRow {
     docs_url: string | null;
     configured: boolean;
     /**
+     * An MCP server the user added to ``mcp_servers.json`` themselves. It can
+     * be switched on or off, but has no setup form and is removed in that file.
+     */
+    custom?: boolean;
+    /**
      * ``false`` when the connector cannot be instantiated as configured —
      * for example, an ``oauth_pkce`` provider whose required environment
      * variables (``GAIA_GOOGLE_CLIENT_ID`` etc.) aren't set. The UI uses

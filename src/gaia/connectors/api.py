@@ -1021,7 +1021,17 @@ def _require_mcp_server_for_activation(connector_id: str) -> None:
     try:
         spec = REGISTRY.get(connector_id)
     except KeyError as e:
-        raise ConfigurationError(f"Unknown connector '{connector_id}'.") from e
+        # A server the user added to mcp_servers.json themselves.
+        from gaia.config import mcp_servers_path
+        from gaia.connectors.mcp_server import is_custom_mcp_server
+
+        if is_custom_mcp_server(connector_id):
+            return
+        raise ConfigurationError(
+            f"Unknown connector '{connector_id}': it is not in the connector "
+            f"catalog and {mcp_servers_path()} has no MCP server by that name. "
+            "`gaia connectors list` shows the ids that can be activated."
+        ) from e
     if spec.type != "mcp_server":
         raise ConfigurationError(
             f"Activations apply to MCP-server connectors only; "
@@ -1055,9 +1065,12 @@ def activate(
     See ``docs/sdk/infrastructure/connectors.mdx`` for the two-axis model.
     """
     _require_mcp_server_for_activation(connector_id)
+    from gaia.connectors.registry import REGISTRY
+
     existing_scopes = list_agent_grants(connector_id).get(agent_id)
     auto_granted = False
-    if existing_scopes is None:
+    # GAIA holds no credential for a user-added server, so there is nothing to grant.
+    if existing_scopes is None and connector_id in REGISTRY:
         if scopes_for_grant is None:
             raise ConfigurationError(
                 f"Cannot activate connector '{connector_id}' for agent "

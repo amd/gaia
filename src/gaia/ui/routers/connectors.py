@@ -50,6 +50,7 @@ import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
 from gaia.connectors.accounts import list_accounts
 from gaia.connectors.activations import (
     ActivationsLedgerCorrupt,
+    effective_activations,
     list_agent_activations,
     load_activations,
 )
@@ -90,10 +91,11 @@ from gaia.connectors.handler import (
 )
 from gaia.connectors.mcp_server import (
     _read_mcp_servers_json,
+    custom_mcp_specs,
     is_mcp_server_configured,
 )
 from gaia.connectors.registry import REGISTRY
-from gaia.connectors.spec import ConfigField
+from gaia.connectors.spec import ConfigField, ConnectorSpec
 from gaia.connectors.store import (
     peek_connection,
     peek_provider_credentials,
@@ -122,6 +124,29 @@ forwarded_router = APIRouter(prefix="/v1/connections", tags=["connections"])
 # ─────────────────────────────────────────────────────────────────
 
 
+def _custom_spec(connector_id: str) -> Optional[ConnectorSpec]:
+    """The spec of a server the user added to ``mcp_servers.json``, if it is one."""
+    if connector_id in REGISTRY:
+        return None
+    try:
+        specs = custom_mcp_specs()
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
+    return next((s for s in specs if s.id == connector_id), None)
+
+
+def _spec_for(connector_id: str) -> ConnectorSpec:
+    """Return the catalog spec, or a user-added MCP server's; 404 when neither."""
+    if connector_id in REGISTRY:
+        return REGISTRY.get(connector_id)
+    spec = _custom_spec(connector_id)
+    if spec is None:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown connector: {connector_id!r}"
+        )
+    return spec
+
+
 def _require_mcp_server(connector_id: str) -> None:
     """Reject activation writes for non-MCP-server connectors.
 
@@ -130,12 +155,7 @@ def _require_mcp_server(connector_id: str) -> None:
     agent access is gated by per-scope grants, not by this ledger — so allowing
     a write here would create a switch that does nothing.
     """
-    try:
-        spec = REGISTRY.get(connector_id)
-    except KeyError:
-        raise HTTPException(
-            status_code=404, detail=f"Unknown connector: {connector_id!r}"
-        )
+    spec = _spec_for(connector_id)
     if spec.type != "mcp_server":
         raise HTTPException(
             status_code=400,
@@ -480,12 +500,8 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
     so the AgentUI renders a friendly "needs setup" tile rather than
     letting the user click Connect and hit a 503.
     """
-    try:
-        spec = REGISTRY.get(connector_id)
-    except KeyError:
-        raise HTTPException(
-            status_code=404, detail=f"Unknown connector: {connector_id!r}"
-        )
+    spec = _spec_for(connector_id)
+    custom = connector_id not in REGISTRY
 
     configured = False
     account_id: Optional[str] = None
@@ -588,7 +604,12 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
     # accept ``mcp_server`` connectors only (see ``_require_mcp_server``).
     # The dict is always returned (empty ``{}`` for OAuth) so the response
     # shape stays uniform across connector types.
-    activations = list_agent_activations(spec.id)
+    # A user-added server also shows the flagship's default: on until decided.
+    activations = (
+        effective_activations(spec.id)
+        if spec.type == "mcp_server"
+        else list_agent_activations(spec.id)
+    )
 
     return {
         "id": spec.id,
@@ -602,6 +623,9 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "docs_url": spec.docs_url,
         "setup_url": spec.setup_url,
         "configured": configured,
+        # A server the user added to mcp_servers.json themselves: it can be
+        # switched on or off, but has no setup form and is removed in that file.
+        "custom": custom,
         "configurable": configurable,
         "config_error": config_error,
         "oauth_client": oauth_client,
@@ -648,6 +672,11 @@ def _field_summary(f: ConfigField) -> Dict[str, Any]:
 async def list_connectors() -> Dict[str, Any]:
     """Return catalog specs merged with live state for all connectors."""
     specs = REGISTRY.all()
+    try:
+        specs = specs + custom_mcp_specs()
+    except ConnectorsError as exc:
+        # An unreadable mcp_servers.json must not hide the catalog.
+        logger.warning("connectors-list: user-added MCP servers not listed: %s", exc)
     # Every summary reads the same ledger; a corrupt one is fixed by deleting it, so name it.
     ledger_cause: Dict[str, Any] = {}
     try:
@@ -869,6 +898,8 @@ async def get_grants(connector_id: str) -> Dict[str, Any]:
 
 @router.get("/{connector_id}/activations")
 async def get_activations(connector_id: str) -> Dict[str, Any]:
+    if _custom_spec(connector_id) is not None:
+        return {"activations": effective_activations(connector_id)}
     return {"activations": list_agent_activations(connector_id)}
 
 
@@ -939,7 +970,11 @@ async def test_connector(connector_id: str) -> Dict[str, Any]:
     """Run the health check for a connector."""
     retry_keyring()
     try:
-        result = await health_check(connector_id)
+        custom = _custom_spec(connector_id)
+        if custom is not None:
+            result = await _HANDLER_REGISTRY["mcp_server"].test(custom)
+        else:
+            result = await health_check(connector_id)
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"Unknown connector: {connector_id!r}"
@@ -1064,12 +1099,7 @@ async def _set_connector_enabled(connector_id: str, enabled: bool) -> Dict[str, 
     On success, emits ``connector.enabled`` or ``connector.disabled`` on the
     SSE stream and returns the updated connector summary.
     """
-    try:
-        spec = REGISTRY.get(connector_id)
-    except KeyError:
-        raise HTTPException(
-            status_code=404, detail=f"Unknown connector: {connector_id!r}"
-        )
+    spec = _spec_for(connector_id)
 
     if spec.type != "mcp_server":
         raise HTTPException(
