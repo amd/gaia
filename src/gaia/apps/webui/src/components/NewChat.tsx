@@ -366,7 +366,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                         autoFocus
                         inputRef={inputRef}
                         placeholder={researchMode ? t('composer.researchPlaceholder') : undefined}
-                        leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /><ResearchChip sessionId={null} disabled={sending} /></>}
+                        leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /><ResearchChip sessionId={null} disabled={sending} compact /></>}
                         rightControls={<ModelChip />}
                     />
                 </div>

@@ -18,7 +18,7 @@ export function withResearch(text: string, sessionId: string | null): string {
 
 /**
  * Composer toggle: while on, each message is sent as a `/research` turn.
- * `compact` drops the label, for a chat's crowded message box; the tooltip and
+ * `compact` drops the label, for a crowded message box; the tooltip and
  * accessible name still say what it is.
  */
 export function ResearchChip({ sessionId, disabled, compact = false }: {

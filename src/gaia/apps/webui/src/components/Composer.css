@@ -99,11 +99,6 @@
     justify-content: flex-end;
 }
 
-/* A new chat's left chips (permission, private, research) are cut before its model name. */
-.new-chat .composer-row-right { flex: 1 1 auto; }
-.new-chat .composer-row-left { flex-shrink: 100; }
-.new-chat .composer-row-left > .composer-chip { min-width: 0; }
-
 .composer-row .composer-chip-wrap {
     min-width: 0;
 }
@@ -345,6 +340,11 @@
 /* A long memory-switch label is cut before it squeezes the model name; its eye icon carries the state. */
 .composer-chip-memory .composer-chip-label {
     max-width: 14rem;
+}
+
+/* Beside the Research chip it gives up that chip's width, so the model name keeps its room. */
+.composer-row-left:has(.composer-chip-research) .composer-chip-memory .composer-chip-label {
+    max-width: 11.75rem;
 }
 
 /* Too long to sit beside the other chips on a phone; the eye icon carries the state. */
