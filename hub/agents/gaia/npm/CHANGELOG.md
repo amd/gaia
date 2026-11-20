@@ -8,6 +8,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **Clearing a conversation forgets its "always" answers.** `/clear` in the
+  terminal UI, `clear_history` from a host, and `/reset` in `gaia chat` used to
+  keep them, so a command approved "always" in the cleared chat still ran
+  unasked in the next one. Now the same command asks again. Other sessions keep
+  their answers, and full access and loaded skills are unchanged.
 - **Full access runs any command.** It used to refuse a program outside a
   short developer list (`pip`, `where`, `rmdir`, `gaia`, a program given by its
   full path), a package install outside a virtual environment, a path outside

@@ -89,6 +89,9 @@ gaia chat --stats
   </Accordion>
 </AccordionGroup>
 
+`/reset` also forgets every "always" you answered in the conversation, so the next
+action that asks will ask again.
+
 `/quit` and `/reset` save the current session first. If saving fails, the
 conversation stays open and unchanged so you can fix the storage problem and
 retry `/save`, then `/quit` or `/reset`. To exit without saving, press `Ctrl-C`;
