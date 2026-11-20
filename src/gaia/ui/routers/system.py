@@ -1773,6 +1773,34 @@ def _running_index_ids(request: Request) -> List[str]:
     return ids
 
 
+class WindowVisibility(BaseModel):
+    """Whether the desktop app's window is out of sight."""
+
+    hidden: bool
+
+
+@router.post(
+    "/api/system/window-visibility",
+    response_model=WindowVisibility,
+    dependencies=[
+        Depends(security.require_ui_header),
+        Depends(security.require_local_pc),
+    ],
+)
+def window_visibility(body: WindowVisibility) -> WindowVisibility:
+    """The desktop app's window went to the tray or was minimised, or came back.
+
+    GAIA's daemon unloads the models of an app that has sat hidden and unused
+    (``hidden_idle_unload_minutes``); the next message loads them again. Only
+    the desktop app calls this: a browser tab never reports, so it always
+    counts as showing.
+    """
+    from gaia.llm.lemonade_service import set_window_hidden
+
+    set_window_hidden(body.hidden)
+    return body
+
+
 @router.get("/api/system/work-in-progress", response_model=WorkInProgress)
 async def work_in_progress(request: Request, db: ChatDatabase = Depends(get_db)):
     """Answers still being written, documents still being indexed, and setup still downloading.

@@ -42,6 +42,9 @@ class RegisterClientRequest(BaseModel):
     name: str = ""
     # Set when a client repeats its registration (see LemonadeClients.register).
     client_id: Optional[str] = None
+    # An app's window is in the tray or minimised; absent from clients that
+    # do not say, which then count as in use.
+    hidden: Optional[bool] = None
 
 
 class StartRequest(BaseModel):
@@ -137,7 +140,11 @@ def build_clients_router(token: str, clients, owner) -> APIRouter:
     def register(body: RegisterClientRequest) -> dict:
         try:
             result = clients.register(
-                body.kind, body.pids, body.name, client_id=body.client_id
+                body.kind,
+                body.pids,
+                body.name,
+                client_id=body.client_id,
+                hidden=body.hidden,
             )
         except ClientRejected as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
