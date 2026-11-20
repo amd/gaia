@@ -96,7 +96,11 @@ public:
         std::string name;
         json args;
         std::string output;  // what the tool returned, clipped
+        bool succeeded = true;
     };
+
+    /// The answer says the tests pass, and no test run this turn passed after the last file change.
+    static std::optional<std::string> testClaimNote(const std::string& answer, const std::vector<CallSeen>& calls);
 
     /// A file or page the turn read holds text addressed to an AI assistant, and
     /// the answer doesn't tell the user about it.

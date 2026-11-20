@@ -297,7 +297,44 @@ TEST(GaiaAgentTest, ClaimingTestsRanWithoutRunningThemIsSentBack) {
     GaiaAgent agent(cfgFor(mock), optionsFor(w));
     json r = agent.processQuery("fix it");
     EXPECT_EQ(r["result"], "Fixed the bug; I did not run the tests.");
-    EXPECT_NE(mock.receivedBodies()[1].find("no command ran"), std::string::npos);
+    EXPECT_NE(mock.receivedBodies()[1].find("no test run this turn"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, ATestsPassClaimNeedsAPassingTestRunAfterTheLastEdit) {
+    auto run = [](const std::string& command, int exitCode, const std::string& stdoutText) {
+        return GaiaAgent::CallSeen{"bash_execute",
+                                   {{"command", command}},
+                                   json{{"exit_code", exitCode}, {"stdout", stdoutText}, {"stderr", ""}}.dump()};
+    };
+    const GaiaAgent::CallSeen edit{"file_edit", {{"path", "stats.py"}}, R"({"status":"success"})"};
+    const std::string claim = "Fixed both bugs, and the tests now pass.";
+
+    // A script that runs no tests is not a test run, even when it exits 0.
+    const auto none = GaiaAgent::testClaimNote(claim, {edit, run("python test_stats.py", 0, "")});
+    ASSERT_TRUE(none);
+    EXPECT_NE(none->find("no test run this turn"), std::string::npos);
+
+    EXPECT_FALSE(GaiaAgent::testClaimNote(claim, {edit, run("python -m pytest -q", 0, "3 passed in 0.02s")}));
+    EXPECT_FALSE(GaiaAgent::testClaimNote(claim, {edit, run("python test_stats.py", 0, "Ran 4 tests in 0.001s\nOK")}))
+        << "unittest's own summary makes it a test run";
+
+    const auto failed =
+        GaiaAgent::testClaimNote(claim, {edit, run("python -m pytest", 1, "1 failed, 2 passed in 0.03s")});
+    ASSERT_TRUE(failed);
+    EXPECT_NE(failed->find("didn't pass"), std::string::npos);
+    EXPECT_TRUE(GaiaAgent::testClaimNote(claim, {edit, run("python -m unittest", 0, "Ran 0 tests in 0.000s\nOK")}))
+        << "a run of zero tests is not a pass";
+    EXPECT_FALSE(GaiaAgent::testClaimNote("Two tests pass; test_median still fails.",
+                                          {edit, run("python -m pytest", 1, "1 failed, 2 passed")}))
+        << "a failed run reported honestly";
+
+    const auto stale = GaiaAgent::testClaimNote(claim, {run("pytest", 0, "3 passed"), edit});
+    ASSERT_TRUE(stale);
+    EXPECT_NE(stale->find("after the last passing test run"), std::string::npos);
+    EXPECT_FALSE(GaiaAgent::testClaimNote(claim, {run("pytest", 1, "1 failed"), edit, run("pytest", 0, "3 passed")}))
+        << "the rerun after the fix counts";
+
+    EXPECT_FALSE(GaiaAgent::testClaimNote("Fixed the bug; I did not run the tests.", {edit}));
 }
 
 TEST(GaiaAgentTest, SayingAFileIsMissingWithoutLookingIsSentBack) {
