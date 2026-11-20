@@ -1381,7 +1381,7 @@ class PathValidator:
         """
         self.read_only_paths.discard(Path(_real_path(path)))
 
-    def withhold_path(self, path: str) -> None:
+    def withhold_path(self, path: str, *, document: Optional[bool] = None) -> None:
         """Refuse everything under *path* until :meth:`release_path`.
 
         Wins over every grant, including a wider allowed folder, a read-only
@@ -1389,10 +1389,13 @@ class PathValidator:
 
         Args:
             path: The folder (or file) the user removed.
+            document: Whether *path* is a document taken off the chat, which
+                changes the advice in the refusal. Unset, a path that is a
+                file now counts as one; pass it when the file may be gone.
         """
         real = Path(_real_path(path))
         self.withheld_paths.add(real)
-        if real.is_file():
+        if document if document is not None else real.is_file():
             self._withheld_files.add(real)
         self.allowed_paths = {
             p
@@ -1410,6 +1413,10 @@ class PathValidator:
         real = Path(_real_path(path))
         self.withheld_paths.discard(real)
         self._withheld_files.discard(real)
+
+    def is_withheld_document(self, path: Any) -> bool:
+        """Whether *path* was withheld as a document rather than a folder."""
+        return Path(_real_path(path)) in self._withheld_files
 
     def withheld_root(self, path: str) -> Optional[Path]:
         """The withheld folder *path* is in, or None."""

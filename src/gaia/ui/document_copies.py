@@ -89,7 +89,15 @@ def move_library_files_out_of_shared_folder(db: ChatDatabase) -> List[str]:
             db.update_document_path(doc["id"], str(target))
         except sqlite3.Error as e:
             # The row must name where the file is; put the file back.
-            os.replace(target, source)
+            try:
+                os.replace(target, source)
+            except OSError as back:
+                failures.append(
+                    f"{source}: the library could not be updated ({e}), and "
+                    f"the file could not be put back ({back}); it is now at "
+                    f"{target}. Move it back to {source} by hand"
+                )
+                continue
             failures.append(f"{source}: the library could not be updated ({e})")
             continue
         moved[key] = target

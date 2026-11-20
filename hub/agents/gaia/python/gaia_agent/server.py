@@ -1040,7 +1040,7 @@ def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
     for doc in sorted(dropped):
         validator.remove_allowed_path(doc)
         if _granted_only_as_gaias_copy(validator, doc):
-            validator.withhold_path(doc)
+            validator.withhold_path(doc, document=True)
             withheld.add(doc)
         if doc not in agent.indexed_files:
             continue

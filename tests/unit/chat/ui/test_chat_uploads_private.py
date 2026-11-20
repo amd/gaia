@@ -278,6 +278,46 @@ def test_a_withheld_document_says_to_attach_it_again(tmp_path):
     assert "taken off this chat" in validator.grant_refusal_reason(str(doc))
 
 
+def test_a_document_already_deleted_still_says_to_attach_it_again(tmp_path):
+    """A library document deleted before it is taken off keeps the right advice."""
+    gone = tmp_path / "deleted.pdf"
+    validator = PathValidator([str(tmp_path)])
+    validator.withhold_path(str(gone), document=True)
+
+    reason = validator.validate_read(str(gone), prompt_user=False)[1]
+
+    assert "attach it to this chat again" in reason
+    assert "Environment" not in reason
+    assert validator.is_withheld_document(str(gone))
+
+
+def test_a_withheld_document_keeps_its_advice_on_a_rebuilt_validator(tmp_path):
+    """What a rebuild copies over: the path and whether it was a document."""
+    doc = tmp_path / "notes.txt"
+    doc.write_text("x", encoding="utf-8")
+    old = PathValidator([str(tmp_path)])
+    old.withhold_path(str(doc))
+    doc.unlink()
+
+    new = PathValidator([str(tmp_path)])
+    for path in old.withheld_paths:
+        new.withhold_path(str(path), document=old.is_withheld_document(path))
+
+    reason = new.validate_read(str(doc), prompt_user=False)[1]
+    assert "attach it to this chat again" in reason
+
+
+def test_a_withheld_folder_is_not_a_document_even_when_told_nothing(tmp_path):
+    folder = tmp_path / "v1.2"
+    folder.mkdir()
+    validator = PathValidator([str(tmp_path)])
+    validator.withhold_path(str(folder))
+
+    assert not validator.is_withheld_document(str(folder))
+    reason = validator.validate_read(str(folder / "a.txt"), prompt_user=False)[1]
+    assert "under Environment in the session panel" in reason
+
+
 def test_a_withheld_folder_still_points_at_environment(tmp_path):
     folder = tmp_path / "private"
     folder.mkdir()
@@ -579,6 +619,40 @@ def test_a_library_update_failure_puts_the_file_back(tmp_path, homes):
     assert failures
     assert (shared / "keep.txt").read_text(encoding="utf-8") == "KEEP"
     assert db.get_document(doc["id"])["filepath"] == str(shared / "keep.txt")
+
+
+def test_a_file_that_cannot_be_put_back_is_reported_not_a_crash(tmp_path, homes):
+    """Startup survives a failed rollback and says where the file ended up."""
+    from gaia.ui import document_copies
+    from gaia.ui.utils import managed_documents_dir
+
+    db = _library_db(tmp_path)
+    shared = managed_documents_dir()
+    shared.mkdir(parents=True)
+    _add(db, shared / "stuck.txt", "STUCK")
+    real_replace = os.replace
+    calls = []
+
+    def replace_once(src, dst):
+        calls.append((src, dst))
+        if len(calls) > 1:
+            raise PermissionError("in use")
+        return real_replace(src, dst)
+
+    with (
+        patch.object(
+            db, "update_document_path", side_effect=sqlite3.OperationalError("locked")
+        ),
+        patch.object(document_copies.os, "replace", side_effect=replace_once),
+    ):
+        failures = document_copies.move_library_files_out_of_shared_folder(db)
+
+    assert len(failures) == 1
+    stranded = calls[0][1]
+    assert Path(stranded).read_text(encoding="utf-8") == "STUCK"
+    assert str(stranded) in failures[0]
+    assert "by hand" in failures[0]
+    assert db.get_setting(document_copies.MOVED_SETTING) != "1"
 
 
 def test_a_link_in_the_shared_folder_is_not_moved(tmp_path, homes):
