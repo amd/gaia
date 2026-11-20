@@ -289,6 +289,63 @@ def test_repeated_or_mixed_trailing_separators_still_name_the_folder(dictation, 
     assert not any("\\" in part for part in Path(result["saved_to"]).parts[1:])
 
 
+@pytest.mark.parametrize(
+    "given, kept",
+    [
+        # Roots keep their separator: "C:" alone is the drive's current folder.
+        ("C:\\", "C:\\"),
+        ("D:\\", "D:\\"),
+        ("C:/", "C:/"),
+        ("D:/", "D:/"),
+        ("c:\\\\", "c:\\\\"),
+        ("C:\\ ", "C:\\"),
+        ("\\\\server\\share\\", "\\\\server\\share\\"),
+        ("//server/share/", "//server/share/"),
+        ("\\\\?\\C:\\", "\\\\?\\C:\\"),
+        ("/", "/"),
+        ("\\", "\\"),
+        ("//", "//"),
+        # Everything else loses every trailing separator.
+        ("folder\\", "folder"),
+        ("folder\\\\\\", "folder"),
+        ("a/b/", "a/b"),
+        ("a\\\\\\", "a"),
+        ("..\\", ".."),
+        ("sub\\..\\..\\", "sub\\..\\.."),
+        ("Reports v1.2\\", "Reports v1.2"),
+        ("C:\\Reports\\", "C:\\Reports"),
+        ("C:folder\\", "C:folder"),
+        ("\\\\server\\share\\folder\\", "\\\\server\\share\\folder"),
+        ("/home/me/out/", "/home/me/out"),
+    ],
+)
+def test_trailing_separators_go_but_a_root_keeps_its_own(given, kept):
+    from gaia.agents.tools.dictation_tools import strip_folder_separators
+
+    assert strip_folder_separators(given) == kept
+
+
+@pytest.mark.parametrize("root", ["C:\\", "D:/", "\\\\server\\share\\", "/"])
+def test_a_drive_or_share_root_is_resolved_as_that_root(dictation, root):
+    """``D:\\`` must not shrink to ``D:``, the drive's current folder."""
+    import gaia.agents.tools.workspace_paths as workspace_paths
+
+    seen = []
+
+    def target(agent, path):
+        seen.append(path)
+        return dictation.allowed
+
+    with patch.object(workspace_paths, "_workspace_target", target):
+        destination, audio_format, refusal = dictation.agent._dictation_destinations(
+            "story", root, "mp3"
+        )
+    assert seen == [root]
+    assert refusal is None
+    assert destination == dictation.allowed / "story.mp3"
+    assert audio_format == "mp3"
+
+
 def test_a_script_copy_that_fails_does_not_undo_the_audio_copy(dictation, monkeypatch):
     """The reply must match the disk: the audio is there, only the script is not."""
     import shutil

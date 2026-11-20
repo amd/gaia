@@ -13,6 +13,7 @@ both save speech the same way.
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 import shutil
@@ -30,6 +31,20 @@ logger = get_logger(__name__)
 DICTATION_TIMEOUT_SECONDS = 3600
 
 _SLUG = re.compile(r"[^A-Za-z0-9]+")
+
+
+def strip_folder_separators(path: str) -> str:
+    """``path`` without trailing separators, unless that would leave no root.
+
+    A drive (``C:\\``), a UNC share (``\\\\server\\share\\``) or ``/`` keeps
+    its separator: ``C:`` alone means the drive's current folder.
+    """
+    text = path.rstrip()
+    stripped = text.rstrip("/\\")
+    drive, rest = ntpath.splitdrive(stripped)
+    if not stripped or (drive and not rest):
+        return text
+    return stripped
 
 
 def speech_folder() -> Path:
@@ -255,7 +270,7 @@ class DictationToolsMixin:
         # Strip it: on POSIX a trailing backslash would stay in the folder name.
         names_folder = output_path.rstrip().endswith(("/", "\\"))
         if names_folder:
-            output_path = output_path.rstrip().rstrip("/\\") or output_path
+            output_path = strip_folder_separators(output_path)
         destination = _workspace_target(self, output_path)
         if names_folder or destination.is_dir() or not destination.suffix:
             destination = destination / f"{stem}{SPEECH_FILE_FORMATS[audio_format]}"
