@@ -15,12 +15,14 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
 from gaia.agents.base.verification import EXECUTED_KEY
+from gaia.agents.tools.browser_tools import PRIMARY_SOURCE_MARKER
 from gaia.llm.inference_location import InferenceLocation
 from gaia.logger import get_logger
+from gaia.upload_names import display_file_name
 
 logger = get_logger(__name__)
 
@@ -63,6 +65,8 @@ _SCHEDULE_ADD_RE = re.compile(
 #: The host the built-in ``search_web`` sends its queries to (``WebClient``).
 _SEARCH_HOST = "duckduckgo.com"
 
+_AUDIO_TOOLS = frozenset({"generate_music", "generate_sound_effect"})
+
 #: File types the rail may hand to the default app: nothing that runs code,
 #: so no scripts or programs, and no HTML, SVG or XML, which can open in a browser.
 OPENABLE_SUFFIXES = frozenset(
@@ -89,6 +93,7 @@ OPENABLE_SUFFIXES = frozenset(
         ".gif",
         ".webp",
         ".bmp",
+        ".wav",
     }
 )
 
@@ -104,6 +109,27 @@ _SEARCH_HIT_RE = re.compile(
 def is_openable(path: str) -> bool:
     """Whether *path* is a type the default app can open without running code."""
     return Path(path).suffix.lower() in OPENABLE_SUFFIXES
+
+
+def search_hits(text: str) -> List[Dict[str, str]]:
+    """The ``title``/``url`` of each hit in a ``search_web`` text result."""
+    return [
+        {
+            "title": m.group("title").strip().removesuffix(PRIMARY_SOURCE_MARKER),
+            "url": m.group("url"),
+        }
+        for m in _SEARCH_HIT_RE.finditer(text)
+    ]
+
+
+def _search_sources(data: Any) -> Optional[List[Any]]:
+    """A ``search_web`` result's hits, from its text or from the summary a
+    relayed turn carries instead; None when it is neither."""
+    if isinstance(data, str):
+        return search_hits(data)
+    if isinstance(data, dict) and isinstance(data.get("sources"), list):
+        return data["sources"]
+    return None
 
 
 def _payload(data: Any) -> Any:
@@ -184,14 +210,17 @@ class TurnLedger:
                     match = _PAGE_TITLE_RE.search(data)
                     title = match.group("title").strip() if match else None
                 read.setdefault(url, {"url": url, "title": title, "kind": "page"})
-            elif tool == "search_web" and isinstance(data, str):
-                for match in _SEARCH_HIT_RE.finditer(data):
-                    url = match.group("url")
+            elif tool == "search_web":
+                for hit in _search_sources(data) or []:
+                    url = hit.get("url") if isinstance(hit, dict) else None
+                    if not _web_url(url):
+                        continue
+                    title = hit.get("title")
                     hits.setdefault(
                         url,
                         {
                             "url": url,
-                            "title": match.group("title").strip(),
+                            "title": title if isinstance(title, str) else None,
                             "kind": "search_result",
                         },
                     )
@@ -217,7 +246,7 @@ class TurnLedger:
                 entry = docs.setdefault(
                     path,
                     {
-                        "name": display_names.get(base, base),
+                        "name": display_names.get(base) or display_file_name(path),
                         "path": path,
                         "pages": [],
                         "passages": 0,
@@ -246,7 +275,8 @@ class TurnLedger:
             arg = LIVE_DATA_TOOLS[tool]
             if arg is None:
                 # Only the built-in search (text result) has a known backend.
-                host = _SEARCH_HOST if isinstance(call["data"], str) else None
+                searched = _search_sources(call["data"]) is not None
+                host = _SEARCH_HOST if searched else None
             else:
                 host = _host(call["args"].get(arg))
             if host and host not in sites:
@@ -265,6 +295,25 @@ class TurnLedger:
             if isinstance(path, str) and os.path.isabs(path):
                 paths.append(path)
         return paths
+
+    def indexed_documents(self) -> List[Tuple[str, int]]:
+        """``(path, chunks)`` for each file ``index_document`` indexed this turn.
+
+        The path is the tool's resolved one; a call whose result names none
+        (it failed, or it is still indexing in the background) is left out.
+        """
+        found: Dict[str, int] = {}
+        for call in self._finished():
+            data = call["data"]
+            if call["tool"] != "index_document" or not call["success"]:
+                continue
+            if not isinstance(data, dict) or data.get("status") != "success":
+                continue
+            path = data.get("file_path")
+            if isinstance(path, str) and os.path.isabs(path):
+                chunks = data.get("num_chunks")
+                found[path] = chunks if isinstance(chunks, int) else 0
+        return list(found.items())
 
     def _produced(self) -> List[Dict[str, Any]]:
         """Things the turn made besides files: images, indexed documents,
@@ -286,6 +335,21 @@ class TurnLedger:
                             "detail": args.get("prompt"),
                         }
                     )
+            elif tool in _AUDIO_TOOLS and isinstance(data, dict):
+                kept = data.get("audio_path")
+                saved = data.get("saved_to")
+                # The user's copy is the one to open; GAIA's own is for the player.
+                path = saved if isinstance(saved, str) and saved else kept
+                if isinstance(path, str) and path:
+                    item = {
+                        "kind": "audio",
+                        "name": Path(path).name,
+                        "path": path,
+                        "detail": args.get("prompt"),
+                    }
+                    if path != kept and isinstance(kept, str):
+                        item["copy_of"] = kept
+                    out.append(item)
             elif tool in _INDEX_TOOLS:
                 path = args.get(_INDEX_TOOLS[tool])
                 if isinstance(path, str) and path:
@@ -403,15 +467,16 @@ def _cost(
     # Only Fireworks publishes a rate card GAIA carries.
     if location.provider != "fireworks":
         return {"kind": "unknown"}
+    # Lazy: the rate card lives with the benchmark's metering code.
+    from gaia.eval.bench.metering import price, rate_card
+
     input_tokens = usage.get("input_tokens")
     output_tokens = usage.get("tokens")
     if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
-        return {"kind": "unknown"}
+        # A stopped stream ends before the provider reports its usage.
+        return {"kind": "unreported" if rate_card(location.model) else "unknown"}
     cached = usage.get("cached_tokens")
     cached = cached if isinstance(cached, int) else 0
-    # Lazy: the rate card lives with the benchmark's metering code.
-    from gaia.eval.bench.metering import price
-
     usd = price(location.model, input_tokens, cached, output_tokens)
     if usd is None:
         return {"kind": "unknown"}
@@ -421,7 +486,7 @@ def _cost(
 def upload_display_names(message: str) -> Dict[str, str]:
     """Upload copy file name -> the name the user attached it as (#5183).
 
-    The composer links each attachment as ``[original.pdf](<uploads>/<uuid>.pdf)``,
+    The composer links each attachment as ``[original.pdf](<uploads>/<copy>.pdf)``,
     so the link label is the only place the original name survives.
     """
     from gaia.ui.utils import uploads_dir

@@ -22,18 +22,18 @@ Included demos:
 | C++ Compiler | C++17 support | MSVC 2019+ or GCC 9+ |
 | Git | any | Required by CMake FetchContent |
 
-> **Windows**: Install [Visual Studio 2022](https://visualstudio.microsoft.com/) (Desktop C++ workload) or the standalone [Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022). CMake is bundled with Visual Studio, or install it separately from [cmake.org](https://cmake.org/download/).
+> **Windows**: Install [Visual Studio 2022](https://visualstudio.microsoft.com/) (Desktop C++ workload) or the standalone [Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022). CMake is bundled with Visual Studio, or install it separately from [CMake releases](https://github.com/Kitware/CMake/releases).
 
 ### 2. LLM Server (Lemonade)
 
 The agent connects to an OpenAI-compatible LLM server at `http://localhost:13305/api/v1` by default. The reference backend is [Lemonade Server](https://github.com/lemonade-sdk/lemonade), which runs models locally on AMD hardware.
 
-Install Lemonade Server v2026.40.0:
+Install Lemonade Server v2026.44.1:
 
 **Windows:**
 ```powershell
 # Download and run the MSI installer
-curl -L -o lemonade-server-minimal.msi https://github.com/lemonade-sdk/lemonade/releases/download/v2026.40.0/lemonade-server-minimal.msi
+curl -L -o lemonade-server-minimal.msi https://github.com/lemonade-sdk/lemonade/releases/download/v2026.44.1/lemonade-server-minimal.msi
 msiexec /i lemonade-server-minimal.msi
 ```
 
@@ -44,7 +44,7 @@ sudo add-apt-repository ppa:lemonade-team/stable
 sudo apt install lemonade-server
 ```
 
-Or browse all platform options on the [Lemonade v2026.40.0 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v2026.40.0).
+Or browse all platform options on the [Lemonade v2026.44.1 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v2026.44.1).
 
 How the server starts depends on the install, and there is no cross-platform
 `serve` command — Lemonade removed the `lemonade-server` CLI in 10.7. Windows
@@ -53,7 +53,7 @@ starts `LemonadeServer.exe` from the tray icon or the Start menu; Linux runs the
 start one from the repo (this restarts the server and frees its port first):
 
 ```powershell
-.\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+.\installer\scripts\ensure-lemonade-running.ps1 -JobScoped -Port 13305 -NoModel
 ```
 
 Default model: `Qwen3-4B-GGUF` (configurable via `AgentConfig::modelId`)
@@ -259,6 +259,13 @@ gaia/                           # repo root
     │   ├── console.cpp
     │   ├── clean_console.cpp
     │   └── database.cpp
+    ├── agents/
+    │   ├── gaia/               # gaiacpp — the general-purpose GAIA agent (CLI, headless, server)
+    │   ├── bash/               # gaia-bash — the coding agent
+    │   └── <id>/gaia-agent.yaml  # Packaging manifest per agent (see agents/README.md)
+    ├── packaging/
+    │   ├── package_agents.py   # Packages each agent's binary for the Agent Hub
+    │   └── package_lemonade.py # Packages gaiacpp as a Lemonade release archive
     ├── examples/
     │   ├── health_agent.cpp    # Windows System Health Agent (MCP/CUA demo)
     │   └── wifi_agent.cpp      # Wi-Fi Troubleshooter (registered-tool demo)
@@ -490,6 +497,15 @@ builds compile byte-identical sources with the same feature flags:
 SQLite lives in [`third_party/sqlite/`](third_party/sqlite/) and is compiled
 directly into `gaia_core`; there is deliberately no `find_package` fallback. See
 that directory's README for the compile flags, the upgrade procedure, and why.
+
+**Software Bill of Materials.** [`SBOM.spdx.json`](SBOM.spdx.json) is an SPDX 2.3
+inventory of every dependency above plus OpenSSL (optional, from vcpkg or the
+system), with versions, licenses, and the SHA256 of each pinned archive. It
+describes the archives the build fetches; a build that picks up a system-installed
+copy through `find_package` links whatever version that system has. When you
+add or bump a `FetchContent_Declare`, a vendored tree, or a `vcpkg.json`
+dependency, update the SBOM in the same change: `python util/check_cpp_sbom.py`
+fails CI when the two drift.
 
 ---
 

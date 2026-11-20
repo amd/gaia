@@ -20,6 +20,11 @@ namespace gaia {
 
 using json = nlohmann::json;
 
+/// Model or tool text made safe to print: drops C0 controls other than \n and
+/// \t, ESC/CSI/OSC sequences, DEL and UTF-8 C1 controls. Never pass text that
+/// already carries the console's own colour codes.
+GAIA_API std::string sanitizeTerminalText(const std::string& text);
+
 /// Abstract output handler interface.
 /// Mirrors Python OutputHandler ABC with 15+ required methods.
 class GAIA_API OutputHandler {

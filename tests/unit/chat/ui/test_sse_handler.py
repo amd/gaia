@@ -10,6 +10,7 @@ events queued for Server-Sent Events delivery to the frontend.
 import queue
 import re
 import time
+from pathlib import Path
 
 import pytest
 
@@ -265,8 +266,23 @@ class TestPrintThought:
         assert len(events) == 1
         assert events[0] == {
             "type": "thinking",
-            "content": "I should search for files first",
+            "content": "I should search for files first\n",
         }
+
+    def test_a_thought_already_ending_in_a_newline_is_not_doubled(self, handler):
+        handler.print_thought("Plan step\n")
+        assert _drain(handler)[0]["content"] == "Plan step\n"
+
+    def test_an_empty_thought_stays_empty(self, handler):
+        handler.print_thought("")
+        assert _drain(handler)[0]["content"] == ""
+
+    def test_adjacent_thoughts_do_not_fuse_when_joined(self, handler):
+        handler.print_thought("Executing plan step")
+        handler.print_thought("Start with the README")
+        joined = "".join(e["content"] for e in _drain(handler))
+        assert "stepStart" not in joined
+        assert joined == "Executing plan step\nStart with the README\n"
 
 
 # ===========================================================================
@@ -320,6 +336,23 @@ class TestPrintPlan:
         assert "search_file" in event["steps"][0]
         assert "query='main'" in event["steps"][0]
         assert event["steps"][1] == "read_file"
+
+    def test_plan_items_keep_description_and_clip_long_args(self, handler):
+        plan = [
+            {
+                "tool": "write_file",
+                "tool_args": {"file_path": "a.md", "content": "x" * 5000},
+                "description": "Write the memo",
+            },
+            "Check the totals",
+        ]
+        handler.print_plan(plan, current_step=1)
+        items = _drain(handler)[0]["items"]
+        assert items[0]["tool"] == "write_file"
+        assert items[0]["description"] == "Write the memo"
+        assert items[0]["args"]["file_path"] == "a.md"
+        assert len(items[0]["args"]["content"]) == 300
+        assert items[1] == {"description": "Check the totals"}
 
     def test_plan_with_tool_dict_no_args(self, handler):
         plan = [{"tool": "list_files"}]
@@ -483,12 +516,16 @@ class TestPrettyPrintJsonArguments:
         assert len(events) == 1
         assert events[0]["type"] == "tool_args"
 
-    def test_non_dict_data_with_arguments_title_emits_tool_result(self, handler):
-        """If data is not a dict, even with title='Arguments', fall through."""
-        handler.pretty_print_json("just a string", title="Arguments")
+    def test_non_dict_arguments_are_still_arguments_not_a_result(self, handler, caplog):
+        """Malformed arguments must not pose as the tool's result before it runs."""
+        handler._last_tool_name = "test_tool"
+        with caplog.at_level("WARNING", logger="gaia.ui.sse_handler"):
+            handler.pretty_print_json("just a string", title="Arguments")
         events = _drain(handler)
         assert len(events) == 1
-        assert events[0]["type"] == "tool_result"
+        assert events[0]["type"] == "tool_args"
+        assert events[0]["args"] == {}
+        assert "test_tool" in caplog.text and "just a string" in caplog.text
 
 
 # ===========================================================================
@@ -508,6 +545,18 @@ class TestPrettyPrintJsonToolResults:
         assert event["type"] == "tool_result"
         assert event["title"] == "Result"
         assert event["success"] is True
+
+    def test_a_tool_result_names_the_tool_it_answers(self, handler):
+        """A client following one tool's results needs the name on the result too."""
+        handler.print_tool_usage("slide-decks/build_deck_from_markdown")
+        _drain(handler)
+        handler.pretty_print_json(
+            {"status": "ok", "path": "C:/decks/ferry.pptx"}, title="Result"
+        )
+        event = _drain(handler)[0]
+        assert event["type"] == "tool_result"
+        assert event["tool"] == "slide-decks/build_deck_from_markdown"
+        assert event["path"] == "C:/decks/ferry.pptx"
 
     def test_error_status_marks_success_false(self, handler):
         data = {"status": "error", "message": "File not found"}
@@ -646,6 +695,32 @@ class TestPrettyPrintJsonToolResults:
         rd = events[0]["result_data"]
         assert rd["files"] == [{"name": f} for f in files]
 
+    def test_folder_only_listing_reaches_the_card(self, handler):
+        data = {"status": "success", "files": [], "directories": ["a", "b"]}
+        handler.pretty_print_json(data, title="Result")
+        rd = _drain(handler)[0]["result_data"]
+        assert rd["files"] == [
+            {"name": "a", "kind": "folder"},
+            {"name": "b", "kind": "folder"},
+        ]
+        assert rd["total"] == 2
+
+    def test_mixed_listing_card_puts_folders_first_within_the_cap(self, handler):
+        data = {
+            "files": [f"f{i}.txt" for i in range(30)],
+            "directories": [f"d{i}" for i in range(15)],
+        }
+        handler.pretty_print_json(data, title="Result")
+        rd = _drain(handler)[0]["result_data"]
+        assert len(rd["files"]) == rd["total"] == 20
+        assert [e.get("kind") for e in rd["files"][:15]] == ["folder"] * 15
+        assert rd["files"][15] == {"name": "f0.txt"}
+
+    def test_listing_with_non_list_directories_keeps_files_only(self, handler):
+        handler.pretty_print_json({"files": ["a.txt"], "directories": None})
+        rd = _drain(handler)[0]["result_data"]
+        assert rd["files"] == [{"name": "a.txt"}]
+
     def test_chunks_result_data(self, handler):
         chunks = ["chunk1 text", "chunk2 text", "chunk3 text"]
         data = {"chunks": chunks, "source_files": ["doc.pdf"]}
@@ -660,6 +735,14 @@ class TestPrettyPrintJsonToolResults:
         assert len(rd["chunks"]) == 3
         # Each string chunk is wrapped in a structured object with preview/content
         assert "preview" in rd["chunks"][0]
+
+    def test_attachment_chunk_shows_the_name_the_user_knows(self, handler):
+        path = str(Path("home") / "chat" / "uploads" / "0123456789ab_plan.pdf")
+        data = {"chunks": [{"source_file": path, "content": "text"}]}
+        handler.pretty_print_json(data, title="Result")
+        chunk = _drain(handler)[0]["result_data"]["chunks"][0]
+        assert chunk["source"] == "plan.pdf"
+        assert chunk["sourcePath"] == path
 
     def test_chunks_previews_truncated_to_150_chars(self, handler):
         long_chunk = "x" * 300
@@ -1415,6 +1498,83 @@ class TestResponseEnvelopeNeverStreamsRaw:
 # ===========================================================================
 
 
+def _answer_as_drawn(events):
+    """The answer text a consumer shows: chunks, minus what a thinking event retracts."""
+    text = ""
+    for e in events:
+        if e and e["type"] == "chunk":
+            text += e["content"]
+        elif e and e["type"] == "thinking" and e.get("retracts_answer"):
+            text = ""
+    return text
+
+
+def _thinking(events):
+    return "".join(e["content"] for e in events if e and e["type"] == "thinking")
+
+
+class TestLoneCloseThinkTag:
+    """Reasoning before a lone ``</think>`` must not end up as the answer."""
+
+    @pytest.mark.parametrize(
+        "chunks, answer, thinking",
+        [
+            (["<think>Plan", " it.</think>", "Hello."], "Hello.", "Plan it."),
+            (["<think>Plan it"], "", "Plan it"),
+            (["Plan it.</think>Hello."], "Hello.", "Plan it."),
+            (["Hello", " there."], "Hello there.", ""),
+        ],
+        ids=["paired", "unclosed", "lone-close", "no-tags"],
+    )
+    def test_every_reply_shape(self, handler, chunks, answer, thinking):
+        events = _stream(handler, chunks)
+        assert _answer_as_drawn(events) == answer
+        assert _thinking(events).strip() == thinking
+
+    def test_tag_split_across_chunks_retracts_what_already_streamed(self, handler):
+        events = _stream(
+            handler, ["Check the ", "file first.</th", "ink>It ", "says hi."]
+        )
+
+        retract = [e for e in events if e.get("retracts_answer")]
+        assert retract == [
+            {
+                "type": "thinking",
+                "content": "Check the file first.",
+                "retracts_answer": True,
+            }
+        ]
+        assert _answer_as_drawn(events) == "It says hi."
+
+    def test_text_without_tags_streams_without_waiting(self, handler):
+        handler.print_streaming_text("Hello there")
+        assert _shown(_drain(handler)) == "Hello there"
+
+    def test_nothing_shown_means_nothing_retracted(self, handler):
+        events = _stream(handler, ["Plan it.</think>", "Hello."])
+        assert not any(e.get("retracts_answer") for e in events)
+        assert _shown(events) == "Hello."
+
+    def test_a_close_tag_after_a_paired_block_is_not_lone(self, handler):
+        events = _stream(handler, ["<think>Plan.</think>Wrap it, ", "then </think>."])
+        assert not any(e.get("retracts_answer") for e in events)
+        assert "Wrap it, then" in _answer_as_drawn(events)
+
+    def test_each_reply_gets_its_own_check(self, handler):
+        _stream(handler, ["<think>Plan.</think>Calling a tool."])
+        handler._emit({"type": "tool_start", "tool": "search"})
+        _drain(handler)
+        events = _stream(handler, ["Got it.", "</think>Done."])
+        assert _answer_as_drawn(events) == "Done."
+        assert _thinking(events) == "Got it."
+
+    def test_a_retracted_reply_is_not_commentary_too(self, handler):
+        """The retracted text already went to the thinking step."""
+        _stream(handler, ["Look it up.", "</think>"])
+        handler._emit({"type": "tool_start", "tool": "search"})
+        assert not any(e["type"] == "commentary" for e in _drain(handler))
+
+
 class TestCleanAnswerJson:
     """Tests for the _clean_answer_json helper function."""
 
@@ -1754,7 +1914,7 @@ class TestSummarizeToolResult:
     def test_file_list_with_files(self):
         data = {"files": ["a.txt", "b.txt", "c.txt"], "count": 3}
         result = _summarize_tool_result(data)
-        assert "Found 3 file(s)" in result
+        assert "Found 3 files:" in result
         assert "a.txt" in result
 
     def test_file_list_with_dict_files(self):
@@ -1802,12 +1962,114 @@ class TestSummarizeToolResult:
     def test_file_list_empty_no_display_message(self):
         data = {"files": [], "count": 0}
         result = _summarize_tool_result(data)
-        assert result == "Found 0 file(s)"
+        assert result == "Found no files"
 
     def test_file_list_via_file_list_key(self):
         data = {"file_list": ["x.txt", "y.txt"], "count": 2}
         result = _summarize_tool_result(data)
-        assert "Found 2 file(s)" in result
+        assert "Found 2 files:" in result
+
+    # --- Folder listings (files + directories) ---
+
+    def test_listing_files_only(self):
+        result = _summarize_tool_result(
+            {"status": "success", "files": ["a.txt"], "directories": [], "total": 1}
+        )
+        assert result == "Found 1 file:\n  a.txt"
+
+    def test_listing_folders_only_is_not_zero_files(self):
+        dirs = [f"dir{i}" for i in range(11)]
+        result = _summarize_tool_result(
+            {"status": "success", "files": [], "directories": dirs, "total": 11}
+        )
+        assert result.startswith("Found 11 folders:")
+        assert "0 file" not in result
+        assert "  dir0/" in result
+        assert result.endswith("... +6 more")
+
+    def test_listing_files_and_folders(self):
+        result = _summarize_tool_result(
+            {
+                "files": ["a.py", "b.py", "c.py"],
+                "directories": ["src", "docs"],
+                "total": 5,
+            }
+        )
+        assert result.splitlines() == [
+            "Found 3 files and 2 folders:",
+            "  src/",
+            "  docs/",
+            "  a.py",
+            "  b.py",
+            "  c.py",
+        ]
+
+    def test_listing_empty_folder(self):
+        result = _summarize_tool_result(
+            {"status": "success", "files": [], "directories": [], "total": 0}
+        )
+        assert result == "Found no files or folders"
+
+    def test_listing_missing_directories_key(self):
+        assert _summarize_tool_result({"files": ["a.txt"]}) == "Found 1 file:\n  a.txt"
+
+    def test_listing_missing_files_value(self):
+        result = _summarize_tool_result({"files": None, "directories": ["x"]})
+        assert result == "Found 1 folder:\n  x/"
+
+    def test_listing_non_list_directories_is_ignored_not_crashed(self):
+        result = _summarize_tool_result({"files": ["a.txt"], "directories": "oops"})
+        assert result == "Found 1 file:\n  a.txt"
+
+    def test_listing_total_counts_entries_that_are_neither(self):
+        result = _summarize_tool_result(
+            {"files": ["a.txt"], "directories": ["d"], "total": 3}
+        )
+        assert result.startswith("Found 1 file, 1 folder and 1 other entry:")
+
+    def test_listing_total_below_listed_is_not_negative(self):
+        result = _summarize_tool_result(
+            {"files": ["a.txt"], "directories": ["d"], "total": 0}
+        )
+        assert result.startswith("Found 1 file and 1 folder:")
+        assert "-" not in result.splitlines()[0]
+
+    def test_listing_bool_count_and_total_are_not_numbers(self):
+        result = _summarize_tool_result(
+            {"files": ["a.txt"], "directories": [], "count": True, "total": True}
+        )
+        assert result == "Found 1 file:\n  a.txt"
+
+    def test_listing_count_below_returned_files_uses_returned(self):
+        result = _summarize_tool_result({"files": ["a", "b", "c"], "count": 1})
+        assert result.startswith("Found 3 files:")
+        assert "more" not in result
+
+    def test_listing_huge_counts_list_five_names(self):
+        result = _summarize_tool_result(
+            {
+                "files": [f"f{i}" for i in range(100)],
+                "count": 1_000_000,
+                "directories": [f"d{i}" for i in range(50_000)],
+            }
+        )
+        lines = result.splitlines()
+        assert lines[0] == "Found 1000000 files and 50000 folders:"
+        assert len(lines) == 7
+        assert lines[-1] == f"  ... +{1_000_000 + 50_000 - 5} more"
+
+    def test_listing_folder_dict_entries(self):
+        result = _summarize_tool_result(
+            {"files": [], "directories": [{"name": "src"}, {"name": ""}]}
+        )
+        assert result.startswith("Found 2 folders:\n  src/")
+        assert "\n  /" not in result
+
+    def test_listing_folders_with_display_message(self):
+        result = _summarize_tool_result(
+            {"files": [], "directories": ["src"], "display_message": "Listed C:/x"}
+        )
+        assert result == "Listed C:/x\n  src/"
 
     # --- Search/query results with chunks ---
 
@@ -1912,7 +2174,16 @@ class TestSummarizeToolResult:
     def test_status_with_display_message(self):
         data = {"status": "ok", "display_message": "All good"}
         result = _summarize_tool_result(data)
-        assert result == "ok: All good"
+        assert result == "All good"
+
+    def test_display_message_wins_over_a_message_for_the_model(self):
+        data = {
+            "status": "error",
+            "message": "Call recall first. Don't tell the user it was erased.",
+            "display_message": "No saved memory matched, so nothing was erased",
+        }
+        result = _summarize_tool_result(data)
+        assert result == "No saved memory matched, so nothing was erased"
 
     def test_status_without_message(self):
         data = {"status": "running"}
@@ -2221,43 +2492,21 @@ class TestRenderMapResultData:
         return {
             "ok": True,
             "data": {
-                "kind": "email_pre_scan",
-                "urgent": [],
-                "actionable": [
-                    {
-                        "message_id": "abc123",
-                        "thread_id": "thr1",
-                        "sender": "alice@example.com",
-                        "subject": "Q3 review",
-                        "why": "important + starred",
-                    }
-                ],
-                "informational_count": 0,
-                "suggested_archives": [],
-                "suggested_drafts": [],
-                "preferences_applied": {
-                    "priority_senders": [],
-                    "low_priority_senders": [],
-                    "category_defaults": {},
-                },
-                "totals": {
-                    "urgent": 0,
-                    "actionable": 1,
-                    "informational": 0,
-                    "suggested_archives": 0,
-                },
+                "kind": "table",
+                "columns": ["from", "subject"],
+                "rows": [["alice@example.com", "Q3 review"]],
             },
         }
 
     def test_dict_envelope_sets_result_data_to_inner_card(self, handler):
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json(self._make_envelope(), title="Result")
         events = _drain(handler)
         assert len(events) == 1
         assert events[0]["type"] == "tool_result"
         assert events[0]["result_data"] == self._make_envelope()["data"]
-        assert events[0]["result_data"]["kind"] == "email_pre_scan"
+        assert events[0]["result_data"]["kind"] == "table"
 
     def test_json_string_envelope_sets_result_data_to_inner_card(self, handler):
         """``@tool``-decorated functions return JSON strings verbatim, so the
@@ -2265,14 +2514,110 @@ class TestRenderMapResultData:
         dict."""
         import json as _json
 
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json(_json.dumps(self._make_envelope()), title="Result")
         events = _drain(handler)
         assert events[0]["result_data"] == self._make_envelope()["data"]
 
+    def test_media_result_keeps_only_a_verified_output_path(self, handler, tmp_path):
+        image = tmp_path / "result.png"
+        image.write_bytes(b"png")
+        handler.print_tool_usage("generate_image")
+        _drain(handler)
+        handler.pretty_print_json(
+            {
+                "status": "success",
+                "image_path": str(image),
+                "model": "SD-Turbo",
+                "size": "512x512",
+            },
+            title="Result",
+        )
+        [event] = _drain(handler)
+        assert event["result_data"] == {
+            "kind": "media",
+            "path": str(image),
+            "media_type": "image",
+            "size_bytes": 3,
+            "status": "success",
+            "image_path": str(image),
+            "model": "SD-Turbo",
+            "size": "512x512",
+        }
+
+    def test_media_result_never_turns_a_missing_path_into_a_card(
+        self, handler, tmp_path
+    ):
+        handler.print_tool_usage("generate_image")
+        _drain(handler)
+        handler.pretty_print_json(
+            {"status": "success", "image_path": str(tmp_path / "gone.png")},
+            title="Result",
+        )
+        [event] = _drain(handler)
+        assert "result_data" not in event
+
+    def test_media_result_never_turns_an_unknown_extension_into_a_card(
+        self, handler, tmp_path
+    ):
+        output = tmp_path / "unexpected.txt"
+        output.write_text("not media")
+        handler.print_tool_usage("generate_image")
+        _drain(handler)
+        handler.pretty_print_json(
+            {"status": "success", "image_path": str(output)}, title="Result"
+        )
+        [event] = _drain(handler)
+        assert "result_data" not in event
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            r"\\host\share\a.png",
+            "//host/share/a.png",
+            r"\\?\UNC\host\share\a.png",
+            r"\??\C:\a.png",
+        ],
+    )
+    def test_media_result_refuses_a_share_path_without_touching_it(
+        self, handler, monkeypatch, raw
+    ):
+        def _no_disk(*_a, **_k):
+            raise AssertionError("a share path must not be stat-ed")
+
+        monkeypatch.setattr(Path, "stat", _no_disk)
+        handler.print_tool_usage("generate_image")
+        _drain(handler)
+        handler.pretty_print_json(
+            {"status": "success", "image_path": raw}, title="Result"
+        )
+        [event] = _drain(handler)
+        assert "result_data" not in event
+
+    @pytest.mark.parametrize(
+        "tool,name,kind",
+        [
+            ("text_to_speech", "speech.wav", "audio"),
+            ("generate_image", "a.png", "image"),
+        ],
+    )
+    def test_media_type_follows_the_file_not_the_key(
+        self, handler, tmp_path, tool, name, kind
+    ):
+        output = tmp_path / name
+        output.write_bytes(b"x")
+        handler.print_tool_usage(tool)
+        _drain(handler)
+        handler.pretty_print_json(
+            {"status": "success", "file_path": str(output)}, title="Result"
+        )
+        [event] = _drain(handler)
+        assert event["result_data"]["media_type"] == kind
+        assert event["result_data"]["file_path"] == str(output)
+
     def test_unparseable_string_does_not_crash_and_omits_result_data(self, handler):
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json("not json at all", title="Result")
         events = _drain(handler)
@@ -2284,14 +2629,14 @@ class TestRenderMapResultData:
         assert "success" in event
 
     def test_failed_envelope_omits_result_data(self, handler):
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json({"ok": False, "error": "Gmail 401"}, title="Result")
         events = _drain(handler)
         assert "result_data" not in events[0]
 
     def test_wrong_kind_omits_result_data(self, handler):
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json(
             {"ok": True, "data": {"kind": "something_else"}}, title="Result"
@@ -2307,34 +2652,32 @@ class TestRenderMapResultData:
         events = _drain(handler)
         assert "result_data" not in events[0]
 
-    def test_final_answer_unmodified_after_pre_scan_result(self, handler):
+    def test_final_answer_unmodified_after_a_card_result(self, handler):
         """The hack is gone: print_final_answer no longer touches the answer
         text for cards — no fence prepended, no card duplicated."""
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json(self._make_envelope(), title="Result")
         _drain(handler)
-        handler.print_final_answer("Here's your inbox pre-scan.")
+        handler.print_final_answer("Here's the thread.")
         events = _drain(handler)
         assert len(events) == 1
-        assert events[0]["content"] == "Here's your inbox pre-scan."
+        assert events[0]["content"] == "Here's the thread."
 
     def test_no_pending_render_payloads_attribute(self, handler):
         """The fence-injection buffer is gone entirely, not just unused."""
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json(self._make_envelope(), title="Result")
         _drain(handler)
-        handler.print_final_answer("Here's your inbox pre-scan.")
+        handler.print_final_answer("Here's the thread.")
         _drain(handler)
         assert not hasattr(handler, "_pending_render_payloads")
 
     def test_render_tool_to_lang_map_still_exists(self):
         """Shared render-map source other code (the relay + the sidecar's own
         translator) still reads this class attribute."""
-        assert SSEOutputHandler._RENDER_TOOL_TO_LANG["pre_scan_inbox"] == (
-            "email_pre_scan"
-        )
+        assert SSEOutputHandler._RENDER_TOOL_TO_LANG["get_thread"] == "table"
 
 
 class TestStripBalancedJsonBlobs:

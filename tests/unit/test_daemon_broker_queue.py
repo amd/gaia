@@ -45,14 +45,6 @@ from gaia.daemon.constants import (
 _TOKEN = "broker-queue-token"
 
 
-def _free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
 class _Daemon:
     def __init__(self, broker: ModelSlotBroker, port: int):
         self.broker = broker
@@ -85,7 +77,11 @@ class _Daemon:
 
 def _start_daemon(broker: ModelSlotBroker):
     uvicorn = pytest.importorskip("uvicorn")
-    port = _free_port()
+    # Hand uvicorn a socket that is already bound: freeing a port and binding it
+    # again later lets a parallel worker's daemon take it in between.
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
     app = create_app(
         token=_TOKEN,
         port=port,
@@ -96,13 +92,15 @@ def _start_daemon(broker: ModelSlotBroker):
     server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     )
-    thread = threading.Thread(target=server.run, daemon=True)
+    thread = threading.Thread(
+        target=server.run, kwargs={"sockets": [sock]}, daemon=True
+    )
     thread.start()
     deadline = time.time() + 15
     while not server.started and time.time() < deadline:
         time.sleep(0.05)
     assert server.started, "test daemon did not come up"
-    return server, thread, _Daemon(broker, port)
+    return server, thread, sock, _Daemon(broker, port)
 
 
 @pytest.fixture
@@ -111,8 +109,8 @@ def daemon_factory(monkeypatch):
     started = []
 
     def _make(broker=None):
-        server, thread, daemon = _start_daemon(broker or ModelSlotBroker())
-        started.append((server, thread))
+        server, thread, sock, daemon = _start_daemon(broker or ModelSlotBroker())
+        started.append((server, thread, sock))
         monkeypatch.setenv(BROKER_URL_ENV_VAR, daemon.url)
         monkeypatch.setenv(BROKER_TOKEN_ENV_VAR, _TOKEN)
         return daemon
@@ -122,9 +120,10 @@ def daemon_factory(monkeypatch):
     monkeypatch.setattr(broker_client, "_broker_unsupported", False)
     broker_client._held.set(None)
     yield _make
-    for server, thread in started:
+    for server, thread, sock in started:
         server.should_exit = True
         thread.join(timeout=30)
+        sock.close()
     broker_client._held.set(None)
 
 
@@ -403,11 +402,13 @@ def test_a_lease_from_a_client_that_does_not_renew_keeps_the_fixed_ttl():
 @pytest.mark.allow_network
 def test_model_lease_renews_while_held(daemon_factory):
     """A holder that runs past the heartbeat TTL keeps the slot end to end."""
-    daemon_factory(ModelSlotBroker(lease_ttl_s=1.0, heartbeat_ttl_s=1.0))
-    holder, released = _hold_in_thread("holder-model", 3.0, max_hold_s=30)
+    # A 1 s heartbeat left 0.75 s of slack, which a busy CI runner can use up.
+    daemon_factory(ModelSlotBroker(lease_ttl_s=1.0, heartbeat_ttl_s=4.0))
+    holder, released = _hold_in_thread("holder-model", 6.0, max_hold_s=30)
 
     lease = broker_client.acquire_lease("waiter-model")
 
+    assert "at" in released, "the lease was reclaimed mid-hold"
     assert time.monotonic() >= released["at"], "the lease was reclaimed mid-hold"
     broker_client.release_lease(lease["lease_id"])
     holder.join(10)
@@ -720,18 +721,21 @@ def test_a_lemonade_request_declares_its_own_call_budget(monkeypatch):
 
     monkeypatch.setattr(broker_client, "model_lease", _record)
     monkeypatch.setattr(lemonade_client, "request_budget_seconds", lambda: 2048)
+    # The lease budget must track the bounded drain, including test overrides.
+    monkeypatch.setattr(lemonade_client.stream_watchdog, "DRAIN_LIMIT_S", 17)
     deadline = lemonade_client.RetryPolicy.from_env().deadline
     margin = lemonade_client.LEASE_LOAD_MARGIN_S
+    drain = lemonade_client.stream_watchdog.DRAIN_LIMIT_S
     client = _local_client()
 
     with client._model_slot_lease("local-model"):
         pass
-    assert seen["max_hold_s"] == 2048 + deadline + margin
+    assert seen["max_hold_s"] == 2048 + deadline + margin + drain
 
     # An explicit per-call timeout is what bounds that call, not the default.
     with client._model_slot_lease("local-model", request_timeout=5000):
         pass
-    assert seen["max_hold_s"] == 5000 + deadline + margin
+    assert seen["max_hold_s"] == 5000 + deadline + margin + drain
 
 
 def test_background_work_is_not_starved_by_a_stream_of_turns():
@@ -942,3 +946,140 @@ def test_only_a_failed_connection_counts_as_an_unreachable_daemon(
     with pytest.raises(broker_client.BrokerUnavailableError) as err:
         broker_client.acquire_lease("m")
     assert err.value.unreachable is unreachable
+
+
+# ── An Agent UI upload queued for the embedder behind a chat ────────────────
+
+
+def _rag_that_leases(model):
+    """A RAGSDK stand-in whose index_document takes a real lease, like the embedder load."""
+
+    class _Rag:
+        def __init__(self, _config):
+            pass
+
+        def index_document(self, path, progress_callback=None, heartbeat=None):
+            with broker_client.model_lease(model):
+                return {"success": True, "num_chunks": 1}
+
+    return _Rag
+
+
+@pytest.mark.allow_network
+def test_an_upload_queued_behind_a_chat_receives_queue_updates(
+    daemon_factory, monkeypatch, tmp_path
+):
+    """The broker forwards queue updates to an upload while it waits."""
+    import asyncio
+
+    from gaia.ui import _chat_helpers as helpers
+
+    daemon = daemon_factory()
+    monkeypatch.setattr(broker_routes, "QUEUE_UPDATE_EVERY_S", 0.1)
+    monkeypatch.setattr("gaia.rag.sdk.RAGSDK", _rag_that_leases("embed-model"))
+    doc = tmp_path / "doc.txt"
+    doc.write_text("content", encoding="utf-8")
+    queued = threading.Event()
+    real_listener = broker_client.lease_wait_listener
+
+    def record_queue_updates(listener):
+        def recorded(event):
+            if event.get("event") == "queued":
+                queued.set()
+            listener(event)
+
+        return real_listener(recorded)
+
+    monkeypatch.setattr(broker_client, "lease_wait_listener", record_queue_updates)
+    holder, released = _hold_in_thread("chat-model", 2.0)
+
+    async def run_upload():
+        task = asyncio.create_task(helpers._index_document(doc))
+        assert await asyncio.to_thread(
+            queued.wait, 5
+        ), "the upload never saw a queue update"
+        assert "at" not in released, "indexed before the chat let go of the slot"
+        return await asyncio.wait_for(task, 10)
+
+    assert asyncio.run(run_upload()) == 1
+    holder.join(10)
+    assert daemon.waiting() == 0
+
+
+@pytest.mark.allow_network
+def test_cancelling_an_upload_queued_behind_a_chat_leaves_the_queue(
+    daemon_factory, monkeypatch, tmp_path
+):
+    import asyncio
+
+    from gaia.ui import _chat_helpers as helpers
+
+    daemon = daemon_factory()
+    monkeypatch.setattr(broker_routes, "QUEUE_UPDATE_EVERY_S", 0.1)
+    monkeypatch.setattr("gaia.rag.sdk.RAGSDK", _rag_that_leases("embed-model"))
+    doc = tmp_path / "doc.txt"
+    doc.write_text("content", encoding="utf-8")
+    holder, _ = _hold_in_thread("chat-model", 6.0)
+    posts = []
+    real_post = requests.post
+
+    def _counting_post(url, *a, **k):
+        if url.endswith("/models/lease"):
+            posts.append(url)
+        return real_post(url, *a, **k)
+
+    monkeypatch.setattr(requests, "post", _counting_post)
+
+    async def _run():
+        task = asyncio.create_task(helpers._index_document(doc))
+        await asyncio.to_thread(
+            daemon.wait_until, lambda: daemon.waiting() == 1, "the upload to queue"
+        )
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_run())
+    daemon.wait_until(lambda: daemon.waiting() == 0, "the upload to leave the queue")
+    assert len(posts) == 1, "Cancel was retried as a fresh lease request"
+    holder.join(10)
+
+
+@pytest.mark.allow_network
+def test_an_upload_queued_behind_a_dead_holder_receives_queue_updates(
+    daemon_factory, monkeypatch, tmp_path
+):
+    """A queued upload still receives broker updates before a dead lease expires."""
+    import asyncio
+
+    from gaia.ui import _chat_helpers as helpers
+
+    daemon = daemon_factory(ModelSlotBroker(heartbeat_ttl_s=4.0))
+    monkeypatch.setattr(broker_routes, "QUEUE_UPDATE_EVERY_S", 0.1)
+    monkeypatch.setattr("gaia.rag.sdk.RAGSDK", _rag_that_leases("embed-model"))
+    doc = tmp_path / "doc.txt"
+    doc.write_text("content", encoding="utf-8")
+    queued = threading.Event()
+    real_listener = broker_client.lease_wait_listener
+
+    def record_queue_updates(listener):
+        def recorded(event):
+            if event.get("event") == "queued":
+                queued.set()
+            listener(event)
+
+        return real_listener(recorded)
+
+    monkeypatch.setattr(broker_client, "lease_wait_listener", record_queue_updates)
+    # Granted, then never renewed or released: its process died holding it.
+    dead = daemon.raw_lease("chat-model", renewable=True)
+    assert dead.status_code == 200, dead.text
+
+    async def run_upload():
+        task = asyncio.create_task(helpers._index_document(doc))
+        assert await asyncio.to_thread(
+            queued.wait, 5
+        ), "the upload never saw a queue update"
+        return await asyncio.wait_for(task, 15)
+
+    assert asyncio.run(run_upload()) == 1

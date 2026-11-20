@@ -23,7 +23,7 @@ is deliberately **not** the same selection model:
 Capability is never fully gated on the semantic match: :meth:`Agent.load_skill`
 is itself the explicit escape hatch — calling it again on an already-loaded
 skill always re-activates that skill's body for the rest of the turn, whether
-or not the query matched it (mirrors ToolLoader's ``load_tools`` escape hatch).
+or not the query matched it (mirrors ``search_tools``).
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 #: Inclusive cosine threshold. Same calibration basis as ToolLoader's
-#: DEFAULT_THRESHOLD (#1449) — a query is only weakly similar to a short
+#: DEFAULT_THRESHOLD — a query is only weakly similar to a short
 #: trigger description, so real scores sit well below a naive 0.5+ guess.
 DEFAULT_SKILL_THRESHOLD = 0.20
 
@@ -102,6 +102,10 @@ class SkillLoader:
 
         self._turn = 0
         self._disabled_until = 0.0
+        #: Each loaded skill's score from the last :meth:`select`, empty when
+        #: it did not score (nothing to choose, or the embedder failed). The
+        #: skill context budget ranks by it (``gaia.agents.base.skill_budget``).
+        self.last_scores: Dict[str, float] = {}
 
     #: Seconds to wait before retrying after an embedder failure. Wall-clock,
     #: not turns: the host checks ``session_disabled`` and skips ``select()``
@@ -147,6 +151,7 @@ class SkillLoader:
             failure cooldown — the caller must fall back to rendering every
             loaded skill's body.
         """
+        self.last_scores = {}
         if all(name in always_on for name in loaded_skills):
             return []
 
@@ -175,6 +180,7 @@ class SkillLoader:
             scores[name] = score
             if score >= self._threshold:
                 active.append(name)
+        self.last_scores = scores
 
         result = sorted(active)
         logger.info(
@@ -227,13 +233,22 @@ class SkillLoader:
 
     @staticmethod
     def _doc_text(skill: "Skill") -> str:
-        """The text embedded for a skill: ``"{name}: {first line of description}"``."""
-        description = ""
-        for line in (skill.description or "").splitlines():
-            if line.strip():
-                description = line.strip()
-                break
-        return f"{skill.name}: {description}" if description else skill.name
+        """The text embedded for a skill — see :func:`skill_doc_text`."""
+        return skill_doc_text(skill)
+
+
+def skill_doc_text(skill: "Skill") -> str:
+    """The text embedded for a skill: ``"{name}: {first line of description}"``.
+
+    Shared with :mod:`gaia.agents.base.skill_suggester` so a skill is described
+    to the embedder the same way whether it is loaded or not.
+    """
+    description = ""
+    for line in (skill.description or "").splitlines():
+        if line.strip():
+            description = line.strip()
+            break
+    return f"{skill.name}: {description}" if description else skill.name
 
 
 def _sha256(text: str) -> str:
@@ -241,4 +256,9 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-__all__ = ["SkillLoader", "DEFAULT_SKILL_THRESHOLD", "dynamic_skills_env_override"]
+__all__ = [
+    "SkillLoader",
+    "DEFAULT_SKILL_THRESHOLD",
+    "dynamic_skills_env_override",
+    "skill_doc_text",
+]

@@ -7,7 +7,7 @@
  * Manages OS agent subprocesses (C++ MCP servers, .NET agents, Python agents).
  * Each agent communicates via JSON-RPC 2.0 over stdio:
  *   - stdout → JSON-RPC messages (MCP protocol + GAIA extensions)
- *   - stderr → Structured log lines → piped to terminal view
+ *   - stderr → Structured log lines → kept in a per-agent buffer
  *   - stdin  → JSON-RPC requests from the tray app
  *
  * Cross-platform shutdown protocol (C3 fix):
@@ -21,11 +21,16 @@
  */
 
 const { spawn } = require("child_process");
-const { ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { EventEmitter } = require("events");
+const {
+  killProcessTree,
+  listDescendants,
+  listTimeoutMs,
+  worstCaseKillMs,
+} = require("./process-tree.cjs");
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -37,6 +42,9 @@ const MANIFEST_FILENAME = "agent-manifest.json";
 
 /** Graceful shutdown timeout before force kill (ms) */
 const SHUTDOWN_TIMEOUT = 5000;
+
+/** After the graceful shutdown, how long the tree gets between SIGTERM and SIGKILL (ms) */
+const TREE_KILL_GRACE = 2000;
 
 /** Health check interval (ms) — uses MCP "ping", not "initialize" */
 const HEALTH_CHECK_INTERVAL = 30000;
@@ -59,41 +67,15 @@ const STDERR_BUFFER_MAX = 10000;
 /** Max bytes kept in stdout buffer per agent (protects against malformed output without newlines) */
 const STDOUT_BUFFER_MAX = 1024 * 1024; // 1 MB
 
-/** Poll interval while waiting on the backend install-status endpoint (ms) */
-const INSTALL_POLL_INTERVAL = 750;
-
-/**
- * Hard ceiling on a single install poll loop (ms). A `uv pip install` of a
- * large wheel over a slow link can legitimately take minutes; we cap at 15 to
- * turn a wedged backend into a loud timeout instead of an infinite spinner.
- */
-const INSTALL_TIMEOUT = 15 * 60 * 1000;
-
-/** Header the UI backend requires on every mutating route (see gaia/ui/security.py). */
-const UI_HEADER = { "X-Gaia-UI": "1" };
-
 // ── AgentProcessManager ──────────────────────────────────────────────────
 
 class AgentProcessManager extends EventEmitter {
   /**
-   * @param {Electron.BrowserWindow} mainWindow — for sending IPC events to renderer
-   * @param {{ getBackendPort?: () => (number | null) }} [options]
-   *   getBackendPort resolves the live Python-backend port. The install/uninstall
-   *   handlers proxy to that backend's `/api/agents/*` routes (the real install
-   *   runtime), so without a resolver those handlers fail loudly rather than
-   *   duplicating download/verify/uv logic in the main process (issue #1721).
+   * @param {{ killTree?: Function, listDescendants?: Function }} [options]
+   *   killTree / listDescendants replace the process-tree helpers (tests).
    */
-  constructor(mainWindow, options = {}) {
+  constructor(options = {}) {
     super();
-
-    /** @type {Electron.BrowserWindow} */
-    this.mainWindow = mainWindow;
-
-    /** @type {(() => (number | null)) | null} */
-    this._getBackendPort =
-      typeof options.getBackendPort === "function"
-        ? options.getBackendPort
-        : null;
 
     /**
      * Running processes keyed by agentId.
@@ -110,6 +92,12 @@ class AgentProcessManager extends EventEmitter {
      */
     this.processes = {};
 
+    this._killTree = options.killTree || killProcessTree;
+    this._listDescendants = options.listDescendants || listDescendants;
+
+    /** Set by stopAll(): GAIA is quitting, so nothing may start another agent. */
+    this._shuttingDown = false;
+
     /** Crash timestamps per agent for rate-limiting restart attempts */
     this._crashTimes = {};
 
@@ -118,8 +106,6 @@ class AgentProcessManager extends EventEmitter {
 
     /** Tray config (for auto-start and crash-restart settings) */
     this.config = this._loadConfig();
-
-    this._registerIpcHandlers();
   }
 
   // ── Public API: Lifecycle ────────────────────────────────────────────
@@ -130,6 +116,11 @@ class AgentProcessManager extends EventEmitter {
    * @returns {Promise<{ pid: number }>}
    */
   async startAgent(agentId) {
+    if (this._shuttingDown) {
+      throw new Error(
+        `Not starting agent "${agentId}": GAIA is quitting and has already stopped its agents.`
+      );
+    }
     if (this.processes[agentId]) {
       console.log(`[agent-mgr] Agent ${agentId} is already running (PID ${this.processes[agentId].process.pid})`);
       return { pid: this.processes[agentId].process.pid };
@@ -166,9 +157,17 @@ class AgentProcessManager extends EventEmitter {
       pendingRpc: {},
       healthTimer: null,
       stopping: false, // Set to true during intentional shutdown to suppress crash recovery
+      stopPromise: null, // The running stopAgent(), shared by duplicate calls
+      stdinError: null, // The error that broke stdin; nothing more can be written once set
     };
 
     this.processes[agentId] = entry;
+
+    // A write to a child that has died fails later, as an 'error' on the
+    // stream; without a listener that EPIPE crashes the whole app (#3498).
+    child.stdin.on("error", (err) => {
+      this._handleStdinError(agentId, child, err);
+    });
 
     // ── stdout: JSON-RPC message stream ──
     child.stdout.on("data", (data) => {
@@ -207,6 +206,7 @@ class AgentProcessManager extends EventEmitter {
   /**
    * Stop an agent gracefully using JSON-RPC shutdown protocol.
    * Cross-platform (works on Windows where SIGTERM = TerminateProcess).
+   * A second call while the first runs waits for that same stop.
    * @param {string} agentId
    * @returns {Promise<void>}
    */
@@ -217,21 +217,38 @@ class AgentProcessManager extends EventEmitter {
       return;
     }
 
-    // Guard against concurrent stopAgent() calls for the same agent
-    if (entry.stopping) {
-      console.log(`[agent-mgr] Agent ${agentId} is already being stopped — skipping duplicate`);
-      return;
+    if (entry.stopPromise) {
+      console.log(`[agent-mgr] Agent ${agentId} is already being stopped — waiting for that stop`);
+      return entry.stopPromise;
     }
 
     console.log(`[agent-mgr] Stopping agent ${agentId} (PID ${entry.process.pid})...`);
 
     // Mark as intentionally stopping — suppresses crash recovery in _handleProcessExit
     entry.stopping = true;
+    entry.stopPromise = this._stopAgent(agentId, entry);
+    return entry.stopPromise;
+  }
 
+  async _stopAgent(agentId, entry) {
     // Clear health check timer
     if (entry.healthTimer) {
       clearInterval(entry.healthTimer);
       entry.healthTimer = null;
+    }
+
+    // Read the tree while the agent is alive: once it exits, its children
+    // are re-parented on Linux and macOS and can no longer be found from it.
+    let knownDescendants = [];
+    if (entry.process.exitCode === null && entry.process.signalCode === null) {
+      try {
+        ({ descendants: knownDescendants } = await this._listDescendants(entry.process.pid));
+      } catch (err) {
+        console.error(
+          `[agent-mgr] Could not list the processes agent ${agentId} started (${err.message}); ` +
+            "any it leaves behind will keep running."
+        );
+      }
     }
 
     // Step 1: Send JSON-RPC shutdown request via stdin
@@ -247,291 +264,23 @@ class AgentProcessManager extends EventEmitter {
     // Step 2: Wait up to SHUTDOWN_TIMEOUT for clean exit
     const exited = await this._waitForExit(agentId, SHUTDOWN_TIMEOUT);
 
-    // Step 3: Force kill if still running
-    if (!exited && this.processes[agentId]) {
+    // Step 3: Stop the agent if it ignored the request, and anything it started either way.
+    if (!exited) {
       console.warn(
         `[agent-mgr] Agent ${agentId} did not exit within ${SHUTDOWN_TIMEOUT}ms, force killing...`
       );
-      try {
-        entry.process.kill(); // SIGKILL on Unix, TerminateProcess on Windows
-      } catch {
-        // Already dead
-      }
     }
+    await this._killTree(entry.process, {
+      knownDescendants,
+      graceMs: TREE_KILL_GRACE,
+      label: `agent ${agentId}`,
+    });
 
     // Note: _handleProcessExit may have already cleaned up if the process exited.
     // _cleanupProcess is idempotent, so calling it again is safe.
     this._cleanupProcess(agentId);
     this._emitStatusChange(agentId, "stopped");
     console.log(`[agent-mgr] Agent ${agentId} stopped`);
-  }
-
-  /**
-   * Restart an agent (stop + start).
-   * @param {string} agentId
-   */
-  async restartAgent(agentId) {
-    await this.stopAgent(agentId);
-    return this.startAgent(agentId);
-  }
-
-  // ── Public API: Install / Uninstall (issue #1721) ────────────────────
-  //
-  // The install RUNTIME lives in the Python backend (src/gaia/hub/installer.py,
-  // exposed by src/gaia/ui/routers/hub.py): R2 download, SHA-256 verify,
-  // `uv pip install` into ~/.gaia/agents/<id>/, hot-register, backup/rollback,
-  // and the native-trust gate. Rather than reimplement that in the main
-  // process, these handlers proxy to those routes so there is exactly one
-  // tested install path. Progress streams to the renderer over the existing
-  // `agent:install-progress` channel.
-
-  /**
-   * Resolve the live backend base URL, or throw an actionable error.
-   * @returns {string}
-   */
-  _backendBaseUrl() {
-    const port = this._getBackendPort ? this._getBackendPort() : null;
-    if (!port) {
-      throw new Error(
-        "GAIA backend is not running — cannot install or uninstall agents. " +
-          "The Python backend exposes the install runtime at /api/agents/install; " +
-          "wait for it to finish starting, or restart GAIA if this persists."
-      );
-    }
-    // 127.0.0.1 (not localhost) matches the backend's _require_localhost allowlist
-    // and avoids a DNS/IPv6 hop on Windows.
-    return `http://127.0.0.1:${port}`;
-  }
-
-  /**
-   * Fetch a single agent's catalog entry (tier, permissions, verified status)
-   * from the live backend. Used by the gaia:// deep-link install gate
-   * (main.cjs) to build an informed trust prompt — the confirmation must show
-   * the agent's real tier/permissions, not just its bare id.
-   *
-   * Throws with an actionable message when the backend is unreachable or the
-   * agent id isn't in the catalog. Callers MUST treat that as a refusal —
-   * never install without having shown the user what they're installing.
-   *
-   * @param {string} agentId
-   * @returns {Promise<object>} the matching catalog entry
-   */
-  async fetchCatalogEntry(agentId) {
-    if (typeof agentId !== "string" || !agentId.trim()) {
-      throw new Error("fetchCatalogEntry requires a non-empty agent id");
-    }
-    const base = this._backendBaseUrl();
-
-    let resp;
-    try {
-      resp = await fetch(`${base}/api/agents/catalog`, {
-        headers: { ...UI_HEADER },
-      });
-    } catch (err) {
-      throw new Error(
-        `Could not reach the GAIA backend to look up "${agentId}" in the agent catalog: ${err.message}`
-      );
-    }
-
-    if (!resp.ok) {
-      const detail = await this._readErrorDetail(resp);
-      throw new Error(
-        `Agent catalog request failed (HTTP ${resp.status}): ${detail}`
-      );
-    }
-
-    const body = await resp.json();
-    const agents = Array.isArray(body && body.agents) ? body.agents : [];
-    const entry = agents.find((a) => a && a.id === agentId);
-    if (!entry) {
-      throw new Error(`"${agentId}" was not found in the agent catalog.`);
-    }
-    return entry;
-  }
-
-  /**
-   * Install a published agent via the backend runtime, streaming progress.
-   *
-   * @param {string} agentId
-   * @param {{ trustNative?: boolean, version?: string | null }} [opts]
-   * @returns {Promise<{ id: string, status: string, version: string | null }>}
-   */
-  async installAgent(agentId, opts = {}) {
-    if (typeof agentId !== "string" || !agentId.trim()) {
-      throw new Error("installAgent requires a non-empty agent id");
-    }
-    const base = this._backendBaseUrl();
-    const trustNative = opts.trustNative === true;
-    const version =
-      typeof opts.version === "string" && opts.version ? opts.version : null;
-
-    this._emitInstallProgress(agentId, {
-      status: "queued",
-      phase: "queued",
-      percent: 0,
-    });
-
-    // ── Kick off the background install (202) ──
-    let resp;
-    try {
-      resp = await fetch(`${base}/api/agents/install`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...UI_HEADER },
-        body: JSON.stringify({ id: agentId, trust_native: trustNative, version }),
-      });
-    } catch (err) {
-      throw new Error(
-        `Could not reach the GAIA backend to install "${agentId}": ${err.message}`
-      );
-    }
-
-    if (!resp.ok) {
-      const detail = await this._readErrorDetail(resp);
-      if (resp.status === 409) {
-        throw new Error(`An install for "${agentId}" is already in progress.`);
-      }
-      if (resp.status === 403) {
-        // Native agents require explicit trust — surface the backend's reason.
-        throw new Error(
-          `Install of "${agentId}" was refused: ${detail} ` +
-            `(pass trustNative once the user accepts the trust prompt).`
-        );
-      }
-      throw new Error(
-        `Install request for "${agentId}" failed (HTTP ${resp.status}): ${detail}`
-      );
-    }
-
-    // ── Poll install-status until terminal ──
-    const deadline = Date.now() + INSTALL_TIMEOUT;
-    let lastState = null;
-    while (Date.now() < deadline) {
-      await this._sleep(INSTALL_POLL_INTERVAL);
-
-      let statusResp;
-      try {
-        statusResp = await fetch(
-          `${base}/api/agents/${encodeURIComponent(agentId)}/install-status`,
-          { headers: { ...UI_HEADER } }
-        );
-      } catch (err) {
-        throw new Error(
-          `Lost contact with the GAIA backend while installing "${agentId}": ${err.message}`
-        );
-      }
-
-      // A brief 404 window is possible between the 202 and the worker seeding
-      // progress; keep polling until the deadline rather than failing early.
-      if (statusResp.status === 404) continue;
-      if (!statusResp.ok) {
-        const detail = await this._readErrorDetail(statusResp);
-        throw new Error(
-          `Install-status poll for "${agentId}" failed (HTTP ${statusResp.status}): ${detail}`
-        );
-      }
-
-      lastState = await statusResp.json();
-      this._emitInstallProgress(agentId, {
-        status: lastState.status,
-        phase: lastState.phase,
-        percent: lastState.percent,
-        version: lastState.version,
-        error: lastState.error,
-      });
-
-      if (lastState.status === "completed") {
-        // Hot-register already happened backend-side; refresh our manifest so
-        // getAgentStatus / startAgent see the new binary paths.
-        this.reloadManifest();
-        return {
-          id: agentId,
-          status: "completed",
-          version: lastState.version || null,
-        };
-      }
-      if (lastState.status === "failed") {
-        throw new Error(
-          `Install of "${agentId}" failed: ${lastState.error || "unknown error"}`
-        );
-      }
-    }
-
-    throw new Error(
-      `Install of "${agentId}" timed out after ${Math.round(
-        INSTALL_TIMEOUT / 1000
-      )}s (last phase: ${lastState ? lastState.phase : "unknown"}).`
-    );
-  }
-
-  /**
-   * Uninstall a hub-installed agent: stop any running sidecar, then delegate
-   * removal + de-registration to the backend runtime.
-   *
-   * @param {string} agentId
-   * @returns {Promise<{ id: string, status: string }>}
-   */
-  async uninstallAgent(agentId) {
-    if (typeof agentId !== "string" || !agentId.trim()) {
-      throw new Error("uninstallAgent requires a non-empty agent id");
-    }
-    const base = this._backendBaseUrl();
-
-    // Stop a running sidecar first so its dir/executable isn't held open.
-    if (this.processes[agentId]) {
-      await this.stopAgent(agentId);
-    }
-
-    let resp;
-    try {
-      resp = await fetch(`${base}/api/agents/${encodeURIComponent(agentId)}`, {
-        method: "DELETE",
-        headers: { ...UI_HEADER },
-      });
-    } catch (err) {
-      throw new Error(
-        `Could not reach the GAIA backend to uninstall "${agentId}": ${err.message}`
-      );
-    }
-
-    if (!resp.ok) {
-      const detail = await this._readErrorDetail(resp);
-      if (resp.status === 404) {
-        throw new Error(`"${agentId}" is not installed.`);
-      }
-      if (resp.status === 400) {
-        // e.g. refusing to remove a builtin — surface the backend's reason.
-        throw new Error(`Cannot uninstall "${agentId}": ${detail}`);
-      }
-      throw new Error(
-        `Uninstall of "${agentId}" failed (HTTP ${resp.status}): ${detail}`
-      );
-    }
-
-    this.reloadManifest();
-    return { id: agentId, status: "uninstalled" };
-  }
-
-  /** Read a FastAPI-style `{detail}` error body without throwing. */
-  async _readErrorDetail(resp) {
-    try {
-      const body = await resp.json();
-      if (body && typeof body.detail === "string") return body.detail;
-      return JSON.stringify(body);
-    } catch {
-      return resp.statusText || `HTTP ${resp.status}`;
-    }
-  }
-
-  _emitInstallProgress(agentId, progress) {
-    this._sendToRenderer("agent:install-progress", {
-      agentId,
-      ...progress,
-      timestamp: Date.now(),
-    });
-  }
-
-  _sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   // ── Public API: Monitoring ───────────────────────────────────────────
@@ -575,30 +324,6 @@ class AgentProcessManager extends EventEmitter {
     };
   }
 
-  /**
-   * Get statuses for all known agents.
-   * @returns {Record<string, object>}
-   */
-  getAllAgentStatuses() {
-    const result = {};
-
-    // Include agents from manifest
-    if (this.manifest && this.manifest.agents) {
-      for (const agent of this.manifest.agents) {
-        result[agent.id] = this.getAgentStatus(agent.id);
-      }
-    }
-
-    // Include any running agents not in manifest (shouldn't happen, but safety)
-    for (const agentId of Object.keys(this.processes)) {
-      if (!result[agentId]) {
-        result[agentId] = this.getAgentStatus(agentId);
-      }
-    }
-
-    return result;
-  }
-
   // ── Public API: I/O ──────────────────────────────────────────────────
 
   /**
@@ -626,7 +351,13 @@ class AgentProcessManager extends EventEmitter {
 
       entry.pendingRpc[id] = { resolve, reject, timer };
 
-      this._sendJsonRpcRaw(agentId, method, params, id);
+      try {
+        this._sendJsonRpcRaw(agentId, method, params, id);
+      } catch (err) {
+        clearTimeout(timer);
+        delete entry.pendingRpc[id];
+        reject(err);
+      }
     });
   }
 
@@ -639,6 +370,7 @@ class AgentProcessManager extends EventEmitter {
     const agentConfigs = this.config.agents || {};
 
     for (const [agentId, agentCfg] of Object.entries(agentConfigs)) {
+      if (this._shuttingDown) return;
       if (agentCfg.autoStart && !this.processes[agentId]) {
         try {
           await this.startAgent(agentId);
@@ -656,27 +388,17 @@ class AgentProcessManager extends EventEmitter {
   }
 
   /**
-   * Stop all running agents gracefully.
+   * Stop all running agents gracefully. For quitting only: afterwards no
+   * agent can be started, so a pending auto-start or crash restart can't
+   * spawn one the app will never stop.
    */
   async stopAll() {
     const agentIds = Object.keys(this.processes);
     console.log(
       `[agent-mgr] Stopping all agents: ${agentIds.join(", ") || "(none)"}`
     );
+    this._shuttingDown = true;
     await Promise.all(agentIds.map((id) => this.stopAgent(id)));
-  }
-
-  // ── Public API: Manifest ─────────────────────────────────────────────
-
-  /** @returns {object | null} The agent manifest */
-  getManifest() {
-    return this.manifest;
-  }
-
-  /** Reload the manifest from disk. */
-  reloadManifest() {
-    this.manifest = this._loadManifest();
-    return this.manifest;
   }
 
   // ── Private: stdout handling (JSON-RPC) ──────────────────────────────
@@ -733,13 +455,6 @@ class AgentProcessManager extends EventEmitter {
       }
     }
 
-    // It's a notification or unsolicited message — forward to renderer
-    this._sendToRenderer("agent:stdout", {
-      agentId,
-      message: msg,
-      timestamp: Date.now(),
-    });
-
     // Handle specific notification methods
     if (msg.method === "notification/send") {
       this.emit("agent-notification", agentId, msg.params);
@@ -762,13 +477,6 @@ class AgentProcessManager extends EventEmitter {
       if (entry.stderrBuffer.length > STDERR_BUFFER_MAX) {
         entry.stderrBuffer.shift();
       }
-
-      // Forward to renderer
-      this._sendToRenderer("agent:stderr", {
-        agentId,
-        line,
-        timestamp: Date.now(),
-      });
     }
   }
 
@@ -788,14 +496,6 @@ class AgentProcessManager extends EventEmitter {
     if (code !== 0 && code !== null) {
       this._logCrash(agentId, code, signal);
     }
-
-    // Notify renderer of unexpected exit
-    this._sendToRenderer("agent:crashed", {
-      agentId,
-      exitCode: code,
-      signal,
-      timestamp: Date.now(),
-    });
 
     this._cleanupProcess(agentId);
     this._emitStatusChange(agentId, "stopped");
@@ -832,6 +532,7 @@ class AgentProcessManager extends EventEmitter {
     );
 
     setTimeout(async () => {
+      if (this._shuttingDown) return;
       try {
         await this.startAgent(agentId);
         console.log(`[agent-mgr] Agent ${agentId} restarted after crash`);
@@ -858,6 +559,11 @@ class AgentProcessManager extends EventEmitter {
     if (!entry || !entry.process.stdin || entry.process.stdin.destroyed) {
       throw new Error(`Cannot write to stdin of agent "${agentId}"`);
     }
+    if (entry.stdinError) {
+      throw new Error(
+        `Cannot write to stdin of agent "${agentId}": the pipe broke earlier (${entry.stdinError.message})`
+      );
+    }
 
     const msg = {
       jsonrpc: "2.0",
@@ -868,6 +574,36 @@ class AgentProcessManager extends EventEmitter {
 
     const payload = JSON.stringify(msg) + "\n";
     entry.process.stdin.write(payload);
+  }
+
+  /**
+   * The agent's stdin failed — almost always EPIPE because the process is
+   * gone. Fail its pending calls now instead of letting them time out, and
+   * make sure the death is reported: a child that only closed its stdin is
+   * unusable, so it is stopped and its exit goes through the crash path.
+   */
+  _handleStdinError(agentId, child, err) {
+    const entry = this.processes[agentId];
+    const current = entry && entry.process === child ? entry : null;
+    const exited = child.exitCode !== null || child.signalCode !== null;
+    console.error(
+      `[agent-mgr] stdin of agent ${agentId} (PID ${child.pid}) failed: ${err.code || "error"} ${err.message}` +
+        (exited ? " — the agent had already exited" : "")
+    );
+    if (!current) return;
+    current.stdinError = err;
+
+    for (const [rpcId, pending] of Object.entries(current.pendingRpc)) {
+      clearTimeout(pending.timer);
+      delete current.pendingRpc[rpcId];
+      pending.reject(new Error(`Agent "${agentId}" stopped reading its input (${err.code || err.message})`));
+    }
+
+    if (exited || current.stopping) return;
+    console.error(`[agent-mgr] Agent ${agentId} can no longer receive requests — stopping it`);
+    this._killTree(child, { graceMs: TREE_KILL_GRACE, label: `agent ${agentId}` }).catch((killErr) => {
+      console.error(`[agent-mgr] Could not stop agent ${agentId} after its stdin broke: ${killErr.message}`);
+    });
   }
 
   // ── Private: Health check ────────────────────────────────────────────
@@ -952,19 +688,7 @@ class AgentProcessManager extends EventEmitter {
       timestamp: Date.now(),
     };
 
-    this._sendToRenderer("agent:status-change", payload);
     this.emit("status-change", payload);
-  }
-
-  _sendToRenderer(channel, data) {
-    try {
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.webContents.send(channel, data);
-      }
-    } catch (err) {
-      // Window may be closing
-      console.warn(`[agent-mgr] Could not send to renderer:`, err.message);
-    }
   }
 
   // ── Private: Manifest & config ───────────────────────────────────────
@@ -1055,45 +779,16 @@ class AgentProcessManager extends EventEmitter {
     }
   }
 
-  // ── Private: IPC handlers ────────────────────────────────────────────
-
-  _registerIpcHandlers() {
-    ipcMain.handle("agent:start", async (_event, agentId) => {
-      return this.startAgent(agentId);
-    });
-
-    ipcMain.handle("agent:stop", async (_event, agentId) => {
-      return this.stopAgent(agentId);
-    });
-
-    ipcMain.handle("agent:restart", async (_event, agentId) => {
-      return this.restartAgent(agentId);
-    });
-
-    ipcMain.handle("agent:status", (_event, agentId) => {
-      return this.getAgentStatus(agentId);
-    });
-
-    ipcMain.handle("agent:status-all", () => {
-      return this.getAllAgentStatuses();
-    });
-
-    ipcMain.handle("agent:send-rpc", async (_event, agentId, method, params) => {
-      return this.sendJsonRpc(agentId, method, params);
-    });
-
-    ipcMain.handle("agent:get-manifest", () => {
-      return this.getManifest();
-    });
-
-    ipcMain.handle("agent:install", async (_event, agentId, opts) => {
-      return this.installAgent(agentId, opts || {});
-    });
-
-    ipcMain.handle("agent:uninstall", async (_event, agentId) => {
-      return this.uninstallAgent(agentId);
-    });
-  }
 }
+
+/**
+ * Longest stopAgent can take on `platform` (ms): the tree read while the
+ * agent is alive, its shutdown wait, then killProcessTree. The quit's
+ * cleanup deadline must cover it.
+ */
+AgentProcessManager.worstCaseStopMs = (platform = process.platform) =>
+  listTimeoutMs(platform) +
+  SHUTDOWN_TIMEOUT +
+  worstCaseKillMs({ platform, graceMs: TREE_KILL_GRACE });
 
 module.exports = AgentProcessManager;

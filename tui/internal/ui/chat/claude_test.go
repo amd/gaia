@@ -21,7 +21,7 @@ func (c *claudeTransport) ClaudeAtLaunch() bool { return c.launchClaude }
 // user must be able to tell at a glance that inference is NOT local.
 func TestLaunchFlagShowsTheClaudeChipImmediately(t *testing.T) {
 	c := &claudeTransport{launchClaude: true}
-	m := NewChatModel(c, "gaia", "", false)
+	m := NewChatModel(c, "gaia", "")
 	m.width, m.height = 100, 30
 
 	if !m.claudeMode {
@@ -34,7 +34,7 @@ func TestLaunchFlagShowsTheClaudeChipImmediately(t *testing.T) {
 
 // Without the flag there is no chip — a local session must never look remote.
 func TestNoClaudeChipOnALocalLaunch(t *testing.T) {
-	m := NewChatModel(&claudeTransport{}, "gaia", "", false)
+	m := NewChatModel(&claudeTransport{}, "gaia", "")
 	m.width, m.height = 100, 30
 
 	if m.claudeMode {
@@ -48,7 +48,7 @@ func TestNoClaudeChipOnALocalLaunch(t *testing.T) {
 // A transport that cannot report its argv (no ClaudeAtLaunch) never triggers
 // the chip either — absence of evidence is a local session.
 func TestNoClaudeChipOnATransportWithoutArgv(t *testing.T) {
-	m := NewChatModel(&nullClient{}, "gaia", "", false)
+	m := NewChatModel(&nullClient{}, "gaia", "")
 	m.width, m.height = 100, 30
 
 	if m.claudeMode || strings.Contains(m.View(), "│ claude") {

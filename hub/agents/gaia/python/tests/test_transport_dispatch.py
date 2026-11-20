@@ -299,7 +299,7 @@ def test_the_freeze_entry_runs_a_python_file_before_building_the_agent(tmp_path)
     import subprocess
     from pathlib import Path
 
-    from gaia_agent_chat.python_runner import RUN_PYTHON_FILE_FLAG
+    from gaia_agent.python_runner import RUN_PYTHON_FILE_FLAG
 
     entry = Path(__file__).resolve().parents[1] / "packaging" / "server.py"
     script = tmp_path / "snippet.py"
@@ -309,10 +309,10 @@ def test_the_freeze_entry_runs_a_python_file_before_building_the_agent(tmp_path)
         "sys.exit(5)\n",
         encoding="utf-8",
     )
-    chat_root = Path(__import__("gaia_agent_chat").__file__).resolve().parents[1]
+    agent_root = Path(__import__("gaia_agent").__file__).resolve().parents[1]
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
-        [str(chat_root), *filter(None, [env.get("PYTHONPATH")])]
+        [str(agent_root), *filter(None, [env.get("PYTHONPATH")])]
     )
 
     result = subprocess.run(

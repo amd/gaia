@@ -35,6 +35,7 @@ from gaia.connectors.context import agent_runtime_active, current_agent_id
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
     ConnectorsError,
     ConsentDeniedError,
@@ -78,6 +79,7 @@ _API_NAMES: frozenset[str] = frozenset(
         "import_forwarded_connection",
         "is_agent_active",
         "list_agent_activations",
+        "list_accounts",
         "list_agent_grants",
         "list_connections",
         "load_activations",
@@ -86,6 +88,7 @@ _API_NAMES: frozenset[str] = frozenset(
         "revoke_agent_grant",
         "revoke_connection",
         "revoke_connection_async",
+        "set_default_account",
         "start_authorization",
         "start_device_flow",
         "tripwire_check",
@@ -111,6 +114,7 @@ __all__ = [
     # Errors
     "AuthRequiredError",
     "ConfigurationError",
+    "ConnectionBusyError",
     "ConnectionRevokedError",
     "ConnectorsError",
     "ConsentDeniedError",

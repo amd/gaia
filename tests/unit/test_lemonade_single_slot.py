@@ -45,7 +45,7 @@ def _sent_load(client, model, **kwargs):
 def test_a_llamacpp_chat_load_names_its_slot_count(client):
     sent = _sent_load(client, "Qwen3.6-35B-A3B-GGUF", ctx_size=262144)
     assert sent["llamacpp_args"] == CHAT_LLAMACPP_ARGS
-    assert "--parallel 2" in sent["llamacpp_args"]
+    assert "--parallel 3" in sent["llamacpp_args"]
     assert sent["ctx_size"] == 262144
 
 

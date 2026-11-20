@@ -15,17 +15,15 @@ import (
 // holding the alt screen. Anything it writes to stderr lands ON that frame:
 // the terminal is not ours to write to between p.Run() and its return.
 //
-// That is not a cosmetic problem. --dev turns control debugging on (see
-// run() in internal/ui/app.go), and the recorder logs once per control request,
-// so driving a --dev session over the API repaints the screen with [control]
-// lines faster than the TUI can redraw it — the frame a developer turned --dev
-// on to READ is the frame the logging destroys.
+// That is not a cosmetic problem. --dev turns control debugging on, and the
+// recorder logs once per control request, so driving a session over the API
+// would repaint the screen with [control] lines faster than the TUI can redraw
+// it — the frame being read is the frame the logging destroys.
 //
-// So diagnostics go to a file instead, the same split internal/ui/chat/devlog.go
-// already draws for the agent's work log: one truncated pointer on screen, the
-// full record in ~/.gaia/logs/. A failure to open that file drops the line
-// rather than falling back to stderr — a lost diagnostic costs less than a
-// corrupted session, and stderr is exactly what this exists to avoid.
+// So diagnostics go to a file instead, and the screen stays the user's. A
+// failure to open that file drops the line rather than falling back to stderr —
+// a lost diagnostic costs less than a corrupted session, and stderr is exactly
+// what this exists to avoid.
 
 // LogFileName is the session log the control plane appends its diagnostics to.
 const LogFileName = "gaia-tui.log"
@@ -100,6 +98,12 @@ func logf(format string, args ...any) {
 		fmt.Sprintf(format, args...))
 }
 
+// DevLogf records one --dev diagnostic from the interactive TUI, which has the
+// same reason as this package to keep off stderr.
+func DevLogf(format string, args ...any) {
+	logf("[DEBUG] "+format, args...)
+}
+
 // CloseLog releases the session log. Optional — the OS closes it at exit — but
 // it lets a test reopen a fresh file under a new GAIA_TUI_HOME.
 func CloseLog() {
@@ -111,3 +115,8 @@ func CloseLog() {
 	}
 	logOnce = sync.Once{}
 }
+
+// Logf appends one line to the session log, for any package that has a
+// diagnostic and no screen to put it on. Callers pass metadata only: the log
+// never holds what the user typed or what the agent read.
+func Logf(format string, args ...any) { logf(format, args...) }

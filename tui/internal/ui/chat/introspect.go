@@ -22,6 +22,9 @@ func (m ChatModel) ControlSnapshot() control.Snapshot {
 	if m.agentsPanel != nil {
 		snap.Overlay = "agents"
 	}
+	if m.modelSetup != nil && m.modelSetupOpen {
+		snap.Overlay = "setup-" + m.modelSetup.Screen()
+	}
 	snap.Chat = m.controlChatState()
 	return snap
 }

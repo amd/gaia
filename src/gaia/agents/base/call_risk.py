@@ -37,7 +37,19 @@ _ORDER = {READ: 0, WRITE: 1, EXECUTE: 2, DESTRUCTIVE: 3}
 #: so no "always" is offered for it and none can cover it.
 RISK_NOTE_ARG = "_risk_note"
 
-SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command", "wait_for_condition"})
+#: Prompt argument marking a call only a person may approve: a console that
+#: pre-approves tools still asks about it, and never shows the marker itself.
+NEEDS_PERSON_ARG = "_needs_person"
+
+#: Display-only prompt argument carrying the literal text a person is approving,
+#: such as a whole email. Every front-end shows it in full, never shortened.
+EXACT_TEXT_ARG = "_exact_text"
+
+#: Display-only prompt argument carrying the content of the script a call runs,
+#: read when the prompt is built: ``{"text", "hidden_lines"}`` or ``{"unreadable"}``.
+SCRIPT_ARG = "_script"
+
+SHELL_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
 
 _FILE_WRITE_TOOLS = frozenset(
     {
@@ -52,7 +64,9 @@ _FILE_WRITE_TOOLS = frozenset(
     }
 )
 
-_CODE_TOOLS = frozenset({"run_python", "execute_python_file"})
+_CODE_TOOLS = frozenset(
+    {"run_python", "execute_python_file", "browser-pane/dev_server"}
+)
 
 _READ_PROGRAMS = frozenset(
     {
@@ -333,16 +347,28 @@ _PLAIN_NOTES = {
 }
 
 
+#: The line a code prompt shows (``run_python``, ``execute_python_file``). The
+#: Agent UI shows the same words as ``prompt.codeRisk``.
+CODE_RISK_NOTE = (
+    "Can run any code with your permissions. GAIA checks the code's text, not "
+    "what it does when it runs."
+)
+
+
 def plain_risk_note(risk: Optional[str]) -> str:
     """One plain sentence for *risk* on a command prompt, or "" when none is due."""
     return _PLAIN_NOTES.get(risk or "", "")
 
 
 __all__ = [
+    "CODE_RISK_NOTE",
     "DESTRUCTIVE",
     "EXECUTE",
+    "EXACT_TEXT_ARG",
+    "NEEDS_PERSON_ARG",
     "READ",
     "RISK_NOTE_ARG",
+    "SCRIPT_ARG",
     "SHELL_TOOLS",
     "WRITE",
     "call_risk",

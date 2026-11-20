@@ -43,7 +43,6 @@ type HubAgentLister interface {
 // print the id twice. Never guessed for an id not in this map.
 var knownDisplayNames = map[string]string{
 	catalog.FlagshipID: "GAIA",
-	"email":            "Email",
 }
 
 // row is one installed agent as this panel renders it.
@@ -64,6 +63,9 @@ type loadedMsg struct {
 	rows         []row
 	onlyFlagship bool
 	err          error
+	// warnings name installed agents this panel cannot list (a corrupt
+	// install record), so one never just disappears from it.
+	warnings []string
 }
 
 // Model lists installed agents and lets the user select one. It never
@@ -78,6 +80,7 @@ type Model struct {
 	onlyFlagship bool
 	loading      bool
 	loadErr      string
+	warnings     []string
 
 	selected      int
 	width, height int
@@ -132,20 +135,21 @@ func (m Model) load() tea.Cmd {
 	ctx := m.ctx
 	gen := m.gen
 	return func() tea.Msg {
+		_, warnings := catalog.LocalInstalls()
 		cat, err := c.Catalog(ctx, false, true, false)
 		if err != nil {
-			return loadedMsg{gen: gen, err: err}
+			return loadedMsg{gen: gen, err: err, warnings: warnings}
 		}
 		// Zero agents (a fresh pip install the daemon is up for another
 		// reason) has no other agent to switch to either — same message as
 		// the flagship-only case.
 		if len(cat.Agents) == 0 || (len(cat.Agents) == 1 && cat.Agents[0].ID == catalog.FlagshipID) {
-			return loadedMsg{gen: gen, onlyFlagship: true}
+			return loadedMsg{gen: gen, onlyFlagship: true, warnings: warnings}
 		}
 
 		runtimes, err := c.Agents(ctx, false)
 		if err != nil {
-			return loadedMsg{gen: gen, err: err}
+			return loadedMsg{gen: gen, err: err, warnings: warnings}
 		}
 		running := make(map[string]bool, len(runtimes))
 		for _, rt := range runtimes {
@@ -171,7 +175,7 @@ func (m Model) load() tea.Cmd {
 			}
 			return rows[i].id < rows[j].id
 		})
-		return loadedMsg{gen: gen, rows: rows}
+		return loadedMsg{gen: gen, rows: rows, warnings: warnings}
 	}
 }
 
@@ -191,6 +195,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.rows = v.rows
 		m.onlyFlagship = v.onlyFlagship
+		m.warnings = v.warnings
 		if v.err != nil {
 			m.loadErr = "Could not list installed agents: " + v.err.Error()
 		} else {
@@ -239,6 +244,22 @@ func (m Model) View() string {
 	w := max(1, m.width-4)
 	title := lipgloss.NewStyle().Bold(true).Foreground(theme.AccentBright)
 	lines := []string{title.Render("Installed agents"), ""}
+	budget := max(1, m.height-4)
+
+	// Laid out before the rows, which get only the room these leave: the tail
+	// crop below would otherwise cut the selected row off a short panel.
+	var warnLines []string
+	if len(m.warnings) > 0 && !m.loading {
+		warn := lipgloss.NewStyle().Foreground(theme.Warning)
+		warnLines = append(warnLines, "")
+		for _, msg := range m.warnings {
+			for _, l := range strings.Split(ansi.Wrap("! "+msg, w, ""), "\n") {
+				warnLines = append(warnLines, warn.Render(l))
+			}
+		}
+		// The title, its gap and the selected row stay on screen regardless.
+		warnLines = warnLines[:min(len(warnLines), max(0, budget-3))]
+	}
 
 	switch {
 	case m.loading:
@@ -246,7 +267,7 @@ func (m Model) View() string {
 	case m.loadErr != "":
 		lines = append(lines, m.loadErr)
 	case m.onlyFlagship:
-		lines = append(lines, "Only the flagship is installed. Install another with: "+catalog.InstallCommand("<id>"))
+		lines = append(lines, "Only the GAIA agent is installed.")
 	case len(m.rows) > 0:
 		rowLines := make([][]string, len(m.rows))
 		for i, r := range m.rows {
@@ -274,7 +295,7 @@ func (m Model) View() string {
 		}
 		// Scroll the rows around the selection: the height crop below keeps
 		// only the tail, which would drop a selection near the top.
-		avail := max(1, m.height-6)
+		avail := max(1, m.height-6-len(warnLines))
 		start, end := m.selected, m.selected+1
 		used := len(rowLines[m.selected])
 		for start > 0 && used+len(rowLines[start-1]) <= avail {
@@ -290,6 +311,8 @@ func (m Model) View() string {
 		}
 	}
 
+	lines = append(lines, warnLines...)
+
 	hint := "↑/↓ choose · enter switch · r refresh · esc close"
 	if w < 65 {
 		hint = "↑/↓ · enter · r refresh · esc"
@@ -302,7 +325,6 @@ func (m Model) View() string {
 	for _, line := range lines {
 		wrapped = append(wrapped, strings.Split(ansi.Wrap(line, w, ""), "\n")...)
 	}
-	budget := max(1, m.height-4)
 	if len(wrapped) > budget {
 		wrapped = append(wrapped[:1], wrapped[len(wrapped)-budget+1:]...)
 	}

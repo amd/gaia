@@ -7,9 +7,10 @@ limit like "120 s without a byte from the model" fires the instant the PC
 wakes from a long sleep, even though the model server (asleep too) is fine and
 about to carry on. :func:`monotonic` stops while the PC sleeps:
 
-* Windows: ``QueryUnbiasedInterruptTime``, which excludes sleep and
-  hibernation (Windows 7 and later), in 100 ns units at timer-tick resolution
-  (about 16 ms).
+* Windows: ``QueryUnbiasedInterruptTime``, which leaves out S3 sleep and
+  hibernation, in 100 ns units at timer-tick resolution (about 16 ms). Modern
+  Standby (S0 low-power idle) counts as running time: the PC never leaves S0,
+  and on the PC this was measured on, processes kept running through it.
 * Linux and macOS: ``time.monotonic()``, which already stops during suspend.
 
 Use it for any limit on how long something may take, so a sleep never reads
@@ -22,6 +23,11 @@ from __future__ import annotations
 import sys
 import time
 
+
+class AwakeClockError(RuntimeError):
+    """The clock that time limits run on could not be read."""
+
+
 if sys.platform == "win32":
     import ctypes
     from ctypes import wintypes
@@ -32,14 +38,21 @@ if sys.platform == "win32":
     _query.restype = wintypes.BOOL
 
     def monotonic() -> float:
-        """Seconds since boot, not counting time the PC slept.
+        """Seconds since boot, not counting S3 sleep or hibernation.
 
         Raises:
-            OSError: Windows refused the call (it never does on Windows 7+).
+            AwakeClockError: Windows refused ``QueryUnbiasedInterruptTime``,
+                so no time limit can be measured.
         """
         ticks = ctypes.c_ulonglong()
         if not _query(ctypes.byref(ticks)):
-            raise ctypes.WinError(ctypes.get_last_error())
+            err = ctypes.WinError(ctypes.get_last_error())
+            raise AwakeClockError(
+                "GAIA's time-limit clock stopped working: Windows refused "
+                f"QueryUnbiasedInterruptTime ({err}). Restart GAIA. If it "
+                "happens again, run `gaia diagnostics` and attach the bundle to "
+                "an issue at https://github.com/amd/gaia/issues"
+            ) from err
         return ticks.value / 10_000_000
 
 else:

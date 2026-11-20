@@ -261,11 +261,17 @@ def test_synthetic_error_frame_terminates_partial_frame_first():
     assert raw.startswith(b"\n\ndata: ")
 
 
-def test_stream_ended_detail_is_actionable():
+def test_stream_ended_detail_is_plain_words():
     detail = stream_ended_unexpectedly_detail("email")
     assert "email" in detail
-    assert "ensure" in detail  # names the remedy
+    assert "Send your message again" in detail  # the remedy a user can take
     assert "logs" in detail  # names where to look
+    assert "/daemon/" not in detail and "POST" not in detail
+
+
+def test_stream_ended_detail_names_the_flagship_plainly():
+    detail = stream_ended_unexpectedly_detail("gaia")
+    assert detail.startswith("GAIA's agent stopped unexpectedly")
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +291,15 @@ class _FakeManager:
         self.auth_token = f"tok-{spec.agent_id}"
         self.pid = None
         self.started_at = None
+
+    uses_ignored_lemonade = False
+
+    @property
+    def exited_unexpectedly(self):
+        return self.pid is not None and not self._running
+
+    def crash(self):
+        self._running = False
 
     @property
     def is_running(self):
@@ -306,6 +321,7 @@ class _FakeManager:
 
     def shutdown(self):
         self._running = False
+        self.pid = None
 
 
 def _toy_registry():
@@ -365,6 +381,73 @@ def test_connection_stopped_after_running_raises_again(monkeypatch):
         reg.connection("toy")
 
 
+def test_restart_if_crashed_leaves_a_never_started_sidecar_alone():
+    reg = _toy_registry()
+    assert reg.restart_if_crashed("toy") is False
+    with pytest.raises(SidecarNotRunningError):
+        reg.connection("toy")
+
+
+def test_restart_if_crashed_leaves_a_stopped_sidecar_alone(monkeypatch):
+    monkeypatch.setattr("gaia.daemon.sidecars.registry.pid_alive", lambda pid: False)
+    reg = _toy_registry()
+    reg.ensure("toy")
+    reg.stop("toy")
+    assert reg.restart_if_crashed("toy") is False
+    with pytest.raises(SidecarNotRunningError):
+        reg.connection("toy")
+
+
+def test_stopping_a_crashed_sidecar_keeps_it_stopped(monkeypatch):
+    monkeypatch.setattr("gaia.daemon.sidecars.registry.pid_alive", lambda pid: False)
+    reg = _toy_registry()
+    reg.ensure("toy")
+    manager, _ = reg._managers["toy"]
+    manager.crash()
+    reg.stop("toy")
+    assert reg.restart_if_crashed("toy") is False
+
+
+def test_an_idle_stop_on_app_quit_is_never_restarted_as_a_crash(monkeypatch):
+    monkeypatch.setattr("gaia.daemon.sidecars.registry.pid_alive", lambda pid: False)
+    reg = _toy_registry()
+    reg.ensure("toy")
+    assert reg.stop_idle() == ["toy"]
+    assert reg.restart_if_crashed("toy") is False
+    with pytest.raises(SidecarNotRunningError):
+        reg.connection("toy")
+
+
+def test_restart_if_crashed_starts_a_crashed_sidecar_again():
+    reg = _toy_registry()
+    reg.ensure("toy")
+    manager, _ = reg._managers["toy"]
+    manager.crash()
+    assert reg.restart_if_crashed("toy") is True
+    base_url, _ = reg.connection("toy")
+    assert base_url == manager.base_url
+
+
+def test_manager_exited_unexpectedly_only_for_a_process_that_died(monkeypatch):
+    from gaia.daemon.sidecars.manager import AgentSidecarManager
+
+    class _Proc:
+        pid = 99999
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    manager = AgentSidecarManager.__new__(AgentSidecarManager)
+    monkeypatch.setattr(manager, "_tree_survives", lambda pid: False, raising=False)
+    manager._proc = None  # never started, or shut down
+    assert manager.exited_unexpectedly is False
+    manager._proc = _Proc()  # running
+    assert manager.exited_unexpectedly is False
+    manager._proc.returncode = 0xC0000005  # gone without shutdown()
+    assert manager.exited_unexpectedly is True
+
+
 # ---------------------------------------------------------------------------
 # Part 3 — route-level loud errors (TestClient, stub registry, no upstream)
 # ---------------------------------------------------------------------------
@@ -373,10 +456,30 @@ def test_connection_stopped_after_running_raises_again(monkeypatch):
 class _StubRegistry:
     """connection()-only registry stub for route tests."""
 
-    def __init__(self, base_url=None, bearer=_SIDECAR_TOKEN, known=("email",)):
+    def __init__(
+        self,
+        base_url=None,
+        bearer=_SIDECAR_TOKEN,
+        known=("email",),
+        restarted_url=None,
+        restart_error=None,
+    ):
         self._base_url = base_url
         self._bearer = bearer
         self._known = set(known)
+        # Where a crashed sidecar comes back; None means it had not crashed.
+        self._restarted_url = restarted_url
+        self._restart_error = restart_error
+        self.restarts = 0
+
+    def restart_if_crashed(self, agent_id):
+        self.restarts += 1
+        if self._restart_error is not None:
+            raise self._restart_error
+        if self._restarted_url is None:
+            return False
+        self._base_url = self._restarted_url
+        return True
 
     def connection(self, agent_id):
         if agent_id not in self._known:
@@ -423,6 +526,28 @@ def _auth(token=_DAEMON_TOKEN):
 
 
 @needs_fastapi
+def test_the_status_reads_the_turn_counter_the_daemon_shares():
+    """The counter the unload policy reads is the one the relay counts on."""
+    from fastapi.testclient import TestClient
+
+    from gaia.daemon.app import create_app
+    from gaia.daemon.relay import RelayTurns
+
+    turns = RelayTurns()
+    app = create_app(
+        token=_DAEMON_TOKEN,
+        port=55555,
+        pid=1,
+        started_at=time.time(),
+        registry=_StubRegistry(),
+        relay_turns=turns,
+    )
+    turns.opened()
+    status = TestClient(app).get("/daemon/v1/status", headers=_auth()).json()
+    assert status["relayed_turns"] == 1
+
+
+@needs_fastapi
 def test_relay_requires_daemon_client_token():
     client = _daemon_test_client(_StubRegistry())
     r = client.post("/v1/email/query", json={"query": "hi"})  # no auth header
@@ -458,7 +583,7 @@ def test_relay_not_running_sidecar_maps_to_503_with_ensure_remedy():
 
 
 @needs_fastapi
-def test_relay_dead_upstream_maps_to_502_with_reensure_remedy():
+def test_relay_dead_upstream_maps_to_502_with_the_tui_contract_words():
     # Registered + "running" per the registry, but nothing listens on the port
     # (the sidecar died after registration): connect refused → loud 502.
     from gaia.daemon.sidecars.manager import find_free_port
@@ -471,12 +596,184 @@ def test_relay_dead_upstream_maps_to_502_with_reensure_remedy():
     assert r.status_code == 502
     detail = r.json()["detail"]
     assert "email" in detail
-    assert "ensure" in detail
+    # The TUI tells a dead agent from a slow one by these words.
+    assert "sidecar for agent" in detail and "did not answer" in detail
+
+
+@needs_fastapi
+def test_relay_dead_upstream_detail_names_no_http_route():
+    from gaia.daemon.sidecars.manager import find_free_port
+
+    registry = _StubRegistry(base_url=f"http://127.0.0.1:{find_free_port()}")
+    r = _daemon_test_client(registry).post(
+        "/v1/email/query", json={"query": "hi"}, headers=_auth()
+    )
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert "Send your message again" in detail
+    assert "/daemon/" not in detail and "POST" not in detail
+    # The registry said it had not crashed, so nothing was started again.
+    assert registry.restarts == 1
+
+
+@needs_fastapi
+def test_relay_restart_failure_is_loud():
+    from gaia.daemon.sidecars.errors import SidecarSpawnError
+
+    registry = _StubRegistry(
+        base_url=None, restart_error=SidecarSpawnError("port 1 in use")
+    )
+    r = _daemon_test_client(registry).post(
+        "/v1/email/query", json={"query": "hi"}, headers=_auth()
+    )
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert "could not start again" in detail and "port 1 in use" in detail
+    # The TUI tells a dead agent from a refusing mailbox by these words.
+    assert "sidecar for agent 'email'" in detail
+
+
+@pytest.fixture()
+def live_sidecar_url():
+    if not (_HAS_FASTAPI and _HAS_HTTPX and _HAS_UVICORN):
+        pytest.skip("fastapi/httpx/uvicorn not importable")
+    sidecar = _FakeSidecar()
+    server, thread, url = _serve(sidecar.build_app())
+    yield sidecar, url
+    sidecar.release.set()
+    server.should_exit = True
+    thread.join(timeout=10)
+
+
+@needs_fastapi
+def test_relay_restarts_a_crashed_sidecar_and_sends_once_more(live_sidecar_url):
+    sidecar, url = live_sidecar_url
+    registry = _StubRegistry(base_url=None, restarted_url=url)
+    r = _daemon_test_client(registry).post(
+        "/v1/email/triage", json={"q": 1}, headers=_auth()
+    )
+    assert r.status_code == 200
+    assert r.json() == {"result": {"echo": {"q": 1}}}
+    assert registry.restarts == 1
+    assert [seen[0] for seen in sidecar.seen] == ["/v1/email/triage"]
+
+
+@needs_fastapi
+def test_relay_resends_once_when_the_sidecar_died_before_answering(
+    live_sidecar_url,
+):
+    from gaia.daemon.sidecars.manager import find_free_port
+
+    sidecar, url = live_sidecar_url
+    registry = _StubRegistry(
+        base_url=f"http://127.0.0.1:{find_free_port()}", restarted_url=url
+    )
+    r = _daemon_test_client(registry).post(
+        "/v1/email/triage", json={"q": 2}, headers=_auth()
+    )
+    assert r.status_code == 200
+    assert registry.restarts == 1
+    assert [seen[0] for seen in sidecar.seen] == ["/v1/email/triage"]
+
+
+@needs_fastapi
+def test_relay_restarts_at_most_once():
+    from gaia.daemon.sidecars.manager import find_free_port
+
+    dead = f"http://127.0.0.1:{find_free_port()}"
+    registry = _StubRegistry(base_url=dead, restarted_url=dead)
+    r = _daemon_test_client(registry).post("/v1/email/triage", json={}, headers=_auth())
+    assert r.status_code == 502
+    assert registry.restarts == 1
+
+
+@pytest.fixture()
+def drops_after_reading_url():
+    """A sidecar that reads each request in full, then dies without answering."""
+    import socket
+
+    received = []
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    listener.settimeout(0.2)
+    stop = threading.Event()
+
+    def _serve_and_drop():
+        while not stop.is_set():
+            try:
+                conn, _ = listener.accept()
+            except (socket.timeout, OSError):
+                continue
+            with conn:
+                conn.settimeout(5)
+                data = b""
+                try:
+                    while b"\r\n\r\n" not in data:
+                        chunk = conn.recv(65536)
+                        if not chunk:
+                            break
+                        data += chunk
+                    head, _, body = data.partition(b"\r\n\r\n")
+                    length = 0
+                    for line in head.split(b"\r\n")[1:]:
+                        name, _, value = line.partition(b":")
+                        if name.strip().lower() == b"content-length":
+                            length = int(value.strip())
+                    while len(body) < length:
+                        chunk = conn.recv(65536)
+                        if not chunk:
+                            break
+                        body += chunk
+                except OSError:
+                    continue
+                received.append(head.split(b"\r\n", 1)[0].decode())
+
+    thread = threading.Thread(target=_serve_and_drop, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{listener.getsockname()[1]}", received
+    stop.set()
+    thread.join(timeout=5)
+    listener.close()
+
+
+@needs_fastapi
+@pytest.mark.parametrize("method", ["POST", "PUT", "DELETE", "GET"])
+def test_relay_never_resends_a_request_the_sidecar_received(
+    drops_after_reading_url, live_sidecar_url, method
+):
+    # It may have run a tool (sent mail, wrote a file) before it died, so a
+    # resend could do that twice: the user is told to send it again instead.
+    dropping_url, received = drops_after_reading_url
+    sidecar, url = live_sidecar_url
+    registry = _StubRegistry(base_url=dropping_url, restarted_url=url)
+    r = _daemon_test_client(registry).request(
+        method, "/v1/email/confirm", json={"send": 1}, headers=_auth()
+    )
+    assert r.status_code == 502
+    assert len(received) == 1 and received[0].startswith(f"{method} /v1/email/")
+    assert sidecar.seen == []
+    assert registry.restarts == 0
+    detail = r.json()["detail"]
+    assert "sidecar for agent 'email'" in detail and "did not answer" in detail
+    assert "Send your message again" in detail
 
 
 # ---------------------------------------------------------------------------
 # Part 4 — real-server integration: fake sidecar + daemon relay over TCP
 # ---------------------------------------------------------------------------
+
+
+# A turn parked mid-run: on a slow tool, or on the user's approval.
+_PARKED = {
+    "tool": {"type": "tool_call", "tool": "run_shell_command", "args": {}},
+    "confirm": {
+        "type": "needs_confirmation",
+        "action": "write_file",
+        "summary": "Allow writing file?",
+        "confirm_id": "c-1",
+    },
+}
 
 
 class _FakeSidecar:
@@ -536,6 +833,8 @@ class _FakeSidecar:
                     )
                     if sidecar.mode == "crash":
                         return  # EOF without a terminal event
+                    if sidecar.mode in _PARKED:
+                        yield _frame(dict(_PARKED[sidecar.mode], run_id=run_id))
                     while not sidecar.release.is_set():
                         await asyncio.sleep(0.02)
                     yield _frame({"type": "final", "answer": "done"})
@@ -743,6 +1042,8 @@ def test_sidecar_crash_mid_stream_yields_synthetic_terminal_error(live_relay):
     synthetic = events[-1]
     assert synthetic["source"] == "daemon_relay"
     assert synthetic["detail"] == stream_ended_unexpectedly_detail("email")
+    # A response had begun, so the relay sends nothing again.
+    assert len(sidecar.seen) == 1
     # The abandoned run is cancelled upstream too (single-tenant LLM slot).
     _wait_for(
         lambda: sidecar.cancels,
@@ -862,3 +1163,68 @@ def test_control_plane_status_route_unchanged(live_relay):
     r = requests.get(f"{daemon_url}/daemon/v1/status", headers=_auth(), timeout=10)
     assert r.status_code == 200
     assert r.json()["service"]
+
+
+def _relayed_turns(daemon_url):
+    import requests
+
+    r = requests.get(f"{daemon_url}/daemon/v1/status", headers=_auth(), timeout=5)
+    return r.json()["relayed_turns"]
+
+
+@needs_live_servers
+@pytest.mark.parametrize("parked_on", ["tool", "confirm"])
+def test_a_parked_turn_counts_as_relayed_until_it_ends(
+    live_relay, parked_on, monkeypatch, tmp_path
+):
+    """An update's restart must see a turn waiting on a tool or an approval."""
+    import requests
+
+    from gaia.daemon import client
+    from gaia.daemon.instance import DaemonInstance
+
+    sidecar, daemon_url = live_relay
+    sidecar.mode = parked_on
+    monkeypatch.setattr(client.paths, "host_dir", lambda: tmp_path)
+    port = int(daemon_url.rsplit(":", 1)[1])
+    inst = DaemonInstance(pid=1, port=port, token=_DAEMON_TOKEN)
+    assert _relayed_turns(daemon_url) == 0
+
+    with requests.post(
+        f"{daemon_url}/v1/email/query",
+        json={"query": "q", "run_id": f"run-{parked_on}", "context": []},
+        headers=_auth(),
+        stream=True,
+        timeout=(5, 15),
+    ) as resp:
+        events = _iter_data_events(resp)
+        assert next(events)["type"] == "status"
+        assert next(events)["type"] == _PARKED[parked_on]["type"]
+        assert _relayed_turns(daemon_url) == 1
+        assert "1 agent turn(s) are still running" in client.outdated_daemon_busy(inst)
+        sidecar.release.set()
+        assert [e["type"] for e in events] == ["final"]
+
+    _wait_for(lambda: _relayed_turns(daemon_url) == 0)
+
+
+@needs_live_servers
+def test_a_turn_the_client_walked_away_from_stops_counting(live_relay):
+    import requests
+
+    sidecar, daemon_url = live_relay
+    sidecar.mode = "confirm"
+    resp = requests.post(
+        f"{daemon_url}/v1/email/query",
+        json={"query": "q", "run_id": "run-gone", "context": []},
+        headers=_auth(),
+        stream=True,
+        timeout=(5, 15),
+    )
+    events = _iter_data_events(resp)
+    next(events)
+    next(events)
+    assert _relayed_turns(daemon_url) == 1
+    resp.close()
+
+    _wait_for(lambda: _relayed_turns(daemon_url) == 0)

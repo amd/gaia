@@ -214,3 +214,68 @@ def test_report_sent_with_a_memory_save_reaches_the_user(agent):
     result = agent.process_query("check my watched sources")
 
     assert result["result"].startswith(report)
+
+
+# ---------------------------------------------------------------------------
+# A closing remark that points back at an answer sent beside a lookup
+# ---------------------------------------------------------------------------
+
+_FOUR_FILES = (
+    "1. `notes.md` is empty, so there is nothing to summarise.\n"
+    "2. `minutes.pdf` could not be read: the file is corrupted.\n"
+    "3. The tasting menu is $85 per person.\n"
+    "4. The inventory lists 12 dock doors."
+)
+_DEFERRING = (
+    "That's the same corrupted-file error as before, nothing new there. I "
+    "already reported that in my last answer."
+)
+
+
+def test_remark_deferring_to_an_answer_beside_a_lookup_keeps_that_answer(agent):
+    _script(agent, _calls(_QUERY), _calls(_READ, content=_FOUR_FILES), _DEFERRING)
+
+    result = agent.process_query("answer my four questions about these files")
+
+    assert result["result"].startswith(_FOUR_FILES)
+    assert result["result"].rstrip().endswith(_DEFERRING)
+    # The completion checks saw the same text the user did.
+    assert agent.finalized == [f"{_FOUR_FILES}\n\n{_DEFERRING}"]
+
+
+def test_answer_from_an_earlier_step_survives_a_later_bare_call(agent):
+    _script(
+        agent,
+        _calls(_DROP, content=_FOUR_FILES),
+        _calls(_READ),
+        "As I said above, the second file is unreadable.",
+    )
+
+    result = agent.process_query("answer my four questions about these files")
+
+    assert result["result"].startswith(_FOUR_FILES)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Actually, my last answer was wrong: the inventory lists 14 doors.",
+        "The retry failed too, so the file stays unread.",
+    ],
+    ids=["retraction", "no-pointer-back"],
+)
+def test_reply_that_does_not_defer_stands_alone(agent, reply):
+    _script(agent, _calls(_READ, content=_FOUR_FILES), reply)
+
+    result = agent.process_query("answer my four questions about these files")
+
+    assert result["result"].strip() == reply
+
+
+def test_full_answer_mentioning_the_earlier_one_is_not_doubled(agent):
+    final = f"As I said above, here is everything again.\n\n{_FOUR_FILES}"
+    _script(agent, _calls(_READ, content=_FOUR_FILES), final)
+
+    result = agent.process_query("answer my four questions about these files")
+
+    assert result["result"].count("tasting menu") == 1

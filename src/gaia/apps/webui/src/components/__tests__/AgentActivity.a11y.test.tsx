@@ -16,19 +16,21 @@ const steps: AgentStep[] = [
     { id: 2, type: 'tool', label: 'Using tool', tool: 'write_file', active: false, success: true, timestamp: 2 },
 ];
 
-it('keeps collapsed activity out of the tab order and the accessibility tree', () => {
-    const { container } = render(<AgentActivity steps={steps} isActive={false} variant="summary" />);
-    const wrap = container.querySelector('.agent-flow-wrap')!;
+it('keeps folded steps out of the tab order and the accessibility tree', () => {
+    render(<AgentActivity steps={steps} isActive={false} />);
+    const summary = screen.getByRole('button', { name: /Ran command, wrote file/ });
 
-    expect(wrap.hasAttribute('inert')).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
-    expect(wrap.hasAttribute('inert')).toBe(false);
+    expect(summary).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: /Ran command$/ })).toBeNull();
+    fireEvent.click(summary);
+    expect(summary).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: /Ran command$/ })).toBeInTheDocument();
 });
 
 it('names the icon-only copy button on command output', () => {
-    render(<AgentActivity steps={steps} isActive={false} variant="summary" />);
-    fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
-    fireEvent.click(screen.getByRole('button', { name: /Ran command/ }));
+    render(<AgentActivity steps={steps} isActive={false} />);
+    fireEvent.click(screen.getByRole('button', { name: /Ran command, wrote file/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Ran command$/ }));
 
     expect(screen.getByRole('button', { name: 'Copy command output' })).toBeInTheDocument();
 });

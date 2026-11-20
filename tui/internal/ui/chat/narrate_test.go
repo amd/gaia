@@ -25,11 +25,13 @@ func TestToolNarration(t *testing.T) {
 		{"shell shows the command", "run_shell_command", `{"command":"gh issue view 2924"}`, "", "gh issue view 2924"},
 		{"derived verb + object", "unload_skill_set", `{}`, "", "Unloading skill set"},
 		{"derived with argument", "fetch_report", `{"name":"q3"}`, "", "Fetching report: q3"},
-		{"unknown verb stays honest", "pre_scan_inbox2", `{}`, "", "Running pre_scan_inbox2"},
+		{"unknown verb stays honest", "frob_widget", `{}`, "", "Running frob_widget"},
 		{"no args at all", "read_file", ``, "", "Reading a file"},
-		{"numeric id is not scientific", "get_message", `{"message_id":2924}`, "", "Opening message 2924"},
+		{"numeric id is not scientific", "read_email", `{"message_id":2924}`, "", "Opening message 2924"},
 		// Asked before a write as well as a read, so it must not say "open".
 		{"path access is not opening", "allow_path_access", `{}`, "", "Asking for access to a location"},
+		{"trust asks, not reads", "trust_project_folder", `{"folder":"/w/repo"}`, "", "Asking to trust /w/repo"},
+		{"trust without a folder", "trust_project_folder", `{}`, "", "Asking to trust this folder"},
 		{"nested args are not pasted as JSON", "index_document", `{"opts":{"deep":true}}`, "", "Indexing a document"},
 		// The tool name reaches a Sprintf FORMAT string, so an unescaped "%" used
 		// to come out as "Getting 100%!d(string=arg)one".

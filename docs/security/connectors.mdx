@@ -19,10 +19,15 @@ operator should know about.
 - Linux SecretService (gnome-keyring or kwallet)
 
 Plaintext fallbacks (`keyrings.alt.PlaintextKeyring`,
-`EncryptedKeyring`) are explicitly **refused** at the entry of every
-save and load (plan amendment A4). A Linux user without SecretService
-sees an actionable error pointing at this page rather than silently
-writing tokens to disk.
+`EncryptedKeyring`, `Win32CryptoKeyring`, and anything derived from them) are
+explicitly **refused** before every keyring read and write, by every GAIA
+feature that keeps a secret there (plan amendment A4). Deletes still go ahead,
+with a warning, so secrets saved there earlier can be removed. When keyring chains
+several backends, every backend in the chain is checked, and a chain GAIA cannot
+inspect, or one holding something that is not a keyring backend, is refused
+rather than trusted. A Linux user
+without SecretService sees an actionable error pointing at this page rather
+than silently writing tokens to disk.
 
 **Refresh tokens never cross a public API or response body.** The public
 `gaia.connectors.list_connections()` returns only metadata
@@ -56,7 +61,26 @@ Either is surfaced to the user; nothing falls through silently.
 verifies that the OAuth client id under which it was issued matches
 the current configuration. A mismatch (e.g. after rotation) clears the
 stored entry and raises `AuthRequiredError(REAUTH_REQUIRED)`. Users
-reconnect explicitly; we never use a stale connection.
+reconnect explicitly; we never use a stale connection. The daemon, the
+Agent UI and the CLI each cache the OAuth client, so when a stored
+connection doesn't match that cache, the process re-reads the client
+config from the credential store before judging it. A connection another
+GAIA process just forwarded or reconnected under a new client is kept. A
+connection that still doesn't match is cleared only while holding the
+connection lock. If another GAIA operation (in this process or another)
+holds it, the connection is left in place and the call raises
+`ConnectionBusyError`, a transient error rather than a disconnect: agent
+tools report it as busy, HTTP returns `503` with `Retry-After`, the
+connection listing keeps the row marked `"error": "busy"` (with no scopes,
+since they may be about to change), and the daemon keeps the token it already
+forwarded to a sidecar. An access token already forwarded to a sidecar stays
+usable until it expires or is withdrawn, even after the provider is
+disconnected. A forwarded connection records the previous client and
+connection before changing either. An ordinary failure puts both back before
+letting go of the lock; after a crash or power loss, the first locked read
+restores that pair before it applies the client-hash check. A later sign-in or
+disconnect discards that record, so recovery never undoes it. No process clears a
+connection because it observed a new client next to the old connection.
 
 ## What we do not protect
 
@@ -81,8 +105,9 @@ amendment A9). The grant-ledger key for custom agents is
 code gets a new key and cannot inherit a previous grant.
 
 **An attacker with read access to the user's home directory can read
-`~/.gaia/connectors/grants.json`.** Grants are per-agent scope
-declarations only — they do NOT contain tokens. Tokens are in the OS
+`~/.gaia/connectors/grants.json` and `accounts.json`.** Grants are per-agent
+scope declarations only, and the account list holds each connected account's
+stable id, address and sign-in state — neither contains tokens. Tokens are in the OS
 keychain, which is encrypted by the OS (Keychain on macOS, DPAPI on
 Windows, SecretService on Linux). The grants file is mode 0600 and the
 parent directory 0700 on POSIX systems.
@@ -96,12 +121,15 @@ locally (browsers, native mail clients, etc.).
 **Concurrent processes refreshing the same provider's token.** Two GAIA
 processes running as the same user (e.g. `gaia chat --ui` and
 `gaia connectors status`) each maintain their own in-memory access-
-token cache and share the keyring. A refresh, a connect and a disconnect
-each hold a per-provider file lock
-(`~/.gaia/connectors/<provider>.refresh.lock`, per user like the keyring).
-A refresh re-reads the stored refresh token after taking it, so two
-GAIA processes of this version or later never refresh with the same
-token. Two writes happen outside the lock, both on reading a connection:
+token cache and share the keyring. Each stored account has its own file
+lock (`~/.gaia/connectors/<provider>.account-<hash>.lock`, per user like the
+keyring), held by its refresh and by any write of its token. A connect, a
+disconnect or a forwarded import also holds the provider's lock
+(`~/.gaia/connectors/<provider>.refresh.lock`) first, so two sign-ins never
+race to decide which slot an account lands in, while two accounts still
+refresh at the same time. A refresh re-reads the stored refresh token after
+taking its account's lock, so two GAIA processes of this version or later
+never refresh with the same token. Two writes happen outside the lock, both on reading a connection:
 the read clears it when the stored client ID or tenant no longer matches,
 or when the stored blob isn't valid JSON. A refresh that finishes
 after the user reconnected or disconnected leaves the stored connection

@@ -10,11 +10,23 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
-from gaia.agents.base.call_risk import RISK_NOTE_ARG
-from gaia.agents.base.tool_grants import PATH_TOOLS, grant_scope, path_argument
+from gaia.agents.base.call_risk import EXACT_TEXT_ARG, RISK_NOTE_ARG
+from gaia.agents.base.tool_grants import (
+    PATH_TOOLS,
+    GrantScope,
+    grant_scope,
+    path_argument,
+)
 from gaia.agents.base.tools import get_tool_display_name
+from gaia.agents.base.write_safety import (
+    has_hidden_part,
+    is_too_broad_folder,
+    lands_where_code_runs,
+)
+from gaia.env import child_env
+from gaia.llm.surface_hints import surface_wording
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +70,7 @@ ANSI_MAGENTA = "\033[95m"
 ANSI_CYAN = "\033[96m"
 
 
-# === Confirmation-gated tools (#2210) ===
+# === Confirmation-gated tools ===
 #
 # Tools in ``Agent.confirmation_required_tools()`` must never execute without an
 # explicit human decision. A console that cannot reach a human DENIES. The only
@@ -121,6 +133,8 @@ class Denial(NamedTuple):
     reason: str
     #: Nobody answered in time: not a refusal, so the call may be offered again.
     timed_out: bool = False
+    #: Nothing could put the call to a person: not a refusal either.
+    unattended: bool = False
 
 
 def user_denial_message(tool_name: str) -> str:
@@ -138,7 +152,9 @@ def timeout_denial_message(tool_name: str, waited: str) -> str:
     return (
         f"Nobody answered the confirmation for '{tool_name}' within {waited}, "
         "so it did not run. The prompt timed out — the user did NOT refuse it. "
-        "Tell the user the approval request expired and ask whether to try again."
+        "Tell the user the approval request expired and ask whether to try again. "
+        "Don't ask again in this request for approval: nobody is there to "
+        "answer."
     )
 
 
@@ -158,9 +174,11 @@ def unaskable_denial_message(tool_name: str) -> str:
 
 def edit_target(tool_args: Any) -> str:
     """Where a file-writing call lands — the same rule the file tools apply
-    (``gaia.agents.tools.file_io_tools._resolve_target``): a relative
+    (``gaia.agents.tools.workspace_paths._resolve_target``): a relative
     ``file_path`` sits under ``project_dir`` when one is given, else under the
-    process cwd. "" when the call names no file."""
+    process cwd. It does not know a session workspace, so a host that sets one
+    passes args already resolved by the tool's ``target_of``. "" when the call
+    names no file."""
     target = path_argument(tool_args)
     if not target:
         return ""
@@ -183,21 +201,14 @@ def edit_is_inside(target: str, roots: Tuple[str, ...]) -> bool:
     A home folder or drive root is never a workspace: started there, every
     file the user owns would be "inside".
     """
-    roots = tuple(r for r in roots if not _too_broad_to_be_a_workspace(r))
+    roots = tuple(r for r in roots if not is_too_broad_folder(r))
     if not roots:
         return False
     try:
         resolved = os.path.realpath(target)
     except (OSError, ValueError):
         return False
-    parts = {part.lower() for part in resolved.replace("\\", "/").split("/")}
-    if ".git" in parts:
-        return False
-    parent = os.path.normcase(os.path.dirname(resolved))
-    for entry in os.environ.get("PATH", "").split(os.pathsep):
-        if entry and os.path.normcase(os.path.realpath(entry)) == parent:
-            return False
-    if _shadows_a_program(resolved):
+    if lands_where_code_runs(resolved):
         return False
     for root in roots:
         real_root = os.path.realpath(root)
@@ -209,25 +220,8 @@ def edit_is_inside(target: str, roots: Tuple[str, ...]) -> bool:
         except ValueError:
             continue  # different drives on Windows
         inside = os.path.relpath(resolved, real_root).replace("\\", "/").split("/")
-        return not any(part.startswith(".") and part != "." for part in inside)
+        return not has_hidden_part(inside)
     return False
-
-
-def _too_broad_to_be_a_workspace(root: str) -> bool:
-    """A home folder or a drive root holds everything the user owns."""
-    real = os.path.normcase(os.path.realpath(root))
-    home = os.path.normcase(os.path.realpath(os.path.expanduser("~")))
-    return real == home or os.path.dirname(real) == real
-
-
-def _shadows_a_program(path: str) -> bool:
-    """On Windows, cmd.exe looks in the current folder before ``PATH``, so a
-    ``git.bat`` written into the workspace runs instead of git."""
-    if os.name != "nt":
-        return False
-    stem, ext = os.path.splitext(os.path.basename(path))
-    pathext = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").lower().split(";")
-    return ext.lower() in pathext and shutil.which(stem) is not None
 
 
 def terminal_is_interactive() -> bool:
@@ -246,6 +240,22 @@ def terminal_is_interactive() -> bool:
             # ValueError: stream closed (pytest capture, detached subprocess).
             return False
     return True
+
+
+def someone_can_answer(console: Any) -> bool:
+    """Whether a person can answer a prompt on *console* right now.
+
+    Never on a background run or an unattended sidecar query; always on a
+    console that waits for an explicit decision; on a terminal console, only
+    when the terminal is interactive. Every other console denies.
+    """
+    if getattr(console, "background_mode", False) is True:
+        return False
+    if getattr(console, "nobody_answers", False) is True:
+        return False
+    if getattr(console, "blocking_confirmation", False):
+        return True
+    return isinstance(console, TerminalConfirmationMixin) and terminal_is_interactive()
 
 
 def _shorten(value: str) -> str:
@@ -271,6 +281,8 @@ def format_confirmation_args(tool_args: Any) -> str:
         return "(no arguments)"
     if not isinstance(tool_args, dict):
         return _shorten(str(tool_args))
+    if isinstance(tool_args.get(EXACT_TEXT_ARG), str):
+        return tool_args[EXACT_TEXT_ARG]
     # A one-time call is approved on its exact text, so that is never cut.
     verbatim = {"command"} if tool_args.get(RISK_NOTE_ARG) else set()
     shortened = {
@@ -327,13 +339,15 @@ class OutputHandler(ABC):
     """A person turned on full access for this session, and can see that it is on.
 
     Strictly narrower in origin than ``auto_approve_gated_tools`` and wider in
-    effect. Only ``PermissionState`` sets it, from the TUI's ``/full-access``
-    (or the retired ``--bypass-permissions`` spelling) — an unattended harness
-    that merely pre-approves prompts must not also get an unguarded shell. In
+    effect. Only an explicit opt-in a person names sets it — the TUI's
+    ``/full-access`` via ``PermissionState`` (or the retired
+    ``--bypass-permissions`` spelling), or ``gaia -p --full-access`` — never
+    pre-approval: an unattended harness that merely pre-approves prompts must
+    not also get an unguarded shell. In
     exchange it lifts the shell guardrails too: the operator block, the
-    read-only binary policy (replaced by ``DEVELOPER_COMMANDS``) and the rate
-    limit, and it runs commands outside ``run_shell_command``'s no-prompt list
-    without asking. See
+    command policy, the path checks and the rate limit. ``run_shell_command``
+    runs any program without asking, and the Python tools run their code
+    unchecked. See
     ``gaia.agents.tools.shell_tools.ShellToolsMixin.full_access_active``.
 
     Mutable for the life of the session: the host can toggle it mid-run over the
@@ -350,7 +364,33 @@ class OutputHandler(ABC):
     edit_roots: Tuple[str, ...] = ()
     """Folders "accept edits" may write into — the session's workspace."""
 
+    grants_paths: bool = False
+    """The user turned on Full access: grant an out-of-scope path without asking.
+
+    Set by ``PermissionState`` with Full access, independent of whether the
+    shell guardrails are lifted. Honoured only with :attr:`answers_confirmations`,
+    so an unattended run that pre-approves tools still never widens the scope.
+    Paths no answer may grant (home, drive roots, secrets) stay refused.
+    """
+
+    answers_confirmations: bool = False
+    """A person can answer a confirmation on this run even while tools are pre-approved.
+
+    Set by a transport whose caller declared someone is watching (the relayed
+    Agent UI). Without :attr:`full_access`, pre-approval never widens the file
+    scope; this lets an out-of-scope path be asked about instead of refused.
+    """
+
+    asks_past_preapproval: bool = False
+    """``confirm_tool_execution`` asks about a call marked ``NEEDS_PERSON_ARG``
+    even while tools are pre-approved, and denies it when nobody can answer.
+
+    A tool marks a call only on a console that declares this, so a console
+    that would pre-approve the marked call never sees one.
+    """
+
     _last_denial: Optional[Denial] = None
+    _answered_prompt: Optional[str] = None
     """The most recent denial (#2210).
 
     Bound to the tool so a handler that denies without recording a reason can
@@ -455,6 +495,16 @@ class OutputHandler(ABC):
         the same thing in words for clients that only show text. Optional.
         """
 
+    def report_draft(self, tool: str, text: str) -> None:
+        """The text a tool call is being written with, so far. Optional."""
+
+    def restart_answer(self, message: str) -> None:
+        """The reply streamed so far was cut off and the step starts over.
+
+        A front-end that drew the partial reply drops it and shows *message*
+        in its place, so the new reply never silently replaces it. Optional.
+        """
+
     def pause_progress(self):
         """Pause progress indicator, remembering state for later resume. Optional — default no-op."""
         ...
@@ -489,6 +539,13 @@ class OutputHandler(ABC):
         """
         ...
 
+    def mark_turn_failed(self, failure: Optional[str] = None) -> None:
+        """The next :meth:`print_final_answer` ends a turn a model failure cut
+        short, so a console can report the turn as failed. Optional — no-op.
+
+        *failure* names a cause a front-end can offer a fix for
+        (``"model_server_down"``), or is None."""
+
     def print_turn_metrics(  # pylint: disable=unused-argument
         self, record: Dict[str, Any]
     ):
@@ -498,6 +555,19 @@ class OutputHandler(ABC):
         record on that same event. A separate hook rather than another
         ``print_final_answer`` parameter, which every override would have to
         take.
+        """
+        ...
+
+    def print_skill_use(  # pylint: disable=unused-argument
+        self, name: str, loaded: List[str], how: str
+    ):
+        """A turn is running on skill *name*. Optional — no-op.
+
+        *loaded* is every skill now loaded in this chat, in load order. *how*
+        is ``"model"`` when the model called ``load_skill``, ``"auto"`` when
+        GAIA loaded it because the model called one of its ``loads_with``
+        tools, ``"user"`` when the user typed ``/<name>``, and ``"loaded"``
+        when it was already loaded.
         """
         ...
 
@@ -579,7 +649,9 @@ class OutputHandler(ABC):
         if self.auto_approve_confirmations_enabled():
             self.log_auto_approval(tool_name)
             return True
-        return self.deny_tool_execution(tool_name, unattended_denial_message(tool_name))
+        return self.deny_tool_execution(
+            tool_name, unattended_denial_message(tool_name), unattended=True
+        )
 
     def auto_approve_confirmations_enabled(self) -> bool:
         """True when this handler may approve gated tools without asking."""
@@ -604,6 +676,15 @@ class OutputHandler(ABC):
         """Grant keys the user has answered "always" to on this console."""
         return self._lazy_tool_set("_session_grants")
 
+    def session_grant_scopes(self) -> Dict[str, GrantScope]:
+        """Each "always" answer on this console, by :attr:`GrantScope.key`.
+
+        :meth:`session_grants` holds only the family keys a call is checked
+        against; this keeps what each answer granted, so it can be listed by
+        its label and revoked as a whole.
+        """
+        return self._lazy_attribute("_session_grant_scopes", dict)
+
     def call_is_granted(self, tool_name: str, tool_args: Any) -> bool:
         """True when an earlier "always" already covers THIS exact call."""
         scope = grant_scope(tool_name, tool_args)
@@ -626,6 +707,7 @@ class OutputHandler(ABC):
             )
             return None
         self.session_grants().update(scope.keys)
+        self.session_grant_scopes()[scope.key] = scope
         self._last_denial = None
         logger.info("User granted '%s' for the remainder of this session", scope.label)
         return scope.label
@@ -637,6 +719,7 @@ class OutputHandler(ABC):
         new user) so consent does not outlive its context.
         """
         self.session_grants().clear()
+        self.session_grant_scopes().clear()
 
     def _lazy_tool_set(self, attribute: str) -> Set[str]:
         """Per-instance string set, created on first use.
@@ -645,11 +728,27 @@ class OutputHandler(ABC):
         into every other console in the process — so a subclass that skips
         ``super().__init__()`` still behaves.
         """
-        names = getattr(self, attribute, None)
-        if names is None:
-            names = set()
-            setattr(self, attribute, names)
-        return names
+        return self._lazy_attribute(attribute, set)
+
+    def _lazy_attribute(self, attribute: str, factory: Callable[[], Any]) -> Any:
+        value = getattr(self, attribute, None)
+        if value is None:
+            value = factory()
+            setattr(self, attribute, value)
+        return value
+
+    def note_prompt_answered(self, tool_name: str) -> None:
+        """Record that a person saw this tool's prompt and answered it."""
+        self._answered_prompt = tool_name
+
+    def take_prompt_answered(self, tool_name: str) -> bool:
+        """True once if a person answered a prompt for *tool_name*.
+
+        False for anything approved or denied without a prompt: a grant,
+        "accept edits", auto-approval, a timeout, or a console that never asks.
+        """
+        answered, self._answered_prompt = self._answered_prompt, None
+        return answered == tool_name
 
     def log_auto_approval(self, tool_name: str) -> None:
         """Record that a gated tool ran without a human decision."""
@@ -662,10 +761,14 @@ class OutputHandler(ABC):
         )
 
     def deny_tool_execution(
-        self, tool_name: str, reason: str, timed_out: bool = False
+        self,
+        tool_name: str,
+        reason: str,
+        timed_out: bool = False,
+        unattended: bool = False,
     ) -> bool:
         """Record and log a denial, then return False for the caller to return."""
-        self._last_denial = Denial(tool_name, reason, timed_out)
+        self._last_denial = Denial(tool_name, reason, timed_out, unattended)
         logger.warning("Denied confirmation-gated tool '%s': %s", tool_name, reason)
         return False
 
@@ -686,6 +789,11 @@ class OutputHandler(ABC):
         """True when this tool's most recent denial was a prompt nobody answered."""
         recorded = self._last_denial
         return bool(recorded and recorded.tool == tool_name and recorded.timed_out)
+
+    def confirmation_unattended(self, tool_name: str) -> bool:
+        """True when this tool's most recent denial had no person to ask."""
+        recorded = self._last_denial
+        return bool(recorded and recorded.tool == tool_name and recorded.unattended)
 
     def print_policy_alert(
         self,
@@ -824,7 +932,8 @@ class ProgressIndicator:
                 self.rich_spinner.text = timer_text
                 self.live.update(self.rich_spinner)
                 time.sleep(1.0)  # Update every 1 second
-            except Exception:
+            except Exception as e:
+                logger.debug("Progress timer stopped: %s", e)
                 break
 
     def stop(self):
@@ -838,8 +947,8 @@ class ProgressIndicator:
         if RICH_AVAILABLE and hasattr(self, "_update_timer_thread"):
             try:
                 self._update_timer_thread.join(timeout=0.5)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Progress timer thread join failed: %s", e)
 
         if RICH_AVAILABLE and self.live:
             self.live.stop()
@@ -879,6 +988,7 @@ class TerminalConfirmationMixin:
         stdout, CI, a subprocess host) there is nobody to ask, so the call is
         denied with an actionable message instead of silently approved (#2210).
         """
+        self._answered_prompt = None
         if self.auto_approve_confirmations_enabled():
             self.log_auto_approval(tool_name)
             return True
@@ -898,7 +1008,7 @@ class TerminalConfirmationMixin:
             if tool_name not in self._notified_denials():
                 self._notified_denials().add(tool_name)
                 self._display("denial notice", self._show_denial_notice, reason)
-            return self.deny_tool_execution(tool_name, reason)
+            return self.deny_tool_execution(tool_name, reason, unattended=True)
 
         # "Always" is offered only when this call has a scope narrow enough to
         # name — never for the bare tool. See tool_grants.
@@ -915,7 +1025,7 @@ class TerminalConfirmationMixin:
             if not shown:
                 # The user never saw what they would be approving.
                 return self.deny_tool_execution(
-                    tool_name, unaskable_denial_message(tool_name)
+                    tool_name, unaskable_denial_message(tool_name), unattended=True
                 )
             answer = self._read_confirmation_answer(
                 scope is not None, scope.label if scope else ""
@@ -925,8 +1035,9 @@ class TerminalConfirmationMixin:
 
         if answer is None:
             return self.deny_tool_execution(
-                tool_name, unaskable_denial_message(tool_name)
+                tool_name, unaskable_denial_message(tool_name), unattended=True
             )
+        self.note_prompt_answered(tool_name)
 
         if scope is not None and answer in ("a", "always"):
             self.grant_call_for_session(tool_name, tool_args)
@@ -1088,7 +1199,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                     return obj.item()
                 if isinstance(obj, np.ndarray):
                     return obj.tolist()
-            except Exception:
+            except ImportError:
                 pass
 
             for caster in (float, int, str):
@@ -1097,6 +1208,9 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                 except Exception:
                     continue
             return "<non-serializable>"
+
+        if title == "Arguments" and not data:
+            return  # a call with no arguments has nothing to show
 
         if self.rich_available:
             # Check if this is a command execution result
@@ -1483,6 +1597,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         # Handle None error messages
         if error_message is None:
             error_message = "Unknown error occurred (received None)"
+        error_message = surface_wording(str(error_message), "cli")
 
         if self.rich_available:
             self.console.print(
@@ -1570,7 +1685,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                 lines.append("".join(line_parts) + "\x1b[0m")
 
             return "\n".join(lines)
-        except Exception:
+        except Exception as e:
+            logger.debug("Half-block render of %s failed: %s", image_path, e)
             return ""
 
     def print_image(
@@ -1645,7 +1761,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                             self.console.print(
                                 Panel(info, border_style="cyan"), justify="center"
                             )
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("Image metadata read of %s failed: %s", path, e)
                         self.console.print(
                             f"[cyan]🖼️  Image: {path}[/cyan]", justify="center"
                         )
@@ -1662,7 +1779,13 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                         elif sys.platform == "darwin":
                             subprocess.run(["open", str(path)], check=False)
                         else:
-                            subprocess.run(["xdg-open", str(path)], check=False)
+                            # Not waited on: xdg-open can run the viewer itself.
+                            subprocess.Popen(
+                                ["xdg-open", str(path)],
+                                env=child_env(),
+                                stdin=subprocess.DEVNULL,
+                                start_new_session=True,
+                            )
                 except (KeyboardInterrupt, EOFError):
                     pass  # User cancelled
         else:
@@ -1681,7 +1804,13 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                         elif sys.platform == "darwin":
                             subprocess.run(["open", str(path)], check=False)
                         else:
-                            subprocess.run(["xdg-open", str(path)], check=False)
+                            # Not waited on: xdg-open can run the viewer itself.
+                            subprocess.Popen(
+                                ["xdg-open", str(path)],
+                                env=child_env(),
+                                stdin=subprocess.DEVNULL,
+                                start_new_session=True,
+                            )
                 except (KeyboardInterrupt, EOFError):
                     pass
 
@@ -1778,6 +1907,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             ttft_seconds: Not used here (CLI stats table is out of scope for #2899)
             tok_per_s: Not used here (CLI stats table is out of scope for #2899)
         """
+        answer = surface_wording(answer, "cli")
         if self.rich_available:
             self.console.print()  # Add newline before
             self.console.print(
@@ -1928,10 +2058,15 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                 self.file_preview_live = None
                 # Small delay to ensure clean transition
                 time.sleep(0.05)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Pausing file preview failed: %s", e)
 
         self.progress.start(message, show_timer=show_timer)
+
+    def report_phase(self, phase: str, message: str, **counts: int) -> None:
+        """A terminal shows a phase as its spinner line."""
+        if message:
+            self.start_progress(message)
 
     def stop_progress(self) -> None:
         """Stop the progress indicator."""
@@ -2498,8 +2633,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         if self.file_preview_live is not None:
             try:
                 self.file_preview_live.stop()
-            except Exception:
-                pass  # Ignore errors if already stopped
+            except Exception as e:
+                logger.debug("Stopping previous file preview failed: %s", e)
             finally:
                 self.file_preview_live = None
                 # Small delay to ensure display cleanup
@@ -2560,10 +2695,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                     # Just update, don't force refresh
                     self.file_preview_live.update(preview)
                     self._last_preview_update_time = current_time
-                except Exception:
-                    # If update fails, continue accumulating content
-                    # (silently ignore preview update failures)
-                    pass
+                except Exception as e:
+                    logger.debug("File preview update failed: %s", e)
         else:
             # For non-rich mode, print new content directly
             print(content_chunk, end="", flush=True)
@@ -2575,8 +2708,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             if self.file_preview_live:
                 try:
                     self.file_preview_live.stop()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Stopping file preview failed: %s", e)
                 finally:
                     self.file_preview_live = None
 

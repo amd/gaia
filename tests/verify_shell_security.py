@@ -3,12 +3,12 @@
 
 import os
 
-# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+# ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099).
 try:
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 except ImportError:
     raise SystemExit(
-        "gaia-agent-chat is not installed — run: pip install gaia-agent-chat"
+        "gaia-agent-gaia is not installed — run: pip install -e hub/agents/gaia/python"
     )
 
 from gaia.agents.base.tools import _TOOL_REGISTRY

@@ -6,4 +6,4 @@
 package lemonade
 
 // adapterMemoryGB has nothing to read off Windows; Lemonade reports the memory.
-func adapterMemoryGB(string) float64 { return 0 }
+var adapterMemoryGB = func(string) float64 { return 0 }

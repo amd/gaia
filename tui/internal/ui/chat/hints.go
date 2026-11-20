@@ -66,8 +66,13 @@ const (
 	// but it is the one mode nobody has to be warned about, so it yields to
 	// anything saying what is happening right now.
 	rankDefaultMode = 30
-	// Numbers for whoever is tuning the machinery. First to go.
-	rankDiagnostic = 10
+	// How full the model's context is. A glance, until it is nearly full and
+	// the next message may push turns out of view.
+	rankContext     = 35
+	rankContextFull = 75
+	// The Connectors entry: the TUI's toolbar button, so it outlives the
+	// scroll and mouse hints but yields to anything about the current state.
+	rankToolbar = 50
 )
 
 // statusHints builds the hint list for the current state, in display order.
@@ -78,6 +83,11 @@ func (m ChatModel) statusHints() []hint {
 	// the one row that is always drawn.
 	if m.fullAccess {
 		hints = append(hints, hint{text: "/full-access off", rank: rankFullAccess})
+	}
+	// A /models download running in the background, so the user can keep
+	// chatting and still see how far it is.
+	if dl := m.downloadHint(); dl != "" {
+		hints = append(hints, hint{text: dl, rank: rankMode + 1})
 	}
 	// A mode the user switched into outranks the scroll hints; the default one
 	// only takes a column nothing else wanted.
@@ -91,13 +101,6 @@ func (m ChatModel) statusHints() []hint {
 		hints = append(hints, hint{text: mode, rank: rank})
 	}
 
-	if m.dev && m.totalSteps > 0 {
-		// The agent loop's step count is a loop bound, not user progress — it
-		// says neither what is happening nor how far along the work is. For
-		// someone tuning the loop it is the number that matters, so it rides
-		// the one row always on screen, and only in --dev.
-		hints = append(hints, hint{text: stepHint(m.totalSteps), rank: rankDiagnostic})
-	}
 	if !m.followTail {
 		hints = append(hints, hint{text: "End to jump to latest", rank: rankOrient})
 	}
@@ -109,11 +112,17 @@ func (m ChatModel) statusHints() []hint {
 	if spend := m.sessionSpendHint(); spend != "" {
 		hints = append(hints, hint{text: spend, rank: rankSecondary})
 	}
+	if h, ok := m.contextHint(); ok {
+		hints = append(hints, h)
+	}
 
 	// In an alt-screen app the wheel and the arrows are the ONLY way back to
 	// earlier turns; a user who does not know that concludes history is gone.
 	// The warm-up stage has no transcript to scroll or select — it replaces
 	// the transcript entirely.
+	if m.connectorsHintShown() {
+		hints = append(hints, hint{text: connectorsHint, rank: rankToolbar})
+	}
 	if !(m.warming && !m.warmHidden) {
 		hints = append(hints, hint{text: "↑↓/wheel scroll", rank: rankAffordance})
 		// The terminal's drag-select stops at the window's edge; Ctrl+T is the
@@ -133,6 +142,16 @@ func (m ChatModel) statusHints() []hint {
 				text = "Ctrl+O fold"
 			}
 			hints = append(hints, hint{text: text, rank: rankSecondary})
+		}
+		// One key to the result, offered only once there is one to open.
+		if _, ok := m.newerDeliverable(); ok {
+			if !m.streaming && m.confirmation == nil && !remoteSession() {
+				hints = append(hints, hint{text: "Ctrl+F open file", rank: rankAffordance})
+			}
+		} else if _, ok := m.latestMediaCandidate(); ok {
+			hints = append(hints,
+				hint{text: "Ctrl+F open · Ctrl+G reveal", rank: rankSecondary},
+			)
 		}
 	}
 
@@ -159,12 +178,18 @@ func (m ChatModel) statusHints() []hint {
 			hint{text: "type ahead", rank: rankAffordance},
 			hint{text: "Esc show chat", rank: rankInterrupt},
 		)
+	} else if m.startup.inFlight && m.startup.kind == StartupRestore {
+		// Say what the wait is; Esc still cancels a streaming restore turn.
+		hints = append(hints, hint{text: "restoring " + m.startup.model + "…", rank: rankAffordance})
+		if m.streaming {
+			hints = append(hints, hint{text: "Esc cancel", rank: rankInterrupt})
+		}
 	} else if m.streaming {
 		// Worth advertising exactly when it applies: someone who believes the
 		// composer is frozen never tries it.
 		hints = append(hints,
 			hint{text: "keep typing", rank: rankAffordance},
-			hint{text: "Esc cancel", rank: rankInterrupt},
+			hint{text: "Esc to interrupt", rank: rankInterrupt},
 		)
 	}
 
@@ -246,33 +271,6 @@ func remaining(keep []bool) int {
 		}
 	}
 	return n
-}
-
-func stepHint(steps int) string {
-	return "step " + itoa(steps)
-}
-
-// itoa avoids pulling strconv in for one call site in a hot render path.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
 }
 
 // hintBudget is how many columns the hint may use on this terminal: whatever

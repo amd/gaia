@@ -28,6 +28,7 @@ def vault(monkeypatch):
     monkeypatch.setattr(
         "gaia.connectors.store.delete_secret", lambda n: store.pop(n, None)
     )
+    monkeypatch.setattr("gaia.connectors.store.secret_in_use", store.__contains__)
     return store
 
 
@@ -94,6 +95,14 @@ def test_a_kept_key_is_replayed_into_a_lemonade_that_lost_it(vault, lemonade):
     assert fake.auth_calls == [{"provider": "fireworks", "api_key": KEY}]
     # A redirect could carry the key to another host.
     assert fake.redirects_allowed and not any(fake.redirects_allowed)
+
+
+def test_a_caller_supplied_recall_replaces_the_store_read(vault, lemonade):
+    fake = lemonade(
+        {"name": "fireworks", "runtime_key_set": False, "env_var_set": False}
+    )
+    assert cloud_keys.ensure_authenticated("fireworks", recall=lambda: KEY) is True
+    assert fake.auth_calls == [{"provider": "fireworks", "api_key": KEY}]
 
 
 def test_a_key_lemonade_already_has_is_not_overwritten(vault, lemonade):
@@ -214,7 +223,7 @@ def test_readiness_replays_a_fireworks_key(monkeypatch):
 
     seen = []
     monkeypatch.setattr(
-        "gaia.llm.cloud_keys.ensure_authenticated", lambda p: seen.append(p) or True
+        "gaia.llm.cloud_keys.reconnect_provider", lambda p: seen.append(p) or True
     )
     assert readiness._replay_cloud_key("fireworks.deepseek-v4p1-flash") is True
     assert readiness._replay_cloud_key("amd.gpt-5") is True

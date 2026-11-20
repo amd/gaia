@@ -1,26 +1,26 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Where a chat works: ``GAIA_WORKING_DIR`` and a folder picked per chat.
+"""``GAIA_WORKING_DIR`` / ``--working-dir``: the folder a chat works in by default.
 
 The desktop app starts its backend in the home folder, which is too broad to
-grant, so every chat fell back to GAIA's own documents folder with no way to
-choose another.
+grant, so every chat without a picked folder fell back to GAIA's own documents
+folder with no way to choose another default.
 """
 
+import os
 from pathlib import Path
 
 import pytest
 
-from gaia.agents.tools.shell_tools import ShellToolsMixin
-from gaia.ui import _chat_helpers as helpers
+from gaia.ui import start_screen
 from gaia.ui._chat_helpers import (
     WorkingDirEnvError,
     _compute_allowed_paths,
     _managed_documents_dir,
-    _project_root,
+    _session_working_directory,
+    default_working_dir,
     env_working_dir,
 )
-from gaia.ui.database import ChatDatabase
 
 
 @pytest.fixture
@@ -30,21 +30,79 @@ def project(tmp_path):
     return path
 
 
+@pytest.fixture(autouse=True)
+def _no_env(monkeypatch):
+    monkeypatch.delenv("GAIA_WORKING_DIR", raising=False)
+    monkeypatch.delenv("GAIA_ALLOWED_PATHS", raising=False)
+
+
+def test_unset_or_blank_means_the_start_folder(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert env_working_dir() is None
+    monkeypatch.setenv("GAIA_WORKING_DIR", "   ")
+    assert env_working_dir() is None
+    assert default_working_dir() == tmp_path.resolve()
+
+
 def test_gaia_working_dir_replaces_an_unsafe_cwd(project, monkeypatch):
     monkeypatch.chdir(Path.home())
     monkeypatch.setenv("GAIA_WORKING_DIR", str(project))
     assert _compute_allowed_paths([]) == sorted(
         {str(_managed_documents_dir()), str(project.resolve())}
     )
+    assert _session_working_directory() == str(project.resolve())
 
 
-@pytest.mark.parametrize("which", ["home", "missing"])
+def test_gaia_working_dir_replaces_a_safe_cwd_too(project, tmp_path, monkeypatch):
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("GAIA_WORKING_DIR", str(project))
+    allowed = _compute_allowed_paths([])
+    assert str(project.resolve()) in allowed
+    assert str(cwd.resolve()) not in allowed
+
+
+def test_a_folder_the_chat_picked_beats_the_env_default(project, tmp_path, monkeypatch):
+    picked = tmp_path / "picked"
+    picked.mkdir()
+    monkeypatch.setenv("GAIA_WORKING_DIR", str(project))
+    assert _session_working_directory([str(picked)]) == str(picked.resolve())
+
+
+def test_attached_documents_still_narrow_the_scope(project, tmp_path, monkeypatch):
+    monkeypatch.setenv("GAIA_WORKING_DIR", str(project))
+    doc = tmp_path / "elsewhere" / "a.txt"
+    allowed = _compute_allowed_paths([str(doc)])
+    assert str(project.resolve()) not in allowed
+
+
+@pytest.mark.parametrize("which", ["home", "missing", "file", "root"])
 def test_gaia_working_dir_must_be_a_narrow_existing_folder(
     tmp_path, monkeypatch, which
 ):
-    bad = Path.home() if which == "home" else tmp_path / "nope"
+    if which == "file":
+        bad = tmp_path / "a.txt"
+        bad.write_text("x")
+    else:
+        bad = {
+            "home": Path.home(),
+            "missing": tmp_path / "nope",
+            "root": Path(Path.cwd().anchor),
+        }[which]
     monkeypatch.setenv("GAIA_WORKING_DIR", str(bad))
     with pytest.raises(WorkingDirEnvError, match="GAIA_WORKING_DIR"):
+        env_working_dir()
+    # Never quietly granted: every scope path raises instead.
+    with pytest.raises(WorkingDirEnvError):
+        _compute_allowed_paths([])
+    with pytest.raises(WorkingDirEnvError):
+        _session_working_directory()
+
+
+def test_a_home_subfolder_reached_through_dots_is_still_home(monkeypatch):
+    monkeypatch.setenv("GAIA_WORKING_DIR", str(Path.home() / "x" / ".." / "."))
+    with pytest.raises(WorkingDirEnvError, match="home"):
         env_working_dir()
 
 
@@ -57,55 +115,21 @@ def test_a_bad_gaia_working_dir_stops_server_startup(tmp_path, monkeypatch):
         create_app(db_path=":memory:")
 
 
-def test_a_picked_working_folder_is_granted_beside_documents(project, tmp_path):
-    doc = tmp_path / "elsewhere" / "a.txt"
-    allowed = _compute_allowed_paths([str(doc)], str(project))
-    assert set(allowed) == {
-        str(doc.resolve()),
-        str(project.resolve()),
-        str(_managed_documents_dir()),
-    }
-
-
-def test_a_picked_working_folder_replaces_the_default(project, tmp_path, monkeypatch):
-    cwd = tmp_path / "cwd"
-    cwd.mkdir()
-    monkeypatch.chdir(cwd)
-    allowed = _compute_allowed_paths([], str(project))
-    assert str(cwd.resolve()) not in allowed
-    assert str(project.resolve()) in allowed
-
-
-def test_project_root_is_the_picked_folder_then_the_env_one(project, monkeypatch):
-    monkeypatch.delenv("GAIA_WORKING_DIR", raising=False)
-    assert _project_root(None) is None
-    assert _project_root("/picked") == "/picked"
+def test_start_screen_shows_the_env_folder(project, monkeypatch):
+    monkeypatch.chdir(Path.home())
     monkeypatch.setenv("GAIA_WORKING_DIR", str(project))
-    assert _project_root(None) == str(project.resolve())
+    shown = start_screen.working_folder(choosable=True)
+    assert shown["path"] == str(project.resolve())
+    assert shown["gaia_folder"] is False
 
 
-def test_the_working_folder_is_saved_with_the_chat(project):
-    db = ChatDatabase(":memory:")
-    sid = db.create_session()["id"]
-    assert helpers._session_working_folder(db, sid) is None
-    db.set_session_working_folder(sid, str(project))
-    db.set_session_environment(sid, folders=["/x"], withheld=[], internet_off=True)
-    env = db.get_session_environment(sid)
-    assert env["working_folder"] == str(project)
-    assert env["folders"] == ["/x"] and env["internet_off"] is True
-
-
-class _Shell(ShellToolsMixin):
-    def __init__(self, project_root):
-        self.config = type("C", (), {"project_root": project_root})()
-
-    def _path_allowed(self, _path):
-        return True
-
-
-def test_shell_commands_start_in_the_configured_project(project):
-    assert Path(_Shell(str(project)).shell_session.cwd) == project.resolve()
-    assert Path(_Shell(None).shell_session.cwd) == Path.cwd()
+def test_start_screen_survives_an_env_folder_deleted_after_startup(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GAIA_WORKING_DIR", str(tmp_path / "gone"))
+    shown = start_screen.working_folder(choosable=True)
+    assert shown["path"] == str(_managed_documents_dir())
+    assert shown["gaia_folder"] is True
 
 
 @pytest.mark.parametrize(
@@ -131,6 +155,53 @@ def test_launching_the_ui_with_a_working_dir_sets_the_env(monkeypatch):
     monkeypatch.setattr(server, "create_app", stop)
     with pytest.raises(SystemExit):
         cli._launch_agent_ui(working_dir="D:/proj")
-    import os
-
     assert os.environ["GAIA_WORKING_DIR"] == "D:/proj"
+
+
+def test_launching_the_ui_without_a_working_dir_leaves_the_env(monkeypatch):
+    import gaia.cli as cli
+    import gaia.ui.server as server
+
+    monkeypatch.setenv("GAIA_WORKING_DIR", "kept")
+    monkeypatch.setattr(cli, "_ensure_webui_built", lambda log=None: None)
+
+    def stop(**_kwargs):
+        raise SystemExit(0)
+
+    monkeypatch.setattr(server, "create_app", stop)
+    with pytest.raises(SystemExit):
+        cli._launch_agent_ui()
+    assert os.environ["GAIA_WORKING_DIR"] == "kept"
+
+
+def test_the_server_runner_reports_a_bad_working_dir(tmp_path, monkeypatch, capsys):
+    import sys
+
+    import gaia.ui.server as server
+
+    monkeypatch.setenv("GAIA_WORKING_DIR", "")
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+    monkeypatch.setattr(
+        sys, "argv", ["server", "--working-dir", str(tmp_path / "nope")]
+    )
+    with pytest.raises(SystemExit) as exc:
+        server.main()
+    assert exc.value.code == 64
+    assert "GAIA_WORKING_DIR" in capsys.readouterr().err
+
+
+def test_the_session_panel_names_a_bad_working_dir(tmp_path, monkeypatch):
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.routers import environment
+
+    db = ChatDatabase(":memory:")
+    session = db.get_session(db.create_session()["id"])
+    monkeypatch.setenv("GAIA_WORKING_DIR", str(tmp_path / "gone"))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(environment._describe(db, session))
+    assert exc.value.status_code == 500
+    assert "GAIA_WORKING_DIR" in exc.value.detail

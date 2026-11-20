@@ -43,6 +43,8 @@ from gaia_agent import server as server_mod  # noqa: E402
 from gaia_agent import session_registry as sr  # noqa: E402
 
 _BASE_URL = "http://127.0.0.1:8141"
+_TOKEN = "test-caller-token"
+_AUTH = {"Authorization": f"Bearer {_TOKEN}"}
 
 
 class _ScriptedAgent:
@@ -58,15 +60,28 @@ class _ScriptedAgent:
         self.raise_on_query = False
         self.block = None  # optional threading.Event to park the loop on
         self.approved = None  # outcome of a gated_call, once answered
+        self.streaming = False  # GaiaAgentConfig's default
+
+    #: When set, the run is stopped part-way through its streamed answer.
+    stop_midway = False
 
     #: When set, the loop asks for approval of this (tool, args) before
     #: answering — the real handler emits needs_confirmation and blocks the
     #: agent thread, exactly as the base loop does for a gated tool.
     gated_call = None
 
+    #: When set, the loop calls this (tool, result) before answering, the way
+    #: the base loop reports a tool's result to the console.
+    tool_call = None
+
     def process_query(self, query, max_steps=None):
         if self.block is not None:
             self.block.wait(timeout=10)
+        if self.tool_call is not None:
+            tool, result = self.tool_call
+            self.console.print_tool_usage(tool)
+            self.console.pretty_print_json({}, title="Arguments")
+            self.console.pretty_print_json(result, title="Result")
         if self.gated_call is not None:
             tool, args = self.gated_call
             self.approved = self.console.confirm_tool_execution(tool, args)
@@ -80,6 +95,18 @@ class _ScriptedAgent:
             raise RuntimeError("scripted failure")
         if self.saw_cancelled:
             return {"answer": "stopped before doing any work"}
+        if self.streaming and self.stop_midway:
+            # Stop lands mid-generation: the base loop breaks out of the
+            # stream and returns no text; the handler flushes its held tail.
+            self.console.print_streaming_text("A bicycle ")
+            self._cancel_event.set()
+            self.console.print_streaming_text('{"answer": "half-wri')
+            return {"status": "cancelled", "result": ""}
+        if self.streaming:
+            # What the base loop does with a streamed model call.
+            for piece in ("ans", "wered: ", query):
+                self.console.print_streaming_text(piece)
+            self.console.print_streaming_text("", end_of_stream=True)
         return {"answer": f"answered: {query}"}
 
     def close(self):
@@ -114,7 +141,8 @@ def built(monkeypatch):
     """
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
-    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    # Full access over HTTP needs caller auth, as the shipped sidecar has.
+    monkeypatch.setenv(caller_auth.TOKEN_ENV_VAR, _TOKEN)
 
     agents: list[_ScriptedAgent] = []
 
@@ -129,7 +157,7 @@ def built(monkeypatch):
     sr.registry.clear()
     server_mod._registry = server_mod._RunRegistry()
 
-    client = TestClient(server_mod.build_app(), base_url=_BASE_URL)
+    client = TestClient(server_mod.build_app(), base_url=_BASE_URL, headers=_AUTH)
     try:
         yield client, agents
     finally:
@@ -208,14 +236,12 @@ def test_the_request_body_cannot_ask_for_bypass(built):
     assert r.status_code == 422, r.text
 
 
-def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built):
-    """``/sessions/{id}/bypass`` grants unattended approval, not a free shell.
+def test_session_bypass_is_full_access_shell_included(built):
+    """``/sessions/{id}/bypass`` is full access, as over stdio.
 
-    The two grants ride the same ``PermissionState``, and ``attach`` writes it
-    onto each turn's fresh handler — so a session that turned bypass on would
-    otherwise overwrite the ``full_access = False`` the query path pins,
-    handing a bound socket the operator block, the read-only binary policy and
-    the rate limit. Approval is answerable over HTTP; arbitrary shell is not.
+    It rides the session's ``PermissionState``, and ``attach`` writes it onto
+    each turn's fresh handler: prompts stop and the shell runs any command.
+    Turning it off takes both away again.
     """
     client, agents = built
     session_id = f"s-{uuid.uuid4()}"
@@ -224,6 +250,7 @@ def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built)
         client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code
         == 200
     )
+    assert agents[0].console.full_access is False, "a session starts in ask"
 
     r = client.post(f"/v1/gaia/sessions/{session_id}/bypass", json={"enabled": True})
     assert r.status_code == 200, r.text
@@ -235,7 +262,27 @@ def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built)
 
     console = agents[0].console
     assert console.auto_approve_gated_tools is True, "bypass must stop the prompts"
-    assert console.full_access is False, "shell gates must stay on over HTTP"
+    assert console.full_access is True, "bypass must open the shell too"
+
+    r = client.post(f"/v1/gaia/sessions/{session_id}/bypass", json={"enabled": False})
+    assert r.status_code == 200, r.text
+    assert (
+        client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code
+        == 200
+    )
+
+    console = agents[0].console
+    assert console.auto_approve_gated_tools is False
+    assert console.full_access is False
+
+
+def test_a_query_with_no_session_never_runs_with_full_access(built):
+    """Full access belongs to a session; the query body cannot ask for it."""
+    client, agents = built
+
+    assert client.post("/v1/gaia/query", json=_body()).status_code == 200
+
+    assert agents[0].console.full_access is False
 
 
 def _served_paths(app) -> set:
@@ -336,6 +383,80 @@ def test_one_terminal_event_per_run(built):
     client, _ = built
     r = client.post("/v1/gaia/query", json=_body())
     assert len(_terminals(r)) == 1, _events(r)
+
+
+# ---------------------------------------------------------------------------
+# Streamed model calls
+#
+# The sidecar built its agent with streaming off, so a relayed turn showed
+# "Waiting on the model" until the whole answer landed at once, and Stop could
+# not cut a model call short. test_relayed_answer_streams.py drives the whole
+# hop on a real socket; these pin the route's side of it.
+# ---------------------------------------------------------------------------
+
+
+def test_a_render_tool_result_carries_its_card_type(built, monkeypatch):
+    """The sidecar's translator once had no render map, so no card ever drew."""
+    client, _ = built
+    card = {"kind": "guide", "guideType": "checklist", "title": "Camping"}
+    monkeypatch.setattr(
+        _ScriptedAgent,
+        "tool_call",
+        ("guides/show_checklist", {"ok": True, "data": card}),
+    )
+
+    r = client.post("/v1/gaia/query", json=_body())
+
+    assert r.status_code == 200, r.text
+    (result,) = [e for e in _events(r) if e["type"] == "tool_result"]
+    assert result["tool"] == "guides/show_checklist"
+    assert result["render"] == "guide"
+    assert result["data"] == card
+
+
+@pytest.mark.parametrize("session_id", [None, "s-stream"])
+def test_a_query_streams_its_answer_as_tokens(built, session_id):
+    client, agents = built
+    body = _body(session_id=session_id) if session_id else _body()
+
+    r = client.post("/v1/gaia/query", json=body)
+
+    assert r.status_code == 200, r.text
+    assert agents[0].streaming is True
+    events = _events(r)
+    types = [e["type"] for e in events]
+    deltas = [e["delta"] for e in events if e["type"] == "token"]
+    assert "".join(deltas) == "answered: hello", events
+    assert types.index("token") < types.index("final"), types
+
+
+def test_a_retained_session_streams_even_if_its_agent_was_turned_off(built):
+    """The flag is set per turn, not trusted from construction."""
+    client, agents = built
+    assert (
+        client.post("/v1/gaia/query", json=_body(session_id="s-2")).status_code == 200
+    )
+    agents[0].streaming = False
+
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-2"))
+
+    assert len(agents) == 1
+    assert any(e["type"] == "token" for e in _events(r)), _events(r)
+
+
+def test_a_run_stopped_mid_answer_ends_cleanly(built, monkeypatch):
+    """A stopped turn ends with the empty final stdio sends, not a "this is a
+    bug" error, and the half-written tail flushed at teardown stays off the
+    wire."""
+    client, _ = built
+    monkeypatch.setattr(_ScriptedAgent, "stop_midway", True)
+
+    r = client.post("/v1/gaia/query", json=_body())
+
+    events = _events(r)
+    sent = "".join(e["delta"] for e in events if e["type"] == "token")
+    assert "half-wri" not in sent, events
+    assert _terminals(r) == [{"type": "final", "answer": ""}], events
 
 
 # ---------------------------------------------------------------------------
@@ -671,9 +792,11 @@ def test_a_turn_sent_after_stop_waits_for_the_stopped_one(parked_session):
     second.join(timeout=10)
 
     assert results["second"].status_code == 200, results["second"].text
-    assert _terminals(results["second"]) == [
-        {"type": "final", "answer": "answered: hello"}
-    ], _events(results["second"])
+    [final] = _terminals(results["second"])
+    assert final.pop("context")["turns_in_view"] == 1
+    assert final == {"type": "final", "answer": "answered: hello"}, _events(
+        results["second"]
+    )
 
 
 def test_a_turn_sent_while_one_is_live_is_still_refused(parked_session):
@@ -1068,6 +1191,28 @@ def test_a_decision_for_an_unknown_run_is_a_404(built):
 # ---------------------------------------------------------------------------
 
 
+def test_full_access_is_refused_on_a_sidecar_without_caller_auth(built, monkeypatch):
+    """Without a token any local process could turn on an unrestricted shell.
+
+    Turning it off still works, and the session stays in ask.
+    """
+    client, agents = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1"))
+    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR)
+    caller_auth.reset()
+    open_client = TestClient(server_mod.build_app(), base_url=_BASE_URL)
+
+    on = open_client.post("/v1/gaia/sessions/s-1/bypass", json={"enabled": True})
+    off = open_client.post("/v1/gaia/sessions/s-1/bypass", json={"enabled": False})
+
+    assert on.status_code == 403, on.text
+    assert caller_auth.TOKEN_FILE_ENV_VAR in on.json()["detail"]
+    assert off.status_code == 200, off.text
+    assert sr.registry.get("s-1").permissions.full_access is False
+    open_client.post("/v1/gaia/query", json=_body(session_id="s-1"))
+    assert agents[0].console.full_access is False
+
+
 def test_full_access_applies_to_the_session_and_survives_the_turn(built):
     """Bypass outliving a turn is the entire point of it."""
     client, _ = built
@@ -1167,9 +1312,13 @@ class _RecordingHandler:
         self.auto_approve_gated_tools = False
         self.confirm_timeout_seconds = 60.0
         self._grants = set()
+        self._scopes = {}
 
     def session_grants(self):
         return self._grants
+
+    def session_grant_scopes(self):
+        return self._scopes
 
 
 def test_a_gated_tool_runs_once_the_decision_arrives(built):
@@ -1235,6 +1384,30 @@ def test_a_one_shot_still_refuses_a_gated_tool(built):
     final = [e for e in events if e.get("type") == "final"]
     assert final, events
     assert "needs your explicit approval" in final[-1].get("answer", "")
+
+
+def test_a_refused_gated_tool_ends_failed_with_what_the_turn_spent(built):
+    """`gaia -p` read the stop as a free, zero-step success (#8034)."""
+    client, _ = built
+
+    class _Spent(_ScriptedAgent):
+        def process_query(self, query, max_steps=None):
+            self.console.confirm_tool_execution("allow_path_access", {"path": "x"})
+            return {
+                "status": "cancelled",
+                "result": "",
+                "steps_taken": 1,
+                "input_tokens": 5120,
+                "output_tokens": 48,
+            }
+
+    with mock.patch.object(server_mod, "build_query_agent", _Spent):
+        response = client.post("/v1/gaia/query", json=_body(can_answer_questions=False))
+
+    [final] = [e for e in _events(response) if e.get("type") == "final"]
+    assert final["failed"] is True
+    assert final["usage"] == {"steps": 1, "input_tokens": 5120, "tokens": 48}
+    assert "needs your explicit approval" in final["answer"]
 
 
 def test_a_caller_that_cannot_answer_is_never_asked(built):
@@ -1375,3 +1548,134 @@ def test_debug_turns_returns_the_newest_records(built, monkeypatch, tmp_path):
     assert r.status_code == 200
     assert [t["turn_id"] for t in r.json()["turns"]] == ["b", "c"]
     assert client.get("/v1/gaia/debug/turns", params={"limit": 0}).status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# A turn a model failure ended is reported failed, not done
+#
+# The relay records a chat's last run from the terminal event. A model that
+# stopped responding mid-turn used to end on a plain final, so the Agent UI
+# listed the chat as done with only the model's opening sentence on screen.
+# ---------------------------------------------------------------------------
+
+_STOPPED = (
+    "The model stopped responding at step 13, so this request is unfinished. "
+    "Fireworks AI: 5 attempts failed, the last with connection error."
+)
+
+
+def test_a_failed_turn_ends_on_a_final_marked_failed(built, monkeypatch):
+    client, _ = built
+
+    def failing_turn(self, query, max_steps=None):
+        self.console.print_streaming_text("I'll start by loading the skill. ")
+        self.console.mark_turn_failed()
+        self.console.print_final_answer(_STOPPED)
+        return {"result": _STOPPED, "status": "failed", "model_failed": True}
+
+    monkeypatch.setattr(_ScriptedAgent, "process_query", failing_turn)
+    r = client.post("/v1/gaia/query", json=_body())
+
+    (final,) = _terminals(r)
+    assert final["type"] == "final"
+    assert final["failed"] is True
+    assert final["answer"].startswith("The model stopped responding at step 13")
+
+
+def test_a_failed_turn_that_printed_nothing_is_still_marked_failed(built, monkeypatch):
+    client, _ = built
+    monkeypatch.setattr(
+        _ScriptedAgent,
+        "process_query",
+        lambda self, query, max_steps=None: {
+            "result": _STOPPED,
+            "status": "failed",
+            "model_failed": True,
+        },
+    )
+    r = client.post("/v1/gaia/query", json=_body())
+
+    (final,) = _terminals(r)
+    assert final == {"type": "final", "answer": _STOPPED, "failed": True}
+
+
+def test_an_ordinary_answer_is_not_marked_failed(built):
+    client, _ = built
+    r = client.post("/v1/gaia/query", json=_body())
+    (final,) = _terminals(r)
+    assert final["type"] == "final" and "failed" not in final
+
+
+# ---------------------------------------------------------------------------
+# A failed model request is worded for the caller's front-end (#5295)
+#
+# A headless caller whose model endpoint returned 502 was told to check "the
+# TUI provider settings", a screen it doesn't have. The caller now says which
+# front-end it is, and a caller that says nothing is a headless service.
+# ---------------------------------------------------------------------------
+
+
+def _endpoint_failure():
+    from gaia.llm.lemonade_client import _cloud_request_error
+
+    return str(_cloud_request_error(502, "fireworks", endpoint="10.0.0.5:8080"))
+
+
+def _answering(text):
+    def turn(self, query, max_steps=None):
+        self.console.mark_turn_failed()
+        self.console.print_final_answer(text)
+        return {"result": text, "status": "failed", "model_failed": True}
+
+    return turn
+
+
+def test_a_headless_caller_is_pointed_at_the_endpoint_not_the_tui(built, monkeypatch):
+    from gaia.llm.surface_hints import SERVICE_PROVIDER_SETTINGS
+
+    client, _ = built
+    monkeypatch.setattr(
+        _ScriptedAgent, "process_query", _answering(_endpoint_failure())
+    )
+
+    (final,) = _terminals(client.post("/v1/gaia/query", json=_body()))
+
+    assert final["failed"] is True
+    assert "10.0.0.5:8080" in final["answer"]
+    assert SERVICE_PROVIDER_SETTINGS in final["answer"]
+    assert "TUI" not in final["answer"]
+
+
+@pytest.mark.parametrize(
+    "surface,expected",
+    [("tui", "in the TUI provider settings"), ("agent_ui", "under Settings > Model")],
+)
+def test_a_front_end_that_names_itself_gets_its_own_advice(
+    built, monkeypatch, surface, expected
+):
+    client, _ = built
+    monkeypatch.setattr(
+        _ScriptedAgent, "process_query", _answering(_endpoint_failure())
+    )
+
+    r = client.post("/v1/gaia/query", json=_body(surface=surface))
+
+    (final,) = _terminals(r)
+    assert expected in final["answer"] and "10.0.0.5:8080" in final["answer"]
+
+
+def test_an_unknown_surface_is_refused(built):
+    client, _ = built
+    r = client.post("/v1/gaia/query", json=_body(surface="webui"))
+    assert r.status_code == 422, r.text
+
+
+@pytest.fixture(autouse=True)
+def _no_model_server(monkeypatch):
+    """The turn-end context count reads no live Lemonade in these tests."""
+    from gaia.ui import turn_insights
+
+    def offline(base_url, headers):
+        raise ConnectionError("no model server in unit tests")
+
+    monkeypatch.setattr(turn_insights, "_loaded_chat_model", offline)

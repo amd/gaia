@@ -11,30 +11,90 @@ on:
   push:
     branches: ["main"]
     paths:
-      - 'src/gaia/version.py'
+      - '.github/workflows/test_api.yml'
+      - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
+      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      - 'installer/scripts/*lemonade*.ps1'
+      - 'tests/ci_lemonade_check.py'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      # The LLM client every hardware test drives, the daemon modules it imports,
+      # the init profile that sets its minimum Lemonade, and the leaf modules.
+      - 'src/gaia/llm/**'
+      - 'src/gaia/daemon/__init__.py'
+      - 'src/gaia/daemon/broker_client.py'
+      - 'src/gaia/daemon/client.py'
+      - 'src/gaia/daemon/constants.py'
+      - 'src/gaia/daemon/errors.py'
+      - 'src/gaia/daemon/instance.py'
+      - 'src/gaia/daemon/lemonade.py'
+      - 'src/gaia/daemon/lock.py'
+      - 'src/gaia/daemon/paths.py'
+      - 'src/gaia/daemon/custody/constants.py'
+      - 'src/gaia/daemon/sidecars/errors.py'
+      - 'src/gaia/daemon/sidecars/spec.py'
+      - 'src/gaia/installer/init_command.py'
+      - 'src/gaia/utils/**'
+      - 'src/gaia/config.py'
+      - 'src/gaia/env.py'
+      - 'src/gaia/logger.py'
+      - 'src/gaia/log_rotation.py'
+      - 'src/gaia/ports.py'
+      - 'src/gaia/version.py'
       - 'src/gaia/api/**'
       - 'src/gaia/agents/base/**'
-      - 'src/gaia/llm/**'
-      - 'hub/agents/email/python/**'
+      - 'src/gaia/database/**'
+      - 'src/gaia/connectors/errors.py'
       - 'hub/agents/gaia/python/**'
       - 'tests/test_api.py'
-      - 'setup.py'
-      - '.github/workflows/test_api.yml'
+      - 'tests/fixtures/email/**'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
-      - 'src/gaia/version.py'
+      - '.github/workflows/test_api.yml'
+      - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
+      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      - 'installer/scripts/*lemonade*.ps1'
+      - 'tests/ci_lemonade_check.py'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      # The LLM client every hardware test drives, the daemon modules it imports,
+      # the init profile that sets its minimum Lemonade, and the leaf modules.
+      - 'src/gaia/llm/**'
+      - 'src/gaia/daemon/__init__.py'
+      - 'src/gaia/daemon/broker_client.py'
+      - 'src/gaia/daemon/client.py'
+      - 'src/gaia/daemon/constants.py'
+      - 'src/gaia/daemon/errors.py'
+      - 'src/gaia/daemon/instance.py'
+      - 'src/gaia/daemon/lemonade.py'
+      - 'src/gaia/daemon/lock.py'
+      - 'src/gaia/daemon/paths.py'
+      - 'src/gaia/daemon/custody/constants.py'
+      - 'src/gaia/daemon/sidecars/errors.py'
+      - 'src/gaia/daemon/sidecars/spec.py'
+      - 'src/gaia/installer/init_command.py'
+      - 'src/gaia/utils/**'
+      - 'src/gaia/config.py'
+      - 'src/gaia/env.py'
+      - 'src/gaia/logger.py'
+      - 'src/gaia/log_rotation.py'
+      - 'src/gaia/ports.py'
+      - 'src/gaia/version.py'
       - 'src/gaia/api/**'
       - 'src/gaia/agents/base/**'
-      - 'src/gaia/llm/**'
-      - 'hub/agents/email/python/**'
+      - 'src/gaia/database/**'
+      - 'src/gaia/connectors/errors.py'
       - 'hub/agents/gaia/python/**'
       - 'tests/test_api.py'
-      - 'setup.py'
-      - '.github/workflows/test_api.yml'
+      - 'tests/fixtures/email/**'
   merge_group:
   workflow_dispatch:
 
@@ -67,10 +127,6 @@ jobs:
         shell: powershell
         run: |
           uv pip install pytest pytest-timeout requests --python .venv\Scripts\python.exe
-          # The email REST router only mounts when gaia-agent-email is
-          # importable; without it every /v1/email test in tests/test_api.py
-          # 404s (red on main since the email agent moved to a hub wheel).
-          uv pip install -e hub/agents/email/python --python .venv\Scripts\python.exe
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
@@ -93,7 +149,7 @@ jobs:
               # shim was removed in Lemonade v10.5), captures stdout/stderr to
               # logs, waits for health (dumping the logs on failure), and sets
               # LEMONADE_PROCESS_ID for cleanup.
-              .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+              .\installer\scripts\ensure-lemonade-running.ps1 -JobScoped -Port 13305 -NoModel
               if ($LASTEXITCODE -ne 0) { throw "Lemonade server failed to start" }
 
               # Pull + load + verify the LLM via GAIA's LemonadeClient so CI

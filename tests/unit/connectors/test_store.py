@@ -20,6 +20,8 @@ Coverage:
 
 from __future__ import annotations
 
+import logging
+
 import keyring
 import pytest
 
@@ -27,9 +29,11 @@ from gaia.connectors.errors import AuthRequiredError, ConnectorsError
 from gaia.connectors.store import (
     _CHUNK_CHARS,
     _CHUNK_SENTINEL,
+    _LEGACY_CHUNK_SENTINEL,
     SERVICE_NAME,
     _chunk_username,
     _connection_username,
+    _payload_crc,
     _provider_credentials_username,
     _secret_username,
     clear_provider_credentials,
@@ -723,31 +727,54 @@ class TestStandaloneSecrets:
         assert peek_connection("google") is not None
         assert peek_provider_credentials("google") is not None
 
-    def test_refused_backend_blocks_every_operation(self):
+    def test_refused_backend_blocks_reads_and_writes_but_not_deletes(self, caplog):
+        from gaia.connectors import keyring_access
+
         class PlaintextKeyring(keyring.backend.KeyringBackend):
             priority = 1
+            viable = False
+
+            def __init__(self):
+                super().__init__()
+                self.items = {}
 
             def get_password(self, service, username):
-                return None
+                return self.items.get((service, username))
 
             def set_password(self, service, username, password):
                 raise AssertionError("must not write to a plaintext backend")
 
             def delete_password(self, service, username):
-                raise AssertionError("must not touch a plaintext backend")
+                if (service, username) not in self.items:
+                    raise keyring.errors.PasswordDeleteError("absent")
+                del self.items[(service, username)]
 
+        backend = PlaintextKeyring()
+        # A chunked secret saved before the check existed.
+        base = _secret_username("k")
+        backend.items[(SERVICE_NAME, base)] = "gaia-chunked-v2:2:00000000"
+        backend.items[(SERVICE_NAME, f"{base}#0")] = "aa"
+        backend.items[(SERVICE_NAME, f"{base}#1")] = "bb"
         previous = keyring.get_keyring()
-        keyring.set_keyring(PlaintextKeyring())
+        keyring.set_keyring(backend)
+        keyring_access._warned.clear()
         try:
             for call in (
                 lambda: save_secret("k", "v"),
                 lambda: peek_secret("k"),
-                lambda: delete_secret("k"),
             ):
                 with pytest.raises(ConnectorsError, match="Insecure keyring backend"):
                     call()
+            with caplog.at_level(
+                logging.WARNING, logger="gaia.connectors.keyring_access"
+            ):
+                delete_secret("k")
+                delete_secret("k")  # absent now: still fine
         finally:
             keyring.set_keyring(previous)
+        assert backend.items == {}
+        assert caplog.text.count("insecure keyring backend") == 1
+        assert keyring_access.DOCS_URL in caplog.text
 
 
 class TestConstants:
@@ -756,3 +783,66 @@ class TestConstants:
         # "gaia.connections" even after the module rename to gaia.connectors.
         # Renaming the constant would orphan #915's existing keyring entries.
         assert SERVICE_NAME == "gaia.connections"
+
+
+class TestMacOSKeychainNulTruncation:
+    """The macOS backend cuts a stored value at the first NUL."""
+
+    @pytest.fixture(autouse=True)
+    def truncate_at_nul(self, monkeypatch):
+        real_set = keyring.set_password
+
+        def set_password(service, username, password):
+            real_set(service, username, password.split("\x00", 1)[0])
+
+        monkeypatch.setattr(keyring, "set_password", set_password)
+
+    def test_long_connection_survives(self):
+        big_token = "R" * (_CHUNK_CHARS * 2)
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token=big_token,
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        loaded = load_connection("microsoft", current_client_id_hash="h")
+        assert loaded["refresh_token"] == big_token
+
+    def test_long_secret_survives(self):
+        save_secret("big", "z" * (_CHUNK_CHARS * 3))
+        assert peek_secret("big") == "z" * (_CHUNK_CHARS * 3)
+
+    def test_manifest_truncated_by_an_earlier_release_reads_as_not_connected(self):
+        username = _connection_username("microsoft", "default")
+        keyring.set_password(SERVICE_NAME, username, _LEGACY_CHUNK_SENTINEL + "2:ab")
+        keyring.set_password(SERVICE_NAME, _chunk_username(username, 0), "stale")
+
+        assert load_connection("microsoft", current_client_id_hash="h") is None
+
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token="fresh",
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None
+
+
+def test_manifest_from_an_earlier_release_still_reads_where_nul_survives():
+    payload = "y" * (_CHUNK_CHARS + 5)
+    username = _secret_username("old")
+    keyring.set_password(
+        SERVICE_NAME, _chunk_username(username, 0), payload[:_CHUNK_CHARS]
+    )
+    keyring.set_password(
+        SERVICE_NAME, _chunk_username(username, 1), payload[_CHUNK_CHARS:]
+    )
+    keyring.set_password(
+        SERVICE_NAME, username, f"{_LEGACY_CHUNK_SENTINEL}2:{_payload_crc(payload)}"
+    )
+
+    assert peek_secret("old") == payload
+    delete_secret("old")
+    assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None

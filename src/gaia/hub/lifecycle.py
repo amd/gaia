@@ -416,9 +416,13 @@ def status(
     except LifecycleError:
         config = {}
 
-    # Hub-installed agents carry a SemVer in their sentinel; custom
-    # agents have no published version, so report None rather than guess.
-    version = sentinel.version if sentinel is not None else None
+    # Hub-installed agents carry a SemVer in their sentinel, and a pip-installed
+    # one carries its package's version; custom agents have no published
+    # version, so report None rather than guess.
+    if sentinel is not None:
+        version = sentinel.version
+    else:
+        version = getattr(reg, "version", None)
 
     source = ""
     if reg is not None:

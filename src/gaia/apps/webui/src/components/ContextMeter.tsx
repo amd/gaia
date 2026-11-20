@@ -2,23 +2,26 @@
 // SPDX-License-Identifier: MIT
 
 import { useRef, useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, X } from 'lucide-react';
 import { Popover } from './Popover';
 import { ContextPanel } from './ContextPanel';
+import { pluralKey } from '../i18n/registry';
+import { useT } from '../i18n/useT';
 import type { ContextUsage } from '../types';
 import './ContextMeter.css';
 
 export function formatTokens(n: number): string {
     if (n < 1000) return String(n);
-    return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
+    if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
+    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
 }
 
 const PARTS = [
-    { key: 'system', label: 'System prompt' },
-    { key: 'tools', label: 'Tools' },
-    { key: 'documents', label: 'Documents' },
-    { key: 'history', label: 'Conversation' },
-    { key: 'query', label: 'Your message' },
+    { key: 'system', label: 'ctx.meter.part.system' },
+    { key: 'tools', label: 'ctx.meter.part.tools' },
+    { key: 'documents', label: 'ctx.meter.part.documents' },
+    { key: 'history', label: 'ctx.meter.part.history' },
+    { key: 'query', label: 'ctx.meter.part.query' },
 ] as const;
 
 interface ContextMeterProps {
@@ -34,6 +37,7 @@ interface ContextMeterProps {
 
 /** How full the model's context window is, with a breakdown on click. */
 export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUsage, onDetails }: ContextMeterProps) {
+    const t = useT();
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
     const [details, setDetails] = useState(false);
@@ -42,16 +46,26 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
         : null;
     if (!usage) {
         if (!unavailable) return null;
+        // A dash, not an empty bar: nothing is measured yet, and the title says when it will be.
         return (
-            <span className="context-meter is-empty" title={unavailable}>
-                <span className="context-meter-bar" aria-hidden="true"><span style={{ width: 0 }} /></span>
-                <span className="context-meter-label">Context</span>
+            <span className="context-meter is-empty" title={unavailable} aria-label={`${t('ctx.context')}: ${unavailable}`}>
+                <span className="context-meter-label">{t('ctx.context')}</span>
+                <span aria-hidden="true">–</span>
             </span>
         );
     }
     const pct = Math.min(100, Math.round((usage.used / usage.window) * 100));
     const warn = usage.at_risk.length > 0;
     const free = Math.max(0, usage.window - usage.used - usage.reply_reserve);
+    // The meter fills against GAIA's admitted window, which can be far below a cloud model's own.
+    const modelWindow = usage.model_window != null && usage.model_window > usage.window ? usage.model_window : null;
+    const cap = modelWindow ? { gaia: formatTokens(usage.window), model: formatTokens(modelWindow) } : null;
+    // A new chat already reads 16-36%: say that most of it is GAIA's own set-up, not the user's doing.
+    const setup = usage.system + usage.tools;
+    const mostlySetup = usage.used > 0 && setup / usage.used >= 0.6;
+    const setupNote = mostlySetup
+        ? t('ctx.meter.mostlySetup', { setup: formatTokens(setup), chat: formatTokens(usage.history + usage.query + usage.documents) })
+        : null;
     return (
         <div className="composer-chip-wrap context-meter-wrap">
             <button
@@ -60,17 +74,27 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
                 className={`context-meter${warn ? ' is-warning' : ''}`}
                 onClick={() => setOpen((v) => !v)}
                 aria-expanded={open}
-                aria-label={`Context ${pct}% full: ${formatTokens(usage.used)} of ${formatTokens(usage.window)} tokens`}
-                title="How full the model's context window is"
+                aria-label={t.compose((say) => {
+                    const fill = say('ctx.meter.aria', { pct, used: formatTokens(usage.used), window: formatTokens(usage.window) });
+                    return cap ? `${fill} (${say('ctx.meter.capNote', cap)})` : fill;
+                })}
+                title={[cap ? t('ctx.meter.titleCapped', cap) : t('ctx.meter.title'), setupNote].filter(Boolean).join('\n')}
             >
                 <span className="context-meter-bar" aria-hidden="true"><span style={{ width: `${pct}%` }} /></span>
-                <span className="context-meter-label">{pct}%</span>
+                <span className="context-meter-label"><bdi dir="ltr">{pct}%</bdi></span>
             </button>
-            <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label="Context window" align="end">
+            <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label={t('ctx.meter.window')} align="end">
                 <div className="context-meter-panel">
                     <div className="context-meter-head">
-                        <strong>{formatTokens(usage.used)}</strong> of {formatTokens(usage.window)} tokens
+                        <strong><bdi dir="ltr">{formatTokens(usage.used)}</bdi></strong> {t.bare('ctx.of')} <bdi dir="ltr">{formatTokens(usage.window)}</bdi> {t.bare('ctx.tokensWord')}
+                        {cap && (
+                            <span className="context-meter-cap" title={t('ctx.windowTitle')}>
+                                {' · '}{t.bare('ctx.gaiaUses')} <bdi dir="ltr">{cap.gaia}</bdi>
+                                {' '}{t.bare('ctx.ofModel')} <bdi dir="ltr">{cap.model}</bdi>
+                            </span>
+                        )}
                     </div>
+                    {setupNote && <p className="context-meter-note is-setup">{setupNote}</p>}
                     <div className="context-meter-stack" aria-hidden="true">
                         {PARTS.map(({ key }) => (
                             <span key={key} className={`part-${key}`} style={{ width: `${(usage[key] / usage.window) * 100}%` }} />
@@ -79,24 +103,28 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
                     <dl className="context-meter-rows">
                         {PARTS.filter(({ key }) => key !== 'query' || usage.query > 0).map(({ key, label }) => (
                             <div key={key} className="context-meter-row">
-                                <dt><span className={`swatch part-${key}`} aria-hidden="true" />{label}</dt>
-                                <dd>{formatTokens(usage[key])}</dd>
+                                <dt><span className={`swatch part-${key}`} aria-hidden="true" />{t(label)}</dt>
+                                <dd><bdi dir="ltr">{formatTokens(usage[key])}</bdi></dd>
                             </div>
                         ))}
                         <div className="context-meter-row is-quiet">
-                            <dt>Kept free for the reply</dt>
-                            <dd>{formatTokens(usage.reply_reserve)}</dd>
+                            <dt>{t('ctx.meter.reserve')}</dt>
+                            <dd><bdi dir="ltr">{formatTokens(usage.reply_reserve)}</bdi></dd>
                         </div>
                         <div className="context-meter-row is-quiet">
-                            <dt>Free</dt>
-                            <dd>{formatTokens(free)}</dd>
+                            <dt>{t('ctx.freeRow')}</dt>
+                            <dd><bdi dir="ltr">{formatTokens(free)}</bdi></dd>
                         </div>
                     </dl>
                     <p className="context-meter-note">
-                        {usage.turns_in_view} earlier {usage.turns_in_view === 1 ? 'turn is' : 'turns are'} in view
-                        {usage.turns_hidden > 0 && `; ${usage.turns_hidden} older ${usage.turns_hidden === 1 ? 'is' : 'are'} out of view`}.
-                        {' '}{usage.tokenizer?.exact ? "Counted with the model's tokenizer." : 'Estimates.'}
-                        {' '}Older turns stay saved and can be recalled.
+                        {t.compose((say) => [
+                            say(pluralKey('ctx.meter.inView', usage.turns_in_view), { n: usage.turns_in_view }),
+                            usage.turns_hidden > 0 ? say(pluralKey('ctx.meter.hidden', usage.turns_hidden), { n: usage.turns_hidden }) : '',
+                            '. ',
+                            say(usage.tokenizer?.exact ? 'ctx.meter.exact' : 'ctx.meter.estimates'),
+                            ' ',
+                            say('ctx.meter.saved'),
+                        ].join(''))}
                     </p>
                     {sessionId && (
                         <button
@@ -108,7 +136,7 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
                                 else setDetails(true);
                             }}
                         >
-                            Details: context &amp; performance
+                            {t('ctx.meter.details')}
                         </button>
                     )}
                 </div>
@@ -118,21 +146,43 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
     );
 }
 
-/** Says which turns leave the model's view next, before they go. */
+/** One line above the composer when older turns are about to leave the model's view; details on request. */
 export function ContextWarning({ usage }: { usage: ContextUsage | null }) {
+    const t = useT();
+    const [open, setOpen] = useState(false);
+    // Dismissed for these turns only; another turn coming up to the edge shows it again.
+    const [dismissed, setDismissed] = useState<string | null>(null);
     if (!usage || usage.at_risk.length === 0) return null;
+    const key = usage.at_risk.join('\n');
+    if (dismissed === key) return null;
     const n = usage.at_risk.length;
     return (
         <div className="context-warning" role="status">
             <AlertTriangle size={13} aria-hidden="true" />
-            <span>
-                The conversation is filling the model's context. The oldest
-                {n === 1 ? ' turn' : ` ${n} turns`} may drop out of the model's view next:{' '}
-                {usage.at_risk.map((q, i) => (
-                    <span key={i}>{i > 0 && ', '}<q>{q}</q></span>
-                ))}
-                . They stay saved, and you can ask GAIA to recall them.
-            </span>
+            <div className="context-warning-body">
+                <span>{t('ctx.warning.short')}</span>{' '}
+                <button type="button" className="link-btn" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+                    {open ? t('ctx.warning.hideDetails') : t('ctx.warning.details')}
+                </button>
+                {open && (
+                    <p className="context-warning-details">
+                        {t.plural('ctx.meter.warning', n)}{' '}
+                        {usage.at_risk.map((q, i) => (
+                            <span key={i}>{i > 0 && ', '}<q>{q}</q></span>
+                        ))}
+                        {'. '}{t('ctx.meter.warningSaved')}
+                    </p>
+                )}
+            </div>
+            <button
+                type="button"
+                className="btn-icon-sm context-warning-close"
+                onClick={() => { setDismissed(key); setOpen(false); }}
+                aria-label={t('ctx.warning.dismiss')}
+                title={t('ctx.warning.dismiss')}
+            >
+                <X size={12} aria-hidden="true" />
+            </button>
         </div>
     );
 }

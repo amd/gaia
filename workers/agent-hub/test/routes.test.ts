@@ -97,7 +97,7 @@ describe("GET routes", () => {
   });
 });
 
-// Minimal YAML front matter matching the email agent's scorecard shape.
+// Minimal YAML front matter matching a hub agent's scorecard shape.
 const SAMPLE_SCORECARD = [
   "---",
   "schema_version: 1",
@@ -166,6 +166,44 @@ describe("eval scorecard in catalog", () => {
     expect(entry.scorecard).toContain("# Test Agent — Eval Scorecard v0.1.0");
   });
 
+  it.each([150, -1])("rejects a scorecard whose aggregate score is %s", async (value) => {
+    const env = makeEnv();
+    const res = await worker.fetch(
+      publishRequest({
+        token: "tok_amd",
+        manifestYaml: sampleManifest({ id: "chat", version: "0.1.0" }),
+        artifact: "chat-wheel",
+        filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+        evalScorecard: SAMPLE_SCORECARD.replace("value: 87.5", `value: ${value}`),
+      }),
+      env as never
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as any;
+    expect(body.error.code).toBe("invalid_eval_score");
+    expect(body.error.message).toContain(`aggregate.value is ${value}`);
+    // Nothing was written, so the catalog stays valid against its schema.
+    const index = (await (await worker.fetch(get("/index.json"), env as never)).json()) as any;
+    expect(index.agents ?? []).toEqual([]);
+  });
+
+  it.each([0, 100])("accepts the boundary score %s", async (value) => {
+    const env = makeEnv();
+    const res = await worker.fetch(
+      publishRequest({
+        token: "tok_amd",
+        manifestYaml: sampleManifest({ id: "chat", version: "0.1.0" }),
+        artifact: "chat-wheel",
+        filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+        evalScorecard: SAMPLE_SCORECARD.replace("value: 87.5", `value: ${value}`),
+      }),
+      env as never
+    );
+    expect(res.status).toBe(201);
+    const index = (await (await worker.fetch(get("/index.json"), env as never)).json()) as any;
+    expect(index.agents[0].eval_score).toBe(value);
+  });
+
   it("omits eval_score and eval_scorecard_url when no scorecard is published", async () => {
     const env = makeEnv();
     await worker.fetch(
@@ -191,7 +229,7 @@ describe("eval scorecard in catalog", () => {
   });
 
   it("surfaces the scorecard's own version even when it lags the published package version (#2965)", async () => {
-    // Mirrors the email agent's real drift: package.json/pyproject at 0.2.0,
+    // Mirrors a real drift: package.json/pyproject at 0.2.0,
     // SCORECARD.md still front-matter-stamped 0.1.0 because no fresh eval ran
     // for the new release. eval_score_version must report the MEASURED
     // version, not the package's latest_version, so a UI caption can't imply

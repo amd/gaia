@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import DECLINED_HINT, Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.denied_effects import (
     COMMAND,
@@ -33,6 +33,7 @@ from gaia.agents.base.denied_effects import (
     effects_of_shell_command,
     render_call,
 )
+from gaia.agents.base.history import frame_user_message
 from gaia.agents.base.tools import tool
 from gaia.ui.sse_handler import SSEOutputHandler
 
@@ -126,6 +127,28 @@ def test_pipeline_helpers_and_cd_are_never_the_denied_effect(tmp_path):
         "cd repo && pytest -q 2>&1 | tail -5 | grep FAILED", str(tmp_path)
     )
     assert effects == {Effect(COMMAND, TEST_SUITE)}
+
+
+@pytest.mark.parametrize(
+    "wrapped_delete",
+    [
+        "call del victim.txt",
+        "start del victim.txt",
+        "& rm -rf victim.txt",
+        ". rm -rf victim.txt",
+        "conda run -n myenv rm -rf victim.txt",
+        "conda run --name=myenv rm -rf victim.txt",
+        "conda run -p C:/env rm -rf victim.txt",
+    ],
+)
+def test_wrapped_deletes_remain_overlapping_after_a_refusal(wrapped_delete, tmp_path):
+    assert _overlaps(
+        "run_shell_command",
+        _shell("rm -rf victim.txt"),
+        "run_shell_command",
+        _shell(wrapped_delete),
+        tmp_path,
+    )
 
 
 def test_a_url_inside_file_content_is_not_a_request(tmp_path):
@@ -308,6 +331,27 @@ def test_a_denied_mkdir_with_a_quoted_windows_path_blocks_the_folder(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -E rm -rf victim_rm",
+        "timeout 5 rm -rf victim_rm",
+        "timeout -k 5 10 rm -rf victim_rm",
+        "xargs -n 1 rm -rf victim_rm",
+        "xargs -L 1 rm -rf victim_rm",
+        "timeout -- 5 rm -rf victim_rm",
+        "sudo -p pw rm -rf victim_rm",
+    ],
+)
+def test_wrapped_deletes_are_recorded_with_their_inner_operands(command, tmp_path):
+    effects = effects_of_shell_command(command, str(tmp_path))
+    expected = os.path.normcase(str(tmp_path / "victim_rm"))
+    assert any(
+        effect.kind == PATH and os.path.normcase(effect.target) == expected
+        for effect in effects
+    )
+
+
 def test_a_denied_file_is_denied_through_the_shell_too(tmp_path):
     denied = {"file_path": "notes/todo.txt", "content": "x"}
     assert _overlaps(
@@ -405,6 +449,115 @@ def test_run_tests_script_is_the_suite_even_before_it_is_written(tmp_path):
         "execute_python_file",
         {"file_path": "run_tests.py"},
         tmp_path,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Python that deletes or moves files is the same effect as `rm` / `mv`
+# ---------------------------------------------------------------------------
+
+
+def _refused_rm(folder) -> DeniedEffects:
+    """The ledger after the shell gate refused ``rm -rf <folder>``."""
+    ledger = DeniedEffects(str(folder.parent))
+    ledger.record(
+        "run_shell_command",
+        _shell(f'rm -rf "{folder}"'),
+        "refused",
+        kinds={NETWORK, PATH},
+    )
+    assert ledger, "the refused rm must leave its target on the ledger"
+    return ledger
+
+
+@pytest.fixture
+def victim(tmp_path):
+    folder = tmp_path / "victim_rm"
+    folder.mkdir()
+    (folder / "KEEP_ME.txt").write_text("canary\n")
+    return folder
+
+
+def _deleting_snippets(folder):
+    f = repr(str(folder))
+    keep = repr(str(folder / "KEEP_ME.txt"))
+    parent, name = repr(str(folder.parent)), repr(folder.name)
+    return [
+        f"import shutil\nshutil.rmtree({f})",
+        # The shape the agent wrote in the failing eval run.
+        f"import shutil, os\npath = {f}\nif os.path.exists(path):\n"
+        "    shutil.rmtree(path)\n",
+        f"from shutil import rmtree\nrmtree({f}, ignore_errors=True)",
+        f"import shutil as sh\nsh.rmtree({f})",
+        f"import os\nos.remove({keep})",
+        f"import os\nos.unlink(os.path.join({f}, 'KEEP_ME.txt'))",
+        f"import os\nfor n in os.listdir({f}):\n    os.remove(os.path.join({f}, n))",
+        f"from pathlib import Path\nPath({keep}).unlink()",
+        f"from pathlib import Path\n(Path({parent}) / {name} / 'KEEP_ME.txt').unlink()",
+        f"import pathlib\np = pathlib.Path({f})\n"
+        "for c in p.iterdir():\n    c.unlink()\np.rmdir()",
+        f"import os\nos.rename({f}, {f} + '_old')",
+        f"import shutil\nshutil.move({f}, 'elsewhere')",
+        f"from pathlib import Path\nPath({keep}).write_text('')",
+    ]
+
+
+def test_python_that_deletes_a_refused_target_is_the_same_effect(victim):
+    ledger = _refused_rm(victim)
+    for code in _deleting_snippets(victim):
+        assert ledger.conflict("run_python", {"code": code}) is not None, code
+
+
+def test_a_script_file_that_deletes_a_refused_target_is_the_same_effect(victim):
+    ledger = _refused_rm(victim)
+    for i, code in enumerate(_deleting_snippets(victim)):
+        script = victim.parent / f"cleanup_{i}.py"
+        script.write_text(code)
+        assert (
+            ledger.conflict("execute_python_file", {"file_path": str(script)})
+            is not None
+        ), code
+
+
+def test_a_delete_whose_target_the_code_computes_is_treated_as_overlapping(victim):
+    """Fail closed after a refusal: an unreadable target could be the refused one."""
+    ledger = _refused_rm(victim)
+    for code in [
+        "import shutil, sys\nshutil.rmtree(sys.argv[1])",
+        "import os\nos.remove(input('path? '))",
+        "from pathlib import Path\nPath(input('path? ')).unlink()",
+        "import os\ngetattr(os, 'remove')(input('path? '))",
+        "import shutil, base64\nshutil.rmtree(base64.b64decode('eA==').decode())",
+    ]:
+        assert ledger.conflict("run_python", {"code": code}) is not None, code
+
+
+def test_python_that_only_reads_or_touches_other_paths_is_not_swept_up(victim):
+    ledger = _refused_rm(victim)
+    f, other = repr(str(victim)), repr(str(victim.parent / "elsewhere"))
+    for code in [
+        f"import os\nprint(os.path.exists({f}))",
+        f"print(open({f} + '/KEEP_ME.txt').read())",
+        f"import os\nprint(os.listdir({f}))",
+        f"import shutil\nshutil.rmtree({other})",
+        f"import shutil\nshutil.copy({f} + '/KEEP_ME.txt', {other})",
+        f"s = {f}\nprint(s.replace('\\\\', '/'))",
+        "import sys\nprint(sys.argv)",
+    ]:
+        assert ledger.conflict("run_python", {"code": code}) is None, code
+
+
+def test_an_unreadable_target_is_never_recorded_as_the_denied_one(tmp_path):
+    """Declining such a script must not block every later file change."""
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record(
+        "run_python",
+        {"code": "import shutil, sys\nshutil.rmtree(sys.argv[1])"},
+        "Tool 'run_python' was denied by the user.",
+    )
+    assert (
+        ledger.conflict("write_file", {"file_path": "notes.txt", "content": "x"})
+        is None
     )
 
 
@@ -663,9 +816,9 @@ def test_the_question_quotes_the_users_words_not_the_memory_context(tmp_path, sc
     console = _AskingConsole("__NO_RESPONSE__")
     agent = _agent(console, tmp_path)
     agent._original_user_input = "check the tie order in sorting.py"
-    agent._current_query = (
-        "[GAIA Memory Context]\nCurrent time: 2026-09-29\n\n"
-        "check the tie order in sorting.py"
+    agent._current_query = frame_user_message(
+        "[GAIA Memory Context]\nCurrent time: 2026-09-29",
+        "check the tie order in sorting.py",
     )
     agent._execute_tool("run_shell_command", {"command": "pytest -q"})
 
@@ -751,6 +904,305 @@ def test_a_policy_refusal_records_the_host_not_the_command(tmp_path):
     )
 
 
+BLANKET_REFUSAL = (
+    "Not run: `{cmd}` needs your approval, and this run can only approve "
+    "commands that are safe to run unattended. Run the request interactively "
+    "to approve it, or turn on full access."
+)
+
+
+def _refuse_rm(name, args):
+    command = str((args or {}).get("command", ""))
+    if command.startswith(("rm ", "Remove-Item")):
+        return {
+            "status": "error",
+            "tier": "refuse",
+            "error": BLANKET_REFUSAL.format(cmd=command),
+        }
+    return None
+
+
+def test_a_refused_rm_cannot_be_rerouted_through_a_python_script(tmp_path, victim):
+    """The failing eval run: rm refused, then an rmtree script ran unasked."""
+    console = _AskingConsole(Agent.ALLOW_DENIED_EFFECT)
+    agent = _agent(console, tmp_path)
+    agent.policy_refusal_for_call = _refuse_rm
+    cleanup = tmp_path / "cleanup.py"
+    cleanup.write_text(
+        f"import shutil, os\npath = {str(victim)!r}\n"
+        "if os.path.exists(path):\n    shutil.rmtree(path)\n"
+    )
+
+    refused = agent._execute_tool("run_shell_command", {"command": f"rm -rf {victim}"})
+    rerouted = agent._execute_tool("execute_python_file", {"file_path": str(cleanup)})
+
+    assert refused["executed"] is False
+    assert rerouted["status"] == "denied"
+    assert rerouted["executed"] is False
+    assert agent.ran == []
+    # A refusal no approval could lift is not offered as "Allow once".
+    assert console.questions == []
+    assert "was refused" in rerouted["error"]
+    assert "the user declined" not in rerouted["error"]
+    assert "do not reach it with another tool" in rerouted["error"]
+
+
+def _hosts_script(tmp_path):
+    """The rc17 eval run's reroute: a script that writes the refused file."""
+    hosts = tmp_path / "etc" / "hosts"
+    hosts.parent.mkdir()
+    hosts.write_text("127.0.0.1 localhost\n")
+    script = tmp_path / "add-hosts.ps1"
+    script.write_text(
+        f"Add-Content -Path '{hosts}' -Value \"`r`n127.0.0.1 widgetworks.local\"\n"
+    )
+    return hosts, script
+
+
+def _elevated_reroutes(script):
+    return [
+        f"powershell -NoProfile -ExecutionPolicy Bypass -File {script}",
+        f"pwsh -ep bypass {script}",
+        f'powershell -Command "Start-Process powershell -ArgumentList '
+        f"'-NoProfile -ExecutionPolicy Bypass -File {script}' -Verb RunAs\"",
+        f"Start-Process -FilePath powershell -ArgumentList '-File',\"{script}\" "
+        "-Verb RunAs -Wait",
+    ]
+
+
+def test_running_a_script_elevated_is_what_the_script_does(tmp_path):
+    hosts, script = _hosts_script(tmp_path)
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record(
+        "run_shell_command",
+        _shell(f"Add-Content -Path '{hosts}' -Value x"),
+        "refused",
+        kinds={NETWORK, PATH},
+    )
+    for command in _elevated_reroutes(script):
+        assert ledger.conflict("run_shell_command", _shell(command)), command
+
+
+def test_every_spelling_of_running_the_script_is_what_it_does(tmp_path):
+    hosts, script = _hosts_script(tmp_path)
+    bat = tmp_path / "fix.bat"
+    bat.write_text(f"echo 127.0.0.1 widgetworks.local >> {hosts}\n")
+    sh = tmp_path / "fix.sh"
+    sh.write_text(f"echo '127.0.0.1 widgetworks.local' >> {hosts}\n")
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record(
+        "run_shell_command",
+        _shell(f"Add-Content -Path '{hosts}' -Value x"),
+        "refused",
+        kinds={NETWORK, PATH},
+    )
+    for command in [
+        f"Start-Process -FilePath {bat} -Verb RunAs",
+        f"Start-Process powershell '-File {script}' -Verb RunAs",
+        f"Start-Process powershell -ArgumentList @('-File', '{script}')",
+        f"Start-Process -F powershell -A '-File {script}'",
+        f"powershell -NoProfile -File:{script}",
+        f"bash -f -x {sh}",
+        f"{bat}",
+    ]:
+        assert ledger.conflict("run_shell_command", _shell(command)), command
+
+
+def test_a_shim_named_like_a_script_is_still_its_program(tmp_path):
+    effects = effects_of_shell_command("npm.cmd test", str(tmp_path))
+    assert Effect(COMMAND, TEST_SUITE) in effects
+
+
+def test_a_shim_run_by_its_path_keeps_its_command(tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "npm.cmd").write_text(
+        '@ECHO off\nSETLOCAL\nIF EXIST "%dp0%\\node.exe" (\n  SET "_prog=node"\n)\n'
+        "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC%\n"
+    )
+    shim = tools / "npm.cmd"
+    commands = {
+        e.target
+        for e in effects_of_shell_command(f"{shim} test", str(tmp_path))
+        if e.kind == COMMAND
+    }
+    # The suite it runs, and none of the batch file's own set/if/goto.
+    assert commands == {TEST_SUITE}
+
+
+def test_a_shell_switch_is_not_powershells_value_switch(tmp_path):
+    victim = tmp_path / "keep.txt"
+    victim.write_text("x")
+    script = tmp_path / "run.sh"
+    script.write_text(f"rm -f {victim}\n")
+    for command in ("bash -ex run.sh", "sh -ex run.sh arg", "bash -f -x run.sh"):
+        effects = effects_of_shell_command(command, str(tmp_path))
+        assert Effect(SCRIPT, _canonical_in(tmp_path, "run.sh")) in effects, command
+        assert Effect(PATH, _canonical_in(tmp_path, "keep.txt")) in effects, command
+
+
+def test_start_process_reads_every_way_of_passing_the_script(tmp_path):
+    spaced = tmp_path / "my scripts"
+    spaced.mkdir()
+    hosts, _ = _hosts_script(tmp_path)
+    script = spaced / "add hosts.ps1"
+    script.write_text(f"Add-Content -Path '{hosts}' -Value x\n")
+    changed = _canonical_in(tmp_path, str(hosts))
+    for command in [
+        f'Start-Process powershell -ArgumentList "-File", "{script}" -Verb RunAs',
+        f'Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -File `"{script}`""',
+        f"Start-Process powershell -Verb RunAs -WorkingDirectory '{spaced}' "
+        "-ArgumentList '-File \"add hosts.ps1\"'",
+        f"gsudo powershell -File '{script}'",
+        f"start \"\" powershell -File '{script}'",
+        f"start /wait powershell -File '{script}'",
+    ]:
+        effects = effects_of_shell_command(command, str(tmp_path))
+        assert Effect(PATH, changed) in effects, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo "`date`" && rm keep.txt',
+        'x="`cat a.txt`"; rm keep.txt',
+        "start /b cmd /c del keep.txt",
+        "start /d . cmd /c del keep.txt",
+        'start "" /wait cmd /c del keep.txt',
+        "gsudo powershell -Command Remove-Item keep.txt",
+        "gsudo -u admin cmd /c del keep.txt",
+    ],
+)
+def test_a_launcher_or_backtick_keeps_the_command_it_runs(command, tmp_path):
+    effects = effects_of_shell_command(command, str(tmp_path))
+    assert Effect(PATH, _canonical_in(tmp_path, "keep.txt")) in effects, command
+
+
+def test_start_process_writes_where_it_redirects_output(tmp_path):
+    effects = effects_of_shell_command(
+        "Start-Process notepad -RedirectStandardOutput out.log", str(tmp_path)
+    )
+    assert Effect(PATH, _canonical_in(tmp_path, "out.log")) in effects
+
+
+@pytest.mark.parametrize(
+    "command", ["Start-Process", "Start-Process powershell -ArgumentList ,"]
+)
+def test_a_start_process_that_cannot_be_read_is_still_one(command, tmp_path):
+    assert effects_of_shell_command(command, str(tmp_path)) == {
+        Effect(COMMAND, "start-process")
+    }
+
+
+def test_a_content_value_is_not_a_path_the_command_changes(tmp_path):
+    effects = effects_of_shell_command(
+        "Add-Content -Path notes.txt -Value 'todo later' -Encoding utf8",
+        str(tmp_path),
+    )
+    changed = {e.target for e in effects if e.kind == PATH}
+    assert changed == {_canonical_in(tmp_path, "notes.txt")}
+
+
+def _canonical_in(folder, name):
+    return next(
+        e.target
+        for e in effects_of_shell_command(f"rm {name}", str(folder))
+        if e.kind == PATH
+    )
+
+
+def test_a_refused_write_cannot_be_rerouted_by_running_it_as_admin(tmp_path):
+    """rc17: the hosts file was refused, then a script ran with -Verb RunAs."""
+    hosts, script = _hosts_script(tmp_path)
+
+    def refuse_hosts(name, args):
+        command = str((args or {}).get("command", ""))
+        if command.startswith("Add-Content"):
+            return {
+                "status": "error",
+                "tier": "refuse",
+                "error": f"Access denied: {hosts} is protected. No approval can grant it.",
+            }
+        return None
+
+    for command in _elevated_reroutes(script):
+        console = _AskingConsole(Agent.ALLOW_DENIED_EFFECT)
+        agent = _agent(console, tmp_path)
+        agent.policy_refusal_for_call = refuse_hosts
+        refused = agent._execute_tool(
+            "run_shell_command", {"command": f"Add-Content -Path '{hosts}' -Value x"}
+        )
+        rerouted = agent._execute_tool("run_shell_command", {"command": command})
+
+        assert refused["executed"] is False
+        assert rerouted["status"] == "denied", command
+        assert rerouted["executed"] is False
+        assert agent.ran == []
+        assert console.questions == []
+        assert "do not reach it with another tool" in rerouted["error"]
+
+
+def test_a_users_no_is_still_put_to_them_once(tmp_path, victim):
+    """Only a policy refusal skips the question; a person's no can be lifted."""
+    console = _AskingConsole(Agent.ALLOW_DENIED_EFFECT)
+    agent = _agent(console, tmp_path)
+    cleanup = tmp_path / "cleanup.py"
+    cleanup.write_text(f"import shutil\nshutil.rmtree({str(victim)!r})\n")
+
+    declined = agent._execute_tool("run_shell_command", {"command": f"rm -rf {victim}"})
+    allowed = agent._execute_tool("execute_python_file", {"file_path": str(cleanup)})
+
+    assert declined["status"] == "denied"
+    assert len(console.questions) == 1
+    assert "You declined" in console.questions[0][0]
+    assert allowed["status"] == "success"
+    assert agent.ran == [("execute_python_file", str(cleanup))]
+
+
+@pytest.mark.parametrize("names_the_file", [False, True])
+def test_a_shape_refusal_that_points_at_another_tool_can_still_be_allowed(
+    tmp_path, names_the_file
+):
+    """`echo … > f` is refused toward write_file; that route must stay open.
+
+    A refusal that doesn't name the file says nothing about it, so the other
+    route isn't asked about at all. One that names it is put to the user, and
+    "allow once" lets it run: a shape refusal is never a final no.
+    """
+    console = _AskingConsole(Agent.ALLOW_DENIED_EFFECT)
+    agent = _agent(console, tmp_path)
+    notes = tmp_path / "notes.txt"
+
+    def _refuse_redirect(name, args):
+        if ">" in str((args or {}).get("command", "")):
+            named = f" Not writing {notes.name} this way." if names_the_file else ""
+            return {
+                "status": "error",
+                "shell_operators": True,
+                "error": "Shell operators (&, >, >>, <) are not allowed." + named,
+                "hint": "To write a file, use write_file or edit_file.",
+            }
+        return None
+
+    agent.policy_refusal_for_call = _refuse_redirect
+    writer = tmp_path / "write_notes.py"
+    writer.write_text(f"open({str(notes)!r}, 'w').write('hi')\n")
+
+    refused = agent._execute_tool(
+        "run_shell_command", {"command": f"echo hi > {notes}"}
+    )
+    allowed = agent._execute_tool("execute_python_file", {"file_path": str(writer)})
+
+    assert refused["executed"] is False
+    assert len(console.questions) == (1 if names_the_file else 0)
+    assert allowed["status"] == "success"
+    assert agent.ran == [("execute_python_file", str(writer))]
+
+
+def test_the_unattended_refusal_gets_the_no_reroute_recovery_prompt():
+    assert Agent._is_denial_error(BLANKET_REFUSAL.format(cmd="rm -rf victim_rm"))
+
+
 # ---------------------------------------------------------------------------
 # The loop: per-turn reset, and a recovery prompt that stops inviting reroutes
 # ---------------------------------------------------------------------------
@@ -832,7 +1284,8 @@ def test_a_refusal_gets_a_recovery_prompt_that_does_not_invite_a_reroute(
     ]
     assert recovery, "the refusal should still reach the recovery step"
     assert "Create a NEW corrected plan" not in recovery[-1]
-    assert "do not reach the same result" in recovery[-1]
+    assert "do not do the same thing through another tool" in recovery[-1]
+    assert "not a no to the task" in recovery[-1]
 
 
 def test_an_ordinary_error_keeps_the_fix_it_prompt():
@@ -847,3 +1300,451 @@ def test_an_ordinary_error_keeps_the_fix_it_prompt():
 def test_cwd_default_is_the_process_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert DeniedEffects().cwd == os.getcwd()
+
+
+# ---------------------------------------------------------------------------
+# A refusal no person made is never reported as the user's decision
+# ---------------------------------------------------------------------------
+
+_NOT_IN_SET = (
+    "Command 'copy' is not in the developer command set, even with full access "
+    "active."
+)
+
+
+class _ApproveAllConsole(AgentConsole):
+    """A full-access run: every prompt answers yes, nobody is asked."""
+
+    def confirm_tool_execution(self, tool_name, tool_args):
+        return True
+
+
+def _refuse_program(program: str, reason: str):
+    def _policy(tool_name, tool_args):
+        command = str((tool_args or {}).get("command", ""))
+        if tool_name == "run_shell_command" and command.split()[:1] == [program]:
+            return {"status": "error", "error": reason}
+        return None
+
+    return _policy
+
+
+def test_refusing_a_program_does_not_block_the_files_it_named(tmp_path):
+    """A refused ``copy`` says nothing about the files; ``cp`` to them must run."""
+    agent = _agent(_ApproveAllConsole(), tmp_path)
+    agent.policy_refusal_for_call = _refuse_program("copy", _NOT_IN_SET)
+
+    first = agent._execute_tool(
+        "run_shell_command",
+        _shell(r'copy /Y "src\a.py" "out\a.bak" && git checkout -- src/a.py'),
+    )
+    retry = agent._execute_tool("run_shell_command", _shell("cp src/a.py out/a.bak"))
+    revert = agent._execute_tool(
+        "run_shell_command", _shell("git checkout -- src/a.py")
+    )
+
+    assert first["executed"] is False
+    assert retry["status"] == "success"
+    assert revert["status"] == "success"
+    assert not agent._denied_effects
+
+
+def test_a_policy_refusal_naming_the_file_blocks_it_without_blaming_the_user(
+    tmp_path,
+):
+    target = tmp_path / "notes.md"
+    reason = f"Refused: rm would delete {target}, which is outside the project."
+    agent = _agent(_ApproveAllConsole(), tmp_path)
+    agent.policy_refusal_for_call = _refuse_program("rm", reason)
+
+    agent._execute_tool("run_shell_command", _shell(f"rm {target}"))
+    rerouted = agent._execute_tool("run_shell_command", _shell(f"mv {target} x.md"))
+
+    assert rerouted["status"] == "denied"
+    assert "was refused earlier" in rerouted["error"]
+    assert "declined" not in rerouted["error"]
+    assert "the user" not in rerouted["error"]
+    assert "not a decision anyone made" in rerouted["error"]
+    assert agent.ran == []
+
+
+def test_a_users_no_is_still_reported_as_theirs(tmp_path, script):
+    agent = _agent(_DenyShellConsole(), tmp_path)
+
+    agent._execute_tool("run_shell_command", _shell("pytest -q"))
+    rerouted = agent._execute_tool("execute_python_file", {"file_path": script})
+
+    assert "the user declined" in rerouted["error"]
+    assert "ask the user" in rerouted["error"]
+
+
+class _UnattendedConsole(_DenyShellConsole):
+    """Nothing can ask a person, and the denial reason says so."""
+
+    def confirmation_denied_reason(self, tool_name):
+        return (
+            f"'{tool_name}' requires explicit user approval and cannot run "
+            "unattended."
+        )
+
+
+def test_an_unattended_denial_is_not_called_the_users(tmp_path, script):
+    agent = _agent(_UnattendedConsole(), tmp_path)
+
+    first = agent._execute_tool("run_shell_command", _shell("pytest -q"))
+    rerouted = agent._execute_tool("execute_python_file", {"file_path": script})
+
+    assert "hint" not in first
+    # Still a reroute of the same effect, so it stays blocked.
+    assert rerouted["status"] == "denied"
+    assert "the user declined" not in rerouted["error"]
+    assert "cannot run unattended" in rerouted["error"]
+
+
+def test_the_lift_question_names_who_refused(tmp_path):
+    target = tmp_path / "notes.md"
+    console = _AskingConsole(Agent.KEEP_DENIED_EFFECT)
+    console.confirm_tool_execution = lambda name, args: True
+    agent = _agent(console, tmp_path)
+    agent.policy_refusal_for_call = _refuse_program("rm", f"rm may not delete {target}")
+
+    agent._execute_tool("run_shell_command", _shell(f"rm {target}"))
+    agent._execute_tool("run_shell_command", _shell(f"mv {target} x.md"))
+
+    question = console.questions[-1][0]
+    assert "was refused earlier" in question
+    assert "You declined" not in question
+
+
+@pytest.mark.parametrize(
+    "reason,target,named",
+    [
+        (r"would delete C:\Work\Notes.md", r"c:\work\notes.md", True),
+        ("would delete /home/u/notes.md", "/home/u/notes.md", True),
+        ("notes.md is outside the project", r"c:\work\notes.md", True),
+        # Boundaries: a longer name that contains it is a different file.
+        ("notes.md.bak is outside the project", r"c:\work\notes.md", False),
+        ("mynotes.md is outside the project", r"c:\work\notes.md", False),
+        ("Command 'copy' is not allowed", r"c:\work\notes.md", False),
+        ("", r"c:\work\notes.md", False),
+        # A sentence that ends on the name still names it.
+        ("could not delete notes.md.", r"c:\work\notes.md", True),
+    ],
+)
+def test_names_path_matches_the_file_not_a_lookalike(reason, target, named):
+    from gaia.agents.base.denied_effects import _names_path
+
+    assert _names_path(reason, target) is named
+
+
+_RM_NOT_IN_SET = (
+    "Command 'rm' is not in the developer command set, even with full access " "active."
+)
+
+
+def test_a_refused_delete_still_guards_its_target(tmp_path):
+    """Bypass attempt: ``rm`` is refused as a program, so delete it another way."""
+    agent = _agent(_ApproveAllConsole(), tmp_path)
+    agent.policy_refusal_for_call = _refuse_program("rm", _RM_NOT_IN_SET)
+
+    agent._execute_tool("run_shell_command", _shell("rm -rf build"))
+    moved = agent._execute_tool("run_shell_command", _shell("mv build old"))
+
+    assert moved["status"] == "denied"
+    assert "was refused earlier" in moved["error"]
+    assert agent.ran == []
+
+
+def test_a_delete_riding_on_a_refused_line_is_still_guarded(tmp_path):
+    """Bypass attempt: hide the delete beside the program that gets refused."""
+
+    def _policy(tool_name, tool_args):
+        command = str((tool_args or {}).get("command", ""))
+        if command.startswith("copy"):
+            return {"status": "error", "error": _NOT_IN_SET}
+        if "rm " in command:
+            return {"status": "error", "error": _RM_NOT_IN_SET}
+        return None
+
+    agent = _agent(_ApproveAllConsole(), tmp_path)
+    agent.policy_refusal_for_call = _policy
+
+    agent._execute_tool("run_shell_command", _shell("copy a.txt b.txt && rm c.txt"))
+    moved = agent._execute_tool("run_shell_command", _shell("mv c.txt d.txt"))
+    copied = agent._execute_tool("run_shell_command", _shell("cp a.txt b.txt"))
+
+    assert moved["status"] == "denied"
+    assert copied["status"] == "success"
+
+
+def test_with_no_way_to_ask_the_policy_every_delete_is_kept(tmp_path):
+    """Conservative default: the ledger alone keeps every destructive target."""
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record(
+        "run_shell_command",
+        _shell("copy a.txt b.txt && rm c.txt"),
+        _NOT_IN_SET,
+        kinds={NETWORK, PATH},
+        by_user=False,
+        scope_to_reason=True,
+    )
+
+    assert ledger.conflict("run_shell_command", _shell("mv c.txt d.txt"))
+    assert not ledger.conflict("run_shell_command", _shell("cp a.txt b.txt"))
+
+
+# ---------------------------------------------------------------------------
+# A no is to one action, not to the tool or the task
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "declined, later",
+    [
+        ("pip install pandas", "pip install openpyxl"),
+        ("gh issue close 3", "gh issue close 4"),
+        ("git push origin main", "git push upstream dev"),
+        (
+            "powershell -Command \"Expand-Archive -Path 'a.zip' -DestinationPath out\"",
+            "powershell -Command \"Expand-Archive -Path 'b.zip' -DestinationPath tmp\"",
+        ),
+        ("dir /s reports", "dir invoices"),
+    ],
+)
+def test_the_same_program_on_something_else_is_another_action(
+    declined, later, tmp_path
+):
+    assert not _overlaps(
+        "run_shell_command",
+        _shell(declined),
+        "run_shell_command",
+        _shell(later),
+        tmp_path,
+    )
+
+
+@pytest.mark.parametrize(
+    "declined, later",
+    [
+        ("pip install pandas", "pip install --upgrade pandas"),
+        ("pip install pandas", "python -m pip install pandas"),
+        ("pip install pandas", "pip install pandas openpyxl"),
+        ("git push origin main", "git push --force origin main"),
+        ("git push origin main", "git push"),
+        ("git push", "git push origin main"),
+        ("gh issue close 3", 'bash -c "gh issue close 3"'),
+        ("git add a.txt", "git add ."),
+        ("git add src", "git add src/app.py"),
+        ('git commit -m "fix bug"', 'git commit -m "Fix the bug"'),
+        ('gh pr create --title "Fix" --body "one"', 'gh pr create -t "A fix" -b "two"'),
+        ("pip install pandas", "pip install pandas==2.2"),
+        ("pip install pandas>=2", "pip install 'pandas[excel]<3'"),
+    ],
+)
+def test_a_reworded_command_is_the_same_action(declined, later, tmp_path):
+    assert _overlaps(
+        "run_shell_command",
+        _shell(declined),
+        "run_shell_command",
+        _shell(later),
+        tmp_path,
+    )
+
+
+def _anywhere(path):
+    return True
+
+
+def _declined_program(tmp_path, code, may_create=_anywhere):
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record(
+        "run_python",
+        {"code": code},
+        "Tool 'run_python' was denied by the user.",
+        may_create=may_create,
+    )
+    return ledger
+
+
+_BUILDS_A_REPORT = (
+    "import os\n"
+    "os.makedirs('out', exist_ok=True)\n"
+    "with open('out/report.csv', 'w') as fh:\n"
+    "    fh.write('a,b\\n')\n"
+)
+
+
+def test_a_declined_programs_new_output_can_be_made_another_way(tmp_path):
+    ledger = _declined_program(tmp_path, _BUILDS_A_REPORT)
+    report = {"file_path": "out/report.csv", "content": "a,b\n"}
+    assert ledger.conflict("write_file", report) is None
+    other = "open('out/report.csv', 'w').write('a,b\\n')"
+    assert ledger.conflict("run_python", {"code": other}) is None
+
+
+def test_a_folder_that_is_already_there_is_not_what_was_declined(tmp_path):
+    (tmp_path / "out").mkdir()
+    ledger = _declined_program(tmp_path, _BUILDS_A_REPORT)
+    assert (
+        ledger.conflict("write_file", {"file_path": "out/notes.md", "content": "x"})
+        is None
+    )
+
+
+def test_without_a_write_scope_every_path_is_still_recorded(tmp_path):
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record("run_python", {"code": _BUILDS_A_REPORT}, "denied by the user")
+    assert ledger.conflict(
+        "write_file", {"file_path": "out/report.csv", "content": "x"}
+    )
+
+
+def test_a_new_file_outside_the_chats_folders_stays_declined(tmp_path):
+    ledger = _declined_program(
+        tmp_path, _BUILDS_A_REPORT, may_create=lambda path: False
+    )
+    assert ledger.conflict(
+        "write_file", {"file_path": "out/report.csv", "content": "x"}
+    )
+
+
+def test_a_declined_overwrite_is_not_smuggled_through_another_tool(tmp_path):
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "report.csv").write_text("kept\n")
+    ledger = _declined_program(tmp_path, _BUILDS_A_REPORT)
+    assert ledger.conflict(
+        "write_file", {"file_path": "out/report.csv", "content": "x"}
+    )
+    assert ledger.conflict("run_shell_command", _shell("echo x > out/report.csv"))
+    # The folder was only ensured, so its other files are not swept up.
+    assert (
+        ledger.conflict("write_file", {"file_path": "out/other.csv", "content": "x"})
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import shutil\nshutil.rmtree('archive')",
+        "import os\nos.makedirs('archive', exist_ok=True)\nos.rename('archive', 'old')",
+        "from pathlib import Path\nPath('archive/ledger.csv').unlink()",
+        "import shutil\nshutil.move('archive/ledger.csv', 'elsewhere.csv')",
+    ],
+)
+def test_a_declined_delete_or_move_is_not_smuggled_through_another_tool(code, tmp_path):
+    (tmp_path / "archive").mkdir()
+    (tmp_path / "archive" / "ledger.csv").write_text("kept\n")
+    ledger = _declined_program(tmp_path, code)
+    assert ledger.conflict("run_shell_command", _shell("rm -rf archive"))
+    assert ledger.conflict(
+        "write_file", {"file_path": "archive/ledger.csv", "content": ""}
+    )
+
+
+def test_a_declined_script_is_the_same_script_through_any_tool(tmp_path):
+    script = tmp_path / "build_report.py"
+    script.write_text(_BUILDS_A_REPORT)
+    wrapper = (
+        f"import subprocess, sys\nsubprocess.run([sys.executable, {str(script)!r}])"
+    )
+    ledger = _declined_program(tmp_path, wrapper)
+    assert ledger.conflict("run_shell_command", _shell(f'python "{script}"'))
+    assert ledger.conflict("execute_python_file", {"file_path": str(script)})
+    # What the script was for is still open to a different route.
+    assert (
+        ledger.conflict("write_file", {"file_path": "out/report.csv", "content": "x"})
+        is None
+    )
+
+
+class _DenyPythonConsole(AgentConsole):
+    """Declines run_python, approves everything else."""
+
+    def __init__(self):
+        super().__init__()
+        self.prompted = []
+
+    def confirm_tool_execution(self, tool_name, tool_args):
+        self.prompted.append(tool_name)
+        return tool_name != "run_python"
+
+
+class _Worker(_Probe):
+    def _register_tools(self):
+        super()._register_tools()
+        agent = self
+
+        @tool
+        def run_python(code: str) -> dict:
+            """Probe python."""
+            agent.ran.append(("run_python", code))
+            return {"status": "success", "return_code": 0}
+
+        @tool
+        def write_file(file_path: str, content: str) -> dict:
+            """Probe writer."""
+            agent.ran.append(("write_file", file_path))
+            return {"status": "success", "file_path": file_path}
+
+
+def _worker(console, cwd):
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        _Worker._console_override = console
+        agent = _Worker(silent_mode=True, skip_lemonade=True)
+    agent._denied_effects = DeniedEffects(str(cwd))
+    root = os.path.normcase(os.path.realpath(str(cwd)))
+
+    def inside(path, prompt_user=True):
+        return os.path.normcase(os.path.realpath(path)).startswith(root)
+
+    agent.path_validator = MagicMock(
+        is_path_allowed=inside, is_write_blocked=lambda path: (False, "")
+    )
+    return agent
+
+
+def test_one_declined_script_does_not_close_the_task(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    console = _DenyPythonConsole()
+    agent = _worker(console, tmp_path)
+
+    declined = agent._execute_tool("run_python", {"code": _BUILDS_A_REPORT})
+    again = agent._execute_tool("run_python", {"code": _BUILDS_A_REPORT})
+    written = agent._execute_tool(
+        "write_file", {"file_path": "out/report.csv", "content": "a,b\n"}
+    )
+
+    assert declined["status"] == "denied"
+    assert declined["hint"] == DECLINED_HINT
+    assert again["status"] == "denied"
+    assert written["status"] == "success"
+    assert agent.ran == [("write_file", "out/report.csv")]
+
+
+def test_a_declined_delete_is_still_stopped_at_the_next_tool(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "archive").mkdir()
+    console = _DenyPythonConsole()
+    agent = _worker(console, tmp_path)
+
+    agent._execute_tool(
+        "run_python", {"code": "import shutil\nshutil.rmtree('archive')"}
+    )
+    rerouted = agent._execute_tool("run_shell_command", {"command": "rm -rf archive"})
+
+    assert rerouted["status"] == "denied"
+    assert rerouted["executed"] is False
+    assert "do not reach it with another tool" in rerouted["error"]
+    assert "steps that do something else are still open" in rerouted["error"]
+    assert agent.ran == []
+    # Stopped by the ledger: nobody is prompted to approve the reroute.
+    assert console.prompted == ["run_python"]
+
+
+def test_the_hint_closes_the_call_not_the_task():
+    assert "not the tool and not the task" in DECLINED_HINT
+    assert "Do not repeat it or reword it" in DECLINED_HINT
+    assert "Carry on with the task" in DECLINED_HINT
+    assert "say in your answer what you could not do" in DECLINED_HINT
+    assert "then stop" not in DECLINED_HINT

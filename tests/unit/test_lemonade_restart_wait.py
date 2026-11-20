@@ -29,6 +29,7 @@ from gaia.llm.lemonade_embedded import (
     EmbeddedStatus,
 )
 from gaia.llm.lemonade_manager import LemonadeManager
+from gaia.llm.surface_hints import APP_RESTART_HINT, CLI_RESTART_HINT
 
 OLD_PORT, OLD_KEY = 60293, "key-of-the-server-that-went-quiet"
 NEW_PORT, NEW_KEY = 60411, "key-after-the-daemon-restarted-it"
@@ -39,6 +40,7 @@ NOT_ANSWERING = (
     "GAIA's Lemonade Server (pid 1) is running but not answering; it may still "
     "be loading a model."
 )
+from gaia.version import LEMONADE_VERSION
 
 
 class _Http:
@@ -303,7 +305,7 @@ class TestItFailsLoudlyWithinTheBound:
             f"was not back within {lc.GAIA_LEMONADE_RECONNECT_SECONDS:.0f}s" in message
         )
         assert "running but not answering" in message
-        assert "gaia daemon status" in message
+        assert APP_RESTART_HINT in message
         assert "daemon log" in message
         assert world.now == pytest.approx(lc.GAIA_LEMONADE_RECONNECT_SECONDS)
         # Bounded: one ask per poll, never a tight loop.
@@ -351,7 +353,9 @@ class TestANewSessionWaitsToo:
         monkeypatch.setattr(
             lc.LemonadeClient,
             "get_status",
-            lambda self: lc.LemonadeStatus(running=True, url=self.base_url),
+            lambda self: lc.LemonadeStatus(
+                version=LEMONADE_VERSION, running=True, url=self.base_url
+            ),
         )
         return world
 
@@ -372,7 +376,8 @@ class TestANewSessionWaitsToo:
 
         err = capsys.readouterr().err
         assert "was not back within" in err
-        assert "gaia daemon status" in err
+        assert CLI_RESTART_HINT in err
+        assert APP_RESTART_HINT not in err
         assert startup.now == pytest.approx(lc.GAIA_LEMONADE_RECONNECT_SECONDS)
 
     def test_a_failed_start_is_still_reported_at_once(self, startup, capsys):
@@ -396,7 +401,8 @@ class TestNotGaiasServer:
 
         assert client.follows_gaia_lemonade is False
         assert client.wait_for_gaia_lemonade(on_status=statuses.append) is False
-        with pytest.raises(requests.exceptions.ConnectionError):
+        # Down, so the request fails at once, naming the server.
+        with pytest.raises(lc.LemonadeServerDownError, match=f"localhost:{OLD_PORT}"):
             client.chat_completions(
                 MODEL, [{"role": "user", "content": "hi"}], auto_download=False
             )
@@ -443,6 +449,22 @@ class TestTheStalePortNeverRestartsALeasedServer:
         assert client.current_base_url() == f"http://localhost:{NEW_PORT}/api/v1"
         assert client.wait_for_gaia_lemonade() is False
         assert world.daemon_posts == []
+
+    def test_with_nothing_recorded_each_poll_asks_the_daemon_once(self, world):
+        """Following with no record already asks for a start; asking again in
+        the same poll doubled the ensure calls and key replays."""
+        world.embedded.state_path.unlink()
+        client = _client()
+
+        def started_but_quiet():
+            # The daemon reports a server it has not recorded answering yet.
+            return _Http(200, {"base_url": f"http://localhost:{NEW_PORT}/api/v1"})
+
+        world.daemon_answers = [started_but_quiet, world.restarted]
+
+        assert client.wait_for_gaia_lemonade() is True
+        assert len(world.daemon_posts) == 2
+        assert world.now == pytest.approx(lc.GAIA_LEMONADE_RECONNECT_POLL_SECONDS)
 
     def test_a_stale_port_never_reaches_a_stop(self, world, monkeypatch):
         """Even waiting on a default-port client only ever asks ``ensure``."""
@@ -620,7 +642,7 @@ class TestRandomizedRestartTiming:
             )
         except lc.LemonadeClientError as e:
             assert quiet_polls * poll >= bound - poll, f"gave up early: {e}"
-            assert "gaia daemon status" in str(e)
+            assert APP_RESTART_HINT in str(e)
             assert world.lemonade_posts == []
         else:
             assert world.lemonade_posts == [
@@ -893,3 +915,78 @@ class TestEmbeddingsRideARestart:
 
         assert world.daemon_posts == []
         assert world.now == 0.0
+
+
+class _Warnings:
+    def __init__(self):
+        self.lines = []
+
+    def warning(self, line):
+        self.lines.append(line)
+
+    def info(self, _line):
+        pass
+
+
+class TestSayingTheServerStopped:
+    """A chat turn shows a live line while the daemon brings a stopped server
+    back, and can tell a stopped GAIA server from any other failure."""
+
+    def test_a_server_with_no_record_reports_it_is_starting_before_the_wait(
+        self, world
+    ):
+        client = _client()
+        world.embedded.state_path.unlink()
+        world.daemon_answers = [world.restarted]
+        seen = []
+        client.model_load_listener = lambda model, state: seen.append(
+            (model, state, len(world.daemon_posts))
+        )
+
+        client.chat_completions(
+            MODEL, [{"role": "user", "content": "hi"}], auto_download=False
+        )
+
+        # Said before the daemon was asked, so the wait is never silent.
+        assert seen[0] == (MODEL, "starting_server", 0)
+        assert world.lemonade_posts[-1][0].startswith(f"http://localhost:{NEW_PORT}")
+
+    def test_a_restart_on_the_same_port_says_it_came_back(self, world):
+        world.listening = {OLD_PORT}
+        client = _client()
+        world.live_pids = {2}
+        world.record(pid=2, port=OLD_PORT, key=NEW_KEY)
+        client.log = _Warnings()
+
+        client.current_base_url()
+
+        url = f"http://localhost:{OLD_PORT}/api/v1"
+        assert client.log.lines == [
+            f"GAIA's Lemonade Server came back at {url} (the daemon restarted "
+            "it); following it."
+        ]
+
+    def test_a_move_still_names_both_addresses(self, world):
+        client = _client()
+        world.restarted()
+        client.log = _Warnings()
+
+        client.current_base_url()
+
+        assert client.log.lines == [
+            f"GAIA's Lemonade Server moved from http://localhost:{OLD_PORT}/api/v1 "
+            f"to http://localhost:{NEW_PORT}/api/v1 (the daemon restarted it); "
+            "following it."
+        ]
+
+    def test_stopped_is_true_only_for_gaias_own_server_not_answering(
+        self, world, monkeypatch
+    ):
+        client = _client()
+        assert client.gaia_lemonade_stopped() is True
+        world.listening = {OLD_PORT}
+        assert client.gaia_lemonade_stopped() is False
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://localhost:9")
+        world.listening = set()
+        assert _client().gaia_lemonade_stopped() is False

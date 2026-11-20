@@ -26,6 +26,10 @@ class ConfigurationError(ConnectorsError):
     """Required configuration (env var, runbook entry) is missing."""
 
 
+class InvalidConfigValueError(ConnectorsError):
+    """A value the user typed into a connector's configure form is not usable."""
+
+
 class OAuthClientNotConfiguredError(ConfigurationError):
     """An ``oauth_pkce`` connector has no OAuth *client* credentials configured.
 
@@ -83,7 +87,7 @@ class OAuthClientNotConfiguredError(ConfigurationError):
             f"{example_block}"
             f"(Power users / CI can instead set {env_prefix}_CLIENT_ID and "
             f"{env_prefix}_CLIENT_SECRET in the environment before launching "
-            f"GAIA.) In the Agent UI you can instead use Settings -> Connections "
+            f"GAIA.) In the Agent UI you can instead use Settings -> Connectors "
             f"-> {label}. Full walkthrough: {docs}"
         )
 
@@ -140,7 +144,7 @@ class AuthRequiredError(ConnectorsError):
         pid = self.provider or "<provider>"
         if self.reason is AuthRequiredError.Reason.NOT_CONNECTED:
             return (
-                f"No {prov} connection. Connect via Settings → Connections in "
+                f"No {prov} connection. Connect via Settings → Connectors in "
                 "AgentUI, or run `gaia connectors connect "
                 f"{pid}`. "
                 "See docs/sdk/infrastructure/connections.mdx."
@@ -166,7 +170,7 @@ class AuthRequiredError(ConnectorsError):
                 )
             return (
                 f"Agent '{agent}' has no grant for {prov}. Grant the required "
-                f"scopes in Settings → Connections, or run {command}. "
+                f"scopes in Settings → Connectors, or run {command}. "
                 "See docs/sdk/infrastructure/connections.mdx."
             )
         if self.reason is AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES:
@@ -186,7 +190,7 @@ class AuthRequiredError(ConnectorsError):
                 )
             return (
                 f"The {prov} connection lacks required scopes ({scopes}). "
-                "Reconnect with the missing scopes from Settings → Connections, "
+                "Reconnect with the missing scopes from Settings → Connectors, "
                 f"or run {command}. "
                 "See docs/sdk/infrastructure/connections.mdx."
             )
@@ -194,7 +198,7 @@ class AuthRequiredError(ConnectorsError):
             return (
                 f"The stored {prov} credentials are no longer valid (client "
                 "rotation or remote revocation). Reconnect from Settings → "
-                f"Connections, or run `gaia connectors connect "
+                f"Connectors, or run `gaia connectors connect "
                 f"{pid}`. "
                 "See docs/runbooks/google-oauth-client.md."
             )
@@ -202,7 +206,7 @@ class AuthRequiredError(ConnectorsError):
             return (
                 f"The stored {prov} connection was authenticated against a "
                 "different Microsoft tenant than the connector currently "
-                "resolves to. Reconnect from Settings → Connections, or run "
+                "resolves to. Reconnect from Settings → Connectors, or run "
                 f"`gaia connectors connect {pid}`. "
                 "See docs/connectors/microsoft.mdx."
             )
@@ -220,10 +224,88 @@ class ConnectionRevokedError(ConnectorsError):
             or (
                 f"The {provider} connection was revoked or its refresh token "
                 "is no longer accepted by the provider. Reconnect from "
-                f"Settings → Connections, or run `gaia connectors connect "
+                f"Settings → Connectors, or run `gaia connectors connect "
                 f"{provider}`. See docs/security/connections.mdx."
             )
         )
+
+
+class ConnectionBusyError(ConnectorsError):
+    """Another GAIA operation is writing this connection right now; retry.
+
+    Transient: the connection is NOT known to be gone, so callers must not
+    treat it like ``AuthRequiredError`` (no reconnect prompt, no 401, no
+    withdrawn forward). ``connection`` is the stored connection's display
+    metadata as last read (account email, connected-at, account type; never
+    its tokens or scopes), or ``None`` if it could not be read.
+    """
+
+    def __init__(self, provider: str, *, connection: dict | None = None):
+        self.provider = provider
+        self.connection = connection
+        super().__init__(
+            f"The {provider} connection is being saved by another GAIA operation "
+            "(in this process or another) right now, so it was left as is. "
+            "Retry in a moment; if this keeps happening, look for a stuck "
+            "`gaia daemon` or Agent UI process."
+        )
+
+
+class ProfileRefusedError(ConnectorsError):
+    """The provider refused to show the signed-in account's profile (HTTP 401
+    or 403): the token lacks the profile permission, so asking again won't help."""
+
+
+class UnknownAccountError(ConnectorsError):
+    """An account name that matches none, or more than one, of a connector's
+    stored accounts. ``choices`` lists the addresses the caller can name."""
+
+    def __init__(
+        self,
+        connector_id: str,
+        account: str,
+        choices: list[str],
+        *,
+        ambiguous: bool = False,
+    ):
+        self.connector_id = connector_id
+        self.account = account
+        self.choices = list(choices)
+        listed = ", ".join(self.choices) if self.choices else "none"
+        what = "matches more than one" if ambiguous else "is not one"
+        super().__init__(
+            f"{account!r} {what} of the connected {connector_id} accounts "
+            f"({listed}). Name one by its address or account id, as listed by "
+            f"`gaia connectors list {connector_id}`."
+        )
+
+
+class AccountChoiceRequiredError(ConnectorsError):
+    """The request needs one account and several are connected."""
+
+    def __init__(self, connector_id: str, choices: list[str], *, action: str):
+        self.connector_id = connector_id
+        self.choices = list(choices)
+        self.action = action
+        super().__init__(
+            f"{connector_id} has {len(self.choices)} connected accounts "
+            f"({', '.join(self.choices)}), so {action} needs to know which one. "
+            "Name it with --account <address>, or pass --all for every account."
+        )
+
+    def http_detail(self) -> dict:
+        """The body of the HTTP 409 for this error: the choices, and a message
+        without CLI flags."""
+        return {
+            "error": "account_choice_required",
+            "connector_id": self.connector_id,
+            "choices": self.choices,
+            "message": (
+                f"{self.connector_id} has {len(self.choices)} connected accounts "
+                f"({', '.join(self.choices)}). Choose one to {self.action}, or "
+                f"{self.action} them all."
+            ),
+        }
 
 
 class ScopeMismatchError(ConnectorsError):
@@ -259,7 +341,7 @@ class ScopeMismatchError(ConnectorsError):
         return (
             f"The {prov} stored connection is missing required scopes "
             f"({missing}). Reconnect with the missing scopes via Settings → "
-            f"Connections, or run `gaia connectors connect "
+            f"Connectors, or run `gaia connectors connect "
             f"{pid} --scopes "
             f"{' '.join(full_scopes) or '<none>'}`. "
             "See docs/sdk/infrastructure/connections.mdx."
@@ -304,7 +386,7 @@ class ConsentDeniedError(ConnectorsError):
 
 
 class FlowTimeoutError(ConnectorsError):
-    """OAuth flow exceeded its 120-second callback timeout."""
+    """OAuth flow's browser sign-in window lapsed before the callback."""
 
 
 class FlowInProgressError(ConnectorsError):
@@ -355,7 +437,7 @@ class UnknownAgentError(ConnectorsError):
         self.agent_ids = list(agent_ids)
         super().__init__(
             f"Unknown agent id(s): {', '.join(self.agent_ids)}. Check the "
-            "namespaced agent id (e.g. 'installed:email') via `gaia connectors "
+            "namespaced agent id (e.g. 'installed:gaia') via `gaia connectors "
             "grants list` or the Agent UI's agent picker."
         )
 

@@ -18,7 +18,6 @@ export const ENV: SessionEnvironment = {
     ],
     removed: [],
     internet: true,
-    working_folder: null,
     enforced: true,
     internet_enforced: true,
 };
@@ -39,6 +38,7 @@ export function stubPanelApi() {
     const m = vi.mocked(api);
     m.getEnvironment.mockResolvedValue(ENV);
     m.getOutputs.mockResolvedValue({ session_id: SID, items: [] });
+    m.getCapabilities.mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: [], skills: [] });
     m.getSessionChanges.mockResolvedValue(NO_CHANGES);
     m.getSessionGit.mockResolvedValue(NO_GIT);
     m.getLocalModelStatus.mockResolvedValue({

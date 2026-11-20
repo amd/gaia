@@ -4,8 +4,9 @@
 
 Upstream ships an "embeddable" Lemonade build: a ``lemond`` daemon plus a
 ``lemonade`` HTTP client, with no installer, no tray app and no machine-wide
-state. This module downloads that artifact, unpacks it under ``~/.gaia``, and
-runs it on a private port behind a generated API key.
+state. This module takes that artifact from the copy the desktop app ships, or
+downloads it, unpacks it under ``~/.gaia``, and runs it on a private port behind
+a generated API key.
 
 The point is a GAIA that carries its own inference server: ``gaia init``
 installs and starts this one, and a system-wide Lemonade install is never
@@ -59,7 +60,7 @@ from gaia.utils.terminal import (
     popen_outliving_job,
     windows_hidden_popen_kwargs,
 )
-from gaia.version import LEMONADE_VERSION
+from gaia.version import LEMONADE_VERSION, parse_version
 
 log = get_logger(__name__)
 
@@ -69,6 +70,11 @@ GITHUB_RELEASE_BASE = "https://github.com/lemonade-sdk/lemonade/releases/downloa
 #: environment describe GAIA's own server, not one the user runs.
 EMBEDDED_ENV_MARKER = "GAIA_LEMONADE_EMBEDDED"
 RELEASES_PAGE = "https://github.com/lemonade-sdk/lemonade/releases"
+
+#: Directory holding the archive the desktop app ships, set by its main.cjs. The
+#: filename carries the version, so a gaia upgraded past that copy finds nothing
+#: there and downloads.
+BUNDLED_ARCHIVE_DIR_ENV = "GAIA_BUNDLED_LEMONADE_DIR"
 
 # (platform.system(), normalized machine) -> asset name template.
 _ASSET_TEMPLATES: Dict[Tuple[str, str], str] = {
@@ -90,10 +96,10 @@ _MACHINE_ALIASES = {
 # install() fail loudly; tests/integration/test_lemonade_embeddable_assets.py
 # checks them against the live release so CI catches the omission first.
 EMBEDDABLE_SHA256: Dict[str, str] = {
-    "lemonade-embeddable-2026.40.0-windows-x64.zip": "30acbcc8beea565f0ea69ea92b229c45c7e7c756a6b35573c45840765c599e8f",
-    "lemonade-embeddable-2026.40.0-ubuntu-x64.tar.gz": "7b7ff14dfe9aea312f5d88281e6499d98fa52ad09f0272dd7ef32e6b6ada3537",
-    "lemonade-embeddable-2026.40.0-ubuntu-arm64.tar.gz": "6ab4a80e51e80f8410b1b31aa7665717e0f78926d57ff55e2bf83995d19dbb32",
-    "lemonade-embeddable-2026.40.0-macos-arm64.tar.gz": "5301b1004e95454b4b4b2a0b09206764c52d387fe6fcd6ac5340bffe55779151",
+    "lemonade-embeddable-2026.44.1-windows-x64.zip": "7ff6c5d6ab612c33690411a7e53d6d0dd62eb515a073375c35015b0778a5a344",
+    "lemonade-embeddable-2026.44.1-ubuntu-x64.tar.gz": "16f156a7f44a32b20936e76019b24dbccc7b82e60a3acea12e8614da8bca8e90",
+    "lemonade-embeddable-2026.44.1-ubuntu-arm64.tar.gz": "b458a1cfbcfa3f382c5cacc90486c216a5f100f56d5266912eaea141aa9be7ae",
+    "lemonade-embeddable-2026.44.1-macos-arm64.tar.gz": "204e436477c6391f503baf245828251eb0007e91a204e7196fd87887df385017",
 }
 
 # lemond reads these from <config_dir>/config.json.
@@ -423,6 +429,38 @@ def _exit_details(pid: int) -> Tuple[Optional[int], Optional[float]]:
     return None, None
 
 
+#: Lines of lemond's own output quoted when it exits during start.
+_STARTUP_ERROR_LINES = 6
+_STARTUP_TAIL_BYTES = 256 * 1024
+_STARTUP_LINE_CHARS = 500
+#: lemond's own error levels, and the dynamic loader's refusals.
+_STARTUP_ERROR_RE = re.compile(
+    r"\[(?:error|critical|fatal)\]|error while loading shared libraries"
+    r"|version `[^']+' not found|cannot open shared object",
+    re.IGNORECASE,
+)
+_STARTUP_WARNING_RE = re.compile(r"\b(?:error|failed|cannot|denied|abort)", re.I)
+
+
+def _startup_output(log_path: Path, offset: int, known: Tuple[str, ...]) -> str:
+    """The end of what lemond wrote to *log_path* after *offset*, errors first."""
+    with open(log_path, "rb") as fh:
+        size = fh.seek(0, os.SEEK_END)
+        start = offset if offset <= size else 0
+        fh.seek(max(start, size - _STARTUP_TAIL_BYTES))
+        text = fh.read().decode("utf-8", errors="replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    errors = [line for line in lines if _STARTUP_ERROR_RE.search(line)]
+    if not errors:
+        errors = [line for line in lines if _STARTUP_WARNING_RE.search(line)]
+    picked = [
+        line[:_STARTUP_LINE_CHARS] for line in (errors or lines)[-_STARTUP_ERROR_LINES:]
+    ]
+    from gaia.llm.failure_record import redact
+
+    return redact("\n".join(picked), known)
+
+
 def _describe_exit_code(code: Optional[int]) -> str:
     if code is None:
         return "exit code unavailable"
@@ -527,6 +565,16 @@ def gaia_home() -> Path:
     return Path.home() / ".gaia"
 
 
+def is_gaias_to_start(embedded: "EmbeddedLemonade") -> bool:
+    """Whether this machine was set up with GAIA's own server: installed, in
+    need of repair, or on a version this GAIA replaces."""
+    return bool(
+        embedded.is_installed()
+        or embedded.replaces_other_install()
+        or embedded.is_incomplete()
+    )
+
+
 def _normalized_machine() -> str:
     """Return this host's architecture in the naming the asset table uses.
 
@@ -584,6 +632,25 @@ def asset_url(version: str = LEMONADE_VERSION) -> str:
     return f"{GITHUB_RELEASE_BASE}/v{version}/{asset_name(version)}"
 
 
+def bundled_archive(name: str) -> Optional[Path]:
+    """Return the desktop app's copy of the asset *name*, if it ships one.
+
+    Args:
+        name: Asset filename from :func:`asset_name`.
+
+    Returns:
+        The archive's path, or None when nothing is bundled for this version.
+    """
+    directory = os.environ.get(BUNDLED_ARCHIVE_DIR_ENV)
+    if not directory:
+        return None
+    candidate = Path(directory) / name
+    if candidate.is_file():
+        return candidate
+    log.info("%s has no %s; downloading it", directory, name)
+    return None
+
+
 def _inside(path: str, root: str) -> bool:
     """Whether *path* is under *root* (both compared case-normalized)."""
     try:
@@ -618,6 +685,10 @@ def _outlived(anchor: int, born: float) -> bool:
     except psutil.AccessDenied as e:
         log.debug("Treating pid %s as alive: cannot inspect it (%s)", anchor, e)
         return False
+
+
+# What secrets.token_urlsafe(32) produces; anything else in last_key is not ours.
+_API_KEY_RE = re.compile(r"[A-Za-z0-9_-]{43}")
 
 
 def _free_port() -> int:
@@ -780,6 +851,8 @@ class EmbeddedLemonade:
         self.version = version
         self.root = (home or gaia_home()) / "lemonade"
         self.progress_callback = progress_callback
+        # Where this start's output begins in lemond.log, to quote its error.
+        self._spawn_log_offset = 0
 
     # -- paths ------------------------------------------------------------
 
@@ -820,6 +893,12 @@ class EmbeddedLemonade:
         return self.root / "last_port.json"
 
     @property
+    def last_key_path(self) -> Path:
+        """The API key the last start used. Survives ``stop`` and a crash so a
+        restart on the same port keeps the key running agents already hold."""
+        return self.root / "last_key"
+
+    @property
     def busy_since_path(self) -> Path:
         """Since when the busy instance's backends have been quiet."""
         return self.root / "busy_since.json"
@@ -849,10 +928,57 @@ class EmbeddedLemonade:
         """
         return self.daemon_path.is_file()
 
+    def is_incomplete(self) -> bool:
+        """Whether this version was unpacked but its ``lemond`` is gone.
+
+        Still GAIA's server to start: setup repairs it, and a system install
+        on the default port is not the one this machine was set up with.
+        """
+        return self.dist_dir.is_dir() and not self.daemon_path.is_file()
+
+    def replaces_other_install(self) -> bool:
+        """Whether another parseable version is unpacked for replacement.
+
+        GAIA keeps its private server on the pinned version. A newer build may
+        be incompatible with the current GAIA release too, so both upgrades and
+        downgrades repair it without making the user reinstall manually.
+        """
+        target = parse_version(self.version)
+        dist = self.root / "dist"
+        if target is None or not dist.is_dir():
+            return False
+        return any(
+            (found := parse_version(entry.name)) is not None and found != target
+            for entry in dist.iterdir()
+            if entry.is_dir()
+        )
+
+    def other_installed_version(self) -> Optional[str]:
+        """The newest parseable version other than the pinned one, or None.
+
+        A GAIA update can move the pinned version in either direction. Any
+        complete, different install means this machine needs repair rather than
+        first-run setup.
+        """
+        dist = self.root / "dist"
+        if not dist.is_dir():
+            return None
+        name = self.daemon_path.name
+        found = [
+            d.name
+            for d in dist.iterdir()
+            if d.name != self.version
+            and parse_version(d.name) is not None
+            and (d / name).is_file()
+        ]
+        return max(found, key=lambda v: parse_version(v) or (), default=None)
+
     # -- install ----------------------------------------------------------
 
     def install(self, force: bool = False) -> Path:
-        """Download, verify and unpack the embeddable artifact.
+        """Verify and unpack the embeddable artifact.
+
+        Uses the copy the desktop app ships for this version, else downloads it.
 
         Args:
             force: Reinstall even when the version is already unpacked.
@@ -862,7 +988,8 @@ class EmbeddedLemonade:
 
         Raises:
             UnsupportedPlatformError: No asset for this OS/architecture.
-            EmbeddedLemonadeError: Download, checksum or unpack failed.
+            EmbeddedLemonadeError: Download, checksum or unpack failed. A bundled
+                archive that fails its checksum never falls back to a download.
         """
         if self.is_installed() and not force:
             log.debug("Embedded Lemonade %s already installed", self.version)
@@ -890,10 +1017,14 @@ class EmbeddedLemonade:
             )
 
         self.root.mkdir(parents=True, exist_ok=True)
+        bundled = bundled_archive(name)
         with tempfile.TemporaryDirectory(prefix="gaia-lemonade-") as tmp:
             archive = Path(tmp) / name
-            self._download(asset_url(self.version), archive)
-            self._verify(archive, expected)
+            if bundled is None:
+                self._download(asset_url(self.version), archive)
+                self._verify(archive, expected)
+            else:
+                self._copy_bundled(bundled, archive, expected)
 
             unpacked = Path(tmp) / "unpacked"
             _extract(archive, unpacked)
@@ -960,12 +1091,44 @@ class EmbeddedLemonade:
                 f"from {RELEASES_PAGE}/tag/v{self.version}."
             ) from e
 
-    def _verify(self, archive: Path, expected_sha256: str) -> None:
+    def _copy_bundled(self, bundled: Path, dest: Path, expected_sha256: str) -> None:
+        """Copy the desktop app's archive to *dest* and verify it.
+
+        Args:
+            bundled: The archive inside the installed app.
+            dest: File to write.
+            expected_sha256: Hex digest the release publishes.
+
+        Raises:
+            EmbeddedLemonadeError: It cannot be read or fails its checksum.
+        """
+        log.info("Installing Lemonade from the app's copy at %s", bundled)
+        try:
+            shutil.copyfile(bundled, dest)
+        except OSError as e:
+            raise EmbeddedLemonadeError(
+                f"Could not read the Lemonade Server archive shipped with GAIA "
+                f"at {bundled}: {e}. Reinstall the GAIA desktop app."
+            ) from e
+        self._verify(
+            dest,
+            expected_sha256,
+            remedy=(
+                f"The copy shipped with GAIA at {bundled} is damaged or was "
+                f"altered. Reinstall the GAIA desktop app."
+            ),
+        )
+
+    def _verify(
+        self, archive: Path, expected_sha256: str, remedy: Optional[str] = None
+    ) -> None:
         """Check *archive* against its pinned digest.
 
         Args:
-            archive: Downloaded file.
+            archive: The file to check.
             expected_sha256: Hex digest the release publishes.
+            remedy: What the error tells the user to do. Defaults to retrying
+                the download.
 
         Raises:
             EmbeddedLemonadeError: The digest does not match.
@@ -976,11 +1139,14 @@ class EmbeddedLemonade:
                 digest.update(block)
         actual = digest.hexdigest()
         if actual != expected_sha256:
+            remedy = remedy or (
+                f"The download is corrupt or the release asset was replaced. "
+                f"Retry; if it persists, compare against "
+                f"{RELEASES_PAGE}/tag/v{self.version}."
+            )
             raise EmbeddedLemonadeError(
                 f"Checksum mismatch for {archive.name}: expected "
-                f"{expected_sha256}, got {actual}. The download is corrupt or "
-                f"the release asset was replaced. Retry; if it persists, "
-                f"compare against {RELEASES_PAGE}/tag/v{self.version}."
+                f"{expected_sha256}, got {actual}. {remedy}"
             )
         log.debug("Verified %s (sha256 %s)", archive.name, actual)
 
@@ -1063,7 +1229,8 @@ class EmbeddedLemonade:
         The embedder is loaded on demand by ``/embeddings`` as well as by GAIA's
         explicit loads, so its ubatch has to live in Lemonade's saved options.
         A saved CPU backend is dropped so each start tries the GPU again; the
-        client saves the CPU back only if the GPU load fails.
+        client saves the CPU back only if the GPU load fails. On macOS, where
+        Lemonade picks the backend, only the ubatch is written.
         """
         from gaia.llm.lemonade_client import (
             DEFAULT_EMBEDDING_MODEL,
@@ -1089,11 +1256,12 @@ class EmbeddedLemonade:
             options = loaded
         # Lemonade keys saved options by the registered (``user.``) name.
         for model in (DEFAULT_EMBEDDING_MODEL,):
-            if not manages_embedder_backend(model):
-                continue
             entry = options.get(model)
             entry = dict(entry) if isinstance(entry, dict) else {}
-            if entry.get("llamacpp_backend") == "cpu":
+            if (
+                manages_embedder_backend(model)
+                and entry.get("llamacpp_backend") == "cpu"
+            ):
                 log.info(
                     "Clearing the saved CPU backend for %s in %s so it tries the "
                     "GPU again",
@@ -1138,18 +1306,23 @@ class EmbeddedLemonade:
         Args:
             state: pid, port, api_key and version of the live daemon.
         """
+        self._write_private(self.state_path, json.dumps(state, indent=2))
+
+    def _write_private(self, path: Path, text: str) -> None:
+        """Write *text* to a file created owner-only (0600 on POSIX)."""
         self.root.mkdir(parents=True, exist_ok=True)
-        self.state_path.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        descriptor = os.open(self.state_path, flags, stat.S_IRUSR | stat.S_IWUSR)
+        descriptor = os.open(path, flags, stat.S_IRUSR | stat.S_IWUSR)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(state, handle, indent=2)
+            handle.write(text)
 
     def _clear_state(self) -> None:
         """Remove the state and credentials files if present.
 
         Both go together: credentials naming a dead port are worse than none,
         because the next process to grab that port inherits the trust.
+        ``last_key`` stays: :meth:`_reusable_key` hands it back only on the same port.
         """
         self.state_path.unlink(missing_ok=True)
         self.env_path.unlink(missing_ok=True)
@@ -1548,15 +1721,27 @@ class EmbeddedLemonade:
         """Ask the recorded instance for its ``/health`` payload.
 
         Returns:
-            ``(recorded, health)``: whether an instance is recorded at all, and
-            its health payload, or None when it did not answer.
+            ``(recorded, health)``: whether a recorded instance is still
+            running, and its health payload, or None when it did not answer.
+            A record whose process has exited counts as no instance.
         """
         state = self._read_state()
         port = state.get("port") if state else None
         api_key = state.get("api_key") if state else None
         if not (port and api_key):
             return False, None
-        return True, self._health(int(port), api_key)
+        health = self._health(int(port), api_key)
+        if health is not None:
+            return True, health
+        pid = state.get("pid")
+        if not pid:
+            return False, None
+        spawned = _SPAWNED.get(int(pid))
+        if spawned is not None and spawned.poll() is not None:
+            return False, None
+        if self._identify(int(pid), int(port), api_key) == OTHER:
+            return False, None
+        return True, None
 
     def current_api_key(self) -> Optional[str]:
         """Return the API key of the recorded instance, if there is one.
@@ -1649,6 +1834,10 @@ class EmbeddedLemonade:
             return None
         return port if 1024 <= port <= 65535 else None
 
+    def last_port(self) -> Optional[int]:
+        """The port the last start used: where a stopped server comes back."""
+        return self._read_last_port()
+
     def _choose_port(self) -> int:
         """Reuse the last start's port while it is free, else take a new one."""
         last = self._read_last_port()
@@ -1665,6 +1854,39 @@ class EmbeddedLemonade:
     def _record_port(self, port: int) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         self.last_port_path.write_text(json.dumps({"port": port}), encoding="utf-8")
+
+    def _record_key(self, api_key: str) -> None:
+        self._write_private(self.last_key_path, api_key)
+
+    def _reusable_key(self, port: int) -> Optional[str]:
+        """The last start's key when this start lands on the same port, else None.
+
+        A new port means running agents cannot reach the server anyway, and the
+        old port may now belong to a stranger they sent the key to, so it rotates.
+        """
+        if port != self._read_last_port():
+            return None
+        path = self.last_key_path
+        try:
+            mode = path.stat().st_mode
+            key = path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return None
+        except (OSError, UnicodeDecodeError) as e:
+            log.warning("Ignoring unreadable %s (%s); starting with a new key", path, e)
+            return None
+        if platform.system() != "Windows" and mode & 0o077:
+            log.warning(
+                "Ignoring %s: other users can read it; starting with a new key",
+                path,
+            )
+            return None
+        if not _API_KEY_RE.fullmatch(key):
+            log.warning(
+                "Ignoring %s: it holds no valid key; starting with a new key", path
+            )
+            return None
+        return key
 
     def _write_env_file(self, port: int, api_key: str) -> Path:
         """Write the sourceable credentials file for the running instance.
@@ -1736,6 +1958,7 @@ class EmbeddedLemonade:
         install_if_missing: bool = True,
         owner_pid: Optional[int] = None,
         owner_started: Optional[float] = None,
+        upgrade_mismatch: bool = False,
     ) -> EmbeddedStatus:
         """Start the private daemon and wait for it to answer.
 
@@ -1747,6 +1970,9 @@ class EmbeddedLemonade:
             install_if_missing: Download the artifact when it is not unpacked.
             owner_pid: The GAIA daemon starting it, recorded as its owner.
             owner_started: That daemon's process start time.
+            upgrade_mismatch: Download this version, even when
+                *install_if_missing* is false, if it replaces another
+                parseable version that is installed or running.
 
         Returns:
             Status of the running instance.
@@ -1757,8 +1983,32 @@ class EmbeddedLemonade:
         """
         with self._instance_lock():
             return self._start_locked(
-                port, timeout, install_if_missing, owner_pid, owner_started
+                port,
+                timeout,
+                install_if_missing,
+                owner_pid,
+                owner_started,
+                upgrade_mismatch,
             )
+
+    def is_version_mismatch(self, version: Optional[str]) -> bool:
+        """Whether a parseable *version* differs from this instance's target."""
+        found, target = parse_version(version), parse_version(self.version)
+        return found is not None and target is not None and found != target
+
+    def _ensure_installed(
+        self, install_if_missing: bool, upgrade_mismatch: bool, upgrading: bool
+    ) -> None:
+        if self.is_installed():
+            return
+        replaces = upgrading or self.replaces_other_install()
+        if not install_if_missing and not (upgrade_mismatch and replaces):
+            raise EmbeddedLemonadeError(
+                f"Embedded Lemonade {self.version} is not installed at "
+                f"{self.dist_dir}. Run `gaia lemonade embedded start` "
+                f"without --no-install to download it."
+            )
+        self.install()
 
     def _start_locked(
         self,
@@ -1767,8 +2017,28 @@ class EmbeddedLemonade:
         install_if_missing: bool,
         owner_pid: Optional[int],
         owner_started: Optional[float],
+        upgrade_mismatch: bool,
     ) -> EmbeddedStatus:
         existing = self._status(reap=False)
+        if existing.running and self.is_version_mismatch(existing.version):
+            # Download first, so a failed repair leaves the running server up.
+            try:
+                self._ensure_installed(
+                    install_if_missing, upgrade_mismatch, upgrading=True
+                )
+            except EmbeddedLemonadeError as e:
+                raise EmbeddedLemonadeError(
+                    f"Could not upgrade embedded Lemonade {existing.version} to "
+                    f"{self.version}, so {existing.version} is still running on "
+                    f"port {existing.port}. {e}"
+                ) from e
+            log.warning(
+                "Embedded Lemonade %s is running; replacing it with %s",
+                existing.version,
+                self.version,
+            )
+            self._stop_locked(_STOP_TIMEOUT)
+            existing = self._status(reap=False)
         if existing.running:
             if existing.version != self.version:
                 raise EmbeddedLemonadeError(
@@ -1795,14 +2065,7 @@ class EmbeddedLemonade:
                 f"`gaia lemonade embedded stop`, then start again."
             )
 
-        if not self.is_installed():
-            if not install_if_missing:
-                raise EmbeddedLemonadeError(
-                    f"Embedded Lemonade {self.version} is not installed at "
-                    f"{self.dist_dir}. Run `gaia lemonade embedded start` "
-                    f"without --no-install to download it."
-                )
-            self.install()
+        self._ensure_installed(install_if_missing, upgrade_mismatch, upgrading=False)
 
         self._reap_orphaned_backends()
         self.write_config()
@@ -1859,6 +2122,7 @@ class EmbeddedLemonade:
         )
         self._write_env_file(port, api_key)
         self._record_port(port)
+        self._record_key(api_key)
         log.info("Embedded Lemonade %s ready on port %s", self.version, port)
         return EmbeddedStatus(
             installed=True,
@@ -1880,9 +2144,18 @@ class EmbeddedLemonade:
         Returns:
             The process, the API key it was started with, and when it started.
         """
-        api_key = secrets.token_urlsafe(32)
+        # Running agents hold the last key; a new one would 401 them.
+        api_key = self._reusable_key(port) or secrets.token_urlsafe(32)
 
-        env = child_env({"LEMONADE_API_KEY": api_key, **vulkan_workarounds()})
+        from gaia.llm.fireworks_known_models import start_env
+
+        env = child_env(
+            {
+                "LEMONADE_API_KEY": api_key,
+                **vulkan_workarounds(),
+                **start_env(self.config_dir),
+            }
+        )
 
         argv = [
             str(self.daemon_path),
@@ -1892,6 +2165,17 @@ class EmbeddedLemonade:
             str(port),
         ]
         log.info("Starting embedded Lemonade: %s", " ".join(argv))
+        if sys.platform.startswith("linux"):
+            from gaia.llm.lemonade_tls import ca_store_problem
+            from gaia.llm.npu_linux import raise_memlock_soft_limit
+
+            # Local models still run without it, so warn rather than refuse.
+            ca_problem = ca_store_problem()
+            if ca_problem:
+                log.warning(ca_problem)
+
+            # FastFlowLM pins the model in locked memory, and inherits lemond's limit.
+            raise_memlock_soft_limit()
 
         # Own group/session so the server outlives the CLI process that spawned
         # it. A hidden console, not none: lemond's llama/whisper/kokoro children
@@ -1900,6 +2184,7 @@ class EmbeddedLemonade:
 
         self.root.mkdir(parents=True, exist_ok=True)
         with open(self.log_path, "ab") as logfile:
+            self._spawn_log_offset = logfile.tell()
             process = popen_outliving_job(
                 argv,
                 env=env,
@@ -1952,11 +2237,7 @@ class EmbeddedLemonade:
                     taken = False
                 if taken:
                     raise _PortTaken(port)
-                raise EmbeddedLemonadeError(
-                    f"Embedded Lemonade exited immediately (code "
-                    f"{process.returncode}) on port {port}. Read "
-                    f"{self.log_path} for the daemon's own error, then retry."
-                )
+                raise EmbeddedLemonadeError(self._exit_message(process, port, api_key))
             if self._health(port, api_key) is not None:
                 return
             time.sleep(0.25)
@@ -1965,6 +2246,20 @@ class EmbeddedLemonade:
             f"{port} within {timeout:.0f}s. Read {self.log_path} for what "
             f"it was doing, then retry."
         )
+
+    def _exit_message(self, process: subprocess.Popen, port: int, api_key: str) -> str:
+        """Why lemond quit during start, quoting its own last errors."""
+        head = (
+            f"Embedded Lemonade exited immediately "
+            f"({_describe_exit_code(process.returncode)}) on port {port}."
+        )
+        try:
+            said = _startup_output(self.log_path, self._spawn_log_offset, (api_key,))
+        except OSError as e:
+            return f"{head} Its log {self.log_path} could not be read ({e})."
+        if not said:
+            return f"{head} It wrote nothing before exiting. Full log: {self.log_path}"
+        return f"{head} Lemonade said:\n{said}\nFull log: {self.log_path}"
 
     def _discard(self, process: subprocess.Popen) -> None:
         """Kill a start that failed and forget it, unless another took over."""

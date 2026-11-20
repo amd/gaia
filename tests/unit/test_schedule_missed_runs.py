@@ -11,7 +11,9 @@ show` gave no sign anything was missed.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
+import pytest
 from apscheduler.events import (
     EVENT_JOB_MISSED,
     EVENT_JOB_SUBMITTED,
@@ -34,14 +36,31 @@ def _hour(dt: datetime) -> datetime:
     return dt.replace(minute=0, second=0, microsecond=0)
 
 
+def _frozen_at(moment):
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment if tz is None else moment.astimezone(tz)
+
+    return Frozen
+
+
+@pytest.fixture
+def now(monkeypatch):
+    """The test's "now", which the daemon also reads: a minute or hour must not
+    roll over between the test's clock read and the daemon's."""
+    moment = datetime.now(timezone.utc)
+    monkeypatch.setattr(daemon, "datetime", _frozen_at(moment))
+    return moment
+
+
 def _store(tmp_path, **fields) -> TomlScheduleStore:
     store = TomlScheduleStore(tmp_path / "schedules.toml")
     store.add(Schedule(name="brief", cron=HOURLY, prompt="say hello", **fields))
     return store
 
 
-def test_runs_due_while_the_daemon_was_not_running_are_recorded(tmp_path):
-    now = datetime.now(timezone.utc)
+def test_runs_due_while_the_daemon_was_not_running_are_recorded(tmp_path, now):
     # The last run finished, then the PC was off for the next three hours.
     last_run = _hour(now) - timedelta(hours=3, minutes=-1)
     store = _store(
@@ -61,8 +80,7 @@ def test_runs_due_while_the_daemon_was_not_running_are_recorded(tmp_path):
     assert datetime.fromisoformat(brief.next_run) > now
 
 
-def test_a_restart_does_not_report_the_same_missed_runs_twice(tmp_path):
-    now = datetime.now(timezone.utc)
+def test_a_restart_does_not_report_the_same_missed_runs_twice(tmp_path, now):
     store = _store(
         tmp_path,
         created_at=_iso(now - timedelta(days=2)),
@@ -74,8 +92,7 @@ def test_a_restart_does_not_report_the_same_missed_runs_twice(tmp_path):
     assert store.get("brief").missed_count == first
 
 
-def test_a_paused_schedule_does_not_count_its_pause_as_missed(tmp_path):
-    now = datetime.now(timezone.utc)
+def test_a_paused_schedule_does_not_count_its_pause_as_missed(tmp_path, now):
     store = _store(
         tmp_path,
         created_at=_iso(now - timedelta(days=2)),
@@ -87,18 +104,11 @@ def test_a_paused_schedule_does_not_count_its_pause_as_missed(tmp_path):
     assert store.get("brief").missed_count == 0
 
 
-def _frozen_at(moment):
-    class Frozen(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return moment if tz is None else moment.astimezone(tz)
-
-    return Frozen
-
-
 def _sleeping_daemon(tmp_path, monkeypatch, *, woke_after):
     """A daemon running before the next run, on a PC that then sleeps."""
-    due = _hour(datetime.now(timezone.utc)) + timedelta(hours=1)
+    started = datetime.now(timezone.utc)
+    monkeypatch.setattr(daemon, "datetime", _frozen_at(started))
+    due = _hour(started) + timedelta(hours=1)
     store = _store(
         tmp_path, created_at=_iso(due - timedelta(days=1)), next_run=_iso(due)
     )
@@ -126,6 +136,41 @@ def test_runs_a_long_sleep_folded_together_are_recorded(tmp_path, monkeypatch):
     assert datetime.fromisoformat(brief.next_run) == woke_run + timedelta(hours=1)
 
 
+def test_the_repeated_hour_of_a_dst_change_is_counted_once(tmp_path, monkeypatch):
+    # 01:00 happens twice on this date in Los Angeles: 08:00 and 09:00 UTC.
+    zone = ZoneInfo("America/Los_Angeles")
+    from_crontab = daemon.CronTrigger.from_crontab
+    monkeypatch.setattr(
+        daemon.CronTrigger,
+        "from_crontab",
+        lambda cron: from_crontab(cron, timezone=zone),
+    )
+    first_due = datetime(2026, 11, 1, 6, tzinfo=timezone.utc)
+    second_one_am = datetime(2026, 11, 1, 9, tzinfo=timezone.utc)
+    store = _store(
+        tmp_path,
+        created_at=_iso(first_due - timedelta(days=1)),
+        next_run=_iso(first_due),
+        missed_since=_iso(first_due - timedelta(days=1)),
+    )
+    monkeypatch.setattr(
+        daemon, "datetime", _frozen_at(second_one_am + timedelta(minutes=30))
+    )
+    # APScheduler reports run times in the trigger's zone, so both read 01:00.
+    scheduled = [
+        (second_one_am - timedelta(hours=hours)).astimezone(zone) for hours in (0, 1)
+    ]
+
+    daemon._account_for_submission(
+        store, JobSubmissionEvent(EVENT_JOB_SUBMITTED, "brief", None, scheduled)
+    )
+
+    brief = store.get("brief")
+    assert brief.missed_count == 3
+    assert brief.last_missed == _iso(second_one_am - timedelta(hours=1))
+    assert datetime.fromisoformat(brief.next_run) == second_one_am + timedelta(hours=1)
+
+
 def test_a_run_dropped_as_too_late_is_recorded_once(tmp_path, monkeypatch):
     due, store, scheduler = _sleeping_daemon(
         tmp_path, monkeypatch, woke_after=timedelta(hours=3, minutes=30)
@@ -144,8 +189,7 @@ def test_a_run_dropped_as_too_late_is_recorded_once(tmp_path, monkeypatch):
     assert brief.last_missed == _iso(latest)
 
 
-def test_a_schedule_saved_before_misses_were_counted_starts_counting_now(tmp_path):
-    now = datetime.now(timezone.utc)
+def test_a_schedule_saved_before_misses_were_counted_starts_counting_now(tmp_path, now):
     store = TomlScheduleStore(tmp_path / "schedules.toml")
     # An old store: its next_run is stale because failed runs never moved it.
     store.save(
@@ -183,9 +227,27 @@ def test_show_says_runs_were_missed(tmp_path, mocker, capsys):
     assert f"latest due {local.isoformat()}" in out
 
 
-def test_past_the_count_cap_the_latest_due_time_is_recorded(tmp_path, monkeypatch):
+def _minute(dt: datetime) -> datetime:
+    return dt.replace(second=0, microsecond=0)
+
+
+@pytest.mark.parametrize(
+    "offset",
+    [
+        pytest.param(None, id="now"),
+        pytest.param(timedelta(0), id="on-the-minute"),
+        pytest.param(timedelta(microseconds=-1), id="just-before-the-minute"),
+        pytest.param(timedelta(microseconds=1), id="just-after-the-minute"),
+    ],
+)
+def test_past_the_count_cap_the_latest_due_time_is_recorded(
+    tmp_path, monkeypatch, offset
+):
     monkeypatch.setattr(daemon, "_MAX_MISSED_COUNTED", 10)
     now = datetime.now(timezone.utc)
+    if offset is not None:
+        now = _minute(now) + timedelta(minutes=1) + offset
+    monkeypatch.setattr(daemon, "datetime", _frozen_at(now))
     store = TomlScheduleStore(tmp_path / "schedules.toml")
     store.add(
         Schedule(
@@ -198,8 +260,8 @@ def test_past_the_count_cap_the_latest_due_time_is_recorded(tmp_path, monkeypatc
     )
     daemon.build_scheduler(store)
     brief = store.get("minutely")
-    latest = datetime.fromisoformat(brief.last_missed)
-    assert now - timedelta(minutes=1) < latest <= now
+    # A run due at the very moment the daemon starts was missed too.
+    assert datetime.fromisoformat(brief.last_missed) == _minute(now)
     assert brief.missed_at_least is True
 
 

@@ -8,6 +8,7 @@ liveness verification (D-4b).
 
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 import time
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from gaia.daemon.instance import pid_alive
+from gaia.daemon.sidecars import platform as plat
 from gaia.daemon.sidecars.errors import (
     CapacityError,
     DevSrcDirResolutionError,
@@ -28,6 +30,7 @@ from gaia.daemon.sidecars.errors import (
 from gaia.daemon.sidecars.manager import AgentSidecarManager
 from gaia.daemon.sidecars.spec import (
     AgentSidecarSpec,
+    repo_root_from_agent_binary_lock_path,
     repo_root_from_agent_dev_src_dir,
 )
 from gaia.logger import get_logger
@@ -75,10 +78,11 @@ class SidecarRegistry:
         max_live: int = MAX_LIVE_SIDECARS,
         *,
         on_spawn: Optional[Callable[[str, AgentSidecarManager], None]] = None,
-        on_stop: Optional[Callable[[str], None]] = None,
+        on_stop: Optional[Callable[[str, Optional[int]], None]] = None,
         on_started: Optional[Callable[[str, AgentSidecarManager], None]] = None,
         custody_auth=None,
         custody_base_url: Optional[str] = None,
+        keychain_auth=None,
     ):
         self._specs = dict(specs)
         self.max_live = max_live
@@ -98,6 +102,7 @@ class SidecarRegistry:
         # (they fall back to their own embedded provider).
         self._custody_auth = custody_auth
         self._custody_base_url = custody_base_url
+        self._keychain_auth = keychain_auth
         # agent_id -> (manager, per-agent lock). The registry lock guards this
         # map (atomic get-or-create); the per-agent lock serializes the slow
         # is_running-check + start() so N concurrent first ensures spawn ONE
@@ -141,10 +146,11 @@ class SidecarRegistry:
 
         # A single reaped hook fires both the ledger removal and the custody
         # revoke so a crashed/killed sidecar's secret stops resolving the moment
-        # its process is confirmed gone.
-        def _on_reaped(_aid=agent_id) -> None:
+        # its process is confirmed gone. It names the reaped pid so an earlier
+        # spawn that outlived its shutdown keeps its ledger entry.
+        def _on_reaped(_aid=agent_id, _m=manager) -> None:
             if self._on_stop is not None:
-                self._on_stop(_aid)
+                self._on_stop(_aid, _m.pid)
             self._revoke_custody(_aid)
 
         manager.on_process_reaped = _on_reaped
@@ -155,18 +161,26 @@ class SidecarRegistry:
         if self._custody_auth is not None and self._custody_base_url:
             manager.custody_url = self._custody_base_url
             manager.custody_secret = self._custody_auth.mint(agent_id)
+            if self._keychain_auth is not None and spec.daemon_owns_keychain:
+                manager.mint_keychain_secret = lambda: self._keychain_auth.mint(
+                    agent_id
+                )
         return manager
 
     def _revoke_custody(self, agent_id: str) -> None:
         """Drop *agent_id*'s custody secret binding (idempotent)."""
         if self._custody_auth is not None:
             self._custody_auth.revoke(agent_id)
+        if self._keychain_auth is not None:
+            self._keychain_auth.revoke(agent_id)
 
     def ensure(
         self,
         agent_id: str,
         mode: Optional[str] = None,
         dev_src_dir: Optional[str] = None,
+        binary_lock_sha256: Optional[str] = None,
+        binary_lock_path: Optional[str] = None,
     ) -> dict:
         """Spawn-or-attach *agent_id*'s sidecar; return its fields + token.
 
@@ -176,6 +190,12 @@ class SidecarRegistry:
         source; a caller in a different checkout gets a loud refusal instead
         of silently being served the daemon's checkout (or, in the attach
         case, whatever checkout is already running).
+
+        *binary_lock_sha256* is the user-mode mirror (issue #2596): the digest
+        of the caller's own ``binaries.lock.json``, compared against the
+        daemon's lock. *binary_lock_path* only names the caller's file in the
+        refusal; the daemon never reads it. A checked ensure echoes the
+        daemon's digest as ``binary_lock_sha256``.
         """
         spec = self._spec(agent_id)
         with self._lock:
@@ -189,6 +209,15 @@ class SidecarRegistry:
         manager, agent_lock = holder
         with agent_lock:
             self._check_dev_src_dir(agent_id, spec, mode, dev_src_dir)
+            lock_digest = self._check_binary_lock(
+                agent_id, spec, mode, manager, binary_lock_sha256, binary_lock_path
+            )
+            if manager.is_running and manager.uses_ignored_lemonade:
+                # GAIA's own was chosen over the LEMONADE_BASE_URL it got.
+                logger.info(
+                    "daemon: restarting agent '%s' on GAIA's own Lemonade", agent_id
+                )
+                self._stop_locked(agent_id, manager)
             if manager.is_running:
                 # Attaching without an explicit mode is not a mode request —
                 # only an explicit, differing mode conflicts (compared against
@@ -200,7 +229,7 @@ class SidecarRegistry:
                         f"requested. Stop it first (`gaia daemon stop-agent "
                         f"{agent_id}`), then re-ensure in the new mode."
                     )
-                return self._entry(agent_id, manager, include_token=True)
+                return self._ensured(agent_id, manager, lock_digest)
             _raise_if_inhibited(agent_id)
             with self._lock:
                 # Cap counts running AND starting: the reservation closes the
@@ -223,7 +252,7 @@ class SidecarRegistry:
                         self._managers[agent_id] = (manager, agent_lock)
                 manager.start()
                 self._fire_started(agent_id, manager)
-                return self._entry(agent_id, manager, include_token=True)
+                return self._ensured(agent_id, manager, lock_digest)
             finally:
                 with self._lock:
                     self._starting.discard(agent_id)
@@ -301,6 +330,63 @@ class SidecarRegistry:
             f"environment/editable install rooted at {caller_repo_root}."
         )
 
+    def _check_binary_lock(
+        self,
+        agent_id: str,
+        spec: AgentSidecarSpec,
+        mode: Optional[str],
+        manager,
+        caller_sha256: Optional[str],
+        caller_path: Optional[str],
+    ) -> Optional[str]:
+        """Refuse a user-mode ensure whose caller pins a different binary than
+        the daemon's own ``binaries.lock.json`` (issue #2596).
+
+        Returns the daemon's lock digest when the check ran and matched, else
+        ``None``. Only digests are compared; *caller_path* is message text.
+        Like the dev-mode check, an attach compares against the lock on disk
+        now, not the pin the running sidecar was spawned from.
+        """
+        if caller_sha256 is None or self._resolve_mode(spec, mode) != "user":
+            return None
+        daemon_lock = Path(manager.lock_path or plat.default_lock_path(agent_id))
+        try:
+            daemon_sha256 = hashlib.sha256(daemon_lock.read_bytes()).hexdigest()
+        except FileNotFoundError:
+            daemon_sha256 = None
+        if daemon_sha256 is not None and daemon_sha256 == caller_sha256.lower():
+            return daemon_sha256
+        if caller_path is not None:
+            caller_root = repo_root_from_agent_binary_lock_path(
+                Path(caller_path), agent_id
+            )
+            caller_desc = caller_path
+            remedy = (
+                "restart the daemon from a Python environment/editable install "
+                f"rooted at {caller_root}"
+            )
+        else:
+            caller_desc = "your checkout's binaries.lock.json"
+            remedy = "restart the daemon from your checkout's Python environment"
+        daemon_desc = (
+            f"pins a different binary in {daemon_lock}"
+            if daemon_sha256 is not None
+            else f"has no binaries.lock.json (looked for {daemon_lock})"
+        )
+        raise ModeConflictError(
+            f"agent '{agent_id}' user mode would not run the binary pinned in "
+            f"{caller_desc}: the daemon {daemon_desc}, and it never reads a "
+            f"lock file a caller sends it. To run your pin, {remedy}. To run "
+            "the daemon's pin instead, start the agent from the daemon's "
+            "checkout."
+        )
+
+    def _ensured(self, agent_id: str, manager, lock_digest: Optional[str]) -> dict:
+        entry = self._entry(agent_id, manager, include_token=True)
+        if lock_digest is not None:
+            entry["binary_lock_sha256"] = lock_digest
+        return entry
+
     def connection(self, agent_id: str) -> "tuple[str, str]":
         """``(base_url, bearer token)`` for *agent_id*'s RUNNING sidecar.
 
@@ -327,6 +413,27 @@ class SidecarRegistry:
             )
         manager.check_responsive()
         return manager.base_url, manager.auth_token
+
+    def restart_if_crashed(self, agent_id: str) -> bool:
+        """Start *agent_id*'s sidecar again if its process died on its own.
+
+        Returns ``False`` for one that was never started or was stopped on
+        purpose; those are the caller's to start. Start failures raise as from
+        :meth:`ensure`.
+        """
+        self._spec(agent_id)
+        with self._lock:
+            holder = self._managers.get(agent_id)
+        if holder is None or not holder[0].exited_unexpectedly:
+            return False
+        logger.warning(
+            "daemon: agent '%s' sidecar pid %s exited unexpectedly; starting it "
+            "again",
+            agent_id,
+            holder[0].pid,
+        )
+        self.ensure(agent_id)
+        return True
 
     def authenticate_callback(self, credential: str) -> Optional[str]:
         """Return the agent_id of the RUNNING sidecar whose launch token equals
@@ -405,10 +512,15 @@ class SidecarRegistry:
         self._spec(agent_id)
         with self._lock:
             holder = self._managers.get(agent_id)
-        if holder is None or not holder[0].is_running:
+        if holder is None:
             return {"agent_id": agent_id, "state": "stopped"}
         manager, agent_lock = holder
+        if not manager.is_running and not manager.exited_unexpectedly:
+            return {"agent_id": agent_id, "state": "stopped"}
         with agent_lock:
+            if not manager.is_running and manager.exited_unexpectedly:
+                # Reaps the crashed one, so restart_if_crashed leaves it stopped.
+                manager.shutdown()
             self._stop_locked(agent_id, manager)
         return {"agent_id": agent_id, "state": "stopped"}
 
@@ -475,6 +587,44 @@ class SidecarRegistry:
                 holder = (self._new_manager(agent_id, spec, None), threading.Lock())
                 self._managers[agent_id] = holder
             return holder
+
+    def process_ids(self) -> "set[int]":
+        """The pid the daemon started for each running sidecar."""
+        with self._lock:
+            managers = [manager for manager, _ in self._managers.values()]
+        return {m.pid for m in managers if m.is_running and m.pid is not None}
+
+    def stop_idle(self) -> "list[str]":
+        """Stop every running sidecar that is not being started, stopped or
+        installed right now; return the ids stopped.
+
+        Never waits on an agent's lock: whoever holds it wants that agent.
+
+        Raises:
+            StopFailedError: A sidecar survived its tree-kill. The others are
+                still stopped first.
+        """
+        with self._lock:
+            holders = list(self._managers.items())
+        stopped, failures = [], []
+        for agent_id, (_, agent_lock) in holders:
+            if not agent_lock.acquire(blocking=False):
+                continue
+            try:
+                with self._lock:
+                    manager = self._managers[agent_id][0]
+                if not manager.is_running:
+                    continue
+                logger.info("registry: stopping idle %s sidecar", agent_id)
+                self._stop_locked(agent_id, manager)
+                stopped.append(agent_id)
+            except StopFailedError as e:
+                failures.append(str(e))
+            finally:
+                agent_lock.release()
+        if failures:
+            raise StopFailedError(" ".join(failures))
+        return stopped
 
     def shutdown_all(self) -> None:
         """Tree-kill every running sidecar (daemon shutdown path)."""

@@ -33,6 +33,7 @@ from gaia.rag.sdk import (  # noqa: E402
     EncryptedPDFError,
     PDFExtractionError,
     RAGConfig,
+    name_file_for_user,
 )
 
 # ---------------------------------------------------------------------------
@@ -53,6 +54,7 @@ def rag(tmp_path: Path) -> RAGSDK:
     """
     config = RAGConfig(
         cache_dir=str(tmp_path / ".gaia"),
+        allowed_paths=[str(tmp_path)],
         show_stats=False,
         use_local_llm=False,
     )
@@ -100,12 +102,11 @@ def _write_owner_only_pdf(path: Path, text: str) -> None:
     This is how permission-restricted PDFs (e.g. most SEC filings) ship: every
     viewer opens them without a prompt, but pypdf still reports is_encrypted.
     """
-    pymupdf = pytest.importorskip("pymupdf")
-    doc = pymupdf.open()
-    doc.new_page().insert_text((72, 72), text)
+    canvas = pytest.importorskip("reportlab.pdfgen.canvas")
     plain = path.with_suffix(".plain.pdf")
-    doc.save(str(plain))
-    doc.close()
+    c = canvas.Canvas(str(plain))
+    c.drawString(72, 720, text)
+    c.save()
 
     writer = PdfWriter(clone_from=str(plain))
     writer.encrypt(user_password="", owner_password="owner-secret")
@@ -261,6 +262,58 @@ class TestCorruptedPDF:
 
         assert stats["success"] is False
         assert stats.get("pdf_status") == "corrupted"
+
+    def test_index_document_error_names_display_name(
+        self, rag: RAGSDK, tmp_path: Path
+    ) -> None:
+        """Indexing a private copy reports the user's file name, not the copy's."""
+        pdf = tmp_path / "gaia_upload_x1y2z3.pdf"
+        _write_corrupted_pdf(pdf)
+
+        stats = rag.index_document(str(pdf), display_name="broken.pdf")
+
+        assert stats["file_name"] == "broken.pdf"
+        assert "Could not read PDF: broken.pdf" in stats["error"]
+        assert "gaia_upload_" not in stats["error"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Could not read PDF: {name}",
+        "Failed to decode file: {path}",
+        "Failed to decode file: {posix}",
+        "Failed to decode file: C:\\PROGRA~1\\Temp\\{name}",
+    ],
+)
+def test_name_file_for_user_replaces_every_spelling(tmp_path: Path, text: str) -> None:
+    copy = tmp_path / "gaia_upload_abc.md"
+    text = text.format(name=copy.name, path=str(copy), posix=copy.as_posix())
+
+    shown = name_file_for_user(text, str(copy), "notes.md")
+
+    assert shown.endswith(": notes.md")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("error ({name})", "error (notes.md)"),
+        ("error ({path})", "error (notes.md)"),
+        ("error (C:\\PROGRA~1\\Temp\\{name})", "error (notes.md)"),
+        ("cannot open '{name}'", "cannot open 'notes.md'"),
+        ('cannot open "{name}"', 'cannot open "notes.md"'),
+        ("PDF:{name}", "PDF:notes.md"),
+        ("{name} is corrupt", "notes.md is corrupt"),
+    ],
+)
+def test_name_file_for_user_keeps_neighbouring_text(
+    tmp_path: Path, text: str, expected: str
+) -> None:
+    copy = tmp_path / "gaia_upload_abc.md"
+    text = text.format(name=copy.name, path=str(copy))
+
+    assert name_file_for_user(text, str(copy), "notes.md") == expected
 
 
 # ---------------------------------------------------------------------------

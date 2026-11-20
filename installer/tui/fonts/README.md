@@ -4,8 +4,7 @@ The Windows setup installs IBM Plex Mono per-user so the **GAIA** Windows
 Terminal profile it writes has the face it names. Nothing here is committed as a
 binary: [`fetch_fonts.py`](../fetch_fonts.py) downloads the official release at
 build time and verifies it against [`fonts.lock.json`](fonts.lock.json), the
-same fetch-and-verify contract the installer already uses for `gaia-agent` and
-the Lemonade MSI.
+same fetch-and-verify contract the installer already uses for `gaia-agent`.
 
 | | |
 | --- | --- |
@@ -13,7 +12,7 @@ the Lemonade MSI.
 | Zip SHA-256 | `6d23f01257663d8cc49a0d64c22ced630b79e0e2a0ac08a0da86e9a38bbc481c` (matches the digest GitHub publishes for the asset) |
 | Zip size | 6,940,652 bytes |
 | Faces bundled | Regular, Bold, Italic, Bold Italic (`fonts/complete/ttf/`, ~700 KB) |
-| Licence | SIL Open Font License 1.1, shipped as `IBM-Plex-Mono-OFL.txt` next to `gaia-tui.exe` |
+| Licence | SIL Open Font License 1.1, shipped as `IBM-Plex-Mono-OFL.txt` next to `gaia-cli.exe` |
 
 Four faces, not one: the TUI renders bold and italic text, and without the real
 faces Windows Terminal synthesises them. Every face carries the family name

@@ -15,8 +15,6 @@ package preflight
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -71,7 +69,7 @@ func detectLemonadeAt(ctx context.Context, bases []string, installed func() bool
 // server: nobody chose, no LEMONADE_BASE_URL, and GAIA's own is not installed.
 func offersRunningLemonade(choice lemonade.Choice) bool {
 	return choice.Mode == "" &&
-		strings.TrimSpace(os.Getenv(lemonadeBaseURLEnv)) == "" &&
+		lemonade.EnvBaseURL() == "" &&
 		!lemonade.EmbeddedInstalled()
 }
 
@@ -210,7 +208,7 @@ func (l localRunner) useGAIALemonade() FixResult {
 func awaitsGAIALemonade(choice lemonade.Choice) bool {
 	wanted := declinedRunningLemonade.Load() || choice.Mode == lemonade.ModeGAIA
 	return wanted &&
-		strings.TrimSpace(os.Getenv(lemonadeBaseURLEnv)) == "" &&
+		lemonade.EnvBaseURL() == "" &&
 		!lemonade.EmbeddedInstalled() &&
 		readEmbeddedLemonade() == nil
 }

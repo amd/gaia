@@ -20,12 +20,11 @@ import (
 
 // modelSwitchAgentID is the only agent whose transport understands `/model`
 // today — the flagship's stdio.py intercepts it before it ever reaches the
-// LLM (run_model_command). Every other agent (a daemon-relay agent like
-// email, or another subprocess agent) has no such interception, so sending it
-// the literal text would ship as an uncomprehended chat question — mirrors
-// the existing preScanAgentID scoping (model.go) for the same reason: the
-// feature lives agent-side, not transport-side, so it has to be gated by
-// WHICH agent, not by what kind of connection this is.
+// LLM (run_model_command). Every other agent (a daemon-relay agent, or another
+// subprocess agent) has no such interception, so sending it the literal text
+// would ship as an uncomprehended chat question. The feature lives agent-side,
+// not transport-side, so it has to be gated by WHICH agent, not by what kind
+// of connection this is.
 const modelSwitchAgentID = "gaia"
 
 // supportsModelCommand reports whether this session's agent understands
@@ -78,6 +77,10 @@ func (m ChatModel) refuseModelSwitch(arg string) string {
 	}
 
 	if client.IsClaudeModelID(arg) {
+		if m.nativeAgent() {
+			return client.NativeClaudeUnavailable + " Nothing was switched: this session is still on " +
+				m.currentModelName() + "."
+		}
 		if _, ok := client.KnownClaudeModel(arg); ok {
 			return ""
 		}
@@ -125,11 +128,20 @@ func (m ChatModel) refuseModelSwitch(arg string) string {
 // suggesting it to a local session both misreads the state and pushes
 // off-machine inference at someone who may have no ANTHROPIC_API_KEY.
 func (m ChatModel) remoteAlternative() string {
+	if m.nativeAgent() {
+		return "Or pick a cloud model with /provider."
+	}
 	if m.claudeMode {
 		return "Or stay on Claude — this session already is."
 	}
 	return "Or move to Claude with `/model " + client.ExampleClaudeModelID +
 		"`, which sends the conversation to Anthropic and needs ANTHROPIC_API_KEY."
+}
+
+// nativeAgent reports whether this session's agent is the C++ one (gaiacpp).
+func (m ChatModel) nativeAgent() bool {
+	c, ok := m.client.(interface{ Native() bool })
+	return ok && c.Native()
 }
 
 // currentModelName names the model this session is on right now, for a

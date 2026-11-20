@@ -26,11 +26,17 @@ fetches, and :class:`~gaia.skills.lock.SkillLock` for provenance.
 
 from __future__ import annotations
 
+import posixpath
+import re
+import shlex
 import shutil
+import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, FrozenSet, Iterable, List, Optional, Tuple
+from urllib.parse import unquote, urlsplit
 
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
@@ -44,8 +50,10 @@ from gaia.skills.format import (
     parse_skill_file,
     reset_security_tier,
 )
+from gaia.skills.human_only import require_user_terminal
 from gaia.skills.lock import (
     SOURCE_CAPTURED,
+    UNVERSIONED,
     LockEntry,
     SkillLock,
     SkillLockBusyError,
@@ -62,16 +70,222 @@ _DOCS = "https://amd-gaia.ai/docs/spec/agent-skills"
 #: Leading bytes of every zip archive ("PK\x03\x04").
 _ZIP_MAGIC = b"PK\x03\x04"
 
-#: ``version`` recorded in the lock when the captured SKILL.md declares none.
-UNVERSIONED = "unversioned"
-
 #: Lock ``source`` for ``gaia skill import``. Recorded with ``captured=True`` so
 #: imported code shares the capture deferral and ``gaia skill promote``.
 SOURCE_IMPORTED = "imported"
 
+#: Lock ``source`` for ``gaia skill migrate``. Lands through :func:`import_bundle`,
+#: so it shares every import gate and the same deferral.
+SOURCE_MIGRATED = "migrated"
+
 
 class SkillCaptureError(SkillError):
     """A capture or promote was refused — audit BLOCK, bad source, or conflict."""
+
+
+# ---------------------------------------------------------------------------
+# Hub skills are installed, not captured
+# ---------------------------------------------------------------------------
+
+#: Where to report a hub skill that failed verification.
+REPORT_URL = "https://github.com/amd/gaia/issues"
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def published_on_hub_message(name: str) -> str:
+    """The refusal for a skill the hub publishes — install checks its signature."""
+    return (
+        f"{name} is published on the GAIA hub. Install it with `gaia skill "
+        f"install {name}` (or ask GAIA to install it), which checks its signature."
+    )
+
+
+def failed_verification_message(name: str) -> str:
+    """The refusal for a skill whose hub install failed verification."""
+    return (
+        f"{name} failed verification on the GAIA hub: its signature or "
+        "checksum does not match what was published, so it may have been "
+        "tampered with. It must not be obtained any other way, and GAIA will "
+        "not install it by another route — do not fetch it, capture it, "
+        "download it, or rewrite it from memory. Tell the user it was refused "
+        f"for failing verification; they can report it at {REPORT_URL}."
+    )
+
+
+def _decoded(text: str) -> str:
+    """*text* lower-cased, percent-decoded however deeply, ``_``/spaces read as ``-``."""
+    current = text.strip()
+    for _ in range(5):
+        decoded = unquote(current)
+        if decoded == current:
+            break
+        current = decoded
+    return re.sub(r"[\s_]+", "-", current.replace("\\", "/").lower())
+
+
+def refuse_failed_verification_source(
+    source: str, failed_verification: Iterable[str]
+) -> None:
+    """Refuse a URL or path that names a skill whose hub install failed verification.
+
+    Runs before any fetch, so a guessed URL for the refused skill never touches
+    the network. A name matches as a whole token (``tampered-notes`` matches
+    ``.../tampered-notes/SKILL.md`` and ``tampered-notes-1.0.0.zip``, never
+    ``my-tampered-notes-copy``).
+
+    Raises:
+        SkillCaptureError: *source* names a refused skill.
+    """
+    text = _decoded(source)
+    names = {n.strip().lower() for n in failed_verification if n and n.strip()}
+    for name in sorted(names):
+        pattern = rf"(?<![a-z0-9-]){re.escape(name)}(?![a-z0-9]|-[a-z])"
+        if re.search(pattern, text):
+            log.warning(
+                "Refusing capture of %r: it names %s, whose hub install failed "
+                "verification this session",
+                source.strip(),
+                name,
+            )
+            raise SkillCaptureError(failed_verification_message(name))
+
+
+def _url_parts(url: str) -> Optional[Tuple[str, Optional[int], str]]:
+    """``(host, port, path)`` of an http(s) URL, normalised; ``None`` otherwise.
+
+    The port is ``None`` when it is the scheme's default, so ``https://h``,
+    ``https://h:443`` and ``http://h`` compare equal. The host comes from
+    ``urlsplit``, which drops any ``user@`` prefix.
+    """
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+    try:
+        port = parts.port
+    except ValueError:
+        port = -1  # Unusable, but the host still counts.
+    scheme = parts.scheme.lower()
+    if scheme not in _DEFAULT_PORTS:
+        return None
+    host = unquote(parts.hostname or "").rstrip(".").lower()
+    if not host:
+        return None
+    if port == _DEFAULT_PORTS[scheme]:
+        port = None
+    path = posixpath.normpath(unquote(parts.path) or "/").rstrip("/").lower()
+    return host, port, path
+
+
+def _hub_origins() -> List[Tuple[Tuple[str, Optional[int], str], bool]]:
+    """``(origin, any_port)`` for the public hub and the configured one."""
+    from gaia.hub.catalog import DEFAULT_HUB_URL, get_hub_base_url
+
+    origins = []
+    # The public hub stays refused under a GAIA_HUB_URL override; its skills are signed.
+    for base, any_port in ((DEFAULT_HUB_URL, True), (get_hub_base_url(), False)):
+        parts = _url_parts(base)
+        if parts is not None:
+            origins.append((parts, any_port))
+    return origins
+
+
+def _hub_skill_in_url(url: str) -> Tuple[bool, Optional[str]]:
+    """Whether *url* is on a hub, and the skill name its path names (if any)."""
+    for (host, port, base_path), any_port in _hub_origins():
+        # A backslash reads as "/" to some URL parsers, so either reading counts.
+        for candidate in (url, url.replace("\\", "/")):
+            parts = _url_parts(candidate)
+            if parts is None or parts[0] != host:
+                continue
+            if not any_port and parts[1] != port:
+                continue
+            path = parts[2]
+            if base_path and not (path + "/").startswith(base_path + "/"):
+                continue
+            segments = [s for s in path[len(base_path) :].split("/") if s]
+            on_skill = len(segments) > 1 and segments[0] == "skills"
+            return True, segments[1] if on_skill else None
+    return False, None
+
+
+def refuse_hub_url(url: str) -> None:
+    """Refuse a URL on the GAIA hub: hub skills go through ``gaia skill install``.
+
+    Matches the configured hub (``GAIA_HUB_URL``, including its path prefix)
+    and the public hub host on any scheme or port.
+
+    Raises:
+        SkillCaptureError: *url* points at the hub.
+    """
+    on_hub, name = _hub_skill_in_url(url)
+    if not on_hub:
+        return
+    if name and NAME_PATTERN.match(name):
+        raise SkillCaptureError(published_on_hub_message(name))
+    raise SkillCaptureError(
+        f"{url.strip()} is on the GAIA hub. Skills published there are installed "
+        "with `gaia skill install <name>` (or by asking GAIA to install them), "
+        "which checks their signature. Find the name with `gaia skill search`."
+    )
+
+
+def published_skill_names() -> FrozenSet[str]:
+    """Lower-cased names of every skill the hub catalog lists.
+
+    Reads the catalog through :func:`gaia.skills.hub.search_skills`, so the
+    offline cache answers when the hub is unreachable.
+
+    Raises:
+        SkillCaptureError: neither the hub nor an offline catalog copy could
+            be read, so whether a name is published cannot be told.
+    """
+    from gaia.skills.hub import search_skills
+
+    try:
+        found = search_skills("")
+    except SkillError as exc:
+        raise SkillCaptureError(
+            "Could not read the GAIA hub catalog, so this skill was not "
+            "captured: a skill published on the hub must be installed with "
+            "`gaia skill install <name>`, and the catalog is how capture tells. "
+            f"Reconnect and retry, or check GAIA_HUB_URL. Details: {exc}"
+        ) from exc
+    names = set()
+    for entry in found.entries:
+        for key in ("id", "name"):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                names.add(value.strip().lower())
+    return frozenset(names)
+
+
+def refuse_published_skill(
+    names: Iterable[Optional[str]], *, failed_verification: Iterable[str] = ()
+) -> None:
+    """Refuse a capture of a skill the hub publishes.
+
+    Args:
+        names: The skill's own name and the name it would land under.
+        failed_verification: Names whose hub install failed signature
+            verification earlier in this session.
+
+    Raises:
+        SkillCaptureError: a name is published on the hub, failed
+            verification, or the catalog could not be read.
+    """
+    wanted = [n.strip().lower() for n in names if n and n.strip()]
+    if not wanted:
+        return
+    refused = {n.strip().lower() for n in failed_verification if n}
+    for name in wanted:
+        if name in refused:
+            raise SkillCaptureError(failed_verification_message(name))
+    published = published_skill_names()
+    for name in wanted:
+        if name in published:
+            raise SkillCaptureError(published_on_hub_message(name))
 
 
 @dataclass
@@ -160,7 +374,12 @@ def _classify_source(source: str) -> str:
     return "text"
 
 
-def _fetch_url(url: str, workdir: Path, web_client: Optional[Any]) -> tuple:
+def _fetch_url(
+    url: str,
+    workdir: Path,
+    web_client: Optional[Any],
+    failed_verification: Iterable[str] = (),
+) -> tuple:
     """Fetch ``url`` via the SSRF-guarded WebClient.
 
     Returns ``("dir", skill_dir)`` for a zip bundle, ``("text", markdown)`` for
@@ -183,6 +402,12 @@ def _fetch_url(url: str, workdir: Path, web_client: Optional[Any]) -> tuple:
             "operator allowlists the host via GAIA_WEB_ALLOWED_HOSTS). Check "
             "the URL, or download the file and capture the local path instead."
         ) from exc
+
+    final_url = getattr(response, "url", None)
+    if isinstance(final_url, str) and final_url != url:
+        # A redirect can land on the hub, or on a skill that failed verification.
+        refuse_failed_verification_source(final_url, failed_verification)
+        refuse_hub_url(final_url)
 
     content = response.content
     content_type = (response.headers.get("Content-Type") or "").lower()
@@ -280,6 +505,7 @@ def capture_skill(
     manager: Optional[SkillManager] = None,
     web_client: Optional[Any] = None,
     force: bool = False,
+    failed_verification: Iterable[str] = (),
 ) -> CaptureResult:
     """Capture a skill into the user skills root, code inert until promoted.
 
@@ -292,6 +518,9 @@ def capture_skill(
         web_client: Injected fetcher (tests); defaults to a fresh
             :class:`~gaia.web.client.WebClient`.
         force: Replace an already-captured copy of the same name.
+        failed_verification: Skill names whose hub install failed signature
+            verification this session; capturing one is refused, as is a URL
+            or path that names one (checked before anything is fetched).
 
     Returns:
         A :class:`CaptureResult`; ``review_findings`` is non-empty when the
@@ -299,7 +528,8 @@ def capture_skill(
 
     Raises:
         SkillCaptureError: the audit verdict is BLOCK, the source is unusable,
-            or the name already exists. Nothing is written on a refusal.
+            the source is on the GAIA hub or names a skill it publishes, or
+            the name already exists. Nothing is written on a refusal.
         SkillValidationError: the ``SKILL.md`` fails the schema gate.
     """
     if not isinstance(source, str) or not source.strip():
@@ -309,7 +539,18 @@ def capture_skill(
         )
 
     resolver = manager if manager is not None else SkillManager()
+    from gaia.skills.audit.findings import (
+        AUDIT_ENGINE,
+        content_digest,
+        ignore_bytecode_caches,
+    )
+
     kind = _classify_source(source)
+    failed_verification = tuple(failed_verification)
+    if kind in ("url", "path"):
+        refuse_failed_verification_source(source, failed_verification)
+    if kind == "url":
+        refuse_hub_url(source)
 
     with tempfile.TemporaryDirectory(prefix="gaia-skill-capture-") as tmp:
         workdir = Path(tmp)
@@ -317,7 +558,9 @@ def capture_skill(
 
         if kind == "url":
             origin = source.strip()
-            fetched_kind, fetched = _fetch_url(origin, workdir, web_client)
+            fetched_kind, fetched = _fetch_url(
+                origin, workdir, web_client, failed_verification
+            )
             if fetched_kind == "dir":
                 source_dir = fetched
             else:
@@ -340,6 +583,9 @@ def capture_skill(
                 )
 
         final_name = _validate_name(name or skill.name)
+        refuse_published_skill(
+            [skill.name, final_name], failed_verification=failed_verification
+        )
 
         permissions = skill.parsed_permissions()
         refuse_unbridged_permissions(permissions, skill_name=final_name)
@@ -370,7 +616,7 @@ def capture_skill(
             if source_dir is not None:
                 # The WHOLE bundle lands — tools.py/scripts included — so
                 # promote trusts exactly the bytes that were audited.
-                shutil.copytree(source_dir, target)
+                shutil.copytree(source_dir, target, ignore=ignore_bytecode_caches)
                 landed = parse_skill_file(target, check_directory_name=False)
             else:
                 target.mkdir(parents=True)
@@ -379,6 +625,7 @@ def capture_skill(
             landed.name = final_name
             previous_tier = reset_security_tier(landed)
             landed.write(target / SKILL_FILENAME)
+            landed_digest = content_digest(target)
 
             with SkillLock.locked(destination_root) as lock:
                 lock.record(
@@ -388,6 +635,8 @@ def capture_skill(
                         requested="*",
                         source=SOURCE_CAPTURED,
                         origin=origin,
+                        content_digest=landed_digest,
+                        digest_engine=AUDIT_ENGINE,
                         claimed_tier=previous_tier,
                         installed_tier=LOWEST_TIER,
                         permissions=list(landed.gaia.permissions),
@@ -476,6 +725,8 @@ def import_bundle(
     manager: Optional[SkillManager] = None,
     force: bool = False,
     allow_experimental: bool = False,
+    destination_root: Optional[Path] = None,
+    source: str = SOURCE_IMPORTED,
 ) -> ImportResult:
     """Import a materialized skill folder into the user root at ``experimental``.
 
@@ -485,6 +736,10 @@ def import_bundle(
     load only with that opt-in and an audit ALLOW; a REVIEW verdict lands with
     its code deferred until ``gaia skill promote``.
 
+    ``destination_root`` overrides the user root (``gaia skill migrate --out``);
+    the lock entry is written beside the skill either way. ``source`` is the
+    lock ``source`` recorded for it.
+
     Raises:
         SkillInstallError: code shipped without ``allow_experimental``, or the
             name is taken and ``force`` is unset.
@@ -492,14 +747,20 @@ def import_bundle(
         SkillPermissionError: a permission is un-bridged or above the ceiling.
         SkillValidationError: the ``SKILL.md`` fails the schema gate.
     """
-    from gaia.skills.audit.findings import content_digest
+    require_user_terminal("gaia skill import")
+    from gaia.skills.audit.findings import (
+        AUDIT_ENGINE,
+        content_digest,
+        ignore_bytecode_caches,
+    )
     from gaia.skills.install import SkillInstallError, _gate_tier
 
     resolver = manager if manager is not None else SkillManager()
     skill = parse_skill_file(source_dir, check_directory_name=False)
     label = "--name" if name else str(source_dir / SKILL_FILENAME)
     final_name = validated_skill_name(name or skill.name, source=label)
-    destination_root = resolver.user_root
+    if destination_root is None:
+        destination_root = resolver.user_root
     target = skill_directory(destination_root, final_name, source=label)
 
     if skill.gaia.tools and not (source_dir / SKILL_TOOLS_FILENAME).is_file():
@@ -535,21 +796,24 @@ def import_bundle(
     try:
         if target.exists():
             shutil.rmtree(target)
-        shutil.copytree(source_dir, target)
+        shutil.copytree(source_dir, target, ignore=ignore_bytecode_caches)
         landed = parse_skill_file(target, check_directory_name=False)
         landed.name = final_name
         previous_tier = reset_security_tier(landed)
         landed.write(target / SKILL_FILENAME)
 
-        digest = content_digest(target) if trusted else ""
+        landed_digest = content_digest(target)
+        digest = landed_digest if trusted else ""
         with SkillLock.locked(destination_root) as lock:
             lock.record(
                 LockEntry(
                     name=final_name,
                     version=landed.version or UNVERSIONED,
                     requested="*",
-                    source=SOURCE_IMPORTED,
+                    source=source,
                     origin=origin,
+                    content_digest=landed_digest,
+                    digest_engine=AUDIT_ENGINE,
                     claimed_tier=previous_tier,
                     installed_tier=LOWEST_TIER,
                     permissions=list(landed.gaia.permissions),
@@ -576,8 +840,9 @@ def import_bundle(
     ):
         review_findings = _render_findings(report)
     log.info(
-        "Imported skill '%s' from %s at tier '%s' — verdict %s, code %s",
+        "Landed skill '%s' (%s) from %s at tier '%s' — verdict %s, code %s",
         final_name,
+        source,
         origin,
         LOWEST_TIER,
         report.verdict,
@@ -614,6 +879,23 @@ def capture_entry(skill: Skill) -> Optional[LockEntry]:
     return entry
 
 
+def _reaudit_entry(skill: Skill) -> Optional[LockEntry]:
+    """The lock entry when *skill* awaits re-audit after a digest-rule change.
+
+    Code trust earned under an older rule is not carried over: the current rule
+    covers files the old one never checked.
+    """
+    directory = skill.directory
+    if directory is None:
+        return None
+    entry = SkillLock.load(directory.parent).get(skill.name)
+    if entry is None:
+        return None
+    from gaia.skills.drift import reaudit_required
+
+    return entry if reaudit_required(entry, directory) else None
+
+
 def _grants_a_binary(skill: Skill) -> bool:
     """True when the skill asks for a policied CLI (``shell:execute:<binary>``)."""
     from gaia.skills.binaries import resolve_binary_policies
@@ -644,6 +926,18 @@ def code_is_deferred(skill: Skill) -> bool:
     """
     if not skill.gaia.tools and not _grants_a_binary(skill):
         return False
+    from gaia.skills.manager import ROOT_CLAUDE_PROJECT
+
+    # A repo's own .claude/skills arrive with a clone: having them is not consent.
+    if skill.root == ROOT_CLAUDE_PROJECT:
+        return True
+    if _reaudit_entry(skill) is not None:
+        log.warning(
+            "Skill '%s' was checked by an older GAIA and needs re-auditing — its "
+            "code is off until then.",
+            skill.name,
+        )
+        return True
     entry = capture_entry(skill)
     if entry is None:
         return False
@@ -663,6 +957,36 @@ def code_is_deferred(skill: Skill) -> bool:
     return False
 
 
+def shell_path(path: Path) -> str:
+    """*path* quoted for pasting into this platform's shell."""
+    if sys.platform == "win32":
+        return subprocess.list2cmdline([str(path)])
+    return shlex.quote(str(path))
+
+
+def deferred_remedy(skill: Skill) -> str:
+    """The terminal command(s) that lift :func:`code_is_deferred`, backticked.
+
+    A repo's ``.claude/skills`` copy is never promotable (promote governs the
+    user root): import puts an audited copy there, which outranks it, and
+    promote then trusts that copy.
+    """
+    from gaia.skills.manager import ROOT_CLAUDE_PROJECT
+
+    promote = f"`gaia skill promote {skill.name}`"
+    if skill.root == ROOT_CLAUDE_PROJECT:
+        flag = " --allow-experimental" if skill.gaia.tools else ""
+        return (
+            f"`gaia skill import {shell_path(skill.directory)}{flag}`, then {promote}"
+        )
+    reaudit = _reaudit_entry(skill)
+    if reaudit is not None:
+        from gaia.skills.drift import reaudit_remedy
+
+        return ", then ".join(f"`{command}`" for command in reaudit_remedy(reaudit))
+    return promote
+
+
 def promote_skill(
     name: str, *, manager: Optional[SkillManager] = None
 ) -> PromoteResult:
@@ -678,6 +1002,7 @@ def promote_skill(
         SkillCaptureError: the skill exists but was not captured — hub installs
             and imports are not what promote governs.
     """
+    require_user_terminal("gaia skill promote")
     from gaia.skills.audit.engine import audit_skill
 
     safe_name = _validate_name(name)
@@ -764,10 +1089,19 @@ __all__ = [
     "ImportResult",
     "PromoteResult",
     "SOURCE_IMPORTED",
+    "SOURCE_MIGRATED",
     "SkillCaptureError",
     "capture_entry",
     "capture_skill",
     "code_is_deferred",
+    "deferred_remedy",
+    "failed_verification_message",
+    "refuse_failed_verification_source",
     "import_bundle",
     "promote_skill",
+    "published_on_hub_message",
+    "published_skill_names",
+    "refuse_hub_url",
+    "refuse_published_skill",
+    "shell_path",
 ]

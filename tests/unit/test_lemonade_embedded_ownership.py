@@ -667,6 +667,85 @@ class TestOneStartAtATime:
         assert json.loads(manager.state_path.read_text())["pid"] == 9999
 
 
+class TestStartupExitMessage:
+    """A lemond that quits during start is reported with its own error."""
+
+    def _exits_writing(self, manager, monkeypatch, output: bytes):
+        monkeypatch.setattr(manager, "is_installed", lambda: True)
+        monkeypatch.setattr(manager, "write_config", lambda: None)
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
+        monkeypatch.setattr(
+            EmbeddedLemonade, "_kill_tree", staticmethod(lambda p: None)
+        )
+        monkeypatch.setattr(embedded_mod, "_port_free", lambda port: True)
+
+        self.env = {}
+
+        def fake_popen(argv, **kwargs):
+            self.env = kwargs["env"]
+            kwargs["stdout"].write(output)
+            kwargs["stdout"].flush()
+            return SimpleNamespace(
+                pid=7001, poll=lambda: 1, returncode=1, wait=lambda timeout=None: 1
+            )
+
+        monkeypatch.setattr(embedded_mod.subprocess, "Popen", fake_popen)
+
+    def test_quotes_lemonds_error_from_this_start_only(self, manager, monkeypatch):
+        manager.root.mkdir(parents=True, exist_ok=True)
+        manager.log_path.write_bytes(b"[Error] (Old) from a previous run\n")
+        self._exits_writing(
+            manager,
+            monkeypatch,
+            b"[Info] (main) Starting Lemonade Server...\n"
+            b"[Error] (Server) Failed to open config.json: Permission denied\n",
+        )
+        with pytest.raises(EmbeddedLemonadeError) as err:
+            manager.start(port=50557)
+        msg = str(err.value)
+        assert "Permission denied" in msg
+        assert "previous run" not in msg
+        assert "exit code 1" in msg
+
+    def test_silent_exit_names_the_log(self, manager, monkeypatch):
+        self._exits_writing(manager, monkeypatch, b"")
+        with pytest.raises(EmbeddedLemonadeError, match="wrote nothing") as err:
+            manager.start(port=50558)
+        assert str(manager.log_path) in str(err.value)
+
+    def test_quotes_the_loader_refusal_over_info_noise(self, manager, monkeypatch):
+        loader = (
+            b"/home/u/.gaia/lemonade/dist/2026.44.1/lemond: /home/u/.gaia/app-core/"
+            b"0.26.0rc13/_internal/libstdc++.so.6: version `GLIBCXX_3.4.32' not "
+            b"found (required by /home/u/.gaia/lemonade/dist/2026.44.1/lemond)\n"
+        )
+        noise = b"[Info] (ModelManager) 0 errors, model not found in cache\n" * 20
+        self._exits_writing(manager, monkeypatch, loader + noise)
+        with pytest.raises(EmbeddedLemonadeError) as err:
+            manager.start(port=50559)
+        assert "GLIBCXX_3.4.32' not found" in str(err.value)
+        assert "0 errors" not in str(err.value)
+
+    def test_a_frozen_linux_gaia_starts_lemond_without_its_bundle(
+        self, manager, monkeypatch
+    ):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(
+            sys, "_MEIPASS", "/home/u/.gaia/app-core/_internal", raising=False
+        )
+        monkeypatch.setattr(embedded_mod, "vulkan_workarounds", lambda: {})
+        import gaia.llm.npu_linux as npu_linux
+
+        monkeypatch.setattr(npu_linux, "raise_memlock_soft_limit", lambda: None)
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/home/u/.gaia/app-core/_internal")
+        monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+        self._exits_writing(manager, monkeypatch, b"")
+        with pytest.raises(EmbeddedLemonadeError):
+            manager.start(port=50560)
+        assert "LD_LIBRARY_PATH" not in self.env
+
+
 class TestUnload:
     def test_unload_posts_to_gaias_server_with_its_key(self, manager, monkeypatch):
         _record(manager)
@@ -715,3 +794,146 @@ class TestUnload:
         monkeypatch.setattr(urllib.request, "urlopen", _refuse)
         with pytest.raises(EmbeddedLemonadeError, match="did not unload"):
             manager.unload_models()
+
+
+@pytest.mark.allow_network
+class TestRestartKeepsTheKey:
+    """Agents already running hold the server's key; a restart must not change it.
+
+    Driven through ``start`` / ``status``: the crash path clears the state file
+    before the next spawn, which a direct ``_spawn`` test never sees.
+    """
+
+    @staticmethod
+    def _fake_server(manager, monkeypatch):
+        monkeypatch.setattr(manager, "is_installed", lambda: True)
+        monkeypatch.setattr(manager, "write_config", lambda: None)
+        monkeypatch.setattr(manager, "_reap_orphaned_backends", lambda: [])
+        lab = SimpleNamespace(keys=[], ports=[], alive=True, pid=7000)
+
+        def health(port, key, timeout=3.0):
+            state = manager._read_state() or {}
+            live = lab.alive and state.get("port") == port
+            return {"status": "ok"} if live and state.get("api_key") == key else None
+
+        def fake_popen(argv, **kwargs):
+            lab.pid += 1
+            lab.alive = True
+            lab.keys.append(kwargs["env"]["LEMONADE_API_KEY"])
+            lab.ports.append(int(argv[argv.index("--port") + 1]))
+            return SimpleNamespace(
+                pid=lab.pid, poll=lambda: None if lab.alive else 1, returncode=None
+            )
+
+        monkeypatch.setattr(manager, "_health", health)
+        monkeypatch.setattr(embedded_mod.subprocess, "Popen", fake_popen)
+        _processes(monkeypatch, {})  # a crashed pid no longer exists
+        return lab
+
+    @pytest.fixture
+    def server(self, manager, monkeypatch):
+        return self._fake_server(manager, monkeypatch)
+
+    @staticmethod
+    def _crash(manager, lab):
+        lab.alive = False
+        assert manager.status().running is False
+        assert manager._read_state() is None, "the crash must clear the state"
+
+    def test_a_restart_after_a_crash_reuses_the_key(self, manager, server):
+        manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager.start(owner_pid=1000)
+
+        assert len(server.keys) == 2 and server.keys[0] == server.keys[1]
+        assert server.ports[0] == server.ports[1]
+        assert manager.current_api_key() == server.keys[0]
+
+    def test_a_restart_after_a_stop_reuses_the_key(self, manager, server):
+        manager.start(owner_pid=1000)
+        manager._clear_state()  # what a successful stop leaves behind
+        manager.start(owner_pid=1000)
+
+        assert server.keys[0] == server.keys[1]
+
+    def test_a_restart_on_another_port_makes_a_new_key(self, manager, server):
+        first = manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager.start(port=first.port + 1, owner_pid=1000)
+
+        assert server.keys[0] != server.keys[1]
+
+    def test_a_first_start_makes_a_fresh_key_per_profile(self, tmp_path, monkeypatch):
+        keys = []
+        for home in ("a", "b"):
+            m = EmbeddedLemonade(home=tmp_path / home)
+            lab = self._fake_server(m, monkeypatch)
+            m.start(owner_pid=1000)
+            keys.append(lab.keys[0])
+
+        assert keys[0] != keys[1]
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "",
+            "short",
+            "x" * 44,
+            "a" * 36 + '";id;"',
+            "a" * 42 + "$",
+        ],
+        ids=["empty", "short", "long", "shell-quote", "bad-char"],
+    )
+    def test_a_bad_key_file_rotates_loudly(self, manager, server, caplog, content):
+        manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager._write_private(manager.last_key_path, content)
+        manager.start(owner_pid=1000)
+
+        assert server.keys[1] != server.keys[0]
+        assert embedded_mod._API_KEY_RE.fullmatch(server.keys[1])
+        assert "last_key" in caplog.text
+        if content:
+            assert content not in manager.env_path.read_text(encoding="utf-8")
+
+    def test_an_undecodable_key_file_rotates_loudly(self, manager, server, caplog):
+        manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager.last_key_path.write_bytes(b"\xff\xfe\x00garbage")
+        manager.start(owner_pid=1000)
+
+        assert server.keys[1] != server.keys[0]
+        assert "last_key" in caplog.text
+
+    def test_a_missing_key_file_makes_a_new_key_quietly(self, manager, server, caplog):
+        manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager.last_key_path.unlink()
+        manager.start(owner_pid=1000)
+
+        assert server.keys[1] != server.keys[0]
+        assert "last_key" not in caplog.text
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+    def test_the_key_file_is_owner_only(self, manager, server):
+        manager.start(owner_pid=1000)
+
+        assert manager.last_key_path.stat().st_mode & 0o777 == 0o600
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+    def test_a_key_file_others_can_read_is_not_reused(self, manager, server, caplog):
+        manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager.last_key_path.chmod(0o644)
+        manager.start(owner_pid=1000)
+
+        assert server.keys[1] != server.keys[0]
+        assert "other users can read" in caplog.text
+        assert manager.last_key_path.stat().st_mode & 0o777 == 0o600
+
+    def test_uninstall_removes_the_key(self, manager, server):
+        manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager.uninstall()
+
+        assert not manager.last_key_path.exists()

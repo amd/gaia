@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEscapeLayer } from '../hooks/useEscapeToClose';
 import './Popover.css';
 
 interface PopoverProps {
@@ -12,6 +13,7 @@ interface PopoverProps {
     label: string;
     placement?: 'above' | 'below';
     align?: 'start' | 'end';
+    className?: string;
     children: ReactNode;
 }
 
@@ -19,10 +21,11 @@ interface PopoverProps {
 const EDGE_GAP = 14;
 
 /** A small anchored panel that closes on Escape or an outside click, and returns focus. */
-export function Popover({ open, onClose, anchor, label, placement = 'above', align = 'start', children }: PopoverProps) {
+export function Popover({ open, onClose, anchor, label, placement = 'above', align = 'start', className, children }: PopoverProps) {
     const ref = useRef<HTMLDivElement>(null);
     const [side, setSide] = useState(placement);
     const [room, setRoom] = useState<number | null>(null);
+    const [shift, setShift] = useState(0);
 
     // Flip when the preferred side can't hold the menu, and cap it to the room it has.
     useLayoutEffect(() => {
@@ -38,22 +41,45 @@ export function Popover({ open, onClose, anchor, label, placement = 'above', ali
             const flip = el.scrollHeight > preferred && other > preferred;
             setSide(flip ? (placement === 'above' ? 'below' : 'above') : placement);
             setRoom(Math.max(0, Math.floor(flip ? other : preferred)));
+            // Slide sideways so a wide panel anchored near one edge stays inside the window.
+            // Measure the layout box, which ignores transforms: the painted one can still carry an
+            // old shift mid-transition, even after the inline transform is cleared.
+            const parent = el.offsetParent;
+            // The panel is position: absolute (Popover.css), so offsetParent is null only while it is closed or hidden.
+            if (!parent) return;
+            const naturalLeft = parent.getBoundingClientRect().left + parent.clientLeft - parent.scrollLeft + el.offsetLeft;
+            // Keep the box inside the window gutter; one too wide for it keeps its inline start.
+            const width = el.offsetWidth;
+            const usable = window.innerWidth - 2 * EDGE_GAP;
+            const rtl = getComputedStyle(el).direction === 'rtl';
+            const left = width > usable
+                ? (rtl ? window.innerWidth - EDGE_GAP - width : EDGE_GAP)
+                : Math.min(Math.max(naturalLeft, EDGE_GAP), window.innerWidth - EDGE_GAP - width);
+            setShift(left - naturalLeft);
         };
         place();
         // Content arrives after open (e.g. the model list), so re-measure when it changes.
         const observer = new MutationObserver(place);
         if (ref.current) observer.observe(ref.current, { childList: true, subtree: true });
+        // Sizes can change with no DOM edit (a font arriving), and the box it hangs from moves it.
+        const sized = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(place);
+        for (const target of [ref.current, anchor.current, ref.current?.offsetParent]) {
+            if (target) sized?.observe(target);
+        }
         window.addEventListener('resize', place);
         return () => {
             observer.disconnect();
+            sized?.disconnect();
             window.removeEventListener('resize', place);
         };
     }, [open, placement, anchor]);
 
+    useEscapeLayer(open);
     useEffect(() => {
         if (!open) return;
         const first = ref.current?.querySelector<HTMLElement>('button:not(:disabled), input, [tabindex="0"]');
-        first?.focus();
+        // A tall popover opens at its top, even when its first button sits at the bottom.
+        first?.focus({ preventScroll: true });
         const onDown = (e: MouseEvent) => {
             const t = e.target as Node;
             if (ref.current?.contains(t) || anchor.current?.contains(t)) return;
@@ -62,6 +88,7 @@ export function Popover({ open, onClose, anchor, label, placement = 'above', ali
         const onKey = (e: KeyboardEvent) => {
             if (e.key !== 'Escape') return;
             e.stopPropagation();
+            e.preventDefault();
             onClose();
             anchor.current?.focus();
         };
@@ -77,8 +104,11 @@ export function Popover({ open, onClose, anchor, label, placement = 'above', ali
     return (
         <div
             ref={ref}
-            className={`popover popover-${side} popover-${align}`}
-            style={room === null ? undefined : ({ '--popover-room': `${room}px` } as CSSProperties)}
+            className={`popover popover-${side} popover-${align}${className ? ` ${className}` : ''}`}
+            style={{
+                ...(room === null ? {} : { '--popover-room': `${room}px` }),
+                ...(shift ? { transform: `translateX(${shift}px)` } : {}),
+            } as CSSProperties}
             role="dialog"
             aria-label={label}
         >

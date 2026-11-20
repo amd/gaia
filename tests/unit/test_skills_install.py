@@ -41,6 +41,8 @@ from tests.unit.skills_helpers import (
     write_audit_report,
 )
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 SKILL_BODY = """# Web Research
 
 1. Call `web-research/search_web` with the user's question.
@@ -346,7 +348,7 @@ def test_audit_gate_uses_the_engine_when_it_is_installed(
     module = types.ModuleType("gaia.skills.audit")
 
     def audit_skill(directory):
-        calls.append(directory)
+        calls.append((directory, sorted(p.name for p in directory.iterdir())))
         return {
             "verdict": "ALLOW",
             "engine": "gaia-skill-audit/0.1.0",
@@ -359,9 +361,14 @@ def test_audit_gate_uses_the_engine_when_it_is_installed(
 
     marketplace.keygen()
     source = _write_source(tmp_path)
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "x.cpython-312.pyc").write_bytes(b"\x00")
     result = marketplace.publish(source, audit_report=None)
 
-    assert calls == [source]
+    # The gate reads the staged copy that gets signed, not the working folder.
+    ((audited, contents),) = calls
+    assert audited != source and audited.name == source.name
+    assert contents == ["SKILL.md"]
     assert result.audit.engine == "gaia-skill-audit/0.1.0"
     assert json.loads(marketplace.hub.publishes[-1].audit_json)["engine"] == (
         "gaia-skill-audit/0.1.0"
@@ -468,6 +475,29 @@ def test_install_refuses_a_pin_no_published_version_satisfies(marketplace, tmp_p
     with pytest.raises(SkillNotFoundError, match="satisfies"):
         marketplace.install("web-research@>=9.0.0")
     assert not (marketplace.skills_root / "web-research").exists()
+
+
+@pytest.mark.parametrize(
+    "reference,expected",
+    [
+        ("web-research", "1.0.0"),
+        ("web-research@^1.0", "1.0.0"),
+        ("web-research@>=1.1.0-rc.1", "1.1.0-rc.1"),
+    ],
+)
+def test_install_respects_prerelease_opt_in(marketplace, tmp_path, reference, expected):
+    key = marketplace.keygen()
+    marketplace.trust(key)
+    for version in ("1.0.0", "1.1.0-rc.1"):
+        marketplace.publish(_write_source(tmp_path / version, version=version))
+
+    result = marketplace.install(reference)
+
+    assert result.version == expected
+    assert marketplace.manager.reload()["web-research"].version == expected
+    assert (
+        SkillLock.load(marketplace.skills_root).get("web-research").version == expected
+    )
 
 
 def test_install_refuses_to_clobber_an_existing_install_without_force(

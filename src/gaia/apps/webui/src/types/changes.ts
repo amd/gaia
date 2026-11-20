@@ -14,8 +14,12 @@ export interface TurnFileChange {
 /** Work that may have changed files without GAIA keeping a copy. */
 export interface UntrackedWork {
     kind: string;
+    /** A command line, a script path, or a one-line description of a snippet. */
     detail: string;
+    /** Files GAIA saw it change, when it looked. */
     paths: string[];
+    /** Always true in a listing; work known not to write files is left out. */
+    may_write?: boolean;
 }
 
 export interface TurnChanges {

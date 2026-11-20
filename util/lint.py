@@ -45,7 +45,18 @@ DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718,W0212"
 EXCLUDE_DIRS = (
     ".git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules"
 )
+# The hub packages GAIA ships. Keep them in the same blocking lint surface as
+# the core source and tests; otherwise a hub-only change can pass without any
+# style check examining the code that will be published.
+HUB_DIRS = sorted(p.as_posix() for p in Path("hub/agents").glob("*/python")) + [
+    "hub/skills"
+]
 LINT_DIRS = [SRC_DIR, TEST_DIR]
+FORMAT_DIRS = LINT_DIRS + HUB_DIRS
+# Hub packages predate this gate and carry a small, documented legacy style
+# backlog. Keep checking them for every other Flake8 error without turning this
+# coverage fix into a mass rewrite of published agent tests.
+HUB_FLAKE8_IGNORES = "F401,E201,E202,E731"
 
 
 def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:
@@ -118,7 +129,7 @@ def check_black(fix: bool = False) -> CheckResult:
     print("-" * 40)
 
     if fix:
-        cmd = uvx("black", *LINT_DIRS, "--config", "pyproject.toml")
+        cmd = uvx("black", *FORMAT_DIRS, "--config", "pyproject.toml")
         print(f"[CMD] {' '.join(cmd)}")
         exit_code, output = run_command(cmd)
 
@@ -143,7 +154,7 @@ def check_black(fix: bool = False) -> CheckResult:
             return CheckResult("Code Formatting (Black)", True, False, 0, output)
     else:
         cmd = uvx(
-            "black", "--check", "--diff", *LINT_DIRS, "--config", "pyproject.toml"
+            "black", "--check", "--diff", *FORMAT_DIRS, "--config", "pyproject.toml"
         )
 
     print(f"[CMD] {' '.join(cmd)}")
@@ -192,7 +203,7 @@ def check_isort(fix: bool = False) -> CheckResult:
     print("-" * 40)
 
     if fix:
-        cmd = uvx("isort", *LINT_DIRS, "--settings-path", "pyproject.toml")
+        cmd = uvx("isort", *FORMAT_DIRS, "--settings-path", "pyproject.toml")
         print(f"[CMD] {' '.join(cmd)}")
         exit_code, output = run_command(cmd)
 
@@ -218,7 +229,7 @@ def check_isort(fix: bool = False) -> CheckResult:
             "isort",
             "--check-only",
             "--diff",
-            *LINT_DIRS,
+            *FORMAT_DIRS,
             "--settings-path",
             "pyproject.toml",
         )
@@ -283,9 +294,22 @@ def check_flake8() -> CheckResult:
         "--max-line-length=88",
         "--extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722",
     )
+    hub_cmd = uvx(
+        "flake8",
+        *HUB_DIRS,
+        f"--exclude={EXCLUDE_DIRS}",
+        "--count",
+        "--statistics",
+        "--max-line-length=88",
+        f"--extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722,{HUB_FLAKE8_IGNORES}",
+    )
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
+    print(f"[CMD] {' '.join(hub_cmd)}")
+    hub_exit_code, hub_output = run_command(hub_cmd)
+    exit_code = exit_code or hub_exit_code
+    output += hub_output
 
     if exit_code != 0:
         # Count violation lines
@@ -516,7 +540,7 @@ def check_imports() -> CheckResult:
         # gaia-agent-<id> installed) skips rather than fails. CI installs them
         # and sets GAIA_REQUIRE_HUB_AGENTS=1 so a broken import fails.
         ("from", "gaia_agent.agent", "GaiaAgent", "Flagship agent", hub_optional),
-        ("from", "gaia_agent_chat", "ChatAgent", "Chat agent", hub_optional),
+        ("from", "gaia_agent.chat_agent", "ChatAgent", "Chat agent", hub_optional),
         # Database
         ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
         ("from", "gaia.database", "DatabaseMixin", "Database mixin", False),
@@ -739,6 +763,38 @@ def check_test_lanes() -> CheckResult:
     return CheckResult("Test Lane Coverage", True, False, 0, "")
 
 
+def check_ci_paths() -> CheckResult:
+    """Reject CI lanes whose path filter misses a file they run, import or read."""
+    print("\nChecking every CI lane triggers on what it depends on...")
+    print("-" * 40)
+
+    try:
+        from check_ci_path_coverage import run_check
+    except ImportError:
+        util_dir = str(Path(__file__).parent)
+        if util_dir not in sys.path:
+            sys.path.insert(0, util_dir)
+        try:
+            from check_ci_path_coverage import run_check
+        except ImportError as exc:
+            print(f"[!] Could not import check_ci_path_coverage.py: {exc}")
+            return CheckResult("CI Path Coverage", False, False, 1, str(exc))
+
+    exit_code = run_check()
+
+    if exit_code != 0:
+        return CheckResult(
+            "CI Path Coverage",
+            False,
+            False,
+            1,
+            "See output above; add the path to the lane's `paths:` filter, or "
+            "list it in util/ci_path_allowlist.yml with a reason.",
+        )
+
+    return CheckResult("CI Path Coverage", True, False, 0, "")
+
+
 def check_tool_descriptions() -> CheckResult:
     """Hold every flagship tool description to the per-call token budget."""
     print("\nChecking tool description budget...")
@@ -815,12 +871,38 @@ def check_doc_versions() -> CheckResult:
     return CheckResult("Doc Version Consistency", True, False, 0, "")
 
 
+def check_release_versions() -> CheckResult:
+    """Fail when a version field drifts from src/gaia/version.py or its agent's."""
+    print("\nChecking release version fields...")
+    print("-" * 40)
+
+    util_dir = str(Path(__file__).parent)
+    if util_dir not in sys.path:
+        sys.path.insert(0, util_dir)
+    try:
+        from release_versions import run_check
+    except ImportError as exc:
+        print(f"[!] Could not import release_versions.py: {exc}")
+        return CheckResult("Release Versions", False, False, 1, str(exc))
+
+    if run_check() != 0:
+        return CheckResult(
+            "Release Versions",
+            False,
+            False,
+            1,
+            "See output above; run: python util/release_versions.py --stamp",
+        )
+
+    return CheckResult("Release Versions", True, False, 0, "")
+
+
 def count_python_files() -> tuple[int, int]:
     """Count Python files and lines of code."""
     total_files = 0
     total_lines = 0
 
-    for dir_name in LINT_DIRS:
+    for dir_name in FORMAT_DIRS:
         dir_path = Path(dir_name)
         if dir_path.exists():
             for py_file in dir_path.rglob("*.py"):
@@ -846,7 +928,7 @@ def print_summary(results: list[CheckResult]) -> int:
     print("[STATS] Project Statistics:")
     print(f"   - Python Files: {total_files}")
     print(f"   - Lines of Code: {total_lines:,}")
-    print(f"   - Directories: {', '.join(LINT_DIRS)}")
+    print(f"   - Directories: {', '.join(FORMAT_DIRS)}")
 
     # Build results
     pass_count = 0
@@ -977,6 +1059,11 @@ def main():
         help="Reject test files that no CI lane runs (see util/test_lane_allowlist.yml)",
     )
     parser.add_argument(
+        "--ci-paths",
+        action="store_true",
+        help="Reject CI lanes whose path filter misses a file they depend on",
+    )
+    parser.add_argument(
         "--tool-descriptions",
         action="store_true",
         help="Check flagship tool descriptions against the per-call token budget",
@@ -985,6 +1072,11 @@ def main():
         "--doc-versions",
         action="store_true",
         help="Check doc version consistency",
+    )
+    parser.add_argument(
+        "--release-versions",
+        action="store_true",
+        help="Check every version field matches its source (util/release_versions.py)",
     )
     parser.add_argument("--all", action="store_true", help="Run all checks")
     parser.add_argument(
@@ -1008,8 +1100,10 @@ def main():
             args.workflow_triggers,
             args.workflow_ancestor_skip,
             args.test_lanes,
+            args.ci_paths,
             args.tool_descriptions,
             args.doc_versions,
+            args.release_versions,
             args.all,
         ]
     )
@@ -1074,11 +1168,17 @@ def main():
     if args.test_lanes or run_all:
         results.append(check_test_lanes())
 
+    if args.ci_paths or run_all:
+        results.append(check_ci_paths())
+
     if args.tool_descriptions or run_all:
         results.append(check_tool_descriptions())
 
     if args.doc_versions or run_all:
         results.append(check_doc_versions())
+
+    if args.release_versions or run_all:
+        results.append(check_release_versions())
 
     exit_code = print_summary(results)
     sys.exit(exit_code)

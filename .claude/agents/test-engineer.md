@@ -57,9 +57,9 @@ import pytest
 
 # Concrete agents ship as standalone hub wheels — import the package, not
 # gaia.agents.<id>. Guard so a framework-only env skips instead of erroring.
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 def test_chat_agent_registers_tools(mock_lemonade_client):
     agent = ChatAgent(debug=True)

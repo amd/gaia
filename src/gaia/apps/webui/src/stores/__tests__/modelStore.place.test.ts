@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../../services/api');
 
 import { inferencePlace, selectInferenceLocation } from '../modelStore';
+import { translator } from '../../i18n/useT';
 import type { ActiveModel, Session } from '../../types';
 
 const LOCAL_ACTIVE: ActiveModel = {
@@ -18,6 +19,7 @@ const LOCAL_ACTIVE: ActiveModel = {
 };
 const CLOUD_ACTIVE: ActiveModel = {
     provider: 'fireworks', model: 'fireworks.deepseek-v4p1-flash', label: 'DeepSeek', remote: true, is_default: false,
+    provider_name: 'Fireworks AI',
 };
 const FIREWORKS_SENTENCE =
     'Using deepseek-v4p1-flash on Fireworks AI (cloud). Your messages, and anything read from '
@@ -40,10 +42,30 @@ describe('inferencePlace', () => {
         expect(place).toEqual({ remote: true, label: 'Fireworks AI', description: FIREWORKS_SENTENCE });
     });
 
-    it('treats a cloud pick as cloud before the session list catches up', () => {
+    it('a cloud pick shows as cloud once the chat names it', () => {
+        // This window's own pick refetches the chat list with it, so the chat names the pick.
+        const place = inferencePlace(CLOUD_ACTIVE, {
+            inference_remote: true,
+            inference_provider_name: 'Fireworks AI',
+            effective_model: 'fireworks.deepseek-v4p1-flash',
+        });
+        expect(place?.remote).toBe(true);
+        expect(place?.label).toBe('Fireworks AI');
+    });
+
+    it('a backend that does not name the model still counts a cloud pick at once', () => {
+        // Older backends send no effective_model, so the pick can't be stale and wins.
         const place = inferencePlace(CLOUD_ACTIVE, { inference_remote: false });
         expect(place?.remote).toBe(true);
         expect(place?.label).toBe('Fireworks AI');
+    });
+
+    it('names a cloud provider GAIA has no tab for (#7216)', () => {
+        const opencode: ActiveModel = {
+            provider: 'local', model: 'opencode.big-model', label: 'big-model · opencode',
+            remote: true, is_default: false, provider_name: 'opencode',
+        };
+        expect(inferencePlace(opencode, undefined)).toEqual({ remote: true, label: 'opencode', description: null });
     });
 
     it.each([
@@ -53,6 +75,25 @@ describe('inferencePlace', () => {
     ])('makes no claim for %s', (_label, location) => {
         expect(inferencePlace(LOCAL_ACTIVE, location)).toBeNull();
         expect(inferencePlace(null, location)).toBeNull();
+    });
+
+    it("follows the chat's own location when another window switched models (#5743)", () => {
+        // This window still caches the old cloud pick; the chat already resolves to local Qwen.
+        const place = inferencePlace(CLOUD_ACTIVE, {
+            inference_remote: false,
+            inference_provider_name: 'Lemonade on this machine',
+            effective_model: 'Qwen3.6-35B-A3B-GGUF',
+        });
+        expect(place?.remote).toBe(false);
+        expect(place?.label).toBe('Local');
+    });
+
+    it('claims nothing when the pick is stale and the chat cannot say where it runs', () => {
+        const place = inferencePlace(CLOUD_ACTIVE, {
+            inference_remote: null,
+            effective_model: 'Qwen3.6-35B-A3B-GGUF',
+        });
+        expect(place).toBeNull();
     });
 
     it('before the first chat, uses the backend answer for a new chat (#5253)', () => {
@@ -72,5 +113,26 @@ describe('selectInferenceLocation', () => {
         expect(selectInferenceLocation(sessions, 'b')?.inference_remote).toBe(false);
         expect(selectInferenceLocation(sessions, null)?.inference_remote).toBe(true);
         expect(selectInferenceLocation([], null)).toBeUndefined();
+    });
+});
+
+describe('inferencePlace in Arabic (#7626)', () => {
+    const ar = translator('ar');
+    const location = {
+        inference_remote: false,
+        inference_description:
+            'Using Gemma-4-E4B-it-GGUF on this machine. GAIA is not sending this conversation to any cloud provider.',
+    };
+
+    it('says the place and the hover sentence in Arabic, not the backend English', () => {
+        const place = inferencePlace(LOCAL_ACTIVE, location, ar);
+        expect(place?.label).toBe('محلي');
+        expect(place?.description).toContain('على هذا الجهاز');
+        expect(place?.description).toContain('Gemma');
+        expect(place?.description).not.toMatch(/Using|GAIA is not/);
+    });
+
+    it('keeps the English sentence in English', () => {
+        expect(inferencePlace(LOCAL_ACTIVE, location)?.description).toMatch(/^Using Gemma.* on this machine\./);
     });
 });

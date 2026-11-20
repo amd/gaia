@@ -5,24 +5,42 @@
 The settings live in the chat database. They are applied to the chat's agent
 before every turn and, when the user changes one, to the cached agent right
 away — the agent's path checks and tool policy read them on every call, so a
-change takes effect on the next step without a restart.
+change takes effect on the next step without a restart. A relayed turn already
+running is told of an Internet change over its sidecar session.
 """
 
 from __future__ import annotations
 
 import os
+import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from gaia.logger import get_logger
+from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
 from .database import ChatDatabase
+from .sidecar.profiles import profile_for
 
 logger = get_logger(__name__)
 
 
 class EnvironmentChangeError(ValueError):
     """A change to the chat's folders or internet that cannot be made."""
+
+
+class RelayedSwitchError(RuntimeError):
+    """The Internet switch is saved, but the relayed turn running now wasn't told."""
+
+
+def _shorten(path: str) -> str:
+    return path if len(path) <= 120 else path[:120] + "…"
+
+
+def path_error_reason(error: Exception) -> str:
+    """Why a path failed, without the path: POSIX errors repeat it in full."""
+    return getattr(error, "strerror", None) or str(error)
 
 
 def _norm(path: str) -> str:
@@ -36,6 +54,39 @@ def within(child: str, parent: str) -> bool:
 
 def load(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
     return db.get_session_environment(session_id)
+
+
+_NOTE_OPENINGS = (
+    "[This chat is working in the folder ",
+    "[This chat is working in these folders: ",
+)
+
+
+def with_folder_note(message: str, folders: List[str]) -> str:
+    """*message* as sent to the chat's agent, led by a note naming *folders*."""
+    # A granted folder only widens the scope; the model must also be told it.
+    if not folders:
+        return message
+    if len(folders) == 1:
+        note = (
+            f"[This chat is working in the folder {folders[0]}. When the user "
+            'says "this folder" or "here", they mean it.]'
+        )
+    else:
+        note = (
+            f"[This chat is working in these folders: {', '.join(folders)}. "
+            'When the user says "this folder" or "here", they mean these.]'
+        )
+    return f"{note}\n\n{message}"
+
+
+def without_folder_note(message: str) -> str:
+    """*message* without the note :func:`with_folder_note` leads it with."""
+    if message.startswith(_NOTE_OPENINGS):
+        _note, sep, rest = message.partition("]\n\n")
+        if sep:
+            return rest
+    return message
 
 
 def apply_to_agent(agent: Any, env: Dict[str, Any]) -> bool:
@@ -77,89 +128,112 @@ def relayed(session: Dict[str, Any]) -> bool:
     )
 
 
-def _takes_folders(session: Dict[str, Any]) -> bool:
-    """Whether the chat's agent can be held to its folders: in-process, or sent them."""
-    if not relayed(session):
+def takes_folders(agent_type: Optional[str]) -> bool:
+    """Whether a chat with *agent_type* can be given folders.
+
+    An in-process agent always can. A relayed one can when the running
+    sidecar's contract says it takes the chat's file scope on every turn.
+
+    Raises:
+        EnvironmentChangeError: The relayed agent could not be started to ask.
+    """
+    from gaia.daemon.sidecars.errors import SidecarError
+
+    from .sidecar import daemon_client
+    from .sidecar.profiles import profile_for, scope_supported
+
+    agent_type = agent_type or "chat"
+    if not relayed({"agent_type": agent_type}):
         return True
-    from gaia.ui.email_sidecar.profiles import profile_for
+    profile = profile_for(agent_type)
+    if profile is None or profile.min_scope_api_version is None:
+        return False
+    try:
+        handle = daemon_client.acquire_handle(profile.agent_id)
+    except SidecarError as e:
+        logger.error("Could not start the %s agent to check folders: %s", agent_type, e)
+        raise EnvironmentChangeError(profile.start_failed_text(e.kind)) from e
+    return scope_supported(profile, handle.api_version)
 
-    profile = profile_for(session.get("agent_type") or "chat")
-    return profile is not None and profile.min_folders_api_version is not None
 
+def folders_refusal(agent_type: Optional[str]) -> str:
+    """What to tell the user when *agent_type* can't be given folders."""
+    from .sidecar.profiles import profile_for
 
-def _refuse(what: str) -> EnvironmentChangeError:
-    return EnvironmentChangeError(
-        f"This chat's agent runs as its own process, so GAIA can't hold it to {what}. "
+    profile = profile_for(agent_type or "chat")
+    if profile is not None and profile.min_scope_api_version is not None:
+        return (
+            f"The installed {profile.display_name} agent is too old to be given "
+            "folders. Update GAIA to the latest version, then try again."
+        )
+    return (
+        "This chat's agent runs as its own process and can't be given folders. "
         "Start a chat with the GAIA agent to use them."
     )
 
 
+def withheld_refusal() -> str:
+    """What to tell the user when a relayed chat has folders taken away."""
+    return (
+        "This chat had folders taken away while its agent ran inside GAIA. The "
+        "agent now runs as its own process, which can't be kept out of them. "
+        "Start a new chat to keep working."
+    )
+
+
+def _require_folders(agent_type: Optional[str]) -> None:
+    if not takes_folders(agent_type):
+        raise EnvironmentChangeError(folders_refusal(agent_type))
+
+
+def _require_holdable(session: Dict[str, Any]) -> None:
+    if relayed(session):
+        raise EnvironmentChangeError(
+            "This chat's agent runs as its own process, so GAIA can't take a "
+            "folder away from it. To work without a folder, start a new chat."
+        )
+
+
 def _require_enforceable(db: ChatDatabase, session_id: str) -> None:
-    """Refuse an internet setting for an agent GAIA can't hold to it."""
     session = db.get_session(session_id)
-    if session is not None and relayed(session):
-        raise _refuse("these settings")
+    if session is not None:
+        _require_holdable(session)
 
 
-def _require_folders_reach(db: ChatDatabase, session_id: str) -> None:
-    """Refuse a folder setting for an agent that is neither in-process nor sent it."""
-    session = db.get_session(session_id)
-    if session is not None and not _takes_folders(session):
-        raise _refuse("these folder settings")
+def check_new_chat_folders(agent_type: Optional[str], folders: List[str]) -> None:
+    """Refuse folders a chat about to be made with *agent_type* could not be given.
 
+    Checked before the chat exists, so a refused folder leaves no chat behind.
 
-def relayed_scope(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
-    """The folder settings a relayed agent is sent each turn to apply itself.
-
-    ``working_folder`` is the chat's own pick; ``default_working_folder`` is
-    ``GAIA_WORKING_DIR`` (or ``--working-dir``), kept apart so a sidecar too
-    old to take folders is stopped only by settings the chat itself made.
+    Raises:
+        EnvironmentChangeError: The agent can't be given folders, or a
+            folder is missing or too broad.
     """
-    from ._chat_helpers import env_working_dir
-
-    env = load(db, session_id)
-    default = None if env["working_folder"] else env_working_dir()
-    return {
-        "folders": list(env["folders"]),
-        "withheld": list(env["withheld"]),
-        "working_folder": env["working_folder"],
-        "default_working_folder": str(default) if default else None,
-    }
+    if not folders:
+        return
+    _require_folders(agent_type)
+    for path in folders:
+        check_folder(path)
 
 
-def _checked_folder(path: str) -> Path:
-    """*path* as a folder GAIA may be given, or why it can't be."""
-    from ._chat_helpers import _unsafe_directory_grant_reason
+def internet_enforceable(session: Dict[str, Any]) -> bool:
+    """Whether GAIA can hold the chat's agent to its Internet switch.
 
-    target = Path(os.path.expanduser(path)).resolve()
-    if not target.is_dir():
-        raise EnvironmentChangeError(f"{target} is not a folder on this PC.")
-    reason = _unsafe_directory_grant_reason(target)
-    if reason:
-        raise EnvironmentChangeError(
-            f"GAIA can't be given {target}: {reason}. Pick a narrower folder."
-        )
-    return target
-
-
-def set_working_folder(db: ChatDatabase, session_id: str, path: str) -> None:
-    """Make *path* the folder this chat works in, before its first message.
-
-    The agent is built around its working folder, so a chat that has started
-    keeps the one it has; adding a folder is how it reaches another.
+    True in process, and for a relayed agent whose contract carries the switch.
     """
+    if not relayed(session):
+        return True
+    profile = profile_for(session.get("agent_type") or "chat")
+    return profile is not None and profile.min_internet_api_version is not None
+
+
+def _require_internet_enforceable(db: ChatDatabase, session_id: str) -> None:
     session = db.get_session(session_id)
-    if session is None:
-        raise EnvironmentChangeError(f"Chat {session_id} does not exist.")
-    if session.get("message_count", 0) or _live_agent(session_id) is not None:
+    if session is not None and not internet_enforceable(session):
         raise EnvironmentChangeError(
-            "This chat has already started, so its working folder is set. Add the "
-            "folder to this chat instead, or start a new chat in it."
+            "This chat's agent keeps its own network rules, so GAIA can't switch "
+            "its internet on or off here."
         )
-    _require_folders_reach(db, session_id)
-    target = _checked_folder(path)
-    db.set_session_working_folder(session_id, str(target))
-    logger.info("Chat %s works in %s", session_id, target)
 
 
 def _live_agent(session_id: str) -> Optional[Any]:
@@ -168,33 +242,53 @@ def _live_agent(session_id: str) -> Optional[Any]:
     return cached_session_agent(session_id)
 
 
-def _computed_scope(
-    db: ChatDatabase, session: Dict[str, Any], env: Dict[str, Any]
-) -> List[str]:
+def _computed_scope(db: ChatDatabase, session: Dict[str, Any]) -> List[str]:
     """The scope a new agent for this chat would get, before the user's changes."""
-    from ._chat_helpers import (
-        WorkingDirEnvError,
-        _compute_allowed_paths,
-        _managed_documents_dir,
-        _resolve_rag_paths,
-    )
+    from ._chat_helpers import _compute_allowed_paths, _resolve_rag_paths
 
     rag, library = _resolve_rag_paths(db, session.get("document_ids", []))
+    return _compute_allowed_paths(rag + library)
+
+
+# Paths approved at a relayed agent's prompt; its sidecar holds the grant itself.
+_approved_paths: Dict[str, List[str]] = {}
+_approved_guard = threading.Lock()
+
+
+def note_approved_path(session_id: str, path: str) -> None:
+    """Record that the user let *session_id*'s relayed agent open *path*."""
+    with _approved_guard:
+        paths = _approved_paths.setdefault(session_id, [])
+        if path not in paths:
+            paths.append(path)
+
+
+def forget_session(session_id: str) -> None:
+    """Drop what *session_id*'s relayed agent was allowed at its prompts."""
+    with _approved_guard:
+        _approved_paths.pop(session_id, None)
+
+
+def _approved(session_id: str) -> List[str]:
+    with _approved_guard:
+        return list(_approved_paths.get(session_id, []))
+
+
+def _env_scope_entries() -> List[Path]:
+    """The ``GAIA_ALLOWED_PATHS`` entries, or none when it is unset or invalid."""
     try:
-        return _compute_allowed_paths(rag + library, env["working_folder"])
-    except WorkingDirEnvError as e:
-        # Only reached with no documents and no pick: the GAIA folder alone.
-        logger.warning("No default working folder to show: %s", e)
-        return [str(_managed_documents_dir())]
+        return env_allowed_paths() or []
+    except AllowedPathsEnvError:
+        return []
 
 
 def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
-    """What the session panel shows: every folder and file the chat may touch."""
-    from ._chat_helpers import (
-        WorkingDirEnvError,
-        _managed_documents_dir,
-        default_working_dir,
-    )
+    """What the session panel shows: every folder and file the chat may touch.
+
+    Raises:
+        AllowedPathsEnvError: When ``GAIA_ALLOWED_PATHS`` holds an invalid value.
+    """
+    from ._chat_helpers import _effective_scope, _managed_documents_dir
 
     session_id = session["id"]
     env = load(db, session_id)
@@ -204,24 +298,23 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
         scope = [str(p) for p in validator.allowed_paths]
         scratch = str(validator.scratch_dir) if validator.scratch_dir else None
     else:
-        scope = _computed_scope(db, session, env) + list(env["folders"])
+        # What a new agent's validator would hold, GAIA_ALLOWED_PATHS applied.
+        scope = _effective_scope(_computed_scope(db, session) + list(env["folders"]))
+        scope += _approved(session_id)
         scratch = None
 
     added = {_norm(p) for p in env["folders"]}
     managed = _norm(str(_managed_documents_dir()))
-    doc_paths = {
-        _norm(d["filepath"])
+    # A library copy's file name carries an id prefix; the person knows the original.
+    doc_names = {
+        _norm(d["filepath"]): d.get("filename")
         for d in db.get_session_documents(session_id)
         if d.get("filepath")
     }
-    cwd = env["working_folder"]
-    if not cwd:
-        try:
-            cwd = str(default_working_dir())
-        except WorkingDirEnvError as e:
-            # The panel still lists the chat's folders; the turn says what to fix.
-            logger.warning("No default working folder to show: %s", e)
-    cwd = _norm(cwd) if cwd else None
+    doc_paths = set(doc_names)
+    cwd = _norm(os.getcwd())
+    from_env = {_norm(str(p)) for p in _env_scope_entries()}
+    approved = {_norm(p) for p in _approved(session_id)}
     entries: Dict[str, Dict[str, Any]] = {}
     for path in scope:
         key = _norm(path)
@@ -237,12 +330,15 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
             source = "document"
         elif key == cwd:
             source = "working_folder"
-        elif validator is not None:
+        elif key in from_env:
+            source = "allowed_paths"
+        elif validator is not None or key in approved:
             source = "approved"
         else:
             source = "document"
         entries[key] = {
             "path": str(Path(path)),
+            "name": doc_names.get(key) or None,
             "kind": "file" if Path(path).is_file() else "folder",
             "source": source,
             # An attached document is removed from the chat's documents, which
@@ -252,23 +348,62 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "session_id": session_id,
         "folders": sorted(
-            entries.values(), key=lambda e: (e["kind"] != "folder", e["path"].lower())
+            entries.values(),
+            key=lambda e: (
+                e["kind"] != "folder",
+                (e["name"] or Path(e["path"]).name).lower(),
+                e["path"].lower(),
+            ),
         ),
         "removed": list(env["withheld"]),
         "internet": not env["internet_off"],
-        "working_folder": env["working_folder"],
-        # A relayed agent is sent its folders each turn; its internet is its own.
-        "enforced": _takes_folders(session)
-        and (relayed(session) or validator is not None or agent is None),
-        "internet_enforced": not relayed(session)
-        and (validator is not None or agent is None),
+        "enforced": not relayed(session) and (validator is not None or agent is None),
+        "internet_enforced": internet_enforceable(session),
     }
+
+
+def check_folder(path: str) -> Path:
+    """*path* resolved, if a chat may be given it.
+
+    Raises:
+        EnvironmentChangeError: It is not a folder, or too broad to grant.
+    """
+    from ._chat_helpers import _unsafe_directory_grant_reason
+
+    try:
+        target = Path(os.path.expanduser(path)).resolve()
+        is_dir = target.is_dir()
+    except (ValueError, OSError) as e:  # a null byte, or a path too long for the OS
+        raise EnvironmentChangeError(
+            f"{_shorten(path)!r} is not a path this PC can open: "
+            f"{path_error_reason(e)}."
+        ) from e
+    if not is_dir:
+        raise EnvironmentChangeError(
+            f"{_shorten(str(target))} is not a folder on this PC."
+        )
+    reason = _unsafe_directory_grant_reason(target)
+    if reason:
+        raise EnvironmentChangeError(
+            f"GAIA can't be given {target}: {reason}. Pick a narrower folder."
+        )
+    return target
 
 
 def add_folder(db: ChatDatabase, session_id: str, path: str) -> None:
     """Let the chat read and write *path*, now and in later turns."""
-    _require_folders_reach(db, session_id)
-    target = _checked_folder(path)
+    session = db.get_session(session_id)
+    if session is not None:
+        _require_folders(session.get("agent_type"))
+    grant_folder(db, session_id, path)
+
+
+def grant_folder(db: ChatDatabase, session_id: str, path: str) -> None:
+    """:func:`add_folder` for a chat whose agent is known to take folders.
+
+    A new chat's agent was asked once, by :func:`check_new_chat_folders`.
+    """
+    target = check_folder(path)
     env = load(db, session_id)
     covering = [
         w
@@ -301,7 +436,7 @@ def add_folder(db: ChatDatabase, session_id: str, path: str) -> None:
 
 def remove_folder(db: ChatDatabase, session_id: str, path: str) -> None:
     """Take *path* away from the chat; enforced from the agent's next step."""
-    _require_folders_reach(db, session_id)
+    _require_enforceable(db, session_id)
     target = str(Path(os.path.expanduser(path)).resolve())
     env = load(db, session_id)
     folders = [f for f in env["folders"] if not within(f, target)]
@@ -320,17 +455,96 @@ def remove_folder(db: ChatDatabase, session_id: str, path: str) -> None:
     logger.info("Chat %s may no longer use %s", session_id, target)
 
 
+_switch_locks: Dict[str, threading.Lock] = {}
+_switch_locks_guard = threading.Lock()
+
+
+def _switch_lock(session_id: str) -> threading.Lock:
+    with _switch_locks_guard:
+        return _switch_locks.setdefault(session_id, threading.Lock())
+
+
+@contextmanager
+def held_internet_off(db: ChatDatabase, session_id: str) -> Iterator[bool]:
+    """The chat's saved ``internet_off``, with no switch landing until the block exits.
+
+    A relayed turn reads it once its sidecar has applied the turn's body, so a
+    switch flipped while the turn was starting is not lost.
+    """
+    with _switch_lock(session_id):
+        yield bool(load(db, session_id)["internet_off"])
+
+
 def set_internet(db: ChatDatabase, session_id: str, on: bool) -> None:
     """Turn the chat's internet on or off; enforced from the agent's next step."""
-    _require_enforceable(db, session_id)
-    env = load(db, session_id)
-    db.set_session_environment(
-        session_id,
-        folders=env["folders"],
-        withheld=env["withheld"],
-        internet_off=not on,
-    )
-    agent = _live_agent(session_id)
-    if agent is not None:
-        agent.internet_off = not on
-    logger.info("Chat %s internet %s", session_id, "on" if on else "off")
+    _require_internet_enforceable(db, session_id)
+    # Saving and telling the running turn as one step keeps two quick flips in order.
+    with _switch_lock(session_id):
+        env = load(db, session_id)
+        db.set_session_environment(
+            session_id,
+            folders=env["folders"],
+            withheld=env["withheld"],
+            internet_off=not on,
+        )
+        agent = _live_agent(session_id)
+        if agent is not None:
+            agent.internet_off = not on
+        logger.info("Chat %s internet %s", session_id, "on" if on else "off")
+        _tell_running_relay(session_id, internet_off=not on)
+
+
+def _tell_running_relay(session_id: str, internet_off: bool) -> None:
+    """Carry the switch to a relayed turn of this chat that is running now.
+
+    With no turn running there is nothing to tell: the next turn sends the saved
+    value, and a turn still starting reads it through :func:`held_internet_off`.
+    A turn that can't be told it is offline is ended, as a full-access run is
+    when Ask can't reach it.
+
+    Raises:
+        RelayedSwitchError: When the running turn's sidecar couldn't be told.
+    """
+    from gaia.daemon.sidecars.errors import SidecarError
+
+    from ._chat_helpers import _active_sse_handlers
+
+    handler = _active_sse_handlers.get(session_id)
+    if internet_off and getattr(handler, "relay_ignores_internet", False) is True:
+        handler.cancelled.set()
+        handler.close_active_relay_response()
+        raise RelayedSwitchError(
+            "Internet is off from the next message, but the running agent is too "
+            "old to be told, so the Agent UI ended its turn. Update GAIA to the "
+            "latest version, then send the message again."
+        )
+    proxy = getattr(handler, "active_relay_proxy", None)
+    sidecar_session = getattr(handler, "active_relay_internet_session", None)
+    if proxy is None or sidecar_session is None:
+        return
+    try:
+        proxy.set_internet(sidecar_session, internet_off)
+    except SidecarError as exc:
+        if not (
+            _active_sse_handlers.get(session_id) is handler
+            and handler.active_relay_internet_session == sidecar_session
+        ):
+            logger.info(
+                "Chat %s: the relayed turn ended before it could be told the "
+                "internet switch (%s); the next turn carries it",
+                session_id,
+                exc,
+            )
+            return
+        if internet_off:
+            handler.cancelled.set()
+            handler.close_active_relay_response()
+            raise RelayedSwitchError(
+                f"Internet is off from the next message, but the running agent "
+                f"couldn't be told ({exc}), so the Agent UI ended its turn. Send "
+                "the message again."
+            ) from exc
+        raise RelayedSwitchError(
+            f"Internet is on from the next message, but the running agent "
+            f"couldn't be told ({exc}), so this turn stays offline."
+        ) from exc

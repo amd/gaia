@@ -63,6 +63,10 @@ await talk.start_voice_session()
 
 ## 10.2 Voice + RAG Integration
 
+Install both extras with `uv pip install "amd-gaia[talk,rag]"`. If any document
+listed in `rag_documents` cannot be indexed, `TalkSDK` raises `RuntimeError`
+instead of starting voice chat without that document's context.
+
 ```python
 from gaia.talk.sdk import TalkSDK, TalkConfig
 

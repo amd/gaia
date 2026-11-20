@@ -67,6 +67,18 @@ def test_search_hits_stand_in_when_no_page_was_read():
     assert {p["kind"] for p in pages} == {"search_result"}
 
 
+def test_search_hit_titles_drop_the_primary_source_tag():
+    ledger = TurnLedger()
+    text = (
+        'Web search results for: "kestrel releases"\n\n'
+        "1. Releases · kestrel/kestrel [primary source]\n"
+        "   https://github.com/kestrel/kestrel/releases\n"
+    )
+    _call(ledger, "search_web", {"query": "kestrel releases"}, text)
+    pages = ledger.summary(location=LOCAL)["pages"]
+    assert [p["title"] for p in pages] == ["Releases · kestrel/kestrel"]
+
+
 def test_a_failed_fetch_is_not_a_source_but_its_site_was_contacted():
     ledger = TurnLedger()
     _call(
@@ -107,6 +119,32 @@ def test_document_passages_are_named_by_the_attached_file_not_the_upload_id():
         "passages": 3,
     }
     assert docs[1]["name"] == "plan.docx"
+
+
+@pytest.mark.parametrize(
+    "display_names",
+    [
+        {},
+        {"0123456789ab_Q3%20plan.pdf": "Q3 plan.pdf"},
+    ],
+)
+def test_a_duplicate_spaced_upload_is_named_without_its_id_prefix(display_names):
+    ledger = TurnLedger()
+    upload = "C:/Users/me/.gaia/chat/uploads/0123456789ab_Q3 plan.pdf"
+    _call(
+        ledger,
+        "query_specific_file",
+        {"file_path": upload},
+        json.dumps(
+            {
+                "status": "success",
+                "chunks": [{"source_file": upload, "page": 1, "content": "a"}],
+            }
+        ),
+    )
+    docs = ledger.summary(location=LOCAL, display_names=display_names)["documents"]
+    assert docs[0]["name"] == "Q3 plan.pdf"
+    assert docs[0]["path"] == upload
 
 
 @pytest.mark.parametrize(
@@ -280,15 +318,23 @@ def test_a_cloud_turn_names_the_provider_and_estimates_its_cost():
     assert summary["cost"] == {"kind": "estimate", "usd": 0.65}
 
 
-def test_cloud_cost_without_a_rate_card_or_token_counts_is_unknown():
+def test_cloud_cost_without_a_rate_card_is_unknown():
     assert TurnLedger().summary(
         location=GATEWAY, usage={"input_tokens": 5, "tokens": 5}
     )["cost"] == {"kind": "unknown"}
-    assert TurnLedger().summary(location=FIREWORKS)["cost"] == {"kind": "unknown"}
+    assert TurnLedger().summary(location=GATEWAY)["cost"] == {"kind": "unknown"}
     assert (
         TurnLedger().summary(location=GATEWAY)["model"]["provider_name"]
         == "AMD LLM Gateway"
     )
+
+
+def test_a_priced_model_with_no_token_counts_says_usage_was_not_reported():
+    # A stopped stream never sends its usage; the model's price is still known.
+    assert TurnLedger().summary(location=FIREWORKS)["cost"] == {"kind": "unreported"}
+    assert TurnLedger().summary(location=FIREWORKS, usage={"tokens": 5})["cost"] == {
+        "kind": "unreported"
+    }
 
 
 def test_an_unknown_location_is_reported_not_assumed_local():
@@ -422,6 +468,6 @@ def test_the_turn_summary_survives_a_reload():
     restored = responses[msg_id].turn_summary
     assert restored is not None
     assert restored.model.provider_name == "Fireworks AI"
-    assert restored.cost.kind == "unknown"
+    assert restored.cost.kind == "unreported"
     others = [r for i, r in responses.items() if i != msg_id]
     assert others[0].turn_summary is None

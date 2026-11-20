@@ -4,6 +4,7 @@
 """A new chat's task cards and working folder come from what is set up here."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -23,6 +24,14 @@ STARTER = frozenset(
         "inbox-triage",
     }
 )
+
+
+@pytest.fixture(autouse=True)
+def in_process_agent(monkeypatch):
+    """No agent registry in unit tests; the flagship runs in-process, as from source."""
+    from gaia.ui import session_environment
+
+    monkeypatch.setattr(session_environment, "relayed", lambda _session: False)
 
 
 def _ctx(skills=STARTER, docs=0, mail=False):
@@ -49,13 +58,25 @@ def test_what_the_user_set_up_comes_first():
     assert cards[0]["note"] == "3 indexed documents"
 
 
-def test_a_card_needs_its_skill_installed():
-    cards = ss.pick_cards(_ctx(skills=frozenset({"summarize"}), docs=2, mail=True))
-    assert _skills(cards) == ["summarize"]
+def test_cards_run_on_the_agents_own_tools_without_their_skills():
+    cards = ss.pick_cards(_ctx(skills=frozenset(), docs=2, mail=True))
+    assert _skills(cards) == [
+        "document-brief",
+        "inbox-triage",
+        "research-report",
+        "coding",
+    ]
 
 
-def test_no_skills_means_no_cards():
-    assert ss.pick_cards(_ctx(skills=frozenset())) == []
+def test_without_the_starter_skills_a_new_chat_still_offers_tasks():
+    # What a release agent without the starter pack lists (#3057).
+    cards = ss.pick_cards(_ctx(skills=frozenset({"gaia-voice", "document-extract"})))
+    assert _skills(cards) == ["research-report", "coding", "summarize"]
+
+
+def test_check_in_needs_its_skill():
+    assert "check-in" not in _skills(ss.pick_cards(_ctx(skills=frozenset())))
+    assert "check-in" in _skills(ss.pick_cards(_ctx()))
 
 
 def test_cards_that_need_a_subject_say_so():
@@ -69,12 +90,75 @@ def test_working_folder_is_the_project_directory(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     project.mkdir()
     monkeypatch.chdir(project)
-    folder = ss.working_folder()
+    folder = ss.working_folder(choosable=True)
     assert folder == {
         "path": str(project.resolve()),
         "name": "proj",
         "gaia_folder": False,
+        "choosable": True,
     }
+
+
+@pytest.fixture
+def relayed_gaia(monkeypatch):
+    """The flagship runs as a daemon sidecar, as on an installed GAIA."""
+    from gaia.ui import session_environment
+    from gaia.ui.routers import skills
+    from gaia.ui.sidecar import daemon_client
+
+    monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
+    monkeypatch.setattr(ss, "_mail_connected", lambda: False)
+    monkeypatch.setattr(skills, "list_skills", lambda: {"skills": []})
+    agent = SimpleNamespace(api_version="2.21")
+    monkeypatch.setattr(
+        daemon_client,
+        "acquire_handle",
+        lambda _id: SimpleNamespace(api_version=agent.api_version),
+    )
+    return agent
+
+
+def _start(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    app = FastAPI()
+    app.include_router(onboarding.router)
+    app.dependency_overrides[get_db] = lambda: _Db([])
+    res = TestClient(app).get("/api/onboarding/start")
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_a_relayed_flagship_that_takes_folders_can_pick_one(
+    tmp_path, monkeypatch, relayed_gaia
+):
+    body = _start(tmp_path, monkeypatch)
+    assert body["working_folder"]["choosable"] is True
+    assert body["skills_error"] is None
+
+
+def test_a_relayed_flagship_too_old_for_folders_shows_the_folder_as_text(
+    tmp_path, monkeypatch, relayed_gaia
+):
+    relayed_gaia.api_version = "2.17"
+    body = _start(tmp_path, monkeypatch)
+    assert body["working_folder"]["choosable"] is False
+    assert body["skills_error"] is None
+
+
+def test_a_flagship_that_cannot_start_says_why_and_offers_no_folder(
+    tmp_path, monkeypatch, relayed_gaia
+):
+    from gaia.daemon.sidecars.errors import SidecarError
+    from gaia.ui.sidecar import daemon_client
+
+    def fail(_agent_id):
+        raise SidecarError("sidecar crashed")
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", fail)
+    body = _start(tmp_path, monkeypatch)
+    assert body["working_folder"]["choosable"] is False
+    assert body["cards"] == []
+    assert "couldn't start" in body["skills_error"]
 
 
 def test_working_folder_falls_back_to_gaias_folder_when_cwd_is_home(
@@ -85,7 +169,7 @@ def test_working_folder_falls_back_to_gaias_folder_when_cwd_is_home(
     managed = tmp_path / "documents"
     monkeypatch.setattr(chat, "_managed_documents_dir", lambda: managed)
     monkeypatch.chdir(Path.home())
-    folder = ss.working_folder()
+    folder = ss.working_folder(choosable=True)
     assert folder["path"] == str(managed) and folder["gaia_folder"] is True
 
 
@@ -101,32 +185,51 @@ def test_start_screen_counts_only_finished_documents(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(ss, "_mail_connected", lambda: False)
     db = _Db([{"indexing_status": "complete"}, {"indexing_status": "indexing"}])
-    result = ss.start_screen(db, [{"name": "document-brief"}])
+    result = ss.start_screen(db, [{"name": "document-brief"}], choosable=True)
     assert result["cards"][0]["note"] == "1 indexed document"
     assert result["working_folder"]["name"] == tmp_path.name
 
 
-def test_mail_counts_as_connected_when_any_account_is(monkeypatch):
+def test_mail_counts_as_connected_when_any_account_is(monkeypatch, mock_home):
+    import gaia.connectors.accounts as store
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    import gaia.connectors.store as store
 
     monkeypatch.setattr(
-        store, "peek_connection", lambda ref: {"x": 1} if ref == "microsoft" else None
+        store,
+        "peek_connection",
+        lambda ref, **_kw: {"x": 1} if ref == "microsoft" else None,
     )
     assert ss._mail_connected() is True
-    monkeypatch.setattr(store, "peek_connection", lambda ref: None)
+    monkeypatch.setattr(store, "peek_connection", lambda ref, **_kw: None)
     assert ss._mail_connected() is False
 
 
-def _refused_keyring(ref):
+def test_a_second_account_counts_once_the_first_is_removed(monkeypatch, mock_home):
+    import gaia.connectors.accounts as accounts
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+
+    accounts.record_account(
+        "google", "id:bob", account_id="bob", email="bob@example.com", state="ok"
+    )
+    monkeypatch.setattr(
+        accounts,
+        "peek_connection",
+        lambda ref, slot="default", **_kw: {"x": 1} if slot == "id:bob" else None,
+    )
+    assert ss._mail_connected() is True
+
+
+def _refused_keyring(ref, **_kw):
     from gaia.connectors.errors import ConnectorsError
 
     raise ConnectorsError("plaintext keyring backend refused")
 
 
-def test_an_unreadable_keyring_only_drops_the_inbox_card(monkeypatch, caplog):
+def test_an_unreadable_keyring_only_drops_the_inbox_card(
+    monkeypatch, caplog, mock_home
+):
+    import gaia.connectors.accounts as store
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    import gaia.connectors.store as store
 
     monkeypatch.setattr(store, "peek_connection", _refused_keyring)
     with caplog.at_level("WARNING"):
@@ -134,10 +237,14 @@ def test_an_unreadable_keyring_only_drops_the_inbox_card(monkeypatch, caplog):
     assert "plaintext keyring backend refused" in caplog.text
 
 
-def test_an_unreadable_keyring_still_serves_the_start_screen(monkeypatch, tmp_path):
-    import gaia.connectors.store as store
+def test_an_unreadable_keyring_still_serves_the_start_screen(
+    monkeypatch, tmp_path, mock_home
+):
+    import gaia.connectors.accounts as store
 
-    monkeypatch.chdir(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
     monkeypatch.setattr(
         "gaia.ui.routers.skills.list_skills",
         lambda: {"skills": [{"name": n} for n in STARTER], "invalid": []},
@@ -150,15 +257,52 @@ def test_an_unreadable_keyring_still_serves_the_start_screen(monkeypatch, tmp_pa
     assert response.status_code == 200
     body = response.json()
     assert len(body["cards"]) == ss.MAX_CARDS
-    assert body["working_folder"]["name"] == tmp_path.name
+    assert body["working_folder"]["name"] == "project"
     assert not body.get("skills_error")
 
 
-def test_a_non_keyring_error_still_fails_loudly(monkeypatch):
-    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    import gaia.connectors.store as store
+def test_a_keychain_prompt_does_not_hold_the_start_screen(
+    monkeypatch, caplog, mock_home
+):
+    import threading
+    import time
 
-    def boom(ref):
+    import gaia.connectors.accounts as store
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors import credential_wait
+
+    answered = threading.Event()
+    reads = []
+
+    def prompting(ref, **_kw):
+        reads.append(ref)
+        answered.wait(timeout=30)
+        return None
+
+    monkeypatch.setattr(store, "peek_connection", prompting)
+    monkeypatch.setattr(credential_wait, "WAIT_SECONDS", 0.2)
+    try:
+        with caplog.at_level("WARNING"):
+            for _ in range(3):
+                started = time.monotonic()
+                assert ss._mail_connected() is False
+                assert time.monotonic() - started < 2
+        assert "Look for a system dialog" in caplog.text
+        assert len(reads) == 1  # one read in flight, not one per call
+    finally:
+        answered.set()
+    deadline = time.monotonic() + 5
+    while credential_wait.in_flight_count() and time.monotonic() < deadline:
+        ss._mail_connected()
+        time.sleep(0.01)
+    assert credential_wait.in_flight_count() == 0
+
+
+def test_a_non_keyring_error_still_fails_loudly(monkeypatch, mock_home):
+    import gaia.connectors.accounts as store
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+
+    def boom(ref, **_kw):
         raise RuntimeError("bug")
 
     monkeypatch.setattr(store, "peek_connection", boom)
@@ -199,15 +343,3 @@ def test_start_endpoint_says_why_when_the_agent_cannot_list_skills(client, monke
     assert body["cards"] == []
     assert body["skills_error"] == "The GAIA agent could not be started"
     assert body["working_folder"]["name"]
-
-
-def test_working_folder_follows_gaia_working_dir(tmp_path, monkeypatch):
-    project = tmp_path / "picked"
-    project.mkdir()
-    monkeypatch.chdir(Path.home())
-    monkeypatch.setenv("GAIA_WORKING_DIR", str(project))
-    assert ss.working_folder() == {
-        "path": str(project.resolve()),
-        "name": "picked",
-        "gaia_folder": False,
-    }

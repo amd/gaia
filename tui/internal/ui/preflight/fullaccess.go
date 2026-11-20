@@ -5,9 +5,11 @@ package preflight
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
+
+	"github.com/amd/gaia/tui/internal/filelock"
 )
 
 // Full access as a persistent preference.
@@ -38,6 +40,9 @@ import (
 type FullAccessConfig struct {
 	Enabled bool
 	Path    string
+	// Err is non-nil when the saved setting could not be read. Callers must
+	// surface it instead of treating a lock timeout as "full access is off".
+	Err error
 }
 
 // ReadFullAccess reports the persisted `full_access` preference.
@@ -53,9 +58,16 @@ func readFullAccess(p hostProbe) FullAccessConfig {
 	if path == "" {
 		return FullAccessConfig{}
 	}
-	raw, err := p.readFile(path)
-	if err != nil {
+	read := p.readConfig
+	if read == nil {
+		read = p.readFile
+	}
+	raw, err := read(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return FullAccessConfig{Path: path}
+	}
+	if err != nil {
+		return FullAccessConfig{Path: path, Err: fmt.Errorf("cannot read %s: %w", path, err)}
 	}
 	var cfg struct {
 		FullAccess *bool `json:"full_access"`
@@ -84,6 +96,15 @@ func writeConfigKeys(keys map[string]any) (string, error) {
 		return "", fmt.Errorf("cannot locate ~/.gaia/config.json (no home directory)")
 	}
 
+	// Python's GaiaConfig.save_keys holds this same lock around its own
+	// read-modify-write, so the two writers take turns instead of each
+	// merging into a stale copy and dropping the other's keys.
+	lock, err := filelock.Acquire(path, filelock.Timeout)
+	if err != nil {
+		return path, err
+	}
+	defer lock.Release()
+
 	doc := map[string]any{}
 	raw, err := os.ReadFile(path)
 	if err == nil {
@@ -104,10 +125,7 @@ func writeConfigKeys(keys map[string]any) (string, error) {
 	if err != nil {
 		return path, fmt.Errorf("cannot encode %s: %w", path, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return path, fmt.Errorf("cannot create %s: %w", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, append(body, '\n'), 0o600); err != nil {
+	if err := filelock.WriteAtomic(path, append(body, '\n'), 0o600); err != nil {
 		return path, fmt.Errorf("cannot write %s: %w", path, err)
 	}
 	return path, nil

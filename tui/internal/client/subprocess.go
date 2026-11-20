@@ -2,7 +2,6 @@ package client
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,17 +38,23 @@ const closeGrace = 2 * time.Second
 // nothing to save exits at once, so this only costs time when it is needed.
 const agentExitGrace = 20 * time.Second
 
-var subprocessLemonadePorts = []string{"13305", "8000"}
+var subprocessLemonadePorts = []string{"13305"}
+
+// markEmbedded reports whether the URL handed to the child is GAIA's own
+// server, which moves port and key when the daemon restarts it.
+func markEmbedded() bool {
+	return lemonade.EnvBaseURL() == "" && lemonade.ReadEmbedded() != nil
+}
 
 // detectLemonadeURL resolves configured and embedded endpoints before probing
-// legacy ports. An unrelated local server cannot override the private runtime.
+// the default port. An unrelated local server cannot override the private runtime.
 func detectLemonadeURL() string {
 	// The user's own server: the child reads the saved choice itself, so
 	// pinning a URL here could only point it somewhere else.
 	if lemonade.ExternalModeActive() {
 		return ""
 	}
-	if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) != "" || lemonade.ReadEmbedded() != nil {
+	if lemonade.EnvBaseURL() != "" || lemonade.ReadEmbedded() != nil {
 		return lemonade.ResolveBaseURL("")
 	}
 	// GAIA's own server is restarting. A probed port would reach the child as
@@ -66,6 +72,41 @@ func detectLemonadeURL() string {
 		}
 	}
 	return ""
+}
+
+// nativeEnvOwned are the variables gaiacpp takes its model server from. The
+// child gets the terminal UI's decision for each and never an inherited value:
+// a key this process chose not to use would otherwise ride along to a server
+// it was not meant for.
+var nativeEnvOwned = []string{"LEMONADE_BASE_URL", "LEMONADE_API_KEY", "GAIA_BASE_URL", "GAIA_API_KEY"}
+
+// nativeEnv is the environment for gaiacpp: inherited, minus nativeEnvOwned,
+// plus the model server's address and its key when it has one. The Python
+// agent reads GAIA's saved choice and its own server's key by itself; gaiacpp
+// reads only its environment.
+func nativeEnv(ctx context.Context, inherited []string) ([]string, error) {
+	url := lemonade.ResolveBaseURL("")
+	key, err := lemonade.APIKeyFor(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	env := make([]string, 0, len(inherited)+2)
+	for _, kv := range inherited {
+		name, _, _ := strings.Cut(kv, "=")
+		owned := false
+		for _, o := range nativeEnvOwned {
+			// Windows variable names are case-insensitive.
+			owned = owned || strings.EqualFold(name, o)
+		}
+		if !owned {
+			env = append(env, kv)
+		}
+	}
+	env = append(env, "LEMONADE_BASE_URL="+url)
+	if key != "" {
+		env = append(env, "LEMONADE_API_KEY="+key)
+	}
+	return env, nil
 }
 
 // procHandle owns one child process AND every process that child started.
@@ -171,9 +212,15 @@ type SubprocessClient struct {
 	path  string
 	args  []string
 	debug bool
+	// logf receives --dev diagnostics. The caller picks it because stderr is
+	// safe for a one-shot but lands on the frame of an interactive session.
+	logf func(format string, args ...any)
 	// canonical selects the event dialect read off the pipe: the frozen legacy
 	// vocabulary (false) or the canonical one (true).
 	canonical bool
+	// native marks the C++ agent, which has no Claude provider and reads the
+	// model server's address and key from its environment only.
+	native bool
 	// trace records every event line this client reads, verbatim. Nil means
 	// tracing is off (--trace not passed).
 	trace *event.TraceWriter
@@ -182,7 +229,7 @@ type SubprocessClient struct {
 	proc    *procHandle
 	stdin   io.WriteCloser
 	stdout  *bufio.Scanner
-	stderr  *bytes.Buffer
+	stderr  *tailBuffer
 	started bool
 	// turnDone is closed by the in-flight turn's reader when it exits. nil when
 	// no turn is running.
@@ -262,11 +309,41 @@ func NewCanonicalSubprocessClient(path string, args []string, debug bool) *Subpr
 	return c
 }
 
+// NewNativeSubprocessClient is NewCanonicalSubprocessClient for gaiacpp.
+func NewNativeSubprocessClient(path string, args []string, debug bool) *SubprocessClient {
+	c := NewCanonicalSubprocessClient(path, args, debug)
+	c.native = true
+	return c
+}
+
+// Native reports whether the child is the C++ agent, so the UI can name it and
+// refuse what it cannot do before asking.
+func (s *SubprocessClient) Native() bool { return s.native }
+
+// processName is the child's program name, for a message that asks the user to
+// find it among their running processes.
+func (s *SubprocessClient) processName() string {
+	return strings.TrimSuffix(filepath.Base(s.path), ".exe")
+}
+
 // WithTrace records every event line this client reads to w, verbatim. A nil w
 // leaves tracing off. Returns the client so it can be chained onto a constructor.
 func (s *SubprocessClient) WithTrace(w *event.TraceWriter) *SubprocessClient {
 	s.trace = w
 	return s
+}
+
+// WithLogf sends --dev diagnostics to logf. Returns the client so it can be
+// chained onto a constructor.
+func (s *SubprocessClient) WithLogf(logf func(format string, args ...any)) *SubprocessClient {
+	s.logf = logf
+	return s
+}
+
+func (s *SubprocessClient) debugf(format string, args ...any) {
+	if s.debug && s.logf != nil {
+		s.logf(format, args...)
+	}
 }
 
 // turnState is everything one turn needs, captured under a single lock so it can
@@ -275,7 +352,7 @@ type turnState struct {
 	stdin    io.WriteCloser
 	scanner  *bufio.Scanner
 	proc     *procHandle
-	stderr   *bytes.Buffer
+	stderr   *tailBuffer
 	turnDone chan struct{}
 	// notice is non-empty when this turn is the first against a REPLACEMENT
 	// child, and says what the replacement no longer knows.
@@ -297,7 +374,7 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 				if kerr := s.proc.killError(); kerr != nil {
 					return turnState{}, fmt.Errorf(
 						"the previous message is still running because stopping the agent failed "+
-							"(%v) — end the leftover gaia-agent process in Task Manager, then restart the TUI", kerr)
+							"(%v) — end the leftover %s process in Task Manager, then restart the TUI", kerr, s.processName())
 				}
 				return turnState{}, fmt.Errorf(
 					"the previous message is still running, so this one cannot be sent — " +
@@ -315,7 +392,7 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 	}
 
 	cmd := exec.Command(s.path, s.spawnArgs(s.fullAccess)...)
-	stderr := &bytes.Buffer{}
+	stderr := newTailBuffer(agentStderrCap)
 	cmd.Stderr = stderr
 
 	// Created before Start so a POSIX child is forked straight into its own
@@ -331,17 +408,22 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 		return turnState{}, err
 	}
 	// Resolve once for the child so provider setup and Python use the same
-	// endpoint, even when a second server answers on a legacy port.
-	if url := detectLemonadeURL(); url != "" {
+	// endpoint.
+	if s.native {
+		env, err := nativeEnv(context.Background(), os.Environ())
+		if err != nil {
+			group.close()
+			return turnState{}, err
+		}
+		cmd.Env = env
+	} else if url := detectLemonadeURL(); url != "" {
 		cmd.Env = append(os.Environ(), "LEMONADE_BASE_URL="+url)
 		// GAIA's own server moves port and key when the daemon restarts it; the
 		// marker tells the child this URL is that server's, so it follows it.
-		if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) == "" && lemonade.ReadEmbedded() != nil {
+		if markEmbedded() {
 			cmd.Env = append(cmd.Env, "GAIA_LEMONADE_EMBEDDED=1")
 		}
-		if s.debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Lemonade endpoint: %s\n", url)
-		}
+		s.debugf("Lemonade endpoint: %s", url)
 	}
 
 	stdinPipe, err := cmd.StdinPipe()
@@ -412,7 +494,6 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 	if err == nil {
 		s.turnCtx = ctx
 	}
-	debug := s.debug
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -510,8 +591,8 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			// mid-turn, so a raw stderr write would land on top of the UI. The
 			// writer keeps the first failure and Close() reports it once the
 			// event loop has stopped.
-			if terr := s.trace.Write(line); terr != nil && debug {
-				fmt.Fprintf(os.Stderr, "[DEBUG] trace: %v\n", terr)
+			if terr := s.trace.Write(line); terr != nil {
+				s.debugf("trace: %v", terr)
 			}
 
 			var evt interface{}
@@ -524,9 +605,7 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			if perr != nil {
 				// Visible, not dropped: a status warning keeps the turn alive
 				// while making a bad producer obvious.
-				if debug {
-					fmt.Fprintf(os.Stderr, "[DEBUG] parse error: %v (line: %s)\n", perr, string(line))
-				}
+				s.debugf("parse error: %v (line: %s)", perr, string(line))
 				if !emit(event.StatusEvent{
 					Type:    "status",
 					Status:  "warning",
@@ -599,7 +678,7 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 	return ch, nil
 }
 
-// exitedOutputLabel heads the stderr a dead child wrote over its whole life.
+// exitedOutputLabel heads the tail of the stderr a dead child wrote.
 const exitedOutputLabel = "Output from the process that exited:"
 
 // isTerminalEvent reports whether evt ends a turn in either dialect.
@@ -901,13 +980,13 @@ func (s *SubprocessClient) discard(proc *procHandle, killErr error) {
 	s.turnDone = nil
 	s.turnCtx = nil
 	if proc.served.Load() || killErr != nil {
-		s.respawned = respawnNotice(s.fullAccess, killErr)
+		s.respawned = respawnNotice(s.fullAccess, killErr, s.processName())
 	}
 }
 
 // respawnNotice says what a replacement child no longer has. The permission
 // mode is always stated: it is the state a user acts on without looking.
-func respawnNotice(fullAccess bool, killErr error) string {
+func respawnNotice(fullAccess bool, killErr error, process string) string {
 	var b strings.Builder
 	b.WriteString("The agent was restarted. The new process does not have this session's " +
 		"loaded skills, \"always allow\" grants or earlier messages — repeat anything it needs.")
@@ -918,7 +997,7 @@ func respawnNotice(fullAccess bool, killErr error) string {
 	}
 	if killErr != nil {
 		fmt.Fprintf(&b, " Stopping the previous process failed, so it may still be running "+
-			"(end any leftover gaia-agent process in Task Manager): %v", killErr)
+			"(end any leftover %s process in Task Manager): %v", process, killErr)
 	}
 	return b.String()
 }
@@ -1026,7 +1105,7 @@ func (s *SubprocessClient) SetModelBeforeStart(model string) bool {
 func (s *SubprocessClient) RecordModelSwitch(model string, claude bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.canonical || strings.TrimSpace(model) == "" {
+	if !s.canonical || strings.TrimSpace(model) == "" || (claude && s.native) {
 		return false
 	}
 	if claude {

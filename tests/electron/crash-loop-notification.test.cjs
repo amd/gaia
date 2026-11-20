@@ -15,7 +15,7 @@ const { EventEmitter } = require("events");
 const mockChildren = [];
 function mockMakeChild() {
   const child = new EventEmitter();
-  child.stdin = { write: jest.fn(), destroyed: false };
+  child.stdin = Object.assign(new EventEmitter(), { write: jest.fn(), destroyed: false });
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.pid = 40000 + mockChildren.length;
@@ -92,7 +92,7 @@ describe("agent crash loop -> notification -> tray", () => {
     const win = new electronMock.BrowserWindow();
     win.isMinimized = jest.fn(() => false);
     win.restore = jest.fn();
-    manager = new AgentProcessManager(win);
+    manager = new AgentProcessManager();
     tray = new TrayManager(win, { reopenWindow: () => win });
     tray.create();
     service = new NotificationService(win, manager, tray);

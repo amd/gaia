@@ -61,6 +61,8 @@ metadata:
         atomic: true
     tools_required:
       - remember
+    pairs_with:
+      - research-report
   hermes:
     category: research
 ---
@@ -163,6 +165,7 @@ def test_gaia_fields_parse_into_typed_metadata():
     assert skill.gaia.requirements.env_vars == ["BRAVE_API_KEY"]
     assert skill.gaia.requirements.hardware == {"npu": "optional"}
     assert skill.gaia.tools_required == ["remember"]
+    assert skill.gaia.pairs_with == ["research-report"]
 
     (declared,) = skill.gaia.tools
     assert declared.name == "search_web"
@@ -268,12 +271,39 @@ def test_missing_skill_file_fails_loudly(tmp_path):
         ("permissions: network:read", "must be a list"),
         ("tools: 3", "must be a list"),
         ("tools_required: query_documents", "must be a list"),
+        ("pairs_with: office-docs", "must be a list"),
+        ("loads_with: analyze_transcript", "must be a list"),
         ("requirements: []", "must be a mapping"),
     ],
 )
 def test_malformed_gaia_block_fails_loudly(tier_line, expected):
     text = f"---\nname: ok\ndescription: d\nmetadata:\n  gaia:\n    {tier_line}\n---\n\nbody\n"
     with pytest.raises(SkillValidationError, match=expected):
+        parse_skill(text)
+
+
+def _gaia_block(lines: str) -> str:
+    return f"---\nname: ok\ndescription: d\nmetadata:\n  gaia:\n{lines}---\n\nbody\n"
+
+
+def test_loads_with_round_trips():
+    skill = parse_skill(
+        _gaia_block(
+            "    tools_required:\n      - analyze_transcript\n"
+            "    loads_with:\n      - analyze_transcript\n"
+        )
+    )
+
+    assert skill.gaia.loads_with == ["analyze_transcript"]
+    assert parse_skill(skill.to_markdown()) == skill
+
+
+def test_loads_with_a_tool_the_procedure_never_uses_fails_loudly():
+    text = _gaia_block(
+        "    tools_required:\n      - read_file\n"
+        "    loads_with:\n      - analyze_transcript\n"
+    )
+    with pytest.raises(SkillValidationError, match="tools_required does not list"):
         parse_skill(text)
 
 

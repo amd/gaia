@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Set
 from gaia.logger import get_logger
 
 from .config import MCPConfig
-from .mcp_client import MCPClient, server_timeout
+from .mcp_client import MCPClient, MCPToolDeclarationError, server_timeout
 
 logger = get_logger(__name__)
 
@@ -116,6 +116,18 @@ class MCPClientManager:
 
         logger.debug(f"Successfully removed MCP server: {name}")
 
+    def refuse_server(self, name: str, error: str) -> None:
+        """Disconnect a connected server and report it failed with ``error``."""
+        logger.error("Refusing MCP server '%s': %s", name, error)
+        client = self._clients.pop(name, None)
+        if client is not None:
+            client.disconnect()
+        self._failed[name] = error
+
+    def failure(self, name: str) -> Optional[str]:
+        """Why ``name`` failed to load, or ``None`` if no failure is recorded."""
+        return self._failed.get(name)
+
     def get_client(self, name: str) -> Optional[MCPClient]:
         """Get a client by name.
 
@@ -156,6 +168,22 @@ class MCPClientManager:
         from gaia.connectors.activations import is_agent_active
 
         return [name for name in self._clients if is_agent_active(name, agent_id)]
+
+    def failed_servers_for_agent(self, agent_id: Optional[str]) -> Dict[str, str]:
+        """Return ``{name: error}`` for servers that failed to connect.
+
+        Filtered like :meth:`servers_for_agent`: a server not activated for
+        *agent_id* would not reach it even when connected.
+        """
+        if agent_id is None:
+            return dict(self._failed)
+        from gaia.connectors.activations import is_agent_active
+
+        return {
+            name: error
+            for name, error in self._failed.items()
+            if is_agent_active(name, agent_id)
+        }
 
     def tools_for_agent(self, agent_id: Optional[str]) -> Dict[str, List]:
         """Return ``{server_name: [MCPTool, ...]}`` filtered by activation.
@@ -292,9 +320,17 @@ class MCPClientManager:
                 if late:
                     client.disconnect()
                     return name, None, "connected after the deadline; stopped"
-                if connected:
-                    return name, client, None
-                return name, None, client.last_error
+                if not connected:
+                    return name, None, client.last_error
+                # Refused here too, so a reload can't bring a bad server back.
+                for tool in client.list_tools():
+                    try:
+                        tool.declared_dedup_key(name)
+                    except MCPToolDeclarationError as e:
+                        logger.error("Refusing MCP server '%s': %s", name, e)
+                        client.disconnect()
+                        return name, None, str(e)
+                return name, client, None
             except Exception as e:
                 return name, None, str(e)
 

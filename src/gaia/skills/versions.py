@@ -18,6 +18,9 @@ Supported: ``*`` / ``latest`` / "" (any), a bare version (exact), ``==``, ``!=``
 (approximately, no minor bump), and comma-separated conjunctions
 (``">=1.2.0, <2.0.0"``).
 
+Ranges admit prereleases only when a target names a prerelease of the same core
+version; unrestricted installs prefer stable versions when available.
+
 Deliberately unsupported: ``||`` disjunction and hyphen ranges. They are not used
 anywhere in GAIA and a half-implementation would silently mis-resolve, so they
 raise instead.
@@ -31,13 +34,18 @@ from typing import Iterable, Optional
 from gaia.hub.catalog import compare_versions
 from gaia.skills.errors import SkillValidationError
 
-#: Range specs meaning "any version" — resolve to the highest available.
+#: Unrestricted specs prefer the highest stable version, else a prerelease.
 ANY_SPECS = frozenset({"", "*", "latest", "any"})
 
 _OPERATOR_RE = re.compile(r"^\s*(==|!=|>=|<=|>|<|\^|~=|~)?\s*(.+?)\s*$")
 _PARTIAL_RE = re.compile(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+].*)?$")
 
 _DOCS = "https://amd-gaia.ai/docs/plans/skill-format"
+
+
+def _prerelease(version: str) -> str:
+    """Prerelease tag, excluding build metadata."""
+    return version.strip().partition("+")[0].partition("-")[2]
 
 
 def _core(version: str) -> tuple[int, int, int]:
@@ -112,8 +120,8 @@ def _matches_clause(version: str, clause: str) -> bool:
         return compare_versions(version, target) < 0
 
     # '^' and '~' are both "at least this, below some upper bound".
-    major, minor, patch = _core(target)
-    if compare_versions(version, f"{major}.{minor}.{patch}") < 0:
+    major, minor, _ = _core(target)
+    if compare_versions(version, target) < 0:
         return False
     got_major, got_minor, _ = _core(version)
 
@@ -141,11 +149,20 @@ def matches(version: str, spec: Optional[str]) -> bool:
     normalized = (spec or "").strip()
     if normalized.lower() in ANY_SPECS:
         return True
-    return all(
-        _matches_clause(version, clause)
-        for clause in normalized.split(",")
-        if clause.strip()
-    )
+    clauses = [clause for clause in normalized.split(",") if clause.strip()]
+    if not all(_matches_clause(version, clause) for clause in clauses):
+        return False
+    if not _prerelease(version):
+        return True
+
+    # One clause opts the whole range into prereleases of that core version.
+    for clause in clauses:
+        match = _OPERATOR_RE.match(clause)
+        assert match is not None
+        target = match.group(2)
+        if _prerelease(target) and _core(target) == _core(version):
+            return True
+    return False
 
 
 def validate_spec(spec: Optional[str]) -> None:
@@ -181,7 +198,11 @@ def highest(versions: Iterable[str]) -> Optional[str]:
 def resolve(versions: Iterable[str], spec: Optional[str]) -> Optional[str]:
     """Highest version in *versions* satisfying *spec*, or None when none does.
 
-    "Highest satisfying" matches how the hub resolves agent ``dependencies:``, so
-    a skill pin and an agent pin behave the same way.
+    Unrestricted specs prefer stable versions, allowing prereleases only when
+    no stable version exists. Other ranges require an explicit prerelease target.
     """
-    return highest(v for v in versions if matches(v, spec))
+    candidates = [v for v in versions if matches(v, spec)]
+    if (spec or "").strip().lower() in ANY_SPECS:
+        stable = [v for v in candidates if not _prerelease(v)]
+        return highest(stable or candidates)
+    return highest(candidates)

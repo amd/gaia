@@ -18,12 +18,15 @@ import (
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/filelock"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/sessionstore"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
 	"github.com/amd/gaia/tui/internal/ui/theme"
+	"github.com/amd/gaia/tui/internal/update"
 )
 
 // prepareTerminal does everything that has to TALK to the terminal before
@@ -48,20 +51,34 @@ func prepareTerminal() {
 // program. fullAccess starts the agent with confirmation prompts off.
 // useClaude/claudeModel run it against Anthropic's Claude API instead of the
 // local Lemonade backend. A non-nil trace records every agent event to a JSONL
-// file; the caller owns it and closes it after this returns.
-func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, fullAccessSaved bool, useClaude bool, claudeModel string, trace *event.TraceWriter) error {
-	cat := catalog.NewCatalog()
-	if mockAgent != "" {
-		cat.SetMockBinary(mockAgent)
-	} else {
-		cat.DiscoverBinaries()
+// file; the caller owns it and closes it after this returns. agentChoice names
+// the agent program to run (see catalog.SelectFlagshipAgent); empty picks one.
+// Resume is --resume: Pick opens the session list at launch, ID reopens one
+// session directly (a full id or a unique prefix). Zero starts a new session.
+type Resume struct {
+	Pick bool
+	ID   string
+}
+
+func RunFlagship(dev bool, mockAgent, agentChoice string, ctrl *control.Options, fullAccess, fullAccessSaved bool, useClaude bool, claudeModel string, trace *event.TraceWriter, resume Resume) error {
+	cat, agentNotice, err := loadCatalog(mockAgent, agentChoice, catalog.FlagshipID)
+	if err != nil {
+		return err
 	}
 	agent := cat.Get(catalog.FlagshipID)
 	if agent == nil {
 		return fmt.Errorf("the catalog has no %q entry, so there is nothing to launch. "+
 			"Report this with GAIA diagnostics", catalog.FlagshipID)
 	}
+	if err := checkClaudeSupported(*agent, useClaude); err != nil {
+		return err
+	}
 	fullAccess, notice, err := launchFullAccess(*agent, fullAccess, fullAccessSaved)
+	if err != nil {
+		return err
+	}
+	// Resolved before the screen opens, so a bad id fails as a command-line error.
+	resumed, err := resumeTarget(*agent, resume)
 	if err != nil {
 		return err
 	}
@@ -75,18 +92,72 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 			}
 		}()
 	}
+	if err := update.Settle(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+	}
 	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
-		WithFullAccessNotice(notice).
-		WithClaude(useClaude, claudeModel)).
+		WithFullAccessNotice(joinNotices(notice, agentNotice)).
+		WithClaude(useClaude, claudeModel).
+		WithTerminalVersion(update.Current)).
 		WithTrace(trace).
+		WithUpdateCheck().
 		WithLocalPreflight(preflight.LocalOptions{
 			// The gate has to answer about the binary this launch will actually
 			// spawn — with --mock that is the mock, not the name the seed carries.
-			Binary: agent.BinaryPath, ClaudeMode: useClaude,
+			Binary: agent.BinaryPath, ClaudeMode: useClaude, Native: agent.Native,
 		})
+	if resumed != nil {
+		m = m.WithResume(resumed.session, resumed.turns)
+	}
+	if resume.Pick {
+		m = m.WithSessionPicker()
+	}
 	return run(m, dev, ctrl)
+}
+
+// loadCatalog builds the catalog for launching agentID: the mock when one was
+// given, else what is installed. agentChoice names the flagship's agent
+// program, so it is applied only when the flagship is what is being launched;
+// the notice is what the user must be told about how it was honoured.
+func loadCatalog(mockAgent, agentChoice, agentID string) (*catalog.Catalog, string, error) {
+	cat := catalog.NewCatalog()
+	if mockAgent != "" {
+		cat.SetMockBinary(mockAgent)
+		return cat, "", nil
+	}
+	cat.DiscoverBinaries()
+	if agentID != catalog.FlagshipID {
+		return cat, "", nil
+	}
+	notice, err := cat.SelectFlagshipAgent(agentChoice)
+	if err != nil {
+		return nil, "", err
+	}
+	return cat, notice, nil
+}
+
+func joinNotices(notices ...string) string {
+	var out []string
+	for _, n := range notices {
+		if n != "" {
+			out = append(out, n)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// checkClaudeSupported refuses --use-claude for the native agent before any
+// screen opens: it would exit on the flag, and nothing else may be run in its
+// place without the user asking.
+func checkClaudeSupported(agent catalog.Agent, useClaude bool) error {
+	if !useClaude || !agent.Native {
+		return nil
+	}
+	return fmt.Errorf("--use-claude cannot be used here. %s Or run the Python agent, which has a "+
+		"Claude provider, by setting %s=%s. See %s",
+		client.NativeClaudeUnavailable, catalog.AgentEnv, catalog.PythonAgentBinary, catalog.AgentChoiceDocsURL)
 }
 
 // RunChat launches the chat TUI directly with a subprocess agent (standalone mode).
@@ -105,14 +176,23 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 		return fmt.Errorf("cannot start --subprocess %q: %w", argv[0], err)
 	}
 
-	c := client.NewSubprocessClient(bin, argv[1:], dev).WithTrace(trace)
+	c := client.NewSubprocessClient(bin, argv[1:], dev)
+	if catalog.IsNativeAgentBinary(bin) {
+		if !hasArg(argv[1:], catalog.NativeStdioFlag) {
+			return fmt.Errorf("--subprocess %q starts gaiacpp without %s, so it would open its own "+
+				"interactive session instead of talking to the terminal UI. Add %s to the command",
+				subprocess, catalog.NativeStdioFlag, catalog.NativeStdioFlag)
+		}
+		c = client.NewNativeSubprocessClient(bin, argv[1:], dev)
+	}
+	c = c.WithTrace(trace).WithLogf(control.DevLogf)
 	defer func() {
 		if err := closeSession(c, os.Stderr, slowCloseNotice); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 		}
 	}()
 
-	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, dev), dev, ctrl)
+	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query), dev, ctrl)
 }
 
 // slowCloseNotice is how long quit runs before it says what it is waiting on.
@@ -189,14 +269,29 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	if removed, err := control.ClearStale(daemon.PIDAlive); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 	} else if removed && dev {
-		fmt.Fprintln(os.Stderr, "[DEBUG] removed a stale control discovery file")
+		control.DevLogf("removed a stale control discovery file")
 	}
 
 	if ctrl == nil {
 		p := tea.NewProgram(model, teaOptions()...)
-		if _, err := p.Run(); err != nil {
+		// Bubble Tea quits on SIGINT/SIGTERM but not SIGHUP, so closing the
+		// terminal window skipped the Close above and orphaned the agent.
+		hup := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		defer func() {
+			signal.Stop(hup)
+			close(hup)
+		}()
+		go func() {
+			if _, ok := <-hup; ok {
+				p.Quit()
+			}
+		}()
+		final, err := p.Run()
+		if err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
+		beforeExit(final)
 		return nil
 	}
 
@@ -220,7 +315,7 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	// A deferred Stop covers a normal exit only; a signalled one has to remove
 	// the discovery file too, or it keeps advertising a pid, a port and a token.
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer func() {
 		signal.Stop(sigs)
 		close(sigs)
@@ -238,12 +333,35 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	// Bracket Run: tea.Program.Send silently discards messages outside it, so
 	// the control API must refuse injection rather than report a false success.
 	srv.MarkRunning()
-	_, err = p.Run()
+	final, err := p.Run()
 	srv.MarkStopped()
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
+	beforeExit(final)
 	return nil
+}
+
+// exitHook is a model with work to finish once the program has stopped —
+// however it stopped: a key, a closed terminal, a signal.
+type exitHook interface{ BeforeExit() error }
+
+// beforeExit runs the final model's exit work, after unwrapping the
+// recorder and repaint wrappers around it.
+func beforeExit(m tea.Model) {
+	for m != nil {
+		if h, ok := m.(exitHook); ok {
+			if err := h.BeforeExit(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+			return
+		}
+		u, ok := m.(interface{ Unwrap() tea.Model })
+		if !ok {
+			return
+		}
+		m = u.Unwrap()
+	}
 }
 
 // RunAgent launches one catalog agent by id, over whatever transport that entry
@@ -266,12 +384,10 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 // that overrode the binary for one entry point and not the other let a test
 // spawn the real agent while believing it had substituted a stand-in.
 // Returns the process exit code.
-func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, fullAccess bool, useClaude bool, claudeModel, mockAgent string, trace *event.TraceWriter) (int, error) {
-	cat := catalog.NewCatalog()
-	if mockAgent != "" {
-		cat.SetMockBinary(mockAgent)
-	} else {
-		cat.DiscoverBinaries()
+func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, fullAccess bool, useClaude bool, claudeModel, mockAgent, agentChoice string, trace *event.TraceWriter) (int, error) {
+	cat, agentNotice, err := loadCatalog(mockAgent, agentChoice, agentID)
+	if err != nil {
+		return 1, err
 	}
 
 	agent := cat.Get(agentID)
@@ -280,6 +396,9 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	}
 
 	if err := client.CheckFullAccessSupported(*agent, fullAccess); err != nil {
+		return 1, err
+	}
+	if err := checkClaudeSupported(*agent, useClaude); err != nil {
 		return 1, err
 	}
 
@@ -300,6 +419,9 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	}
 
 	if query != "" {
+		if agentNotice != "" {
+			fmt.Fprintln(os.Stderr, agentNotice)
+		}
 		var notice string
 		model, notice = oneShotModel(agent.ID, model, useClaude, preflight.ReadLastModel)
 		if notice != "" {
@@ -315,14 +437,14 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		// it ran after the client, so a machine with no gaia-agent got
 		// ForAgent's bare "no runnable binary" instead of the gate's three-part
 		// answer, which names where it looked and how to get the program.
-		cfg := preflight.ConfigFor(agent.ID, agent.Name)
+		cfg := oneShotConfig(agent.ID, agent.Name, model)
 		var rep preflight.Report
 		if agent.Transport == catalog.TransportDaemon {
 			t := preflight.NewDaemonTransport(daemon.New(daemon.Options{Logf: logf}))
 			rep = ReportReadiness(context.Background(), t, cfg, os.Stderr)
 		} else {
 			rep = ReportLocalReadiness(context.Background(),
-				preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: useClaude, Model: model},
+				preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: useClaude, Model: model, Native: agent.Native},
 				cfg, os.Stderr)
 		}
 		// Every row, not just the blocker: a turn that answers nothing is
@@ -354,20 +476,44 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		res := RunOneShot(ctx, c, query, os.Stdout, os.Stderr, dev, logf)
+
+		// The agent leads its own process group on POSIX, so a terminal Ctrl+C
+		// never reaches it: left to the default disposition, this process died
+		// and the turn ran on. Trapped, it is stopped the way Esc stops it.
+		sigs := make(chan os.Signal, 2)
+		signal.Notify(sigs, interruptSignals...)
+		defer signal.Stop(sigs)
+		res := runOneShotInterruptible(ctx, c, query, os.Stdout, os.Stderr, logf,
+			interruptOptions{
+				sigs:        sigs,
+				cancelGrace: interruptCancelGrace,
+				abandonWait: interruptAbandonWait,
+				release:     func() { signal.Stop(sigs) },
+			})
+		// Explicit, not left to the defer: a stop or an abandoned turn's cancel
+		// that did not land must say so before the process exits.
+		if err := c.Close(); err != nil {
+			if res.Interrupted {
+				fmt.Fprintf(os.Stderr, "❌ Could not stop the agent, so it may still be running: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+			}
+		}
 		return res.ExitCode, nil
 	}
 
 	// Interactive goes through the same splash -> readiness -> chat router the
 	// flagship launch uses, and that router builds its own client once the gate
 	// passes. That is what gains an interactive --agent launch a gate: it had
-	// none, and email in particular went straight to chat and reported a
-	// missing daemon as a failed first message.
+	// none, and went straight to chat and reported a missing daemon as a failed
+	// first message.
 	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
+		WithFullAccessNotice(agentNotice).
 		WithClaude(useClaude, claudeModel).
-		WithModel(model)).
+		WithModel(model).
+		WithTerminalVersion(update.Current)).
 		WithTrace(trace)
 	if err := run(m, dev, ctrl); err != nil {
 		return 1, err
@@ -383,10 +529,16 @@ func knownIDs(cat *catalog.Catalog) string {
 	for _, a := range cat.All() {
 		ids = append(ids, a.ID)
 	}
+	known := "Known ids: " + strings.Join(ids, ", ") + "."
 	if len(ids) == 0 {
-		return "The catalog is empty."
+		known = "The catalog is empty."
 	}
-	return "Known ids: " + strings.Join(ids, ", ") + "."
+	// An agent whose install record is unreadable is missing from the list
+	// above; say so, or it reads as never installed.
+	if warnings := cat.Warnings(); len(warnings) > 0 {
+		known += " " + strings.Join(warnings, " ")
+	}
+	return known
 }
 
 // orDefault names what will actually be used when a flag was left unset, so a
@@ -396,6 +548,15 @@ func orDefault(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func hasArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
 }
 
 func agentNameFromPath(path string) string {
@@ -420,6 +581,17 @@ func launchFullAccess(agent catalog.Agent, fullAccess, saved bool) (bool, string
 		return false, "", err
 	}
 	return fullAccess, "", nil
+}
+
+// oneShotConfig is the readiness check for a --query turn. It carries the model
+// the turn runs on, so a cloud model is checked rather than the local default.
+func oneShotConfig(agentID, name, model string) preflight.Config {
+	cfg := preflight.ConfigFor(agentID, name)
+	// Only the flagship takes a per-turn model.
+	if agentID == catalog.FlagshipID {
+		cfg.Model = model
+	}
+	return cfg
 }
 
 // oneShotModel is the model a --query run uses: an explicit --model, else the
@@ -457,4 +629,53 @@ func withLastModel(m root.FlagshipModel) root.FlagshipModel {
 			". Pick one with /provider.")
 	}
 	return m.WithSavedModel(saved)
+}
+
+// sessionHeld tells whether another window has a session open; tests fake it.
+var sessionHeld sessionstore.Held = filelock.Held
+
+type resumedSession struct {
+	session sessionstore.Session
+	turns   []sessionstore.Turn
+}
+
+// resumeTarget reads the session --resume=<id> names, refusing one that cannot
+// be reopened here. Nil for a launch that reopens nothing.
+func resumeTarget(agent catalog.Agent, resume Resume) (*resumedSession, error) {
+	if !resume.Pick && resume.ID == "" {
+		return nil, nil
+	}
+	if agent.ID != catalog.FlagshipID || agent.Transport != catalog.TransportSubprocess {
+		return nil, fmt.Errorf("--resume needs the built-in GAIA agent the TUI starts itself; "+
+			"this install runs %q over the %s transport, which keeps no sessions to reopen", agent.ID, agent.Transport)
+	}
+	if agent.Native {
+		return nil, fmt.Errorf("--resume needs the Python agent: gaiacpp, the native agent this launch would run, " +
+			"doesn't keep sessions yet. Start with GAIA_TUI_AGENT=gaia-agent (or --agent-program gaia-agent) to reopen one")
+	}
+	if pinned := os.Getenv(client.HistoryFileEnv); pinned != "" {
+		return nil, fmt.Errorf("--resume cannot be used while %s=%s pins every launch to that "+
+			"transcript. Unset %s to choose a session, or drop --resume to keep using that file",
+			client.HistoryFileEnv, pinned, client.HistoryFileEnv)
+	}
+	if resume.Pick {
+		return nil, nil
+	}
+	dir, err := sessionstore.Dir()
+	if err != nil {
+		return nil, err
+	}
+	s, err := sessionstore.Get(dir, resume.ID, sessionHeld)
+	if err != nil {
+		return nil, fmt.Errorf("--resume: %w", err)
+	}
+	if s.Live {
+		return nil, fmt.Errorf("--resume: session %s (%q) is open in another GAIA window. "+
+			"Close it there first, then resume it here", s.ID, s.Title)
+	}
+	turns, err := sessionstore.Transcript(dir, s.ID)
+	if err != nil {
+		return nil, fmt.Errorf("--resume: %w", err)
+	}
+	return &resumedSession{session: s, turns: turns}, nil
 }

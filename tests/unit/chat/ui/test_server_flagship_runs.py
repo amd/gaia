@@ -131,20 +131,32 @@ def test_scheduled_runs_use_the_flagship(monkeypatch):
         def process_query(self, prompt):
             return {"result": f"did {prompt}"}
 
+        def close(self):
+            pass
+
     fake = types.ModuleType("gaia_agent.agent")
     fake.GaiaAgent = FakeGaiaAgent
     fake.GaiaAgentConfig = FakeConfig
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake)
-    chat_mod = types.ModuleType("gaia_agent_chat.agent")
+    chat_mod = types.ModuleType("gaia_agent.chat_agent")
 
     def _chat_agent(*_a, **_k):
         raise AssertionError("scheduled runs must not build ChatAgent")
 
     chat_mod.ChatAgent = chat_mod.ChatAgentConfig = _chat_agent
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat.agent", chat_mod)
+    monkeypatch.setitem(sys.modules, "gaia_agent.chat_agent", chat_mod)
     monkeypatch.setattr(lemonade_service, "ensure_daemon_owns_lemonade", lambda: None)
 
     with TestClient(server.create_app(db_path=":memory:")) as client:
+        # An in-process (wheel) flagship, whatever this machine has installed.
+        monkeypatch.setattr(
+            helpers,
+            "_agent_registry",
+            types.SimpleNamespace(
+                get=lambda _id: types.SimpleNamespace(is_sidecar=False),
+                get_load_error=lambda _id: None,
+            ),
+        )
         executor = client.app.state.scheduler._executor
         assert asyncio.run(executor("summarize")) == "did summarize"
 

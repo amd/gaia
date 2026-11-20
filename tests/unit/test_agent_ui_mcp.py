@@ -3,6 +3,7 @@
 
 """Unit tests for agent_ui_mcp error normalization and routing."""
 
+import json as json_module
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -262,3 +263,129 @@ class TestStreamChatModelPin:
             _model_pin()
         assert "GAIA_EVAL_AGENT_PROVIDER" in str(excinfo.value)
         assert "claude" in str(excinfo.value)
+
+
+class TestStreamChatEventLog:
+    """The eval judge reads event_log as what the agent actually did."""
+
+    @staticmethod
+    def _run(events):
+        from gaia.mcp.servers.agent_ui_mcp import _stream_chat
+
+        def _fake_post(url, json=None, stream=False, timeout=None, headers=None):
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            lines = [f"data: {json_module.dumps(e)}" for e in events]
+            resp.iter_lines.return_value = iter(lines + ["data: [DONE]"])
+            return resp
+
+        with patch("gaia.mcp.servers.agent_ui_mcp.requests.post", _fake_post):
+            return _stream_chat("http://localhost:4200", "sess-1", "hi")["event_log"]
+
+    def test_a_no_argument_call_shows_no_args_line(self):
+        log = self._run(
+            [
+                {"type": "tool_start", "tool": "list_skills"},
+                {
+                    "type": "tool_args",
+                    "tool": "list_skills",
+                    "args": {},
+                    "detail": "Listing your skills",
+                },
+            ]
+        )
+        assert log == ["[tool] list_skills"]
+
+    def test_real_arguments_are_still_shown(self):
+        log = self._run(
+            [
+                {"type": "tool_start", "tool": "read_file"},
+                {
+                    "type": "tool_args",
+                    "tool": "read_file",
+                    "args": {"file_path": "a.txt"},
+                    "detail": "file_path: a.txt",
+                },
+            ]
+        )
+        assert log == ["[tool] read_file", "  args: file_path: a.txt"]
+
+
+class TestStreamChatFailedTurn:
+    """A failed turn must not read as an empty successful reply (#7193)."""
+
+    @staticmethod
+    def _run(events):
+        from gaia.mcp.servers.agent_ui_mcp import _stream_chat
+
+        def _fake_post(url, json=None, stream=False, timeout=None, headers=None):
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            lines = [f"data: {json_module.dumps(e)}" for e in events]
+            resp.iter_lines.return_value = iter(lines + ["data: [DONE]"])
+            return resp
+
+        with patch("gaia.mcp.servers.agent_ui_mcp.requests.post", _fake_post):
+            return _stream_chat("http://localhost:4200", "sess-1", "hi")
+
+    def test_refused_turn_returns_its_reason_as_an_error(self):
+        reason = "The GAIA agent isn't ready yet: the model is not downloaded."
+        result = self._run(
+            [
+                {"type": "agent_error", "content": reason},
+                {"type": "done", "message_id": 1, "content": "", "failed": True},
+            ]
+        )
+        assert result["status"] == "error"
+        assert result["detail"] == reason
+        assert result["event_log"] == [f"[error] {reason}"]
+
+    def test_fatal_agent_error_wins_over_the_reply_text(self):
+        result = self._run(
+            [
+                {"type": "chunk", "content": "Partial"},
+                {"type": "agent_error", "content": "Policy blocked", "fatal": True},
+                {"type": "done", "content": "Partial", "failed": True},
+            ]
+        )
+        assert result["status"] == "error"
+        assert result["detail"] == "Policy blocked"
+        assert result["content"] == "Partial"
+
+    def test_backend_error_event_is_an_error(self):
+        result = self._run([{"type": "error", "content": "Lemonade is not running."}])
+        assert result["status"] == "error"
+        assert result["detail"] == "Lemonade is not running."
+
+    def test_nonfatal_agent_error_on_a_completed_turn_is_not_an_error(self):
+        result = self._run(
+            [
+                {"type": "agent_error", "content": "Retrying"},
+                {"type": "done", "content": "Recovered"},
+            ]
+        )
+        assert "status" not in result
+        assert result["content"] == "Recovered"
+
+    def test_cancelled_turn_is_not_an_error(self):
+        result = self._run(
+            [{"type": "done", "content": "Cancelled.", "cancelled": True}]
+        )
+        assert "status" not in result
+
+    def test_failed_done_explanation_is_the_detail(self):
+        why = "The model stopped before it could finish."
+        result = self._run([{"type": "done", "content": why, "failed": True}])
+        assert result["status"] == "error"
+        assert result["detail"] == why
+        assert result["content"] == why
+
+    def test_stale_retry_error_does_not_mask_the_failure_explanation(self):
+        why = "The model stopped before it could finish."
+        result = self._run(
+            [
+                {"type": "agent_error", "content": "Retrying"},
+                {"type": "done", "content": why, "failed": True},
+            ]
+        )
+        assert result["detail"] == why

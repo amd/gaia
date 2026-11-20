@@ -67,11 +67,10 @@ def test_invalid_override_fails_loudly(monkeypatch, value):
         resolve_ctx_size(device="gpu")
 
 
-def test_npu_cap_warns_and_lower_override_is_honored(monkeypatch, caplog):
+def test_override_is_honored_on_the_npu(monkeypatch):
     monkeypatch.setenv("GAIA_CTX_SIZE", "131072")
-    assert resolve_ctx_size(device="NPU") == 32768
-    assert resolve_ctx_size("gemma4-it-e2b-FLM", "gpu") == 32768
-    assert "NPU ceiling" in caplog.text
+    assert resolve_ctx_size(device="NPU") == 131072
+    assert resolve_ctx_size("gemma4-it-e2b-FLM", "gpu") == 131072
     monkeypatch.setenv("GAIA_CTX_SIZE", "16384")
     assert resolve_ctx_size(device="npu") == 16384
 
@@ -142,8 +141,12 @@ def test_startup_switch_and_embedder_eviction_use_same_http_load(monkeypatch, wi
         if call.request.method == "POST"
     ]
     assert loads == [
-        {"model_name": "Gemma-4-E4B-it-GGUF", "ctx_size": window},
-        {"model_name": "user.another-local-model", "ctx_size": window},
+        {"model_name": "Gemma-4-E4B-it-GGUF", "ctx_size": window, "save_options": True},
+        {
+            "model_name": "user.another-local-model",
+            "ctx_size": window,
+            "save_options": True,
+        },
     ]
 
 
@@ -184,7 +187,7 @@ def test_small_registered_model_does_not_warn_without_override(caplog):
     "model,device,window",
     [
         ("Gemma-4-E4B-it-GGUF", "gpu", 131072),
-        ("gemma4-it-e2b-FLM", "npu", 32768),
+        ("gemma4-it-e2b-FLM", "npu", 131072),
     ],
 )
 def test_agent_constructor_resolves_override_before_manager(
@@ -213,7 +216,9 @@ def test_agent_constructor_resolves_override_before_manager(
 
 
 @pytest.mark.parametrize("window", [16384, 131072])
-def test_installer_saved_recipe_uses_same_override(monkeypatch, window):
+def test_installer_saved_recipe_uses_same_override(
+    monkeypatch, window, gaia_owned_lemonade
+):
     from unittest.mock import MagicMock
 
     from gaia.installer.init_command import InitCommand
@@ -222,18 +227,21 @@ def test_installer_saved_recipe_uses_same_override(monkeypatch, window):
     model = "Gemma-4-E4B-it-GGUF"
     client = MagicMock()
     client.check_model_loaded.return_value = False
-    client.list_models.return_value = {
-        "data": [{"id": model, "recipe_options": {"ctx_size": window}}]
+    client.health_check.return_value = {
+        "all_models_loaded": [
+            {"model_name": model, "type": "llm", "recipe_options": {"ctx_size": window}}
+        ]
     }
     command = InitCommand(profile="chat")
     command._test_model_inference(client, model)
+    assert command._ctx_verified == window
     assert client.load_model.call_args.kwargs["ctx_size"] == window
     assert client.load_model.call_args.kwargs["save_options"] is True
 
 
 @pytest.mark.parametrize(
     "profile,previous,expected,gguf_load",
-    [("npu", "gpu", 32768, 131072), ("chat", "npu", 131072, 131072)],
+    [("npu", "gpu", 131072, 131072), ("chat", "npu", 131072, 131072)],
 )
 def test_installer_profile_wins_before_config_is_saved(
     monkeypatch, profile, previous, expected, gguf_load

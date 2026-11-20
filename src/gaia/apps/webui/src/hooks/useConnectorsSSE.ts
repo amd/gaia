@@ -21,6 +21,7 @@
  *   - ``connector.oauth.error``       ({connector_id, error})
  *   - ``connector.grant.changed``     ({connector_id, agent_id, scopes})
  *   - ``connector.activation.changed`` ({connector_id, agent_id, active})
+ *   - ``connector.account.changed``   ({connector_id, account_id, is_default})
  *
  * For backwards compatibility, the legacy event names emitted by
  * ``src/gaia/connectors/flow.py`` (``connection.connected`` /
@@ -53,7 +54,8 @@ export type ConnectorChangeReason =
     | 'oauth_error'
     | 'tested'
     | 'grant_changed'
-    | 'activation_changed';
+    | 'activation_changed'
+    | 'account_changed';
 
 export interface ConnectorChangeEvent {
     /** Which connector changed, if the payload identified one. */
@@ -95,6 +97,8 @@ function reasonFor(eventType: string): ConnectorChangeReason | null {
             return 'grant_changed';
         case 'connector.activation.changed':
             return 'activation_changed';
+        case 'connector.account.changed':
+            return 'account_changed';
         default:
             return null;
     }
@@ -116,7 +120,6 @@ export function useConnectorsSSE(
     }, [onChange]);
 
     useEffect(() => {
-        const url = `${getApiBase()}/connectors/events`;
         let es: EventSource | null = null;
         let backoff = 1000;
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -124,7 +127,8 @@ export function useConnectorsSSE(
 
         const connect = () => {
             if (cancelled) return;
-            es = new EventSource(url);
+            // Read the base on every try: a restarted backend can be on a new port.
+            es = new EventSource(`${getApiBase()}/connectors/events`);
 
             es.onopen = () => {
                 // Reset backoff once the stream is healthy.

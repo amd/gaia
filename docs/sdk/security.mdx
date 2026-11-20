@@ -24,7 +24,8 @@ validator = PathValidator()
 session = PathValidator(allowed_paths=["/home/user/documents/report.pdf"])
 
 # Reads: scope AND secrets. `.env`, id_rsa, *.pem, ~/.ssh/* are refused even
-# when they sit inside an allowed directory.
+# when they sit inside an allowed directory, and so is a hard link elsewhere to
+# a file in a credential folder such as ~/.ssh.
 is_allowed, reason = session.validate_read("/home/user/documents/report.pdf")
 
 # Writes: additionally refuses blocked directories and files that execute on
@@ -41,23 +42,35 @@ Every agent tool that takes a path checks it with `validate_read` or
 `validate_write`: reading, listing a folder, searching inside one, indexing it,
 watching it, and the files a tool saves (screenshots, transcripts, speech,
 exports). Out-of-scope paths go through the same approval prompt as `read_file`.
-The validator expands `~` and resolves `..` and symlinks before it decides, and a
-folder walk skips any entry that leads outside the scope. Tools build on these
-checks through `gaia.agents.tools.path_access` rather than adding their own.
+The validator judges every path by one canonical spelling
+(`gaia.canonical_path.canonical_path`), and the tools open that same spelling: `~`,
+`..`, symlinks, junctions and 8.3 short names are resolved, and on Windows a
+device-prefixed path or one through this PC's own drive share is the drive path it
+names, so a protected folder is refused however it is spelled. A path that
+is not a file on this PC (another computer's share, a device or volume path, a
+named NTFS stream) is refused outright, never offered for approval. A folder walk
+skips any entry that leads outside the scope. Tools build on these checks through
+`gaia.agents.tools.path_access` rather than adding their own.
 
 Three things are wider on purpose:
 
 - A name search (`search_file`, `find_files` with a named scope) can return paths
-  under the common document folders. Opening one is still checked.
+  under the common document folders. Opening one is still checked. On macOS an
+  undirected search skips Desktop, Documents, Downloads, iCloud Drive, Music, the
+  TV app's library and the Photos library unless the user named the folder or allowed it, because
+  macOS blocks the first read of them behind a permission prompt; the result says
+  which it skipped.
 - Output a tool writes to GAIA's own folders (`~/.gaia/screenshots`,
-  `~/.gaia/transcripts`, `~/.gaia/tts`) is not the user's files and is not checked.
+  `~/.gaia/transcripts`, `~/.gaia/cache/audio/generations`) is not the user's files and is not checked.
 - `capture_skill` may copy a local skill folder from anywhere, because every
   capture asks the user first with the source shown.
 
 `ChatAgent` and `GaiaAgent` create one scratch directory per agent that has a
 file-writing tool, name it in the system prompt, and delete it when the agent is
-cleaned up (`GaiaAgent.close()`). The `chat` profile has no file-writing tools, so
-it gets none.
+cleaned up (`GaiaAgent.close()`). A process that exits without that cleanup still
+removes the scratch directories it holds, and the first agent in a process removes
+`gaia-scratch-*` directories no run has written to for a day. The `chat` profile
+has no file-writing tools, so it gets none.
 
 <Warning>
   Only a validator built **without** an `allowed_paths` argument reads or writes the
@@ -86,7 +99,10 @@ v.is_path_allowed("/home/user/evals/answers.json")   # False, and never prompts
 ```
 
 - The scope becomes the overlap of the host's scope and the list. An entry
-  outside the host's scope is logged and ignored; it never widens.
+  outside the host's scope is logged and ignored; it never widens the validator.
+  One host picks its scope from the list: an Agent UI chat with no attached
+  documents whose default scope shares nothing with the list is scoped to the
+  listed folders instead, minus any too broad to grant.
 - Later grants are held to it too: `add_allowed_path`, approval prompts (including
   an approve-everything harness or full access), and persisted CLI grants.
 - The scratch directory set by `set_scratch_dir` stays allowed even when it sits
@@ -98,10 +114,34 @@ v.is_path_allowed("/home/user/evals/answers.json")   # False, and never prompts
   server and the flagship sidecar check it before they start serving.
 
 <Warning>
-  This confines GAIA's tools, not code they run. A `run_python` script or shell
-  command can still open any file the OS user can read. Real isolation needs OS-level
-  separation: a separate user account, a container, or a VM.
+  This confines GAIA's tools, not code they run. A `run_python` or
+  `execute_python_file` script can't open, copy, move, link or delete files in
+  the credential folders (`~/.ssh`, `~/.aws` and the like), however it builds the
+  path. A shell command, or a process a script starts, can still open any file
+  the OS user can read. Real isolation needs OS-level separation: a separate
+  user account, a container, or a VM.
 </Warning>
+
+### Code that names a protected path
+
+`run_python`, `execute_python_file` (the script and the arguments it is handed) and a
+shell line that hands code to an interpreter (`python -c`, `powershell -Command`,
+`node -e`) are screened before the approval card: code whose text names a credential
+folder, a credential file (`.env`, `id_rsa`, `*.pem`, …) or, when it may write, GAIA's
+own settings is refused outright, and an earlier "Always allow" does not cover it.
+A credential file counts only when the code reads it, which the read checks refuse;
+code that writes or only names one (`load_dotenv(".env")`, creating `.env` from a
+template) runs.
+Paths are judged in the canonical form above, after folding the plain ways of building
+one (`os.path.join`, `Path(...) / x`, `+`, f-strings, `"".join`, `$HOME`).
+`execute_python_file` is also refused, before the card and before the file is opened
+to show on it, when the script's own path is a credential file or a path no approval
+can grant. The screen is
+in `gaia.agents.base.code_path_screen`.
+
+It reads the code's text, so it is not a sandbox: code that works a path out while it
+runs (from characters, base64, a file or the network) is not caught. The card for a
+code tool says so.
 
 ---
 

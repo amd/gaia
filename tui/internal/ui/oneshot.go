@@ -45,6 +45,12 @@ type OneShotResult struct {
 	// WithheldActions are confirmation-gated actions the run stopped at and
 	// could not perform. Not failures — refusals held open on purpose.
 	WithheldActions []string
+	// Interrupted is set when a signal stopped the turn; ExitCode is then
+	// ExitInterrupted.
+	Interrupted bool
+	// StillRunning is set when the stop could not be confirmed, so the turn
+	// may still be running where this process cannot reach it.
+	StillRunning bool
 }
 
 // toolLedger records what each tool call proved, in first-seen order.
@@ -152,18 +158,13 @@ func containsString(haystack []string, needle string) bool {
 // script and from CI.
 //
 // debugf receives every event as it arrives, raw payloads included; nil is
-// silent. It is what --dev reaches for when a turn answers with nothing.
-//
-// dev also decides whether the run reports its own machinery — step and tool
-// counts — after the answer. Those measure the agent loop, not the answer, so
-// they belong to whoever is tuning the loop; a one-shot piped into a script
-// should end at the answer.
+// silent. A one-shot ends at the answer: the agent loop's step and tool counts
+// are not printed — they are in the trace.
 func RunOneShot(
 	ctx context.Context,
 	c client.AgentClient,
 	query string,
 	out, errW io.Writer,
-	dev bool,
 	debugf func(format string, args ...any),
 ) OneShotResult {
 	if debugf == nil {
@@ -173,6 +174,10 @@ func RunOneShot(
 	debugf("one-shot: query=%q", query)
 
 	ch, err := c.Send(ctx, query)
+	if errors.Is(err, errInterruptedBeforeSend) {
+		// The stop handler reports this one; saying it twice reads as two failures.
+		return OneShotResult{ExitCode: 1, ErrorDetail: err.Error()}
+	}
 	if err != nil {
 		// Our own deadline is not a broken dependency: the transport error sent
 		// the user to the daemon log over a --timeout they chose.
@@ -265,10 +270,6 @@ func RunOneShot(
 			} else if res.Answer != "" {
 				fmt.Fprintln(out, res.Answer)
 			}
-			if usage := event.CanonicalUsageOf(e); dev && (usage.Steps > 0 || usage.ToolsUsed > 0) {
-				fmt.Fprintf(errW, "  ℹ️  %s, %s\n",
-					plural(usage.Steps, "step"), plural(usage.ToolsUsed, "tool"))
-			}
 
 		case event.CanonicalErrorEvent:
 			debugf("error: status=%d source=%q", e.Status, e.Source)
@@ -278,6 +279,10 @@ func RunOneShot(
 				fmt.Fprintln(out)
 			}
 			fmt.Fprintf(errW, "❌ %s\n", e.Detail)
+
+		case event.CanonicalContextUsageEvent:
+			// A meter for the next message; a one-shot has none.
+			debugf("context_usage: %d of %d tokens", e.Used, e.Window)
 
 		case event.CanonicalUnsupportedEvent:
 			// Contract §7: visible, never dropped.
@@ -306,9 +311,12 @@ func RunOneShot(
 			fmt.Fprintf(errW, "  🔧 %s\n", e.Tool)
 		case event.StepEvent:
 			// The agent loop's bound, not progress on the work — same reason the
-			// chat view drops it. Only --dev has a use for it.
-			if dev {
-				fmt.Fprintf(errW, "  … Step %d/%d\n", e.Step, e.Total)
+			// chat view drops it.
+			// No limit set sends no total: there is no denominator to show.
+			if e.Total > 0 {
+				debugf("step %d/%d", e.Step, e.Total)
+			} else {
+				debugf("step %d", e.Step)
 			}
 		case event.ThinkingEvent:
 			// Reasoning is not progress a script needs; --debug keeps it.
@@ -357,7 +365,7 @@ func RunOneShot(
 		case evt, open := <-ch:
 			if !open {
 				// The stream closed; the terminal-event check decides.
-				return finishOneShot(res, tools, query, errW)
+				return finishOneShot(res, tools, query, errW, stopped(c))
 			}
 			handle(evt)
 
@@ -377,14 +385,14 @@ func RunOneShot(
 				select {
 				case evt, open := <-ch:
 					if !open {
-						return finishOneShot(res, tools, query, errW)
+						return finishOneShot(res, tools, query, errW, stopped(c))
 					}
 					handle(evt)
 				default:
 				}
 			}
 			if res.TerminalType != "" {
-				return finishOneShot(res, tools, query, errW)
+				return finishOneShot(res, tools, query, errW, stopped(c))
 			}
 
 			if sawTokens {
@@ -434,19 +442,23 @@ func rawOrDash(raw json.RawMessage) string {
 // turn whose only tool call came back `{"ok": false, …}` and which then wrote an
 // apology is not a success — exiting 0 there fired the caller's `&& next-step`
 // over work that never happened.
-func finishOneShot(res OneShotResult, tools *toolLedger, query string, errW io.Writer) OneShotResult {
+func finishOneShot(res OneShotResult, tools *toolLedger, query string, errW io.Writer, interrupted bool) OneShotResult {
 	res.FailedTools = tools.failed()
 	res.UndeterminedTools = tools.undetermined()
 	res.WithheldActions = tools.withheld()
 
-	if res.TerminalType == "" {
+	if interrupted {
+		// Set first, so the notices below name the code the process exits with.
+		// A stream cut short by the stop is not a contract violation.
+		res.ExitCode = ExitInterrupted
+	} else if res.TerminalType == "" {
 		// Exactly one terminal event is mandatory; a stream that ends without one
 		// is a failure, reported loudly rather than as an empty success.
 		res.ErrorDetail = fmt.Sprintf(
 			"the %q query stream ended without a terminal final/error event", query)
 		fmt.Fprintf(errW, "❌ %s\n", res.ErrorDetail)
 	}
-	if res.TerminalType != event.CanonicalTypeFinal {
+	if res.TerminalType != event.CanonicalTypeFinal && !interrupted {
 		res.ExitCode = 1
 	}
 
@@ -507,8 +519,8 @@ const (
 	// readinessEnsureTimeout bounds start-or-attach of the background service and
 	// the spawn of the agent's sidecar. It matches the gate's own ensureTimeout
 	// and the daemon client's ensure budget on purpose: a first run may still
-	// fetch the sidecar binary here, and a bound tighter than the hub's would
-	// refuse a cold start the hub completes on the same machine.
+	// fetch the sidecar binary here, and a bound tighter than the gate's would
+	// refuse a cold start the interactive TUI completes on the same machine.
 	readinessEnsureTimeout = 15 * time.Minute
 	// readinessCheckTimeout bounds the readiness probe. Same value as the gate's
 	// CheckTimeout, over the same call — two paths asking the same question must
@@ -565,7 +577,7 @@ func ReportReadiness(
 
 // ReportLocalReadiness is the same gate for an agent the TUI spawns itself.
 //
-// It is what makes `gaia-tui chat --agent gaia --query …` on a machine with no
+// It is what makes `gaia-cli chat --agent gaia --query …` on a machine with no
 // gaia-agent print the same three-part refusal a person sees on the readiness
 // screen, and exit 1 — instead of failing at exec with a message that names
 // neither the program nor where to get it.
@@ -636,13 +648,4 @@ func abandonedDetail(err error, query string, elapsed time.Duration) string {
 	}
 	return fmt.Sprintf("the %q query was cancelled after %s, before the agent answered",
 		query, elapsed.Round(time.Second))
-}
-
-// plural renders a count with its noun, so a one-step turn does not report
-// "1 steps".
-func plural(n int, noun string) string {
-	if n == 1 {
-		return fmt.Sprintf("1 %s", noun)
-	}
-	return fmt.Sprintf("%d %ss", n, noun)
 }

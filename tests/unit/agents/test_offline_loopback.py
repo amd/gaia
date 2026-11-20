@@ -7,9 +7,17 @@ merely looks local — a look-alike name, userinfo, a numeric form the resolver
 might read differently, a second command on the same line — is refused.
 """
 
+import ast
+import json
+from pathlib import Path
+
 import pytest
 
-from gaia.agents.base.offline import _is_loopback, offline_refusal
+from gaia.agents.base.offline import (
+    ONLINE_SERVICE_TOOLS,
+    _is_loopback,
+    offline_refusal,
+)
 
 
 def _refused(name, **args):
@@ -146,6 +154,105 @@ class TestShellCommands:
     def test_local_only_still_runs(self, command):
         assert not _refused("run_shell_command", command=command), command
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "dotnet restore",
+            "dotnet add package Newtonsoft.Json",
+            "dotnet tool install -g x",
+            "nuget restore",
+            "conda install numpy",
+            "mamba create -n env python",
+            "micromamba install x",
+            "gem install rails",
+            "bundle install",
+            "mvn package",
+            "./mvnw -q verify",
+            "gradle build",
+            "gradlew.bat build",
+            "cd app && mvn test",
+            "poetry install",
+            "pdm sync",
+            "uv lock",
+            "uv python install 3.12",
+            "pipx install x",
+            "pip wheel .",
+            "cargo add serde",
+            "go mod tidy",
+            "composer require x",
+            "yarn dlx x",
+            "npm create vite",
+            "npm init vite",
+            "npm ci",
+            "podman pull x",
+            "zypper install x",
+            "apk add x",
+            "pacman -S x",
+            "Install-Module Az",
+            "hf download x",
+            "git remote update",
+            "git lfs pull",
+            # A full path, a quoted path, a Windows suffix or another case.
+            r"C:\tools\Conda.EXE install x",
+            r'"C:\Program Files\dotnet\dotnet.exe" restore',
+            "/usr/local/bin/pip3 install x",
+            "pip.exe install x",
+            "NPM.CMD install",
+            "CONDA INSTALL x",
+            r"C:\Ruby\bin\gem.cmd install x",
+            "yarn.cmd add x",
+            '"conda" install x',
+            "echo ok\nmvn -q package",
+        ],
+    )
+    def test_package_managers_and_build_tools_are_refused(self, command):
+        assert _refused("run_shell_command", command=command), command
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cat build.gradle",
+            "cat pom.xml",
+            "dotnet build",
+            "dotnet --version",
+            "npm init -y",
+            "npm test",
+            "cargo build",
+            "conda list",
+            "gem list",
+            "pip list",
+            "echo mvnfoo",
+        ],
+    )
+    def test_local_package_manager_commands_still_run(self, command):
+        assert not _refused("run_shell_command", command=command), command
+
+
+#: Commands the native agent judges the same way; cpp/tests/test_security.cpp reads it too.
+_SHARED_TABLE = json.loads(
+    (
+        Path(__file__).resolve().parents[2] / "fixtures" / "offline_commands.json"
+    ).read_text(encoding="utf-8")
+)
+
+
+class TestSharedWithNativeAgent:
+    """Spliced program names and explicit offline flags, judged as the native agent does."""
+
+    @pytest.mark.parametrize(
+        "command", _SHARED_TABLE["refused"] + _SHARED_TABLE["refused_harmless"]
+    )
+    def test_refused(self, command):
+        assert _refused("run_shell_command", command=command), command
+
+    @pytest.mark.parametrize("command", _SHARED_TABLE["allowed"])
+    def test_allowed(self, command):
+        assert not _refused("run_shell_command", command=command), command
+
+    def test_an_allowed_command_inside_a_shell_is_still_judged_whole(self):
+        assert _refused("run_shell_command", command="bash -c 'mvn -o package'")
+        assert _refused("run_shell_command", command="cmd /c mvn -o package")
+
 
 class TestToolArguments:
     @pytest.mark.parametrize("tool", ["fetch_page", "download_file", "browser_open"])
@@ -197,3 +304,51 @@ class TestToolArguments:
         assert not _refused(
             "write_file", file_path="notes.md", content="see https://example.com"
         )
+
+
+def _tool_names(path):
+    """Every ``@tool``-decorated function defined in *path*."""
+    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for deco in node.decorator_list:
+                target = deco.func if isinstance(deco, ast.Call) else deco
+                if isinstance(target, ast.Name) and target.id == "tool":
+                    names.add(node.name)
+    return names
+
+
+_TOOLS = Path(__file__).resolve().parents[3] / "src" / "gaia" / "agents" / "tools"
+
+
+class TestOnlineServiceTools:
+    @pytest.mark.parametrize("tool", sorted(ONLINE_SERVICE_TOOLS))
+    def test_refused_with_no_url_in_sight(self, tool):
+        assert _refused(tool, query="invoice")
+
+    @pytest.mark.parametrize("tool", sorted(ONLINE_SERVICE_TOOLS))
+    def test_a_local_url_argument_does_not_clear_it(self, tool):
+        assert _refused(tool, url="http://localhost/")
+
+    def test_every_mailbox_tool_is_covered(self):
+        mailbox = _tool_names(_TOOLS / "email_tools.py")
+        assert mailbox, "found no mailbox tools to check"
+        # Reads local connector state only, so it stays answerable offline.
+        local_only = {"list_connected_mailboxes"}
+        assert local_only <= mailbox
+        assert mailbox - local_only <= ONLINE_SERVICE_TOOLS
+        assert not local_only & ONLINE_SERVICE_TOOLS
+
+    @pytest.mark.parametrize(
+        "tool",
+        ["list_skills", "load_skill", "unload_skill", "skill_status", "remove_skill"],
+    )
+    def test_skills_already_on_this_pc_still_run(self, tool):
+        assert tool in _tool_names(_TOOLS / "skill_library_tools.py")
+        assert offline_refusal(tool, {"name": "pdf-tools"}) is None
+
+    def test_the_refusal_names_the_tool(self):
+        result = offline_refusal("list_inbox", {})
+        assert "list_inbox" in result["error"]
+        assert "Internet is off for this chat" in result["error"]

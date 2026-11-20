@@ -21,6 +21,7 @@ external processes during tests.
 import io
 import logging
 import platform
+import re
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -30,6 +31,7 @@ from fastapi.testclient import TestClient
 
 from gaia.ui.server import create_app
 from gaia.ui.utils import uploads_dir
+from tests.fixtures.legacy_text import LEGACY_SAMPLES, UNDECODABLE
 
 logger = logging.getLogger(__name__)
 
@@ -177,10 +179,8 @@ class TestFileUpload:
         assert data["content_type"] == "text/plain"
         assert data["is_image"] is False
         assert data["url"].startswith("/api/files/uploads/")
-        assert data["filename"].endswith(".txt")
-        # Filename should be UUID format + extension
-        stem = data["filename"].rsplit(".", 1)[0]
-        uuid.UUID(stem)  # Raises ValueError if not valid UUID
+        # The name the user knows the file by, with an id only on a clash.
+        assert re.fullmatch(r"(?:[0-9a-f]{12}_)?test\.txt", data["filename"])
         logger.info("Upload text file response: %s", data)
 
     def test_upload_image_file(self, client, sample_png_bytes):
@@ -241,7 +241,7 @@ class TestFileUpload:
             files={"file": ("empty.txt", io.BytesIO(b""), "text/plain")},
         )
         assert resp.status_code == 400
-        assert "empty" in resp.json()["detail"].lower()
+        assert resp.json()["detail"]["status"] == "empty_file"
 
     def test_upload_disallowed_extension(self, client):
         """Upload a .exe file should return 400."""
@@ -256,7 +256,7 @@ class TestFileUpload:
             },
         )
         assert resp.status_code == 400
-        assert "not allowed" in resp.json()["detail"].lower()
+        assert resp.json()["detail"]["status"] == "unsupported_type"
 
     def test_upload_disallowed_extension_bat_not_doc(self, client):
         """Upload a .dll file should return 400, .bat is allowed."""
@@ -289,10 +289,10 @@ class TestFileUpload:
             files={"file": ("big.txt", io.BytesIO(b"x" * size), "text/plain")},
         )
         assert resp.status_code == 413
-        assert "too large" in resp.json()["detail"].lower()
+        assert resp.json()["detail"]["status"] == "too_large"
 
     def test_upload_preserves_extension(self, client):
-        """Verify uploaded filename is UUID.ext pattern."""
+        """Verify uploaded filename is <id>_<name>.ext pattern."""
         for ext, ctype in [
             (".md", "text/markdown"),
             (".csv", "text/csv"),
@@ -309,9 +309,10 @@ class TestFileUpload:
             assert data["filename"].endswith(
                 ext
             ), f"Extension not preserved: expected {ext}, got {data['filename']}"
-            # Verify UUID prefix
-            stem = data["filename"][: -len(ext)]
-            uuid.UUID(stem)  # Validates UUID format
+            # The kept name, with an id only when that name is already taken
+            assert re.fullmatch(
+                rf"(?:[0-9a-f]{{12}}_)?myfile{re.escape(ext)}", data["filename"]
+            )
 
     def test_upload_is_stored_under_gaia_home(self, client):
         """The upload lands in ``<GAIA_HOME>/chat/uploads``."""
@@ -361,11 +362,8 @@ class TestFileBrowse:
 
     def test_browse_home_directory(self, client):
         """Default path (no param) should return home directory contents."""
-        # On Windows with no path param, the router lists drive letters
-        # because 'not path' is True and we're on Windows.
-        # We pass the explicit home path instead.
         home = str(Path.home())
-        resp = client.get("/api/files/browse", params={"path": home})
+        resp = client.get("/api/files/browse")
         assert resp.status_code == 200
 
         data = resp.json()
@@ -378,6 +376,16 @@ class TestFileBrowse:
             len(data["entries"]),
             len(data["quick_links"]),
         )
+
+    def test_browse_says_the_home_folder_cannot_be_given_to_a_chat(
+        self, client, home_tmp_dir
+    ):
+        """The picker learns at browse time what the chat would refuse after Send."""
+        home = client.get("/api/files/browse").json()
+        assert "your home directory" in home["folder_refusal"]
+
+        sub = client.get("/api/files/browse", params={"path": str(home_tmp_dir)})
+        assert sub.json()["folder_refusal"] is None
 
     def test_browse_specific_directory(self, client, home_tmp_dir, sample_text_file):
         """Browse a known temp directory and verify the file appears."""
@@ -631,9 +639,7 @@ class TestFileSearch:
             "/api/files/search",
             params={"query": "test", "max_results": 0},
         )
-        # FastAPI validates ge=1 on the query model for FileSearchRequest,
-        # but the endpoint uses plain int param with manual clamping.
-        # max(0, 1) = 1, so it should return at most 1 result.
+        # The endpoint clamps max_results itself: max(0, 1) = 1.
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 1
@@ -819,6 +825,39 @@ class TestFilePreview:
         assert len(data["preview_lines"]) == 200  # Clamped to max
         assert data["total_lines"] == 300
 
+    @pytest.mark.parametrize(
+        "name,content",
+        [
+            ("report.pdf", b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n"),
+            ("budget.docx", b"PK\x03\x04\x00\x00\x08\x00[Content_Types].xml"),
+            ("logo.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"),
+        ],
+    )
+    def test_preview_binary_file_is_not_shown_as_text(
+        self, client, home_tmp_dir, name, content
+    ):
+        """PDF, DOCX and PNG files give no preview text instead of raw bytes."""
+        f = home_tmp_dir / name
+        f.write_bytes(content)
+
+        resp = client.get("/api/files/preview", params={"path": str(f)})
+        assert resp.status_code == 200
+
+        data = resp.json()
+        assert data["is_text"] is False
+        assert data["preview_lines"] == []
+
+    def test_preview_text_without_known_extension(self, client, home_tmp_dir):
+        """A small text file with an unlisted extension still previews."""
+        f = home_tmp_dir / "notes.dat"
+        f.write_text("first line\nsecond line\n", encoding="utf-8")
+
+        resp = client.get("/api/files/preview", params={"path": str(f)})
+
+        data = resp.json()
+        assert data["is_text"] is True
+        assert data["preview_lines"] == ["first line", "second line"]
+
     def test_preview_nonexistent_file(self, client, home_tmp_dir):
         """Preview of nonexistent file should return 404."""
         fake_path = home_tmp_dir / "nonexistent.txt"
@@ -887,10 +926,9 @@ class TestFilePreview:
         assert data["is_text"] is True
         assert data["encoding"] == "utf-8"
 
-    def test_preview_latin1_fallback(self, client, home_tmp_dir):
-        """Verify latin-1 fallback for non-UTF-8 encoded files."""
+    def test_preview_windows_western_text(self, client, home_tmp_dir):
+        """Western text that is not UTF-8 reads as Windows-1252."""
         latin1_file = home_tmp_dir / "latin1.txt"
-        # Write bytes that are valid latin-1 but not valid utf-8
         latin1_file.write_bytes(b"caf\xe9\nni\xf1o\n")
 
         resp = client.get(
@@ -901,7 +939,31 @@ class TestFilePreview:
 
         data = resp.json()
         assert data["is_text"] is True
-        assert data["encoding"] == "latin-1"
+        assert data["encoding"] == "cp1252"
+        assert data["preview_lines"] == ["café", "niño"]
+
+    @pytest.mark.parametrize(**LEGACY_SAMPLES)
+    def test_preview_legacy_encoding(self, client, home_tmp_dir, text, encoding):
+        """Arabic, Japanese, Chinese and Cyrillic files preview as their text (#8040)."""
+        f = home_tmp_dir / "legacy.csv"
+        f.write_bytes(text.encode(encoding))
+
+        data = client.get("/api/files/preview", params={"path": str(f)}).json()
+
+        assert data["is_text"] is True
+        assert data["preview_lines"] == text.splitlines()
+        assert data["columns"] == text.splitlines()[0].split(",")
+        assert data["row_count"] == len(text.splitlines()) - 1
+
+    def test_preview_undecodable_text_file_is_not_shown(self, client, home_tmp_dir):
+        """Bytes no encoding fits give no preview rather than mojibake."""
+        f = home_tmp_dir / "scrambled.txt"
+        f.write_bytes(UNDECODABLE)
+
+        data = client.get("/api/files/preview", params={"path": str(f)}).json()
+
+        assert data["is_text"] is False
+        assert data["preview_lines"] == []
 
     def test_preview_python_file(self, client, sample_py_file):
         """Preview a .py file to confirm code files work."""
@@ -1316,9 +1378,10 @@ class TestSecurityEdgeCases:
         assert resp.status_code == 200
         data = resp.json()
         assert data["original_name"] == "my file (copy) [2].txt"
-        # Stored filename should be a clean UUID
-        stem = data["filename"].rsplit(".", 1)[0]
-        uuid.UUID(stem)  # Validates no special chars leaked through
+        # The stored name and its URL keep the user's spelling.
+        assert data["filename"] == "my file (copy) [2].txt"
+        assert data["url"] == "/api/files/uploads/my%20file%20%28copy%29%20%5B2%5D.txt"
+        assert client.get(data["url"]).content == b"data"
 
 
 # ── TestBrowseEdgeCases ──────────────────────────────────────────────────────
@@ -1444,3 +1507,19 @@ class TestPreviewEdgeCases:
         # min(max(0, 1), 200) = 1
         data = resp.json()
         assert len(data["preview_lines"]) == 1
+
+
+class TestFileBrowseDenialReason:
+    """A 403 caused by the operating system says so; the home-folder limit does not."""
+
+    def test_unreadable_folder_is_marked_os_denied(self, client, home_tmp_dir):
+        with patch("pathlib.Path.iterdir", side_effect=PermissionError("denied")):
+            resp = client.get("/api/files/browse", params={"path": str(home_tmp_dir)})
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["status"] == "os_denied"
+
+    def test_outside_home_is_not_marked_os_denied(self, client):
+        outside = "C:\\\\Windows" if platform.system() == "Windows" else "/etc"
+        resp = client.get("/api/files/browse", params={"path": outside})
+        assert resp.status_code == 403
+        assert isinstance(resp.json()["detail"], str)

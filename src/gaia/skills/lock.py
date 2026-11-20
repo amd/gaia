@@ -87,10 +87,14 @@ SOURCE_HUB = "hub"
 SOURCE_CAPTURED = "captured"
 
 #: ``source`` value for a skill that lives in the user root without hub
-#: provenance — authored with ``gaia skill create`` or converted by
-#: ``gaia skill migrate``. Recorded only
-#: by ``gaia skill lock --relock``, so drift detection covers it too.
+#: provenance — authored with ``gaia skill create``. Recorded only by
+#: ``gaia skill lock --relock``, so drift detection covers it too; until then
+#: the skill is held to the ``experimental`` ceiling at load.
 SOURCE_LOCAL = "local"
+
+#: ``version`` recorded for a skill whose ``SKILL.md`` declares none; an entry
+#: needs one to load.
+UNVERSIONED = "unversioned"
 
 
 def _now() -> str:
@@ -137,6 +141,10 @@ class LockEntry:
     #: Content digest of the bundle the promote audited. Trust is bound to
     #: these bytes: edit the skill after promoting and the code defers again.
     code_digest: str = ""
+    #: The audit engine (:data:`gaia.skills.audit.findings.AUDIT_ENGINE`) whose
+    #: digest rule computed ``content_digest``. Empty on entries written before
+    #: this was recorded, which means the 0.1.0 rule.
+    digest_engine: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

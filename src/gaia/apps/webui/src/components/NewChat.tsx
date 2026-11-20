@@ -1,142 +1,212 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronRight, Folder, X } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ChevronRight, FileText, X } from 'lucide-react';
+import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
+import { FolderChip } from './FolderChip';
 import { ModelChip } from './ModelChip';
+import { NpuBackdrop } from './NpuBackdrop';
 import { PermissionModeChip } from './PermissionModeChip';
-import { StartCards } from './StartCards';
-import { FolderPicker } from './session-panel/FolderPicker';
+import { PrivateChip } from './PrivateChip';
+import { TryChips } from './TryChips';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
+import { isStarting } from '../services/statusPoll';
 import { useChatStore } from '../stores/chatStore';
-import { displayModelName, useModelNames } from '../stores/modelStore';
+import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
+import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
-import { STARTING_REASON } from '../utils/constants';
 import { log } from '../utils/logger';
+import { requestErrorText } from '../utils/requestErrors';
+import { FlagshipMissing } from '../utils/newTask';
+import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
-import type { StartCard, StartScreen } from '../types';
+import type { StartScreen } from '../types';
 import './NewChat.css';
+import { useSavedDraft } from '../hooks/useSavedDraft';
+import { NEW_CHAT_DRAFT_KEY } from '../utils/savedDraft';
+import { ref, type MessageKey } from '../i18n/registry';
+import { tEn, useT, type Translate } from '../i18n/useT';
+import { visibleName } from './CalendarApproval';
 
 interface NewChatProps {
-    /** Creates the chat and sends the first message; rejects with the reason it could not. */
-    onSend: (text: string) => Promise<void>;
+    /**
+     * Creates the chat and sends the first message; rejects with the reason it could not.
+     * Resolves false when the chat was made but the message was not sent (it says why itself).
+     */
+    onSend: (text: string) => Promise<boolean | void>;
     /** Text to start the message box with, e.g. a task picked at the end of setup. */
     initialText?: string;
     /** Changes each time New chat is chosen, so the box takes focus even when already shown. */
     focusRequest?: number;
+    /** The flagship isn't installed: the top notice offers it, and a refused send points there while it shows. */
+    agentMissing?: boolean;
+    /** The box opens holding a first message the missing agent refused elsewhere (Personalize, setup, files). */
+    agentRefused?: boolean;
 }
 
-/** How often the new-chat cards are asked for again while they are unavailable. */
+/** How often the start screen is asked for again while the assistant is unavailable. */
 export const START_RETRY_MS = 15_000;
 
-export function greeting(now: Date = new Date()): string {
+export function greeting(now: Date = new Date(), t: Translate = tEn): string {
     const h = now.getHours();
     const part = h < 5 ? 'evening' : h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
-    return `Good ${part}. What should we work on?`;
+    return t(`newChat.greeting.${part}`);
 }
 
-export function warmUpLine({ seconds, model, device }: WarmUpProgress): string {
-    if (!model) return `Getting GAIA ready… ${seconds}s`;
-    const where = deviceLabel(device);
-    return `Loading ${displayModelName(model)}${where ? ` on ${where}` : ''}… ${seconds}s`;
+const DEVICE_KEYS: Record<string, MessageKey> = { gpu: 'device.gpu', npu: 'device.npu', cpu: 'device.cpu' };
+
+export function warmUpLine({ seconds, model, device }: WarmUpProgress, t: Translate = tEn): string {
+    if (!model) return t('newChat.warmup.ready', { s: seconds });
+    const name = displayModelName(model);
+    const where = device ? DEVICE_KEYS[device] : undefined;
+    if (where) return t('newChat.warmup.loadingOn', { model: name, where: ref(where), s: seconds });
+    // A device the labels don't know yet still reads in English rather than vanishing.
+    const raw = deviceLabel(device);
+    return raw
+        ? t('newChat.warmup.loadingOn', { model: name, where: raw, s: seconds })
+        : t('newChat.warmup.loading', { model: name, s: seconds });
 }
 
-/** No suggestions: one plain sentence, a retry, and the full error behind Details. */
-function SuggestionsUnavailable({ detail, onRetry }: { detail: string; onRetry: () => void }) {
+/** The assistant didn't start: one plain sentence, a retry, and the full error behind Details. */
+function AssistantUnavailable({ detail, onRetry }: { detail: string; onRetry: () => void }) {
+    const t = useT();
     const [open, setOpen] = useState(false);
     return (
         <div className="new-chat-note">
             <p>
-                GAIA&rsquo;s assistant didn&rsquo;t start, so it can&rsquo;t suggest tasks yet.{' '}
-                <button type="button" className="link-btn" onClick={onRetry}>Try again</button>
+                {t('newChat.assistantUnavailable')}{' '}
+                <button type="button" className="link-btn" onClick={onRetry}>{t('newChat.tryAgain')}</button>
             </p>
             <button type="button" className="new-chat-details" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-                <ChevronRight size={12} className={open ? 'is-open' : ''} aria-hidden="true" /> Details
+                <ChevronRight size={12} className={open ? 'is-open' : ''} aria-hidden="true" /> {t('newChat.details')}
             </button>
             {open && <pre className="new-chat-details-text">{detail}</pre>}
         </div>
     );
 }
 
-function baseName(path: string): string {
-    const parts = path.split(/[\\/]/).filter(Boolean);
-    return parts[parts.length - 1] ?? path;
+/** Hold every indexed library document for the chat about to be created. */
+function attachWholeLibrary() {
+    const { documents, draftDocumentIds, addDraftDocuments } = useChatStore.getState();
+    addDraftDocuments(documents
+        .filter((d) => d.indexing_status === 'complete' && !draftDocumentIds.includes(d.id))
+        .map((d) => d.id));
 }
 
+/** Attached documents shown before the rest fold behind "+N more". */
+export const DOCS_SHOWN = 5;
+
 /**
- * The folder the new chat will work in, and a way to pick another: the OS
- * dialog in the desktop app, a path box and browser in a plain browser.
+ * A chat searches only the documents attached to it: show what this one will
+ * get, and offer the rest of the library.
  */
-function WorkingFolderChip({ folder }: { folder: StartScreen['working_folder'] | undefined }) {
-    const picked = useChatStore((s) => s.draftWorkingFolder);
-    const setPicked = useChatStore((s) => s.setDraftWorkingFolder);
-    const [browsing, setBrowsing] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-    const choose = useCallback(async () => {
-        setError(null);
-        const native = window.gaiaAPI?.dialog?.pickFolder;
-        if (!native) {
-            setBrowsing(true);
-            return;
-        }
-        try {
-            const path = await native();
-            if (path) setPicked(path);
-        } catch (err) {
-            setError(`Couldn't open the folder picker: ${err instanceof Error ? err.message : String(err)}`);
-        }
-    }, [setPicked]);
-
-    if (!folder && !picked) return null;
-    const title = picked
-        ? `GAIA works in ${picked} in this chat. Click to pick another folder.`
-        : folder?.gaia_folder
-            ? `GAIA works in its own folder, ${folder.path}. Click to pick a folder for this chat.`
-            : `GAIA works in ${folder?.path}. Click to pick another folder for this chat.`;
+function LibraryDocuments() {
+    const t = useT();
+    const [expanded, setExpanded] = useState(false);
+    const documents = useChatStore((s) => s.documents);
+    const draftIds = useChatStore((s) => s.draftDocumentIds);
+    const removeDraftDocument = useChatStore((s) => s.removeDraftDocument);
+    const setShowDocLibrary = useChatStore((s) => s.setShowDocLibrary);
+    const attached = documents.filter((d) => draftIds.includes(d.id));
+    const offered = documents.filter((d) => d.indexing_status === 'complete' && !draftIds.includes(d.id));
+    if (!attached.length && !offered.length) return null;
+    const n = offered.length;
+    const hidden = attached.length - DOCS_SHOWN;
+    const shown = expanded || hidden <= 0 ? attached : attached.slice(0, DOCS_SHOWN);
     return (
-        <div className="new-chat-meta">
-            <button type="button" className="new-chat-folder" title={title} aria-label={title} onClick={() => void choose()}>
-                <Folder size={13} aria-hidden="true" />
-                <span>{picked ? baseName(picked) : folder?.name}</span>
-            </button>
-            {picked && (
+        <div className="new-chat-docs">
+            {attached.length > 0 && (
+                <ul
+                    id="new-chat-doc-list"
+                    className={`new-chat-doc-list${expanded ? ' is-expanded' : ''}`}
+                    aria-label={t('newChat.docs.forChat')}
+                >
+                    {shown.map((d) => (
+                        <li key={d.id} className="new-chat-doc">
+                            <FileText size={12} aria-hidden="true" />
+                            <span dir="ltr">{visibleName(d.filename)}</span>
+                            <button
+                                type="button"
+                                className="new-chat-doc-remove"
+                                onClick={() => removeDraftDocument(d.id)}
+                                aria-label={t('newChat.docs.dontAttach', { name: visibleName(d.filename) })}
+                            >
+                                <X size={12} aria-hidden="true" />
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            )}
+            {hidden > 0 && (
                 <button
                     type="button"
-                    className="btn-icon-sm"
-                    onClick={() => setPicked(null)}
-                    aria-label="Use the default folder"
-                    title="Use the default folder"
+                    className="link-btn new-chat-doc-toggle"
+                    aria-expanded={expanded}
+                    aria-controls="new-chat-doc-list"
+                    onClick={() => setExpanded((v) => !v)}
                 >
-                    <X size={12} />
+                    {expanded ? t('newChat.docs.fewer') : t('newChat.docs.hidden', { n: hidden })}
                 </button>
             )}
-            {error && <span className="new-chat-error" role="alert">{error}</span>}
-            {browsing && (
-                <FolderPicker
-                    title="Choose a folder"
-                    label="Choose the folder this chat works in"
-                    note="This chat will read and write in the folder you pick, and run commands there."
-                    onPick={(path) => { setPicked(path); setBrowsing(false); }}
-                    onClose={() => setBrowsing(false)}
-                />
+            {n > 0 && (
+                <p className="new-chat-note">
+                    {attached.length
+                        ? t.plural('newChat.docs.more', n)
+                        : t.plural('newChat.docs.library', n)}{' '}
+                    <button type="button" className="link-btn" onClick={attachWholeLibrary}>
+                        {n === 1 ? t('newChat.docs.attachIt') : t('newChat.docs.attachAll', { n })}
+                    </button>
+                    {n > 1 && (
+                        <>
+                            {' · '}
+                            <button type="button" className="link-btn" onClick={() => setShowDocLibrary(true)}>
+                                {t('newChat.docs.choose')}
+                            </button>
+                        </>
+                    )}
+                </p>
             )}
         </div>
     );
 }
 
-/** An empty chat: a greeting, the composer, tasks to start from. Created on the first message. */
-export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatProps) {
-    const starting = useChatStore((s) => s.systemStatus?.init_state === 'initializing');
-    const [text, setText] = useState(initialText);
+/** First-run setup failed: say so before the first message fails with the same error. */
+function SetupFailed({ error }: { error: string }) {
+    const t = useT();
+    const openSettings = useChatStore((s) => s.openSettings);
+    return (
+        <div className="new-chat-setup-failed" role="alert">
+            <p className="new-chat-setup-failed-title">{t('newChat.setupFailed.title')}</p>
+            <p className="new-chat-setup-failed-error">{error}</p>
+            <p>
+                {t('newChat.setupFailed.hint')}{' '}
+                <button type="button" className="link-btn" onClick={() => openSettings('model')}>{t('newChat.setupFailed.choose')}</button>
+            </p>
+        </div>
+    );
+}
+
+/** An empty chat: a greeting and the composer over the NPU backdrop. Created on the first message. */
+export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissing = false, agentRefused: heldRefused = false }: NewChatProps) {
+    const t = useT();
+    const starting = useChatStore((s) => isStarting(s.systemStatus));
+    const download = useChatStore((s) => s.systemStatus?.download_progress ?? null);
+    // Moot once chats run in the cloud or a local model has loaded after all.
+    const setupError = useChatStore((s) => (s.systemStatus?.model_loaded ? null : s.systemStatus?.setup_error ?? null));
+    const remote = useModelStore((s) => !!s.active?.remote);
+    const [text, setText] = useSavedDraft(NEW_CHAT_DRAFT_KEY, initialText);
     const [error, setError] = useState<string | null>(null);
+    const [agentRefused, setAgentRefused] = useState(heldRefused);
     const [sending, setSending] = useState(false);
     const [start, setStart] = useState<StartScreen | null>(null);
     const [startError, setStartError] = useState<string | null>(null);
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
+    const innerRef = useRef<HTMLDivElement | null>(null);
+    const composerRef = useRef<HTMLDivElement | null>(null);
     const attachments = useAttachments();
     const warming = useWarmUp();
     useModelNames();
@@ -152,8 +222,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                 setStartError(s.skills_error ?? null);
             })
             .catch((err) => {
-                log.api.warn('New-chat suggestions unavailable', err);
-                if (live.current) setStartError(err instanceof Error ? err.message : String(err));
+                log.api.warn('New-chat start screen unavailable', err);
+                if (live.current) setStartError(requestErrorText(err));
             });
     }, []);
 
@@ -163,66 +233,147 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         return () => { live.current = false; };
     }, [loadStart]);
 
+    useEffect(() => {
+        api.listDocuments()
+            .then((data) => useChatStore.getState().setDocuments(data.documents || []))
+            .catch((err) => log.api.warn('Document library unavailable; not offering its documents', err));
+    }, []);
+
     // The assistant may still be starting: keep asking while the reason is on screen.
     useEffect(() => {
         if (!startError) return;
         return setVisibleInterval(() => loadStart(true), START_RETRY_MS);
     }, [startError, loadStart]);
 
-    const send = useCallback(async (message: string) => {
-        if (!message || sending) return;
+    // Set before any re-render, so keypresses landing in the same tick are held too.
+    const sendingRef = useRef(false);
+    // Sent while the chat was still being created: they wait in its queue, never dropped.
+    const heldRef = useRef<string[]>([]);
+    const send = useCallback(async (message: string, draft = '') => {
+        if (!message) return;
+        if (sendingRef.current) {
+            // As typed: the attachments still belong to the first message.
+            heldRef.current.push(draft || message);
+            setText('');
+            return;
+        }
+        sendingRef.current = true;
         setSending(true);
         setError(null);
+        setAgentRefused(false);
+        // Cleared now, so anything typed while the chat is created is a new message.
+        setText('');
         try {
-            await onSend(message);
-            setText('');
+            const sent = await onSend(message);
             attachments.clear();
+            const held = heldRef.current.splice(0);
+            const sessionId = useChatStore.getState().currentSessionId;
+            if (held.length > 0 && sessionId) {
+                // The chat is open now; if its first message never went out, the rest wait for Send again.
+                const add = (items: messageQueue.QueuedMessage[], text: string) => sent === false
+                    ? [...items, { ...messageQueue.item(text, 'failed'), error: 'The first message was not sent.' }]
+                    : messageQueue.enqueue(items, text, 'queued');
+                useChatStore.getState().updateQueue(sessionId, (q) => held.reduce(add, q));
+            }
         } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
+            // Nothing was sent, so every message goes back in the box.
+            const held = heldRef.current.splice(0);
+            setText([draft || message, ...held].join('\n\n'));
+            if (err instanceof FlagshipMissing) setAgentRefused(true);
+            else setError(requestErrorText(err));
         } finally {
+            sendingRef.current = false;
             setSending(false);
         }
-    }, [attachments, onSend, sending]);
+    }, [attachments, onSend]);
 
-    const submit = useCallback(() => send(attachments.compose(text.trim())), [attachments, send, text]);
+    const submit = useCallback(() => send(attachments.compose(text.trim()), text.trim()), [attachments, send, text]);
 
     useEffect(() => {
         if (focusRequest) inputRef.current?.focus();
     }, [focusRequest]);
 
-    const pick = useCallback((card: StartCard) => {
-        if (!card.needs_input) {
-            void send(attachments.compose(card.prompt));
-            return;
-        }
-        setText(card.prompt);
-        inputRef.current?.focus();
-    }, [attachments, send]);
+    // A prompt put in the box (Try in a new chat) is added to, so typing starts after it.
+    useEffect(() => {
+        const el = inputRef.current;
+        if (!initialText || !el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+    }, [initialText]);
 
+    // Sending, not typing, drops the composer to the bottom: the box never moves under the cursor.
+    const docked = sending;
+    const innerTop = useRef<{ top: number; docked: boolean } | null>(null);
+    useLayoutEffect(() => {
+        const el = innerRef.current;
+        if (!el) return;
+        // Measure from where it sits now, not mid-way through a previous move.
+        if (typeof el.getAnimations === 'function') el.getAnimations().forEach((a) => a.cancel());
+        const top = el.getBoundingClientRect().top;
+        const before = innerTop.current;
+        innerTop.current = { top, docked };
+        if (!before || before.docked === docked || prefersReducedMotion() || typeof el.animate !== 'function') return;
+        const easing = getComputedStyle(document.documentElement).getPropertyValue('--ease').trim();
+        if (!easing) throw new Error('Motion token --ease is not set; check styles/index.css.');
+        el.animate(
+            [{ transform: `translateY(${before.top - top}px)` }, { transform: 'none' }],
+            { duration: durationMs('--duration-spring'), easing },
+        );
+    });
+
+    const lastExample = useRef('');
+    const fillPrompt = useCallback((prompt: string) => {
+        const prev = lastExample.current;
+        const draft = (prev && text.endsWith(prev) ? text.slice(0, -prev.length) : text).trimEnd();
+        lastExample.current = prompt;
+        setText(draft ? `${draft}\n\n${prompt}` : prompt);
+        inputRef.current?.focus();
+    }, [text, setText]);
+
+    const downloading = download?.state === 'starting' || download?.state === 'downloading';
+    const activity = sending ? 'sending' : downloading ? 'download' : starting || warming !== null ? 'loading' : 'idle';
     const folder = start?.working_folder;
 
     return (
-        <main className="new-chat" aria-label="New chat">
-            <div className="new-chat-inner">
-                <h1 className="new-chat-greeting">{greeting()}</h1>
-                <Composer
-                    value={text}
-                    onChange={setText}
-                    onSubmit={submit}
-                    attachments={attachments}
-                    disabledReason={starting ? STARTING_REASON : sending ? 'Starting the chat…' : null}
-                    autoFocus
-                    inputRef={inputRef}
-                    leftControls={<PermissionModeChip sessionId={null} />}
-                    rightControls={<ModelChip />}
-                />
-                <WorkingFolderChip folder={folder} />
+        <main className={`new-chat${docked ? ' is-docked' : ''}`} aria-label={t('newChat.label')}>
+            <NpuBackdrop
+                activity={activity}
+                progress={(download?.percent ?? 0) / 100}
+                pulse={text.length}
+                docked={docked}
+                contentRef={innerRef}
+                composerRef={composerRef}
+            />
+            <div className="new-chat-actions">
+                <BrowserPaneToggle />
+            </div>
+            <div className="new-chat-inner" ref={innerRef}>
+                <h1 className="new-chat-greeting" aria-hidden={docked}>{greeting(new Date(), t)}</h1>
+                {setupError && !remote && <SetupFailed error={setupError} />}
+                <div ref={composerRef}>
+                    <Composer
+                        value={text}
+                        onChange={setText}
+                        onSubmit={submit}
+                        attachments={attachments}
+                        disabledReason={starting ? t('composer.starting') : null}
+                        autoFocus
+                        inputRef={inputRef}
+                        leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /></>}
+                        rightControls={<ModelChip />}
+                    />
+                </div>
+                <div className="new-chat-meta">
+                    {folder && <FolderChip folder={folder} disabled={starting || sending} />}
+                </div>
+                <LibraryDocuments />
                 {warming !== null && !starting && (
-                    <p className="new-chat-warmup" role="status">{warmUpLine(warming)}</p>
+                    <p className="new-chat-warmup" role="status">{warmUpLine(warming, t)}</p>
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
-                {start && <StartCards cards={start.cards} onPick={pick} disabled={starting || sending} />}
-                {startError && <SuggestionsUnavailable detail={startError} onRetry={() => loadStart()} />}
+                {agentRefused && agentMissing && <p className="new-chat-error" role="alert">{t('agentNotice.sendRefused')}</p>}
+                <TryChips onPick={fillPrompt} disabled={starting || sending} />
+                {startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>
     );

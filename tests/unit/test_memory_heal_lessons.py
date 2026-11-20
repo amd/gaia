@@ -81,8 +81,8 @@ FIX_FAILS = (
     {"status": "error", "error": "ModuleNotFoundError: toybox", "return_code": 1},
 )
 LESSON = (
-    "run_shell_command: `pytest -q` failed (test clock not configured. See "
-    "docs/TESTING.md). `env TOYBOX_CLOCK=frozen pytest -q` worked: added "
+    'run_shell_command: `pytest -q` failed with "test clock not configured. See '
+    'docs/TESTING.md". `env TOYBOX_CLOCK=frozen pytest -q` worked: added '
     "`env TOYBOX_CLOCK=frozen`."
 )
 
@@ -185,7 +185,7 @@ class TestLaterSessionsSeeIt:
             second.close()
 
         today = datetime.now().astimezone().date().isoformat()
-        assert "Lessons learned in this workspace (observations quoting tool " in prompt
+        assert "What worked last time in this workspace (reuse these fixes " in prompt
         assert f"  - {LESSON} (confidence: 0.50, learned {today})" in prompt
 
     def test_another_workspace_does_not_see_it(self, db_path, workspace, tmp_path):
@@ -247,6 +247,101 @@ class TestConfirmAndRetire:
             assert len(second.lessons()) == 1
         finally:
             second.close()
+
+
+def _tests_failed(summary: str) -> Dict[str, Any]:
+    """What run_shell_command returns when pytest ran and counted failures."""
+    return {
+        "status": "error",
+        "error": f"pytest reported failures: {summary}",
+        "return_code": 0,
+        "check_result": {
+            "label": "pytest",
+            "target": "",
+            "kind": "test",
+            "passed": False,
+            "summary": summary,
+        },
+    }
+
+
+def _tests_passed(summary: str) -> Dict[str, Any]:
+    return {
+        "status": "success",
+        "return_code": 0,
+        "check_result": {
+            "label": "pytest",
+            "target": "",
+            "kind": "test",
+            "passed": True,
+            "summary": summary,
+        },
+    }
+
+
+class TestFailingTestsAreNotAMistake:
+    """Fixing the code between two test runs teaches nothing about the command (#8054)."""
+
+    def test_failing_then_passing_tests_store_no_lesson_and_no_error(self, session):
+        session.turn(
+            [
+                (
+                    SHELL,
+                    {"command": "python -m pytest -q 2>&1 | tail -40"},
+                    _tests_failed("1 failed, 4 passed in 0.12s"),
+                ),
+                (
+                    "edit_file",
+                    {"file_path": "meter/calc.py", "old": "-", "new": "+"},
+                    {"status": "success"},
+                ),
+                (
+                    SHELL,
+                    {"command": "python -m pytest -q 2>&1 | tail -20"},
+                    _tests_passed("5 passed in 0.10s"),
+                ),
+            ]
+        )
+
+        assert session.lessons() == []
+        assert session._memory_store.get_by_category("error") == []
+
+    def test_a_changed_command_that_makes_failing_tests_pass_still_teaches(
+        self, session
+    ):
+        """Tests that fail until the command sets what they need are a lesson."""
+        session.turn(
+            [
+                (SHELL, {"command": "pytest -q"}, _tests_failed("3 failed in 0.2s")),
+                (FIX[0], FIX[1], _tests_passed("5 passed in 0.1s")),
+            ]
+        )
+
+        [lesson] = session.lessons()
+        assert "env TOYBOX_CLOCK=frozen" in lesson["content"]
+
+    def test_a_runner_that_never_got_to_count_still_teaches(self, session):
+        """No summary means the call itself went wrong, which is worth a lesson."""
+        crashed = {
+            "status": "error",
+            "error": "No module named pytest",
+            "return_code": 1,
+            "check_result": {
+                "label": "pytest",
+                "target": "",
+                "kind": "test",
+                "passed": False,
+                "summary": "",
+            },
+        }
+        session.turn(
+            [
+                (SHELL, {"command": "pytest -q"}, crashed),
+                (SHELL, {"command": "python -m pytest -q"}, _tests_passed("5 passed")),
+            ]
+        )
+
+        assert len(session.lessons()) == 1
 
 
 class TestOverflowRecoveryKeepsTheLesson:

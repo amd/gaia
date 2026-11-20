@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fireEvent, render, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MobileAccessModal } from '../MobileAccessModal';
 
 const toCanvas = vi.fn().mockResolvedValue(undefined);
@@ -90,6 +90,21 @@ describe('MobileAccessModal keyboard', () => {
         fireEvent.keyDown(document, { key: 'Escape' });
 
         expect(onClose).toHaveBeenCalledOnce();
+        setTokens(null, null);
+    });
+
+    it('takes focus when it opens and gives it back when isOpen turns false', async () => {
+        setTokens('#F0EDE7', '#17161C');
+        const trigger = document.createElement('button');
+        document.body.appendChild(trigger);
+        trigger.focus();
+        const { rerender } = render(<MobileAccessModal isOpen onClose={vi.fn()} />);
+        await waitFor(() => expect(toCanvas).toHaveBeenCalled());
+
+        expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+        rerender(<MobileAccessModal isOpen={false} onClose={vi.fn()} />);
+        expect(trigger).toHaveFocus();
+        trigger.remove();
         setTokens(null, null);
     });
 });

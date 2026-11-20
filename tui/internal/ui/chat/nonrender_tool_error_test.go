@@ -19,7 +19,7 @@ func transcriptText(m ChatModel) string {
 	m.updateViewport()
 	var b strings.Builder
 	for i := range m.messages {
-		b.WriteString(ansi.Strip(m.renderMessage(&m.messages[i], nil)))
+		b.WriteString(ansi.Strip(m.renderMessage(&m.messages[i])))
 		b.WriteString("\n")
 	}
 	return b.String()
@@ -42,7 +42,8 @@ func TestFailedNonRenderToolSurfacesItsErrorText(t *testing.T) {
 		!strings.Contains(got, "gaia connectors connect google") {
 		t.Errorf("the tool's own remedy was lost: %q", got)
 	}
-	if !strings.Contains(got, "failed") {
+	// "error" while the turn may still retry past it; "failed" once it ends on it.
+	if !strings.Contains(got, "└ error") {
 		t.Errorf("a failure must say so in words, not colour alone: %q", got)
 	}
 }

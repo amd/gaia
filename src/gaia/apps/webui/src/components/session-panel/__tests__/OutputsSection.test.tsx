@@ -4,11 +4,14 @@
 /** Outputs (#5277): everything the chat produced, newest first, with safe actions and undo states. */
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OutputsSection, OUTPUTS_SHOWN, whenText } from '../OutputsSection';
 import { announceUndo } from '../../../utils/undoEvents';
 import type { OutputItem } from '../../../types/sessionPanel';
 import { resetPanelState, SID, stubPanelApi } from './testUtils';
+import { stripIsolates } from '../../../i18n/registry';
+import { translator } from '../../../i18n/useT';
+import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../../test/dates';
 
 vi.mock('../../../services/api');
 
@@ -63,7 +66,7 @@ describe('OutputsSection', () => {
         expect(r[1]).toHaveTextContent('Image');
         expect(r[2]).toHaveTextContent('Memory saved');
         expect(r[3]).toHaveTextContent('Scheduled task');
-        expect(r[4]).toHaveTextContent('Indexed document');
+        expect(r[4]).toHaveTextContent('Added document');
         // Added from the document bar, not by a turn: nothing to jump to.
         expect(within(r[4]).queryByRole('button', { name: /Go to the turn/ })).not.toBeInTheDocument();
     });
@@ -133,6 +136,28 @@ describe('OutputsSection', () => {
         expect(rows()).toHaveLength(OUTPUTS_SHOWN);
     });
 
+    it('keeps the newest read when an older one answers after it', async () => {
+        const item = (name: string) => ({
+            id: name, kind: 'file' as const, name, path: `C:\\out\\${name}`, detail: null, message_id: 2, created_at: null,
+            change: 'created' as const, state: 'present' as const, openable: true, revealable: true,
+        });
+        let answerOld: (v: { session_id: string; items: ReturnType<typeof item>[] }) => void = () => {};
+        mocked.getOutputs.mockResolvedValueOnce({ session_id: SID, items: [item('first.md')] });
+        render(<OutputsSection sessionId={SID} busy={false} onJumpToMessage={() => true} />);
+        await screen.findByText('first.md');
+
+        // An undo starts a read that is slow; a second undo's read answers first.
+        mocked.getOutputs.mockReturnValueOnce(new Promise((resolve) => { answerOld = resolve; }));
+        act(() => announceUndo(SID));
+        mocked.getOutputs.mockResolvedValueOnce({ session_id: SID, items: [item('newest.md')] });
+        act(() => announceUndo(SID));
+        await screen.findByText('newest.md');
+
+        await act(async () => { answerOld({ session_id: SID, items: [item('stale.md')] }); });
+        expect(screen.getByText('newest.md')).toBeInTheDocument();
+        expect(screen.queryByText('stale.md')).not.toBeInTheDocument();
+    });
+
     it('re-reads after a reply ends and after an Undo', async () => {
         const { rerender } = render(<OutputsSection sessionId={SID} busy={false} onJumpToMessage={() => true} />);
         await waitFor(() => expect(mocked.getOutputs).toHaveBeenCalledTimes(1));
@@ -145,16 +170,25 @@ describe('OutputsSection', () => {
         await waitFor(() => expect(mocked.getOutputs).toHaveBeenCalledTimes(3));
     });
 
-    it('says so when the chat produced nothing yet', async () => {
+    it('shows no section until the chat has produced something', async () => {
         render(<OutputsSection sessionId={SID} busy={false} onJumpToMessage={() => true} />);
-        expect(await screen.findByText(/Nothing yet/)).toBeInTheDocument();
+        await waitFor(() => expect(mocked.getOutputs).toHaveBeenCalled());
+        await act(async () => {});
+        expect(screen.queryByRole('button', { name: /^Outputs/ })).not.toBeInTheDocument();
     });
 
     it('reports a failed read instead of claiming nothing was produced', async () => {
         mocked.getOutputs.mockRejectedValue(new Error('disk unreadable'));
         render(<OutputsSection sessionId={SID} busy={false} onJumpToMessage={() => true} />);
         expect(await screen.findByText(/Couldn't list what this chat produced: disk unreadable/)).toBeInTheDocument();
-        expect(screen.queryByText(/Nothing yet/)).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /^Outputs/ })).toBeInTheDocument();
+    });
+
+    it('says GAIA cannot be reached instead of the raw "Failed to fetch" (#6588)', async () => {
+        mocked.getOutputs.mockRejectedValue(new TypeError('Failed to fetch'));
+        render(<OutputsSection sessionId={SID} busy={false} onJumpToMessage={() => true} />);
+        expect(await screen.findByText(/Couldn't list what this chat produced: GAIA can't be reached right now/)).toBeInTheDocument();
+        expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
     });
 });
 
@@ -166,5 +200,44 @@ describe('whenText', () => {
         expect(whenText('2026-10-16 17:00:00', now)).toBe('3 h ago');
         expect(whenText(null, now)).toBe('');
         expect(whenText('garbage', now)).toBe('');
+    });
+});
+
+describe('Outputs dates follow the interface language', () => {
+    afterEach(resetUiLocale);
+
+    it('dates an item older than a day in Arabic', () => {
+        const text = stripIsolates(whenText('2026-03-14 10:00:00', Date.parse('2026-10-16T20:10:00Z'), translator('ar')));
+        expect(text).toMatch(ARABIC_MONTH);
+        expect(text).not.toMatch(ENGLISH_MONTH);
+    });
+
+    it('shows an older item date in Arabic in an Arabic UI', async () => {
+        setUiLocale('ar');
+        mocked.getOutputs.mockResolvedValue({ session_id: SID, items: [item({ name: 'old.csv', created_at: '2025-03-14 10:00:00' })] });
+        const { container } = render(<OutputsSection sessionId={SID} busy={false} onJumpToMessage={() => true} />);
+        await screen.findByText('old.csv');
+        const list = stripIsolates(container.querySelector('.sp-list')!.textContent ?? '');
+        expect(list).toMatch(ARABIC_MONTH);
+        expect(list).not.toMatch(ENGLISH_MONTH);
+    });
+});
+
+describe('OutputsSection marks hidden characters in names', () => {
+    it('shows a right-to-left override in an output name as a code, and opens the real path', async () => {
+        mocked.getOutputs.mockResolvedValue({
+            session_id: SID,
+            items: [item({ name: 'invoice\u202Etxt.md', path: 'C:\\work\\invoice\u202Etxt.md' })],
+        });
+        render(<OutputsSection sessionId={SID} busy={false} onJumpToMessage={() => true} />);
+        await waitFor(() => expect(rows()).toHaveLength(1));
+        const name = rows()[0].querySelector('.sp-item-name')!;
+        expect(name.textContent).toBe('invoice[U+202E]txt.md');
+        expect(name.getAttribute('title')).toBe('C:\\work\\invoice[U+202E]txt.md');
+        expect(rows()[0].textContent).not.toContain('\u202E');
+        expect(screen.getByRole('button', { name: /invoice\[U\+202E\]txt\.md/ })).toBeInTheDocument();
+
+        fireEvent.click(within(rows()[0]).getByRole('button', { name: 'Open' }));
+        expect(mocked.openFileInApp).toHaveBeenCalledWith('C:\\work\\invoice\u202Etxt.md');
     });
 });
