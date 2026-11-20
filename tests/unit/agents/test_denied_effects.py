@@ -1512,6 +1512,9 @@ def test_with_no_way_to_ask_the_policy_every_delete_is_kept(tmp_path):
         (r'pip install "C:\My Wheels\a.whl"', r'pip install "C:\My Wheels\b.whl"'),
         ("pip install ./pkg-a", "pip install ./pkg-b"),
         ("pip install ./a/pkg[x]", "pip install ./b/pkg[x]"),
+        ('pip install "My Wheels/a.whl"', 'pip install "My Wheels/b.whl"'),
+        ("pip install w@1/a.whl", "pip install w@1/b.whl"),
+        ("pip install w@1/a.whl", "pip install w@2/a.whl"),
     ],
 )
 def test_the_same_program_on_something_else_is_another_action(
@@ -1547,6 +1550,13 @@ def test_the_same_program_on_something_else_is_another_action(
         ("pip install ./pkg[excel]", "pip install ./pkg"),
         (r'pip install "C:\My Wheels\pkg[x]"', r'pip install "C:\My Wheels\pkg"'),
         ('git tag -am "v1" v1', 'git tag -m "Release one" v1'),
+        ('pip install "./My Wheels/a.whl"', 'pip install "My Wheels/a.whl"'),
+        ('pip install "My Wheels/a.whl"', 'pip install "./My Wheels/a.whl"'),
+        ("pip install ./w@1/a.whl", "pip install w@1/a.whl"),
+        ('pip install "My Wheels/a.whl[x]"', 'pip install "./My Wheels/a.whl"'),
+        ("npm install ./w@1/pkg", "npm install w@1/pkg"),
+        ("pip install ./dist/a.whl", "pip install dist/a.whl"),
+        ("pip install git+https://h/r@v1", "pip install git+https://h/r@v2"),
     ],
 )
 def test_a_reworded_command_is_the_same_action(declined, later, tmp_path):

@@ -774,7 +774,8 @@ def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
 
 def _unpinned(word: str) -> str:
     """A package operand without its version, extras or markers."""
-    if "\\" in word or word.startswith((".", "/")) or re.match(r"[a-z]:", word):
+    relative = "/" in word and "://" not in word and not word.startswith("@")
+    if relative or "\\" in word or word.startswith(".") or re.match(r"[a-z]:", word):
         # A path keeps its spaces and ``@``; only its extras are dropped.
         return word.split("[", 1)[0]
     # A leading ``@`` is an npm scope, not a pin.
