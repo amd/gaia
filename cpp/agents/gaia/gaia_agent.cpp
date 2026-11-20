@@ -10,6 +10,7 @@
 #include <fstream>
 #include <algorithm>
 #include <iterator>
+#include <map>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -1086,6 +1087,78 @@ std::optional<std::string> GaiaAgent::failedScriptNote(const std::string& answer
            "result, why the script failed, and where its missing package is published.";
 }
 
+std::optional<std::string> GaiaAgent::testClaimNote(const std::string& answer, const std::vector<CallSeen>& calls) {
+    static const std::regex passClaim(
+        R"(\b(?:tests? (?:(?:all|now|both|still) ){0,2}pass(?:ed|es)?\b|all \d+ tests pass|)"
+        R"(tests? (?:are|were) (?:(?:all|now) ){0,2}(?:passing|green)|)"
+        R"(ran the tests?\b|by running (?:them|the tests?)\b))",
+        std::regex::icase);
+    if (!std::regex_search(answer, passClaim)) return std::nullopt;
+
+    static const std::regex runner(
+        R"(\b(?:pytest|py\.test|unittest|nose2|tox|ctest|jest|vitest|mocha|rspec|phpunit)\b|)"
+        R"(\b(?:go|cargo|dotnet|mvn|gradlew?|npm|yarn|pnpm|bun|deno|make|swift) (?:run )?(?:test|check)\b)",
+        std::regex::icase);
+    // A runner's own summary: "3 passed", "Ran 4 tests in 0.01s", "collected 2 items", "no tests ran".
+    static const std::regex summary(
+        R"(\b\d+ (?:passed|failed)\b|\bRan \d+ tests? in\b|\bcollected \d+ items?\b|no tests ran|No tests found)");
+    static const std::regex failure(
+        R"(\b[1-9]\d* (?:failed|errors?)\b|FAILED \(|\bRan 0 tests\b|no tests ran|collected 0 items|No tests found)");
+    // nlohmann sorts keys, so exit_code precedes the (possibly clipped) stdout.
+    static const std::regex exitCode(R"("exit_code":(-?\d+))");
+
+    struct Run {
+        size_t at;
+        bool passed;
+    };
+    std::map<std::string, Run> latest;  // a rerun of the same command replaces the earlier one
+    size_t lastChange = 0;
+    bool changed = false;
+    for (size_t i = 0; i < calls.size(); ++i) {
+        const auto& c = calls[i];
+        if ((c.name == "file_write" || c.name == "file_edit") && c.succeeded) {
+            lastChange = i;
+            changed = true;
+        }
+        if (c.name != "bash_execute" || !c.args.is_object() || !c.args.contains("command") ||
+            !c.args["command"].is_string()) {
+            continue;
+        }
+        const std::string command = c.args["command"].get<std::string>();
+        if (!std::regex_search(command, runner) && !std::regex_search(c.output, summary)) continue;
+        std::smatch m;
+        const bool exitedClean = !std::regex_search(c.output, m, exitCode) || m[1] == "0";
+        const bool timedOut = c.output.find("\"timed_out\":true") != std::string::npos;
+        latest[command] = {i, c.succeeded && exitedClean && !timedOut && !std::regex_search(c.output, failure)};
+    }
+
+    if (latest.empty()) {
+        return "Your answer says the tests pass, but no test run this turn showed it: a script that runs no tests "
+               "is not a test run. Run the project's tests (for example pytest or python -m unittest) and report "
+               "what they printed, or say they weren't run.";
+    }
+    bool anyPassed = false, passedAfterChange = false;
+    for (const auto& [command, run] : latest) {
+        if (!run.passed) continue;
+        anyPassed = true;
+        if (!changed || run.at > lastChange) passedAfterChange = true;
+    }
+    if (!anyPassed) {
+        // "3 pass, 1 still fails" after a failed run is the run reported honestly.
+        static const std::regex reportsFailure(
+            R"(\b(?:fail(?:s|ed|ing|ures?)?|do(?:es)?n't pass|do(?:es)? not pass|not (?:all )?pass)\b)",
+            std::regex::icase);
+        if (std::regex_search(answer, reportsFailure)) return std::nullopt;
+        return "Your answer says the tests pass, but the test run this turn didn't pass or ran no tests. Fix what "
+               "failed and run them again, or report the failures as they are.";
+    }
+    if (!passedAfterChange) {
+        return "Your answer says the tests pass, but files changed after the last passing test run, so it doesn't "
+               "cover the change. Run the tests again and report what they printed.";
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> GaiaAgent::zeroForAbsentNote(const std::string& answer, const std::vector<CallSeen>& calls) {
     const bool totalled = std::any_of(calls.begin(), calls.end(), [](const CallSeen& c) {
         return c.name == "file_read" && c.output.find("\"summary\"") != std::string::npos;
@@ -1845,11 +1918,13 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         });
     };
 
+    std::vector<CallSeen> testCalls;
+    for (const auto& c : calls) testCalls.push_back({c.name, c.args, c.output, c.succeeded});
+    const auto testNote = testClaimNote(answer, testCalls);
+    if (testNote) notes.push_back(*testNote);
     static const std::regex ranClaim(
-        R"(\b(I ran|I've run|I have run|ran the (tests?|script|command|program|code)|executed the|)"
-        R"(tests? (all )?pass(ed|es)?|all \d+ tests pass))",
-        std::regex::icase);
-    if (std::regex_search(answer, ranClaim) && !called({"bash_execute"}, true)) {
+        R"(\b(I ran|I've run|I have run|ran the (script|command|program|code)|executed the))", std::regex::icase);
+    if (!testNote && std::regex_search(answer, ranClaim) && !called({"bash_execute"}, true)) {
         notes.push_back("Your answer says a command or the tests ran, but no command ran "
                         "successfully in this request. Run it, or say it wasn't run.");
     }
