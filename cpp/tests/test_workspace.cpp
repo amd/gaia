@@ -371,6 +371,35 @@ TEST(WorkspaceTest, AChainOfRelativeLinksAndALoopAreFollowedOrRefused) {
 }
 #endif
 
+// A link that leads nowhere (here, to itself) is outside every folder, not read as the path it spells.
+TEST(WorkspaceTest, ALinkThatCannotBeFollowedIsOutside) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    InFolder in(d.work);
+    const fs::path loop = d.work / "loop";
+#ifdef _WIN32
+    const std::string make = "cmd /c mklink /J \"" + loop.string() + "\" \"" + loop.string() + "\" >nul 2>&1";
+    ASSERT_EQ(std::system(make.c_str()), 0) << make;
+#else
+    std::error_code made;
+    fs::create_symlink("loop", loop, made);
+    ASSERT_FALSE(made) << made.message();
+#endif
+    ASSERT_EQ(resolveWriteTarget((loop / "x.txt").string()), "") << "a link to itself leads nowhere";
+    const std::string cwd = d.work.string();
+    for (const char* through : {"cat loop/x.txt", "cat loop", "ls ./loop/a/../b"}) {
+        EXPECT_NE(ws.checkCommand(through), "") << through;
+        EXPECT_FALSE(staysInside(ws, through, cwd)) << through;
+    }
+    EXPECT_FALSE(ws.contains((loop / "x.txt").string()));
+    for (const char* fine : {"cat sub/x.txt", "ls sub"}) {
+        EXPECT_EQ(ws.checkCommand(fine), "") << fine;
+        EXPECT_TRUE(staysInside(ws, fine, cwd)) << fine;
+    }
+    std::error_code ec;
+    fs::remove(loop, ec);
+}
+
 TEST(WorkspaceTest, ALinkMadeAfterTheCheckIsCaughtWhenTheWriteRuns) {
     Dirs d;
     auto ws = std::make_shared<const Workspace>(std::vector<std::string>{d.work.string()});
@@ -415,7 +444,7 @@ TEST(WorkspaceTest, AJunctionThatLeadsOutMakesAWalkingReadAsk) {
     const fs::path junction = d.work / "sub" / "deps";
     // A junction needs no privilege, unlike a Windows symlink.
     const std::string mklink = "cmd /c mklink /J \"" + junction.string() + "\" \"" + d.other.string() + "\" >nul";
-    if (std::system(mklink.c_str()) != 0) GTEST_SKIP() << "mklink /J failed";
+    ASSERT_EQ(std::system(mklink.c_str()), 0) << mklink;
     for (const char* asks : {"grep -R x .", "cat sub/*"}) {
         EXPECT_FALSE(staysInside(ws, asks, cwd)) << asks;
     }

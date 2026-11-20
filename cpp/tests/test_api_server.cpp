@@ -8,6 +8,7 @@
 
 #include <gaia/agent.h>
 #include <gaia/api_server.h>
+#include <gaia/secrets.h>
 #include <gaia/session.h>
 
 #include <atomic>
@@ -22,6 +23,7 @@
 #include <vector>
 
 #include "support/mock_llm_server.h"
+#include "../src/masked_or_withheld.h"
 
 using namespace gaia;
 
@@ -29,6 +31,9 @@ namespace {
 
 // Shaped like a provider token, assembled so no scanner reads it as a real one.
 const std::string kFakeToken = std::string("ghp_") + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4";
+// A line grep prints from a .env file: no token pattern matches its value, only the file name gives it away.
+const std::string kEnvValue = "Plain-Value-42";
+const std::string kEnvLine = "./.env:3:API_KEY=" + kEnvValue;
 
 class ServedAgent : public Agent {
 public:
@@ -60,6 +65,13 @@ protected:
             "throws", "Fail with a token in the message",
             [](const json&) -> json { throw std::runtime_error("request with token " + kFakeToken + " was refused"); },
             {});
+        // Its validator throws past the registry, quoting a line a search printed from a credential file.
+        ToolInfo quoting;
+        quoting.name = "quotes_env";
+        quoting.description = "Fail before running, quoting a credential file line";
+        quoting.callback = [](const json&) -> json { return json{{"ran", true}}; };
+        quoting.validateArgs = [](const std::string&, const json&) -> json { throw std::runtime_error(kEnvLine); };
+        toolRegistry().registerTool(std::move(quoting));
     }
     std::string getSystemPrompt() const override { return "You are a served test agent."; }
 };
@@ -342,6 +354,31 @@ TEST(ApiServerTest, ToolRouteMasksSecretsInNestedOutputAndInErrors) {
     EXPECT_EQ(failed->status, 200);
     EXPECT_EQ(failed->body.find(kFakeToken.substr(4)), std::string::npos) << failed->body;
     EXPECT_NE(failed->body.find("[redacted]"), std::string::npos) << failed->body;
+}
+
+TEST(ApiServerTest, ToolRouteMasksAnEscapedErrorAsCommandOutput) {
+    ASSERT_NE(redactCredentials(kEnvLine).find(kEnvValue), std::string::npos)
+        << "the looser mask keeps it, so this test tells the two apart";
+    ServerOptions o;
+    o.exposeToolRoutes = true;
+    Harness h(o);
+    auto res = h.client().Post("/v1/tools/quotes_env", "{}", "application/json");
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->status, 500);
+    EXPECT_EQ(res->body.find(kEnvValue), std::string::npos) << res->body;
+    EXPECT_NE(json::parse(res->body)["error"]["message"].get<std::string>().find("Tool execution error"),
+              std::string::npos)
+        << res->body;
+}
+
+TEST(ApiServerTest, OutputIsWithheldWhenMaskingThrows) {
+    const auto throwing = [](json) -> json { throw std::runtime_error("mask failed"); };
+    EXPECT_FALSE(detail::maskedOrWithheld(throwing, json{{"key", kFakeToken}}).has_value())
+        << "nothing comes back, so nothing unmasked can be sent";
+    const auto masked = detail::maskedOrWithheld([](json v) { return redactToolOutput(std::move(v)); },
+                                                 json{{"note", "key=" + kFakeToken}});
+    ASSERT_TRUE(masked.has_value());
+    EXPECT_EQ(masked->dump().find(kFakeToken.substr(4)), std::string::npos) << masked->dump();
 }
 
 TEST(ApiServerTest, NonLoopbackWithoutKeyRefused) {

@@ -29,9 +29,32 @@ std::string spelled(const fs::path& abs) {
     return s;
 }
 
+bool isLink(const fs::file_status& st);
+
+// True when a name along @p p, as written, is a link or another reparse point.
+bool crossesLink(const fs::path& p) {
+    std::error_code ec;
+    const fs::path abs = fs::absolute(p, ec);
+    if (ec) return false;
+    fs::path at = abs.root_path();
+    for (const auto& name : abs.relative_path()) {
+        if (name.empty() || name == ".") continue;
+        if (name == "..") {
+            at = at.parent_path();
+            continue;
+        }
+        at /= name;
+        const fs::file_status st = fs::symlink_status(at, ec);
+        if (!ec && (isLink(st) || st.type() == fs::file_type::unknown)) return true;
+    }
+    return false;
+}
+
+// The path's real place, spelled for comparison; "" (under no folder) for a link that can't be followed.
 std::string normalized(const fs::path& p) {
     const std::string target = resolveWriteTarget(p.u8string());
     if (!target.empty()) return spelled(fs::u8path(target));
+    if (crossesLink(p)) return "";
     std::error_code ec;
     fs::path abs = fs::weakly_canonical(fs::absolute(p, ec), ec);
     if (ec) abs = fs::absolute(p).lexically_normal();
@@ -39,6 +62,7 @@ std::string normalized(const fs::path& p) {
 }
 
 bool under(const std::string& path, const std::string& root) {
+    if (path.empty() || root.empty()) return false;
     if (path == root) return true;
     if (root == "/") return true;
     return path.size() > root.size() && path.compare(0, root.size(), root) == 0 &&
@@ -359,7 +383,7 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
             inSystemDir(abs)) {
             continue;
         }
-        return refusal(word) + " It is a link that leads to " + abs + ".";
+        return refusal(word) + (abs.empty() ? " It is a link GAIA cannot follow." : " It is a link that leads to " + abs + ".");
     }
     return "";
 }
