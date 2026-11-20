@@ -125,9 +125,16 @@ def offenders(
 
 
 def _objdump_p(path: Path) -> str:
-    result = subprocess.run(
-        ["objdump", "-p", str(path)], capture_output=True, text=True, check=False
-    )
+    try:
+        result = subprocess.run(
+            ["objdump", "-p", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"objdump -p {path} did not finish in 120 s") from exc
     if result.returncode != 0:
         raise RuntimeError(f"objdump -p {path} failed: {result.stderr.strip()}")
     return result.stdout
