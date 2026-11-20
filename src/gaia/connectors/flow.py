@@ -785,12 +785,34 @@ async def revoke_provider_token(
     return result
 
 
-def nothing_to_revoke() -> Dict[str, Any]:
+#: Whether each OAuth provider has a revoke endpoint, mirroring its ``revoke_url``.
+#: Static so a disconnect can answer without the provider's client configured.
+HAS_REVOKE_ENDPOINT: Dict[str, bool] = {
+    "google": True,
+    "microsoft": False,
+    "microsoft_work": False,
+}
+
+
+def nothing_to_revoke(provider_id: str) -> Dict[str, Any]:
     """The revoke outcome for an account with no token stored: no live grant.
 
-    Reads nothing from the keyring, so it answers on one that refuses reads.
+    Matches what :func:`revoke_provider_token` reports for the same case, so a
+    provider with no revoke endpoint still says so. Reads nothing from the
+    keyring, so it answers on one that refuses reads.
     """
-    return {"revoke_supported": True, "revoked_remotely": True, "revoke_error": None}
+    if provider_id not in HAS_REVOKE_ENDPOINT:
+        return {
+            "revoke_supported": False,
+            "revoked_remotely": False,
+            "revoke_error": f"provider {provider_id!r} could not be resolved",
+        }
+    supported = HAS_REVOKE_ENDPOINT[provider_id]
+    return {
+        "revoke_supported": supported,
+        "revoked_remotely": supported,
+        "revoke_error": None,
+    }
 
 
 #: Where a user removes GAIA's access by hand, per OAuth provider id.

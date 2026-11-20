@@ -543,7 +543,7 @@ async def _revoke_one(
             account_type=acct.account_type,
         )
     elif refusal is not None:
-        result = nothing_to_revoke()
+        result = nothing_to_revoke(provider)
     else:
         result = await revoke_provider_token(provider, slot=acct.slot)
     remaining = await locked_write(

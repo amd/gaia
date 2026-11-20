@@ -303,12 +303,15 @@ def _outcome(result):
     }
 
 
-# What a secure keyring reports for a slot with no token: no grant to revoke.
-NOTHING_TO_REVOKE = {
-    "revoke_supported": True,
-    "revoked_remotely": True,
-    "revoke_error": None,
-}
+def _nothing_to_revoke(provider):
+    """What a secure keyring reports for a slot with no token: Google has no
+    grant left to revoke; Microsoft has no revoke endpoint at all."""
+    supported = provider == "google"
+    return {
+        "revoke_supported": supported,
+        "revoked_remotely": supported,
+        "revoke_error": None,
+    }
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
@@ -320,7 +323,7 @@ def test_nothing_stored_is_idempotent(provider, refused, monkeypatch, no_provide
     assert recorder.items == {}
     assert result["remaining_accounts"] == 0
     assert _writes(recorder) == []
-    assert _outcome(result) == NOTHING_TO_REVOKE
+    assert _outcome(result) == _nothing_to_revoke(provider)
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
@@ -329,7 +332,7 @@ def test_nothing_stored_default_account_asks_for_no_revoke(
 ):
     recorder = refused({})
     result = asyncio.run(api.revoke_connection_async(provider))
-    assert _outcome(result) == NOTHING_TO_REVOKE
+    assert _outcome(result) == _nothing_to_revoke(provider)
     assert _writes(recorder) == []
 
 
@@ -343,7 +346,7 @@ def test_an_indexed_account_whose_token_is_gone_asks_for_no_revoke(
 
     result = asyncio.run(api.revoke_connection_async(provider, all_accounts=True))
 
-    assert _outcome(result) == NOTHING_TO_REVOKE
+    assert _outcome(result) == _nothing_to_revoke(provider)
     assert _index_section(provider) is None
     assert _writes(recorder) == []
 
@@ -528,6 +531,68 @@ def test_the_cli_tells_the_user_where_to_revoke(
     assert "provider access revoked" not in out
 
 
+_NO_REVOKE_API = (
+    "locally. This provider has no API to revoke access remotely — remove GAIA "
+    "from your account's connected-apps page if you want to fully revoke it."
+)
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("kind", ["weak", "uninspectable", "secure"])
+def test_the_cli_line_for_nothing_stored_matches_every_keyring(
+    provider, kind, monkeypatch, capsys
+):
+    from gaia.connectors import providers
+    from gaia.connectors.cli import _handle_disconnect
+
+    if kind == "secure":
+        # The real revoke path resolves the provider, so give it a client.
+        monkeypatch.setattr(providers, "_registry", {})
+        for prefix in ("GAIA_GOOGLE", "GAIA_MICROSOFT", "GAIA_MICROSOFT_WORK"):
+            monkeypatch.setenv(f"{prefix}_CLIENT_ID", "test-client-id")
+            monkeypatch.setenv(f"{prefix}_CLIENT_SECRET", "test-client-secret")
+        _activate(monkeypatch, StrongKeyring())
+    elif kind == "weak":
+        _activate(monkeypatch, PlaintextKeyring())
+    else:
+        _activate(monkeypatch, _UninspectableChain(StrongKeyring()))
+    assert (store.keyring_read_refusal() is None) == (kind == "secure")
+
+    args = argparse.Namespace(connector_id=provider, account=None, all_accounts=True)
+    assert _handle_disconnect(args) == 0
+
+    out = capsys.readouterr().out
+    if provider == "google":
+        assert out == "Disconnected google (provider access revoked).\n"
+    else:
+        assert out == f"Disconnected {provider} {_NO_REVOKE_API}\n"
+
+
+def test_the_static_revoke_map_matches_each_provider_class():
+    from gaia.connectors.providers.google import GoogleOAuthProvider
+    from gaia.connectors.providers.microsoft import MicrosoftOAuthProvider
+    from gaia.connectors.registry import REGISTRY
+
+    specs = [s for s in REGISTRY.all() if s.type == "oauth_pkce"]
+    seen = set()
+    for spec in specs:
+        provider_id = spec.oauth_provider_ref or spec.id
+        if spec.oauth_impl == "microsoft":
+            provider = MicrosoftOAuthProvider(
+                client_id="id",
+                client_secret="secret",
+                tenant="common",
+                provider_id=provider_id,
+                default_tenant=spec.oauth_tenant,
+            )
+        else:
+            assert provider_id == "google", provider_id
+            provider = GoogleOAuthProvider(client_id="id", client_secret="secret")
+        assert flow_mod.HAS_REVOKE_ENDPOINT[provider_id] is bool(provider.revoke_url)
+        seen.add(provider_id)
+    assert seen == set(flow_mod.HAS_REVOKE_ENDPOINT)
+
+
 def test_the_ui_route_reports_the_local_only_outcome(
     refused, monkeypatch, no_provider_call
 ):
@@ -554,3 +619,33 @@ def test_the_ui_route_reports_the_local_only_outcome(
     assert name == "connector.disconnected"
     assert payload["revoke_supported"] is False
     assert "https://myaccount.google.com/permissions" in payload["revoke_error"]
+
+
+@pytest.mark.parametrize("provider", ["microsoft", "microsoft_work"])
+def test_the_ui_route_says_microsoft_has_no_revoke_api_with_nothing_stored(
+    provider, refused, monkeypatch, no_provider_call
+):
+    """The Agent UI shows its no-revoke-API notice for exactly this payload."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from gaia.ui.routers import connectors as router_mod
+
+    events = []
+
+    async def _emit(name, payload):
+        events.append((name, payload))
+
+    monkeypatch.setattr(router_mod._emitter, "emit", _emit)
+    refused({})
+    app = FastAPI()
+    app.include_router(router_mod.router)
+
+    resp = TestClient(app).delete(f"{router_mod.router.prefix}/{provider}?all=true")
+
+    assert resp.status_code == 204, resp.text
+    (name, payload), *_ = events
+    assert name == "connector.disconnected"
+    assert payload["revoke_supported"] is False
+    assert payload["revoked_remotely"] is False
+    assert payload["revoke_error"] is None
