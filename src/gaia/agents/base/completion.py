@@ -42,8 +42,8 @@ SIDE_EFFECT_PATHS = {
     "take_screenshot": ("file_path", "output_path", "path"),
     "text_to_speech": ("file_path", "output_path", "audio_path"),
     "generate_image": ("file_path", "output_path", "image_path"),
-    "generate_music": ("audio_path",),
-    "generate_sound_effect": ("audio_path",),
+    "generate_music": ("audio_path", "saved_to"),
+    "generate_sound_effect": ("audio_path", "saved_to"),
 }
 _EXEC_TOOLS = frozenset({"run_python", "execute_python_file", "run_shell_command"})
 #: Tools that replace a stretch of text the call itself gives, old and new.
