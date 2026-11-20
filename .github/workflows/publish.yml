@@ -1052,7 +1052,7 @@ jobs:
 
           The GAIA agent itself is attached as `gaia-agent-<os>-<arch>`, built from this candidate's commit. This candidate's `gaia init` and `gaia hub install gaia` install it from here rather than from the Agent Hub, and say so if it is missing.
 
-          On Windows x64, Linux x64 and Apple Silicon, the terminal installers and the one-line installer also put `gaiacpp`, the native GAIA agent attached as `gaiacpp-<os>-<arch>`, beside `gaia-cli`, and the terminal runs it in place of `gaia-agent`. Elsewhere the terminal runs `gaia-agent`.
+          On Windows x64, Linux x64 and Apple Silicon, the terminal installers and the one-line installer also put `gaiacpp`, the native GAIA agent attached as `gaiacpp-<os>-<arch>`, beside `gaia-cli`. The terminal runs `gaia-agent` until you switch with `/agent gaiacpp`; elsewhere it always runs `gaia-agent`.
 
           ### One-line installer
 

@@ -674,7 +674,7 @@ gaiacpp_asset_name() {
     esac
 }
 
-# A gaiacpp left by an earlier install would run in place of gaia-agent beside
+# A gaiacpp left by an earlier install would run for a user who chose it, beside
 # a gaia-cli from another release, so it goes whenever this release's does not land.
 remove_stale_gaiacpp() {
     if [ -e "$GAIA_BIN/gaiacpp" ] || [ -L "$GAIA_BIN/gaiacpp" ]; then
@@ -1052,7 +1052,7 @@ main() {
     # directory, which is where the hub looks for it first.
     install_flagship_agent
 
-    # The native agent the hub runs in place of gaia-agent, from the same release.
+    # The native agent the hub can switch to (/agent gaiacpp), from the same release.
     install_gaiacpp
 
     # Show next steps

@@ -630,7 +630,7 @@ function Write-AgentInstallRecord {
     return $true
 }
 
-# A gaiacpp.exe left by an earlier install would run in place of gaia-agent
+# A gaiacpp.exe left by an earlier install would run for a user who chose it
 # beside a gaia-cli from another release, so it goes whenever this release's
 # does not land.
 function Remove-StaleGaiacpp {
@@ -942,7 +942,7 @@ function Main {
     # the hub looks for its agent first.
     $flagshipInstalled = Install-FlagshipAgent -Pin $pin
 
-    # The native agent the hub runs in place of gaia-agent, from the same release.
+    # The native agent the hub can switch to (/agent gaiacpp), from the same release.
     Install-Gaiacpp
 
     # Show next steps
