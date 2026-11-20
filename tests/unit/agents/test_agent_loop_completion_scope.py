@@ -957,6 +957,25 @@ def test_a_shell_cat_that_showed_the_whole_file_is_a_read_back(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "command",
+    [
+        "type out.toml",
+        "Get-Content out.toml",
+        "gc out.toml",
+        "Get-Content -Path out.toml",
+        "Get-Content -LiteralPath 'out.toml'",
+        "Get-Content -Raw out.toml",
+        'get-content "out.toml" -Raw',
+        "TYPE out.toml",
+    ],
+)
+def test_a_windows_show_of_the_whole_file_is_a_read_back(tmp_path, command):
+    """type / Get-Content / gc are how Windows shows a file; they count like cat."""
+    gaps = _script_writes_then_shell_shows(tmp_path, command)
+    assert not any("read back" in g for g in gaps)
+
+
+@pytest.mark.parametrize(
     "command, stdout, extra",
     [
         ("cat out.toml | head -1", None, {}),
@@ -964,6 +983,10 @@ def test_a_shell_cat_that_showed_the_whole_file_is_a_read_back(tmp_path):
         ("head -1 out.toml", None, {}),
         ("cat out.toml", "takeoff = 53\n", {}),
         ("cat out.toml", None, {"output_truncated": True}),
+        ("Get-Content out.toml -TotalCount 1", None, {}),
+        ("Get-Content -Head 1 out.toml", None, {}),
+        ("gc out.toml | Select-Object -First 1", None, {}),
+        ("type out.toml", "takeoff = 53\n", {}),
     ],
 )
 def test_a_shell_line_that_did_not_show_all_of_it_is_no_read_back(

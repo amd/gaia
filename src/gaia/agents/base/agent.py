@@ -1243,8 +1243,14 @@ class _ClosingOverflow(RuntimeError):
 # Stands in for a call the loop stopped before it ran, so the transcript
 # accounts for every id the model asked for.
 _UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
-# A shell line that only prints one file: `cat path`, nothing piped or chained.
-_PLAIN_CAT = re.compile(r"""^\s*cat\s+("[^"]+"|'[^']+'|[^\s|;&<>`$()'"]+)\s*$""")
+# A shell line that only prints one whole file, nothing piped or chained: `cat`,
+# or on Windows `type` / `Get-Content` / `gc` (optionally `-Path`/`-LiteralPath`, `-Raw`).
+_SHOW_ONE_FILE = re.compile(
+    r"""^\s*(?:cat|type|gc|get-content)(?:\s+-raw)?(?:\s+-(?:literal)?path)?"""
+    r"""\s+(?P<path>"[^"]+"|'[^']+'|[^\s|;&<>`$()'"-][^\s|;&<>`$()'"]*)"""
+    r"""(?:\s+-raw)?\s*$""",
+    re.IGNORECASE,
+)
 _REPEAT_NOT_RUN_NOTE = "Not run — the same call was just repeated."
 
 #: Longest repeating cycle of calls the loop guard recognises (A, B, A, B, …).
@@ -12042,21 +12048,21 @@ Do NOT wrap conversational replies in JSON.
     def _verify_shown_file(
         self, evidence: Any, tool_name: str, args: dict, result: Any
     ) -> None:
-        """A shell ``cat`` that printed all of one file is a full read-back of it.
+        """A shell line that printed all of one file is a full read-back of it.
 
-        Without this a file a script wrote, then shown whole with ``cat``,
-        was still reported as never read back.
+        ``cat``, or ``type`` / ``Get-Content`` / ``gc`` on Windows. Without this
+        a file a script wrote, then shown whole, was still reported as never read back.
         """
         command = args.get("command")
         if tool_name != "run_shell_command" or not isinstance(command, str):
             return
-        found = _PLAIN_CAT.match(command)
+        found = _SHOW_ONE_FILE.match(command)
         shown = result.get("stdout") if isinstance(result, dict) else None
         if not found or not isinstance(shown, str) or result.get("output_truncated"):
             return
         # The folder the line ran in: a relative path means that one, not the project root.
         ran_in = result.get("cwd") or args.get("working_directory")
-        key = evidence.key(found.group(1).strip("\"'"), ran_in)
+        key = evidence.key(found.group("path").strip("\"'"), ran_in)
         if key.startswith(("\\\\", "//")):
             return  # a network share: no round trip from the agent loop
         target = Path(key)
