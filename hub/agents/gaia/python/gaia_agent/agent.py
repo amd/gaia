@@ -438,10 +438,9 @@ class GaiaAgent(
     SKILL_DIRS: ClassVar[List[str]] = _bundled_skill_roots()
     SKILL_MANIFEST: ClassVar[Optional[str]] = _locate_agent_manifest()
 
-    # Loaded skill bodies share ~5% of the model's window, and on a 64K-or-
-    # smaller window only fully shown skills send their own tools: on a 64K
-    # local model, two or three skills plus their tools took each request from
-    # ~23K to ~40K tokens and instruction following dropped.
+    # Loaded skill bodies share ~5% of the model's window (their tools stay
+    # listed): on a 64K local model, two or three full skill bodies took each
+    # request from ~23K to ~40K tokens and instruction following dropped.
     SKILL_CONTEXT_BUDGET: ClassVar[bool] = True
 
     # Declared, not acquired: the user consents once via `gaia connectors`, and

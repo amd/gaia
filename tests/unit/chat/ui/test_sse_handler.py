@@ -529,6 +529,18 @@ class TestPrettyPrintJsonToolResults:
         assert event["title"] == "Result"
         assert event["success"] is True
 
+    def test_a_tool_result_names_the_tool_it_answers(self, handler):
+        """A client following one tool's results needs the name on the result too."""
+        handler.print_tool_usage("slide-decks/build_deck_from_markdown")
+        _drain(handler)
+        handler.pretty_print_json(
+            {"status": "ok", "path": "C:/decks/ferry.pptx"}, title="Result"
+        )
+        event = _drain(handler)[0]
+        assert event["type"] == "tool_result"
+        assert event["tool"] == "slide-decks/build_deck_from_markdown"
+        assert event["path"] == "C:/decks/ferry.pptx"
+
     def test_error_status_marks_success_false(self, handler):
         data = {"status": "error", "message": "File not found"}
         handler.pretty_print_json(data, title="Result")

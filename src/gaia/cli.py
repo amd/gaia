@@ -1282,6 +1282,14 @@ def build_parser():
         "the turn (default: config default_model, else the agent's)",
     )
     parser.add_argument(
+        "--yes",
+        "-y",
+        dest="print_yes",
+        action="store_true",
+        help="With -p: download the run's model without asking when it is not "
+        "downloaded yet (non-interactive/CI use)",
+    )
+    parser.add_argument(
         "--output-format",
         dest="print_output_format",
         choices=["text", "json"],
@@ -5038,6 +5046,7 @@ def main():
         "--disallowed-tools": bool(args.print_disallowed_tools),
         "--no-web": args.print_no_web,
         "--no-skills": args.print_no_skills,
+        "--yes": args.print_yes,
     }
     if args.print_prompt is None and any(print_only.values()):
         used = ", ".join(flag for flag, given in print_only.items() if given)
@@ -5087,6 +5096,7 @@ def main():
                 disallowed_tools=args.print_disallowed_tools or (),
                 no_web=args.print_no_web,
                 no_skills=args.print_no_skills,
+                yes=args.print_yes,
             )
         )
 
@@ -9008,13 +9018,19 @@ def _diag_gaia_processes(gaia_dir):
     except (OSError, ValueError, AttributeError) as e:
         notes.append(f"lemonade: unreadable {state_path}: {type(e).__name__}")
 
-    pid_path = gaia_dir / "backend.pid"
-    try:
-        found.append(("ui backend", int(pid_path.read_text().strip()), None))
-    except FileNotFoundError:
-        pass
-    except (OSError, ValueError) as e:
-        notes.append(f"ui backend: unreadable {pid_path}: {type(e).__name__}")
+    # One record per desktop app (backend-pids/<app pid>.pid); backend.pid is
+    # what older apps wrote.
+    pid_dir = gaia_dir / "backend-pids"
+    pid_paths = [gaia_dir / "backend.pid"]
+    if pid_dir.is_dir():
+        pid_paths += sorted(pid_dir.glob("*.pid"))
+    for pid_path in pid_paths:
+        try:
+            found.append(("ui backend", int(pid_path.read_text().strip()), None))
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as e:
+            notes.append(f"ui backend: unreadable {pid_path}: {type(e).__name__}")
     return found, notes
 
 

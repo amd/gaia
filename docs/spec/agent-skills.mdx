@@ -485,6 +485,20 @@ check goes by the argument's name, so a path in an argument named otherwise
 or `open_read` before using it. A tool that writes calls `check_write` or
 `open_write` itself.
 
+These calls are also how the turn's own checks learn what a skill tool did:
+
+- **A saved file counts as written by the turn** once it has really changed:
+  one written through `check_write` / `open_write`, or one whose absolute path
+  the result reports (`output_path`, `file_path`, `path`, `saved_to`) and that
+  was modified during the call. Without either, a turn that asked for
+  `deck.pptx` ends "incomplete" with the file on disk.
+- **A check tool that opens a file through `check_read` / `open_read` has read
+  it back.** The model is not asked to read the file again after it.
+- **A check that finds problems is a successful call.** Return a status of your
+  own (`"status": "errors_found"`, with `"ok": false` and the findings) and the
+  agent treats the findings as the result. `"status": "error"`, or an `error`
+  field, means the tool itself could not run.
+
 `gaia skill audit` matches these calls against the manifest. A declared
 `run_program("soffice")` passes. An undeclared one, or one naming a program the
 manifest doesn't list, is flagged. The file functions need no `filesystem`
@@ -787,16 +801,16 @@ The loaded body pins for the next few turns, like an explicit `load_skill`.
 A skill body that helps a 200K-context cloud model can crowd a 64K local model
 out of its own instructions. On one such model, loading two or three skills
 with their tools took each request from about 23K to 40K tokens, and the
-model followed its instructions less well. So the flagship agent sizes what
-skills put in the prompt to the model's context window. Other agents opt in
+model followed its instructions less well. So the flagship agent sizes the
+skill text in the prompt to the model's context window. Other agents opt in
 with `SKILL_CONTEXT_BUDGET = True`.
 
-| Window | Skill body budget | Auto-loads per turn | Tools of skills not shown in full |
-|---|---|---|---|
-| 16K | 1,000 tokens (the floor) | 1 | not sent |
-| 32K | ~1,600 tokens | 1 | not sent |
-| 64K | ~3,300 tokens | 1 | not sent |
-| 120K and up, or Claude (200K) | 6,000 tokens (the ceiling) | 2 | sent, as before |
+| Window | Skill body budget | Auto-loads per turn |
+|---|---|---|
+| 16K | 1,000 tokens (the floor) | 1 |
+| 32K | ~1,600 tokens | 1 |
+| 64K | ~3,300 tokens | 1 |
+| 120K and up, or Claude (200K) | 6,000 tokens (the ceiling) | 2 |
 
 - **Budget.** 5% of the window, between 1,000 and 6,000 tokens. The window is
   the one the conversation history is sized from. A Lemonade cloud model is
@@ -821,19 +835,14 @@ with `SKILL_CONTEXT_BUDGET = True`.
 
   Calling `load_skill` on a summarized skill shows it in full straight away,
   summarizing another if it has to.
-- **Tools.** On a 64K window or smaller, the tools a loaded skill provides
-  (its `tools.py`, registered as `<skill>/<tool>`) are only sent while its
-  body is shown in full. They stay registered, so a call still runs, and
-  `load_skill` sends them again with the body. On any window, a summarized
-  skill's `tools_required` no longer pull their tools into the turn, as for a
-  skill hidden as irrelevant. This narrows the dynamic tool
-  list only: with `GAIA_DYNAMIC_TOOLS=0` every registered tool is sent, as
-  before.
+- **Tools are never withdrawn.** Only text shrinks. Every loaded skill keeps
+  its tools on the tool list whether its body is shown in full or summarized:
+  its `tools_required` and the tools it provides itself (its `tools.py`,
+  registered as `<skill>/<tool>`), on every window size.
 - **Diagnostics.** Each decision is logged at debug level under `[skills]`.
   The turn's result and its `GAIA_TURN_LOG` record carry `skill_budget` —
   the window and where it came from, the budget, the bodies shown in full and
-  summarized, the tokens they take, the withheld tools, and the auto-load
-  limit — and the Agent UI's context endpoint reports the same.
+  summarized, the tokens they take, and the auto-load limit — and the Agent UI's context endpoint reports the same.
 
 ## Learned changes: the effective skill vs. the shipped one
 

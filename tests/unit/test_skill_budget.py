@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Loaded-skill bodies and skill tools scaled to the model's context window.
+"""Loaded-skill bodies scaled to the model's context window; their tools stay.
 
 The pure parts (budget per window, ranking, fitting) are tested directly. The
 render path drives the real ``Agent`` methods through a stub that never boots
@@ -27,8 +27,8 @@ from gaia.agents.base.skill_budget import (
     rank_skills,
     skill_body_budget,
     skill_budget_report,
-    withhold_hidden_skill_tools,
 )
+from gaia.agents.base.tools import tool
 
 from .skills_helpers import isolated_manager, write_skill_dir
 
@@ -375,72 +375,150 @@ def test_an_always_on_skill_renders_in_full_on_a_small_window(
     assert agent._active_tool_filter == ["read_file", "voice/speak"]
 
 
-# ── skill-provided tools ─────────────────────────────────────────────────
+# ── a loaded skill keeps its tools, summarized or not ───────────────────
+
+_PROVIDED_TOOL = """from gaia.agents.base.tools import tool
 
 
-def _tool_skill(name, tools):
-    return SimpleNamespace(
-        name=name,
-        body="x",
-        tool_names=list(tools),
-        namespaced_tool_name=lambda tool, n=name: f"{n}/{tool}",
+@tool
+def {func}(text: str) -> dict:
+    \"\"\"Probe tool of {name}.\"\"\"
+    return {{"status": "success"}}
+"""
+
+
+def _tool_skill_text(name: str, func: str) -> str:
+    """A ~2,000-token skill (over a 16K budget) that provides tool *func*."""
+    return _skill_text(name, 1_560).replace(
+        "\n---\n",
+        f"\nmetadata:\n  gaia:\n    tools:\n      - name: {func}\n"
+        f"        description: Probe tool of {name}\n"
+        "        parameters:\n          text: {type: string, required: true}\n"
+        "        returns: {type: object}\n---\n",
+        1,
     )
 
 
-def _tool_agent(window, full):
-    skills = {
-        "alpha": _tool_skill("alpha", ["fetch"]),
-        "beta": _tool_skill("beta", ["parse", "emit"]),
-    }
-    return SimpleNamespace(
-        _loaded_skills=skills,
-        _skill_budget=SkillBudget(
-            window=window,
-            window_source="test",
-            budget=skill_body_budget(window),
-            small_window=is_small_window(window),
-        ),
-        _active_skill_names=lambda: frozenset(full),
-    )
+class _BudgetAgent(Agent):
+    """A real agent on the skill budget that picks one tool per turn."""
+
+    SKILL_CONTEXT_BUDGET = True
+
+    def _get_system_prompt(self):
+        return "probe"
+
+    def _register_tools(self):
+        @tool
+        def read_file(file_path: str) -> dict:
+            """Probe reader."""
+            return {"status": "success"}
+
+    def _select_tools_for_turn(self, user_input):
+        return ["read_file"]
+
+    def _select_skills_for_turn(self, user_input):
+        return sorted(self.loaded_skills)
+
+    def _skill_relevance(self):
+        return self.scores
 
 
-TURN_TOOLS = ["read_file", "alpha/fetch", "beta/parse", "beta/emit"]
+@pytest.fixture
+def budget_agent(tmp_path, monkeypatch):
+    """``make(window, names)``: a real agent whose skills each provide a tool."""
+    from unittest.mock import patch
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    saved = dict(_TOOL_REGISTRY)
+    _TOOL_REGISTRY.clear()
+
+    def make(window, names):
+        root = tmp_path / f"skills-{window}-{len(names)}"
+        for name in names:
+            func = f"{name.replace('-', '_')}_run"
+            write_skill_dir(
+                root,
+                name,
+                _tool_skill_text(name, func),
+                tools=_PROVIDED_TOOL.format(func=func, name=name),
+            )
+        monkeypatch.setattr(
+            skill_budget, "resolve_skill_window", lambda _agent: (window, "test")
+        )
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            agent = _BudgetAgent(silent_mode=True, skip_lemonade=True)
+        agent.scores = {}
+        agent._skill_manager = isolated_manager(tmp_path, agent_skill_dirs=[root])
+        return agent
+
+    try:
+        yield make
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
 
 
-def test_a_small_window_sends_only_the_tools_of_fully_shown_skills():
-    agent = _tool_agent(65_536, full={"alpha"})
-    assert withhold_hidden_skill_tools(agent, list(TURN_TOOLS)) == [
-        "read_file",
-        "alpha/fetch",
-    ]
-    assert agent._skill_budget.withheld_tools == ["beta/emit", "beta/parse"]
+def _sent_tools(agent):
+    """Names in the ``tools=`` schemas built from this turn's filter."""
+    schemas = agent._build_openai_tool_schemas(filter_to=agent._active_tool_filter)
+    return [entry["function"]["name"] for entry in schemas]
 
 
-def test_a_large_window_sends_every_skill_tool():
-    agent = _tool_agent(200_000, full={"alpha"})
-    assert withhold_hidden_skill_tools(agent, list(TURN_TOOLS)) == TURN_TOOLS
-    assert agent._skill_budget.withheld_tools == []
-
-
-def test_no_dynamic_tool_filter_is_never_narrowed():
-    agent = _tool_agent(16_384, full=set())
-    assert withhold_hidden_skill_tools(agent, None) is None
-
-
-def test_the_turn_tool_filter_drops_a_summarized_skills_tools(make_agent):
-    agent = make_agent(65_536)
+@pytest.mark.parametrize("window", [16_384, 65_536])
+def test_a_summarized_skill_keeps_the_tools_it_provides(budget_agent, window):
+    agent = budget_agent(window, ["alpha", "beta"])
     agent.scores = {"alpha": 0.9, "beta": 0.1}
     agent.load_skill("alpha")
     agent.load_skill("beta")
-    agent._loaded_skills["beta"] = _ToolsOf(agent._loaded_skills["beta"], ["parse"])
     agent._skill_requests = []
     agent._refresh_active_skill_filter("about alpha")
-    agent.tools_this_turn = ["read_file", "beta/parse"]
-
     agent._refresh_active_tool_filter("about alpha")
 
-    assert agent._active_tool_filter == ["read_file"]
-    assert skill_budget_report(agent)["withheld_tools"] == ["beta/parse"]
+    report = skill_budget_report(agent)
+    assert report["full"] == ["alpha"] and report["summarized"] == ["beta"]
+    assert "BODY-BETA" not in agent.get_skills_system_prompt()
+    for listed in (agent._active_tool_filter, _sent_tools(agent)):
+        assert "alpha/alpha_run" in listed
+        assert "beta/beta_run" in listed  # summarized, still callable
+
+
+@pytest.mark.parametrize("window", [16_384, 65_536])
+def test_a_mid_turn_load_that_summarizes_another_keeps_its_tools(budget_agent, window):
+    agent = budget_agent(window, ["alpha", "beta"])
+    agent.scores = {"alpha": 0.9, "beta": 0.1}
+    agent.load_skill("alpha")
+    agent.load_skill("beta")
+    agent._skill_requests = []
+    agent._refresh_active_skill_filter("about alpha")
+    agent._refresh_active_tool_filter("about alpha")
+
+    agent.load_skill("beta")  # beta now full, alpha summarized
+
+    assert skill_budget_report(agent)["summarized"] == ["alpha"]
+    assert {"alpha/alpha_run", "beta/beta_run"} <= set(agent._active_tool_filter)
+    agent._refresh_active_tool_filter("next turn")
+    assert {"alpha/alpha_run", "beta/beta_run"} <= set(agent._active_tool_filter)
+
+
+def test_many_skills_on_a_16k_window_shrink_text_but_keep_every_tool(budget_agent):
+    names = [f"skill-{i}" for i in range(8)]
+    agent = budget_agent(16_384, names)
+    for name in names:
+        agent.load_skill(name)
+    agent._skill_requests = []
+    for query in ("first", "second", "third"):
+        agent._refresh_active_skill_filter(query)
+        agent._refresh_active_tool_filter(query)
+
+        report = skill_budget_report(agent)
+        assert len(report["full"]) == 1
+        assert len(report["summarized"]) == len(names) - 1
+        prompt = agent.get_skills_system_prompt()
+        assert prompt.count("--- SKILL:") == 1
+        expected = {f"{n}/{n.replace('-', '_')}_run" for n in names}
+        assert expected <= set(agent._active_tool_filter)
+        assert expected <= set(_sent_tools(agent))
 
 
 class _ToolsOf:

@@ -4,8 +4,9 @@
 """Trusting a folder's guidance stays a step only the user takes.
 
 Every way an agent could reach ``gaia trust add`` or the trust store from its
-shell or Python tools is refused outright, with no approval prompt, in every
-mode. Classification only: process launches are stubbed to fail.
+shell or Python tools is refused outright, with no approval prompt. Full
+access is the exception: there those tools run what they are given.
+Classification only: process launches are stubbed to fail.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from .test_skill_commands_stay_with_the_user import _agent, _refusal
 
 layout = _skill_gate.layout
 
-MODES = ["interactive", "unattended", "full_access"]
+MODES = ["interactive", "unattended"]
 
 SHELL_SPELLINGS = [
     "gaia trust add",
@@ -85,6 +86,24 @@ def test_python_that_trusts_a_folder_is_refused_before_any_prompt(layout, code, 
     assert "never ask the user to approve it" in result["hint"]
     assert agent.ran == []
     assert agent.console.asked == []
+
+
+@pytest.mark.parametrize("command", SHELL_SPELLINGS)
+def test_full_access_does_not_refuse_the_command(layout, command):
+    agent = _mode(layout, "full_access")
+
+    assert _refusal(agent, command) is None
+
+
+@pytest.mark.parametrize("code", PYTHON_SPELLINGS)
+def test_full_access_runs_the_python_as_written(layout, code):
+    agent = _mode(layout, "full_access")
+
+    result = agent._execute_tool("run_python", {"code": code})
+
+    # The probe tool records the call: nothing here starts a real process.
+    assert result.get("executed") is not False, result
+    assert agent.ran == [("run_python", code)]
 
 
 @pytest.mark.parametrize(

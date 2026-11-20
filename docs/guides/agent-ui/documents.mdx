@@ -157,8 +157,10 @@ GAIA's own folders, the same in every chat, wait behind one line.
     path; hover over the path for where it came from. **Add folder** gives it another folder, picked
     the same way as from a new chat's folder;
     **Remove** takes one away. A removed folder is refused by every file and
-    shell tool, even under full access and even inside a wider folder, until
-    you add it back. A document attached to the chat is removed from the
+    shell tool, even inside a wider folder, until you add it back. Under full
+    access the file tools still refuse it, and no command or Python code runs
+    in it, but a command or code that spells out a path inside it is not
+    checked. A document attached to the chat is removed from the
     document bar instead, which also takes it out of the chat's search.
   - **Permissions:** Ask or Full access, the same setting as the shield in
     the message box. It covers this chat only; new chats follow **Settings →

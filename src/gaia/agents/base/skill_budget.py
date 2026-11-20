@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Scale loaded-skill bodies and skill-provided tools to the model's context.
+"""Scale loaded-skill bodies to the model's context window.
 
 A skill body that helps a 200K-context cloud model can crowd a 64K local model
 out of its own instructions: on one such model, loading two or three skills and
@@ -22,12 +22,9 @@ sized from the active model's context window:
   that says how to get the rest back.
 * **Auto-load** — on a window of :data:`SMALL_WINDOW_TOKENS` or less, at most
   :data:`SMALL_WINDOW_AUTOLOADS` skill is auto-loaded per turn.
-* **Tools** — on the same small windows, the tools a loaded skill *provides*
-  (its ``tools.py``, registered as ``<skill>/<tool>``) are left out of the
-  turn's tool list unless its body is shown in full. They stay registered, so
-  a call still runs, and ``load_skill`` brings them back with the body. Only
-  the dynamic tool filter is narrowed: with ``GAIA_DYNAMIC_TOOLS`` off every
-  registered tool is sent, as before.
+* **Tools** — never narrowed. Every loaded skill keeps its tools, required
+  and its own ``<skill>/<tool>`` ones, on the turn's tool list whether its body
+  is shown in full or summarized: only the text shrinks.
 
 Opt-in per agent with :attr:`Agent.SKILL_CONTEXT_BUDGET`; every other agent's
 prompt is unchanged. The plan for the current turn is kept on the agent and
@@ -54,8 +51,7 @@ SKILL_BUDGET_FLOOR = 1_000
 #: largest hub skills (~2.1K-2.8K each) fit inside. Reached at a 120K window.
 SKILL_BUDGET_CEILING = 6_000
 
-#: A window this size or smaller auto-loads one skill per turn and only sends
-#: the tools of skills whose bodies are shown in full.
+#: A window this size or smaller auto-loads one skill per turn.
 SMALL_WINDOW_TOKENS = 65_536
 
 #: Most skills auto-loaded per turn on a small window.
@@ -119,9 +115,6 @@ class SkillBudget:
     used_tokens: int = 0
     #: Tokens the selected bodies would have taken with nothing summarized.
     wanted_tokens: int = 0
-    #: Tools provided by loaded skills not shown in full, kept out of the
-    #: turn's tool list (small windows with a dynamic tool filter only).
-    withheld_tools: List[str] = field(default_factory=list)
     #: Most skills auto-loaded per turn, or ``None`` for no window-based limit.
     autoload_limit: Optional[int] = None
 
@@ -333,40 +326,6 @@ SUMMARY_HEADER = (
 )
 
 
-def withhold_hidden_skill_tools(
-    agent: Any, tool_filter: Optional[List[str]]
-) -> Optional[List[str]]:
-    """*tool_filter* without the provided tools of skills not shown in full.
-
-    Small windows only, and only a real filter: ``None`` sends the whole
-    registry, which this never narrows.
-    """
-    plan = getattr(agent, "_skill_budget", None)
-    if tool_filter is None or plan is None or not plan.small_window:
-        return tool_filter
-    skills = getattr(agent, "_loaded_skills", None) or {}
-    active = agent._active_skill_names()
-    hidden = sorted(
-        skill.namespaced_tool_name(tool)
-        for name, skill in skills.items()
-        if active is not None and name not in active
-        for tool in skill.tool_names
-    )
-    if hidden != plan.withheld_tools:
-        if hidden:
-            log.debug(
-                "[skills] withholding tools of skills not shown in full "
-                "(window %s): %s",
-                plan.window,
-                hidden,
-            )
-        plan.withheld_tools = hidden
-    if not hidden:
-        return tool_filter
-    withheld = set(hidden)
-    return [name for name in tool_filter if name not in withheld]
-
-
 def skill_budget_report(agent: Any) -> Optional[Dict[str, Any]]:
     """This turn's skill budget for diagnostics, or ``None`` when not in use."""
     plan = getattr(agent, "_skill_budget", None)
@@ -398,6 +357,5 @@ __all__ = [
     "skill_budget_report",
     "summarized_skills",
     "summary_line",
-    "withhold_hidden_skill_tools",
     "window_budget",
 ]
