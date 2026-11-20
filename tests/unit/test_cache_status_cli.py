@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from gaia import cli
+from gaia import cache_cli
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def _status(monkeypatch, available, caplog):
         Context7Service, "check_availability", classmethod(lambda cls: available)
     )
     with caplog.at_level(logging.DEBUG):
-        cli.handle_cache_command(argparse.Namespace(cache_action="status"))
+        cache_cli.handle(argparse.Namespace(cache_action="status"))
 
 
 def test_unavailable_context7_is_marked_optional(
@@ -167,7 +167,7 @@ def test_a_non_junction_reparse_point_is_still_counted(tmp_path, monkeypatch):
         lambda p, *a, **k: _Placeholder() if str(p) == str(folder) else real_lstat(p),
     )
     assert _Placeholder.st_reparse_tag != stat_mod.IO_REPARSE_TAG_MOUNT_POINT
-    assert cli._is_link(folder) is False
+    assert cache_cli._is_link(folder) is False
 
 
 def test_a_folder_that_cannot_be_read_is_counted_not_dropped(
