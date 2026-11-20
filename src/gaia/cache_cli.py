@@ -119,7 +119,7 @@ def handle(args):
         print("❌ Error: No cache action specified")
         print("Available actions: status, clear")
         print("Run 'gaia cache --help' for more information")
-        return
+        sys.exit(1)
 
     from gaia.mcp.context7_cache import Context7Cache, Context7RateLimiter
     from gaia.mcp.external_services import Context7Service

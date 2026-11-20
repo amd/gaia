@@ -220,3 +220,10 @@ def test_a_file_removed_while_listing_is_reported_and_the_rest_still_shows(
         ["Total", "100", "B", "1", "file"],
     ]
     assert "Context7" in out
+
+
+def test_no_action_names_the_actions_and_exits_nonzero(capsys):
+    with pytest.raises(SystemExit) as stopped:
+        cache_cli.handle(argparse.Namespace(cache_action=None))
+    assert stopped.value.code == 1
+    assert "status, clear" in capsys.readouterr().out
