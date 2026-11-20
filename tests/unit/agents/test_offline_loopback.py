@@ -8,6 +8,7 @@ might read differently, a second command on the same line — is refused.
 """
 
 import ast
+import json
 from pathlib import Path
 
 import pytest
@@ -200,7 +201,6 @@ class TestShellCommands:
             "CONDA INSTALL x",
             r"C:\Ruby\bin\gem.cmd install x",
             "yarn.cmd add x",
-            "Mvn.CMD -v",
             '"conda" install x',
             "echo ok\nmvn -q package",
         ],
@@ -226,6 +226,32 @@ class TestShellCommands:
     )
     def test_local_package_manager_commands_still_run(self, command):
         assert not _refused("run_shell_command", command=command), command
+
+
+#: Commands the native agent judges the same way; cpp/tests/test_security.cpp reads it too.
+_SHARED_TABLE = json.loads(
+    (
+        Path(__file__).resolve().parents[2] / "fixtures" / "offline_commands.json"
+    ).read_text(encoding="utf-8")
+)
+
+
+class TestSharedWithNativeAgent:
+    """Spliced program names and explicit offline flags, judged as the native agent does."""
+
+    @pytest.mark.parametrize(
+        "command", _SHARED_TABLE["refused"] + _SHARED_TABLE["refused_harmless"]
+    )
+    def test_refused(self, command):
+        assert _refused("run_shell_command", command=command), command
+
+    @pytest.mark.parametrize("command", _SHARED_TABLE["allowed"])
+    def test_allowed(self, command):
+        assert not _refused("run_shell_command", command=command), command
+
+    def test_an_allowed_command_inside_a_shell_is_still_judged_whole(self):
+        assert _refused("run_shell_command", command="bash -c 'mvn -o package'")
+        assert _refused("run_shell_command", command="cmd /c mvn -o package")
 
 
 class TestToolArguments:

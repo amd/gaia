@@ -365,7 +365,9 @@ $env:GAIA_ALLOWED_PATHS = "C:\evals\task-17"; gaia-cli
   commands outside full access (under it the shell and Python tools run in any
   folder). The agent's own scratch folder stays writable.
 - **It does not sandbox code.** A `run_python` script or a shell command the
-  agent runs can open any file your OS account can read. This setting confines
+  agent runs can open any file your OS account can read (code whose text names a
+  credential folder or file is refused, but code that works a path out while it
+  runs is not caught). This setting confines
   GAIA's tools, not arbitrary code — for real isolation, run the agent as a
   separate OS user, in a container, or in a VM, and keep answer keys where that
   account cannot read them.
@@ -4092,7 +4094,7 @@ Options accepted by every `gaia-cli` command:
 | `--full-access` | off | Run every tool without asking, with the shell running any command — arbitrary code execution. Subprocess agents only (the flagship when the TUI launches it); refused over the background service. A banner stays on screen while it is on, and `/full-access off` ends it mid-session. See [Full access](#full-access). The retired `--bypass-permissions` fails naming this flag. |
 | `--use-claude` | off | Answer with Anthropic's Claude API instead of local Lemonade. **Your conversation is sent to Anthropic.** Needs `ANTHROPIC_API_KEY`; the local server is not started and first-run setup is skipped, so RAG, memory and the code index (which embed through Lemonade) need `gaia init --skip-chat-model` later |
 | `--claude-model <id>` | `claude-sonnet-5` | The Claude model `--use-claude` runs on. Only valid with `--use-claude`; an id the agent does not offer is refused before the TUI opens. `""` lets the agent pick |
-| `--dev` | off | Developer mode: per-turn timings, steps, tool arguments and output on screen, connection diagnostics in `~/.gaia/logs/gaia-tui.log`, and DEBUG logging for agents the TUI launches. `--debug` is an alias |
+| `--dev` | off | Developer mode: turns on the loopback control API (same as `--control`) on an interactive launch, connection diagnostics in `~/.gaia/logs/gaia-tui.log`, and DEBUG logging for agents the TUI launches. The screen is the same as a normal launch; detail is behind `Ctrl+O` and in `--trace`. `--debug` is an alias |
 | `--control`, `--control-port <n>` | off | The loopback control API — see [TUI Control API](#tui-control-api) |
 | `--trace[=<path>]` | off | Record every agent event to a JSONL file — see [TUI Event Trace](#tui-event-trace) |
 
@@ -4193,7 +4195,7 @@ token.
 ```bash
 gaia-cli --control                 # auto-assign a port
 gaia-cli --control-port 8770       # explicit port (implies --control)
-gaia-cli --control --dev           # input counts, state changes, and waits; no input contents
+gaia-cli --dev                     # same as --control, plus input counts, state changes and waits in the TUI log
 ```
 
 <Note>
@@ -4206,7 +4208,7 @@ gaia-cli --control --dev           # input counts, state changes, and waits; no 
 |------|------|---------|-------------|
 | `--control` | flag | off | Start the control API on an auto-assigned loopback port. |
 | `--control-port` | integer | `0` | Bind a specific port. Implies `--control`. `0` auto-assigns. Port `4001` is reserved and rejected. |
-| `--dev` | flag | off | Show developer details and log input counts, state transitions, and wait outcomes to the TUI log; input contents are omitted. `--debug` remains an alias. |
+| `--dev` | flag | off | Turn the control API on (like `--control`) and log input counts, state transitions, and wait outcomes to the TUI log; input contents are omitted. Changes nothing on screen. `--debug` remains an alias. |
 
 On start the TUI writes `~/.gaia/tui/control.json` (mode `0600`) holding the
 pid, port, and token, and removes it on exit. Clients find the TUI by reading
@@ -4271,7 +4273,7 @@ payloads**.
 ```bash
 gaia-cli --trace                       # ~/.gaia/traces/<timestamp>-<agent>.jsonl
 gaia-cli --trace=run.jsonl             # a path you choose
-gaia-cli --trace --dev                 # record to a file AND show it on screen
+gaia-cli --trace --dev                 # record to a file AND drive the session over the control API
 ```
 
 The path is printed on startup (`trace → …`). An unwritable path is a startup
@@ -4304,9 +4306,10 @@ JSON string would replace each bad byte with `U+FFFD` and lose what went wrong.
 A reader must check all three keys. Events are flushed one at a time, so a run
 that crashes mid-turn still leaves everything it received.
 
-`--trace` and `--dev` are independent: `--dev` chooses what is rendered on
-screen, `--trace` chooses what is written to disk. Use both together to watch a
-run and keep it.
+`--trace` and `--dev` are independent: `--dev` turns on the control API and the
+TUI's diagnostic log without changing the screen, `--trace` chooses what is
+written to disk. Use both together to drive a run over the control API and keep
+a record of it.
 
 <Note>
   This records the agent's externally visible behaviour — tool calls, arguments,

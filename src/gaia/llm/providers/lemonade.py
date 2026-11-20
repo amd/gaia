@@ -135,6 +135,8 @@ def _defang_think_tags(text: str) -> str:
 TOOL_CALL_PROGRESS_INTERVAL_S = 3.0
 #: Argument characters before a tool call is long enough to report on.
 TOOL_CALL_PROGRESS_MIN_CHARS = 1500
+#: Seconds between live drafts of a tool call's arguments.
+TOOL_CALL_DRAFT_INTERVAL_S = 0.25
 #: Seconds between word counts while the model reasons.
 REASONING_PROGRESS_INTERVAL_S = 1.0
 
@@ -1129,6 +1131,10 @@ class LemonadeProvider(LLMClient):
     #: its arguments arrive as silent deltas, minutes of nothing to show.
     tool_call_progress: Optional[Callable[[str, int], None]] = None
 
+    #: Called as (tool_name, arguments_so_far) while a tool call streams, so a
+    #: client can show what is being written before the call is complete.
+    tool_call_draft: Optional[Callable[[str, str], None]] = None
+
     #: Called with the reasoning word count so far while a thinking model
     #: reasons. Its text is held back a line at a time, so a one-paragraph
     #: thought otherwise shows nothing until it is finished.
@@ -1542,6 +1548,7 @@ class LemonadeProvider(LLMClient):
         thought = ""  # reasoning held back until a line is whole (see below)
         tool_calls: dict[int, dict] = {}
         next_progress = time.perf_counter()
+        next_draft = next_progress
         next_reasoning_progress: Optional[float] = None
         finish_reason = ""
         usage_seen = False
@@ -1574,6 +1581,16 @@ class LemonadeProvider(LLMClient):
                 ):
                     self._last_ttft_seconds = time.perf_counter() - request_started
                 _accumulate_tool_calls(tool_calls, delta.get("tool_calls"))
+                # tool_calls stays empty when a frame holds only non-dict fragments.
+                if (
+                    delta.get("tool_calls")
+                    and tool_calls
+                    and self.tool_call_draft is not None
+                    and time.perf_counter() >= next_draft
+                ):
+                    latest = tool_calls[max(tool_calls)]["function"]
+                    self.tool_call_draft(latest["name"], latest["arguments"])
+                    next_draft = time.perf_counter() + TOOL_CALL_DRAFT_INTERVAL_S
                 if (
                     delta.get("tool_calls")
                     and self.tool_call_progress is not None

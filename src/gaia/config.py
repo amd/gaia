@@ -249,6 +249,9 @@ class GaiaConfig:
         hybrid_policy: How readily ``hybrid`` uses the cheap model:
             ``quality`` (default) or ``balanced``, which also sends
             medium-difficulty code changes to it.
+        reduced_motion: Turn off the terminal UI's animations — the shimmer on
+            the live status line, a pending prompt's pulse, and the spinner.
+            ``GAIA_TUI_REDUCED_MOTION=1`` does the same for one launch.
     """
 
     profile: str = "chat"
@@ -281,6 +284,7 @@ class GaiaConfig:
     hybrid_classifier_model: Optional[str] = None
     hybrid_classifier_timeout: int = 15
     hybrid_policy: str = "quality"
+    reduced_motion: bool = False
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None

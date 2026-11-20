@@ -23,7 +23,7 @@ func TestSkillsLinesAreCommands(t *testing.T) {
 
 // The flagship answers /skills itself, so the line goes out as a turn.
 func TestSkillsAddGoesToTheFlagship(t *testing.T) {
-	m := NewChatModel(&queryCapturingClient{}, "gaia", "", false)
+	m := NewChatModel(&queryCapturingClient{}, "gaia", "")
 	m.width, m.height = 100, 30
 
 	updated, cmd := m.submit("/skills add https://github.com/acme/skills")
@@ -40,7 +40,7 @@ func TestSkillsAddGoesToTheFlagship(t *testing.T) {
 
 func TestSkillsRefusedOnAnUnsupportedAgent(t *testing.T) {
 	c := &queryCapturingClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "email", "")
 	m.width, m.height = 100, 30
 
 	updated, _ := m.submit("/skills add acme/skills")

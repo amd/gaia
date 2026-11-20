@@ -2,10 +2,12 @@ package client
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/event"
 )
 
 func TestFlagshipModelOverrideReachesSubprocessWithoutMutatingCatalog(t *testing.T) {
@@ -164,18 +166,25 @@ func TestDevModeForwardsDevArgsToTheChild(t *testing.T) {
 		name    string
 		devArgs []string
 		dev     bool
+		traced  bool
 		want    []string
 	}{
-		{"off, so the child argv is untouched", []string{"--dev"}, false, []string{"--json-events"}},
-		{"on, so the child goes verbose too", []string{"--dev"}, true, []string{"--json-events", "--dev"}},
-		{"on but the agent has no dev mode", nil, true, []string{"--json-events"}},
+		{"off, so the child argv is untouched", []string{"--dev"}, false, false, []string{"--json-events"}},
+		{"on, so the child goes verbose too", []string{"--dev"}, true, false, []string{"--json-events", "--dev"}},
+		{"on but the agent has no dev mode", nil, true, false, []string{"--json-events"}},
+		{"traced, so the child logs at DEBUG too", []string{"--dev"}, false, true, []string{"--json-events", "--dev"}},
+		{"traced and on, the flag goes once", []string{"--dev"}, true, true, []string{"--json-events", "--dev"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := catalog.Agent{
 				ID: "gaia", BinaryPath: self,
 				BinaryArgs: []string{"--json-events"}, DevArgs: tc.devArgs,
 			}
-			c, err := ForAgent(agent, ForAgentOptions{Dev: tc.dev})
+			opts := ForAgentOptions{Dev: tc.dev}
+			if tc.traced {
+				opts.Trace = testTrace(t)
+			}
+			c, err := ForAgent(agent, opts)
 			if err != nil {
 				t.Fatalf("ForAgent: %v", err)
 			}
@@ -342,4 +351,14 @@ func TestSubprocessFullAccessStillReachesAgent(t *testing.T) {
 	if !c.(*SubprocessClient).FullAccessAtLaunch() {
 		t.Fatal("subprocess full access was dropped")
 	}
+}
+
+func testTrace(t *testing.T) *event.TraceWriter {
+	t.Helper()
+	w, err := event.NewTraceWriter(filepath.Join(t.TempDir(), "trace.jsonl"))
+	if err != nil {
+		t.Fatalf("NewTraceWriter: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	return w
 }

@@ -333,7 +333,7 @@ TEST(InternetRefusalTest, PackageManagersAndBuildToolsGoOnlineHoweverTheyAreName
           // A full path, a quoted path, a Windows suffix or another case runs the same program.
           "C:\\tools\\Conda.EXE install x", "\"C:\\Program Files\\dotnet\\dotnet.exe\" restore",
           "/usr/local/bin/pip3 install x", "pip.exe install x", "NPM.CMD install", "CONDA INSTALL x",
-          "C:\\Ruby\\bin\\gem.cmd install x", "yarn.cmd add x", "Mvn.CMD -v", "c''onda install x",
+          "C:\\Ruby\\bin\\gem.cmd install x", "yarn.cmd add x", "c''onda install x",
           "\"conda\" install x", "echo ok\nmvn -q package"}) {
         EXPECT_NE(internetRefusal(sh, {{"command", online}}), "") << online;
     }
@@ -341,6 +341,34 @@ TEST(InternetRefusalTest, PackageManagersAndBuildToolsGoOnlineHoweverTheyAreName
                               "npm test", "cargo build", "conda list", "gem list", "pip list", "echo mvnfoo"}) {
         EXPECT_EQ(internetRefusal(sh, {{"command", local}}), "") << local;
     }
+}
+
+// The table the Python runtime's tests read too, so both refuse and allow the same commands.
+TEST(InternetRefusalTest, SplicedNamesAndOfflineFlagsJudgedAsThePythonAgentDoes) {
+    std::ifstream in(fs::path(GAIA_REPO_FIXTURES_DIR) / "offline_commands.json");
+    ASSERT_TRUE(in) << "tests/fixtures/offline_commands.json";
+    const json table = json::parse(in);
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    ASSERT_FALSE(table["refused"].empty());
+    ASSERT_FALSE(table["allowed"].empty());
+    ASSERT_FALSE(table["refused_harmless"].empty());
+    for (const auto& list : {table["refused"], table["refused_harmless"]}) {
+        for (const auto& c : list) {
+            EXPECT_NE(internetRefusal(sh, {{"command", c}}), "") << c.get<std::string>();
+        }
+    }
+    for (const auto& c : table["allowed"]) {
+        EXPECT_EQ(internetRefusal(sh, {{"command", c}}), "") << c.get<std::string>();
+    }
+}
+
+TEST(InternetRefusalTest, ARefusalQuotesTheCommandAsAsked) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    // The original command is what the refusal quotes, not the copy the check read.
+    const std::string why = internetRefusal(sh, {{"command", "mvn -o package && npm install"}});
+    EXPECT_NE(why.find("mvn -o package && npm install"), std::string::npos) << why;
 }
 
 TEST(SplitShellCommandTest, SegmentsAndWords) {

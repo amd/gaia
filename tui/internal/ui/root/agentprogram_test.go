@@ -84,7 +84,7 @@ func programSession(t *testing.T, f programFixture, choice string) (FlagshipMode
 	}
 	agent := cat.Get(catalog.FlagshipID)
 	c := &nullClient{}
-	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, false, true).WithAgentPrograms()
+	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, true).WithAgentPrograms()
 	m := NewFlagshipModel(*agent, false).WithCatalog(cat).WithSessionsDir(t.TempDir()).
 		WithLocalPreflight(preflight.LocalOptions{Binary: agent.BinaryPath})
 	m.programs = f.resolve

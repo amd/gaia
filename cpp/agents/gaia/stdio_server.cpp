@@ -16,6 +16,7 @@
 #include <gaia/http_client.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
+#include <gaia/workspace.h>
 
 #include "gaia_agent.h"
 
@@ -327,12 +328,10 @@ std::string workingFolderUtf8() {
 }
 
 bool editIsInside(const std::string& target, const std::vector<std::string>& roots) {
-    if (target.empty()) return false;
-    std::error_code ec;
-    const fs::path absolute = fs::absolute(fs::u8path(target), ec);
-    if (ec) return false;
-    const fs::path resolved = fs::weakly_canonical(absolute, ec);
-    if (ec) return false;
+    // Judged where the write lands, past every link and junction, even one to a file not there yet.
+    const std::string landing = resolveWriteTarget(target);
+    if (landing.empty()) return false;
+    const fs::path resolved = fs::u8path(landing);
     if (landsWhereCodeRuns(resolved)) return false;
     const std::string key = pathKey(resolved);
     for (const auto& r : roots) {
@@ -815,13 +814,19 @@ json StdioServer::runTurn(const std::string& query) {
     return terminal;
 }
 
+// A fresh conversation starts with nothing pre-approved: the "always" answers went with the old one.
+void StdioServer::clearConversation() {
+    agent_.clearHistory();
+    grants_->clearAll();
+}
+
 void StdioServer::runQuery(const std::string& query) {
     json terminal;
     try {
         if (cancelled_) {
             terminal = {{"type", "final"}, {"answer", ""}};
         } else if (query == kClearQuery) {
-            agent_.clearHistory();
+            clearConversation();
             terminal = {{"type", "final"}, {"answer", "conversation_cleared"}};
         } else if (query == kMemoryDumpQuery) {
             terminal = {{"type", "final"}, {"answer", dumps(memoryDump())}};
@@ -884,7 +889,7 @@ int StdioServer::run() {
             }
             if (item.kind == Item::Stop) break;
             if (item.kind == Item::Clear) {
-                agent_.clearHistory();
+                clearConversation();
                 continue;
             }
             if (item.kind == Item::Reject) {

@@ -77,7 +77,7 @@ ONLINE_SERVICE_TOOLS = frozenset(
 #: Commands that go online with no URL in sight: a remote, a package index, an API.
 #: Kept in step with the ``online`` pattern in cpp/src/security.cpp. Build tools
 #: that resolve dependencies from a remote repository on nearly every run (mvn,
-#: gradle) count whatever their arguments.
+#: gradle) count whatever their arguments, unless ``_explicitly_offline`` lets one through.
 _ONLINE_COMMAND_RE = re.compile(
     r"(?:^|[;&|(`]|\b(?:then|do)\s)\s*(?:sudo\s+)?"
     r"(?:git(?:\s+-{1,2}[\w-]+(?:[ =](?!-)\S+)?)*\s+"
@@ -113,6 +113,14 @@ _ONLINE_COMMAND_RE = re.compile(
     r"|gh\s|curl\b|wget\b|ssh\b|scp\b|iwr\b|irm\b|invoke-(?:webrequest|restmethod)\b)",
     re.IGNORECASE,
 )
+
+#: The quote, backslash and caret splices a shell drops from a word before running it.
+_SPLICE_RE = re.compile(r"['\"\\^]")
+_QUOTE_CARET_RE = re.compile(r"['\"^]")
+#: What an explicitly offline command may not hold: quotes, expansions, a URL, a socket path.
+_OFFLINE_UNSAFE_RE = re.compile(r"['\"$%!`]|://|/dev/(?:tcp|udp)/")
+#: Build goals and tasks that publish, which an offline flag does not keep local.
+_PUBLISHING_RE = re.compile(r"deploy|publish|upload|release|scm:|wagon:", re.IGNORECASE)
 
 _LOCALHOST = "localhost"
 
@@ -354,19 +362,74 @@ def _unwrap(tokens: List[str]) -> Tuple[List[str], bool]:
     return tokens, assigned
 
 
+def _bare(word: str) -> str:
+    """A word as the shell looks it up: bash drops quotes and backslashes, cmd.exe drops ``^``."""
+    return _SPLICE_RE.sub("", word)
+
+
 def _mentions_online(words: List[str]) -> bool:
-    # A full path, a quoted name or a Windows suffix still runs the program.
-    if words:
-        words = [_program(words[0]), *words[1:]]
-    return _ONLINE_COMMAND_RE.search(" ".join(words)) is not None
+    # A full path, a quoted name or a Windows suffix still runs the program, and so
+    # does a spliced one: c''onda, co"n"da, c\onda and co^nda are all conda.
+    if not words:
+        return False
+    # Backslashes kept in one spelling, so C:\Tools\co^nda.exe still reads as a path.
+    unquoted = [_QUOTE_CARET_RE.sub("", w) for w in words]
+    for spelled in (words, unquoted, [_bare(w) for w in words]):
+        joined = " ".join([_program(spelled[0]), *spelled[1:]])
+        if _ONLINE_COMMAND_RE.search(joined) is not None:
+            return True
+    return False
+
+
+def _explicitly_offline(segment: str) -> bool:
+    """One command a documented flag keeps off the network.
+
+    ``mvn -o``, ``mvn -v``, ``gradle --offline``, ``gradle --version``,
+    ``npm ci/install --offline`` and ``pip install --no-index``; only those
+    exact flags count. Still checked: anything quoted or expanded, a URL, a
+    requirements file, a wrapper (mvnw and gradlew download a build tool
+    first), and a goal that publishes. Kept in step with ``explicitlyOffline``
+    in cpp/src/security.cpp.
+    """
+    if _OFFLINE_UNSAFE_RE.search(segment):
+        return False
+    words = segment.replace("^", "").split()
+    if not words:
+        return False
+    program = _program(words[0])
+    rest = words[1:]
+    version_only = len(rest) == 1 and rest[0] in ("-v", "--version")
+    publishes = any(_PUBLISHING_RE.search(w) for w in rest)
+    if program == "mvn":
+        return version_only or (("-o" in rest or "--offline" in rest) and not publishes)
+    if program == "gradle":
+        return version_only or ("--offline" in rest and not publishes)
+    if program == "npm":
+        return (
+            len(rest) > 1 and rest[0] in ("ci", "install", "i") and "--offline" in rest
+        )
+    if re.fullmatch(r"(?:python[0-9.]*|py)", program) and rest[:1] == ["-m"]:
+        if len(rest) < 2 or rest[1].lower() != "pip":
+            return False
+        rest = rest[2:]
+    elif not re.fullmatch(r"pip[0-9.]*", program):
+        return False
+    if rest[:1] != ["install"] or "--no-index" not in rest:
+        return False
+    # A requirements or constraints file can name a URL this check cannot see.
+    return not any(
+        w.startswith(("-r", "-c", "--requirement", "--constraint")) for w in rest
+    )
 
 
 def _segment_goes_online(segment: str, depth: int) -> bool:
+    if depth == 0 and _explicitly_offline(segment):
+        return False
     tokens, assigned = _unwrap(_tokens(segment))
     if not tokens:
         return False
     program, rest = _program(tokens[0]), tokens[1:]
-    if program in _SHELLS:
+    if program in _SHELLS or _program(_bare(tokens[0])) in _SHELLS:
         for idx, arg in enumerate(rest):
             if arg.lower() in _SHELL_COMMAND_FLAGS and idx + 1 < len(rest):
                 return _command_goes_online(" ".join(rest[idx + 1 :]), depth + 1)

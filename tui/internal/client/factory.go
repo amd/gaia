@@ -149,9 +149,10 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		}
 		// Appended, never mutated in place: BinaryArgs belongs to the catalog
 		// entry, and appending to it directly would let a full slice alias the
-		// catalog's backing array and leak --dev into the next launch.
+		// catalog's backing array and leak --dev into the next launch. A traced
+		// launch is a debugging one too, so it gets the agent's DEBUG log.
 		args := agent.BinaryArgs
-		if opts.Dev && len(agent.DevArgs) > 0 {
+		if (opts.Dev || opts.Trace != nil) && len(agent.DevArgs) > 0 {
 			args = append(append([]string{}, args...), agent.DevArgs...)
 		}
 		if opts.FullAccess {

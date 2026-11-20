@@ -60,7 +60,7 @@ func (c *permissionClient) FullAccessAtLaunch() bool { return c.launchFullAccess
 func liveModel(t *testing.T) (ChatModel, *permissionClient) {
 	t.Helper()
 	c := &permissionClient{}
-	m := NewChatModel(c, "gaia", "", false)
+	m := NewChatModel(c, "gaia", "")
 	m.width, m.height = 100, 30
 	return m, c
 }
@@ -345,7 +345,7 @@ func TestFullAccessOnATransportWithoutAChannel(t *testing.T) {
 // manual toggle.
 func TestLaunchFlagShowsTheBannerImmediately(t *testing.T) {
 	c := &permissionClient{launchFullAccess: true}
-	m := NewChatModel(c, "gaia", "", false)
+	m := NewChatModel(c, "gaia", "")
 	m.width, m.height = 100, 30
 
 	if !m.fullAccess {
@@ -460,7 +460,7 @@ func savedFullAccess(t *testing.T, path string) bool {
 func TestAlwaysSavesButStillAsksBeforeTurningOn(t *testing.T) {
 	path := configAt(t)
 	c := &permissionClient{}
-	m := NewChatModel(c, "gaia", "", false)
+	m := NewChatModel(c, "gaia", "")
 
 	updated, _ := m.submit("/full-access always")
 	m = updated.(ChatModel)
@@ -483,7 +483,7 @@ func TestAlwaysSavesButStillAsksBeforeTurningOn(t *testing.T) {
 
 func TestNeverClearsThePreference(t *testing.T) {
 	path := configAt(t)
-	m := NewChatModel(&permissionClient{}, "gaia", "", false)
+	m := NewChatModel(&permissionClient{}, "gaia", "")
 
 	updated, _ := m.submit("/full-access always")
 	_, _ = updated.(ChatModel).submit("/full-access never")
@@ -497,7 +497,7 @@ func TestNeverClearsThePreference(t *testing.T) {
 // not quietly do the other's job.
 func TestNeverLeavesTheCurrentSessionAloneAndSaysSo(t *testing.T) {
 	configAt(t)
-	m := NewChatModel(&permissionClient{}, "gaia", "", false)
+	m := NewChatModel(&permissionClient{}, "gaia", "")
 
 	updated, _ := m.submit("/full-access")
 	updated, _ = updated.(ChatModel).submit("/full-access confirm")
@@ -524,7 +524,7 @@ func TestAFailedSaveIsReported(t *testing.T) {
 	// A directory where the config file should be: writing there always fails.
 	t.Setenv("GAIA_CONFIG_FILE", dir)
 
-	m := NewChatModel(&permissionClient{}, "gaia", "", false)
+	m := NewChatModel(&permissionClient{}, "gaia", "")
 	updated, _ := m.submit("/full-access always")
 	m = updated.(ChatModel)
 
@@ -536,7 +536,7 @@ func TestAFailedSaveIsReported(t *testing.T) {
 
 func TestTheTurnOnPromptMentionsMakingItPermanent(t *testing.T) {
 	configAt(t)
-	m := NewChatModel(&permissionClient{}, "gaia", "", false)
+	m := NewChatModel(&permissionClient{}, "gaia", "")
 	updated, _ := m.submit("/full-access")
 
 	explained := updated.(ChatModel).messages[len(updated.(ChatModel).messages)-1].Content
@@ -547,7 +547,7 @@ func TestTheTurnOnPromptMentionsMakingItPermanent(t *testing.T) {
 
 func TestTheRetiredBypassCommandPointsAtTheNewName(t *testing.T) {
 	c := &permissionClient{}
-	m := NewChatModel(c, "gaia", "", false)
+	m := NewChatModel(c, "gaia", "")
 	for _, cmd := range []string{"/bypass", "/bypass on", "/bypass confirm", "/bypass off"} {
 		updated, _ := m.submit(cmd)
 		got := updated.(ChatModel)
@@ -561,7 +561,7 @@ func TestTheRetiredBypassCommandPointsAtTheNewName(t *testing.T) {
 }
 
 func TestASavedPreferenceNoticeReachesTheTranscript(t *testing.T) {
-	m := NewChatModel(&permissionClient{}, "gaia", "", false).WithNotice("[!] prompts are ON")
+	m := NewChatModel(&permissionClient{}, "gaia", "").WithNotice("[!] prompts are ON")
 	if last := m.messages[len(m.messages)-1].Content; last != "[!] prompts are ON" {
 		t.Errorf("notice not shown: %q", last)
 	}

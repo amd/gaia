@@ -8,6 +8,7 @@
 #include <gaia/tool_registry.h>
 
 #include <atomic>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -244,6 +245,51 @@ TEST(DocumentIndexTest, AFolderIndexSkipsALinkThatLeadsOut) {
     ASSERT_EQ(indexed["status"], "success") << indexed.dump();
     ASSERT_EQ(indexed["indexed"].size(), 1u) << indexed.dump();
     EXPECT_NE(indexed["indexed"][0]["file"].get<std::string>().find("policy.txt"), std::string::npos);
+}
+
+// A folder link needs no privilege (a junction on Windows), so this one never skips.
+TEST(DocumentIndexTest, AFolderIndexDoesNotWalkIntoAFolderLink) {
+    TempDir inside, outside;
+    inside.write("policy.txt", "Remote work requires manager approval.");
+    outside.write("credentials.txt", "aws_secret_access_key = abc");
+    fs::create_directories(outside.path / "deeper");
+    std::ofstream(outside.path / "deeper" / "more.txt") << "token = xyz";
+    const fs::path link = inside.path / "linked";
+#ifdef _WIN32
+    const std::string make = "cmd /c mklink /J \"" + link.string() + "\" \"" + outside.path.string() + "\" >nul 2>&1";
+    ASSERT_EQ(std::system(make.c_str()), 0) << make;
+#else
+    std::error_code made;
+    fs::create_directory_symlink(outside.path, link, made);
+    ASSERT_FALSE(made) << made.message();
+#endif
+    // A link to a folder inside is not walked either: it could loop back on itself.
+    fs::create_directories(inside.path / "sub");
+    inside.write("sub/notes.txt", "Approvals are logged weekly.");
+    const fs::path loop = inside.path / "sub" / "circular";
+#ifdef _WIN32
+    const std::string makeLoop = "cmd /c mklink /J \"" + loop.string() + "\" \"" + inside.path.string() + "\" >nul 2>&1";
+    ASSERT_EQ(std::system(makeLoop.c_str()), 0) << makeLoop;
+#else
+    fs::create_directory_symlink(inside.path, loop, made);
+    ASSERT_FALSE(made) << made.message();
+#endif
+    DocumentIndex idx;
+    ToolRegistry reg;
+    // A checker that reads only the spelling, so the walk alone must keep out of the link.
+    idx.registerTools(reg, [&inside](const std::string& p) {
+        return p.find(inside.path.string()) == 0 ? "" : std::string("Refused: outside");
+    });
+    json indexed = reg.executeTool("index_document", json{{"path", inside.path.string()}});
+    ASSERT_EQ(indexed["status"], "success") << indexed.dump();
+    EXPECT_EQ(indexed["indexed"].size(), 2u) << indexed.dump();
+    EXPECT_EQ(indexed.dump().find("credentials.txt"), std::string::npos) << indexed.dump();
+    EXPECT_EQ(indexed.dump().find("more.txt"), std::string::npos) << indexed.dump();
+    EXPECT_EQ(indexed.dump().find("circular"), std::string::npos) << indexed.dump();
+    // The links first, so cleaning up cannot reach through them.
+    std::error_code ec;
+    fs::remove(link, ec);
+    fs::remove(loop, ec);
 }
 
 TEST(DocumentIndexTest, AWordFileInAFolderWithASpaceIsRead) {

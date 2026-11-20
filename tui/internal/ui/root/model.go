@@ -763,7 +763,7 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	m.chatClient.set(c)
 	m.sessionID = plan.id
 
-	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, m.dev, setupVerified).
+	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, setupVerified).
 		WithHubClient(m.hub()).
 		WithAgentPrograms()
 	if len(m.pendingTranscript) > 0 {

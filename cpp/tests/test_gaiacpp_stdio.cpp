@@ -221,6 +221,21 @@ std::string toolCall(const std::string& name, const json& args) {
 
 std::string answer(const std::string& text) { return reply({{"role", "assistant"}, {"content", text}}); }
 
+// A folder link at `link` to `target`, which may not exist. A junction on Windows: it needs no privilege.
+void makeFolderLink(const fs::path& target, const fs::path& link) {
+#ifdef _WIN32
+    std::error_code ec;
+    const bool made = fs::create_directories(target, ec);
+    const std::string cmd = "cmd /c mklink /J \"" + link.string() + "\" \"" + target.string() + "\" >nul 2>&1";
+    ASSERT_EQ(std::system(cmd.c_str()), 0) << cmd;
+    if (made) fs::remove_all(target, ec);
+#else
+    std::error_code ec;
+    fs::create_directory_symlink(target, link, ec);
+    ASSERT_FALSE(ec) << ec.message();
+#endif
+}
+
 const std::string kStopNote =
     "(The user stopped this reply before it finished. Don't continue it unless they ask again.)";
 
@@ -906,6 +921,76 @@ TEST(GaiacppStdioEdits, TheWorkingFolderMayHaveANonAsciiName) {
     fs::remove_all(folder, ec);
 }
 
+TEST(GaiacppStdioEdits, AnEditIsJudgedWhereItLandsPastEveryLink) {
+    std::mt19937_64 rng(std::random_device{}());
+    const fs::path base = fs::weakly_canonical(fs::temp_directory_path()) / ("gaiacpp-links-" + std::to_string(rng()));
+    const fs::path root = base / "work", outside = base / "outside";
+    fs::create_directories(root / "src");
+    fs::create_directories(outside / "inner");
+    const std::vector<std::string> roots = {root.string()};
+
+    // A link to a folder that isn't there yet.
+    makeFolderLink(outside / "not-yet", root / "gone");
+    EXPECT_FALSE(fs::exists(root / "gone")) << "the link dangles";
+    EXPECT_FALSE(editIsInside((root / "gone" / "new.txt").string(), roots));
+    EXPECT_FALSE(editIsInside((root / "gone" / "a" / "b" / "new.txt").string(), roots));
+    EXPECT_FALSE(editIsInside((root / "fresh" / ".." / "gone" / "new.txt").string(), roots));
+
+    // A link inside a linked folder, the inner one dangling.
+    makeFolderLink(outside, root / "outer");
+    makeFolderLink(base / "far", outside / "inner" / "next");
+    EXPECT_FALSE(editIsInside((root / "outer" / "inner" / "next" / "new.txt").string(), roots));
+    EXPECT_FALSE(editIsInside((root / "outer" / "new.txt").string(), roots));
+
+    // A link that stays inside is still an edit in the folder.
+    makeFolderLink(root / "src", root / "alias");
+    EXPECT_TRUE(editIsInside((root / "alias" / "new.txt").string(), roots));
+
+#ifndef _WIN32
+    // A file link to a file not there yet, directly and through a chain of relative links.
+    fs::create_symlink(outside / "new.txt", root / "out.md");
+    fs::create_symlink("hop", root / "chain.md");
+    fs::create_symlink(fs::path("..") / "outside" / "chained.txt", root / "hop");
+    EXPECT_FALSE(editIsInside((root / "out.md").string(), roots));
+    EXPECT_FALSE(editIsInside((root / "chain.md").string(), roots));
+    // `..` after a link climbs from where the link leads, not from the link's own folder.
+    EXPECT_FALSE(editIsInside((root / "outer" / ".." / "escaped.txt").string(), roots));
+    // A loop resolves to nowhere, which is never inside.
+    fs::create_symlink("loop-b", root / "loop-a");
+    fs::create_symlink("loop-a", root / "loop-b");
+    EXPECT_FALSE(editIsInside((root / "loop-a").string(), roots));
+#endif
+
+    std::error_code ec;
+    for (const fs::path& link : {root / "gone", root / "outer", outside / "inner" / "next", root / "alias"}) {
+        fs::remove(link, ec);
+    }
+    fs::remove_all(base, ec);
+}
+
+TEST_F(GaiacppStdio, AcceptEditsDoesNotWriteThroughALinkOutOfTheFolder) {
+    const fs::path outside = work_.parent_path() / (work_.filename().u8string() + "-outside");
+    makeFolderLink(outside, work_ / "drop");
+    const fs::path through = work_ / "drop" / "new.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", through.string()}, {"content", "1"}}));
+    mock_.pushResponse(answer("Done."));
+    start();
+    control({{"gaia_control", "accept_edits"}, {"enabled", true}});
+    ask("write it");
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    // Refused outright, before any approval: the landing is outside the agent's folders.
+    EXPECT_EQ(count("needs_confirmation"), 0u);
+    bool refused = false;
+    for (const auto& e : events()) {
+        refused |= e.is_object() && e.value("type", "") == "tool_result" && e.dump().find("Refused") != std::string::npos;
+    }
+    EXPECT_TRUE(refused) << "the write is refused, not run";
+    EXPECT_FALSE(fs::exists(outside / "new.txt"));
+    std::error_code ec;
+    fs::remove(work_ / "drop", ec);
+    fs::remove_all(outside, ec);
+}
+
 // ---- cancel ----
 
 TEST_F(GaiacppStdio, CancelWhileWaitingForApprovalEndsTheTurn) {
@@ -1156,6 +1241,89 @@ TEST_F(GaiacppStdio, ClearConversationSentinelAndControlBothForgetTheHistory) {
         for (const auto& m : request["messages"]) users += m.value("role", "") == "user" ? 1 : 0;
         EXPECT_EQ(users, 1u) << "earlier turns were forgotten: " << body;
     }
+}
+
+TEST_F(GaiacppStdio, ClearingTheConversationDropsItsAlwaysGrants) {
+    for (const char* dir : {"one", "two", "three"}) {
+        mock_.pushResponse(toolCall("bash_execute", {{"command", std::string("mkdir ") + dir}}));
+        mock_.pushResponse(answer("Made."));
+    }
+    Start s;
+    s.shell = true;
+    start(s);
+    ask("make one");
+    const json first = waitFor("needs_confirmation");
+    ASSERT_TRUE(first.is_object());
+    decide("always", first["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    ASSERT_FALSE(agent_->allowedToolsStore()->allAllowed().empty()) << "mkdir was granted";
+
+    control({{"gaia_control", "clear_history"}});
+    ask("make two");
+    const json second = waitFor("needs_confirmation", 2);
+    ASSERT_TRUE(second.is_object()) << "the grant went with the cleared conversation";
+    decide("always", second["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(2).is_object());
+    EXPECT_TRUE(fs::is_directory(work_ / "two"));
+
+    ask(std::string("\0gaia:clear_conversation\0", 25));
+    ASSERT_TRUE(waitTerminal(3).is_object());
+    EXPECT_TRUE(agent_->allowedToolsStore()->allAllowed().empty()) << "the sentinel clears grants too";
+    ask("make three");
+    const json third = waitFor("needs_confirmation", 3);
+    ASSERT_TRUE(third.is_object());
+    decide("deny", third["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(4).is_object());
+    EXPECT_FALSE(fs::exists(work_ / "three"));
+}
+
+TEST_F(GaiacppStdio, ClearingOneConversationLeavesAnotherSessionsGrants) {
+    start();
+    // Once the status is out, the agent holds this session's in-memory grants, not the saved ones.
+    ASSERT_TRUE(waitFor("status").is_object());
+    // A second session: its own agent, server and pipes.
+    AgentConfig c;
+    c.baseUrl = mock_.baseUrl();
+    c.modelId = "mock-model";
+    c.silentMode = true;
+    c.llmRetries = 0;
+    GaiaAgent::Options o;
+    o.skills = false;
+    o.webTools = false;
+    o.documents = false;
+    o.vision = false;
+    o.memory = false;
+    o.workspaceRoots = {work_.string()};
+    GaiaAgent otherAgent(c, o);
+    otherAgent.setConfig(c);
+    PipeBuf otherIn;
+    LineSink otherOut, otherLog;
+    std::istream otherInStream(&otherIn);
+    std::ostream otherOutStream(&otherOut), otherLogStream(&otherLog);
+    StdioOptions so;
+    so.editRoots = {work_.string()};
+    so.log = &otherLogStream;
+    StdioServer other(otherAgent, otherInStream, otherOutStream, so);
+    std::thread otherThread([&] { other.run(); });
+    struct Joiner {
+        PipeBuf& in;
+        std::thread& t;
+        ~Joiner() {
+            in.close();
+            if (t.joinable()) t.join();
+        }
+    } joiner{otherIn, otherThread};
+    ASSERT_TRUE(::waitEvent(otherOut, [](const json& e) { return e.is_object() && e.value("type", "") == "status"; })
+                    .is_object());
+    otherAgent.allowedToolsStore()->addAlwaysAllowed("bash_execute:mkdir");
+    agent_->allowedToolsStore()->addAlwaysAllowed("bash_execute:mkdir");
+    ASSERT_NE(otherAgent.allowedToolsStore(), agent_->allowedToolsStore()) << "each session keeps its own grants";
+
+    ask(std::string("\0gaia:clear_conversation\0", 25));
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    EXPECT_TRUE(agent_->allowedToolsStore()->allAllowed().empty());
+    EXPECT_EQ(otherAgent.allowedToolsStore()->allAllowed(), std::vector<std::string>{"bash_execute:mkdir"})
+        << "the other session's grant is untouched";
 }
 
 TEST_F(GaiacppStdio, MemoryDumpSentinelAnswersWithTheStoredMemories) {

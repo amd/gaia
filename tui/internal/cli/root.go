@@ -17,15 +17,13 @@ import (
 	"github.com/amd/gaia/tui/internal/update"
 )
 
-// dev is developer mode: rich in-TUI output (per-turn timings, step and turn
-// boundaries, tool arguments and truncated tool output, raw harness statuses)
-// and DEBUG-level file logging in the agent it spawns.
+// dev is developer mode: the loopback control API is on (auto-assigned port
+// unless --control-port picks one), diagnostics go to the session log, and an
+// agent the TUI spawns logs at DEBUG. The screen is the same one every user
+// sees: debug detail lives in --trace, the logs, and behind Ctrl+O.
 //
-// One flag, not two. `--debug` already meant exactly this in the TUI, and the
-// agent half of the same feature shipped as `--dev`; keeping both names as
-// separate switches would give one idea two spellings that could disagree. So
-// `--dev` is the name and `--debug` is a hidden alias onto this same variable
-// (see init) — old scripts and docs keep working, help lists one flag.
+// `--debug` is a hidden alias onto this same variable (see init), so old
+// scripts and docs keep working and help lists one flag.
 var dev bool
 
 // developerMode enables harness engineering, independently of diagnostic output.
@@ -308,9 +306,10 @@ func init() {
 	rootCmd.Flags().BoolVar(&developerMode, "developer-mode", false,
 		"enable the developer skill and consent-based Claude Code/Codex handoff")
 	rootCmd.PersistentFlags().BoolVar(&dev, "dev", false,
-		"developer mode: show per-turn timings, steps, and tool arguments and output "+
-			"(agents the TUI spawns itself also log at DEBUG to ~/.gaia/logs/). "+
-			"This is what is on SCREEN; --trace writes the same events to a file")
+		"developer mode: turn on the loopback control API (same as --control) so a "+
+			"script or assistant can drive this session, with diagnostics in "+
+			"~/.gaia/logs/. The screen does not change; for debug detail use --trace, "+
+			"the logs, or Ctrl+O")
 	// Same variable as --dev, hidden: the previous name for this mode. Kept so
 	// existing scripts and docs do not break, out of --help so the two spellings
 	// never read as two features.
@@ -380,8 +379,8 @@ func init() {
 		"record every agent event — tool calls WITH their arguments, results, errors "+
 			"and timings — to a JSONL file, one event per line, for later inspection. "+
 			"Bare --trace writes ~/.gaia/traces/<timestamp>-<agent>.jsonl; --trace=<path> "+
-			"picks the file (the path must be attached with =, not spaced). Independent "+
-			"of --dev, which shows the same events on screen instead. The file holds "+
+			"picks the file (the path must be attached with =, not spaced). Agents the "+
+			"TUI spawns itself also log at DEBUG to ~/.gaia/logs/. The file holds "+
 			"whatever the agent read — file contents, shell output, email — so review "+
 			"it before sharing. Does NOT capture prompt size or token accounting — "+
 			"those live only in the agent's own recorder (GAIA_TURN_LOG)")
