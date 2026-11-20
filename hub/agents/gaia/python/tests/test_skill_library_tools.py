@@ -1585,6 +1585,34 @@ def test_a_refused_skill_is_reported_not_run(session):
     assert "gaia skill import" in sent
 
 
+@pytest.mark.parametrize("pattern", ["load_skill", "load_*"])
+def test_a_typed_command_is_refused_while_load_skill_is_withheld(
+    session, monkeypatch, pattern
+):
+    monkeypatch.setattr(session.agent, "_denied_tool_patterns", (pattern,))
+
+    sent = session.agent._expand_skill_command("/note-taker take notes")
+
+    assert "note-taker" not in session.agent.loaded_skills
+    assert NOTE_TAKER_MARKER not in session.agent._prompt_text()
+    assert "could not be turned on" in sent
+    assert "load_skill tool is withheld" in sent
+    assert "Do not attempt their request without the skill" in sent
+    assert sent.endswith("Their request was: take notes")
+
+
+def test_a_typed_command_for_a_loaded_skill_still_runs_while_withheld(
+    session, monkeypatch
+):
+    session.agent._expand_skill_command("/note-taker")
+    monkeypatch.setattr(session.agent, "_denied_tool_patterns", ("load_skill",))
+
+    sent = session.agent._expand_skill_command("/note-taker take notes")
+
+    assert "It is loaded" in sent
+    assert sent.endswith("\n\ntake notes")
+
+
 def test_a_folder_note_in_front_of_the_command_is_kept(session):
     note = "[This chat is working in the folder C:\\work. When the user says it.]"
     sent = session.agent._expand_skill_command(f"{note}\n\n/note-taker go")
