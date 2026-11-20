@@ -135,6 +135,13 @@ KNOWN: dict[str, dict[str, tuple[int, str]]] = {
 
 #: Matches that are not text for a user, each with why. Counted like KNOWN.
 NOT_USER_TEXT: dict[str, dict[str, tuple[int, str]]] = {
+    "hub/agents/gaia/python/gaia_agent/chat_agent.py": {
+        "terminal command": (
+            1,
+            "run_python hint for a source install only; the app's frozen "
+            "agent never shows it",
+        ),
+    },
     "hub/agents/gaia/python/gaia_agent/server.py": {
         "removed feature": (2, "API schema text for developers"),
         "pip": (

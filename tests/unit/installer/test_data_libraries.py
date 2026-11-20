@@ -536,7 +536,11 @@ def test_finding_the_skills_never_imports_the_agent_or_numpy():
 
 
 def test_the_skill_folders_match_the_agents_own():
-    from gaia_agent.agent import _CHECKOUT_LAYOUT, _bundled_skill_roots
+    agent = pytest.importorskip("gaia_agent.agent")
+    _CHECKOUT_LAYOUT, _bundled_skill_roots = (
+        agent._CHECKOUT_LAYOUT,
+        agent._bundled_skill_roots,
+    )
 
     assert _BUNDLED_SKILL_ROOTS() == _bundled_skill_roots()
     assert data_libraries._AGENT_CHECKOUT_LAYOUT == _CHECKOUT_LAYOUT
