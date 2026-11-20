@@ -660,8 +660,8 @@ function Get-GaiacppVersion {
     return $out
 }
 
-# gaiacpp, the native GAIA agent. gaia-cli runs it from beside itself in place
-# of gaia-agent, so it comes from the same release as gaia-cli into $GAIA_BIN.
+# gaiacpp, the native GAIA agent. gaia-cli runs it from beside itself once the
+# user picks it, so it comes from the same release as gaia-cli into $GAIA_BIN.
 #
 # A PC or release with no gaiacpp keeps the Python agent, and says so. A
 # checksum mismatch, or a binary from another release, fails the install.
@@ -671,7 +671,7 @@ function Install-Gaiacpp {
     $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     if ($arch -ne "AMD64") {
         Remove-StaleGaiacpp
-        Write-GaiaWarning "No native GAIA agent is built for processor architecture '$arch', so the GAIA Terminal UI uses the Python GAIA agent."
+        Write-GaiaWarning "No native GAIA agent is built for processor architecture '$arch', so only the Python GAIA agent (the default) is available."
         return
     }
     $filename = "gaiacpp-windows-x64.exe"
@@ -690,7 +690,7 @@ function Install-Gaiacpp {
         }
         catch {
             Remove-StaleGaiacpp
-            Write-GaiaWarning "Could not fetch the native GAIA agent's checksums for $tag, so the GAIA Terminal UI uses the Python GAIA agent."
+            Write-GaiaWarning "Could not fetch the native GAIA agent's checksums for $tag, so only the Python GAIA agent (the default) is available."
             Write-Host "  URL:  $sumsUrl" -ForegroundColor $COLOR_YELLOW
             Write-Host "  A release from before the native agent shipped has none. Otherwise check your" -ForegroundColor $COLOR_YELLOW
             Write-Host "  network and re-run this installer." -ForegroundColor $COLOR_YELLOW
@@ -704,7 +704,7 @@ function Install-Gaiacpp {
         }
         if ($found.Count -eq 0) {
             Remove-StaleGaiacpp
-            Write-GaiaWarning "$tag publishes no native GAIA agent for this PC ($filename), so the GAIA Terminal UI uses the Python GAIA agent."
+            Write-GaiaWarning "$tag publishes no native GAIA agent for this PC ($filename), so only the Python GAIA agent (the default) is available."
             return
         }
         if ($found.Count -ne 1 -or $found[0] -cnotmatch '^[0-9a-f]{64}\z') {
@@ -718,17 +718,17 @@ function Install-Gaiacpp {
         $ok = Install-VerifiedBinary -Resolved $resolved -Filename $filename -DestName "gaiacpp.exe" -DestDir $stage -Label "native GAIA agent" -Optional
         if (-not $ok) {
             Remove-StaleGaiacpp
-            Write-GaiaWarning "The native GAIA agent did not install, so the GAIA Terminal UI uses the Python GAIA agent. Re-run this installer to retry."
+            Write-GaiaWarning "The native GAIA agent did not install, so only the Python GAIA agent (the default) is available. Re-run this installer to retry."
             return
         }
 
-        # gaia-cli picks gaiacpp whenever it is there, so one that cannot start
+        # A user can switch gaia-cli to this gaiacpp, so one that cannot start
         # on this PC must not be put there.
         $expected = "gaiacpp " + ($tag.Substring(1) -replace '-rc([0-9]+)\z', '-rc.$1')
         $got = Get-GaiacppVersion -Path "$stage\gaiacpp.exe"
         if ($null -eq $got) {
             Remove-StaleGaiacpp
-            Write-GaiaWarning "The native GAIA agent $tag does not start on this PC, so the GAIA Terminal UI uses the Python GAIA agent."
+            Write-GaiaWarning "The native GAIA agent $tag does not start on this PC, so only the Python GAIA agent (the default) is available."
             Write-Host "  Report it at https://github.com/amd/gaia/issues with your Windows version." -ForegroundColor $COLOR_YELLOW
             return
         }
@@ -755,7 +755,7 @@ function Install-Gaiacpp {
     finally {
         if (Test-Path $stage) { Remove-Item -Path $stage -Recurse -Force }
     }
-    Write-Success "Native GAIA agent $tag installed to $GAIA_BIN\gaiacpp.exe; the GAIA Terminal UI runs it"
+    Write-Success "Native GAIA agent $tag installed to $GAIA_BIN\gaiacpp.exe. The Python GAIA agent stays the default; switch with /agent gaiacpp in the GAIA Terminal UI"
 }
 
 # The user environment key Add-ToPath edits. Tests point it at a scratch key.

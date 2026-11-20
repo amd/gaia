@@ -1642,7 +1642,7 @@ const messages: Messages = {
     'images.settings.chatModelCannot': "نموذج المحادثة {model} أصغر من أن يُتاح له إنشاء الصور، لذا لن تُستخدم هذه الإعدادات حتى تغيّره.",
     'images.settings.chooseChatModel': "اختر نموذج المحادثة",
     'images.settings.modelGone': "لم يعد {model} موجودًا في Lemonade على هذا الجهاز. اختر نموذجًا آخر.",
-    'images.settings.noModels': "لا يوجد نموذج صور منزّل. نزّل واحدًا من الإعدادات › النموذج.",
+    'images.settings.noModels': "لا يوجد نموذج صور منزّل. نزّل واحدًا من الإعدادات › الوكيل والنموذج.",
     'images.settings.model': "النموذج",
     'images.settings.downloadsOnFirstUse': "{model} (يُنزَّل عند أول استخدام، {size})",
     'images.settings.size': "الحجم",

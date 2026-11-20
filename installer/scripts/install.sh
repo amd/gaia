@@ -687,8 +687,8 @@ remove_stale_gaiacpp() {
     fi
 }
 
-# gaiacpp, the native GAIA agent. gaia-cli runs it from beside itself in place
-# of gaia-agent, so it comes from the same release as gaia-cli into $GAIA_BIN.
+# gaiacpp, the native GAIA agent. gaia-cli runs it from beside itself once the
+# user picks it, so it comes from the same release as gaia-cli into $GAIA_BIN.
 #
 # A machine or release with no gaiacpp keeps the Python agent, and says so. A
 # checksum mismatch, or a binary from another release, fails the install.
@@ -698,7 +698,7 @@ install_gaiacpp() {
     filename=""
     if ! filename="$(gaiacpp_asset_name)"; then
         remove_stale_gaiacpp
-        print_warning "No native GAIA agent is built for $(uname -s)/$(uname -m), so the GAIA Terminal UI uses the Python GAIA agent."
+        print_warning "No native GAIA agent is built for $(uname -s)/$(uname -m), so only the Python GAIA agent (the default) is available."
         return 0
     fi
 
@@ -707,7 +707,7 @@ install_gaiacpp() {
     release_url="$GAIA_RELEASES_URL/download/$RELEASE_TAG"
     if ! fetch_file "$release_url/$GAIACPP_SUMS_FILE" "$tmp/$GAIACPP_SUMS_FILE"; then
         remove_stale_gaiacpp
-        print_warning "Could not fetch the native GAIA agent's checksums for $RELEASE_TAG, so the GAIA Terminal UI uses the Python GAIA agent."
+        print_warning "Could not fetch the native GAIA agent's checksums for $RELEASE_TAG, so only the Python GAIA agent (the default) is available."
         echo "  URL:  $release_url/$GAIACPP_SUMS_FILE"
         echo "  A release from before the native agent shipped has none. Otherwise check your"
         echo "  network and re-run this installer."
@@ -717,7 +717,7 @@ install_gaiacpp() {
     if ! awk -v f="$filename" '$2 == f || $2 == "*" f { found = 1 } END { exit !found }' \
             "$tmp/$GAIACPP_SUMS_FILE"; then
         remove_stale_gaiacpp
-        print_warning "$RELEASE_TAG publishes no native GAIA agent for this machine ($filename), so the GAIA Terminal UI uses the Python GAIA agent."
+        print_warning "$RELEASE_TAG publishes no native GAIA agent for this machine ($filename), so only the Python GAIA agent (the default) is available."
         return 0
     fi
     # Listed, so from here it is verified or refused, like gaia-cli.
@@ -741,17 +741,17 @@ install_gaiacpp() {
         exit 1
     elif [ "$_rc" -ne 0 ]; then
         remove_stale_gaiacpp
-        print_warning "The native GAIA agent did not install, so the GAIA Terminal UI uses the Python GAIA agent. Re-run this installer to retry."
+        print_warning "The native GAIA agent did not install, so only the Python GAIA agent (the default) is available. Re-run this installer to retry."
         return 0
     fi
 
-    # gaia-cli picks gaiacpp whenever it is there, so one that cannot start on
+    # A user can switch gaia-cli to this gaiacpp, so one that cannot start on
     # this machine must not be put there.
     expected="$(printf '%s\n' "${RELEASE_TAG#v}" | sed 's/-rc\([0-9][0-9]*\)$/-rc.\1/')"
     got=""
     if ! got="$("$tmp/gaiacpp" --version 2>/dev/null)"; then
         remove_stale_gaiacpp
-        print_warning "The native GAIA agent $RELEASE_TAG does not start on this machine, so the GAIA Terminal UI uses the Python GAIA agent."
+        print_warning "The native GAIA agent $RELEASE_TAG does not start on this machine, so only the Python GAIA agent (the default) is available."
         echo "  Report it at https://github.com/amd/gaia/issues with your OS version."
         return 0
     fi
@@ -767,7 +767,7 @@ install_gaiacpp() {
         echo "  Fix:  check you own $GAIA_BIN and that it is writable, then retry."
         exit 1
     fi
-    print_success "Native GAIA agent $RELEASE_TAG installed to $GAIA_BIN/gaiacpp; the GAIA Terminal UI runs it"
+    print_success "Native GAIA agent $RELEASE_TAG installed to $GAIA_BIN/gaiacpp. The Python GAIA agent stays the default; switch with /agent gaiacpp in the GAIA Terminal UI"
 }
 
 # Link GAIA's own commands to the frozen gaia from $GAIA_BIN, the one directory on PATH
