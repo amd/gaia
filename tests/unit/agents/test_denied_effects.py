@@ -1511,6 +1511,7 @@ def test_with_no_way_to_ask_the_policy_every_delete_is_kept(tmp_path):
         ("dir /s reports", "dir invoices"),
         (r'pip install "C:\My Wheels\a.whl"', r'pip install "C:\My Wheels\b.whl"'),
         ("pip install ./pkg-a", "pip install ./pkg-b"),
+        ("pip install ./a/pkg[x]", "pip install ./b/pkg[x]"),
     ],
 )
 def test_the_same_program_on_something_else_is_another_action(
@@ -1543,6 +1544,9 @@ def test_the_same_program_on_something_else_is_another_action(
         ("pip install pandas>=2", "pip install 'pandas[excel]<3'"),
         ('git commit -am "fix bug"', 'git commit -m "Fix the bug"'),
         ("npm install @scope/pkg@1.0", "npm install @scope/pkg"),
+        ("pip install ./pkg[excel]", "pip install ./pkg"),
+        (r'pip install "C:\My Wheels\pkg[x]"', r'pip install "C:\My Wheels\pkg"'),
+        ('git tag -am "v1" v1', 'git tag -m "Release one" v1'),
     ],
 )
 def test_a_reworded_command_is_the_same_action(declined, later, tmp_path):

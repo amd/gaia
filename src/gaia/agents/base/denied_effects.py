@@ -764,7 +764,7 @@ def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
         if skip:
             skip = False
         elif word.lower() in flags or (
-            program == "git" and _GIT_MESSAGE_CLUSTER.fullmatch(word)
+            program == "git" and _GIT_MESSAGE_CLUSTER.fullmatch(word.lower())
         ):
             skip = True
         else:
@@ -775,7 +775,8 @@ def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
 def _unpinned(word: str) -> str:
     """A package operand without its version, extras or markers."""
     if "\\" in word or word.startswith((".", "/")) or re.match(r"[a-z]:", word):
-        return word
+        # A path keeps its spaces and ``@``; only its extras are dropped.
+        return word.split("[", 1)[0]
     # A leading ``@`` is an npm scope, not a pin.
     return word[:1] + _VERSION_PIN.split(word[1:], maxsplit=1)[0]
 
