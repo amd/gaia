@@ -5,9 +5,10 @@
 from __future__ import annotations
 
 import contextlib
+from types import SimpleNamespace
 
 import pytest
-from gaia_agent import research
+from gaia_agent import research, stdio
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
 from gaia.agents.base.agent import Agent
@@ -315,6 +316,16 @@ def test_a_link_the_user_gave_is_not_invented_but_still_needs_a_read():
     assert "never opened" in problem
     fetched = ("fetch_page", {"url": _WSGR}, {"status": "success", "content": "x"})
     assert research.citation_problems(report, [fetched], request) == []
+
+
+def test_a_host_clear_forgets_the_pages_read():
+    agent = SimpleNamespace(
+        console=None, conversation_history=[{"role": "user", "content": "x"}]
+    )
+    agent._web_calls = [_SEARCH, _FETCH_NIH]
+    stdio._clear_from_host(agent, stdio.PermissionState(), None)
+    assert agent._web_calls == []
+    assert agent.conversation_history == []
 
 
 def test_only_a_research_turn_checks_citations():
