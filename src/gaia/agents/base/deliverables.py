@@ -1915,12 +1915,37 @@ _CODE_SUFFIXES = frozenset({".py", ".js", ".ts", ".sh", ".ps1", ".bat", ".ipynb"
 _LOOKUP_WORDS = ("web", "fetch", "download", "query")
 
 
-def _data_source(name: str) -> bool:
-    """A file figures could come from: not a script, not a skill's instructions."""
+def _data_source(path: str) -> bool:
+    """A file figures could come from: not a script, not a skill's own pages."""
+    parts = [p.lower() for p in re.split(r"[\\/]", path) if p]
     return (
-        os.path.splitext(name)[1].lower() not in _CODE_SUFFIXES
-        and name.lower() != "skill.md"
+        bool(parts)
+        and os.path.splitext(parts[-1])[1] not in _CODE_SUFFIXES
+        and parts[-1] != "skill.md"
+        and "skills" not in parts[:-1]
     )
+
+
+def _outside_sources(
+    records: Sequence[Dict[str, Any]], input_names: Sequence[str], written: Set[str]
+) -> bool:
+    """The turn read a data file other than *written*, or looked something up."""
+    paths = list(input_names)
+    for record in records:
+        name = _name(record)
+        if not _ran(record) or record.get("failed"):
+            continue
+        if _has(name, _LOOKUP_WORDS):
+            return True
+        if _has(name, _WRITE_WORDS + _EXEC_WORDS):
+            continue
+        args = record.get("args") or {}
+        paths += [
+            args[key]
+            for key in _PATH_ARGS
+            if isinstance(args, dict) and isinstance(args.get(key), str)
+        ]
+    return any(_basename(p) not in written and _data_source(p) for p in paths)
 
 
 def asks_for_invented_data(query: str, written: Collection[str] = ()) -> bool:
@@ -1976,15 +2001,8 @@ def file_findings(
     read_names = _read_names(records, written) | (
         {_basename(n) for n in input_names} - written
     )
-    sources = read_names | {_basename(n) for n in input_names}
-    looked_up = any(
-        _ran(r) and not r.get("failed") and _has(_name(r), _LOOKUP_WORDS)
-        for r in records
-    )
-    if (
-        not looked_up
-        and not any(_data_source(n) for n in sources - written)
-        and asks_for_invented_data(query, written)
+    if not _outside_sources(records, input_names, written) and asks_for_invented_data(
+        query, written
     ):
         return []
     input_texts = [_spelled_out(t) for t in inputs]

@@ -423,8 +423,19 @@ def test_sample_wording_does_not_excuse_figures_the_turn_looked_up():
 def test_reading_the_skill_or_the_file_back_keeps_the_sample_exemption():
     records = [
         _read_record("skills/office-docs/SKILL.md", "Use openpyxl. Limit 100 rows."),
+        _read_record(
+            r"C:\gaia\skills\office-docs\references\excel.md", "Widths: 12, 40."
+        ),
         _ran(_SALES_SCRIPT),
         _read_record("sales.csv", "North,12500\nSouth,9800\n"),
     ]
 
-    assert _sales("create sales.csv with 5 rows of sample sales", records) == []
+    assert (
+        _sales(
+            "create sales.csv with 5 rows of sample sales",
+            records,
+            input_names=["C:/gaia/skills/office-docs/references/excel.md"],
+            inputs=["Widths: 12, 40."],
+        )
+        == []
+    )
