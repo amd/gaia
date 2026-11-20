@@ -1454,6 +1454,8 @@ export interface SettingsResponse {
   custom_model?: string | null;
   dynamic_tools?: boolean;
   dynamic_tools_locked?: boolean;
+  flagship_agent?: "gaiapy" | "gaiacpp";
+  gaiacpp_available?: boolean;
   model_status?: ModelStatus | null;
   network_policy?: "cloud_allowed" | "local_ai_only";
   policy_notices?: PolicyNotice[];
@@ -1479,6 +1481,10 @@ export interface SettingsUpdateRequest {
    * Dynamic tool loading: send the tool list in short form and full docs only as needed, to cut first-turn TTFT without breaking the prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.
    */
   dynamic_tools?: boolean | null;
+  /**
+   * Which program is the GAIA agent: gaiapy (the Python agent) or gaiacpp (the native C++ agent, beta). Applies from the next message. Choosing gaiacpp where it is not installed is refused. Omit the field to leave the choice unchanged.
+   */
+  flagship_agent?: ("gaiapy" | "gaiacpp") | null;
   /**
    * Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud models, clears saved cloud model choices, and removes cloud keys from GAIA's running Lemonade server. Omit to leave the policy unchanged.
    */

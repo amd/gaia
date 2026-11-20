@@ -144,4 +144,14 @@ type ActivityItem struct {
 	// Recovery is how a failed step reads given the rest of its turn — set at
 	// render time by settleFailures, never stored. "" is a plain failure.
 	Recovery string
+	// Progress is a running delegation's latest count ("2 of 4 helpers
+	// done"), shown on the step's own row until its result lands.
+	Progress string
+	// Helpers is a finished delegation's per-helper outcomes, in id order;
+	// MoreHelpers counts any past the most one step lists.
+	Helpers     []helperOutcome
+	MoreHelpers int
+	// Partial marks a delegation some helpers failed or stopped short in,
+	// while others returned something usable: a warning, not a failed step.
+	Partial bool
 }

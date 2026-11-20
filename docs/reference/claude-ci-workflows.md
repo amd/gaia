@@ -66,6 +66,8 @@ The only scheduler for the three proactive audits below. At 10:13 UTC (03:13 PDT
 it dispatches **one** of them, picked by `days since 1970-01-01 mod 3`, so each runs every
 third night. Running all three every night spent the Claude subscription's weekly cap mid-week.
 Adding an audit means appending it to `ROTATION` in `scripts/audit/audit_rotation.py`.
+The dispatch waits out a GitHub API rate limit (up to about an hour), then confirms the audit's
+run actually started; if it can't, the rotation job fails and opens an issue.
 
 Each audit then scopes itself from its own last **successful** rotation run, so a night lost to
 the usage limit is covered on that audit's next turn: the code audit reviews everything merged

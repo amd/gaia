@@ -373,6 +373,7 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	// literal there (see modelcmd.go) — assert it directly, mirroring how
 	// TestChatHelpNamesEveryChatBinding checks it against chatHelpText.
 	seen["/skills"] = true // dispatched by isSkillsCommand, like /model
+	seen["/research"] = true // dispatched by isResearchCommand (research.go)
 	seen["/model"] = true
 	if !known["/model"] {
 		t.Error("paletteCommands does not offer /model")
@@ -393,8 +394,9 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	if !known["/automations"] {
 		t.Error("paletteCommands does not offer /automations")
 	}
-	// /read-aloud and /voice take arguments too (readaloud.go).
-	for _, cmd := range []string{"/read-aloud", "/voice"} {
+	// /read-aloud and /voice take arguments too (readaloud.go), and so does
+	// /agent (agentcmd.go).
+	for _, cmd := range []string{"/read-aloud", "/voice", agentCommand} {
 		seen[cmd] = true
 		if !known[cmd] {
 			t.Errorf("paletteCommands does not offer %s", cmd)

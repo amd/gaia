@@ -5189,6 +5189,20 @@
         "title": "Dynamic Tools Locked",
         "type": "boolean"
       },
+      "flagship_agent": {
+        "default": "gaiapy",
+        "enum": [
+          "gaiapy",
+          "gaiacpp"
+        ],
+        "title": "Flagship Agent",
+        "type": "string"
+      },
+      "gaiacpp_available": {
+        "default": false,
+        "title": "Gaiacpp Available",
+        "type": "boolean"
+      },
       "model_status": {
         "anyOf": [
           {
@@ -5278,6 +5292,22 @@
         ],
         "description": "Dynamic tool loading: send the tool list in short form and full docs only as needed, to cut first-turn TTFT without breaking the prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.",
         "title": "Dynamic Tools"
+      },
+      "flagship_agent": {
+        "anyOf": [
+          {
+            "enum": [
+              "gaiapy",
+              "gaiacpp"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Which program is the GAIA agent: gaiapy (the Python agent) or gaiacpp (the native C++ agent, beta). Applies from the next message. Choosing gaiacpp where it is not installed is refused. Omit the field to leave the choice unchanged.",
+        "title": "Flagship Agent"
       },
       "network_policy": {
         "anyOf": [

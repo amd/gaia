@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from gaia.llm.lemonade_client import (
@@ -1221,6 +1222,72 @@ async def _check_model_status(model_name: str) -> ModelStatus:
     return status
 
 
+def _flagship_agent_setting() -> tuple[str, bool]:
+    """``(flagship_agent, gaiacpp_available)`` for the settings response."""
+    from gaia.daemon.sidecars import fetch
+
+    return fetch.chosen_flagship(), fetch.native_flagship() is not None
+
+
+def _set_flagship_agent(choice: str) -> None:
+    """Save the agent choice and stop the running agent so the next message starts the new one."""
+    from gaia.config import GaiaConfig
+    from gaia.daemon.sidecars import fetch
+    from gaia.daemon.sidecars.errors import SidecarError
+    from gaia.ui.run_manager import run_manager
+    from gaia.ui.security import FLAGSHIP_AGENT_ID
+    from gaia.ui.sidecar import daemon_client
+
+    saved = GaiaConfig.load().flagship_agent
+    if choice == saved:
+        return
+    if choice == fetch.NATIVE_FLAGSHIP and fetch.native_flagship() is None:
+        looked = ", ".join(str(p) for p in fetch.native_flagship_candidates())
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "gaiacpp is not installed on this PC, so it cannot be the agent "
+                f"yet (looked in: {looked}). Download it first."
+            ),
+        )
+    if saved is None and choice == fetch.PYTHON_FLAGSHIP:
+        # Already what runs here; saving it makes the terminal UI use it too.
+        GaiaConfig.save_key("flagship_agent", choice)
+        return
+    from gaia.ui.setup_runner import runner as setup_runner
+
+    setup = setup_runner.status() or {}
+    if setup.get("state") in ("running", "verifying"):
+        # Setup's own test chat runs on the agent; stopping it fails setup.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "GAIA is still setting up and testing the agent. Switch once "
+                "setup has finished."
+            ),
+        )
+    if run_manager.active_sessions():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "GAIA is answering in a chat, and switching agents now would cut "
+                "that answer off. Let it finish or stop it, then switch."
+            ),
+        )
+    GaiaConfig.save_key("flagship_agent", choice)
+    logger.info("Flagship agent set: %s", choice)
+    try:
+        daemon_client.stop_sidecar(FLAGSHIP_AGENT_ID)
+    except SidecarError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"The agent choice was saved as {choice}, but the agent that is "
+                f"running could not be stopped: {e} Restart GAIA to switch."
+            ),
+        ) from e
+
+
 def _resolve_dynamic_tools_setting() -> tuple[bool, bool]:
     """Return ``(effective, locked)`` for dynamic tool loading.
 
@@ -1265,6 +1332,7 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
     model_status = await _check_model_status(custom_model) if custom_model else None
     from gaia.llm.local_only import cloud_blocked
 
+    flagship_agent, gaiacpp_available = _flagship_agent_setting()
     return SettingsResponse(
         custom_model=custom_model or None,
         model_status=model_status,
@@ -1272,6 +1340,8 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
         agent_mode=agent_mode,
         dynamic_tools=dynamic_tools,
         dynamic_tools_locked=dynamic_tools_locked,
+        flagship_agent=flagship_agent,
+        gaiacpp_available=gaiacpp_available,
         network_policy="local_ai_only" if cloud_blocked() else "cloud_allowed",
     )
 
@@ -1407,6 +1477,14 @@ async def update_settings(
         GaiaConfig.save_key("dynamic_tools", request.dynamic_tools)
         logger.info("Dynamic tools setting persisted: %s", request.dynamic_tools)
 
+    if (
+        "flagship_agent" in request.model_fields_set
+        and request.flagship_agent is not None
+    ):
+        # Changes the program this PC runs, so only someone at this PC may ask.
+        security.require_local_pc(http_request)
+        await run_in_threadpool(_set_flagship_agent, request.flagship_agent)
+
     policy_warnings: List[str] = []
     policy_notices: List[Dict[str, Any]] = []
     if (
@@ -1445,6 +1523,7 @@ async def update_settings(
     model_status = await _check_model_status(custom_model) if custom_model else None
     from gaia.llm.local_only import cloud_blocked
 
+    flagship_agent, gaiacpp_available = _flagship_agent_setting()
     return SettingsResponse(
         custom_model=custom_model or None,
         model_status=model_status,
@@ -1452,6 +1531,8 @@ async def update_settings(
         agent_mode=agent_mode,
         dynamic_tools=dynamic_tools,
         dynamic_tools_locked=dynamic_tools_locked,
+        flagship_agent=flagship_agent,
+        gaiacpp_available=gaiacpp_available,
         network_policy="local_ai_only" if cloud_blocked() else "cloud_allowed",
         policy_warnings=policy_warnings,
         policy_notices=policy_notices,

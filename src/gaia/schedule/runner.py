@@ -94,7 +94,7 @@ def resolve_model(prompt: str) -> str:
     raise ScheduleModelError(
         f"{model} is not downloaded ({info['size_gb']:.1f} GB), and scheduled "
         f"runs do not download models. {remedy}, or download it from the GAIA "
-        "app's Settings > Model."
+        "app's Settings > Agent & model."
     )
 
 

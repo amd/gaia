@@ -81,6 +81,7 @@ FAULTS = {
     "slow": 2,
     "invalid_utf8": 2,
     "text_tool_call": 3,
+    "delegate": 6,
 }
 
 
@@ -152,7 +153,11 @@ class Handler(BaseHTTPRequestHandler):
                     "model_name": MODEL,
                     "type": "llm",
                     "recipe": "llamacpp",
-                    "recipe_options": {"ctx_size": 32768},
+                    # Three slots, so the helpers of a "delegate" step run side by side.
+                    "recipe_options": {
+                        "ctx_size": 32768,
+                        "llamacpp_args": "--parallel 3",
+                    },
                 }
             ]
             self._json(
@@ -193,6 +198,16 @@ class Handler(BaseHTTPRequestHandler):
         self._json(
             200,
             _message(None, [_call("c1", "bash_execute", {"command": "echo chaos"})]),
+        )
+
+    def _delegate(self):
+        # Three helpers, which then draw their own replies from the rest of the script.
+        tasks = [
+            {"task": f"Check thing {n} in notes.txt", "paths": ["notes.txt"]}
+            for n in (1, 2, 3)
+        ]
+        self._json(
+            200, _message(None, [_call("c1", "delegate_task", {"tasks": tasks})])
         )
 
     def _tool_two(self):

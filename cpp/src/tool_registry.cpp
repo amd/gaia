@@ -172,6 +172,7 @@ json ToolRegistry::buildOpenAiToolSchemas() const {
             prop["type"] = (param.type == ToolParamType::UNKNOWN)
                                ? "string"
                                : paramTypeToString(param.type);
+            if (param.schema.is_object()) prop = param.schema;
             if (!param.description.empty()) {
                 prop["description"] = param.description;
             }
@@ -321,6 +322,12 @@ json ToolRegistry::coerceArgsToSchema(const std::vector<ToolParameter>& params,
                 const std::string l = toLower(s);
                 if (l == "true") *it = true;
                 else if (l == "false") *it = false;
+            } else if (param.type == ToolParamType::ARRAY || param.type == ToolParamType::OBJECT) {
+                // Small models often send a list or object as its JSON text.
+                json parsed = json::parse(s, nullptr, false);
+                if (param.type == ToolParamType::ARRAY ? parsed.is_array() : parsed.is_object()) {
+                    *it = std::move(parsed);
+                }
             }
         } catch (const std::exception&) {
             // Not a number: leave it for the type check to reject with its own message.

@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import * as api from '../services/api';
 import type { SkillInfo } from '../types';
+import { rememberInstalledSkills } from '../utils/research';
 
 /** A composer that holds only `/` and a skill name being typed. */
 const TYPING_COMMAND = /^\/[a-z0-9-]*$/i;
@@ -41,6 +42,7 @@ export function useSkillCommands(value: string): SkillCommands {
         setStatus((s) => (s === 'ready' ? s : 'loading'));
         api.listSkills().then(
             (r) => {
+                rememberInstalledSkills(r.skills.map((s) => s.name));
                 if (!live) return;
                 setSkills(r.skills);
                 setStatus('ready');

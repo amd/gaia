@@ -368,7 +368,7 @@ class TestGaiaDispatch:
         content = event["content"]
         assert event["type"] == "agent_error"
         assert content.count("downloaded") == 1
-        assert "Settings > Model" in content
+        assert "Settings > Agent & model" in content
         assert ("Local only is on" in content) is local_only
         assert ("Settings > Privacy" in content) is local_only
         for developer_word in ("CLI", "agent card", "re-check", "lemonade-server.ai"):

@@ -157,6 +157,59 @@ export const SYSTEM_STATUS = {
     data_dir: 'C:\\Users\\you\\.gaia\\chat',
 };
 
+/** Settings on a PC where both agents are installed and the Python one runs. */
+export const SETTINGS = {
+    custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+    network_policy: 'cloud_allowed', flagship_agent: 'gaiapy', gaiacpp_available: true,
+};
+
+const IDLE_AGENT_DOWNLOAD = { state: 'idle', bytes_done: 0, bytes_total: null, error: null };
+
+/** Both agent programs on this PC, with their sizes; the Python one runs. */
+export const AGENT_PROGRAMS = {
+    current: 'gaiapy',
+    programs: [
+        { id: 'gaiapy', installed: true, size_bytes: 412_000_000, can_download: false, unavailable_reason: null },
+        { id: 'gaiacpp', installed: true, size_bytes: 6_800_000, can_download: false, unavailable_reason: null },
+    ],
+    download: IDLE_AGENT_DOWNLOAD,
+};
+
+/** gaiacpp downloading, about 40% through. */
+export const AGENT_DOWNLOADING = { state: 'downloading', bytes_done: 2_720_000, bytes_total: 6_800_000, error: null };
+export const AGENT_DOWNLOAD_FAILED = {
+    state: 'failed', bytes_done: 2_720_000, bytes_total: 6_800_000,
+    error: 'Download of gaiacpp-win32-x64 stopped: the connection was reset (ECONNRESET) after 2.7 MB.',
+};
+
+export interface AgentProgramsAnswers {
+    /** Installed; not here but downloadable; or not here and not offered. */
+    gaiacpp?: 'installed' | 'downloadable' | 'unavailable';
+    /** The download as the listing reports it when the page opens. */
+    download?: object;
+    /** What each poll of the download answers. */
+    poll?: object;
+}
+
+/** The agent programs as this PC would report them, and the gaiacpp download's answers. */
+export async function withAgentPrograms(page: Page, { gaiacpp = 'installed', download = IDLE_AGENT_DOWNLOAD, poll }: AgentProgramsAnswers = {}): Promise<void> {
+    const cpp = gaiacpp === 'installed' ? AGENT_PROGRAMS.programs[1]
+        : gaiacpp === 'downloadable' ? { ...AGENT_PROGRAMS.programs[1], installed: false, can_download: true }
+            : { ...AGENT_PROGRAMS.programs[1], installed: false, size_bytes: null, unavailable_reason: 'This is a development build of GAIA; gaiacpp comes with released versions.' };
+    const listing = { ...AGENT_PROGRAMS, programs: [AGENT_PROGRAMS.programs[0], cpp], download };
+    await page.route((url) => url.pathname.startsWith('/api/agent-programs'), async (route) => {
+        const { pathname } = new URL(route.request().url());
+        if (pathname === '/api/agent-programs') await route.fulfill({ json: listing });
+        else if (route.request().method() === 'POST') await route.fulfill({ status: 202, json: poll ?? AGENT_DOWNLOADING });
+        else await route.fulfill({ json: poll ?? download });
+    });
+}
+
+/** A PC where gaiacpp isn't installed and can't be downloaded. */
+export async function withoutGaiacpp(page: Page): Promise<void> {
+    await withAgentPrograms(page, { gaiacpp: 'unavailable' });
+}
+
 const ROUTES: Record<string, unknown> = {
     'GET /sessions': { sessions: SESSIONS, total: SESSIONS.length },
     [`GET /sessions/${ANSWER_SESSION}/messages`]: MESSAGES,
@@ -166,7 +219,8 @@ const ROUTES: Record<string, unknown> = {
     'GET /setup/check': { ready: true, steps: [] },
     'GET /setup/status': { state: 'idle' },
     'GET /setup/needs/chat': { job: 'chat', needed: false, model: null, disk_free_gb: null },
-    'GET /settings': { custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false },
+    'GET /settings': SETTINGS,
+    'GET /agent-programs': AGENT_PROGRAMS,
     'GET /providers': {
         providers: [
             { id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' },
@@ -397,6 +451,7 @@ export async function withSettingsPanes(page: Page, options: { networkPolicy?: '
             custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven',
             dynamic_tools: false, dynamic_tools_locked: false,
             network_policy: options.networkPolicy ?? 'cloud_allowed', policy_warnings: [],
+            flagship_agent: 'gaiapy', gaiacpp_available: true,
             policy_notices: options.policyNotices ?? [],
         },
         'GET /memory/settings': { memory_enabled: true },
@@ -434,6 +489,7 @@ export async function withSettingsPanes(page: Page, options: { networkPolicy?: '
             await route.fulfill({ json: {
                 custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven',
                 dynamic_tools: false, dynamic_tools_locked: false, network_policy: 'local_ai_only',
+                flagship_agent: 'gaiapy', gaiacpp_available: true,
                 policy_warnings: [], policy_notices: options.policyNotices ?? [],
             } });
         } else if (key in answers) await route.fulfill({ json: answers[key] });
