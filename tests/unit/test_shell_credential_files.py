@@ -9,6 +9,7 @@ is attached, so neither an approval nor full access lifts the refusal.
 """
 
 import os
+import subprocess
 import sys
 
 import pytest
@@ -43,12 +44,21 @@ class _Host(ShellToolsMixin):
         self.path_validator = _Validator(root)
 
 
+@pytest.fixture(autouse=True)
+def posix_grep(monkeypatch):
+    """grep that reads its arguments as given; the Windows tests switch it off."""
+    monkeypatch.setattr(shell_tools, "_greps_expand_arguments", lambda: False)
+
+
 def _refusal(command, cwd, root):
     host = _Host(root)
     steps, error = _parse_line(command, bypass_gates=True)
     assert error is None, error
+    searchable = shell_tools._search_plan(command, steps) is not None
     for step in steps:
-        refusal = host._path_traversal_refusal(step, str(cwd), frozenset())
+        refusal = host._path_traversal_refusal(
+            step, str(cwd), frozenset(), searchable=searchable
+        )
         if refusal:
             return refusal
     return None
@@ -246,7 +256,7 @@ def test_a_folder_named_like_a_credential_stays_listable(home):
 
 
 def test_a_credential_in_a_subfolder_does_not_stop_a_recursive_search(home):
-    """Its lines are masked in the output, like a root-level one's."""
+    """grep skips it by name, like a root-level one."""
     (home / "proj" / ".env").unlink()
     (home / "proj" / "secrets.json").unlink()
     (home / "proj" / "src" / ".env").write_text("TOKEN=abc\n")
@@ -289,12 +299,37 @@ def run_shell(monkeypatch):
     [
         "findstr TOKEN .env" if os.name == "nt" else "cat .env",
         "findstr x SECRETS.JSON" if os.name == "nt" else "cat SECRETS.JSON",
-        "findstr TOKEN *" if os.name == "nt" else "grep -rh TOKEN .",
+        "findstr TOKEN *" if os.name == "nt" else "cat *",
+        "grep -rl TOKEN -- .",
         "python -c \"print(open('.env').read())\"",
     ],
 )
-def test_full_access_does_not_lift_the_refusal(home, run_shell, command):
+def test_full_access_lifts_the_refusal(home, run_shell, command, monkeypatch):
+    started = []
+
+    def fake_step(step, *args, **kwargs):
+        # Nothing is read: the step is recorded, not started.
+        started.append(step.text)
+        return subprocess.CompletedProcess(step.text, 0, "", "")
+
+    monkeypatch.setattr(shell_tools, "_run_step", fake_step)
     run = run_shell(_Host(home, full_access=True))
+
+    result = run(command, working_directory=str(home / "proj"))
+
+    assert result["status"] == "success", result
+    assert started == [command]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "findstr TOKEN .env" if os.name == "nt" else "cat .env",
+        "python -c \"print(open('.env').read())\"",
+    ],
+)
+def test_the_same_read_is_still_refused_without_full_access(home, run_shell, command):
+    run = run_shell(_Host(home))
 
     result = run(command, working_directory=str(home / "proj"))
 
@@ -413,7 +448,7 @@ def test_a_backslash_escaped_grep_pattern_is_not_a_credential_read(home):
     assert refusal is None or "credentials" not in refusal["error"], refusal
 
 
-# ------------------------------------------------- a recursive search still runs
+# --------------------------- a recursive search runs with credential files left out
 
 
 @pytest.mark.parametrize(
@@ -428,17 +463,9 @@ def test_a_backslash_escaped_grep_pattern_is_not_a_credential_read(home):
         "grep -rl TOKEN .",
         "grep -rc TOKEN .",
         "grep -rno TOKEN .",
-        "grep -rn TODO . | head -20",
-        "grep -rn TODO . | sort | head",
-        "grep -rn TODO . | grep -v test",
-        "grep -rn TODO . | wc -l",
-        'bash -c "grep -rn TODO ."',
-        pytest.param("findstr /s TOKEN *", marks=WINDOWS_ONLY),
-        pytest.param("findstr /S /I TOKEN *.*", marks=WINDOWS_ONLY),
-        pytest.param("findstr /s /c:TOKEN *", marks=WINDOWS_ONLY),
-        'powershell -Command "Get-ChildItem . -Recurse | Select-String TOKEN"',
-        'powershell -Command "gci -r | sls TOKEN"',
-        'powershell -Command "Select-String -Path * -Pattern TOKEN -Recurse"',
+        "grep -rh TOKEN .",
+        "grep -r --no-filename TOKEN .",
+        "grep -rz TOKEN .",
     ],
 )
 def test_a_recursive_search_of_a_folder_with_credentials_runs(home, command):
@@ -448,23 +475,39 @@ def test_a_recursive_search_of_a_folder_with_credentials_runs(home, command):
 @pytest.mark.parametrize(
     "command",
     [
-        "grep -rh TOKEN .",
-        "grep -r --no-filename TOKEN .",
-        "grep -rz TOKEN .",
+        # Piped, so not run as plain argv with the exclusions.
+        "grep -rn TODO . | head -20",
+        "grep -rn TODO . | sort | head",
+        "grep -rn TODO . | grep -v test",
+        "grep -rn TODO . | wc -l",
         "grep -r TOKEN . | cut -d: -f2-",
         "grep -r TOKEN . | tail -c 200",
         "grep -r TOKEN . | grep -o 'TOKEN=.*'",
         "grep -r TOKEN . | sed s/^.*://",
         "grep -rl TOKEN . | xargs cat",
+        "grep -rn TODO . | head --byt 2000",
+        "grep -rn TODO . | tail -n 5",
+        "grep -rn TODO . | tail --lines 5",
+        "grep -rn TODO . | grep --invert x",
+        "grep -rn TOKEN . | grep --only x",
+        "grep -rn TOKEN . | tail -c 100",
+        "grep -rn TOKEN . | head --frob",
+        'bash -c "grep -rn TODO ."',
         'bash -c "grep -r TOKEN . | cut -d: -f2"',
         'bash -c "grep -r TOKEN . > out.txt"',
+        pytest.param("findstr /s TOKEN *", marks=WINDOWS_ONLY),
+        pytest.param("findstr /S /I TOKEN *.*", marks=WINDOWS_ONLY),
+        pytest.param("findstr /s /c:TOKEN *", marks=WINDOWS_ONLY),
+        'powershell -Command "Get-ChildItem . -Recurse | Select-String TOKEN"',
+        'powershell -Command "gci -r | sls TOKEN"',
         'powershell -Command "gci -r | sls TOKEN | % Line"',
         'powershell -Command "gci -r | sls TOKEN -Raw"',
+        'powershell -Command "Select-String -Path * -Pattern TOKEN -Recurse"',
         "cat *",
         "findstr TOKEN *",
     ],
 )
-def test_a_search_whose_file_names_are_lost_is_refused(home, command):
+def test_a_search_that_cannot_skip_credential_files_is_refused(home, command):
     refusal = _refusal(command, home / "proj", home)
 
     assert refusal is not None, command
@@ -473,7 +516,7 @@ def test_a_search_whose_file_names_are_lost_is_refused(home, command):
 
 
 def test_a_recursive_search_over_a_disguised_link_is_refused(home, monkeypatch):
-    """Masking goes by name, so a link hiding a credential file still refuses."""
+    """Exclusions go by name, so a link hiding a credential file still refuses."""
     proj = home / "proj"
     (proj / "notes.txt").write_text("innocent\n")
     real = os.path.realpath
@@ -502,60 +545,47 @@ def test_a_recursive_search_over_a_disguised_link_is_refused(home, monkeypatch):
         "grep --recursive --line-n TODO .",
         "grep -d recurse TODO .",
         "grep --directories=recurse TODO .",
-        "grep -rn TODO . | head --byt 2000",
-        "grep -rn TODO . | tail -n 5",
-        "grep -rn TODO . | tail --lines 5",
-        "grep -rn TODO . | grep --invert x",
+        "grep --rec -h TOKEN .",
+        "grep -d recurse -h TOKEN .",
+        "grep -drecurse --no-file TOKEN .",
+        "grep --dir=recurse -h TOKEN .",
+        "grep -r --null-d TOKEN .",
         "rg TODO",
         "rg -n TODO src",
         "rg --hidden TODO",
         "rg -uu TODO",
         "rg -n -g '!node_modules' TODO",
-        "git grep TODO",
-        "git grep -n TODO",
-        "git -C . grep --line-n TODO",
-        "grep --frobnicate TODO env.txt",
-    ],
-)
-def test_searches_whose_lines_keep_their_file_names_run(home, command):
-    assert _refusal(command, home / "proj", home) is None, command
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "grep -r --no-f TOKEN .",
-        "grep -r --no-filename TOKEN .",
-        "grep -r --null-d TOKEN .",
-        "grep --rec -h TOKEN .",
-        "grep -d recurse -h TOKEN .",
-        "grep -drecurse --no-file TOKEN .",
-        "grep --directories=recurse -h TOKEN .",
-        "grep --dir=recurse -h TOKEN .",
-        "grep -r --frobnicate TOKEN .",
-        "grep -r --n TOKEN .",
-        "grep -rn TOKEN . | grep --only x",
-        "grep -rn TOKEN . | grep -o x",
-        "grep -rn TOKEN . | tail --byt 100",
-        "grep -rn TOKEN . | tail -c 100",
-        "grep -rn TOKEN . | head --frob",
-        "grep -rn TOKEN . | grep --frob x",
         "rg -I TOKEN",
         "rg --no-filename TOKEN",
         "rg --heading TOKEN",
         "rg -p TOKEN",
         "rg --json TOKEN",
         "rg --null-data TOKEN",
-        "rg --frobnicate TOKEN",
-        "rg --no-filen TOKEN",
+        "git grep TODO",
+        "git grep -n TODO",
+        "git -C . grep --line-n TODO",
         "git grep -h TOKEN",
         "git grep --head TOKEN",
-        "git grep --heading TOKEN",
         "git -C . grep -h TOKEN",
+        "grep --frobnicate TODO env.txt",
+    ],
+)
+def test_every_spelling_of_a_search_runs(home, command):
+    assert _refusal(command, home / "proj", home) is None, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -r --frobnicate TOKEN .",
+        "grep -r --n TOKEN .",
+        "rg --frobnicate TOKEN",
+        "rg --no-filen TOKEN",
         "git grep --frobnicate TOKEN",
     ],
 )
-def test_searches_that_may_drop_file_names_are_refused(home, command):
+def test_a_search_with_an_option_this_check_does_not_know_is_refused(home, command):
+    """Exclusions added after an unknown option might not be read as options."""
     refusal = _refusal(command, home / "proj", home)
 
     assert refusal is not None, command
@@ -566,3 +596,144 @@ def test_searches_that_may_drop_file_names_are_refused(home, command):
 def test_an_unknown_option_on_a_plain_command_runs(home):
     assert _refusal("grep --frobnicate TOKEN env.txt", home / "proj", home) is None
     assert _refusal("rg --frobnicate TOKEN env.txt", home / "proj", home) is None
+
+
+# ------------------------------- a hard link is a second name for the file
+
+
+def _key_and_clean_folder(home, monkeypatch):
+    """A key in a credential folder, and a folder with no credential file in it."""
+    from gaia import security
+
+    ssh = home / ".ssh"
+    ssh.mkdir()
+    (ssh / "id_rsa").write_text("PRIVATE KEY\n")
+    monkeypatch.setattr(security, "SECRET_DIRECTORIES", {str(ssh)})
+    security._secret_links_cache.update(key=None)
+    clean = home / "clean"
+    clean.mkdir()
+    (clean / "a.txt").write_text("TODO\n")
+    return ssh / "id_rsa", clean
+
+
+def _hard_link(source, name):
+    try:
+        os.link(source, name)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create a hard link here: {exc}")
+
+
+@pytest.fixture
+def linked_key(home, monkeypatch):
+    """``clean/notes.txt`` is a hard link to a key in a credential folder."""
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    _hard_link(key, clean / "notes.txt")
+    return clean
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cat notes.txt", "grep -n KEY notes.txt", "grep -rn KEY .", "git grep -n KEY"],
+)
+def test_a_hard_link_to_a_credential_file_is_refused(home, linked_key, command):
+    refusal = _refusal(command, linked_key, home)
+
+    assert refusal is not None, command
+    assert refusal["executed"] is False
+    assert "notes.txt" in refusal["error"]
+
+
+@WINDOWS_ONLY
+def test_findstr_over_a_hard_link_to_a_credential_file_is_refused(
+    home, linked_key, monkeypatch
+):
+    monkeypatch.setattr(shell_tools, "_greps_expand_arguments", lambda: True)
+    refusal = _refusal("findstr /s /n KEY *", linked_key, home)
+
+    assert refusal is not None and refusal["executed"] is False
+
+
+def test_a_hard_link_made_after_a_search_is_still_caught(home, monkeypatch):
+    """The credential folder is listed fresh per search, not from a cache."""
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    assert _refusal("grep -rn KEY .", clean, home) is None
+
+    _hard_link(key, clean / "notes.txt")
+
+    refusal = _refusal("grep -rn KEY .", clean, home)
+    assert refusal is not None and refusal["executed"] is False
+
+
+def test_an_ordinary_hard_link_does_not_block_a_search(home, monkeypatch):
+    _key, clean = _key_and_clean_folder(home, monkeypatch)
+    _hard_link(clean / "a.txt", clean / "b.txt")
+
+    assert _refusal("grep -rn TODO .", clean, home) is None
+    assert _refusal("cat b.txt", clean, home) is None
+
+
+@WINDOWS_ONLY
+def test_findstr_over_an_ordinary_hard_link_runs(home, monkeypatch):
+    _key, clean = _key_and_clean_folder(home, monkeypatch)
+    _hard_link(clean / "a.txt", clean / "b.txt")
+    monkeypatch.setattr(shell_tools, "_greps_expand_arguments", lambda: True)
+
+    assert _refusal("findstr /s /n TODO *", clean, home) is None
+
+
+def test_a_symlink_to_a_hard_linked_credential_file_is_refused(home, monkeypatch):
+    """A link in the searched folder, to a hard link outside it, still refuses."""
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    hidden = home / "elsewhere"
+    hidden.mkdir()
+    _hard_link(key, hidden / "copy.txt")
+    try:
+        os.symlink(hidden / "copy.txt", clean / "notes.txt")
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create a symlink here: {exc}")
+
+    for command in ("cat *", "grep -Rn KEY ."):
+        refusal = _refusal(command, clean, home)
+        assert refusal is not None and refusal["executed"] is False, command
+
+
+def test_a_link_is_sized_by_the_file_it_reads(home, monkeypatch):
+    """The size filter follows the link: a symlink's own size is not the key's."""
+    from gaia import security
+
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    hidden = home / "elsewhere"
+    hidden.mkdir()
+    _hard_link(key, hidden / "copy.txt")
+    target = os.stat(hidden / "copy.txt")
+
+    class _LinkEntry:
+        path = str(hidden / "copy.txt")
+
+        def stat(self, follow_symlinks=True):
+            if follow_symlinks:
+                return target
+            return os.stat_result((0o120777, 0, 0, 1, 0, 0, 3, 0, 0, 0))
+
+    assert shell_tools._shares_secret(_LinkEntry(), security.linked_secret_files())
+
+
+def test_linking_a_key_then_searching_in_one_command_is_refused(home, monkeypatch):
+    """The link does not exist yet when the line is checked; naming the key refuses."""
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+
+    for command in (f"ln {key} notes.txt && grep -rn KEY .", f"ln {key} notes.txt"):
+        refusal = _refusal(command, clean, home)
+        assert refusal is not None and refusal["executed"] is False, command
+    assert not (clean / "notes.txt").exists()
+
+
+def test_a_hard_link_the_same_size_as_a_key_is_not_a_key(home, monkeypatch):
+    """Matching size only narrows the lookup; the file itself must be the key."""
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    _hard_link(key, home / "elsewhere.txt")  # the key now has a second name
+    (clean / "same.txt").write_bytes(b"x" * key.stat().st_size)
+    _hard_link(clean / "same.txt", clean / "same2.txt")
+
+    assert _refusal("grep -rn x .", clean, home) is None
+    assert _refusal("cat same2.txt", clean, home) is None

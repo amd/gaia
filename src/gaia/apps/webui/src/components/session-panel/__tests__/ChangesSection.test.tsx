@@ -186,7 +186,7 @@ describe('ChangesSection', () => {
         });
         renderSection();
         expect(await screen.findByRole('note')).toHaveTextContent(
-            "In this chat, GAIA ran 2 Python snippets and 1 command it can't track. If they changed any files, Undo all won't restore them.",
+            "In this chat, GAIA ran 2 Python snippets and 1 command. Undo all only restores files GAIA edited itself, so anything they changed or installed stays.",
         );
     });
 

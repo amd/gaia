@@ -419,9 +419,9 @@ def test_a_firing_row_left_by_a_crash_does_not_keep_it(daemon_reports, tmp_path)
 
 def test_another_running_front_end_keeps_the_daemon(daemon_reports):
     daemon_reports["clients"] = _Response(
-        200, {"clients": [{"name": "gaia-tui", "pids": [4343]}]}
+        200, {"clients": [{"name": "gaia-cli", "pids": [4343]}]}
     )
-    assert "gaia-tui is still using it" in client.outdated_daemon_busy(_inst())
+    assert "gaia-cli is still using it" in client.outdated_daemon_busy(_inst())
 
 
 def test_a_supervised_agent_does_not_keep_the_outdated_daemon(daemon_reports):
@@ -474,13 +474,13 @@ def test_a_stopped_or_pidless_agent_does_not_hide_a_front_end(daemon_reports):
         200,
         {
             "clients": [
-                {"name": "gaia-tui", "pids": [4343]},
+                {"name": "gaia-cli", "pids": [4343]},
                 {"name": "gaia-ui", "pids": [4345]},
             ]
         },
     )
 
-    assert "gaia-tui, gaia-ui is still using it" in client.outdated_daemon_busy(_inst())
+    assert "gaia-cli, gaia-ui is still using it" in client.outdated_daemon_busy(_inst())
 
 
 def test_a_front_end_beside_a_supervised_agent_still_keeps_it(daemon_reports):
@@ -492,12 +492,12 @@ def test_a_front_end_beside_a_supervised_agent_still_keeps_it(daemon_reports):
         {
             "clients": [
                 {"name": "gaia agent", "pids": [4343]},
-                {"name": "gaia-tui", "pids": [5151]},
+                {"name": "gaia-cli", "pids": [5151]},
             ]
         },
     )
 
-    assert "gaia-tui is still using it" in client.outdated_daemon_busy(_inst())
+    assert "gaia-cli is still using it" in client.outdated_daemon_busy(_inst())
 
 
 def test_a_turn_in_a_supervised_agent_still_keeps_it(daemon_reports):
@@ -548,12 +548,12 @@ def test_a_launcher_that_exited_mid_check_still_counts_its_own_pid(
         {
             "clients": [
                 {"name": "gaia agent", "pids": [4343]},
-                {"name": "gaia-tui", "pids": [5151]},
+                {"name": "gaia-cli", "pids": [5151]},
             ]
         },
     )
 
-    assert "gaia-tui is still using it" in client.outdated_daemon_busy(_inst())
+    assert "gaia-cli is still using it" in client.outdated_daemon_busy(_inst())
 
 
 def test_an_older_daemon_without_the_agents_route_is_judged_as_before(
@@ -808,8 +808,8 @@ def test_a_parked_agent_ui_turn_keeps_the_daemon_from_restarting(
     daemon_reports, monkeypatch, event
 ):
     from gaia.ui import _chat_helpers as helpers
-    from gaia.ui.email_sidecar import relay
-    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
     from gaia.ui.sse_handler import SSEOutputHandler
 
     monkeypatch.setattr(helpers, "_active_sse_handlers", {})
@@ -850,8 +850,8 @@ def test_an_agent_ui_chat_shows_why_the_update_is_not_running_yet(monkeypatch):
     from types import SimpleNamespace
 
     from gaia.ui import _chat_helpers as helpers
-    from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.models import ChatRequest
+    from gaia.ui.sidecar import daemon_client
     from gaia.ui.sse_handler import SSEOutputHandler
 
     class _Done:

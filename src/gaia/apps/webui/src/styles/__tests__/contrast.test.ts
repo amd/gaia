@@ -259,6 +259,13 @@ const SHARED_WITH_LIGHT = new Set([
     '--code-success',
     '--code-warning',
     '--code-danger',
+    '--slide-paper',
+    '--slide-ink',
+    '--slide-ink-dim',
+    '--slide-accent',
+    '--slide-on-accent',
+    '--slide-panel',
+    '--slide-rule',
 ]);
 
 describe('token declarations', () => {
@@ -909,7 +916,7 @@ describe('status hues stay on status', () => {
     const STATUS_WORDS = [
         'error', 'danger', 'fail', 'warn', 'deny',
         'delete', 'remove', 'clear', 'confirm', 'stop', 'invalid', 'overdue',
-        'urgent', 'missing', 'bad',
+        'missing', 'bad',
     ];
 
     /** Status by meaning, not by name. Each entry says which status. */

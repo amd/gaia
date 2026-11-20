@@ -364,8 +364,12 @@ def test_executor_mutation_invalidates_prior_readback(agent):
         {"answer": "Saved to `summary.md`."},
     )
     result = agent.process_query("Save to `summary.md`", max_steps=4)
-    assert result["status"] == "incomplete"
-    assert "read back" in result["result"]
+    # The file exists, so the turn is done; the unread change is a caveat.
+    assert result["status"] == "success"
+    assert result["completion_gaps"] == []
+    assert any("read back" in gap for gap in result["completion_caveats"])
+    assert "Not checked: `" in result["result"] and "read back" in result["result"]
+    assert "can't confirm" not in result["result"]
 
 
 def test_executor_failure_after_write_cannot_reuse_old_evidence(agent):
@@ -1090,6 +1094,16 @@ def test_loop_still_rejects_a_false_save_after_a_denied_write(agent, tmp_path):
     assert "[check:completion]" in correction
     assert "Use `write_file`" not in correction
     assert "Do not retry that write" in correction
+
+
+def test_a_write_gaias_own_rule_stopped_is_not_reported_as_declined(tmp_path):
+    ledger = _documents_ledger(tmp_path)
+    target = str(tmp_path / "Documents" / "ui_notes.txt")
+    _refuse(ledger, target, {"status": "denied", "denied_by": "policy"})
+    found = gaps(ledger, "Saved! `ui_notes.txt` is in your Documents folder.")
+    assert len(found) == 1
+    assert "was not permitted" in found[0]
+    assert "declined" not in found[0]
 
 
 def test_an_unanswered_prompt_is_not_reported_as_declined(tmp_path):

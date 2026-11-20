@@ -53,6 +53,7 @@ STARTER_PACK = frozenset(
     {
         "analyze-recording",
         "automations",
+        "browser-pane",
         "calculators",
         "calendar",
         "check-in",
@@ -65,12 +66,17 @@ STARTER_PACK = frozenset(
         "guides",
         "image-gen",
         "inbox-triage",
+        "log-triage",
+        "meeting-actions",
         "music-gen",
+        "office-docs",
         "price-watch",
         "recommendations",
+        "report-from-sources",
         "research-report",
         "rss-digest",
         "send-email",
+        "slide-decks",
         "source-watch",
         "summarize",
         "transcribe-meeting",
@@ -399,6 +405,61 @@ def test_starter_skill_uses_only_real_memory_categories(skill_dir: Path):
     )
 
 
+_START_LINE_ARG = re.compile(r"\bstart_line\s*=\s*([^,)]+)")
+_START_LINE_MINUS = re.compile(r"\w\s*-\s*\w")
+
+
+def _unclamped_start_lines(text: str) -> list:
+    """``start_line=`` values that subtract without a ``max(1, ...)`` floor."""
+    return [
+        arg.strip()
+        for arg in _START_LINE_ARG.findall(text)
+        if _START_LINE_MINUS.search(arg) and not arg.strip().startswith("max(1")
+    ]
+
+
+@pytest.mark.parametrize(
+    "text, flagged",
+    [
+        ("read_file(p, start_line=line - 30, end_line=line + 10)", ["line - 30"]),
+        ("read_file(p, start_line=n-5)", ["n-5"]),
+        ("read_file(p, start_line=max(1, line - 30), end_line=line)", []),
+        ("read_file(p, start_line=1, end_line=40)", []),
+        ("read_file(p, start_line=line, end_line=line + 10)", []),
+        ("start_line is 1-based", []),
+    ],
+)
+def test_unclamped_start_line_detector(text: str, flagged: list):
+    assert _unclamped_start_lines(text) == flagged
+
+
+@pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
+def test_starter_skill_read_window_never_starts_below_line_one(skill_dir: Path):
+    """``read_file`` rejects ``start_line`` below 1, so ``line - N`` needs a floor."""
+    skill = parse_skill_file(skill_dir)
+    bad = _unclamped_start_lines(skill.body)
+
+    assert not bad, (
+        f"{skill.name} computes start_line={bad} with no max(1, ...) floor; "
+        "near the top of a file that asks read_file for line 0 or lower"
+    )
+
+
+@pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
+def test_starter_skill_references_never_start_below_line_one(skill_dir: Path):
+    """Reference files are loaded into the turn too, so they need the same floor."""
+    bad = {
+        ref.name: found
+        for ref in sorted((skill_dir / "references").glob("*.md"))
+        if (found := _unclamped_start_lines(ref.read_text(encoding="utf-8")))
+    }
+
+    assert not bad, (
+        f"{skill_dir.name} references compute start_line with no max(1, ...) "
+        f"floor: {bad}"
+    )
+
+
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
 def test_starter_skill_scratchpad_sql_uses_the_table_prefix(skill_dir: Path):
     """Scratchpad tables are only reachable through their ``scratch_`` prefix.
@@ -508,7 +569,7 @@ def test_starter_skill_loads_into_an_agent(pack_manager: SkillManager):
 
 
 def test_rss_digest_registers_its_declared_tool(pack_manager: SkillManager):
-    """The pack's one tool-providing skill really registers its @tool.
+    """A tool-providing skill really registers its @tool.
 
     Proves the manifest matches ``tools.py`` — the loader refuses on any
     signature drift, so this is a live contract check, not a formality.
@@ -797,6 +858,117 @@ def test_price_watch_has_no_unconditional_pre_fetch_save(stale_rule: str):
     assert stale_rule not in body
 
 
+# ----------------------------------------------------------------------
+# source-watch step order
+#
+# Its record step saved page text memory refuses unasked, so nothing was
+# recalled and an unchanged page was re-listed as news.
+# ----------------------------------------------------------------------
+
+
+def _source_watch_steps() -> tuple[str, list[str], dict[str, str]]:
+    body = parse_skill_file(STARTER_ROOT / "source-watch").body
+    procedure = re.search(r"^## Procedure\b(.+?)(?=^## )", body, re.M | re.S)
+    assert procedure, "source-watch lost its Procedure section"
+    text = procedure.group(1)
+    starts = list(re.finditer(r"^(\d+)\. \*\*(.+?)\*\*", text, re.M | re.S))
+    titles = [" ".join(m.group(2).split()).lower() for m in starts]
+    assert [int(m.group(1)) for m in starts] == list(range(1, len(starts) + 1))
+    steps = {}
+    for i, m in enumerate(starts):
+        end = starts[i + 1].start() if i + 1 < len(starts) else len(text)
+        steps[titles[i]] = " ".join(text[m.start() : end].split())
+    return text, titles, steps
+
+
+def _step(steps: dict[str, str], key: str) -> str:
+    return next(body for title, body in steps.items() if key in title)
+
+
+def test_source_watch_recalls_fetches_reports_then_saves():
+    text, titles, _ = _source_watch_steps()
+    order = [
+        next(i for i, t in enumerate(titles) if key in t)
+        for key in ("recall what", "fetch", "extract", "match", "report or", "record")
+    ]
+
+    assert order == sorted(order), f"steps out of order: {titles}"
+    assert text.index("recall(") < text.index("fetch_page(")
+    assert text.index("fetch_page(") < text.index("remember(")
+    assert text.count("remember(") == 1, "the procedure writes memory once"
+    assert "Report before any memory write" in " ".join(text.split())
+
+
+def test_source_watch_counts_this_conversations_reports_as_seen():
+    """Memory can hold nothing; a re-check in the same chat must still dedupe."""
+    _, _, steps = _source_watch_steps()
+    recall = _step(steps, "recall what")
+
+    assert "earlier in this conversation" in recall
+    assert "even when memory holds nothing" in recall
+    assert '"nothing new"' in _step(steps, "report or")
+
+
+def test_source_watch_saves_only_identifiers_and_only_when_asked():
+    _, _, steps = _source_watch_steps()
+    record = _step(steps, "record")
+    call = re.search(r"remember\(fact=\"([^\"]+)\"", record)
+
+    assert "only if the user asked you to remember or keep track" in record
+    assert '"watch" or "check" alone is not that ask' in record
+    assert call and call.group(1) == "<memory key>: <identifier>"
+    assert "summary" not in call.group(1)
+
+
+def test_source_watch_never_asks_for_the_memory_key_up_front():
+    """A plain check uses no key; asking for one stalls the first fetch."""
+    body = parse_skill_file(STARTER_ROOT / "source-watch").body
+    configure = body[body.index("## Configure") : body.index("## Procedure")]
+    key_row = next(line for line in configure.splitlines() if "Memory key" in line)
+
+    assert "ask for any that are missing" not in configure
+    assert "Never ask for the memory key" in configure
+    assert "Optional" in key_row and "keep track" in key_row
+
+    guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    section = guide[guide.index("### source-watch") :]
+    section = " ".join(section[: section.index("\n### ")].split())
+    assert "A memory key is optional" in section
+
+
+def test_source_watch_a_refused_save_never_replaces_the_report():
+    body = " ".join(parse_skill_file(STARTER_ROOT / "source-watch").body.split())
+
+    assert "never replaces the report" in body
+    assert "Give the report anyway" in body
+    assert "not saved" in body
+    assert "Do not retry the save or stop to ask about it" in body
+
+
+@pytest.mark.parametrize(
+    "stale_rule",
+    ["<one-line summary>", 'say "no new matches"', "Step 1 and step 6 need memory"],
+)
+def test_source_watch_drops_the_unconditional_summary_save(stale_rule: str):
+    body = parse_skill_file(STARTER_ROOT / "source-watch").body
+    assert stale_rule not in body
+
+
+def test_source_watch_guide_matches_the_skill():
+    guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    section = guide[guide.index("### source-watch") :]
+    section = " ".join(section[: section.index("\n### ")].split())
+
+    assert "same conversation count as seen" in section
+    assert "before any memory write" in section
+    assert "never replaces the report" in section
+    assert "suppress anything already reported via memory" not in section
+
+
 def test_the_guide_consumes_lists_match_the_manifests():
     """The guide names each skill's tools; drift makes it quietly wrong."""
     guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
@@ -830,7 +1002,7 @@ def test_daily_brief_and_guide_do_not_underclaim_tts_or_scheduling():
     ``text_to_speech`` is a real, always-registered ChatAgent tool
     (``gaia_agent/chat_agent.py``), so a doc listing it as a missing capability
     tells the model to under-promise. Skill-aware scheduling genuinely is still
-    missing (``gaia schedule add --skill`` is rejected, #1019), so that claim
+    missing (``gaia schedule add --skill`` is rejected, #6470), so that claim
     must stay.
     """
     gaia_agent = pytest.importorskip("gaia_agent")
@@ -859,9 +1031,12 @@ def test_daily_brief_and_guide_do_not_underclaim_tts_or_scheduling():
         ), f"{doc_name} still claims TTS is not callable by an agent"
 
     # The scheduling limitation is still real — don't let a future edit
-    # accidentally claim it works before #1019 actually lands.
+    # accidentally claim it works before #6470 actually lands.
     assert "gaia schedule add" in daily_brief
     assert "gaia schedule add --skill" in guide
+    # #1019 is closed; the limitation must point at the issue that tracks it.
+    assert "issues/6470" in daily_brief
+    assert "issues/1019" not in daily_brief
 
 
 def test_the_guides_run_a_skill_snippet_still_type_checks():

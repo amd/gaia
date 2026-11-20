@@ -55,7 +55,7 @@ response that fully answers.
 - Usability test scripts + success metrics
 - Rationale: why this choice over alternatives
 
-Drop written outputs under `docs/plans/` or attach to issues/PRs. Images under `docs/assets/img/`.
+Drop written outputs under `docs/plans/` or attach to issues/PRs. Images under `docs/assets/`.
 
 ## Accessibility checklist
 

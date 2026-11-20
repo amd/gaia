@@ -34,7 +34,7 @@ var developerMode bool
 // fullAccessFlag backs --full-access: the agent runs every gated tool — shell
 // commands, file writes — without asking, and the shell's own guardrails come
 // off with them (redirection and the other shell-only operators parse, the
-// read-only binary allowlist is replaced by a developer set, the rate limit is
+// shell runs any program, the rate limit is
 // lifted).
 //
 // Off unless passed, or saved as the default with /full-access always or
@@ -70,10 +70,10 @@ func claudeModelArg() string {
 	return claudeModel
 }
 
-const defaultBinaryName = "gaia-tui"
+const defaultBinaryName = "gaia-cli"
 
 // binaryName derives the command name from argv[0]. The installer ships this as
-// `gaia-tui` because the Python CLI owns `gaia`, so a hardcoded name would print
+// `gaia-cli` because the Python CLI owns `gaia`, so a hardcoded name would print
 // usage lines for a command the user does not have.
 func binaryName(argv0 string) string {
 	name := filepath.Base(strings.TrimSpace(argv0))
@@ -359,7 +359,7 @@ func init() {
 		// replaced it, so it owes the same help for an ordinary typo.
 		near := cmd.SuggestionsFor(args[0])
 		// A near-miss is a misspelled COMMAND, not a misplaced path: with
-		// --trace on, `gaia-tui --trace chatt` still has to suggest `chat`.
+		// --trace on, `gaia-cli --trace chatt` still has to suggest `chat`.
 		if len(near) == 0 {
 			if err := traceArgAdvice(args, 0); err != nil {
 				return err
@@ -378,9 +378,9 @@ func init() {
 
 // Execute runs the CLI.
 //
-// A leading `tui` word is accepted and dropped. The binary is `gaia-tui` (the
+// A leading `tui` word is accepted and dropped. The binary is `gaia-cli` (the
 // Python `gaia` CLI has no `tui` subcommand), but older docs and scripts spell
-// it `gaia tui …`, so `gaia-tui tui run email` would otherwise fail with
+// it `gaia tui …`, so `gaia-cli tui run gaia` would otherwise fail with
 // "unknown command". Both spellings work; only the first argument is
 // considered, so an agent named "tui" is unaffected.
 func Execute() error {

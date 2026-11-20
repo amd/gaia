@@ -227,14 +227,14 @@ export function NotificationCenter({ onClose, onOpenChat }: NotificationCenterPr
                   {prompt ? (
                     <>
                       <span className="notification-title"><MarkedText text={prompt.heading} /></span>
-                      <span className="notification-message"><MarkedText text={prompt.question} /></span>
+                      <span className="notification-message" dir="auto"><MarkedText text={prompt.question} /></span>
                     </>
                   ) : (
                     <>
                       {n.title && (
                         <span className="notification-title">{noticeText(n.title)}</span>
                       )}
-                      <span className="notification-message">{noticeText(n.message)}</span>
+                      <span className="notification-message" dir="auto">{noticeText(n.message)}</span>
                     </>
                   )}
 

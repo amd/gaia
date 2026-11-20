@@ -359,7 +359,7 @@ class TestJob:
         # Loud failure: the traceback is logged (no silent swallow).
         mock_log.assert_called_once()
 
-    def test_failure_leaves_store_unmodified(self, mocker, tmp_path):
+    def test_failure_is_recorded_without_marking_the_run(self, mocker, tmp_path):
         store = _store_with(tmp_path, _make_schedule("a"))
         sched = store.get("a")
         mocker.patch.object(runner, "fire", side_effect=RuntimeError("kaboom"))
@@ -367,8 +367,13 @@ class TestJob:
         daemon._job(sched, store)
 
         reloaded = store.get("a")
+        # last_run stays the last successful run; the failure is recorded
+        # beside it (#8263), and next_run moves on so the failed run is not
+        # later counted as missed.
         assert reloaded.last_run is None
-        assert reloaded.next_run is None
+        assert reloaded.failed_runs == 1
+        assert reloaded.last_error == "kaboom"
+        assert reloaded.next_run is not None
 
 
 # ===========================================================================
@@ -448,5 +453,6 @@ class TestResolveInput:
 
     def test_skill_raises_not_implemented(self):
         sched = Schedule(name="s", cron="* * * * *", skill="sk")
-        with pytest.raises(NotImplementedError, match="cannot run skills yet"):
+        with pytest.raises(NotImplementedError, match="cannot run skills yet") as exc:
             runner.resolve_input(sched)
+        assert "issues/6470" in str(exc.value)

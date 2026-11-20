@@ -228,6 +228,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 const ctas = () => descendants(rendered.root).filter((e) => 'data-dl-cta' in e.attrs);
@@ -625,6 +626,25 @@ describe('Downloads.astro against an incomplete release', () => {
     expect(hrefs.filter((h) => /\.(pkg|deb|rpm)$|gaia-0\.25\.0-win-x64-setup/.test(h))).toEqual([]);
   });
 
+  // A release from after the rename carries both names; the card offers gaia-cli.
+  it('links the gaia-cli build when the release carries one', async () => {
+    const {
+      'win-x64-setup': _setup,
+      'darwin-arm64-pkg': _pkg,
+      'linux-x64-deb': _deb,
+      ...raw
+    } = SETUP_RELEASE_FILES;
+    const legacy = Object.values(raw);
+    const renamed = legacy.map((name) => name.replace(/^gaia-/, 'gaia-cli-'));
+    RELEASES = releaseAt([...legacy, ...renamed]);
+    rendered = await render();
+
+    const tui = ctas().filter((b) => b.attrs['data-surface'] === 'tui');
+    expect(tui.flatMap(hrefsIn).sort()).toEqual(
+      renamed.map((name) => assetUrl(`v${SETUP_VERSION}`, name)).sort(),
+    );
+  });
+
   it('drops a desktop platform the release does not carry, and keeps the rest', async () => {
     RELEASES = [
       stable(SETUP_VERSION, [
@@ -663,8 +683,12 @@ describe('Downloads.astro against an incomplete release', () => {
   });
 
   it('fails the build when the GitHub API does', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'test-token');
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '0');
     stubReleases(() => new Response('rate limited', { status: 403 }));
-    await expect(renderHtml()).rejects.toThrow(/\[github\].*releases.*HTTP 403.*GITHUB_TOKEN/s);
+    await expect(renderHtml()).rejects.toThrow(
+      /\[github\].*releases.*HTTP 403.*hourly quota/s,
+    );
   });
 });
 

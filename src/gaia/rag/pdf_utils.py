@@ -8,6 +8,7 @@ PDF image extraction utilities for multi-modal RAG.
 Extracts individual images from PDF pages (not whole page conversion).
 """
 
+import contextlib
 import hashlib
 import io
 from typing import List, Tuple
@@ -16,6 +17,24 @@ from gaia.logger import get_logger
 from gaia.utils.parsing import PDFIUM_LOCK
 
 logger = get_logger(__name__)
+
+# pypdf's own cap is 100,000; SEC filings' catalogs pass it. Bounded, because
+# each element costs memory on a hostile file.
+PDF_MAX_ARRAY_ELEMENTS = 1_000_000
+
+
+def pdf_parse_limits():
+    """pypdf limits for one read, with the array cap raised to PDF_MAX_ARRAY_ELEMENTS.
+
+    pypdf parses lazily, so hold this around every use of the reader, not
+    just its construction.
+    """
+    try:
+        from pypdf import apply_configuration  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        # PyPDF2 has no array cap to raise.
+        return contextlib.nullcontext()
+    return apply_configuration(array_maximum_element_count=PDF_MAX_ARRAY_ELEMENTS)
 
 
 def prepare_image_for_vlm(image_bytes: bytes) -> dict:

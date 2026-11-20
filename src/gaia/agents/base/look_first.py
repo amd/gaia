@@ -15,17 +15,12 @@ import os
 import re
 from typing import List
 
+from gaia.agents.base.text_task import instruction_part
+
 #: A path-like token: has a separator, or ends in a short file extension.
 _PATH_TOKEN = re.compile(
     r"(?<![\w@])(?:[A-Za-z]:[\\/]|/)?[\w.\-]+(?:[\\/][\w.\-]+)+|"
     r"(?<![\w@/\\])[\w\-]+\.[A-Za-z][A-Za-z0-9]{0,5}\b"
-)
-
-#: "Translate this sentence: <text>": after the colon is text to work on, so
-#: a path inside it is part of the sentence, not a file to open.
-_TEXT_TASK = re.compile(
-    r"^\s*(?:please\s+)?(?:translate|rephrase|reword|paraphrase|proofread)\b[^:\n]*:",
-    re.IGNORECASE,
 )
 
 LOOK_FIRST_PROMPT = (
@@ -43,11 +38,7 @@ def named_workspace_paths(request: str, root: str) -> List[str]:
     """
     root_real = os.path.realpath(root)
     found: List[str] = []
-    request = request or ""
-    text_task = _TEXT_TASK.match(request)
-    if text_task:
-        request = request[: text_task.end()]
-    for token in _PATH_TOKEN.findall(request):
+    for token in _PATH_TOKEN.findall(instruction_part(request)):
         token = token.rstrip(".")
         if not token or token in found:
             continue

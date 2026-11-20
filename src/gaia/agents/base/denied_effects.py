@@ -15,6 +15,14 @@ so the loop can stop an overlapping call, whichever tool it arrives through.
 Extraction is deliberately conservative about what it records from a denial:
 text utilities in a pipeline (``| tail``) and ``cd`` are never recorded, so
 declining ``cd repo && pytest | tail`` blocks the test run and nothing else.
+
+A denial is of one action, not of a tool or a task. A command with operands
+(``pip install pandas``, ``gh issue close 3``) covers that command on those
+operands, in any spelling, and not the same program aimed elsewhere. A declined
+Python program covers the script, what it runs and contacts, and the files it
+would delete, move or overwrite; a file it would only have created where the
+agent may write is its output, not what was declined, so the task can still
+produce that output another way.
 """
 
 from __future__ import annotations
@@ -23,13 +31,15 @@ import ast
 import contextvars
 import ipaddress
 import logging
+import ntpath
 import os
 import re
 import shlex
 import tempfile
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
+from gaia.agents.base.call_risk import DESTRUCTIVE, shell_command_risk
 from gaia.agents.base.command_wrappers import unwrap_command_argv
 from gaia.canonical_path import canonical_path
 
@@ -43,6 +53,11 @@ SCRIPT = "script"
 #: Set on a refusal nobody chose — no person was there to approve the call —
 #: so it is kept off the ledger and other routes to the effect stay open.
 UNATTENDED_REFUSAL = "unattended_refusal"
+
+#: Set, to the program's name, on a call that could not run because that
+#: program is not installed. Installing it fixes that, so it is kept off the
+#: ledger too: the host the call aimed at was never refused.
+PROGRAM_NOT_FOUND = "program_not_found"
 
 #: A file change whose target the code computes: it could be any denied path.
 COMPUTED_PATH = "a path the code works out when it runs"
@@ -271,6 +286,8 @@ _PATH_MUTATORS = frozenset(
         "ac",
         "xcopy",
         "robocopy",
+        "mklink",
+        "ln",
     }
 )
 #: Those that delete or empty the paths they name.
@@ -306,7 +323,11 @@ _NON_PATH_VALUE_FLAGS = frozenset(
 )
 #: cmd programs whose ``/X`` arguments are switches, not paths.
 _SLASH_SWITCH_PROGRAMS = frozenset({"xcopy", "robocopy", "copy", "move", "del", "rd"})
+#: ``mklink``'s only switches; any other ``/x`` is a path such as ``/etc``.
+_MKLINK_SWITCHES = frozenset({"/d", "/h", "/j"})
 _SLASH_SWITCH_RE = re.compile(r"^/[A-Za-z]{1,8}(?::\S*)?$")
+#: ``New-Item -ItemType`` values that make a link to another path.
+_LINK_ITEM_TYPES = ("junction", "symboliclink", "hardlink")
 
 #: Running or importing a test module is running (part of) the suite.
 _TEST_MODULE_RE = re.compile(r"^(?:test_\w*|\w+_tests?)$")
@@ -696,12 +717,8 @@ def _program(token: str) -> str:
     return _EXE_SUFFIX_RE.sub("", base)
 
 
-def _canonical_family(program: str, rest: Sequence[str]) -> Optional[str]:
-    """``pytest`` → the test suite; ``gh issue close 1`` → ``gh issue close``."""
-    if program in _NEUTRAL_PROGRAMS or not program:
-        return None
-    if program in _TEST_RUNNERS:
-        return TEST_SUITE
+def _command_words(rest: Sequence[str]) -> List[str]:
+    """The lowercased words of *rest* that are neither switches nor their values."""
     words: List[str] = []
     skip = False
     for w in rest:
@@ -711,6 +728,99 @@ def _canonical_family(program: str, rest: Sequence[str]) -> Optional[str]:
             skip = True
         elif not w.startswith("-") and not w.startswith("/"):
             words.append(w.lower())
+    return words
+
+
+#: While set, each command a parse reads notes its family and operand words.
+_OPERANDS: "contextvars.ContextVar[Optional[Dict[str, List[frozenset]]]]" = (
+    contextvars.ContextVar("denied_effects_operands", default=None)
+)
+
+
+#: Flags whose value is free text about the action, not what it acts on.
+_TEXT_FLAGS = frozenset({"--message", "--title", "--body", "--comment", "--notes"})
+#: Short forms of those, read only for the programs that give them that meaning.
+_SHORT_TEXT_FLAGS = {"git": frozenset({"-m"}), "gh": frozenset({"-m", "-b", "-t"})}
+#: Programs whose operands are packages, where ``pandas==2.2`` is ``pandas``.
+_PACKAGE_PROGRAMS = frozenset(
+    {"pip", "pip3", "uv", "pipx", "conda", "mamba", "npm", "pnpm", "yarn", "winget"}
+)
+_VERSION_PIN = re.compile(r"[\[<>=!~;@ ]")
+
+
+def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
+    """*rest* without the values of message-style flags.
+
+    ``git commit -m "fix bug"`` and ``git commit -m "Fix the bug"`` are one
+    action: the wording of a message is not what the command acts on.
+    """
+    flags = _TEXT_FLAGS | _SHORT_TEXT_FLAGS.get(family.split(" ")[0], frozenset())
+    kept: List[str] = []
+    skip = False
+    for word in rest:
+        if skip:
+            skip = False
+        elif word.lower() in flags:
+            skip = True
+        else:
+            kept.append(word)
+    return kept
+
+
+def _unpinned(word: str) -> str:
+    """A package operand without its version, extras or markers."""
+    # A leading ``@`` is an npm scope, not a pin.
+    return word[:1] + _VERSION_PIN.split(word[1:], maxsplit=1)[0]
+
+
+def _note_command(family: Optional[str], rest: Sequence[str], cwd: str) -> None:
+    """Record what *family* was run on: the words after its subcommand.
+
+    Each is kept as a path under *cwd*, so ``.`` holds ``a.txt`` and a plain
+    word (``pandas``) still only equals itself. The text of a message and the
+    version a package is pinned to are left out: a rewording, or the same
+    package at another version, is the same action.
+    """
+    sink = _OPERANDS.get()
+    if sink is None or not family or family == TEST_SUITE:
+        return
+    depth = len(family.split(" ")) - 1
+    rest = _without_text_values(family, rest)
+    words = [w.strip("'\"") for w in _command_words(rest)[depth:]]
+    if family.split(" ")[0] in _PACKAGE_PROGRAMS:
+        words = [_unpinned(w) for w in words]
+    sink.setdefault(family, []).append(
+        frozenset(_lexical_path(w, cwd) or w for w in words if w)
+    )
+
+
+def _holds(outer: frozenset, inner: frozenset) -> bool:
+    """True when every operand of *inner* is one of *outer*'s, or inside one."""
+    return all(any(_path_within(i, o) for o in outer) for i in inner)
+
+
+def _same_command(
+    mine: Optional[List[frozenset]], theirs: Optional[List[frozenset]]
+) -> bool:
+    """False only when both runs name operands and neither set holds the other.
+
+    ``git push`` covers ``git push origin main`` and the reverse, and ``git
+    add .`` covers ``git add a.txt``; ``pip install pandas`` does not cover
+    ``pip install openpyxl``. A run whose operands could not be read is
+    treated as the same command.
+    """
+    if not mine or not theirs:
+        return True
+    return any(_holds(a, b) or _holds(b, a) for a in mine for b in theirs)
+
+
+def _canonical_family(program: str, rest: Sequence[str]) -> Optional[str]:
+    """``pytest`` → the test suite; ``gh issue close 1`` → ``gh issue close``."""
+    if program in _NEUTRAL_PROGRAMS or not program:
+        return None
+    if program in _TEST_RUNNERS:
+        return TEST_SUITE
+    words = _command_words(rest)
     if program in _PACKAGE_TEST_SCRIPTS and words[:1] == ["test"]:
         return TEST_SUITE
     if program in _PACKAGE_TEST_SCRIPTS and words[:2] == ["run", "test"]:
@@ -727,6 +837,7 @@ def _python_invocation(args: Sequence[str], cwd: str, depth: int) -> Set[Effect]
         if arg == "-m" and i + 1 < len(args):
             module = args[i + 1].lower()
             family = _canonical_family(module.split(".")[0], args[i + 2 :])
+            _note_command(family, args[i + 2 :], cwd)
             return {Effect(COMMAND, family)} if family else set()
         if arg == "-c" and i + 1 < len(args):
             return effects_of_python_code(args[i + 1], cwd, depth + 1)
@@ -752,6 +863,46 @@ def _note_deleted(effects: Set[Effect]) -> None:
         sink.update(effects)
 
 
+#: Set while :func:`creates_a_link` listens; a parse that makes a link marks it.
+_LINKED: "contextvars.ContextVar[Optional[List[bool]]]" = contextvars.ContextVar(
+    "denied_effects_linked", default=None
+)
+
+
+def _note_linked() -> None:
+    sink = _LINKED.get()
+    if sink is not None:
+        sink.append(True)
+
+
+def creates_a_link(command: str, cwd: str) -> bool:
+    """True when shell *command* makes a symlink, junction or hard link.
+
+    Parsed as a denial is: aliases, wrappers, ``python -c`` and scripts.
+    """
+    token = _LINKED.set([])
+    try:
+        effects_of_shell_command(command, cwd)
+        return bool(_LINKED.get())
+    finally:
+        _LINKED.reset(token)
+
+
+def _new_item_links(rest: Sequence[str]) -> bool:
+    """``New-Item -ItemType Junction|SymbolicLink|HardLink``, in any abbreviation."""
+    for index, arg in enumerate(rest):
+        flag, colon, attached = arg.lower().partition(":")
+        names_type = flag == "-type" or (len(flag) > 1 and "-itemtype".startswith(flag))
+        if not names_type:
+            continue
+        value = (
+            attached if colon else (rest[index + 1] if index + 1 < len(rest) else "")
+        )
+        if value.strip("'\"").lower().startswith(_LINK_ITEM_TYPES):
+            return True
+    return False
+
+
 def deletes_a_path(command: str, cwd: str) -> bool:
     """True when shell *command* deletes or empties a path, parsed as a denial is.
 
@@ -766,19 +917,32 @@ def deletes_a_path(command: str, cwd: str) -> bool:
         _DELETED.reset(token)
 
 
-def effects_of_shell_command(command: str, cwd: str, depth: int = 0) -> Set[Effect]:
-    """Every effect a shell command line has, segment by segment."""
+def effects_of_shell_command(
+    command: str,
+    cwd: str,
+    depth: int = 0,
+    keep: Optional[Callable[[str, Set[Effect]], Set[Effect]]] = None,
+) -> Set[Effect]:
+    """Every effect a shell command line has, segment by segment.
+
+    *keep*, given a segment and its effects, returns the ones to count.
+    """
     if depth > 3 or not isinstance(command, str):
         return set()
-    effects = _effects_of_line(command, cwd, depth)
+    effects = _effects_of_line(command, cwd, depth, keep)
     if '`"' in command:
         # PowerShell's `" nests a quote, but in sh the backtick ends a
         # substitution, so read the line both ways.
-        effects |= _effects_of_line(command.replace('`"', "'"), cwd, depth)
+        effects |= _effects_of_line(command.replace('`"', "'"), cwd, depth, keep)
     return effects
 
 
-def _effects_of_line(command: str, cwd: str, depth: int) -> Set[Effect]:
+def _effects_of_line(
+    command: str,
+    cwd: str,
+    depth: int,
+    keep: Optional[Callable[[str, Set[Effect]], Set[Effect]]] = None,
+) -> Set[Effect]:
     """Effects of one reading of a shell command line."""
     effects: Set[Effect] = set()
     for segment in _split_segments(command):
@@ -812,13 +976,15 @@ def _effects_of_line(command: str, cwd: str, depth: int) -> Set[Effect]:
                 pending = True
             elif not target.startswith("&"):
                 redirect_targets.append(target)
+        found: Set[Effect] = set()
         for target in redirect_targets:
             if target.lower() not in ("/dev/null", "nul", "$null"):
                 path = _norm_path(target, cwd)
                 if path:
-                    effects.add(Effect(PATH, path))
-        effects |= _dotnet_file_writes(segment, cwd)
-        effects |= _effects_of_argv(kept, cwd, depth)
+                    found.add(Effect(PATH, path))
+        found |= _dotnet_file_writes(segment, cwd)
+        found |= _effects_of_argv(kept, cwd, depth)
+        effects |= keep(segment, found) if keep is not None else found
     return effects
 
 
@@ -983,6 +1149,15 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     family = _canonical_family(program, rest)
     if family:
         effects.add(Effect(COMMAND, family))
+        _note_command(family, rest, cwd)
+    if program in ("mklink", "ln") or (
+        program in ("new-item", "ni") and _new_item_links(rest)
+    ):
+        _note_linked()
+    elif program == "fsutil" and "hardlink" in (w.lower() for w in rest):
+        _note_linked()
+        linked = (_norm_path(arg, cwd) for arg in rest[2:])
+        effects |= {Effect(PATH, path) for path in linked if path}
     changed: List[str] = []
     if program in _PATH_MUTATORS:
         changed = [
@@ -990,6 +1165,7 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
             for arg in _positionals(rest, _NON_PATH_VALUE_FLAGS)
             # ``xcopy a b /Y``: a cmd switch, not a folder at the drive root.
             if not (program in _SLASH_SWITCH_PROGRAMS and _SLASH_SWITCH_RE.match(arg))
+            and not (program == "mklink" and arg.lower() in _MKLINK_SWITCHES)
         ]
     elif program == "dd":
         changed = [arg[3:] for arg in rest if arg.startswith("of=")]
@@ -1050,11 +1226,21 @@ _FILE_CHANGERS: Dict[str, Dict[str, Tuple[Tuple[int, str], ...]]] = {
         "symlink": ((1, "dst"),),
         "link": ((1, "dst"),),
     },
+    "_winapi": {"CreateJunction": ((1, "dst_path"),)},
 }
+#: Calls that make a link: ``(target argument, link argument)`` of each.
+_PY_LINKERS: Dict[str, Dict[str, Tuple[Tuple[int, str], Tuple[int, str]]]] = {
+    "os": {"symlink": ((0, "src"), (1, "dst")), "link": ((0, "src"), (1, "dst"))},
+    "_winapi": {"CreateJunction": ((0, "src_path"), (1, "dst_path"))},
+}
+#: ``pathlib.Path`` methods that make the receiver a link to their argument.
+_PATH_LINK_METHODS = frozenset({"symlink_to", "hardlink_to"})
 #: Modules whose ``open(file, mode)`` writes when the mode says so.
 _OPENERS = frozenset({"io", "codecs", "builtins", "gzip", "bz2", "lzma"})
 _TRACKED_MODULES = (
-    frozenset({"os", "shutil", "pathlib", "tempfile", "subprocess", "importlib"})
+    frozenset(
+        {"os", "shutil", "pathlib", "tempfile", "subprocess", "importlib", "_winapi"}
+    )
     | _OPENERS
 )
 #: ``os.open`` flags that write; a flag it can't name is read as a write.
@@ -1078,6 +1264,29 @@ _PATH_DERIVERS = frozenset(
 )
 #: ``os.path`` functions that return their argument's path, reshaped.
 _SAME_PATH_FUNCS = frozenset({"abspath", "normpath", "realpath", "expanduser"})
+
+
+#: How Python code changes a path: it makes the folder, writes the file, or
+#: does something that can lose what is there (delete, move, link).
+_MAKES, _WRITES, _DESTROYS = "makes", "writes", "destroys"
+_FOLDER_MAKERS = frozenset({"makedirs", "mkdir"})
+_PY_DESTROYERS = {
+    "os": frozenset({"rename", "replace", "renames", "symlink", "link"}),
+    "shutil": frozenset({"move"}),
+    "_winapi": frozenset({"CreateJunction"}),
+}
+_PATH_DESTROYER_METHODS = frozenset({"rename", "replace", "symlink_to", "hardlink_to"})
+#: While set, each path Python code changes is noted with how it changes it.
+_PY_CHANGES: "contextvars.ContextVar[Optional[Dict[Effect, Set[str]]]]" = (
+    contextvars.ContextVar("denied_effects_py_changes", default=None)
+)
+
+
+def _note_py_change(effects: Set["Effect"], how: str) -> None:
+    sink = _PY_CHANGES.get()
+    if sink is not None:
+        for effect in effects:
+            sink.setdefault(effect, set()).add(how)
 
 
 def _arg(call: ast.Call, position: int, keyword: str) -> Optional[ast.AST]:
@@ -1392,14 +1601,63 @@ class _PyFiles:
             not name.startswith("O_") for name in names
         )
 
+    def link_target(self, call: ast.Call) -> Tuple[bool, Optional[str]]:
+        """Whether *call* makes a link, and the absolute path it points at.
+
+        The path is None when the code works it out at run time. A relative
+        symlink target is read from the link's own folder, as the OS reads it.
+        """
+        module, name = self._callee(call)
+        spec = _PY_LINKERS.get(module or "", {}).get(name or "")
+        func = call.func
+        if spec:
+            target_node, link_node = _arg(call, *spec[0]), _arg(call, *spec[1])
+            relative_to_link = name != "link"
+        elif (
+            isinstance(func, ast.Attribute)
+            and func.attr in _PATH_LINK_METHODS
+            and self.is_path(func.value)
+        ):
+            target_node, link_node = _arg(call, 0, "target"), func.value
+            relative_to_link = func.attr == "symlink_to"
+        else:
+            return False, None
+        target = self.text(target_node) if target_node is not None else None
+        if target is None:
+            return True, None
+        target = os.path.expanduser(target)
+        if os.path.isabs(target):
+            return True, target
+        base = self.cwd
+        if relative_to_link:
+            link = self.text(link_node) if link_node is not None else None
+            if link is None:
+                return True, None
+            base = os.path.dirname(os.path.join(self.cwd, os.path.expanduser(link)))
+        return True, os.path.join(base, target)
+
     def changed(self, call: ast.Call) -> Set[Effect]:
         found = self._changed(call)
+        if self.link_target(call)[0]:
+            _note_linked()
         module, name = self._callee(call)
         func = call.func
+        method = func.attr if isinstance(func, ast.Attribute) else None
         if (name or "") in _PY_DELETERS.get(module or "", ()) or (
-            isinstance(func, ast.Attribute) and func.attr in _PATH_DELETER_METHODS
+            method in _PATH_DELETER_METHODS
         ):
             _note_deleted(found)
+            _note_py_change(found, _DESTROYS)
+        elif (name or "") in _PY_DESTROYERS.get(module or "", ()) or (
+            module is None and method in _PATH_DESTROYER_METHODS
+        ):
+            _note_py_change(found, _DESTROYS)
+        elif (module == "os" and name in _FOLDER_MAKERS) or (
+            module is None and method == "mkdir"
+        ):
+            _note_py_change(found, _MAKES)
+        else:
+            _note_py_change(found, _WRITES)
         return found
 
     def _changed(self, call: ast.Call) -> Set[Effect]:
@@ -1568,8 +1826,10 @@ def python_file_reads(code: str, cwd: str) -> Tuple[List[str], List[List[str]]]:
                 add(func.value)
         elif module == "shutil" and name in _SHUTIL_READERS:
             add(_arg(node, 0, "src"))
-        elif name in _SUBPROCESS_FUNCS or (
-            module == "os" and name in ("system", "popen")
+        elif (
+            name in _SUBPROCESS_FUNCS
+            or (module == "os" and name in ("system", "popen"))
+            or (module == "pty" and name == "spawn")
         ):
             first = _arg(node, 0, "args")
             if first is None:
@@ -1581,7 +1841,104 @@ def python_file_reads(code: str, cwd: str) -> Tuple[List[str], List[List[str]]]:
                 argv, _ = files.argv(first)
                 if argv:
                     commands.append(argv)
+        elif module == "os" and name and name.startswith(("exec", "spawn")):
+            argv = _os_exec_argv(files, node, name)
+            if argv:
+                commands.append(argv)
     return paths, commands
+
+
+def _os_exec_argv(files: "_PyFiles", node: ast.Call, name: str) -> List[str]:
+    """The argv an ``os.exec*`` / ``os.spawn*`` call runs, as far as it is spelled."""
+    # spawn* takes a mode first; then the program, then its arguments.
+    start = 2 if name.startswith("spawn") else 1
+    flavour = name[len("spawn") if name.startswith("spawn") else len("exec") :]
+    if flavour.startswith("v"):
+        if len(node.args) <= start:
+            return []
+        argv, _ = files.argv(node.args[start])
+        return argv
+    words = [files.text(arg) for arg in node.args[start:]]
+    return [word for word in words if word is not None]
+
+
+def python_link_targets(code: str, cwd: str) -> List[Optional[str]]:
+    """Where each link a snippet makes points; None for a target it computes.
+
+    Covers ``os.symlink``, ``os.link``, ``_winapi.CreateJunction`` and
+    ``Path.symlink_to`` / ``hardlink_to``. A link made by a shell command the
+    snippet runs is among the paths :func:`effects_of_python_code` reports.
+    """
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return []
+    files = _PyFiles(tree, cwd)
+    targets: List[Optional[str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            links, target = files.link_target(node)
+            if links:
+                targets.append(target)
+    return targets
+
+
+#: Calls that list a folder: ``os`` functions, and ``Path`` methods.
+_PY_LISTERS = frozenset({"listdir", "scandir", "walk"})
+_PATH_LISTERS = frozenset({"iterdir", "glob", "rglob"})
+_GLOB_CHARS = re.compile(r"[*?\[]")
+
+
+def python_listed_folders(code: str, cwd: str) -> List[str]:
+    """The folders a snippet lists, as the code spells them.
+
+    ``os.listdir`` / ``scandir`` / ``walk``, ``glob.glob`` up to its first
+    wildcard, and ``Path.iterdir`` / ``glob`` / ``rglob``.
+    """
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return []
+    files = _PyFiles(tree, cwd)
+    globs = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "glob"
+    }
+    folders: List[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        module, name = files._callee(node)
+        text: Optional[str] = None
+        if module == "os" and name in _PY_LISTERS:
+            first = _arg(node, 0, "path" if name != "walk" else "top")
+            text = files.text(first) if first is not None else None
+        elif (
+            isinstance(func, ast.Attribute)
+            and func.attr in _PATH_LISTERS
+            and files.is_path(func.value)
+        ):
+            text = files.text(func.value)
+        elif name in ("glob", "iglob") and (
+            module == "glob"
+            or (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and func.value.id in globs
+            )
+        ):
+            pattern = _arg(node, 0, "pathname")
+            spelled = files.text(pattern) if pattern is not None else None
+            if spelled:
+                fixed = _GLOB_CHARS.split(spelled, 1)[0]
+                text = os.path.dirname(fixed) if fixed != spelled else spelled
+        if text:
+            folders.append(text)
+    return folders
 
 
 def _effects_of_python_call(
@@ -1679,9 +2036,15 @@ def _is_url_arg(key: str) -> bool:
 
 
 def effects_of_call(
-    tool_name: str, tool_args: Optional[Dict[str, Any]], cwd: Optional[str] = None
+    tool_name: str,
+    tool_args: Optional[Dict[str, Any]],
+    cwd: Optional[str] = None,
+    keep: Optional[Callable[[str, Set[Effect]], Set[Effect]]] = None,
 ) -> Set[Effect]:
-    """Every effect a tool call would have, whichever tool carries it."""
+    """Every effect a tool call would have, whichever tool carries it.
+
+    *keep* filters a shell command's effects segment by segment.
+    """
     args = tool_args if isinstance(tool_args, dict) else {}
     name = (tool_name or "").lower()
     cwd = cwd or os.getcwd()
@@ -1699,7 +2062,7 @@ def effects_of_call(
 
     for key in _SHELL_ARG_NAMES:
         if isinstance(args.get(key), str):
-            effects |= effects_of_shell_command(args[key], cwd)
+            effects |= effects_of_shell_command(args[key], cwd, keep=keep)
     if "python" in name and re.search(r"run|exec", name):
         if isinstance(args.get("code"), str):
             effects |= effects_of_python_code(args["code"], cwd)
@@ -1788,7 +2151,11 @@ def render_call(tool_name: str, tool_args: Optional[Dict[str, Any]]) -> str:
 
 @dataclass
 class Denial:
-    """One declined call and the effects it covered."""
+    """One declined call and the effects it covered.
+
+    *by_user* is False for a refusal no person made: a policy, or a console
+    that had no one to ask. The model must never be told the user said no.
+    """
 
     tool_name: str
     rendered: str
@@ -1796,6 +2163,87 @@ class Denial:
     effects: Set[Effect] = field(default_factory=set)
     #: GAIA's policy said no, not a person, so no person can lift it.
     refused: bool = False
+    by_user: bool = True
+    #: Command family -> the operand words of each declined run of it.
+    operands: Dict[str, List[frozenset]] = field(default_factory=dict)
+
+    def who(self) -> str:
+        """Who said no, as the model and the user are told."""
+        return "the user declined" if self.by_user else "was refused"
+
+
+def _names_path(text: str, target: str) -> bool:
+    """True when *text* names the file or folder *target*."""
+    lowered = (text or "").lower().replace("/", "\\")
+    path = target.lower().replace("/", "\\").rstrip("\\")
+    if path and path in lowered:
+        return True
+    name = ntpath.basename(path)
+    if not name:
+        return False
+    return (
+        re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w-]|\.\w)", lowered) is not None
+    )
+
+
+def _refusal_scope(
+    reason: str, refused_alone: Optional[Callable[[str], bool]]
+) -> Callable[[str, Set[Effect]], Set[Effect]]:
+    """Which paths of a refused shell line the refusal is about.
+
+    A path the reason names always counts. Otherwise only a segment that
+    deletes or discards keeps its paths, and only when the policy would refuse
+    that segment on its own (*refused_alone*; with none, every such segment
+    counts): refusing ``rm`` still guards its target, while refusing ``copy``
+    says nothing about an allowed ``git checkout`` beside it, nor about the
+    files ``copy`` was given. Hosts are kept as before.
+    """
+
+    def keep(segment: str, effects: Set[Effect]) -> Set[Effect]:
+        destroys = shell_command_risk(segment) == DESTRUCTIVE and (
+            refused_alone is None or refused_alone(segment)
+        )
+        return {
+            e
+            for e in effects
+            if e.kind != PATH or destroys or _names_path(reason, e.target)
+        }
+
+    return keep
+
+
+def _read_call(
+    tool_name: str,
+    tool_args: Optional[Dict[str, Any]],
+    cwd: str,
+    keep: Optional[Callable[[str, Set[Effect]], Set[Effect]]] = None,
+) -> Tuple[Set[Effect], Dict[str, List[frozenset]], Dict[Effect, Set[str]]]:
+    """A call's effects, its commands' operands, and how its Python changes paths."""
+    operands = _OPERANDS.set({})
+    changes = _PY_CHANGES.set({})
+    try:
+        effects = effects_of_call(tool_name, tool_args, cwd, keep=keep)
+        return effects, _OPERANDS.get() or {}, _PY_CHANGES.get() or {}
+    finally:
+        _PY_CHANGES.reset(changes)
+        _OPERANDS.reset(operands)
+
+
+def _only_an_output(
+    effect: Effect, how: Optional[Set[str]], may_create: Callable[[str], bool]
+) -> bool:
+    """True for a path a Python program would only create, where it may.
+
+    Nothing is lost by making a new file, or a folder that is already there,
+    so it is the program's output rather than the thing that was declined.
+    """
+    if effect.kind != PATH or not how or _DESTROYS in how:
+        return False
+    if os.path.lexists(effect.target) and not (
+        how == {_MAKES} and os.path.isdir(effect.target)
+    ):
+        return False
+    return bool(may_create(effect.target))
 
 
 class DeniedEffects:
@@ -1814,26 +2262,45 @@ class DeniedEffects:
         tool_args: Optional[Dict[str, Any]],
         reason: str,
         kinds: Optional[Set[str]] = None,
+        by_user: bool = True,
+        scope_to_reason: bool = False,
+        refused_alone: Optional[Callable[[str], bool]] = None,
         refused: bool = False,
         paths: Optional[Sequence[str]] = None,
         hosts: Optional[Sequence[str]] = None,
+        may_create: Optional[Callable[[str], bool]] = None,
     ) -> Optional[Denial]:
         """Remember what this declined call would have done.
 
         *kinds* narrows what is kept: a policy refusal of one command shape
         records the host or path it targeted, not the whole command family.
-        *refused* marks a policy refusal rather than a person's no. *paths*,
-        when given, are the call's targets as the tool itself resolved them,
+        *scope_to_reason* keeps only the paths the refusal is about, judged
+        with *refused_alone* (see :func:`_refusal_scope`). *refused* marks a
+        refusal no approval can lift; it is never a person's no. *paths*, when
+        given, are the call's targets as the tool itself resolved them,
         recorded instead of reading them off the arguments. *hosts* likewise:
         the host a fetch was blocked at and the address it resolved to, which
-        after a redirect is not the host the URL argument names.
+        after a redirect is not the host the URL argument names. *may_create*
+        says whether the agent may make a path without asking: with it, a path
+        the call's Python would only have created there is left off (see
+        :func:`_only_an_output`); without it every path is recorded.
         """
+        operands: Dict[str, List[frozenset]] = {}
         if paths is not None:
             found = {Effect(PATH, p) for p in map(_norm_path_abs, paths) if p}
         elif hosts is not None:
             found = {Effect(NETWORK, canonical_host(h)) for h in hosts if h}
         else:
-            found = effects_of_call(tool_name, tool_args, self.cwd)
+            keep = _refusal_scope(reason, refused_alone) if scope_to_reason else None
+            found, operands, changes = _read_call(
+                tool_name, tool_args, self.cwd, keep=keep
+            )
+            if may_create is not None:
+                found = {
+                    e
+                    for e in found
+                    if not _only_an_output(e, changes.get(e), may_create)
+                }
         effects = {
             e
             for e in found
@@ -1842,21 +2309,42 @@ class DeniedEffects:
         if not effects:
             return None
         denial = Denial(
-            tool_name, render_call(tool_name, tool_args), reason, effects, refused
+            tool_name,
+            render_call(tool_name, tool_args),
+            reason,
+            effects,
+            refused=refused,
+            by_user=by_user and not refused,
+            operands=operands,
         )
         self.denials.append(denial)
         return denial
 
     def conflict(
-        self, tool_name: str, tool_args: Optional[Dict[str, Any]]
+        self,
+        tool_name: str,
+        tool_args: Optional[Dict[str, Any]],
+        by_user_only: bool = False,
     ) -> Optional[Tuple[Denial, Effect]]:
-        """The earlier denial this call would route around, if any."""
+        """The earlier denial this call would route around, if any.
+
+        *by_user_only* looks only at what a person declined.
+        """
         if not self:
             return None
-        wanted = effects_of_call(tool_name, tool_args, self.cwd)
+        wanted, operands, _ = _read_call(tool_name, tool_args, self.cwd)
         for denial in self.denials:
+            if by_user_only and not denial.by_user:
+                continue
             for denied in denial.effects:
                 for effect in wanted:
-                    if denied.overlaps(effect):
-                        return denial, effect
+                    if not denied.overlaps(effect):
+                        continue
+                    # The same program on something else is another action.
+                    if denied.kind == COMMAND and not _same_command(
+                        denial.operands.get(denied.target),
+                        operands.get(effect.target),
+                    ):
+                        continue
+                    return denial, effect
         return None

@@ -354,10 +354,22 @@ def _call(stats: Dict[str, Any]) -> Dict[str, Optional[float]]:
     }
 
 
-def _cost(model_id: Optional[str], tokens_in, cached, tokens_out) -> Dict[str, Any]:
+def _cost(
+    model_id: Optional[str],
+    tokens_in,
+    cached,
+    tokens_out,
+    *,
+    failed: bool = False,
+    stats: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     where = where_model_runs(model_id)
     if where == "local":
         return {"kind": "local", "usd": 0.0}
+    from gaia.ui import spending
+
+    if spending.never_answered(failed, stats):
+        return {"kind": spending.NO_REPLY_COST_KIND, "usd": None}
     if where is None:
         return {"kind": "unknown", "usd": None}
     from gaia.eval.bench.metering import price, rate_card
@@ -427,6 +439,8 @@ def summarize_turn(
     wall_seconds: float,
     model_id: Optional[str],
     loads: Iterable[Dict[str, Any]] = (),
+    failed: bool = False,
+    stats: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """One turn's performance, from the agent's result and the turn's wall time.
 
@@ -434,6 +448,10 @@ def summarize_turn(
     measured (each request's wall time, plus any model load before the turn),
     and GAIA's time is the rest of the measured wall time, split into tools,
     waiting on the user, and GAIA's own work.
+
+    A *failed* turn with no reported usage in *stats* never answered, so its
+    cost says that too: the same rule :func:`spending.never_answered` gives the
+    side rail, and the same turn is left out of ``unpriced_turns``.
     """
     timing = result.get("timing_summary") or {}
     steps = _step_stats(result.get("conversation") or [])
@@ -501,7 +519,14 @@ def summarize_turn(
         "tool_seconds_total": round(tool_s, _ROUND),
         "tools": listed,
         "loads": loads,
-        "cost": _cost(model_id, tokens_in, cached, tokens_out),
+        "cost": _cost(
+            model_id,
+            tokens_in,
+            cached,
+            tokens_out,
+            failed=failed,
+            stats=stats,
+        ),
         "unknown": unknown,
     }
     # Derived speeds or prompt size can still overflow: reject the record, not the panel.

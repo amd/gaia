@@ -8,7 +8,10 @@ import { ChatView } from './components/ChatView';
 import { NewChat } from './components/NewChat';
 import { ModelNeededDialog } from './components/ModelNeededDialog';
 import { LogsDialog } from './components/LogsDialog';
+import { ShortcutsDialog } from './components/ShortcutsDialog';
 import { SetupScreen } from './components/SetupScreen';
+import { GoBackOffer } from './components/setup/GoBackOffer';
+import { getUpdaterBridge } from './hooks/useUpdateStatus';
 import { ensureModel } from './stores/modelNeededStore';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { buildPersonalizePrompt, PERSONALIZE_EVENT, type PersonalizeRequest } from './utils/connectorPersonalize';
@@ -18,6 +21,8 @@ import { UpdateIndicator } from './components/UpdateIndicator';
 import { DownloadChip } from './components/setup/DownloadChip';
 import { NotificationCenter } from './components/NotificationCenter';
 import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
+import { BrowserPane } from './components/browser-pane/BrowserPane';
+import { browserPaneApi, useBrowserPaneStore } from './stores/browserPaneStore';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
@@ -25,6 +30,7 @@ import { useScheduleStore } from './stores/scheduleStore';
 import { useGoalHealthStore } from './stores/goalHealthStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
+import { useRetryServerWaitingDocs } from './hooks/useRetryServerWaitingDocs';
 import { useWindowTitle } from './hooks/useWindowTitle';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { startActiveRunsPoll } from './services/activeRuns';
@@ -39,7 +45,7 @@ import { NEW_CHAT_DRAFT_KEY, chatDraftKey, clearSavedDraft, readSavedDraft, writ
 import { getApiBase } from './utils/apiBase';
 import { followBackendLifecycle, resyncBackend } from './stores/backendStore';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
-import { FLAGSHIP_AGENT_ID, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
+import { FLAGSHIP_AGENT_ID, FlagshipMissing, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
 import { runWhileVisible } from './utils/visibleInterval';
 import { RETRY_INITIAL_MS, retryUntilOk, type Retrier } from './utils/retry';
 import { shouldShowStartupScreen } from './utils/startupGate';
@@ -110,6 +116,15 @@ function Loading() {
 // First failure, then every 10th (~5 min at the 30 s cap), so a stuck read stays in the log.
 const shouldLogRetry = (attempt: number) => attempt === 1 || attempt % 10 === 0;
 
+/** Local setup works on this version: the desktop app remembers it as the one to come back to. */
+function noteSetupWorked() {
+    // A cloud model skips the local engine, so it proves nothing about this version.
+    if (useModelStore.getState().active?.remote) return;
+    getUpdaterBridge()?.markSetupWorked().catch((err: unknown) => {
+        log.system.warn("Couldn't record that setup works on this version", err);
+    });
+}
+
 function App() {
     const t = useT();
     useWindowTitle();
@@ -165,6 +180,8 @@ function App() {
     const flagshipMissingRef = useRef(flagshipMissing);
     flagshipMissingRef.current = flagshipMissing;
     const [createError, setCreateError] = useState<string | null>(null);
+    // The New chat box holds a first message the missing agent refused.
+    const [heldForAgent, setHeldForAgent] = useState(false);
     // A task picked at the end of setup that needs the user to finish typing it.
     const [draftText, setDraftText] = useState('');
     const [newChatFocus, setNewChatFocus] = useState(0);
@@ -217,6 +234,7 @@ function App() {
                 // Read status and chats before showing the app, so it never flashes "lost connection" or "no chats".
                 if (waited > 0) await Promise.all([refreshStatus.current(), reloadSessions.current()]);
                 setNoAgentBuild(!!check.no_agent_build);
+                if (check.ready) noteSetupWorked();
                 // Seen ready before: an unreachable server is an outage, not a first run.
                 const serverDown = !check.ready && check.stage === 'server' && !!check.initialized;
                 setSetup(check.ready ? { state: 'ready' }
@@ -244,6 +262,20 @@ function App() {
     useEffect(() => {
         if (setup.state === 'serverDown' && lemonadeRunning) void checkSetup(true);
     }, [setup.state, lemonadeRunning, checkSetup]);
+
+    // The poll sees it gone while the app is open: show the launch notice without a reload.
+    const lemonadeDown = useChatStore((s) => s.systemStatus?.lemonade_running === false);
+    useEffect(() => {
+        if (setup.state !== 'ready' || !lemonadeDown) return;
+        let stale = false;
+        api.checkSetup(!!useModelStore.getState().active?.remote)
+            .then((check) => {
+                // Only an outage: anything else missing is not a reason to leave the chat.
+                if (!stale && !check.ready && check.stage === 'server' && check.initialized) setSetup({ state: 'serverDown', modelListUnread: !!check.model_list_unread });
+            })
+            .catch((err) => log.system.warn('Could not confirm the model server is down', err));
+        return () => { stale = true; };
+    }, [setup.state, lemonadeDown]);
 
     // Only the latest read may set the list; an older one in flight predates whatever setup installed.
     const agentsReadSeq = useRef(0);
@@ -434,6 +466,7 @@ function App() {
     useEffect(() => startQueueDispatcher(), []);
 
     useChatAlerts();
+    useRetryServerWaitingDocs();
 
     // Open a chat named in the URL (?session= or #hash), on load and on back/forward.
     const urlResolved = useRef(false);
@@ -533,6 +566,7 @@ function App() {
     // A new chat's first message: make the chat, then hand ChatView the text.
     const startChat = useCallback(async (text: string) => {
         setCreateError(null);
+        setHeldForAgent(false);
         if (!(await ensureModel('chat'))) {
             setDraftText(text);
             return false;
@@ -550,7 +584,7 @@ function App() {
         } catch (err) {
             if (!isFlagshipMissingError(err)) throw err;
             setFlagshipRefused(true);
-            throw new Error("The GAIA agent isn't installed. Install it from the notice above, then send again.");
+            throw new FlagshipMissing();
         }
         if (flagshipMissingRef.current) {
             // Created after all: the agent list was stale (installed from the CLI meanwhile).
@@ -578,6 +612,8 @@ function App() {
         clearSavedDraft(NEW_CHAT_DRAFT_KEY);
         if (modeError && !session.private) writeSavedDraft(chatDraftKey(session.id), text);
         addSession(session);
+        // Before the switch, so main moves the screen's tabs instead of showing the chat empty.
+        useBrowserPaneStore.getState().claimDraft(session.id);
         setCurrentSession(session.id);
         setMessages([]);
         setDraftText('');
@@ -593,6 +629,23 @@ function App() {
         return true;
     }, [addSession, setCurrentSession, setMessages, setPendingPrompt, loadAgents, loadDefaultPermissionMode]);
 
+    // A first message from outside the New chat box, refused for want of the agent:
+    // it waits in that box under the same hint, so "send again" has something to send.
+    const startChatOrHold = useCallback(async (text: string) => {
+        try {
+            return await startChat(text);
+        } catch (err) {
+            if (!(err instanceof FlagshipMissing)) throw err;
+            const saved = readSavedDraft(NEW_CHAT_DRAFT_KEY);
+            const held = saved.trimEnd().endsWith(text) ? saved : [saved, text].filter(Boolean).join('\n\n');
+            writeSavedDraft(NEW_CHAT_DRAFT_KEY, held);
+            setDraftText(held);
+            setHeldForAgent(true);
+            setNewChatSeed((n) => n + 1);
+            return false;
+        }
+    }, [startChat]);
+
     const newChat = useCallback(() => {
         const store = useChatStore.getState();
         const outgoing = store.currentSessionId;
@@ -606,6 +659,7 @@ function App() {
         store.setShowMemoryDashboard(false);
         store.setShowSchedules(false);
         choseNewChatRef.current = true;
+        setHeldForAgent(false);
         setCurrentSession(null);
         setMessages([]);
         setNewChatFocus((n) => n + 1);
@@ -655,14 +709,15 @@ function App() {
             const req = (e as CustomEvent<PersonalizeRequest>).detail;
             useChatStore.getState().closeSettings();
             newChat();
-            startChat(buildPersonalizePrompt(req))
+            startChatOrHold(buildPersonalizePrompt(req))
                 .catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
         };
         window.addEventListener(PERSONALIZE_EVENT, onPersonalize);
         return () => window.removeEventListener(PERSONALIZE_EVENT, onPersonalize);
-    }, [newChat, startChat]);
+    }, [newChat, startChatOrHold]);
 
     const finishSetup = useCallback((first?: StartCard) => {
+        noteSetupWorked();
         setSetup({ state: 'ready' });
         reloadAgentsAfterSetup();
         void checkSystemStatus();
@@ -671,8 +726,8 @@ function App() {
             setDraftText(first.prompt);
             return;
         }
-        startChat(first.prompt).catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
-    }, [checkSystemStatus, startChat, reloadAgentsAfterSetup]);
+        startChatOrHold(first.prompt).catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
+    }, [checkSystemStatus, startChatOrHold, reloadAgentsAfterSetup]);
 
     const leaveLocalSetup = useCallback(() => {
         setSetup({ state: 'ready' });
@@ -689,6 +744,7 @@ function App() {
     }, []);
 
     // ── Keyboard shortcuts ─────────────────────────────────────────────
+    const [showShortcuts, setShowShortcuts] = useState(false);
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             const mod = e.ctrlKey || e.metaKey;
@@ -697,6 +753,7 @@ function App() {
             else if (!e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); window.dispatchEvent(new CustomEvent('gaia:focus-search')); }
             else if (!e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); useChatStore.getState().toggleSidebarCollapsed(); }
             else if (!e.shiftKey && e.key === ',') { e.preventDefault(); openSettings(); }
+            else if (e.key === '/') { e.preventDefault(); setShowShortcuts((v) => !v); }
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
@@ -814,18 +871,20 @@ function App() {
         );
     }
 
+    // Beside a chat or a new chat, in the desktop app only.
+    const paneApi = !showMemoryDashboard && !showSchedules ? browserPaneApi() : undefined;
     const main = showMemoryDashboard ? (
         <Suspense fallback={<Loading />}><MemoryDashboard /></Suspense>
     ) : currentSessionId ? (
         <ChatView key={currentSessionId} sessionId={currentSessionId} />
     ) : (
-        <NewChat key={`${newChatSeed}:${draftText}`} onSend={startChat} initialText={draftText} focusRequest={newChatFocus} />
+        <NewChat key={`${newChatSeed}:${draftText}`} onSend={startChat} initialText={draftText} focusRequest={newChatFocus} agentMissing={flagshipMissing} agentRefused={heldForAgent} />
     );
 
     return (
         <div className="app">
             {!sidebarOpen && (
-                <button className="sidebar-toggle" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar">
+                <button className="sidebar-toggle" onClick={() => setSidebarOpen(true)} aria-label={t('sidebar.open')}>
                     <Menu size={18} />
                 </button>
             )}
@@ -855,10 +914,13 @@ function App() {
                     </div>
                 )}
                 {setup.state === 'unknown' && (setup.upgradeFailed ? (
-                    <div className="app-notice is-warning" role="status">
-                        <span>{t('setup.upgrading.failed', { error: setup.error })}</span>
-                        <button type="button" className="link-btn" onClick={() => void checkSetup()}>{t('setup.upgrading.retry')}</button>
-                    </div>
+                    <>
+                        <div className="app-notice is-warning" role="status">
+                            <span>{t('setup.upgrading.failed', { error: setup.error })}</span>
+                            <button type="button" className="link-btn" onClick={() => void checkSetup()}>{t('setup.upgrading.retry')}</button>
+                        </div>
+                        <GoBackOffer className="app-go-back" />
+                    </>
                 ) : (
                     <div className="app-notice is-warning" role="status">
                         <span>{t('setup.unknown.failed', { error: setup.error })}</span>
@@ -889,10 +951,11 @@ function App() {
                     {main}
                 </ErrorBoundary>
             </div>
+            {paneApi && <BrowserPane api={paneApi} />}
 
             {showSchedules && <Suspense fallback={null}><ScheduleManager /></Suspense>}
             {showDocLibrary && <Suspense fallback={null}><DocumentLibrary /></Suspense>}
-            {showFileBrowser && <Suspense fallback={null}><FileBrowser onStartChat={startChat} /></Suspense>}
+            {showFileBrowser && <Suspense fallback={null}><FileBrowser onStartChat={startChatOrHold} /></Suspense>}
             {showNotificationPanel && (
                 <div className="notification-center-popover">
                     <NotificationCenter onClose={() => setShowNotificationPanel(false)} onOpenChat={openChatFromNotification} />
@@ -913,6 +976,7 @@ function App() {
             {settingsSection && <SettingsDialog onUseSkill={useSkill} />}
             <ModelNeededDialog />
             <LogsDialog />
+            {showShortcuts && <ShortcutsDialog onClose={() => setShowShortcuts(false)} />}
             <UpdateIndicator />
             {createError && (
                 <div className="toast toast-dismissible" role="alert">

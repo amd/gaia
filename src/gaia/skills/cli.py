@@ -516,8 +516,25 @@ def _add_marketplace_subparsers(sub: argparse._SubParsersAction) -> None:
     p_trust_remove.add_argument("key_id", help="Key id to remove (see 'trust list')")
 
 
+#: Subcommands that land, trust or sign skill code: never run by an agent.
+_TRUST_CHANGING = frozenset(
+    {"promote", "install", "import", "add", "migrate", "create", "keygen", "publish"}
+)
+
+
+def _changes_trust(action: str, args: argparse.Namespace) -> bool:
+    """Whether ``gaia skill <action>`` changes which skills are trusted."""
+    if action == "trust":
+        return getattr(args, "trust_action", None) in ("add", "remove")
+    if action == "lock":
+        return bool(getattr(args, "relock", False))
+    return action in _TRUST_CHANGING
+
+
 def handle(args: argparse.Namespace) -> int:
     """Dispatch a parsed ``gaia skill ...`` command. Returns an exit code."""
+    from gaia.skills.human_only import require_user_terminal
+
     action = getattr(args, "skill_action", None)
     if action is None:
         sys.stderr.write("gaia skill: missing subcommand. Try 'gaia skill --help'.\n")
@@ -557,6 +574,8 @@ def handle(args: argparse.Namespace) -> int:
         route_console_logging_to_stderr()
 
     try:
+        if _changes_trust(action, args):
+            require_user_terminal(f"gaia skill {action}")
         return handler(args)
     except SkillNotFoundError as exc:
         sys.stderr.write(f"❌ {exc}\n")
@@ -1262,7 +1281,13 @@ def _handle_remove(args: argparse.Namespace) -> int:
 
 def _handle_lock(args: argparse.Namespace) -> int:
     """Check the user root against ``skill-lock.json``, or re-record it."""
-    from gaia.skills.drift import DRIFT_UNRECORDED, DRIFT_UNTRACKED, check_drift, relock
+    from gaia.skills.drift import (
+        DRIFT_REAUDIT,
+        DRIFT_UNRECORDED,
+        DRIFT_UNTRACKED,
+        check_drift,
+        relock,
+    )
 
     root = _manager().user_root
 
@@ -1290,6 +1315,17 @@ def _handle_lock(args: argparse.Namespace) -> int:
         print(
             f"⚠ {len(unrecorded)} skill(s) in {root} predate content digests, so "
             f"{report.lock_file.name} cannot verify them{also}:\n",
+            file=sys.stderr,
+        )
+        print(report.render(), file=sys.stderr)
+        return EXIT_INVALID
+
+    reaudit = [d for d in report.drifts if d.kind == DRIFT_REAUDIT]
+    if reaudit and len(reaudit) == len(notable):
+        print(
+            f"⚠ {len(reaudit)} skill(s) in {root} were checked by an older GAIA "
+            "and need re-auditing under this version's rules. Their files are "
+            "unchanged; their code stays off until you re-check them:\n",
             file=sys.stderr,
         )
         print(report.render(), file=sys.stderr)

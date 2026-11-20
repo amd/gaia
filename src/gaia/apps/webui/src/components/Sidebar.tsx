@@ -123,11 +123,13 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
         setDraft(null);
         if (save) onRename(session.id, draft);
     };
+    // Held while the pointer rests on it: the wider label reverting under a reader puts Pin under the click.
+    const [overDelete, setOverDelete] = useState(false);
     useEffect(() => {
-        if (!confirm) return;
+        if (!confirm || overDelete) return;
         const timer = setTimeout(() => setConfirm(false), 3000);
         return () => clearTimeout(timer);
-    }, [confirm]);
+    }, [confirm, overDelete]);
     useEffect(() => {
         if (!editing && refocus.current) {
             refocus.current = false;
@@ -293,6 +295,8 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
                         type="button"
                         className={`sb-row-delete${confirm ? ' is-confirm' : ''}`}
                         onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
+                        onPointerEnter={() => setOverDelete(true)}
+                        onPointerLeave={() => setOverDelete(false)}
                         aria-label={confirm
                             ? (unsent > 0
                                 ? t.plural('row.confirmDeleteUnsentAria', unsent, { title: shownTitle })
@@ -351,12 +355,16 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const [showAutomated, setShowAutomated] = useState(readShowAutomated);
     const phone = useMediaQuery('(max-width: 768px)');
     const searchRef = useRef<HTMLInputElement>(null);
+    // What had focus before search took it, so Esc can give it back.
+    const beforeSearch = useRef<HTMLElement | null>(null);
 
     // Opening or leaving a chat ends the search, so the full list comes back.
     useEffect(() => setQuery(''), [currentSessionId]);
 
     useEffect(() => {
         const focusSearch = () => {
+            const active = document.activeElement;
+            if (active instanceof HTMLElement && active !== searchRef.current) beforeSearch.current = active;
             if (collapsed) toggleCollapsed();
             requestAnimationFrame(() => searchRef.current?.focus());
         };
@@ -514,7 +522,11 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         if (e.key === 'Escape') {
             e.preventDefault();
             setQuery('');
-            searchRef.current?.blur();
+            // Back to where typing was, as closing a dialog does; the message box when nothing had focus.
+            const back = beforeSearch.current;
+            beforeSearch.current = null;
+            const to = back?.isConnected && back !== document.body ? back : document.querySelector<HTMLElement>('.composer-input');
+            if (to) to.focus(); else searchRef.current?.blur();
             return;
         }
         if (!q || results.length === 0 || e.nativeEvent.isComposing) return;
@@ -597,8 +609,9 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
                             onKeyDown={onSearchKey}
+                            onFocus={(e) => { if (e.relatedTarget instanceof HTMLElement) beforeSearch.current = e.relatedTarget; }}
                             {...CLAIMS_ESCAPE}
-                            placeholder={t('sidebar.search')}
+                            placeholder={t.bare('sidebar.search')}
                             aria-label={t.hint(t('sidebar.search'), formatShortcut('Mod+K'))}
                             aria-controls="sb-chat-list"
                             aria-activedescendant={picked ? resultRowId(picked.id) : undefined}

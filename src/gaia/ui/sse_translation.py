@@ -87,6 +87,7 @@ from gaia.agents.base.tool_grants import (
     PROJECT_TRUST_PROMPT_TOOL,
     RESOLVED_PATH_ARG,
     SCRATCH_ARG,
+    SITE_ARG,
 )
 from gaia.agents.base.untrusted_text import strip_untrusted_field_markers
 from gaia.ui.event_narration import (
@@ -126,6 +127,10 @@ SUMMARY_VIEW_KEYS = (
     "needs_model",
     # Set on a "denied" call nobody answered, so it isn't shown as the user's no.
     "timed_out",
+    # "policy" on a "denied" call GAIA's own rule stopped, for the same reason.
+    "denied_by",
+    # "agent" on a "denied" call GAIA turned down itself, with no prompt shown.
+    "declined_by",
     # False on a call refused before it ran, so a relayed refusal contacted nothing.
     "executed",
     "summary_truncated",
@@ -140,6 +145,8 @@ SUMMARY_VIEW_KEYS = (
     "num_chunks",
     # A ``search_web`` result's hits, so a relayed turn can cite them.
     "sources",
+    # The file a tool built, so a client can offer to open it.
+    "path",
 )
 
 #: Which connector an MCP tool call belongs to, carried from ``tool_start``.
@@ -180,7 +187,7 @@ class CanonicalTranslator:
     Args:
         run_id: The host-minted run handle, echoed on pause events.
         agent_id: Agent this run belongs to. Drives ``respond_url`` — the reason
-            this is a parameter and not a constant: a hardcoded ``/v1/email/...``
+            this is a parameter and not a constant: a hardcoded ``/v1/<agent>/...``
             silently points every other agent's client at the wrong sidecar.
         action_labels: ``tool name -> human headline`` for confirmation prompts.
         summary_renderer: ``(tool, args) -> str`` override for the whole
@@ -404,6 +411,15 @@ class CanonicalTranslator:
                 out[0]["queue"] = {k: queue[k] for k in _QUEUE_FIELDS if k in queue}
         return out
 
+    def _on_draft(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "type": "draft",
+                "tool": str(event.get("tool", "")),
+                "text": str(event.get("text", "")),
+            }
+        ]
+
     def _on_step(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         step = event.get("step")
         total = event.get("total")
@@ -624,6 +640,8 @@ class CanonicalTranslator:
             prompt_context["working_directory"] = str(folder)
         if args.get(RISK_NOTE_ARG):
             prompt_context["risk_note"] = str(args[RISK_NOTE_ARG])
+        if args.get(SITE_ARG):
+            prompt_context["site"] = str(args[SITE_ARG])
         # A calendar card shows the checked values: the addresses as notified,
         # the event's real title, text with its hidden characters as codes.
         if tool in CALENDAR_WRITE_TOOLS:
@@ -729,6 +747,7 @@ class CanonicalTranslator:
     # Dispatch table: every top-level source type sse_handler.py emits.
     _DISPATCH = {
         "status": _on_status,
+        "draft": _on_draft,
         "step": _on_step,
         "thinking": _on_thinking,
         "plan": _on_plan,
@@ -877,6 +896,7 @@ PROMPT_ONLY_ARGS = frozenset(
         RESOLVED_PATH_ARG,
         NEEDS_PERSON_ARG,
         SCRIPT_ARG,
+        SITE_ARG,
     }
 )
 

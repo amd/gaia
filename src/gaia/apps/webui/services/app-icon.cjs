@@ -15,14 +15,24 @@ function appIconPath(platform = process.platform) {
 }
 
 /**
- * The icon desktop notifications carry. Deliberately small: notification daemons
- * decode it on every banner, and KDE Plasma's panel crashes on the 4096 px app
- * icon (#5888).
+ * The icon desktop notifications carry: the robot head, like the tray, since the
+ * whole robot shrinks to a smudge at banner size. Deliberately small:
+ * notification daemons decode it on every banner, and KDE Plasma's panel
+ * crashes on the 4096 px app icon (#5888).
  *
  * @returns {string} Absolute path to a 256 px PNG.
  */
 function notificationIconPath() {
   return path.join(__dirname, "..", "assets", "notification-icon.png");
+}
+
+/**
+ * The full app art at 256 px, for the Linux launcher an AppImage writes.
+ *
+ * @returns {string} Absolute path to a 256 px PNG.
+ */
+function launcherIconPath() {
+  return path.join(__dirname, "..", "assets", "launcher-icon.png");
 }
 
 /**
@@ -37,4 +47,4 @@ function appUserModelId(isPackaged) {
   return isPackaged ? "ai.amd.gaia" : "ai.amd.gaia.dev";
 }
 
-module.exports = { appIconPath, appUserModelId, notificationIconPath };
+module.exports = { appIconPath, appUserModelId, launcherIconPath, notificationIconPath };

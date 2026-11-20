@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib.parse import unquote, urlparse
 
+from gaia.agents.base.text_task import instruction_part
 from gaia.agents.base.tool_outcome import tool_result_dict
 from gaia.home import gaia_home
 
@@ -45,6 +46,18 @@ SIDE_EFFECT_PATHS = {
     "generate_sound_effect": ("audio_path",),
 }
 _EXEC_TOOLS = frozenset({"run_python", "execute_python_file", "run_shell_command"})
+#: Tools that replace a stretch of text the call itself gives, old and new.
+_IN_PLACE_EDITS = frozenset({"edit_file", "edit_python_file", "replace_function"})
+#: Where a tool this ledger does not know by name reports the file it saved.
+_SAVED_PATH_KEYS = (
+    "output_path",
+    "file_path",
+    "path",
+    "saved",
+    "saved_to",
+    "saved_path",
+    "output_file",
+)
 _UNOBSERVABLE = object()
 # File systems date writes by a coarse clock that trails time.time_ns().
 _FILE_CLOCK_SLACK_NS = 20_000_000
@@ -211,6 +224,7 @@ _PERMISSION_REFUSALS = (
 )
 _DOWNLOAD_TOOL = "download_file"
 _REFUSED = ", so nothing was saved there."
+_UNREAD = " has not been read back completely after its latest write."
 _UNCONFIRMED = f"{_REFUSED} Nobody refused it, so it can be tried again."
 # The answer owns up that the write did not happen.
 _ADMITS_UNSAVED = re.compile(
@@ -270,6 +284,61 @@ _LEAD = re.compile(
     r"\s+)*",
     re.I,
 )
+
+
+# Tools that can read many files in one call, so the reads on record undercount.
+_BULK_READERS = _EXEC_TOOLS | {"index_directory", "index_codebase"}
+# "I read the actual content of every one", "we opened all 40 files".
+_FULL_READ = re.compile(
+    r"\b(?:I|we)(?:['’]ve|\s+have|\s+had)?"
+    r"(?:\s+(?:also|already|just|then|carefully|actually|personally|really))*\s+"
+    r"(?:(?:re-?)?read|opened|went\s+through|looked\s+(?:at|inside)|inspected|examined|"
+    r"(?:checked|verified|reviewed)(?=\s+the\s+(?:actual\s+|full\s+)?contents?\b))"
+    r"\s+(?:the\s+(?:actual\s+|full\s+|whole\s+)?contents?\s+of\s+)?"
+    r"(?:all|each|every)\b",
+    re.I,
+)
+_CLAIMED_COUNT = re.compile(
+    r"^\s*(?:one\s+)?(?:of\s+)?(?:the\s+|these\s+|those\s+)?(\d[\d,]*)\b"
+)
+_FILE_COUNT = re.compile(
+    r"(?<![\w.,])(\d[\d,]*)\s+(?:[\w-]+\s+)?(?:files|documents|docs|memos|notes|"
+    r"logs|reports|records|pages|sources|scripts|clues|pdfs)\b",
+    re.I,
+)
+_NUMBER = re.compile(r"\d")
+
+
+def _count(text: str) -> int:
+    return int(text.replace(",", ""))
+
+
+def claimed_full_read(answer: str) -> int | None:
+    """How many files *answer* says it read every one of, else ``None``.
+
+    The count is the one the claim names ("all 40 files"), or the file count
+    just before it ("1000 files ... I read every one"). A claim with another
+    number in front of it ("the 5 configs, and read every one") is ambiguous.
+    """
+    text = re.sub(r"[*`_]", "", _FENCES.sub("", answer or ""))
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+|\n+", text) if s.strip()]
+    for index, sentence in enumerate(sentences):
+        match = _FULL_READ.search(sentence)
+        if not match or _CONDITION.match(sentence) or _EARLIER.search(sentence):
+            continue
+        named = _CLAIMED_COUNT.match(sentence[match.end() :])
+        if named:
+            return _count(named.group(1))
+        before = sentence[: match.start()]
+        counts = _FILE_COUNT.findall(before)
+        if counts:
+            return _count(counts[-1])
+        if _NUMBER.search(before) or index == 0:
+            continue
+        earlier = _FILE_COUNT.findall(sentences[index - 1])
+        if earlier:
+            return max(_count(c) for c in earlier)
+    return None
 
 
 # Files checked under one requested folder for script-written outputs.
@@ -466,7 +535,8 @@ def _source_paths(text: str) -> set[str]:
 
 def _instructions(query: str):
     """(verb, text after it) for each non-negated storage instruction."""
-    for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", query)):
+    asked = _FENCES.sub("", instruction_part(query))
+    for sentence in re.split(r"(?<=[.!?])\s+|\n", asked):
         sentence = sentence.strip()
         for action in _SAVE_REQUEST.finditer(sentence):
             if not _NOT_REQUEST.search(sentence[: action.end()]):
@@ -551,6 +621,13 @@ class FileEvidence:
     by_script: bool = False
     # Shown in part since its latest write: a range read, head/tail, a summary.
     spot_checked: bool = False
+    # Saved by a tool that builds files from its arguments (a skill's tool).
+    by_tool: bool = False
+    # Opened by a skill's own tool since its latest write: a check read it.
+    checked: bool = False
+    # Read in full, then changed only by in-place edits whose text the model
+    # wrote: it holds the file and every change to it.
+    known: bool = False
 
     def page(self, start: int, end: int, total: int | None) -> None:
         self.ranges.append((start, end))
@@ -652,7 +729,8 @@ class CompletionEvidence:
         # Downloads that ran and failed: key -> the URL's file name when the
         # call named only a folder, else None.
         self.failed_downloads: dict[str, str | None] = {}
-        self.query = query if isinstance(query, str) else ""
+        # A sentence handed over to translate names no file this turn owes.
+        self.query = instruction_part(query) if isinstance(query, str) else ""
         # Folders the request gives in full, and their parents: "in C:\w\project\
         # ... write project\stats.csv" means C:\w\project\stats.csv.
         self.anchors = list(
@@ -666,19 +744,32 @@ class CompletionEvidence:
         )
         # The subset of refused reasons that were prompts nobody answered.
         self.unconfirmed: set[str] = set()
-        self.requested, self.save_requested = save_obligations(query)
-        self.instructed = save_instructed(query)
+        self.requested, self.save_requested = save_obligations(self.query)
+        # Wider than ``requested``: every file the request asks to produce.
+        self.outputs = named_outputs(self.query)
+        self.instructed = save_instructed(self.query)
         # The paths the request names and their folders: where a bare output
         # ("also make tables.xlsx") lands.
         self.named_folders = list(
             dict.fromkeys(
                 folder
-                for path in mentioned_paths(query)
+                for path in mentioned_paths(self.query)
                 if ntpath.basename(path) != path
                 for folder in (self.key(path), os.path.dirname(self.key(path)))
             )
         )
         self.disk_tool_ran = False
+        # Paths a skill tool was cleared to write during the call now running,
+        # with each file's stamp from before: path as given -> (key, stamp).
+        self._skill_writes: dict[str, tuple[str, Any]] = {}
+        # Files a skill tool opened for reading during the call now running.
+        self._skill_reads: set[str] = set()
+        # When the call now running began, by the file system's clock.
+        self._call_started = 0
+        # Files a successful call was given to read, and whether a call that
+        # can read many at once (a script, an indexer) succeeded.
+        self.read_paths: set[str] = set()
+        self.bulk_read = False
         # (started ns, ended ns, succeeded, ledger sequence) per executor run.
         self.exec_windows: list[tuple[int, int, bool, int]] = []
         # (ledger sequence, what the run named) for runs that printed something.
@@ -739,9 +830,10 @@ class CompletionEvidence:
 
     def snapshot(self, tool: str, args: dict, validator=None) -> dict:
         """Metadata only, for concrete executor targets within the read boundary."""
+        self._call_started = time.time_ns() - _FILE_CLOCK_SLACK_NS
         if tool not in _EXEC_TOOLS:
             return {}
-        self._exec_started = time.time_ns() - _FILE_CLOCK_SLACK_NS
+        self._exec_started = self._call_started
         paths = set(self.files) | {self.request_key(p) for p in self.requested}
         code = args.get("code")
         if isinstance(code, str):
@@ -827,11 +919,49 @@ class CompletionEvidence:
         executed: bool = True,
     ) -> None:
         self.sequence += 1
+        skill_writes, self._skill_writes = self._skill_writes, {}
+        skill_reads, self._skill_reads = self._skill_reads, set()
+        started, self._call_started = self._call_started, 0
         if not executed:
             self._record_refusal(tool, args, result)
             return
+        cleared = set()
+        for path, (key, old) in skill_writes.items():
+            current = self._stamp(key)
+            # Cleared is not written: only a file that changed counts.
+            if current is None or current is _UNOBSERVABLE or current == old:
+                continue
+            cleared.add(key)
+            self._tool_saved(key, path, successful)
+        if (
+            tool not in WRITE_TOOLS
+            and tool not in _EXEC_TOOLS
+            and tool not in READ_TOOLS
+            and tool not in SIDE_EFFECT_PATHS
+            and tool != _DOWNLOAD_TOOL
+        ):
+            for path in self._reported_saves(result, started):
+                if self.key(path) not in cleared:
+                    self._tool_saved(self.key(path), path, successful)
+        for key in skill_reads if successful else ():
+            item = self.files.get(key)
+            # The call that saved a file did not also check it.
+            if item is not None and 0 < item.written < self.sequence:
+                item.checked = True
         if tool in WRITE_TOOLS or tool in SIDE_EFFECT_PATHS or tool in _EXEC_TOOLS:
             self.disk_tool_ran = True
+        if successful and tool in _BULK_READERS:
+            self.bulk_read = True
+        source = args.get("file_path")
+        if (
+            successful
+            and tool not in WRITE_TOOLS
+            and tool not in _EXEC_TOOLS
+            and tool not in SIDE_EFFECT_PATHS
+            and isinstance(source, str)
+            and "\x00" not in source
+        ):
+            self.read_paths.add(self.key(source, args.get("project_dir")))
         if tool == _DOWNLOAD_TOOL and not successful:
             # The source said no: no other tool can save this file.
             target, url_name = _download_target(args)
@@ -900,15 +1030,73 @@ class CompletionEvidence:
             key = self.key(path, args.get("project_dir"))
             self.removed.discard(key)
             self.written_as[key] = path
+            earlier = self.files.get(key)
             self.files[key] = FileEvidence(
                 key,
                 self.sequence if successful else 0,
                 tool in WRITE_TOOLS or tool in _EXEC_TOOLS,
                 edited=tool in WRITE_TOOLS,
                 by_script=tool in _EXEC_TOOLS,
+                known=(
+                    successful
+                    and tool in _IN_PLACE_EDITS
+                    and earlier is not None
+                    and bool(earlier.written)
+                    and (earlier.observed or earlier.verified or earlier.known)
+                ),
             )
         if tool in _EXEC_TOOLS and successful:
             self._note_summaries(args, data)
+
+    def expect_skill_write(self, path: str) -> None:
+        """A skill tool was cleared to write *path*; the call's record checks it.
+
+        A skill's tool is not one of the write tools this ledger knows by
+        name, so the file it saves through ``gaia.skills.context`` would
+        otherwise read as never written.
+        """
+        if "\x00" in path or path in self._skill_writes:
+            return
+        key = self.key(path)
+        self._skill_writes[path] = (key, self._stamp(key))
+
+    def expect_skill_read(self, path: str) -> None:
+        """A skill tool was cleared to read *path*: its check of a file this
+        turn wrote stands in for the model reading it back."""
+        if "\x00" not in path:
+            self._skill_reads.add(self.key(path))
+
+    def _tool_saved(self, key: str, path: str, successful: bool) -> None:
+        self.disk_tool_ran = True
+        self.removed.discard(key)
+        self.written_as[key] = path
+        self.files[key] = FileEvidence(
+            key, self.sequence if successful else 0, by_tool=True
+        )
+
+    def _reported_saves(self, result: Any, started: int) -> list[str]:
+        """Files *result* says the call saved, that changed while it ran.
+
+        A tool that only read a file names it too, so the path alone proves
+        nothing: the file must have been modified since the call began.
+        """
+        data = _payload(result)
+        holders = [data, *(v for v in data.values() if isinstance(v, dict))]
+        saved = []
+        for holder in holders:
+            for name in _SAVED_PATH_KEYS:
+                path = holder.get(name)
+                if not isinstance(path, str) or "\x00" in path:
+                    continue
+                if not started or not os.path.isabs(os.path.expanduser(path)):
+                    continue
+                try:
+                    modified = os.stat(os.path.expanduser(path)).st_mtime_ns
+                except OSError:
+                    continue
+                if modified >= started and os.path.isfile(os.path.expanduser(path)):
+                    saved.append(os.path.expanduser(path))
+        return list(dict.fromkeys(saved))
 
     def _note_summaries(self, args: dict, data: dict) -> None:
         """A successful run that names a script output and prints something checked it.
@@ -945,10 +1133,41 @@ class CompletionEvidence:
         A bare name ("bom.xlsx") counts as written wherever it landed, matching
         how :meth:`gaps` judges it.
         """
+        return self._unwritten(self.requested)
+
+    def unwritten_outputs(self) -> list[str]:
+        """Every file the request asks to produce that nothing has written yet.
+
+        A write that was turned down, or whose approval expired, is left out:
+        the completion check already tells the model not to retry those.
+        """
+        return [
+            path
+            for path in self._unwritten(self.outputs)
+            if self.key(path) not in self.refused
+        ]
+
+    def output_written_by(self, path: Any, pending: list[str]) -> str | None:
+        """The entry of *pending* a write to *path* would produce, if any."""
+        if not isinstance(path, str) or not path.strip() or "\x00" in path:
+            return None
+        key = self.key(path)
+        name = os.path.normcase(ntpath.basename(key))
+        for wanted in pending:
+            if self.key(wanted) == key:
+                return wanted
+            if ntpath.basename(wanted) == wanted and os.path.normcase(wanted) == name:
+                return wanted
+        return None
+
+    def _unwritten(self, paths: list[str]) -> list[str]:
+        # A script or shell command that produced the file counts as its write.
+        for path in paths:
+            self._find_executor_writes(self.request_key(path))
         written = {key for key, item in self.files.items() if item.written}
         written_names = {os.path.normcase(ntpath.basename(key)) for key in written}
         pending = []
-        for path in self.requested:
+        for path in paths:
             if self.request_key(path) in written:
                 continue
             parts = self._relative_parts(path)
@@ -980,9 +1199,11 @@ class CompletionEvidence:
         if data.get("status") == "denied" and data.get("timed_out") is True:
             reason = f"The write to `{path}` wasn't confirmed in time{_UNCONFIRMED}"
             self.unconfirmed.add(reason)
-        elif data.get("status") == "denied":
+        elif data.get("status") == "denied" and data.get("denied_by") != "policy":
             reason = f"The write to `{path}` was declined{_REFUSED}"
-        elif isinstance(error, str) and error.startswith(_PERMISSION_REFUSALS):
+        elif data.get("status") == "denied" or (
+            isinstance(error, str) and error.startswith(_PERMISSION_REFUSALS)
+        ):
             reason = f"Writing `{path}` was not permitted{_REFUSED}"
         else:
             return  # A preflight like "read it first" is a step, not a refusal.
@@ -995,7 +1216,7 @@ class CompletionEvidence:
 
     def read_by_framework(self, key: str) -> None:
         """The framework read this output in full after its latest write."""
-        item = self.files.get(key)
+        item = self.files.get(key) or self._written_by_executor(key)
         if item is not None and item.written:
             item.verified = True
 
@@ -1052,6 +1273,18 @@ class CompletionEvidence:
             and not (scratch and key.startswith((scratch + "/", scratch + "\\")))
             and os.path.isfile(key)
         ]
+
+    def inputs_for(self, outputs: list[str]) -> list[str]:
+        """The files this turn's tools were given to read, other than *outputs*."""
+        written = {self.key(path) for path in outputs}
+        scratch = (self.scratch or "").rstrip("/\\")
+        return sorted(
+            key
+            for key in self.read_paths
+            if key not in written
+            and not (scratch and key.startswith((scratch + "/", scratch + "\\")))
+            and os.path.isfile(key)
+        )
 
     def _find_executor_writes(self, key: str) -> None:
         """Record what a script wrote at *key*, or inside it when it is a folder.
@@ -1419,11 +1652,11 @@ class CompletionEvidence:
                 and (data_output or requested(item.path))
                 and not item.observed
                 and not item.verified
+                and not item.checked
+                and not item.known
                 and not self._large_and_checked(item)
             ):
-                gaps.append(
-                    f"`{item.path}` has not been read back completely after its latest write."
-                )
+                gaps.append(f"`{item.path}`{_UNREAD}")
         return gaps
 
     def _is_backup(self, path: str) -> bool:
@@ -1459,6 +1692,25 @@ class CompletionEvidence:
             return os.path.getsize(item.path) > _FULL_READ_LIMIT
         except OSError:
             return False
+
+    def read_coverage_gap(self, answer: str) -> str | None:
+        """An "I read every one of N files" claim that far outruns the reads on record.
+
+        Files this turn wrote are outputs, not sources, so reading them back
+        does not count. After a script or indexer ran, any file may have been
+        read, so nothing is claimed against it.
+        """
+        claimed = claimed_full_read(answer)
+        if claimed is None or claimed < 3 or self.bulk_read:
+            return None
+        written = {key for key, item in self.files.items() if item.written}
+        opened = len(self.read_paths - written)
+        if opened * 2 >= claimed:
+            return None
+        return (
+            f"The answer says all {claimed} files were read, but only {opened} "
+            f"{'was' if opened == 1 else 'were'} opened this turn."
+        )
 
     def cleanup_gaps(self, answer: str) -> list[str]:
         """A deletion claim needs a concrete path observed disappearing."""
@@ -1530,12 +1782,25 @@ class CompletionEvidence:
         return gaps
 
 
+def blocking_gaps(gaps: list[str]) -> list[str]:
+    """The *gaps* that leave the turn unfinished.
+
+    A file that was written and not read back afterwards exists: that is a
+    caveat to state, not missing work.
+    """
+    return [gap for gap in gaps if not gap.endswith(_UNREAD)]
+
+
 def caveated_answer(answer: str | None, gaps: list[str]) -> str:
     """Keep the model's answer and name what could not be confirmed after it."""
     if not answer or not answer.strip():
         return incomplete_answer(gaps)
     if all(gap.endswith((_REFUSED, _UNCONFIRMED)) for gap in gaps):
         return f"{answer.rstrip()}\n\n" + "\n".join(gaps)
+    if not blocking_gaps(gaps):
+        return f"{answer.rstrip()}\n\n" + "\n".join(
+            f"Not checked: {gap}" for gap in gaps
+        )
     return f"{answer.rstrip()}\n\nI couldn't confirm all of this:\n\n" + "\n".join(
         f"- {gap[:1].upper()}{gap[1:]}" for gap in gaps
     )
