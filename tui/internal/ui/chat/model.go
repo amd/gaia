@@ -419,8 +419,13 @@ type ChatModel struct {
 	plan livePlan
 	// ctxMeter is how full the model's context is (context.go).
 	ctxMeter contextMeter
-	// starters are the first screen's suggestions (suggestions.go).
+	// starters are the first screen's suggestions (suggestions.go); suggests
+	// says this chat offers them, so the agent's skill report refreshes them.
 	starters []starter
+	suggests bool
+	// readyTail is how the Ready line ended when it was written, so a later
+	// skill report can replace it (refreshReadyLine).
+	readyTail string
 
 	// awaitingModelSwitch is true for the duration of a `/model <id>` turn
 	// this session itself started. A model-state ping that disagrees with
@@ -612,6 +617,7 @@ func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, se
 	m := NewChatModel(c, agentName, "")
 	m.agentID = agentID
 	m.setupVerified = setupVerified
+	m.suggests = true
 	m.starters = installedStarters(skillsDir())
 	return m.applyFirstBootGate()
 }
@@ -681,6 +687,9 @@ func (m ChatModel) Init() tea.Cmd {
 		// probeCapabilitiesCmd.
 		m.probeCapabilitiesCmd(),
 		loadReadAloudAutoCmd,
+	}
+	if m.suggests {
+		cmds = append(cmds, m.listSkillsCmd())
 	}
 	if m.agentID == setupAgentID {
 		// Whether /gpu applies here: only a PC with an integrated GPU has a
@@ -1248,6 +1257,15 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role:    RoleStatus,
 			Content: pasteImageHint(msg.path, size, nil),
 		})
+		m.updateViewport()
+		return m, nil
+
+	case skillsListedMsg:
+		if msg.err != nil {
+			control.Logf("chat: could not list the agent's skills (%v); the first screen suggests only skills found in the skills folder", msg.err)
+			return m, nil
+		}
+		m.setReportedSkills(msg.skills)
 		m.updateViewport()
 		return m, nil
 

@@ -66,6 +66,9 @@ type fakeRelay struct {
 	// memoryBody is the raw JSON body GET /v1/<agent>/memory returns on
 	// success (memoryStatus == 0, defaulting to 200).
 	memoryBody string
+	// skillsStatus and skillsBody are the same for GET /v1/<agent>/skills.
+	skillsStatus int
+	skillsBody   string
 	// strictBody replicates the sidecar's pydantic `extra="forbid"`: an unknown
 	// request field is a 422, not an ignored key. This is what makes a published
 	// older sidecar reject a field a newer TUI invented.
@@ -272,6 +275,18 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			body = `{"available":true,"stats":{"total_knowledge":0,"by_category":{},"by_context":{},"sensitive_count":0,"entity_count":0,"avg_confidence":0},"contexts":[],"shown":0,"total":0,"items":[]}`
 		}
 		_, _ = w.Write([]byte(body))
+
+	case strings.HasSuffix(r.URL.Path, "/skills"):
+		if r.Method != http.MethodGet {
+			f.t.Errorf("skills request method = %q, want GET", r.Method)
+		}
+		if f.skillsStatus != 0 {
+			w.WriteHeader(f.skillsStatus)
+			_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(f.skillsBody))
 
 	case strings.HasSuffix(r.URL.Path, "/cancel"):
 		parts := strings.Split(r.URL.Path, "/")
