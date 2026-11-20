@@ -69,6 +69,10 @@ type Message struct {
 	// unrelated message.
 	Identity string
 
+	// ImagePath marks a status line naming an image the agent created: the
+	// path is drawn as a link, and a click on the line opens it.
+	ImagePath string
+
 	// Work is a RoleWork message's steps, as the live log held them.
 	Work []ActivityItem
 

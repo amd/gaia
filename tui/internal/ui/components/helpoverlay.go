@@ -289,8 +289,8 @@ const chatHelpText = `  GAIA Chat
 
   Commands    /help /clear /full-access /slack /discord
               /setup /memory /models /provider /gateway
-              /agents /model /gpu /read-aloud /voice
-              /connectors /sessions /agent
+              /agents /model /gpu /image /read-aloud
+              /voice /connectors /sessions /agent
   /cost       Spend · /cost help rates · /context fill
   /update     New GAIA release? · /update now
   /           Browse commands on an empty line: ↑/↓ or

@@ -186,6 +186,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				break
 			}
 			m.markToolDone(e)
+			m.noteCreatedImage(e.Tool, e.Render, e.Data)
 			break
 		}
 		if outcome == event.ToolOutcomeFailed {
@@ -204,6 +205,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// The sidecar declared a card, so the card is the result.
 		m.markToolDone(e)
 		m.appendCard(e.Tool, e.Render, e.Data)
+		m.noteCreatedImage(e.Tool, e.Render, e.Data)
 
 	case event.CanonicalNeedsInputEvent:
 		// The run is parked waiting for this answer, on the stream we are still

@@ -746,6 +746,9 @@ _PACKAGE_PROGRAMS = frozenset(
     {"pip", "pip3", "uv", "pipx", "conda", "mamba", "npm", "pnpm", "yarn", "winget"}
 )
 _VERSION_PIN = re.compile(r"[\[<>=!~;@ ]")
+#: ``git commit -am "msg"``: only flags that take no value may precede ``m``
+#: (``-Fm`` reads ``m`` as the file). Commit only: ``checkout -m`` merges.
+_COMMIT_MESSAGE_CLUSTER = re.compile(r"-[aeinopqsvz]+m")
 
 
 def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
@@ -757,12 +760,19 @@ def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
     flags = _TEXT_FLAGS | _SHORT_TEXT_FLAGS.get(family.split(" ")[0], frozenset())
     kept: List[str] = []
     skip = False
+    # After a bare ``--`` git reads ``-am`` as a path, not a message cluster.
+    paths_only = False
     for word in rest:
         if skip:
             skip = False
-        elif word.lower() in flags:
+        elif word.lower() in flags or (
+            family == "git commit"
+            and not paths_only
+            and _COMMIT_MESSAGE_CLUSTER.fullmatch(word)
+        ):
             skip = True
         else:
+            paths_only = paths_only or word == "--"
             kept.append(word)
     return kept
 

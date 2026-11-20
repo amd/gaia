@@ -55,6 +55,7 @@ var paletteCommands = []paletteCommand{
 	{"/voice", "Pick the read-aloud voice and speed, or read every reply"},
 	{agentCommand, "See or switch the agent program: gaiapy, or gaiacpp (Beta)"},
 	{"/agents", "List installed agents and switch this session to one"},
+	{"/image", "Choose the image model, size and steps; /image open shows the last image"},
 	{"/update", "Check for a newer GAIA, install one (/update now, /update v0.25.0), or set auto-update"},
 	{"/sessions", "Reopen a past session — ones waiting on you come first"},
 	{"/sessions all", "Every session, eval and scheduled runs included"},
