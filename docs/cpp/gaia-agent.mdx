@@ -86,9 +86,9 @@ Any [`AgentConfig`](/cpp/api-reference) field is accepted. `provider` (`lemonade
 
 ### Where the agent may work
 
-The file, git and shell tools are confined to the working directory (`--cwd`) and any folder added with `--allow-dir DIR`. A file tool given a path outside them is refused, and so is a shell command that names an existing folder outside them, other than system folders such as `/usr`, `/etc` and `/tmp`. The prompt tells the model which folders it has. A link or Windows junction inside the folder that leads outside it is treated as outside: file search does not walk into it, and a shell command that names it is refused. The shell check reads the command text: it stops an agent from wandering, for example a whole-disk `find` or a path a document planted, but it is not a sandbox. `--full-access` removes the confinement.
+The file, git and shell tools are confined to the working directory (`--cwd`) and any folder added with `--allow-dir DIR`. A file tool given a path outside them is refused, and so is a shell command that names an existing folder outside them, other than system folders such as `/usr`, `/etc` and `/tmp`. The prompt tells the model which folders it has. A link or Windows junction inside the folder that leads outside it is treated as outside: file search does not walk into it, and a shell command that names it is refused. A file write is judged by where it would land: every link and junction on the way is followed, including one to a file or folder that doesn't exist yet, and a path whose landing can't be worked out (an unreadable link, a loop) is refused. The shell check reads the command text: it stops an agent from wandering, for example a whole-disk `find` or a path a document planted, but it is not a sandbox. `--full-access` removes the confinement.
 
-Every tool result is masked before the model, the console and the step log see it: provider tokens (GitHub, GitLab, AWS, Google, Slack, and `sk-` keys), the `user:password@` part of a URL and secret query values such as `?access_token=` become `[redacted]`, a PEM private key block becomes `[redacted private key]`, and a line a search printed from a credential file (`./.env:3:...`) keeps its file name and loses the rest. `file_read`, `file_write` and `file_edit` refuse a credential file by name (`.env`, `id_rsa`, `*.pem`, `*.key` and the like), `git_show` refuses one named in a `ref:path`, a content search skips those files, and a write that would put `[redacted]` where the file holds the real secret is refused. This is a backstop, not a guarantee: a shell command that prints a credential file is not refused, though a plain read of one (`cat .env`) asks first where other reads don't.
+Every tool result is masked before the model, the console and the step log see it, and before `POST /v1/tools/:name` returns it, error text included: provider tokens (GitHub, GitLab, AWS, Google, Slack, and `sk-` keys), the `user:password@` part of a URL and secret query values such as `?access_token=` become `[redacted]`, a PEM private key block becomes `[redacted private key]`, and a line a search printed from a credential file (`./.env:3:...`) keeps its file name and loses the rest. `file_read`, `file_write` and `file_edit` refuse a credential file by name (`.env`, `id_rsa`, `*.pem`, `*.key` and the like), `git_show` refuses one named in a `ref:path`, a content search skips those files, and a write that would put `[redacted]` where the file holds the real secret is refused. This is a backstop, not a guarantee: a shell command that prints a credential file is not refused, though a plain read of one (`cat .env`) asks first where other reads don't.
 
 ### Documents
 
@@ -214,7 +214,7 @@ Once bound, the server prints one JSON line on stdout, so a supervisor learns th
 | `GET /v1/models` | The agent's model |
 | `GET /v1/tools` | The agent's tools and their parameters |
 | `GET /health` | Status, version, `busy`. Open without a key, for readiness probes |
-| `POST /v1/tools/:name` | Run a tool directly. Off unless `--expose-tool-routes` |
+| `POST /v1/tools/:name` | Run a tool directly. Off unless `--expose-tool-routes`. The result is masked like a chat tool result |
 
 Each request carries its whole conversation, so the server keeps no state between requests. It runs one completion at a time and answers a second with 409. A client that disconnects from a stream cancels the run. A run that fails, runs out of steps or is cancelled comes back as an error (HTTP 500, or an error event on a stream) whose `code` is the run's status, with the agent's own summary as the message; it never ends with `finish_reason: "stop"`.
 
@@ -240,7 +240,7 @@ To try it, put the binary in `~/.gaia/agents/gaia/` with an `.installed` file na
 
 ## Running as the agent of the GAIA terminal UI
 
-`gaiacpp --stdio` speaks the protocol the terminal UI uses with its agent child process: one line per message on stdin, one JSON event per line on stdout, and logs on stderr. The process stays up for the whole session, so the conversation, "always" answers and a switched model carry from one turn to the next. The wire names are pinned by `tests/fixtures/stdio/gaia_stdio_wire.json`, which the Python flagship and the terminal UI are tested against too.
+`gaiacpp --stdio` speaks the protocol the terminal UI uses with its agent child process: one line per message on stdin, one JSON event per line on stdout, and logs on stderr. The process stays up for the whole session, so the conversation, "always" answers and a switched model carry from one turn to the next. Clearing the conversation drops its "always" answers too. The wire names are pinned by `tests/fixtures/stdio/gaia_stdio_wire.json`, which the Python flagship and the terminal UI are tested against too.
 
 ```bash
 printf '%s\n' '{"gaia_query": "What is in this folder?"}' | gaiacpp --stdio -m Qwen3.6-35B-A3B-GGUF
@@ -262,7 +262,7 @@ printf '%s\n' '{"gaia_query": "What is in this folder?"}' | gaiacpp --stdio -m Q
 | `full_access` | `enabled` | Approval prompts off or on, from the next tool call |
 | `accept_edits` | `enabled` | File edits inside the working directory run without asking |
 | `cancel` | | Stops the running turn, which still ends with its one terminal event. A shell command in flight is ended with everything it started, and a streamed reply stops at its next chunk. A query that was read but hasn't started ends at once with an empty `final`. `/model` and the sentinel queries run to completion once started. The process and the conversation stay |
-| `clear_history` | | Forgets the conversation after the running turn |
+| `clear_history` | | Forgets the conversation and its "always" answers after the running turn |
 
 A control with a field of the wrong type is rejected with a line on stderr and changes nothing, except that an unreadable `tool_decision` denies the approval it was meant for.
 
@@ -278,11 +278,11 @@ A control with a field of the wrong type is rejected with a line on stderr and c
 
 | Query | `final` answer |
 |---|---|
-| `"\u0000gaia:clear_conversation\u0000"` | `conversation_cleared`, with the history forgotten |
+| `"\u0000gaia:clear_conversation\u0000"` | `conversation_cleared`, with the history and "always" answers forgotten |
 | `"\u0000gaia:memory_dump\u0000"` | The stored memories as a JSON string: `available`, `stats`, `contexts`, `shown`, `total`, `items`. The store keeps no confidence score or last-use time, so `confidence`, `avg_confidence` and `last_used` are left out. With `--no-memory`, `available` is false and `reason` says why |
 | `"\u0000gaia:warm_up\u0000"` | `warmed_up` once a local model is loaded, `warm_up_skipped` for a cloud model. A model that can't be loaded ends in `error` |
 
-**Approvals.** A shell command that changes something, a file write or edit, a web fetch and an MCP tool that isn't known to be read-only ask first. `always` is offered for shell commands only and remembered until the process exits: the program for single-purpose commands (`mkdir`), program and subcommand for tools such as `git` and `npm`, and the exact command otherwise. Every other tool asks each time, so approving one file write never approves the next. With "accept edits" on, `file_write` and `file_edit` run without asking when the file is inside the working directory. They still ask for anything under `.git`, a dotfile or dot-folder, a folder on `PATH`, and on Windows a file `cmd.exe` would run in place of a program on `PATH`; a home folder or a drive root never counts as the working directory. 
+**Approvals.** A shell command that changes something, a file write or edit, a web fetch and an MCP tool that isn't known to be read-only ask first. `always` is offered for shell commands only and remembered until the conversation is cleared or the process exits: the program for single-purpose commands (`mkdir`), program and subcommand for tools such as `git` and `npm`, and the exact command otherwise. Every other tool asks each time, so approving one file write never approves the next. With "accept edits" on, `file_write` and `file_edit` run without asking when the file is inside the working directory, judged by where the write would land after following every link and junction, even one to a file not there yet. They still ask for anything under `.git`, a dotfile or dot-folder, a folder on `PATH`, and on Windows a file `cmd.exe` would run in place of a program on `PATH`; a home folder or a drive root never counts as the working directory. 
 
 **When the host goes away.** Once stdin closes, queries already read still run while something reads stdout, so `echo '{"gaia_query": "hi"}' | gaiacpp --stdio` prints its answer, and an approval nobody can answer is denied. When stdout has no reader either, or a write to it fails, the process exits at once with code 0, without waiting for a model call or a tool in flight. Commands the agent runs never get its stdin: they read end of input.
 
