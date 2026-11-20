@@ -636,7 +636,7 @@ gaia/
 ├── hub/                # Packages GAIA ships — agents/<id>/{npm,python}/, skills/, components/
 │   └── agents/gaia/python/  # gaiapy: the Python harness (package gaia_agent, binary gaia-agent)
 ├── cpp/                # C++17 agent framework (CMake project gaia-cpp)
-│   ├── agents/gaia/    # gaiacpp: the native harness (binary gaiacpp)
+│   ├── agents/gaiacpp/ # gaiacpp: the native harness (binary gaiacpp)
 │   ├── agents/bash/    # gaia-bash coding agent
 │   └── examples/       # Single-file demo agents (health, wifi, process, vlm…)
 ├── tui/                # Go terminal UI (module github.com/amd/gaia/tui)
@@ -660,7 +660,7 @@ Agent UI and the TUI drive either one.
 | Harness | What it is | Source | Binary |
 |---------|------------|--------|--------|
 | `gaiapy` | The Python harness: every tool and feature, the default | `hub/agents/gaia/python/gaia_agent/` on the framework in `src/gaia/` | `gaia-agent` |
-| `gaiacpp` | The native C++ harness: fast and light, fewer features, beta | `cpp/agents/gaia/` on the framework in `cpp/` | `gaiacpp` |
+| `gaiacpp` | The native C++ harness: fast and light, fewer features, beta | `cpp/agents/gaiacpp/` on the framework in `cpp/` | `gaiacpp` |
 
 `flagship_agent` in `~/.gaia/config.json` (`gaiapy` or `gaiacpp`) picks one;
 unset, the Python harness runs.
