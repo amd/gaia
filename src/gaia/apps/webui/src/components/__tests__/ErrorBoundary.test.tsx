@@ -94,7 +94,7 @@ describe('SettingsDialog with a broken section', () => {
             '[ErrorBoundary] settings.general failed to render:', expect.any(Error), expect.any(String),
         );
 
-        fireEvent.click(screen.getByRole('button', { name: 'Model' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Agent & model' }));
         expect(screen.getByText('model pane')).toBeInTheDocument();
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });

@@ -718,6 +718,9 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
                   << std::endl;
     }
 
+    const int timeoutSec =
+        requestTimeout_ ? std::clamp(requestTimeout_(), 1, LEMONADE_REQUEST_TIMEOUT) : LEMONADE_REQUEST_TIMEOUT;
+
     // ---- Streaming path ----
     if (cfg.streaming) {
         std::string accumulated;
@@ -730,7 +733,8 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
                     accumulated += token;
                     console_->printStreamToken(token);
                 },
-                streamedToolCalls
+                streamedToolCalls,
+                timeoutSec
             );
         } catch (const std::exception& e) {
             if (accumulated.empty() || cancelRequested()) throw;
@@ -809,7 +813,7 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
     }
 
     // ---- Non-streaming path ----
-    std::string responseBody = lemonade_.chatCompletions(requestBody);
+    std::string responseBody = lemonade_.chatCompletions(requestBody, timeoutSec);
 
     // Parse response
     json responseJson;
@@ -1026,6 +1030,15 @@ Agent::LlmResult Agent::callLlmResilient(std::vector<Message>& messages,
         } catch (const std::exception& e) {
             if (cancelRequested()) throw;
             if (dynamic_cast<const PartialStreamError*>(&e)) throw;
+            // Lemonade's cloud relay answers 500 with this text when the provider's reply has no
+            // content, which is a reply cut off at the length limit while still reasoning.
+            if (const auto* http = dynamic_cast<const HttpError*>(&e);
+                http && http->status() == 500 &&
+                http->body().find("type must be string, but is null") != std::string::npos) {
+                LlmResult cut;
+                cut.finishReason = "length";
+                return cut;
+            }
             if (isContextOverflow(e)) {
                 // Free more each time: older tool output, then all of it, then long replies.
                 bool freed = false;
@@ -1097,6 +1110,23 @@ std::string Agent::recordToolOutput(const json& toolResult, int maxChars) {
            " omitted. Call read_tool_output with output_id=" + std::to_string(id) +
            " and offset=" + std::to_string(headEnd) + " to read them]...\n" +
            full.substr(tailStart);
+}
+
+int Agent::resultCharLimit(const std::string& tool, const AgentConfig& cfg) const {
+    const auto& all = tools_.allTools();
+    const std::string resolved = tools_.resolveName(tool);
+    const auto it = all.find(resolved.empty() ? tool : resolved);
+    // A token is about four characters, so the window's token count in characters is a quarter of it.
+    if (it != all.end() && it->second.wideResult) return (std::max)(cfg.toolResultCharLimit(), cfg.contextSize);
+    return cfg.toolResultCharLimit();
+}
+
+int Agent::storeToolOutput(const std::string& text) {
+    std::lock_guard<std::mutex> lock(toolOutputsMutex_);
+    const int id = nextToolOutputId_++;
+    toolOutputs_[id] = text;
+    while (toolOutputs_.size() > kMaxStoredToolOutputs) toolOutputs_.erase(toolOutputs_.begin());
+    return id;
 }
 
 size_t Agent::elideOldToolOutputs(std::vector<Message>& messages, size_t keepRecent) {
@@ -2311,7 +2341,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 toolMsg.role = MessageRole::TOOL;
                 toolMsg.name = tc.name;
                 toolMsg.toolCallId = tc.id;
-                toolMsg.content = recordToolOutput(toolResult, cfg.toolResultCharLimit());
+                toolMsg.content = recordToolOutput(toolResult, resultCharLimit(tc.name, cfg));
                 messages.push_back(toolMsg);
 
                 lastToolFailed = false;
@@ -2535,7 +2565,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             Message toolMsg;
             toolMsg.role = MessageRole::TOOL;
             toolMsg.name = toolName;
-            toolMsg.content = recordToolOutput(toolResult, cfg.toolResultCharLimit());
+            toolMsg.content = recordToolOutput(toolResult, resultCharLimit(toolName, cfg));
             messages.push_back(toolMsg);
 
             lastToolFailed = false;
@@ -2707,6 +2737,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         {"tool_calls", turnToolCalls_.size()},
         {"llm_calls", llmCallLog.size()}
     };
+    if (!stopReason.empty()) result["stop_reason"] = stopReason == "cap" ? "step_limit" : stopReason;
     json toolCallLog = json::array();
     for (const auto& call : turnToolCalls_) {
         // Arguments are what make a trace readable; capped so one huge write can't bloat the log.
@@ -2725,6 +2756,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
     result["telemetry"] = {{"llm_calls", std::move(llmCallLog)},
                            {"tool_calls", std::move(toolCallLog)}};
+    totalUsage += sideUsage();
     if (totalUsage.totalTokens > 0) {
         result["usage"] = totalUsage.toJson();
     }

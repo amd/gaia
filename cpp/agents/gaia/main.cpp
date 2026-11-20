@@ -114,6 +114,7 @@ struct Cli {
     int maxSteps = 0;
     int ctxSize = 0;
     int maxTokens = 0;
+    int maxHelpers = -1;  // -1 = not given
     std::optional<double> temperature;
     bool skipPermissions = false;
     bool noWeb = false;
@@ -163,6 +164,10 @@ void printUsage() {
         "  --output-format FMT       text (default) or json\n"
         "  --cwd DIR                 Work in DIR\n"
         "  --max-steps N             Step budget (default 1000)\n"
+        "  --max-helpers N           Read-only helpers delegate_task runs at once. Default:\n"
+        "                            what the model serves (its slot count up to 4 locally,\n"
+        "                            8 on a cloud model). 0 turns the tool off\n"
+        "                            (env GAIA_MAX_HELPERS)\n"
         "  --mcp-config FILE         Connect the MCP servers in FILE (mcp.json)\n"
         "  --vision-model ID         Model analyze_image uses (default: the main model)\n"
         "  --transcribe-model ID     Whisper model for transcribe_audio (e.g. Whisper-Base on Lemonade)\n"
@@ -221,6 +226,18 @@ int toPositiveInt(const std::string& flag, const std::string& v) {
     const int n = toInt(flag, v);
     if (n <= 0) usageError(flag + " needs a whole number above 0, got '" + v + "'");
     return n;
+}
+
+int toHelperCount(const std::string& flag, const std::string& v) {
+    const int n = toInt(flag, v);
+    if (n < 0 || n > 64) usageError(flag + " needs a whole number from 0 to 64, got '" + v + "'");
+    return n;
+}
+
+// GAIA_MAX_HELPERS, or -1 when it is not set.
+int maxHelpersFromEnv() {
+    const std::string v = gaia::getEnvVar("GAIA_MAX_HELPERS");
+    return v.empty() ? -1 : toHelperCount("GAIA_MAX_HELPERS", v);
 }
 
 bool validTemperature(double t) { return std::isfinite(t) && t >= 0.0 && t <= 2.0; }
@@ -282,6 +299,7 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--max-tokens") cli.maxTokens = toPositiveInt(a, need(i, a));
         else if (a == "--temperature") cli.temperature = toTemperature(a, need(i, a));
         else if (a == "--max-steps") cli.maxSteps = toPositiveInt(a, need(i, a));
+        else if (a == "--max-helpers") cli.maxHelpers = toHelperCount(a, need(i, a));
         else if (a == "--cwd") cli.cwd = need(i, a);
         else if (a == "--mcp-config") cli.mcpConfig = need(i, a);
         else if (a == "--embedding-model") cli.embeddingModel = need(i, a);
@@ -368,6 +386,10 @@ void checkSettingsFile(const gaia::json& j, const std::string& where) {
     for (const char* key : {"debug", "showPrompts", "streaming", "silentMode", "structuredEvents"}) {
         if (j.contains(key) && !j[key].is_boolean()) fail(key, "true or false");
     }
+    if (j.contains("maxHelpers") &&
+        !(j["maxHelpers"].is_number_integer() && j["maxHelpers"] >= 0 && j["maxHelpers"] <= 64)) {
+        fail("maxHelpers", "a whole number from 0 to 64");
+    }
     if (j.contains("temperature") &&
         !(j["temperature"].is_number() && validTemperature(j["temperature"].get<double>()))) {
         fail("temperature", "a number from 0 to 2");
@@ -380,6 +402,7 @@ struct Settings {
     std::string mcpConfig;
     std::string embeddingModel;  // empty = keyword-only document retrieval
     std::string transcribeModel, audioBaseUrl, imageModel;
+    int maxHelpers = -1;  // -1 = sized to the model
 };
 
 Settings buildSettings(const Cli& cli) {
@@ -392,6 +415,7 @@ Settings buildSettings(const Cli& cli) {
                          {"maxSteps", 1000}};
     std::string mcpConfig;
     std::string settingsFrom = "The settings";
+    bool fileSetsWindow = false;
 
     const fs::path file = cli.configFile.empty() ? defaultConfigPath() : fs::path(cli.configFile);
     std::error_code ec;
@@ -416,6 +440,7 @@ Settings buildSettings(const Cli& cli) {
             mcpConfig = m.string();
             j.erase("mcpConfig");
         }
+        fileSetsWindow = j.contains("contextSize") || j.contains("provider");
         if (j.contains("provider")) {
             applyProvider(merged, j["provider"].get<std::string>(), "Settings file " + file.string());
             j.erase("provider");
@@ -437,6 +462,9 @@ Settings buildSettings(const Cli& cli) {
         if (!v.empty()) merged[field] = toPositiveInt(var, v);
     }
 
+    if (const int n = maxHelpersFromEnv(); n >= 0) merged["maxHelpers"] = n;
+    if (cli.maxHelpers >= 0) merged["maxHelpers"] = cli.maxHelpers;
+
     if (!cli.provider.empty()) applyProvider(merged, cli.provider, "--provider");
     if (!cli.baseUrl.empty()) merged["baseUrl"] = cli.baseUrl;
     if (!cli.model.empty()) merged["modelId"] = cli.model;
@@ -452,7 +480,19 @@ Settings buildSettings(const Cli& cli) {
     if (!cli.transcribeModel.empty()) merged["transcribeModel"] = cli.transcribeModel;
     if (!cli.imageModel.empty()) merged["imageModel"] = cli.imageModel;
 
+    // A hosted model reached through Lemonade has the provider's window, not a local one.
+    const bool windowGiven = fileSetsWindow || !gaia::getEnvVar("GAIA_CONTEXT_SIZE").empty() || cli.ctxSize > 0 ||
+                             !cli.provider.empty();
+    const std::string model = merged.value("modelId", "");
+    if (!windowGiven && (model.rfind("fireworks.", 0) == 0 || model.rfind("amd.", 0) == 0)) {
+        merged["contextSize"] = 131072;
+    }
+
     Settings s;
+    if (merged.contains("maxHelpers")) {
+        s.maxHelpers = merged["maxHelpers"].get<int>();
+        merged.erase("maxHelpers");
+    }
     for (auto [key, field] : {std::pair<const char*, std::string*>{"embeddingModel", &s.embeddingModel},
                               {"transcribeModel", &s.transcribeModel},
                               {"audioBaseUrl", &s.audioBaseUrl},
@@ -528,6 +568,7 @@ gaia::GaiaAgent::Options agentOptions(const Cli& cli, const Settings& settings) 
     o.memory = !cli.noMemory;
     o.screenshots = cli.screenshots;
     o.fullAccess = cli.fullAccess;
+    o.maxHelpers = settings.maxHelpers;
     std::error_code ec;
     o.workspaceRoots.push_back(fs::current_path(ec).u8string());
     for (const auto& d : cli.allowDirs) {
@@ -722,6 +763,7 @@ int runPrint(const Cli& cli) {
 
     const std::string status = result.value("status", "success");
     const gaia::json usage = result.value("usage", gaia::json::object());
+    const gaia::json helpers = agent.helperStats();
     // Same names as `gaia -p --output-format json`, so one reader takes both agents.
     gaia::json out = {{"status", status},
                       {"is_error", status != "success"},
@@ -740,6 +782,7 @@ int runPrint(const Cli& cli) {
                       {"output_tokens", usage.value("completion_tokens", 0)},
                       {"peak_context_tokens", usage.value("peak_context_tokens", 0)}};
     if (result.contains("usage")) out["usage"] = usage;
+    if (helpers.value("runs", 0) > 0) out["helpers"] = helpers;
     if (turnLog.is_open()) {
         gaia::json line = out;
         line["schema"] = "gaiacpp.turn/1";
@@ -965,6 +1008,7 @@ int main(int argc, char** argv) {
             so.host = cli.host;
             so.port = cli.port;
             so.defaultModel = cli.model.empty() ? gaia::getEnvVar("GAIA_MODEL_ID") : cli.model;
+            so.maxHelpers = cli.maxHelpers >= 0 ? cli.maxHelpers : maxHelpersFromEnv();
             return gaia::runSidecar(so);
         }
         if (!cli.cwd.empty()) {

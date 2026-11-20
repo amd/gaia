@@ -1411,7 +1411,7 @@ def test_connect_unregistered_provider_names_settings_not_a_command(
     assert resp.status_code == 409, resp.text
     detail = resp.json()["detail"]
     assert "no cloud provider registered" in detail
-    assert "Settings > Model" in detail
+    assert "Settings > Agent & model" in detail
     assert "connect it again" in detail
     assert "older than" not in detail
     assert "gaia gateway install" not in detail

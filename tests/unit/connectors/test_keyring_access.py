@@ -400,6 +400,18 @@ def _forget_cloud_key():
     assert cloud_keys.forget_key(provider) is True
 
 
+def _gateway_slot():
+    from gaia.llm import gateway
+
+    return gateway.GATEWAY_SECRET_NAME
+
+
+def _forget_gateway_token():
+    from gaia.llm import gateway
+
+    assert gateway.forget_token() is True
+
+
 def _remove_all_accounts(provider):
     from gaia.connectors import accounts
 
@@ -436,6 +448,10 @@ DELETERS = {
         [store._secret_username(cloud_keys_slot())],
         _forget_cloud_key,
     ),
+    "gateway-token": (
+        [store._secret_username(_gateway_slot())],
+        _forget_gateway_token,
+    ),
     "accounts-remove-all": (
         [store._connection_username("google", store.DEFAULT_ACCOUNT)],
         lambda: _remove_all_accounts("google"),
@@ -459,6 +475,27 @@ def test_refused_backend_still_deletes_and_warns(name, refused, caplog):
     assert {op for op, *_ in refused.calls} <= {"get", "delete"}
     assert "insecure keyring backend" in caplog.text
     assert keyring_access.DOCS_URL in caplog.text
+
+
+@pytest.mark.parametrize("forget", ["gateway", "cloud-key"])
+def test_forgetting_nothing_reports_nothing_removed(forget, refused):
+    from gaia.llm import cloud_keys, gateway
+
+    if forget == "gateway":
+        assert gateway.forget_token() is False
+    else:
+        assert cloud_keys.forget_key(sorted(cloud_keys.PROVIDERS)[0]) is False
+    assert refused.items == {}
+    assert {op for op, *_ in refused.calls} <= {"get", "delete"}
+
+
+def test_gateway_forget_on_a_strong_backend(strong):
+    from gaia.llm import gateway
+
+    assert gateway.forget_token() is False
+    gateway.remember_token("tok-abc")
+    assert gateway.forget_token() is True
+    assert strong.items == {}
 
 
 def test_weak_backend_delete_warns_once_per_process(monkeypatch, caplog):

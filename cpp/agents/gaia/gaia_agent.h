@@ -51,7 +51,18 @@ public:
         std::shared_ptr<std::atomic<bool>> internetOff;    // nothing that goes online runs
         std::shared_ptr<std::atomic<bool>> memoryOff;      // memory neither read nor written
         std::shared_ptr<std::atomic<bool>> memoryPrivate;  // memory read, nothing saved
+        // delegate_task: -1 = as many helpers at once as the model serves, 0 = no such tool,
+        // N = that many at once (and the tool is offered to a compact model too).
+        int maxHelpers = -1;
+        int helperMaxSteps = 30;         // one helper's step budget
+        int helperTimeoutSeconds = 600;  // one helper's wall-clock limit
     };
+
+    /// delegate_task for this agent: runs read-only helpers on stated tasks.
+    ToolInfo delegateTaskTool();
+
+    /// What this turn's helpers did and used, for the run's JSON output.
+    json helperStats() const;
 
     DocumentIndex* documents() { return docs_.get(); }
 
@@ -70,6 +81,8 @@ protected:
 
     /// Lists the working folder once, so every model call of the turn shows it as it began.
     void onTurnStart() override;
+
+    UsageStats sideUsage() const override;
 
 public:
     /// Files the answer says were created or saved, as written in it.
@@ -120,6 +133,10 @@ public:
     /// Why command must not run: the last three shell commands began the same way and printed
     /// the same output. "" otherwise.
     static std::string repeatedCommandRefusal(const std::string& command, const std::vector<CallSeen>& calls);
+
+    /// How much text `dir` holds, for the prompt: "about 86,000 tokens of text in 16 files". Counts
+    /// text and source files two levels deep; "" when there are fewer than two.
+    static std::string textSizeOf(const std::filesystem::path& dir);
 
     /// text with every path-like token (one holding a slash) blanked out.
     static std::string withoutPaths(const std::string& text);
@@ -183,6 +200,7 @@ private:
     Options options_;
     mutable std::mutex turnListingMu_;
     std::optional<std::string> turnListing_;  // unset until the first turn starts
+    std::string turnTextSize_;                // how much text the working folder holds, in words for the prompt
     std::set<std::string> turnTablesPointedAt_;  // CSVs a command was sent to file_read for, once each
     std::vector<std::string> turnHostileNames_;  // file names holding shell syntax, as the turn began
     std::unique_ptr<SkillLibrary> skills_;
@@ -193,6 +211,16 @@ private:
     void registerCodeTools(std::shared_ptr<const Workspace> ws);
     std::unique_ptr<MemoryStore> memory_;
     std::unique_ptr<LemonadeClient> visionClient_;
+
+    json delegateTasks(const json& args);
+    std::shared_ptr<const Workspace> workspace_;  // null with full access
+    struct HelperTotals {
+        int runs = 0, ok = 0, partial = 0, failed = 0, width = 0;
+        UsageStats usage;
+        double wallSeconds = 0.0;
+    };
+    mutable std::mutex helperMu_;  // the totals, and the step log and console while helpers run
+    HelperTotals helperTotals_;
 
     void registerVisionTool(std::shared_ptr<const Workspace> ws);
 };

@@ -60,6 +60,7 @@ from .database import ChatDatabase
 from .document_monitor import DocumentMonitor
 from .memory_settings import memory_enabled
 from .restart_recovery import recover_interrupted_work, sweep_interrupted_work
+from .routers import agent_programs as agent_programs_router_mod
 from .routers import agents as agents_router_mod
 from .routers import automations as automations_router_mod
 from .routers import changes as changes_router_mod
@@ -991,6 +992,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
     # ── Include Routers ──────────────────────────────────────────────────
     app.include_router(system_router_mod.router)
+    app.include_router(agent_programs_router_mod.router)
     app.include_router(onboarding_router_mod.router)
     app.include_router(setup_router_mod.router)
     app.include_router(gpu_memory_router_mod.router)

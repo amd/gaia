@@ -201,6 +201,11 @@ class GaiaConfig:
             or ``cpu``) GAIA asks Lemonade for when it loads a local chat
             model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
             Takes effect on the next load; the embedding model keeps its own.
+        flagship_agent: which program is the GAIA agent in the Agent UI and
+            the terminal UI: ``gaiapy`` (the Python agent) or ``gaiacpp`` (the
+            native C++ agent, beta). ``None`` means the user has not chosen,
+            and both the Agent UI and the terminal UI run the Python agent;
+            an installed ``gaiacpp`` runs only once it is chosen.
         cloud_reasoning_effort: ``off`` (the default) sends cloud models no
             ``reasoning_effort``, leaving each at its provider's default.
             ``low``, ``medium`` or ``high`` turns on a one-time probe per cloud
@@ -273,6 +278,7 @@ class GaiaConfig:
     read_aloud_speed: int = 100
     read_aloud_auto: bool = False
     dynamic_tools: bool = True
+    flagship_agent: Optional[str] = None
     hybrid_cheap_model: Optional[str] = None
     hybrid_strong_model: Optional[str] = None
     hybrid_classifier_model: Optional[str] = None
@@ -431,6 +437,24 @@ class GaiaConfig:
                 f"{where}: 'llamacpp_backend' must be one of "
                 f"{', '.join(cls.LLAMACPP_BACKEND_CHOICES)}, but it is {value!r}. "
                 "Run `gaia config set llamacpp_backend auto` to let Lemonade choose."
+            )
+        return word
+
+    #: Values ``flagship_agent`` accepts: the Python agent and the native C++ one.
+    FLAGSHIP_AGENT_CHOICES = ("gaiapy", "gaiacpp")
+
+    @classmethod
+    def _check_flagship_agent(cls, value: Any, where: str) -> Optional[str]:
+        """Normalise a ``flagship_agent`` value, raising on anything else."""
+        if value is None:
+            return None
+        word = str(value).strip().lower() if isinstance(value, str) else value
+        if word not in cls.FLAGSHIP_AGENT_CHOICES:
+            raise GaiaConfigError(
+                f"{where}: 'flagship_agent' must be one of "
+                f"{', '.join(cls.FLAGSHIP_AGENT_CHOICES)}, but it is {value!r}. "
+                "Change it to one of those, or delete the 'flagship_agent' line "
+                "to go back to the default."
             )
         return word
 
@@ -685,6 +709,10 @@ class GaiaConfig:
             kwargs["cloud_reasoning_effort"] = cls._check_cloud_reasoning_effort(
                 kwargs["cloud_reasoning_effort"], f"GAIA config at {config_file}"
             )
+        if "flagship_agent" in kwargs:
+            kwargs["flagship_agent"] = cls._check_flagship_agent(
+                kwargs["flagship_agent"], f"GAIA config at {config_file}"
+            )
         if "embedding_device" in kwargs:
             kwargs["embedding_device"] = cls._check_embedding_device(
                 kwargs["embedding_device"], f"GAIA config at {config_file}"
@@ -856,6 +884,9 @@ class GaiaConfig:
         if key == "cloud_reasoning_effort":
             setattr(self, key, self._check_cloud_reasoning_effort(value, "gaia config"))
             return
+        if key == "flagship_agent":
+            setattr(self, key, self._check_flagship_agent(value, "gaia config"))
+            return
         if key == "embedding_device":
             setattr(
                 self,
@@ -866,7 +897,7 @@ class GaiaConfig:
         if key == "context_sizes":
             raise GaiaConfigError(
                 "context_sizes is set per model: choose a context size in the "
-                "Agent UI under Settings › Model, or edit config.json by hand."
+                "Agent UI under Settings › Agent & model, or edit config.json by hand."
             )
         setattr(self, key, self._coerce(key, value))
 

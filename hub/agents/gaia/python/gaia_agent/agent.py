@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, FrozenSet, List, Optional, Set, Tuple
@@ -57,6 +58,21 @@ from gaia_agent.engineering_tools import (
     EngineeringToolsMixin,
 )
 from gaia_agent.profiles import get_profile_spec
+from gaia_agent.research import (
+    CITATION_REPAIR,
+    DOWNLOAD_READ_TOOLS,
+    RESEARCH_BRIEF,
+    RESEARCH_SKILL,
+    RESEARCH_TOOLS,
+    WEB_CALLS_KEPT,
+    WEB_RECORD_TOOLS,
+    citation_problems,
+    downloaded_path,
+    file_read_path,
+    research_brief,
+    research_message,
+    split_research_command,
+)
 
 from gaia.agents.base.agent import default_max_steps, parse_skill_manifest
 from gaia.agents.base.history import context_window
@@ -486,6 +502,8 @@ class GaiaAgent(
                 "[gaia] fast mode: conversational profile only — no documents, "
                 "files, web or skills this session"
             )
+        self._research_brief: Optional[str] = None
+        self._web_calls: deque = deque(maxlen=WEB_CALLS_KEPT)
         router = None
         requested = resolved.model_id
         if requested is None and not resolved.use_claude:
@@ -503,12 +521,31 @@ class GaiaAgent(
             self._start_engineering_setup()
 
     def process_query(self, user_input, *args, **kwargs):
-        """Run a turn; on ``hybrid``, first move to the model its route picks."""
+        """Run a turn; on ``hybrid``, first move to the model its route picks.
+
+        A ``/research`` turn first loads the research skill. The topic becomes
+        the user's message, so memory and history keep what the user asked;
+        the research brief rides in the turn's context.
+        """
         route = self._route_turn(user_input)
-        result = super().process_query(user_input, *args, **kwargs)
+        result = self._run_turn(user_input, *args, **kwargs)
         if route is not None and isinstance(result, dict):
             result["route"] = route.as_record()
         return result
+
+    def _run_turn(self, user_input, *args, **kwargs):
+        split = split_research_command(user_input)
+        if split is None:
+            return super().process_query(user_input, *args, **kwargs)
+        notes, topic = split
+        self._start_research_turn()
+        self._research_brief = research_brief(topic)
+        try:
+            return super().process_query(
+                research_message(notes, topic), *args, **kwargs
+            )
+        finally:
+            self._research_brief = None
 
     def _route_turn(self, user_input: Any) -> Optional[RouteDecision]:
         router = self.hybrid_router
@@ -593,6 +630,62 @@ class GaiaAgent(
     def _always_on_skill_names(self):
         names = super()._always_on_skill_names
         return names | {ENGINEERING_SKILL} if self.config.developer_mode else names
+
+    def _execute_tool_timed(self, tool_name, tool_args):
+        result = super()._execute_tool_timed(tool_name, tool_args)
+        # What a research report's citations are checked against.
+        if tool_name in WEB_RECORD_TOOLS:
+            self._web_calls.append((tool_name, tool_args, result))
+        elif tool_name in DOWNLOAD_READ_TOOLS and any(
+            name == "download_file"
+            and downloaded_path(saved) == file_read_path(tool_args)
+            for name, _args, saved in self._web_calls
+        ):
+            self._web_calls.append((tool_name, tool_args, result))
+        return result
+
+    def answer_problems(self, answer):
+        problems = super().answer_problems(answer)
+        if self._research_brief != RESEARCH_BRIEF:
+            return problems
+        request = getattr(self, "_original_user_input", None) or ""
+        return problems + citation_problems(
+            answer or "", list(self._web_calls), str(request)
+        )
+
+    def answer_repair_prompt(self, problems):
+        if self._research_brief != RESEARCH_BRIEF:
+            return super().answer_repair_prompt(problems)
+        return CITATION_REPAIR.format(problems=" ".join(problems))
+
+    def _start_research_turn(self) -> None:
+        """Load ``research-report`` and keep its instructions in this turn's prompt.
+
+        Raises:
+            RuntimeError: this agent has no web tools, or the skill would not load.
+        """
+        from gaia.skills.errors import SkillError
+
+        missing = [t for t in RESEARCH_TOOLS if t not in self.get_tools_info()]
+        if missing:
+            raise RuntimeError(
+                "Research needs web search and page reading, and this agent has "
+                f"no {', '.join(missing)} tool. Start a regular GAIA chat to "
+                "research a topic."
+            )
+        already = RESEARCH_SKILL in self.loaded_skills
+        if not already:
+            try:
+                self.load_skill(RESEARCH_SKILL)
+            except SkillError as exc:
+                raise RuntimeError(
+                    f"Research needs the {RESEARCH_SKILL} skill, and it could "
+                    f"not be loaded: {exc}"
+                ) from exc
+        # The per-turn selector must not collapse the body the user asked for.
+        self._pin_skill_body(RESEARCH_SKILL)
+        self._announce_skill(RESEARCH_SKILL, "loaded" if already else "auto")
+        self.rebuild_system_prompt()
 
     def close(self, *, wait_for_mcp: bool = True) -> None:
         """Release this agent's watchers, HTTP session and SQLite handles now.
@@ -1142,6 +1235,7 @@ class GaiaAgent(
             auto, suggested = [], matches.auto_load + matches.suggest
         parts = (
             super().get_memory_dynamic_context(),
+            getattr(self, "_research_brief", None),
             render_autoloaded(auto),
             render_suggestion(suggested, after_autoload=bool(auto)),
         )

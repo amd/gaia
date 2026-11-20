@@ -220,6 +220,12 @@ def refuse_unstreamed_sidecar_chat(agent_type: str) -> None:
     )
 
 
+def _native_flagship_chosen() -> bool:
+    from gaia.daemon.sidecars import fetch
+
+    return fetch.chosen_flagship() == fetch.NATIVE_FLAGSHIP
+
+
 def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     """Whether *agent_type* must be served by its daemon sidecar this turn.
 
@@ -241,6 +247,9 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     profile = profile_for(agent_type)
     if profile is None:
         return False
+    if agent_type == FLAGSHIP_AGENT_ID and _native_flagship_chosen():
+        # gaiacpp is a program of its own: it only ever runs behind the daemon.
+        return True
     if registry is None:
         return True
     reg = registry.get(agent_type)
@@ -542,7 +551,7 @@ def _refuse_unrunnable_model(model_id: str) -> None:
     raise LemonadeModelUnavailableError(
         user_message=(
             f"{display_name(model_id)} can't run on this PC: {reason.rstrip('.')}. "
-            "Open Settings › Model to fix it on the model's card, or switch to "
+            "Open Settings › Agent & model to fix it on the model's card, or switch to "
             "another model there."
         )
     )
@@ -697,6 +706,10 @@ _TITLE_INSTRUCTION_WORDS = frozenset(
 _QUESTION_TITLE_MAX_CHARS = 60
 #: A link or image the user typed: ``[text](target)`` / ``![alt](target)``.
 _MARKDOWN_LINK_RE = _re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+#: The Research switch sends ``/research <topic>``; the topic is the title.
+_RESEARCH_COMMAND_RE = _re.compile(
+    r"\A\s*/research(?:-report)?(?=\s|\Z)", _re.IGNORECASE
+)
 #: A cloud model may reason before it answers, and only some providers let a
 #: request turn that off; this leaves room for the reasoning and the title.
 _CLOUD_TITLE_MAX_TOKENS = 512
@@ -798,7 +811,7 @@ def _title_from_question(user_msg: str) -> Optional[str]:
     Only the user's own words count: the attachment links the composer appends
     are dropped, and a message of attachments alone is named by its first file.
     """
-    user_msg = user_msg or ""
+    user_msg = _RESEARCH_COMMAND_RE.sub("", user_msg or "", count=1)
     words = UPLOAD_LINK_RE.sub(" ", user_msg)
     text = " ".join(_MARKDOWN_LINK_RE.sub(r"\1", words).split())
     if not text and (first := UPLOAD_LINK_RE.search(user_msg)):
@@ -2758,23 +2771,23 @@ def _missing_local_model_text(init_body: dict) -> str:
         if cloud_blocked():
             return (
                 f"Local only is on, so {name} can't answer. Pick a local model "
-                "under Settings > Model, or turn off Local only under Settings > "
+                "under Settings > Agent & model, or turn off Local only under Settings > "
                 "Privacy."
             )
         return (
             f"{name} isn't connected, so GAIA can't answer. Reconnect {provider} "
-            "under Settings > Model, or pick another model."
+            "under Settings > Agent & model, or pick another model."
         )
     name = friendly_name(model_id)
     if cloud_blocked():
         return (
             f"Local only is on and {name} isn't downloaded yet, so GAIA can't "
-            "answer. Get a local model under Settings > Model, or turn off Local "
+            "answer. Get a local model under Settings > Agent & model, or turn off Local "
             "only under Settings > Privacy to use a cloud model."
         )
     return (
         f"{name} isn't downloaded yet, so GAIA can't answer. Get it, or pick "
-        "another model, under Settings > Model."
+        "another model, under Settings > Agent & model."
     )
 
 
@@ -2806,7 +2819,7 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
                 "type": "status",
                 "message": _agent_ui_wording(
                     f"Could not reconnect {provider}: {exc}. If the answer says "
-                    "the model is unavailable, reconnect it in Settings > Model."
+                    "the model is unavailable, reconnect it in Settings > Agent & model."
                 ),
             }
         )
@@ -5862,7 +5875,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     for k, v in route.items()
                 }
                 inference_stats = {**(inference_stats or {}), "route": shown}
-            # Settings › Model shows each model's speed measured on this PC.
+            # Settings › Agent & model shows each model's speed measured on this PC.
             if inference_stats is not None and ran_on:
                 inference_stats["measured_model"] = ran_on
             # The model that wrote this answer, so a later model switch can't relabel it.

@@ -627,6 +627,40 @@ TEST_F(GaiacppSidecar, PlainQueryStreamsTokensThenFinalWithUsage) {
     EXPECT_EQ(unknown->status, 404);
 }
 
+TEST_F(GaiacppSidecar, TheHelperSettingReachesAChatsAgent) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar({{"GAIA_MAX_HELPERS", std::string("0")}}));
+    mock().pushResponse(answerReply("hi"));
+    Turn t(port_, queryBody("run-nohelpers", "hello", {{"session_id", "chat-nohelpers"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto tools = send("GET", "/v1/gaia/sessions/chat-nohelpers/tools", bearer());
+    ASSERT_TRUE(tools);
+    ASSERT_EQ(tools->status, 200) << tools->body;
+    bool offered = false, hasRead = false;
+    const json listed = json::parse(tools->body);
+    for (const auto& tool : listed["tools"]) {
+        if (tool["name"] == "delegate_task") offered = true;
+        if (tool["name"] == "file_read") hasRead = true;
+    }
+    EXPECT_TRUE(hasRead) << tools->body.substr(0, 600);
+    EXPECT_FALSE(offered) << "GAIA_MAX_HELPERS=0 removes delegate_task for the Agent UI's agent too";
+}
+
+TEST_F(GaiacppSidecar, AChatsAgentHasDelegateTaskByDefault) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    mock().pushResponse(answerReply("hi"));
+    Turn t(port_, queryBody("run-helpers", "hello", {{"session_id", "chat-helpers"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto tools = send("GET", "/v1/gaia/sessions/chat-helpers/tools", bearer());
+    ASSERT_TRUE(tools);
+    ASSERT_EQ(tools->status, 200) << tools->body;
+    bool offered = false;
+    const json listed = json::parse(tools->body);
+    for (const auto& tool : listed["tools"]) {
+        if (tool["name"] == "delegate_task") offered = true;
+    }
+    EXPECT_TRUE(offered);
+}
+
 // ---- 4. a tool turn ----
 
 TEST_F(GaiacppSidecar, ReadOnlyToolStreamsToolCallThenResultThenFinal) {

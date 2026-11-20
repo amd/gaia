@@ -165,9 +165,12 @@ def _resolve_token(kind: str) -> Optional[str]:
             f"could not read the {kind} token from the OS keyring: {exc} Or set "
             f"the {_env_for(kind)} environment variable instead."
         ) from exc
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        log.warning("publisher: keyring read failed for %s token: %s", kind, exc)
-        return None
+    except Exception as exc:  # noqa: BLE001 - keyring backends raise anything
+        raise PublisherError(
+            f"could not read the {kind} token from the OS keyring: {exc}. "
+            "Unlock or fix the OS credential store and retry, or set the "
+            f"{_env_for(kind)} environment variable instead."
+        ) from exc
     return stored.strip() if stored and stored.strip() else None
 
 

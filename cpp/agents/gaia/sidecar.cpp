@@ -162,6 +162,9 @@ public:
     void printError(const std::string& m) override { emit({{"type", "status"}, {"message", m}}); }
     void printWarning(const std::string& m) override { emit({{"type", "status"}, {"message", m}}); }
     void printInfo(const std::string& m) override { emit({{"type", "status"}, {"message", m}}); }
+    void printToolProgress(const std::string& phase, const std::string& m) override {
+        emit({{"type", "status"}, {"message", m}, {"phase", phase}});
+    }
     void startProgress(const std::string&) override {}
     void stopProgress() override {}
     void printFinalAnswer(const std::string&, const UsageStats&) override {}
@@ -440,6 +443,7 @@ private:
         cfg.responseMode = ResponseMode::Conversational;
         cfg.apiKey = lemonadeKey_;
         GaiaAgent::Options o;
+        o.maxHelpers = opts_.maxHelpers;
         if (s.roots.empty()) {
             // Roots are UTF-8; the environment's narrow strings are the code page on Windows.
 #ifdef _WIN32

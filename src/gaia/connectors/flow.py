@@ -785,6 +785,84 @@ async def revoke_provider_token(
     return result
 
 
+#: Whether each OAuth provider has a revoke endpoint, mirroring its ``revoke_url``.
+#: Static so a disconnect can answer without the provider's client configured.
+HAS_REVOKE_ENDPOINT: Dict[str, bool] = {
+    "google": True,
+    "microsoft": False,
+    "microsoft_work": False,
+}
+
+
+def nothing_to_revoke(provider_id: str) -> Dict[str, Any]:
+    """The revoke outcome for an account with no token stored: no live grant.
+
+    Matches what :func:`revoke_provider_token` reports for the same case, so a
+    provider with no revoke endpoint still says so. Reads nothing from the
+    keyring, so it answers on one that refuses reads.
+    """
+    if provider_id not in HAS_REVOKE_ENDPOINT:
+        return {
+            "revoke_supported": False,
+            "revoked_remotely": False,
+            "revoke_error": f"provider {provider_id!r} could not be resolved",
+        }
+    supported = HAS_REVOKE_ENDPOINT[provider_id]
+    return {
+        "revoke_supported": supported,
+        "revoked_remotely": supported,
+        "revoke_error": None,
+    }
+
+
+#: Where a user removes GAIA's access by hand, per OAuth provider id.
+REVOKE_PAGES: Dict[str, Tuple[str, str]] = {
+    "google": ("Google", "https://myaccount.google.com/permissions"),
+    "microsoft": ("Microsoft", "https://account.live.com/consent/Manage"),
+    "microsoft_work": ("Microsoft", "https://myapps.microsoft.com"),
+}
+
+
+def not_revoked_on_weak_keyring(
+    provider_id: str,
+    *,
+    uninspectable: bool = False,
+    account_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The revoke outcome when the keyring refuses reads (weak or uninspectable).
+
+    Revoking needs the stored refresh token, which GAIA will not read from
+    such a keyring, so only the local copy is removed. ``revoke_error`` tells
+    the user where to revoke GAIA's access by hand. ``uninspectable`` is a
+    chain GAIA could not check, which may well be secure; ``account_type``
+    sends a work account saved under ``microsoft`` to the work page.
+    """
+    from gaia.connectors.providers.microsoft import ACCOUNT_TYPE_WORK
+
+    page_id = provider_id
+    if provider_id == "microsoft" and account_type == ACCOUNT_TYPE_WORK:
+        page_id = "microsoft_work"
+    label, page = REVOKE_PAGES.get(
+        page_id, (provider_id, "your account's connected-apps page")
+    )
+    if uninspectable:
+        why = "GAIA could not confirm the keyring on this PC is secure"
+        fix = "use a single system credential store"
+    else:
+        why = "The keyring on this PC is not secure"
+        fix = "switch to a secure credential store"
+    return {
+        "revoke_supported": False,
+        "revoked_remotely": False,
+        "revoke_error": (
+            f"{why}, so GAIA removed the sign-in without reading it and did "
+            f"not revoke GAIA's access at {label}. To revoke it, remove GAIA "
+            f"at {page}. To keep using connectors, {fix}: "
+            "https://amd-gaia.ai/docs/security/connections"
+        ),
+    }
+
+
 async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
     """Loopback handler for ``GET /callback``."""
     flow = _pending.get(flow_id)

@@ -151,6 +151,9 @@ type ChatModel struct {
 	setupChoices *modelsetup.Choices
 	// gpuApplies is whether /gpu means anything on this PC (an integrated GPU).
 	gpuApplies bool
+	// agentProgramHost is set when the host answers AgentProgramMsg (/agent).
+	agentProgramHost bool
+
 	// agentsPanel is the in-chat "/agents" listing (nil unless open). It only
 	// lists and selects (agents.SelectedMsg's own doc comment); switching to
 	// the picked agent is the root model's job, so a SelectedMsg is left to
@@ -322,6 +325,10 @@ type ChatModel struct {
 	// once at launch from the transport's argv — see applyLaunchClaude — and
 	// kept in sync by every model-state ping thereafter (handleCanonicalEvent).
 	claudeMode bool
+
+	// researchMode is on after a bare /research: every message goes out as
+	// `/research <message>` until /research turns it off (research.go).
+	researchMode bool
 
 	// launchClaudeModel is the id --claude-model put on the child's argv, ""
 	// when the launch named none. Kept separate from modelID on purpose:
@@ -1781,11 +1788,17 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	if isVoiceCommand(query) {
 		return m.runVoiceCommand(commandArg(query, voiceCommand))
 	}
+	if isAgentCommand(query) {
+		return m.runAgentCommand(commandArg(query, agentCommand))
+	}
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
 	if isSkillsCommand(query) {
 		return m.submitSkillsCommand(query)
+	}
+	if isResearchCommand(query) {
+		return m.runResearchCommand(query)
 	}
 	if req, ok := parseConnectorsCommand(query); ok {
 		return m.startConnectorsCommand(req)
@@ -1999,7 +2012,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		return m.handleAutomationsCommand(query)
 	}
 
-	return m.sendQuery(query)
+	return m.sendQuery(m.withResearch(query))
 }
 
 func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
@@ -3130,7 +3143,7 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 			// Nor does a failed row, retried or not: folded, the next call's
 			// outcome would replace its error line. A failure folds under an
 			// earlier row only when it is a retry of that same call.
-			keep := stepFailed(*last) ||
+			keep := stepFailed(*last) || len(last.Helpers) > 0 || len(item.Helpers) > 0 ||
 				(stepFailed(item) && (item.RetryKey == "" || item.RetryKey != last.RetryKey))
 			if last.Kind == item.Kind && activityKey(*last) == activityKey(item) &&
 				last.Approval == item.Approval && !keep {
@@ -3545,6 +3558,7 @@ func (m ChatModel) renderHeader() string {
 	// always tell where inference runs and which model answered.
 	rest := m.renderModelChip()
 	rest += m.renderLemonadeChip()
+	rest += m.renderResearchChip()
 
 	title := prefix + identity + rest
 	if m.width > 0 && ansi.StringWidth(title) > m.width {
