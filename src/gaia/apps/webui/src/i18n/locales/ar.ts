@@ -2751,6 +2751,7 @@ const messages: Messages = {
     'settings.connectors.accountsHint': 'سجّل الدخول ليصل GAIA إلى بريدك وتقويمك وملفاتك.',
     'settings.connectors.servers': 'خوادم MCP',
     'settings.connectors.serversHint': 'أضف أدوات من خدمات أخرى.',
+    'settings.connectors.customServer': 'أضفتَ هذا الخادم في {file}. عدِّله أو أزله من هناك.',
     'settings.connectors.agentServers': 'خوادم الوكلاء المخصصين',
     'settings.connectors.unavailable': 'غير متاحة',
     'settings.connectors.unavailableHint': 'تعذّر على GAIA قراءة هذه الموصلات. أعد تشغيل GAIA. إذا تكرر ذلك، احفظ تقرير استكشاف الأخطاء من الإعدادات ← الخصوصية وأرفقه بتقرير الخطأ.',

@@ -1579,11 +1579,11 @@ class TestActivationsEndpoints:
             headers=UI_HEADER,
         )
         assert resp.status_code == 204
-        # Activation cleared, grant survives — re-activate must be one click.
+        # Activation turned off, grant survives — re-activate must be one click.
         grants = ui_api_client.get("/api/connectors/mcp-test/grants").json()
         assert grants == {"grants": {"builtin:chat": ["use"]}}
         listing = ui_api_client.get("/api/connectors/mcp-test/activations").json()
-        assert listing == {"activations": {}}
+        assert listing == {"activations": {"builtin:chat": False}}
 
     def test_connector_summary_exposes_activations(self, ui_api_client):
         ui_api_client.put(
@@ -1664,3 +1664,97 @@ class TestActivationsRejectNonMcpServer:
         assert resp.status_code == 200
         body = resp.json()
         assert body["agent_id"] == "custom:deadbeef:chat"
+
+
+# ---------------------------------------------------------------------------
+# MCP servers the user added to mcp_servers.json themselves (#8668)
+# ---------------------------------------------------------------------------
+
+FLAGSHIP = "installed:gaia"
+
+
+@pytest.fixture
+def custom_server(tmp_path):
+    """A hand-written ``toy`` entry beside a catalog one, in the test's GAIA home."""
+    import json
+
+    gaia_dir = tmp_path / ".gaia"
+    gaia_dir.mkdir(parents=True, exist_ok=True)
+    (gaia_dir / "mcp_servers.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "toy": {"command": "python", "args": ["toy.py"]},
+                    "mcp-test": {"command": "true", "args": []},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+class TestUserAddedMcpServers:
+    def _row(self, client, connector_id):
+        rows = client.get("/api/connectors").json()["connectors"]
+        return next((r for r in rows if r["id"] == connector_id), None)
+
+    def test_it_is_listed_on_for_gaia(self, ui_api_client, custom_server):
+        row = self._row(ui_api_client, "toy")
+        assert row["type"] == "mcp_server"
+        assert row["custom"] is True
+        assert row["configured"] is True and row["enabled"] is True
+        assert row["activations"] == {FLAGSHIP: True}
+        # No setup form: the user's own entry is the whole configuration.
+        assert row["mcp_env_keys"] == []
+
+    def test_a_catalog_server_stays_opt_in(self, ui_api_client, custom_server):
+        row = self._row(ui_api_client, "mcp-test")
+        assert row["custom"] is False
+        assert row["activations"] == {}
+
+    def test_nothing_is_listed_without_an_entry(self, ui_api_client):
+        assert self._row(ui_api_client, "toy") is None
+        assert ui_api_client.get("/api/connectors/toy").status_code == 404
+
+    def test_turning_it_off_and_on_for_gaia(self, ui_api_client, custom_server):
+        url = f"/api/connectors/toy/activations/{FLAGSHIP}"
+        assert ui_api_client.delete(url, headers=UI_HEADER).status_code == 204
+        assert self._row(ui_api_client, "toy")["activations"] == {FLAGSHIP: False}
+        listing = ui_api_client.get("/api/connectors/toy/activations").json()
+        assert listing == {"activations": {FLAGSHIP: False}}
+
+        # No grant and no scopes: GAIA holds no credential for it to grant.
+        resp = ui_api_client.put(url, json={}, headers=UI_HEADER)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["auto_granted"] is False
+        assert self._row(ui_api_client, "toy")["activations"] == {FLAGSHIP: True}
+        assert ui_api_client.get("/api/connectors/toy/grants").json() == {"grants": {}}
+
+    def test_another_agent_is_not_on_by_default(self, ui_api_client, custom_server):
+        listing = ui_api_client.get("/api/connectors/toy/activations").json()
+        assert "custom:abc:inbox" not in listing["activations"]
+
+    def test_the_server_switch_edits_only_its_entry(
+        self, ui_api_client, custom_server, tmp_path
+    ):
+        import json
+
+        resp = ui_api_client.post("/api/connectors/toy/disable", headers=UI_HEADER)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["enabled"] is False
+        saved = json.loads((tmp_path / ".gaia" / "mcp_servers.json").read_text())
+        assert saved["mcpServers"]["toy"] == {
+            "command": "python",
+            "args": ["toy.py"],
+            "disabled": True,
+        }
+        resp = ui_api_client.post("/api/connectors/toy/enable", headers=UI_HEADER)
+        assert resp.json()["enabled"] is True
+
+    def test_an_unknown_server_cannot_be_activated(self, ui_api_client, custom_server):
+        resp = ui_api_client.put(
+            f"/api/connectors/nope/activations/{FLAGSHIP}",
+            json={"scopes": ["use"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 404

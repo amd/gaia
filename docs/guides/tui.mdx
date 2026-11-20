@@ -781,7 +781,8 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/automations` | List the reminders, summaries, alerts and triggers GAIA runs on its own, numbered. `/automations pause 2`, `resume 2` or `remove 2` changes one; a name works too. See [Automations](/guides/automations) |
 | `/connectors` | List your connected apps (Gmail, Slack, GitHub…). A connector with several accounts lists each one, marking the default and any whose sign-in expired. Also a clickable entry in the status bar. See [Connectors](/connectors) |
 | `/connectors personalize <id>` | Optional: let GAIA read a connected app's recent activity, save what it learns to memory, and suggest automations. Told only to read; creates no schedules. GAIA keeps access to the app afterwards |
-| `/connectors revoke <id>` | Turn off GAIA's access to a tool-server connector (Slack, Notion…), such as the access Personalize leaves on. Google and Microsoft access comes with signing in, so use `/connectors remove` for those |
+| `/connectors revoke <id>` | Turn off GAIA's access to a tool-server connector (Slack, Notion…) or an MCP server you added yourself, such as the access Personalize leaves on. Google and Microsoft access comes with signing in, so use `/connectors remove` for those |
+| `/connectors allow <id>` | Let GAIA use a connected tool server that `/connectors` shows as off for GAIA. It takes effect with your next message |
 | `/connectors remove <id> [address]` | Sign a Google or Microsoft account out of GAIA. With several accounts connected, name the one to remove, or GAIA lists them |
 | `/connectors add <id>` | Sign another Google or Microsoft account in beside the ones already connected. Your browser opens the provider's account picker; GAIA waits up to 15 minutes |
 | `/connectors reconnect <id> <address>` | Sign an account in again after its sign-in expired. `/connectors` marks expired accounts |
