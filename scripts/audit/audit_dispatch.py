@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _AUDIT_DIR = Path(__file__).resolve().parent
@@ -31,7 +31,11 @@ from github_release_retry import (  # noqa: E402  pylint: disable=wrong-import-p
     _is_rate_limit_error,
 )
 
-BUDGET = 300
+# The installation API budget refills hourly, so dispatch may wait out a full reset.
+DISPATCH_BUDGET = 3900
+CONFIRM_BUDGET = 300
+# GitHub stamps created_at by its own clock; allow for a runner clock that runs ahead.
+CLOCK_SLACK = timedelta(seconds=60)
 
 
 def _split_http_response(stdout: str) -> tuple[str, str]:
@@ -103,7 +107,7 @@ def request(args: list[str], deadline: float) -> str:
 
 def main(repo: str, workflow: str, night: str) -> None:
     endpoint = f"repos/{repo}/actions/workflows/{workflow}"
-    started = datetime.now(timezone.utc).replace(microsecond=0)
+    started = datetime.now(timezone.utc).replace(microsecond=0) - CLOCK_SLACK
     request(
         [
             f"{endpoint}/dispatches",
@@ -112,9 +116,9 @@ def main(repo: str, workflow: str, night: str) -> None:
             "-f",
             f"inputs[rotation_night]={night}",
         ],
-        time.monotonic() + BUDGET,
+        time.monotonic() + DISPATCH_BUDGET,
     )
-    deadline = time.monotonic() + BUDGET
+    deadline = time.monotonic() + CONFIRM_BUDGET
     suffix = f" — {ROTATION_TITLE} {night}"
     while time.monotonic() < deadline:
         body = request(

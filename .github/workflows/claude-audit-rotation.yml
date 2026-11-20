@@ -82,8 +82,8 @@ jobs:
           NIGHT: ${{ steps.pick.outputs.night }}
         run: |
           if ! gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "Audit dispatch failed for $WORKFLOW on rotation night $NIGHT" \
-            --body "Dispatch could not be confirmed. Rotation run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"; then
+            --title "Nightly audit not confirmed started: $WORKFLOW, rotation night $NIGHT" \
+            --body "The rotation could not dispatch this audit, or could not confirm its run started; the audit may still be running. Rotation run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"; then
             echo "::error::Failed to open the audit dispatch issue"
             exit 1
           fi

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -70,7 +71,8 @@ def _install_clock(monkeypatch: pytest.MonkeyPatch, budget: int = 50):
     monkeypatch.setattr(dispatch.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(dispatch.time, "time", lambda: now[0])
     monkeypatch.setattr(dispatch.time, "sleep", sleep)
-    monkeypatch.setattr(dispatch, "BUDGET", budget)
+    monkeypatch.setattr(dispatch, "DISPATCH_BUDGET", budget)
+    monkeypatch.setattr(dispatch, "CONFIRM_BUDGET", budget)
     return sleeps
 
 
@@ -326,6 +328,10 @@ def test_workflow_wires_failure_notice_and_dry_run_guards():
     assert "exit 1" in run
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the fake gh is a shebang script; the rotation runs on ubuntu-latest",
+)
 def test_cli_entrypoint_runs_standalone_with_crlf_gh_output(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -369,3 +375,111 @@ def test_cli_entrypoint_runs_standalone_with_crlf_gh_output(tmp_path):
         "Started `claude-nightly-audit.yml` for rotation night 7: "
         "https://github.com/amd/gaia/actions/runs/42"
     )
+
+
+def _fixed_now(monkeypatch: pytest.MonkeyPatch, iso: str) -> None:
+    fixed = datetime.fromisoformat(iso)
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(dispatch, "datetime", _Clock)
+
+
+def _runs(*runs: tuple[str, str]) -> str:
+    return json.dumps(
+        {
+            "workflow_runs": [
+                {
+                    "display_title": title,
+                    "created_at": created,
+                    "html_url": f"https://example.test/{i}",
+                }
+                for i, (title, created) in enumerate(runs)
+            ]
+        }
+    )
+
+
+def test_dispatch_waits_out_an_installation_reset_near_an_hour_away(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary"))
+    sleeps = _install_clock(monkeypatch, budget=dispatch.DISPATCH_BUDGET)
+    monkeypatch.setattr(dispatch, "CONFIRM_BUDGET", 300)
+    limited = _gh_response(
+        403,
+        "",
+        "API rate limit exceeded for installation",
+        **{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(1_000 + 3_500)},
+    )
+    gh = Mock(
+        side_effect=[
+            limited,
+            _gh_response(204),
+            _gh_response(200, _runs_body(True)),
+        ]
+    )
+    monkeypatch.setattr(dispatch.subprocess, "run", gh)
+
+    dispatch.main("amd/gaia", "audit.yml", "1")
+
+    assert sleeps == [3_500 + gh_retry._RESET_SLACK_SECONDS]
+
+
+@pytest.mark.parametrize(
+    ("created_at", "confirmed"),
+    [
+        ("2026-11-12T10:20:00Z", True),
+        ("2026-11-12T10:19:30Z", True),
+        ("2026-11-12T10:19:00Z", True),
+        ("2026-11-12T10:18:59Z", False),
+        ("2026-11-11T10:20:00Z", False),
+    ],
+    ids=[
+        "same-second",
+        "runner-30s-ahead",
+        "runner-60s-ahead",
+        "just-past-slack",
+        "previous-day",
+    ],
+)
+def test_confirmation_tolerates_runner_clock_skew_but_not_older_runs(
+    monkeypatch, tmp_path, created_at, confirmed
+):
+    summary = tmp_path / "summary"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    _install_clock(monkeypatch, budget=12)
+    _fixed_now(monkeypatch, "2026-11-12T10:20:00.900+00:00")
+    listing = _gh_response(
+        200,
+        _runs(
+            ("Audit — rotation night 11", "2026-11-12T10:20:05Z"),
+            ("Audit — rotation night 1", created_at),
+        ),
+    )
+    gh = Mock(side_effect=[_gh_response(204)] + [listing] * 10)
+    monkeypatch.setattr(dispatch.subprocess, "run", gh)
+
+    if confirmed:
+        dispatch.main("amd/gaia", "audit.yml", "1")
+        assert (
+            summary.read_text(encoding="utf-8")
+            .strip()
+            .endswith("https://example.test/1")
+        )
+    else:
+        with pytest.raises(TimeoutError):
+            dispatch.main("amd/gaia", "audit.yml", "1")
+        assert not summary.exists()
+
+
+def test_failure_issue_does_not_claim_the_audit_failed():
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["dispatch"]["steps"]
+    report = next(s for s in steps if s.get("name") == "Report missed audit")
+    assert "not confirmed" in report["run"]
+    assert "may still be running" in report["run"]
+    assert "${{" not in report["run"]
