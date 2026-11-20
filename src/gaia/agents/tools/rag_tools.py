@@ -14,7 +14,7 @@ import threading
 import time
 import weakref
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.file_snapshots import before_change
@@ -2634,7 +2634,7 @@ class RAGToolsMixin:
         )
         def summarize_document(
             file_path: str,
-            summary_type: str = "detailed",
+            summary_type: Literal["brief", "detailed", "bullets"] = "detailed",
             max_words_per_section: int = 20000,
         ) -> Dict[str, Any]:
             """
@@ -2645,6 +2645,11 @@ class RAGToolsMixin:
             2. Split into manageable sections based on word count
             3. Summarize each section with the LLM
             4. Combine section summaries into a final comprehensive summary
+
+            Args:
+                file_path: Name or path of an indexed document to summarize
+                summary_type: Only 'brief', 'detailed', or 'bullets'
+                max_words_per_section: Maximum words per section (default: 20000)
             """
             try:
                 if not self.rag:
