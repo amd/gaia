@@ -439,7 +439,7 @@ class RAGToolsMixin:
     @tool
     def summarize_document(
         file_path: str,
-        summary_type: str = "detailed",
+        summary_type: Literal["brief", "detailed", "bullets"] = "detailed",
         max_words_per_section: int = 20000
     ) -> Dict[str, Any]:
         """

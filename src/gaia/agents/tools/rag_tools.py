@@ -14,7 +14,7 @@ import threading
 import time
 import weakref
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, get_args
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.file_snapshots import before_change
@@ -41,6 +41,9 @@ from gaia.tool_cancellation import raise_if_cancelled
 from gaia.upload_names import display_file_name
 
 logger = get_logger(__name__)
+
+SummaryType = Literal["brief", "detailed", "bullets"]
+SUMMARY_TYPES: Tuple[str, ...] = get_args(SummaryType)
 
 _RAG_HINT = "Set self.rag = <RAGSDK instance, or None to disable RAG>."
 _RAG_DOC_ANCHOR = "docs/spec/rag-tools-mixin.mdx#host-agent-contract"
@@ -2634,7 +2637,7 @@ class RAGToolsMixin:
         )
         def summarize_document(
             file_path: str,
-            summary_type: Literal["brief", "detailed", "bullets"] = "detailed",
+            summary_type: SummaryType = "detailed",
             max_words_per_section: int = 20000,
         ) -> Dict[str, Any]:
             """
@@ -2671,11 +2674,10 @@ class RAGToolsMixin:
                 target_file = matching_files[0]
 
                 # Validate summary type
-                valid_types = ["brief", "detailed", "bullets"]
-                if summary_type not in valid_types:
+                if summary_type not in SUMMARY_TYPES:
                     return {
                         "status": "error",
-                        "error": f"Invalid summary_type '{summary_type}'. Valid types: {', '.join(valid_types)}",
+                        "error": f"Invalid summary_type '{summary_type}'. Valid types: {', '.join(SUMMARY_TYPES)}",
                     }
 
                 # Keep the tool's real styles aligned with summarize/SKILL.md.
