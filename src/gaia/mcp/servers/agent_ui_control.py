@@ -19,6 +19,8 @@ Kept free of the optional ``mcp`` dependency so it is unit-testable on its own.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hmac
 import ipaddress
 import json
@@ -31,6 +33,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
+from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.ui.sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
@@ -1199,4 +1202,19 @@ def remote_app(mcp, host: str, token: str):
         ),
         host=host,
     )
-    return BearerTokenMiddleware(app, token)
+    return BearerTokenMiddleware(_keep_listening(app), token)
+
+
+def _keep_listening(app):
+    """*app* (a Starlette app) with the listener guard armed at startup."""
+    serve = app.router.lifespan_context
+
+    @contextlib.asynccontextmanager
+    async def lifespan(scope_app):
+        # A client resetting a queued connection must not close the listener.
+        keep_listening_after_client_resets(asyncio.get_running_loop())
+        async with serve(scope_app) as state:
+            yield state
+
+    app.router.lifespan_context = lifespan
+    return app
