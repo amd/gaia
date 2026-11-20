@@ -19,7 +19,12 @@ from fastapi.concurrency import run_in_threadpool
 
 from gaia.daemon.sidecars import fetch, native_fetch
 from gaia.daemon.sidecars import platform as plat
-from gaia.daemon.sidecars.errors import IntegrityError, PlatformError, SidecarError
+from gaia.daemon.sidecars.errors import (
+    KIND_NO_RELEASE,
+    IntegrityError,
+    PlatformError,
+    SidecarError,
+)
 from gaia.logger import get_logger
 from gaia.ui.security import FLAGSHIP_AGENT_ID, require_local_pc, require_ui_header
 
@@ -31,7 +36,17 @@ _lock = threading.Lock()
 # One measurement at a time: each is up to three network calls.
 _measuring = threading.Lock()
 # "at" is None when nothing is cached: 0.0 would read as fresh on a just-booted PC.
-_sizes: Dict[str, Any] = {"at": None, "values": {}, "reasons": {}}
+_sizes: Dict[str, Any] = {"at": None, "values": {}, "reasons": {}, "code": None}
+# Shown under the gaiacpp option; the addresses and error text go to the log.
+# Each has a code the Agent UI translates; a reason with no code is shown as it is.
+_UNREACHABLE = (
+    "GAIA couldn't get gaiacpp's details from the download server. Check your "
+    "internet connection, or try again later."
+)
+_UNVERIFIABLE = (
+    "this GAIA release's gaiacpp can't be verified, so GAIA won't install it. "
+    "Use the Python agent, or update GAIA."
+)
 _job: Dict[str, Any] = {
     "state": "idle",
     "bytes_done": 0,
@@ -51,6 +66,7 @@ def _gaiapy_size() -> Optional[int]:
 def _measure() -> None:
     values: Dict[str, Optional[int]] = {}
     reasons: Dict[str, Optional[str]] = {}
+    code: Optional[str] = None
     lasting = True
     try:
         values[fetch.PYTHON_FLAGSHIP] = _gaiapy_size()
@@ -60,19 +76,29 @@ def _measure() -> None:
     try:
         values[fetch.NATIVE_FLAGSHIP] = native_fetch.download_info().size
         reasons[fetch.NATIVE_FLAGSHIP] = None
-    except (PlatformError, IntegrityError) as e:
+    except PlatformError as e:
         logger.warning("agent programs: gaiacpp cannot be downloaded: %s", e)
         values[fetch.NATIVE_FLAGSHIP] = None
         reasons[fetch.NATIVE_FLAGSHIP] = str(e)
+        code = KIND_NO_RELEASE if e.kind == KIND_NO_RELEASE else None
+    except IntegrityError as e:
+        logger.warning("agent programs: gaiacpp cannot be verified: %s", e)
+        values[fetch.NATIVE_FLAGSHIP] = None
+        reasons[fetch.NATIVE_FLAGSHIP] = _UNVERIFIABLE
+        code = "unverifiable"
     except (SidecarError, RuntimeError) as e:
         # The network, not the release: asked again on the next request.
         logger.warning("agent programs: gaiacpp release not reachable: %s", e)
         values[fetch.NATIVE_FLAGSHIP] = None
-        reasons[fetch.NATIVE_FLAGSHIP] = str(e)
+        reasons[fetch.NATIVE_FLAGSHIP] = _UNREACHABLE
+        code = "unreachable"
         lasting = False
     with _lock:
         _sizes.update(
-            at=time.monotonic() if lasting else None, values=values, reasons=reasons
+            at=time.monotonic() if lasting else None,
+            values=values,
+            reasons=reasons,
+            code=code,
         )
 
 
@@ -112,6 +138,7 @@ def _listing() -> Dict[str, Any]:
                 _measure()
     with _lock:
         values, reasons = dict(_sizes["values"]), dict(_sizes["reasons"])
+        native_code = _sizes["code"]
     native_path = fetch.native_flagship()
     native_size = values.get(fetch.NATIVE_FLAGSHIP)
     native_reason = reasons.get(fetch.NATIVE_FLAGSHIP)
@@ -128,6 +155,7 @@ def _listing() -> Dict[str, Any]:
                 "can_download": False,
                 "update_available": False,
                 "unavailable_reason": None,
+                "unavailable_code": None,
             },
             {
                 "id": fetch.NATIVE_FLAGSHIP,
@@ -139,6 +167,7 @@ def _listing() -> Dict[str, Any]:
                 "unavailable_reason": (
                     None if native_path is not None else native_reason
                 ),
+                "unavailable_code": None if native_path is not None else native_code,
             },
         ],
         "download": _job_view(),

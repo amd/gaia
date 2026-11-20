@@ -357,6 +357,12 @@ class DictationToolsMixin:
                 raise dictation.too_long_error(text, name)
             spoken_pages = [n for n, _body in dictation.split_pages(text) if n]
             chosen, reasons = dictation.choose_form(text, form)
+            # Before the rewrite: a missing voice must not cost its model calls.
+            client = LemonadeTTSClient(
+                base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None)),
+                model=DEFAULT_TTS_MODEL,
+            )
+            client.check_model_available()
 
             script: Optional[str] = None
             user_script: Optional[Path] = None
@@ -396,11 +402,6 @@ class DictationToolsMixin:
                 )
             check()
 
-            client = LemonadeTTSClient(
-                base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None)),
-                model=DEFAULT_TTS_MODEL,
-            )
-            client.check_model_available()
             minutes = max(1, round(dictation.spoken_minutes(pieces)))
             audio = new_speech_file("dictation", audio_format, stem)
 

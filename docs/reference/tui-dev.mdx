@@ -314,6 +314,14 @@ with `cannot unmarshal string into Go struct field keysRequest.keys of type
 `text` types into the composer but does **not** submit. Follow it with
 `{"keys":["enter"]}`.
 
+To answer an approval prompt, wait until it is on screen and send `{"keys":["y"]}`
+or `{"keys":["n"]}`: a batch that ends on the letter answers as soon as it lands.
+"Always" takes two keys, `{"keys":["a","enter"]}`. A sentence sent with `text`
+while a prompt is up goes to the composer and never answers it, and with text in
+the composer the
+letters are typed too — answer with `{"keys":["tab","enter"]}` (once),
+`["tab","tab","enter"]` (always, where offered) or `["esc"]` (deny).
+
 ### Wait, never sleep
 
 `POST /control/v1/wait` blocks server-side until a condition holds, with

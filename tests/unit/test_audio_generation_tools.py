@@ -394,11 +394,10 @@ def test_a_file_that_appears_during_generation_is_kept(tmp_path):
         mixin.audio_gen_client, *a, **k
     )
     result = _generate(mixin, "music", "x", "ACE-Step-Music", save_to=str(target))
-    assert result["status"] == "error"
-    assert "appeared while the audio was generating" in result["error"]
     assert target.read_bytes() == b"the user's own file"
     (original,) = mixin.audio_gen_output_dir.iterdir()
-    assert str(original) in result["error"]
+    _assert_kept_without_its_copy(result, original)
+    assert "appeared while the audio was generating" in result["copy_not_saved"]
 
 
 def test_a_failed_copy_leaves_no_partial_file(tmp_path):
@@ -414,8 +413,36 @@ def test_a_failed_copy_leaves_no_partial_file(tmp_path):
         result = _generate(
             mixin, "music", "x", "ACE-Step-Music", save_to=str(project / "a.wav")
         )
-    assert result["status"] == "error"
-    assert "No space left" in result["error"]
     assert list(project.iterdir()) == []
     (original,) = mixin.audio_gen_output_dir.iterdir()
-    assert original.read_bytes() == BODY and str(original) in result["error"]
+    _assert_kept_without_its_copy(result, original)
+    assert "No space left" in result["copy_not_saved"]
+    assert str(project / "a.wav") in result["copy_not_saved"]
+
+
+def test_a_folder_removed_during_generation_still_returns_the_track(tmp_path):
+    mixin, project = _project_mixin(tmp_path)
+    folder = project / "tracks"
+    folder.mkdir()
+    real = LemonadeClient.generate_audio
+
+    def slow_generation(client, payload, output_path, **kwargs):
+        folder.rmdir()
+        return real(client, payload, output_path, **kwargs)
+
+    mixin.audio_gen_client.generate_audio.side_effect = lambda *a, **k: slow_generation(
+        mixin.audio_gen_client, *a, **k
+    )
+    result = _generate(mixin, "music", "x", "ACE-Step-Music", save_to=str(folder))
+    (original,) = mixin.audio_gen_output_dir.iterdir()
+    _assert_kept_without_its_copy(result, original)
+    assert str(folder) in result["copy_not_saved"]
+
+
+def _assert_kept_without_its_copy(result, original):
+    """The track plays and lists from GAIA's folder; only the copy is missing."""
+    assert result["status"] == "success"
+    assert Path(result["audio_path"]) == original.resolve()
+    assert original.read_bytes() == BODY
+    assert "saved_to" not in result
+    assert str(original) in result["copy_not_saved"]

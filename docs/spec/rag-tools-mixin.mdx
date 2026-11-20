@@ -439,7 +439,7 @@ class RAGToolsMixin:
     @tool
     def summarize_document(
         file_path: str,
-        summary_type: str = "detailed",
+        summary_type: Literal["brief", "detailed", "bullets"] = "detailed",
         max_words_per_section: int = 20000
     ) -> Dict[str, Any]:
         """
@@ -563,7 +563,7 @@ final_summary = self.rag.chat.send(synthesis_prompt).text
 
 ## Testing Requirements
 
-**File:** `tests/agents/chat/test_rag_tools_mixin.py`
+**File:** `tests/unit/test_rag_tools.py`
 
 Key test scenarios:
 - Hybrid search with keyword boost

@@ -840,42 +840,6 @@ def _normalize_options(event: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
-def render_labelled_summary(
-    tool: str,
-    args: Dict[str, Any],
-    *,
-    labels: Dict[str, str],
-    detail_fields: Dict[str, str],
-    max_field_chars: int = 120,
-) -> str:
-    """Build a confirmation sentence from a label plus selected argument fields.
-
-    ``detail_fields`` maps an argument name to a prefix, e.g.
-    ``{"to": "to", "subject": "— subject"}`` renders
-    ``Send this email to a@b.com — subject "Re: …"?``. Values longer than
-    ``max_field_chars`` are elided. Agents pass this (via ``functools.partial``)
-    as ``summary_renderer`` rather than reimplementing the shape.
-    """
-    label = labels.get(tool, f"Run {tool!r}")
-    if not isinstance(args, dict) or not args:
-        return f"{label}?"
-    detail = []
-    for field, prefix in detail_fields.items():
-        value = args.get(field)
-        if not value:
-            continue
-        text = str(value)
-        if len(text) > max_field_chars:
-            text = text[:max_field_chars] + "…"
-        # A quoted field reads as a title; a bare one reads as an identifier.
-        detail.append(
-            f'{prefix} "{text}"' if prefix.startswith("—") else f"{prefix} {text}"
-        )
-    if detail:
-        return f"{label} " + " ".join(detail) + "?"
-    return f"{label}?"
-
-
 #: Tools whose confirmation shows a command or code, rendered by
 #: :func:`render_command_summary` instead of as a ``key="value"`` clause.
 COMMAND_SUMMARY_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
@@ -1273,5 +1237,4 @@ __all__ = [
     "TERMINAL_TYPES",
     "render_command_summary",
     "render_invocation",
-    "render_labelled_summary",
 ]

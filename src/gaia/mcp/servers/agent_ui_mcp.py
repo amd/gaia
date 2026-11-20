@@ -861,8 +861,9 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
                     # Bring window to front so it's not occluded
                     try:
                         win32gui.SetForegroundWindow(hwnd)
-                    except Exception:
-                        pass  # May fail if window is minimized
+                    except Exception as e:
+                        # Fails when the window is minimized; the capture still runs.
+                        logger.debug("Could not bring browser window forward: %s", e)
 
                     rect = win32gui.GetWindowRect(hwnd)
                     # rect = (left, top, right, bottom)

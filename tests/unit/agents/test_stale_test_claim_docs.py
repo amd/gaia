@@ -5,7 +5,7 @@
 A task that asks for the code fix and then a write-up of it ends with the
 write-up. Every passing run then came "before the last change", so the
 answer's honest pass count was sent back for a re-run that changed nothing.
-Only a write that is clearly documentation, or the requested output, leaves
+Only a write that is clearly documentation, or a requested report, leaves
 the run standing; anything a test could read still makes it stale.
 """
 
@@ -149,11 +149,19 @@ def test_a_doc_write_does_not_hide_an_earlier_code_edit():
     assert unsupported_test_claim(CLAIM, records)[1] == TEST_RUN_STALE
 
 
-def test_a_requested_output_with_an_unknown_suffix_leaves_the_run_standing():
-    deliverable = {"result.json"}.__contains__
-    record = _write("result.json", is_deliverable=deliverable)
+def test_a_requested_report_leaves_the_run_standing():
+    deliverable = {"result.csv"}.__contains__
+    record = _write("result.csv", is_deliverable=deliverable)
     assert record["mutated"] is False
     assert unsupported_test_claim(CLAIM, [_run(), record]) is None
+
+
+def test_a_requested_config_or_data_file_still_counts():
+    """Asked to write ``result.json``: a JSON file is config or data, not a report."""
+    deliverable = {"result.json"}.__contains__
+    record = _write("result.json", is_deliverable=deliverable)
+    assert record["mutated"] is True
+    assert unsupported_test_claim(CLAIM, [_run(), record])[1] == TEST_RUN_STALE
 
 
 def test_a_requested_output_that_is_code_still_counts():
@@ -264,12 +272,12 @@ def test_the_requested_report_written_last_is_not_a_stale_change(agent):
     sent = _stub_chat(
         agent,
         _call("sandbox_runner_for_doc_write_test", command="pytest tests/"),
-        _call("write_file", file_path="summary.html", content="<p>done</p>"),
+        _call("write_file", file_path="summary.txt", content="done"),
         _answer(CLAIM),
     )
 
     result = agent.process_query(
-        "Fix the parser, run the tests, then write summary.html with what you did.",
+        "Fix the parser, run the tests, then write summary.txt with what you did.",
         max_steps=10,
     )
 
@@ -300,8 +308,8 @@ def test_a_code_write_after_the_run_is_still_corrected(agent):
 def test_the_nudge_skips_a_requested_output_written_after_the_run(tmp_path):
     from gaia.agents.base.verification import unverified_change
 
-    record = _write("result.json", is_deliverable={"result.json"}.__contains__)
-    record["args"] = {"file_path": "result.json"}
+    record = _write("result.csv", is_deliverable={"result.csv"}.__contains__)
+    record["args"] = {"file_path": "result.csv"}
     assert unverified_change([_run(), record], str(tmp_path)) is None
 
 
@@ -432,8 +440,8 @@ def test_a_test_input_named_as_the_output_still_makes_it_stale(path):
     assert unsupported_test_claim(CLAIM, [_run(), record])[1] == TEST_RUN_STALE
 
 
-@pytest.mark.parametrize("path", ["result.json", "out/report.csv", "summary.txt"])
-def test_a_data_file_named_as_the_output_leaves_the_run_standing(path):
+@pytest.mark.parametrize("path", ["result.xlsx", "out/report.csv", "summary.txt"])
+def test_a_report_named_as_the_output_leaves_the_run_standing(path):
     record = _write(path, is_deliverable={path}.__contains__)
     assert record["mutated"] is False
     assert unsupported_test_claim(CLAIM, [_run(), record]) is None

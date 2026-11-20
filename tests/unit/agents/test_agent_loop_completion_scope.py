@@ -957,6 +957,41 @@ def test_a_shell_cat_that_showed_the_whole_file_is_a_read_back(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "command",
+    [
+        "type out.toml",
+        "TYPE out.toml",
+        'type "out.toml"',
+        "more out.toml",
+        "Get-Content out.toml",
+        "get-content out.toml",
+        "gc out.toml",
+        "Get-Content -Path out.toml",
+        "Get-Content -LiteralPath 'out.toml'",
+        pytest.param(
+            "gc -Path .\\out.toml",
+            marks=pytest.mark.skipif(
+                sys.platform != "win32", reason="a backslash path is Windows-only"
+            ),
+        ),
+        "Get-Content -Raw out.toml",
+        "Get-Content -Path out.toml -Raw",
+        "Get-Content out.toml -Encoding UTF8",
+        'powershell -Command "Get-Content out.toml"',
+        "powershell -Command Get-Content out.toml",
+        "powershell Get-Content out.toml",
+        "powershell.exe -NoProfile -Command \"Get-Content -LiteralPath 'out.toml'\"",
+        'pwsh -NoProfile -c "gc out.toml"',
+        'powershell -Command "type out.toml"',
+    ],
+)
+def test_the_windows_ways_to_show_a_whole_file_are_read_backs_too(tmp_path, command):
+    """On Windows the model shows a file with type or Get-Content, not cat."""
+    gaps = _script_writes_then_shell_shows(tmp_path, command)
+    assert not any("read back" in g for g in gaps)
+
+
+@pytest.mark.parametrize(
     "command, stdout, extra",
     [
         ("cat out.toml | head -1", None, {}),
@@ -964,6 +999,25 @@ def test_a_shell_cat_that_showed_the_whole_file_is_a_read_back(tmp_path):
         ("head -1 out.toml", None, {}),
         ("cat out.toml", "takeoff = 53\n", {}),
         ("cat out.toml", None, {"output_truncated": True}),
+        ("type out.toml | findstr takeoff", None, {}),
+        ("type out.toml & echo done", None, {}),
+        ("type out.toml other.toml", None, {}),
+        ("type out.toml", "takeoff = 53\n", {}),
+        ("more +1 out.toml", None, {}),
+        ("Get-Content out.toml -TotalCount 1", None, {}),
+        ("Get-Content -Tail 1 out.toml", None, {}),
+        ("Get-Content out.toml | Select-Object -First 1", None, {}),
+        ("Get-Content out.toml; Remove-Item out.toml", None, {}),
+        ("Get-Content -Path out.toml", "takeoff = 53\n", {}),
+        ("gc out.toml", None, {"output_truncated": True}),
+        ("Get-ChildItem out.toml", None, {}),
+        ('powershell -Command "Get-Content out.toml -TotalCount 1"', None, {}),
+        ('powershell -Command "Get-Content out.toml | Select -First 1"', None, {}),
+        ('powershell -Command "Get-Content out.toml; Remove-Item out.toml"', None, {}),
+        ('powershell -Command "Get-Content out.toml" | findstr takeoff', None, {}),
+        ('powershell -Command "Get-Content out.toml"', "takeoff = 53\n", {}),
+        ("powershell -File show.ps1 out.toml", None, {}),
+        ("powershell -EncodedCommand RwBlAHQA", None, {}),
     ],
 )
 def test_a_shell_line_that_did_not_show_all_of_it_is_no_read_back(

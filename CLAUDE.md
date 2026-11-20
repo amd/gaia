@@ -315,7 +315,7 @@ The PR / commit message is where multi-paragraph context lives. The code carries
 
 **Why the rule exists:** fallbacks hide regressions. A review bot silently downgraded from Opus to a smaller model looks fine but produces worse reviews for weeks. A config loader that defaults a missing API key to `""` produces confusing 401s deep in the request pipeline instead of a clear `"ANTHROPIC_API_KEY is not set"` at startup. Better a loud error the user can fix than a quiet wrong answer.
 
-**On existing violations:** the codebase has pre-existing `except Exception: pass` blocks (mostly in `src/gaia/ui/`) that predate this rule. They are **tech debt, not precedent**. When you touch a file that has one, fix it in the same commit — add a specific exception type, log with context, or re-raise. Don't cite existing violations to justify adding new ones.
+**On existing violations:** the codebase has pre-existing `except Exception: pass` blocks that predate this rule. They are **tech debt, not precedent**. When you touch a file that has one, fix it in the same commit — add a specific exception type, log with context, or re-raise. Don't cite existing violations to justify adding new ones.
 
 ### Testing Requirements
 
@@ -581,7 +581,6 @@ gaia/
 │   ├── agents/         # Agent framework (no agents live in core)
 │   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent mixins
 │   │   ├── tools/      # Cross-agent tool mixins (rag, file, shell, browser, scratchpad, screenshot…)
-│   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
 │   │   #   The one packaged agent lives in hub/agents/gaia/python/ (the
 │   │   #   flagship, incl. its ChatAgent base). Per-task agents were collapsed
@@ -590,12 +589,15 @@ gaia/
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
 │   │   └── llm/        # LLM standalone app
+│   ├── automations/    # Reminders, alerts, triggers, summaries (gaia automation)
 │   ├── audio/          # Audio: Lemonade ASR, speaker diarization, TTS, media decode
-│   ├── chat/           # Agent SDK (AgentSDK class, prompts, app entry)
+│   ├── browser/        # Live-browser automation (Playwright) behind the browser_use tools
+│   ├── chat/           # Agent SDK (AgentSDK class, prompts)
 │   ├── code_index/     # Code indexing/search backend
 │   ├── connectors/     # Connector framework (Google/GitHub OAuth, MCP-server connectors, grants)
 │   ├── daemon/         # Headless daemon (gaia daemon): custody, broker, scheduler, sidecars
 │   ├── database/       # DatabaseMixin and DatabaseAgent
+│   ├── engineering/    # Developer-only coding-app context bridge (gaia mcp engineering)
 │   ├── eval/           # Evaluation framework
 │   ├── factory/        # Claude Code session-corpus harvest/analysis (LLM-free, local cache)
 │   ├── filesystem/     # Filesystem service/utilities
@@ -603,9 +605,9 @@ gaia/
 │   ├── hub/            # Download-server client: fetch, verify, install agent binaries (gaia init, daemon)
 │   ├── img/            # Shared image assets
 │   ├── installer/      # Install/init commands (gaia init, lemonade installer)
-│   ├── llm/            # LLM backend clients (Lemonade, Claude, OpenAI) + providers/
+│   ├── llm/            # LLM backend clients + providers/ (Lemonade, Claude, Fireworks)
 │   ├── mcp/            # Model Context Protocol servers/clients
-│   ├── messaging/      # Messaging adapters (Telegram, …)
+│   ├── messaging/      # Messaging adapters (Telegram, Slack, Discord)
 │   ├── rag/            # Document retrieval (RAG)
 │   ├── schedule/       # Cron scheduling backend (gaia schedule)
 │   ├── sd/             # Stable Diffusion tool mixin (SDToolsMixin)
@@ -619,22 +621,49 @@ gaia/
 │   ├── vlm/            # Vision LLM tool mixin (VLMToolsMixin, structured extraction)
 │   ├── web/            # Web utilities (search/fetch backend)
 │   └── cli.py          # Main CLI entry point (all `gaia <command>` subparsers)
+├── src/vscode/gaia/    # VS Code extension
 ├── tests/              # Test suite
 │   ├── unit/           # Unit tests
 │   ├── mcp/            # MCP integration tests
 │   ├── integration/    # Cross-system integration tests
 │   ├── installer/      # Installer / gaia init tests
+│   ├── hardware/       # Tests that need real AMD hardware (self-hosted runners)
+│   ├── setup_journey/  # Clean-PC setup journey tests
 │   ├── stress/         # Stress/load tests
 │   ├── electron/       # Electron app tests (Jest)
 │   ├── fixtures/       # Shared test fixtures/data
 │   └── test_*.py       # Top-level feature tests (sdk, api, chat, code, rag, eval…)
 ├── hub/                # Packages GAIA ships — agents/<id>/{npm,python}/, skills/, components/
+│   └── agents/gaia/python/  # gaiapy: the Python harness (package gaia_agent, binary gaia-agent)
+├── cpp/                # C++17 agent framework (CMake project gaia-cpp)
+│   ├── agents/gaia/    # gaiacpp: the native harness (binary gaiacpp)
+│   ├── agents/bash/    # gaia-bash coding agent
+│   └── examples/       # Single-file demo agents (health, wifi, process, vlm…)
 ├── tui/                # Go terminal UI (module github.com/amd/gaia/tui)
+├── eval/               # Eval scenarios, corpus, CI lanes and tiers (the framework is src/gaia/eval/)
+├── examples/           # Example Python agents built on the SDK
+├── installer/          # Installers: NSIS, macOS pkg, Linux packages, install.ps1 / install.sh
+├── website/            # amd-gaia.ai marketing site (Astro)
+├── workers/            # Cloudflare Workers: download server (agent-hub), admin, website-router
 ├── scripts/            # Build, install, and launch scripts
 ├── util/               # Repo tooling (lint.py, check_doc_links.py, …)
 ├── docs/               # Documentation (MDX format)
 └── .github/workflows/  # CI/CD pipelines
 ```
+
+### Two harnesses: gaiapy and gaiacpp
+
+The flagship GAIA agent is one agent with two interchangeable programs
+("harnesses") behind it. Both speak the same sidecar/stdio contract, so the
+Agent UI and the TUI drive either one.
+
+| Harness | What it is | Source | Binary |
+|---------|------------|--------|--------|
+| `gaiapy` | The Python harness: every tool and feature, the default | `hub/agents/gaia/python/gaia_agent/` on the framework in `src/gaia/` | `gaia-agent` |
+| `gaiacpp` | The native C++ harness: fast and light, fewer features, beta | `cpp/agents/gaia/` on the framework in `cpp/` | `gaiacpp` |
+
+`flagship_agent` in `~/.gaia/config.json` (`gaiapy` or `gaiacpp`) picks one;
+unset, the Python harness runs.
 
 ### Console Script Entry Points
 
@@ -714,6 +743,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `filesystem` | `gaia.agents.tools.filesystem_tools.FileSystemToolsMixin` | File system navigation |
 | `scratchpad` | `gaia.agents.tools.scratchpad_tools.ScratchpadToolsMixin` | SQL scratchpad tables for data analysis |
 | `browser` | `gaia.agents.tools.browser_tools.BrowserToolsMixin` | Web search, page fetch, download |
+| `browser_use` | `gaia.agents.tools.browser_use_tools.BrowserUseToolsMixin` | Live-browser tools: open, observe, act, and sign in |
 | `email` | `gaia.agents.tools.email_tools.EmailToolsMixin` | Read-only mailbox tools (Gmail / Outlook) |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
@@ -781,20 +811,25 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia knowledge {search|extract|usage}` - Web knowledge via Tavily (search/extract)
 
 **Servers & infrastructure:**
-- `gaia daemon` - The headless daemon (one machine-wide custody process; supervises sidecar agents)
+- `gaia daemon {start|status|stop|restart|agents|start-agent|stop-agent|logs}` - The headless daemon (one machine-wide custody process; supervises sidecar agents)
 - `gaia api` - OpenAI-compatible API server
-- `gaia mcp {start|stop|status|test|agent|serve|tui|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
+- `gaia mcp {start|stop|status|test|agent|serve|tui|list|tools|test-client|code-index|engineering}` - MCP bridge (add/remove moved to the connectors framework, #977)
 - `gaia schedule {add|list|show|remove|pause|resume|run|daemon}` - Run a skill or prompt on a cron schedule
 - `gaia telegram {start|stop|status}` - Telegram messaging adapter
 - `gaia slack {setup|start|stop|connect|decline|status}` - Slack messaging adapter
+- `gaia discord` - Discord messaging adapter (drive the agent from a Discord DM)
+- `gaia automation` - Reminders, alerts, triggers and summaries GAIA runs on its own
+- `gaia gateway` - Connect GAIA to the AMD LLM gateway (requires Lemonade >= 11.8)
 - `gaia connectors` - Manage connectors (Google/GitHub OAuth, MCP servers) and per-agent grants
 - `gaia cache {status|clear}` - Cache management
 
 **Setup & utilities:**
 - `gaia init` - Setup Lemonade Server and download models
-- `gaia lemonade embedded {start|stop|status|install|install-backend}` - GAIA's private, self-contained Lemonade instance (#3121)
+- `gaia lemonade embedded {start|stop|status|install|install-backend|uninstall}` - GAIA's private, self-contained Lemonade instance (#3121)
+- `gaia lemonade {connect|detect|status}` - Point GAIA at a Lemonade Server and check it
 - `gaia uninstall` - Tiered cleanup of `~/.gaia` and caches
 - `gaia config {show|get|set}` - Persistent config in `~/.gaia/config.json`
+- `gaia trust {list|add|decline|forget}` (also `gaia project trust`) - Saved folder trust decisions
 - `gaia skill` - Author and manage agent skills (`SKILL.md` capabilities)
 - `gaia download` - Download a model
 - `gaia kill` - Kill stray GAIA / Lemonade processes
@@ -816,6 +851,7 @@ the installers. **Skills are the one exception:** each final release publishes
 
 **Evaluation & analysis** (see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)):
 - `gaia eval agent` - Run the agent eval benchmark (`--fix` auto-fixes failures)
+- `gaia eval {sessions|code|retrieval|memory|tasks}` - Other benchmarks: real Claude Code sessions, code generation, retrieval, long-run memory, outcome-scored tasks
 - `gaia perf-vis` - Visualize performance results
 
 **Standalone binaries** (separate `console_scripts`, not subcommands):

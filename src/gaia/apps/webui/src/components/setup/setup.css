@@ -710,6 +710,8 @@
 .agent-choice .is-disabled .agent-choice-what,
 .agent-choice .is-disabled .setup-choice-tag:not(.agent-choice-off) { opacity: 0.55; }
 .agent-choice-off { border-color: var(--border-light); color: var(--text-primary); }
+.agent-choice-blocked { display: grid; gap: 4px; }
+.agent-choice-why { margin: 0; padding-inline: 12px; color: var(--text-secondary); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
 .agent-choice-off.is-quiet { color: var(--text-secondary); }
 .agent-choice-size { color: var(--text-secondary); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .agent-choice-more { display: inline-flex; justify-self: start; align-items: center; gap: 4px; min-block-size: 26px; color: var(--text-secondary); font-size: 12.5px; }

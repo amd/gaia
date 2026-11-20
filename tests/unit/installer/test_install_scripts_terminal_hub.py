@@ -1618,9 +1618,9 @@ def test_an_rc_pin_records_the_candidates_agent_version(
 #
 # Optional like the agent: a machine or release without one keeps the Python
 # agent. Never unverified, and never one that cannot start or is another
-# release's, because gaia-cli runs whatever gaiacpp sits beside it.
+# release's, because a user can switch gaia-cli to the gaiacpp beside it.
 
-PYTHON_AGENT = "uses the Python GAIA agent"
+PYTHON_AGENT = "only the Python GAIA agent (the default) is available"
 
 
 def _run_install_gaiacpp(tmp_path, base_url, tag=None):

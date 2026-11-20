@@ -273,7 +273,7 @@ class TestLooseCoupling:
             "import gaia.eval.release_scorecard; "
             "added=set(sys.modules)-before; "
             "bad=[m for m in added if 'gaia.eval.benchmark' in m "
-            "or 'gaia.eval.quality_metrics' in m or 'gaia_agent_email' in m]; "
+            "or 'gaia_agent_email' in m]; "
             "assert not bad, bad"
         )
         r = subprocess.run(

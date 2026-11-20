@@ -29,6 +29,11 @@ const DOWN: Document = {
     error_kind: 'model_server_down', last_error: 'HTTPConnectionPool: connection refused',
 };
 
+const BUSY: Document = {
+    ...BROKEN, id: 'doc-busy', filename: 'busy.md', filepath: '/home/me/busy.md',
+    error_kind: 'model_server_busy', last_error: 'Lemonade Server timed out',
+};
+
 const session: Session = {
     id: 'chat-1', title: 'Notes', model: 'qwen', agent_type: 'gaia',
     created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
@@ -94,6 +99,14 @@ describe("the chat's document bar", () => {
         expect(bar).toHaveAttribute('aria-label', "1 couldn't be read · 1 waiting for the model server");
         expect(screen.getByTitle(/^notes\.md is waiting for GAIA's model server/)).toBeInTheDocument();
         expect(screen.getByTitle(/^broken\.pdf couldn't be read/)).toBeInTheDocument();
+    });
+
+    it('counts a file the server was too busy for as one to retry, not as waiting', () => {
+        const bar = showBar([BUSY]);
+
+        expect(bar).toHaveAttribute('aria-label', '1 to retry');
+        expect(bar).not.toHaveTextContent('waiting for the model server');
+        expect(screen.getByTitle(/^busy\.md wasn't added because GAIA's model server was busy/)).toBeInTheDocument();
     });
 
     it('still calls a file GAIA could not read unreadable', () => {
