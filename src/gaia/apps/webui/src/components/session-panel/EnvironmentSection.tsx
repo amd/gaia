@@ -36,6 +36,7 @@ import type { ContextUsage, LocalModelStatus, PermissionMode, TunnelStatus } fro
 import type { ScopeEntry, ScopeSource, SessionGit } from '../../types/sessionPanel';
 import type { MessageKey } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
+import { visibleName } from '../CalendarApproval';
 
 const MODEL_STATE: Record<Exclude<LocalModelStatus['state'], 'loaded'>, MessageKey> = {
     warming: 'modelStatus.state.warming',
@@ -379,18 +380,18 @@ function Folders({ sessionId, hideDocuments }: { sessionId: string; hideDocument
             <span className="sp-row-icon" aria-hidden="true">
                 {entry.kind === 'folder' ? <Folder size={ICON} /> : <File size={ICON} />}
             </span>
-            <span className="sp-item-name" dir="ltr" title={entry.path}>{entry.name || baseName(entry.path)}</span>
+            <span className="sp-item-name" dir="ltr" title={visibleName(entry.path)}>{visibleName(entry.name || baseName(entry.path))}</span>
             {/* A folder's path says which one it is; a file's shows on hover. Where each came from is on hover too. */}
             {entry.kind === 'folder'
-                ? <span className="sp-item-path sp-quiet" dir="ltr" title={t(SOURCE_LABEL[entry.source])}>{entry.path}</span>
-                : <span className="sp-item-source sp-quiet" title={entry.path}>{t(SOURCE_LABEL[entry.source])}</span>}
+                ? <span className="sp-item-path sp-quiet" dir="ltr" title={t(SOURCE_LABEL[entry.source])}>{visibleName(entry.path)}</span>
+                : <span className="sp-item-source sp-quiet" title={visibleName(entry.path)}>{t(SOURCE_LABEL[entry.source])}</span>}
             {entry.removable && !locked && (
                 <button
                     type="button"
                     className="btn-icon-sm sp-info sp-item-remove"
                     onClick={() => void remove(entry)}
                     disabled={busyPath !== null}
-                    aria-label={t('env.remove', { path: entry.path })}
+                    aria-label={t('env.remove', { path: visibleName(entry.path) })}
                     title={t('env.removeShort')}
                 >
                     <X size={12} />

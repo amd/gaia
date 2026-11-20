@@ -121,7 +121,7 @@ func TestTheStatusBarSaysADecisionIsPending(t *testing.T) {
 	}
 	// The modal says "n/esc deny". A status hint saying "Esc cancel" one row
 	// below it gives the same key two meanings on one screen.
-	if strings.Contains(frame, "Esc cancel") {
+	if strings.Contains(frame, "Esc to interrupt") {
 		t.Errorf("the status hint contradicts the modal about Esc:\n%s", frame)
 	}
 
