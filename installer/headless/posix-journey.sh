@@ -290,10 +290,14 @@ setup_journey() {
 app_pids() {
   {
     pgrep -f "${APP_PATTERN}" || true
-    if [ -f "${GAIA_HOME}/backend.pid" ] && kill -0 "$(cat "${GAIA_HOME}/backend.pid")" 2>/dev/null; then
-      cat "${GAIA_HOME}/backend.pid"
-    fi
-  } | sort -u
+    # backend-pids/<app pid>.pid per app; backend.pid from older apps.
+    for f in "${GAIA_HOME}/backend.pid" "${GAIA_HOME}"/backend-pids/*.pid; do
+      if [ -f "$f" ] && kill -0 "$(cat "$f")" 2>/dev/null; then
+        cat "$f"
+        echo
+      fi
+    done
+  } | awk NF | sort -u
 }
 
 # With no Lemonade answering, the app's setup screen starts installing one by
