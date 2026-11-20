@@ -843,7 +843,8 @@ saying what it can do.
 A command GAIA doesn't run unasked — `python script.py`, `git commit`, `npm test`
 with no skill loaded for it — gets this prompt rather than an error. `a` covers
 that one command family (`git commit`, `python (any script)`) for the session and
-nothing wider, until `/clear` starts the conversation over. If you deny it, the agent is told that this one command is off:
+nothing wider, until `/clear` starts the conversation over or `/sessions`
+reopens another one. If you deny it, the agent is told that this one command is off:
 it must not run it through another tool or script, and it carries on with the
 rest of the task by other means and says what it could not do.
 
@@ -1048,7 +1049,9 @@ they were active, and where they stand:
 
 Pick one with `Enter` and its conversation is redrawn, the agent restarts on
 that session, and you carry on where you left off — the model remembers what
-was said, not just the screen. `gaia-cli --resume=<id>` reopens one directly; a
+was said, not just the screen. It starts with no "always" answers, neither the
+ones from the chat you left nor any given in that session before.
+`gaia-cli --resume=<id>` reopens one directly; a
 unique prefix of the id is enough. A session that is still open in another
 window can't be reopened until you close it there. If a turn is still running
 when you pick a session, GAIA asks first: `s` stops the turn and switches (the
