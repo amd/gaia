@@ -270,6 +270,48 @@ func TestSuggestionsSurviveTheWarmUp(t *testing.T) {
 	}
 }
 
+// Over the relay the skill list can arrive after the warm-up ends: the Ready
+// line was written without it, and must gain the list the numbers pick from.
+func TestSkillsReportedAfterTheWarmUpReachTheReadyLine(t *testing.T) {
+	m := NewChatModelForFlagship(&nullClient{}, "gaia", "gaia", true)
+	m.width, m.height = 100, 30
+	m.resize()
+	m.warming, m.streaming = true, true
+	m.finishWarmUp(client.WarmedUp)
+	if got := screen(m); !strings.Contains(got, firstPromptHint[:20]) || strings.Contains(got, "Try one") {
+		t.Fatalf("before the report the Ready line should carry the plain hint:\n%s", got)
+	}
+	next, _ := m.Update(skillsListedMsg{skills: reportSkills(starterPack...).Skills})
+	m = next.(ChatModel)
+	got := screen(m)
+	if !strings.Contains(got, "Ready") || !strings.Contains(got, "1 Today's tech news in brief") || strings.Contains(got, firstPromptHint[:20]) {
+		t.Fatalf("the late report did not reach the Ready line:\n%s", got)
+	}
+	picked, _ := m.handleKey(digitKey('1'))
+	if p := picked.(ChatModel); !p.streaming || p.messages[len(p.messages)-1].Content != starters[0].prompt {
+		t.Error("1 did not start the first suggestion after a late report")
+	}
+
+	// A report that changes the list rewrites it, and the numbers follow.
+	next, _ = m.Update(skillsListedMsg{skills: reportSkills("check-in").Skills})
+	m = next.(ChatModel)
+	if got := screen(m); !strings.Contains(got, "1 A daily check-in") || strings.Contains(got, "tech news") {
+		t.Fatalf("the Ready line kept a stale list:\n%s", got)
+	}
+	picked, _ = m.handleKey(digitKey('1'))
+	if p := picked.(ChatModel); p.messages[len(p.messages)-1].Content != starters[4].prompt {
+		t.Error("1 did not follow the rewritten list")
+	}
+
+	// Once the conversation has started, the Ready line is history.
+	m.messages = append(m.messages, Message{Role: RoleUser, Content: "hi"})
+	before := m.messages[0].Content
+	next, _ = m.Update(skillsListedMsg{skills: reportSkills(starterPack...).Skills})
+	if after := next.(ChatModel).messages[0].Content; after != before {
+		t.Errorf("a report after the first message rewrote the transcript: %q", after)
+	}
+}
+
 func TestFrameFirstScreen(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -24,9 +24,15 @@ type SkillLister interface {
 
 var _ SkillLister = (*SSEClient)(nil)
 
+// browserPaneSkill drives the Agent UI's browser pane, which a terminal chat
+// does not have, so the agent refuses it here. The route lists it because it
+// serves the Agent UI's settings. Must match BROWSER_PANE_SKILL in
+// src/gaia/agents/base/tool_grants.py.
+const browserPaneSkill = "browser-pane"
+
 // ListSkills reads GET /v1/<agent>/skills through the daemon relay: every
-// skill the agent can load, the ones built into it included. The result is
-// never nil on success, so "no skills" and "not asked" stay different.
+// skill the agent can run in this chat, the ones built into it included. The
+// result is never nil on success, so "no skills" and "not asked" stay different.
 func (s *SSEClient) ListSkills(ctx context.Context) ([]event.SkillCommand, error) {
 	inst, err := s.daemon.EnsureAgent(ctx, s.agentID)
 	if err != nil {
@@ -61,8 +67,11 @@ func (s *SSEClient) ListSkills(ctx context.Context) ([]event.SkillCommand, error
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return nil, fmt.Errorf("could not decode the '%s' skill list: %w", s.agentID, err)
 	}
-	if body.Skills == nil {
-		return []event.SkillCommand{}, nil
+	skills := make([]event.SkillCommand, 0, len(body.Skills))
+	for _, sk := range body.Skills {
+		if sk.Name != browserPaneSkill {
+			skills = append(skills, sk)
+		}
 	}
-	return body.Skills, nil
+	return skills, nil
 }

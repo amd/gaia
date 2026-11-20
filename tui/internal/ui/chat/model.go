@@ -421,6 +421,9 @@ type ChatModel struct {
 	// says this chat offers them, so the agent's skill report refreshes them.
 	starters []starter
 	suggests bool
+	// readyTail is how the Ready line ended when it was written, so a later
+	// skill report can replace it (refreshReadyLine).
+	readyTail string
 
 	// awaitingModelSwitch is true for the duration of a `/model <id>` turn
 	// this session itself started. A model-state ping that disagrees with

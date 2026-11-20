@@ -59,7 +59,7 @@ var skillsDir = userSkillsDir
 func userSkillsDir() string {
 	for _, name := range []string{"GAIA_HOME", "GAIA_CONFIG_DIR"} {
 		if dir := strings.TrimSpace(os.Getenv(name)); dir != "" {
-			return filepath.Join(expandHome(os.ExpandEnv(dir)), "skills")
+			return filepath.Join(os.ExpandEnv(expandHome(dir)), "skills")
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -150,6 +150,37 @@ func (m *ChatModel) setReportedSkills(skills []event.SkillCommand) {
 	m.skillCommands = skills
 	if m.suggests {
 		m.starters = reportedStarters(skills)
+		m.refreshReadyLine()
+	}
+}
+
+// readyTail is what the line that says a local model is ready ends with: the
+// suggestions, or the plain hint when there are none.
+func readyTail(ss []starter) string {
+	if list := suggestionsText(ss); list != "" {
+		return "\n\n" + list
+	}
+	return "\n" + firstPromptHint
+}
+
+// refreshReadyLine rewrites the Ready line's ending when the suggestions
+// change after it was written: the agent's skill report can arrive after the
+// warm-up ends, and the line must show the list the numbers pick from.
+func (m *ChatModel) refreshReadyLine() {
+	if m.readyTail == "" || m.hasUserMessage() {
+		return
+	}
+	tail := readyTail(m.starters)
+	if tail == m.readyTail {
+		return
+	}
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		msg := &m.messages[i]
+		if msg.Role == RoleStatus && strings.HasSuffix(msg.Content, m.readyTail) {
+			msg.Content = strings.TrimSuffix(msg.Content, m.readyTail) + tail
+			m.readyTail = tail
+			return
+		}
 	}
 }
 

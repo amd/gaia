@@ -16,6 +16,7 @@ func TestSSEListSkillsReadsTheAgentsList(t *testing.T) {
 	// The shape skills_listing() answers: more fields than the TUI reads.
 	f.skillsBody = `{"skills":[` +
 		`{"name":"daily-brief","description":"A short brief.","version":"1.0","tier":"safe","tools":[],"path":"agent-bundled","always_on":false,"source":"agent-bundled"},` +
+		`{"name":"browser-pane","description":"Drive the pane.","source":"agent-bundled"},` +
 		`{"name":"file-ops","description":"","version":null,"tier":"safe","tools":["list_dir"],"path":"user","always_on":false,"source":"user"}` +
 		`],"invalid":[]}`
 	c := f.clientFor(t, "gaia")
@@ -27,6 +28,7 @@ func TestSSEListSkillsReadsTheAgentsList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSkills: %v", err)
 	}
+	// browser-pane needs the Agent UI's pane, so a terminal chat is not offered it.
 	if len(got) != 2 || got[0].Name != "daily-brief" || got[0].Description != "A short brief." || got[1].Name != "file-ops" {
 		t.Errorf("skills = %+v", got)
 	}
