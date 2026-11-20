@@ -12,7 +12,7 @@
 #include <random>
 #include <thread>
 
-#include "../agents/gaia/gaia_agent.h"
+#include "../agents/gaiacpp/gaia_agent.h"
 #include <gaia/file_tools.h>
 #include <gaia/process.h>
 #include <gaia/security.h>

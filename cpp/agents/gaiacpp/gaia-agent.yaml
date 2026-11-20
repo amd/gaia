@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Packaging manifest for the native (C++) GAIA agent. Built from cpp/agents/gaia/
+# Packaging manifest for the native (C++) GAIA agent. Built from cpp/agents/gaiacpp/
 # and packaged by cpp/packaging/package_agents.py (Hub layout) or
 # cpp/packaging/package_lemonade.py (Lemonade agent-host release archives).
 id: gaia
