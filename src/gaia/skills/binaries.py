@@ -249,6 +249,15 @@ class Subcommand:
             this binary's (``python util/lint.py --all --fix``). Flag
             validation stops there; what still holds is containment — no
             argument, nor a path attached to one, may leave the checkout.
+        exact_options: Long options THIS subcommand defines that are a strict
+            prefix of a denied flag (``git diff --text`` vs ``--textconv``).
+            The CLI takes an exact match over an abbreviation, so these are not
+            read as one. Per subcommand, never per binary: where a subcommand
+            lacks the option, the same token IS the abbreviation (``git blame
+            --text`` is ``--textconv``). List an option only if every supported
+            version of the CLI defines it on this subcommand — an option a
+            newer release added still abbreviates the denied one on an older
+            release.
     """
 
     actions: frozenset[str] = frozenset()
@@ -273,10 +282,25 @@ class Subcommand:
     denied_operand_prefixes: Mapping[str, str] = field(default_factory=dict)
     delegate_flag: str = ""
     script_args: bool = False
+    exact_options: frozenset[str] = frozenset()
     #: The first operand is an API path on the CLI's own host, never a URL.
     relative_endpoint: bool = False
 
     def __post_init__(self) -> None:
+        idle = sorted(
+            option
+            for option in self.exact_options
+            if not option.startswith("--")
+            or not any(
+                flag != option and flag.startswith(option) for flag in self.denied_flags
+            )
+        )
+        if idle:
+            raise ValueError(
+                f"Subcommand exact_options {idle} must each be a long option "
+                "that is a strict prefix of one of its denied_flags; anything "
+                "else exempts nothing and hides what the exemption is for."
+            )
         offered = (self.actions | self.confirm_actions) & set(
             self.never_offered_actions
         )
@@ -397,10 +421,9 @@ class BinaryPolicy:
             ``parse-options`` does: a unique prefix of a long option selects
             it (``--ext`` is ``--ext-diff``), and boolean short options cluster
             (``-an`` is ``-a -n``). Denied flags are then matched in both
-            spellings, not by exact name.
-        exact_options: Real option names of this CLI that are a strict prefix
-            of a denied flag (git's ``--text`` vs ``--textconv``). The CLI takes
-            an exact match over an abbreviation, so these are not read as one.
+            spellings, not by exact name. A real option that is a strict
+            prefix of a denied one is exempted per subcommand, through
+            :attr:`Subcommand.exact_options`.
         confirm_summary: The clause a CONFIRM prompt uses when the rule does
             not override it — "writes to GitHub", "changes this repository".
             One line, and it must be true of every write the policy offers.
@@ -440,7 +463,6 @@ class BinaryPolicy:
     substitute: str = ""
     single_dash_long: bool = False
     abbreviated_options: bool = False
-    exact_options: frozenset[str] = frozenset()
     #: pflag reads ``-ab`` as ``-a -b`` when ``-a`` takes no value, and which
     #: flags take one differs per subcommand. Refuse every single-dash token
     #: longer than a flag, so no table of value flags has to be right.
@@ -841,6 +863,12 @@ _GIT_DIFF_VALUE_SHORT = frozenset({"-S", "-G", "-l", "-I"})
 _GIT_DIFF_OPTIONAL_VALUE_SHORT = frozenset({"-U", "-M", "-C", "-B", "-X"})
 _GIT_LOG_VALUE_SHORT = _GIT_DIFF_VALUE_SHORT | {"-n", "-L"}
 
+#: Only the subcommands that define ``--text`` (diff, log, show, grep, stash) exempt
+#: it; on blame or cat-file git reads it as ``--textconv``. ``--filter`` is
+#: exempt on log alone: git releases older than ``cat-file --filter`` read it
+#: there as ``--filters``.
+_GIT_TEXT = frozenset({"--text"})
+
 
 def _git_read(
     *,
@@ -850,6 +878,7 @@ def _git_read(
     no_operands: bool = False,
     value_flags: frozenset[str] = frozenset(),
     optional_value_flags: frozenset[str] = frozenset(),
+    exact_options: frozenset[str] = frozenset(),
 ) -> Subcommand:
     """One read-only git subcommand — free-form, because its operands are
     revisions and pathspecs rather than an action word.
@@ -868,6 +897,7 @@ def _git_read(
         no_operands=no_operands,
         value_flags=value_flags,
         optional_value_flags=optional_value_flags,
+        exact_options=exact_options,
         denied_actions=denied_actions,
         denied_flags=_GIT_READ_DENIED_FLAGS | denied_flags,
         denied_flag_reasons={
@@ -1696,7 +1726,6 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
         # out of the run entirely.
         bare_flags=frozenset({"--version", "--help", "-h", "-P", "--no-pager"}),
         abbreviated_options=True,
-        exact_options=frozenset({"--text", "--filter"}),
         # The read-only floor this binary had before it had a policy — see
         # BinaryPolicy.ungranted. Unchanged from the shell tool's old
         # SAFE_GIT_COMMANDS, so an agent with no skill loaded behaves as before.
@@ -1721,14 +1750,19 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             "log": _git_read(
                 value_flags=_GIT_LOG_VALUE_SHORT,
                 optional_value_flags=_GIT_DIFF_OPTIONAL_VALUE_SHORT,
+                # `--filter` is rev-list's object filter, matched exactly by
+                # the revision parser; log has no `--filters` to abbreviate.
+                exact_options=frozenset({"--text", "--filter"}),
             ),
             "show": _git_read(
                 value_flags=_GIT_LOG_VALUE_SHORT,
                 optional_value_flags=_GIT_DIFF_OPTIONAL_VALUE_SHORT,
+                exact_options=_GIT_TEXT,
             ),
             "diff": _git_read(
                 value_flags=_GIT_DIFF_VALUE_SHORT,
                 optional_value_flags=_GIT_DIFF_OPTIONAL_VALUE_SHORT,
+                exact_options=_GIT_TEXT,
             ),
             "blame": _git_read(
                 value_flags=frozenset({"-L", "-S"}),
@@ -1742,7 +1776,8 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             "ls-tree": _git_read(),
             "cat-file": _git_read(),
             "grep": _git_read(
-                value_flags=frozenset({"-e", "-f", "-A", "-B", "-C", "-m"})
+                value_flags=frozenset({"-e", "-f", "-A", "-B", "-C", "-m"}),
+                exact_options=_GIT_TEXT,
             ),
             # Flags only: `git branch` lists, and `git branch <name>`
             # CREATES a ref, which free-form would have called the same read.
@@ -1901,6 +1936,8 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                 denied_flags=_GIT_READ_DENIED_FLAGS,
                 denied_flag_reasons=_GIT_READ_DENIED_FLAG_REASONS,
                 value_flags=frozenset({"-m", "--message"}),
+                # `show` and `list` hand their flags to diff and log.
+                exact_options=_GIT_TEXT,
             ),
         },
     ),
@@ -2682,7 +2719,7 @@ def _spelled_denied_flag(
     if not policy.abbreviated_options or policy.single_dash_long:
         return None
     if token.startswith("--"):
-        if name in policy.exact_options:
+        if name in rule.exact_options:
             return None
         return next(
             (flag for flag in sorted(denied) if _long_flag_matches(name, flag)), None
