@@ -730,7 +730,7 @@ class SDToolsMixin:
                             "error": f"{model}, the image model chosen in GAIA's "
                             "image settings, is not downloaded on this Lemonade. "
                             "Choose another model in those settings, or download "
-                            f"{model} in Settings › Model.",
+                            f"{model} in Settings › Agent & model.",
                         }
                     return {
                         "status": "error",

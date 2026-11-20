@@ -238,7 +238,7 @@ throwaway user data dir, and serves the browser pane fixture site:
 
 ```bash
 uv venv ../gaia-qa-venv && uv pip install --python ../gaia-qa-venv/bin/python \
-  -e ".[dev,ui]" -e hub/agents/chat/python -e hub/agents/gaia/python
+  -e ".[dev,ui]" -e hub/agents/gaia/python
 cd src/gaia/apps/webui && npm run build && cd -
 GAIA_BIN=../gaia-qa-venv/bin/gaia node src/gaia/apps/webui/scripts/qa-pane.mjs launch
 node src/gaia/apps/webui/scripts/qa-pane.mjs chat "What is the title of the page open in the browser pane?"

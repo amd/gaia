@@ -574,6 +574,40 @@ for (const locale of ['en', 'ar']) {
         await expect(menu).toHaveCount(0);
         expect(await audit(page)).toEqual([]);
     });
+
+    for (const [width, height] of [[1280, 800], [390, 844], [1280, 420]]) {
+        test(`a long skill list stays inside a ${width}x${height} window (${locale})`, async ({ page }) => {
+            await page.setViewportSize({ width, height });
+            const skills = Array.from({ length: 24 }, (_, i) => ({ ...SKILL_LIST[0], name: `skill-${String(i).padStart(2, '0')}` }));
+            await open(page, '', locale, (p) => p.route((url) => url.pathname === '/api/skills', (route) =>
+                route.fulfill({ json: { skills, invalid: {} } })));
+            const box = page.locator('.new-chat textarea').first();
+            await box.fill('/');
+            const menu = page.locator('.skill-menu');
+            await expect(menu.getByRole('option')).toHaveCount(24);
+            await shot(page, `skill-menu-long-${width}x${height}-${locale}`);
+
+            const [menuBox, composerBox] = [(await menu.boundingBox())!, (await page.locator('.new-chat .composer').boundingBox())!];
+            expect(menuBox.y, 'the list runs off the top of the window').toBeGreaterThanOrEqual(0);
+            expect(menuBox.y + menuBox.height, 'the list runs off the bottom of the window').toBeLessThanOrEqual(height);
+            const clear = menuBox.y + menuBox.height <= composerBox.y + 1 || menuBox.y >= composerBox.y + composerBox.height - 1;
+            expect(clear, 'the list covers the message box').toBe(true);
+            expect(menuBox.height, 'the list is too short to read a row').toBeGreaterThan(60);
+
+            // Every skill can be reached: the first is in view, and the arrow keys bring the last one in.
+            const inView = async (name: string) => {
+                const row = (await menu.getByRole('option', { name }).boundingBox())!;
+                const now = (await menu.boundingBox())!;
+                return row.y >= now.y - 1 && row.y + row.height <= now.y + now.height + 1;
+            };
+            expect(await inView('/skill-00'), 'the first skill is out of view').toBe(true);
+            await box.press('ArrowUp');
+            await expect(menu.getByRole('option', { name: '/skill-23' })).toHaveAttribute('aria-selected', 'true');
+            expect(await inView('/skill-23'), 'the selected skill is out of view').toBe(true);
+            // At phone width the closed sidebar sits off screen by design.
+            if (width >= 1280) expect(await audit(page)).toEqual([]);
+        });
+    }
 }
 
 const BIG_LIBRARY = Array.from({ length: 600 }, (_, i) => ({
@@ -2890,6 +2924,13 @@ for (const locale of ['ar', 'en']) {
                     const agent = page.locator('.agent-choice');
                     await expect(agent.locator('[role="radio"]')).toHaveCount(2);
                     await expect(agent.locator('.agent-choice-off')).toHaveCount(noGaiacpp ? 1 : 0);
+                    // Why it can't be picked is read under its row, without opening anything.
+                    const why = agent.locator('.agent-choice-why');
+                    await expect(why).toHaveCount(noGaiacpp ? 1 : 0);
+                    if (noGaiacpp) {
+                        await expect(why).toBeVisible();
+                        expect((await why.boundingBox())!.height, 'the reason takes no room on the screen').toBeGreaterThan(10);
+                    }
                     await expect(agent.locator('.agent-choice-size')).toHaveCount(noGaiacpp ? 1 : 2);
                     const more = agent.locator('.agent-choice-more');
                     if (expanded) await more.click();

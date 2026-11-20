@@ -41,7 +41,7 @@ readonly LICENSE_NAME="LICENSE.md"
 # Not `readonly`: bash 3.2, which is what /bin/bash still is on macOS, rejects
 # `readonly name=(...)`.
 PAYLOAD_BINARIES=(gaia-cli gaia-agent)
-# gaiacpp, the native agent gaia-cli runs in place of gaia-agent, is packaged
+# gaiacpp, the native agent a user can switch gaia-cli to, is packaged
 # when the payload holds it: only Apple silicon has a build. tui_installers.yml
 # stages it wherever one is built, and its smoke test checks both packages.
 readonly NATIVE_AGENT="gaiacpp"

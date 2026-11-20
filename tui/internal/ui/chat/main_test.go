@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/daemon"
@@ -49,6 +50,8 @@ func TestMain(m *testing.M) {
 		return &setupapitest.Fake{PlanErr: errors.New("test: no daemon"), GPUErr: errors.New("test: no daemon")}
 	}
 	newGPUProbeAPI = newChatSetupAPI
+	// Tests run an answer's hold out for real; keep that wait off the clock.
+	confirmAnswerHold = time.Millisecond
 	code := m.Run()
 	control.CloseLog()
 	os.RemoveAll(home)

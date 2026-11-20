@@ -24,12 +24,14 @@ on:
     tags: [ 'v*' ]
     paths:
       - 'cpp/**'
+      - 'util/check_glibc_floor.py'
       - '.github/workflows/build_agents.yml'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - 'cpp/**'
+      - 'util/check_glibc_floor.py'
       - '.github/workflows/build_agents.yml'
   merge_group:
   workflow_dispatch:
@@ -71,11 +73,17 @@ jobs:
             triplet: x64-windows-static
             lemonade_os: windows
             lemonade_arch: x64
-          - os: ubuntu-latest
+          # The glibc floor. A Linux binary needs the glibc it was linked
+          # against or newer, and ubuntu-latest's (2.43) locked out every
+          # distro the .deb/.rpm ship to. 22.04's 2.35 reaches Ubuntu 22.04,
+          # Debian 12 and current Fedora; glibc_floor must match the image,
+          # and util/check_glibc_floor.py holds the binary to it.
+          - os: ubuntu-22.04
             platform: linux-x64
             triplet: x64-linux-static
             lemonade_os: linux
             lemonade_arch: x64
+            glibc_floor: '2.35'
           - os: macos-latest
             platform: darwin-arm64
             triplet: arm64-osx-static
@@ -105,16 +113,18 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.vcpkg-cache
-          key: vcpkg-${{ matrix.triplet }}-${{ hashFiles('cpp/vcpkg.json') }}
+          # Keyed by image: a static library built on a newer one would carry
+          # that image's glibc into the floor build.
+          key: vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-${{ hashFiles('cpp/vcpkg.json') }}
           restore-keys: |
-            vcpkg-${{ matrix.triplet }}-
+            vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-
 
       - name: Restore FetchContent cache
         uses: actions/cache@v6
         with:
           path: cpp/build/_deps
-          key: fetchcontent-agents-${{ matrix.platform }}-${{ hashFiles('cpp/CMakeLists.txt') }}
-          restore-keys: fetchcontent-agents-${{ matrix.platform }}-
+          key: fetchcontent-agents-${{ matrix.os }}-${{ matrix.platform }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+          restore-keys: fetchcontent-agents-${{ matrix.os }}-${{ matrix.platform }}-
 
       - name: Install static OpenSSL via vcpkg (${{ matrix.triplet }})
         shell: bash
@@ -151,6 +161,15 @@ jobs:
 
       - name: Build (Release)
         run: cmake --build cpp/build --config Release --parallel
+
+      - name: Check gaiacpp runs on glibc ${{ matrix.glibc_floor }}
+        if: matrix.glibc_floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$(find cpp/build -type f -name gaiacpp | head -n1)"
+          [ -n "${bin}" ] || { echo "::error::the build produced no gaiacpp binary"; exit 1; }
+          python util/check_glibc_floor.py "${bin}" --max "${{ matrix.glibc_floor }}"
 
       # The shipped bytes, run on the platform they ship to: a binary that
       # cannot start, or reports another version, must not reach packaging.
@@ -219,6 +238,39 @@ jobs:
           name: cpp-agents-${{ matrix.platform }}
           path: dist/
           if-no-files-found: error
+
+  # The shipped Linux archive on the oldest distros the .deb/.rpm reach. The
+  # glibc gate reads symbol versions; this proves the binary actually starts.
+  distro-smoke:
+    name: Smoke-test linux-x64 on ${{ matrix.image }}
+    needs: [build]
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:22.04', 'debian:bookworm']
+    steps:
+      - name: Download the linux-x64 build
+        uses: actions/download-artifact@v8
+        with:
+          name: cpp-agents-linux-x64
+          path: artifact
+
+      - name: gaiacpp --version
+        shell: bash
+        run: |
+          set -euo pipefail
+          ldd --version | sed -n 1p
+          mkdir -p unpacked
+          tar -xzf artifact/lemonade/gaiacpp-linux-x64.tar.gz -C unpacked
+          got="$(./unpacked/gaiacpp --version)"
+          echo "${got}"
+          case "${got}" in
+            gaiacpp\ [0-9]*) ;;
+            *) echo "::error::gaiacpp --version printed '${got}' on ${{ matrix.image }}"; exit 1 ;;
+          esac
 
   # On a version tag, consolidate every platform's dist/ into one bundle so a
   # downstream job (R2 / PyPI — other issues) has a single artifact to publish.
@@ -310,19 +362,24 @@ jobs:
   agents-build-summary:
     name: Agent Binaries Summary
     runs-on: ubuntu-latest
-    needs: [build]
+    needs: [build, distro-smoke]
     if: always() && !cancelled()
     steps:
       - name: Check results
         run: |
           echo "=== Agent Binaries (C++) Summary ==="
           echo "Build/package matrix: ${{ needs.build.result }}"
+          echo "Linux distro smoke: ${{ needs.distro-smoke.result }}"
           if [[ "${{ needs.build.result }}" == "skipped" ]]; then
             echo "Matrix skipped (draft PR — add 'ready_for_ci' label to run)"
             exit 0
           fi
           if [[ "${{ needs.build.result }}" != "success" ]]; then
             echo "One or more matrix legs failed"
+            exit 1
+          fi
+          if [[ "${{ needs.distro-smoke.result }}" != "success" ]]; then
+            echo "gaiacpp did not start on an older Linux distro"
             exit 1
           fi
           echo "All platform legs packaged successfully"

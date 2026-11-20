@@ -749,7 +749,10 @@ def sweep_stale_scratch_dirs() -> int:
                 continue
         try:
             info = os.lstat(path)
-            if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            if (
+                hasattr(os, "getuid")
+                and info.st_uid != os.getuid()  # pylint: disable=no-member
+            ):
                 continue
             if _last_activity(path) > cutoff:
                 continue
@@ -1297,16 +1300,16 @@ class PathValidator:
         if self._on_prompt_start:
             try:
                 self._on_prompt_start()
-            except Exception:  # pragma: no cover – best-effort
-                pass
+            except Exception as e:  # pragma: no cover – best-effort
+                logger.debug("on_prompt_start callback failed: %s", e)
         try:
             yield
         finally:
             if self._on_prompt_end:
                 try:
                     self._on_prompt_end()
-                except Exception:  # pragma: no cover – best-effort
-                    pass
+                except Exception as e:  # pragma: no cover – best-effort
+                    logger.debug("on_prompt_end callback failed: %s", e)
 
     def add_allowed_path(self, path: str) -> None:
         """

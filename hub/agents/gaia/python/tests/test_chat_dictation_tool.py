@@ -524,6 +524,28 @@ def test_a_missing_voice_model_is_an_error_not_a_download(dictation):
     dictation.synthesize.assert_not_called()
 
 
+def test_a_missing_voice_is_reported_before_the_listening_rewrite(dictation):
+    dictation.client.return_value.check_model_available.side_effect = LemonadeTTSError(
+        "TTS model 'kokoro-v1' is not downloaded."
+    )
+    result = dictation.tool(str(dictation.allowed / "report.md"), form="listening")
+
+    assert result == {
+        "status": "error",
+        "error": "TTS model 'kokoro-v1' is not downloaded.",
+    }
+    # The rewrite is one chat-model call per part of the document.
+    assert dictation.chat.calls == []
+    assert not any(
+        "listening script" in message for _phase, message in dictation.events
+    )
+
+
+def test_a_document_problem_is_reported_without_asking_for_the_voice(dictation):
+    dictation.tool(str(dictation.allowed / "story.txt"), pages="40-50")
+    dictation.client.return_value.check_model_available.assert_not_called()
+
+
 def test_a_script_cut_off_by_the_reply_limit_fails_instead_of_recording_half(
     dictation,
 ):

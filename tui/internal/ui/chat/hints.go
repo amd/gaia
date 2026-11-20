@@ -163,15 +163,19 @@ func (m ChatModel) statusHints() []hint {
 	}
 
 	if m.confirmation != nil && m.confirmation.Pending() {
-		// The modal owns the keyboard while it is up, so every hint here would
-		// be a lie: typing goes nowhere and Esc denies rather than cancels.
-		// Saying "Esc cancel" one row under a modal that says "esc deny" is
-		// two answers to the same key on the same screen.
+		// Esc denies here rather than cancels, so the usual hints would be
+		// two answers to the same key on the same screen. With a message in
+		// the composer the letters type, so the row names the keys that
+		// still answer.
 		//
 		// The way out is NOT named here — rankEscape appends it below and
 		// outranks everything, so spelling it again only got the bar saying
 		// "Ctrl+C quits · Ctrl+C quit".
-		hints = append(hints, hint{text: "answer above", rank: rankInterrupt})
+		if !m.answeringByLetter() {
+			hints = append(hints, hint{text: "Tab then Enter answers", rank: rankInterrupt})
+		} else {
+			hints = append(hints, hint{text: "answer above", rank: rankInterrupt})
+		}
 	} else if m.warming && !m.warmHidden {
 		// Esc does not cancel here — it shows the chat; see warmup.go.
 		hints = append(hints,
