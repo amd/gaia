@@ -62,6 +62,13 @@
       "tr-7998",
       "tr-8319-cb",
       "tr-7998-cb"
+    ],
+    "research": [
+      "rr-riscv",
+      "rr-crispr",
+      "rr-email-origin",
+      "rr-eu-ai-act",
+      "rr-jwst"
     ]
   },
   "tasks": [
@@ -671,6 +678,311 @@
           "assert git('rev-parse', 'refs/heads/main')[1] == commit('docs: describe the sorting helper'), 'main was moved'",
           "from toybox.dates import parse_updated",
           "assert parse_updated('2026-01-02 03:04:05z').minute == 4, 'the working tree lost the committed fix'"
+        ]
+      }
+    },
+    {
+      "id": "rr-riscv",
+      "check": "research",
+      "max_steps": 40,
+      "prompt": "Research the RISC-V instruction set architecture: where and when it originated and who started it, how it is governed today, and the current state of its specifications and adoption. Search the web, read the most authoritative sources you can find, and write a well-organised report in Markdown: lead with a short answer, then the detail. Cite every factual claim with a link to the page you read it on, and end with a list of your sources.",
+      "must_establish": [
+        "RISC-V began at the University of California, Berkeley in 2010 (Krste Asanovi\u0107 with graduate students Yunsup Lee and Andrew Waterman, in David Patterson's Par Lab).",
+        "The RISC-V Foundation was formed in 2015 to steward it.",
+        "The organisation re-incorporated in Switzerland in 2020 as RISC-V International.",
+        "The ISA is open and royalty-free: anyone may implement it without a licence fee.",
+        "It describes the ratification of specifications by RISC-V International, naming at least one ratified milestone (for example the base ISA and privileged spec in 2019, Vector 1.0 in 2021, or the RVA23 profile in 2024).",
+        "It gives at least one concrete sign of adoption (for example Android's RVA23 baseline, Ubuntu requiring RVA23, member counts in the thousands, or commercial chips and vendors)."
+      ],
+      "genuine_answer": "RISC-V is an open, royalty-free ISA begun in May 2010 at UC Berkeley's Par Lab by Krste Asanovi\u0107, Yunsup Lee and Andrew Waterman (Patterson directed the lab); the first manual was a May 2011 Berkeley tech report [riscv.org/about](https://riscv.org/about/). The RISC-V Foundation formed in 2015 with 36 founding members and in March 2020 re-incorporated in Switzerland as RISC-V International [FAQ](https://riscv.org/about/faq/). Members elect a Board; a Technical Committee oversees working groups that write the specs; only the trademark is licensed. The base ISA and privileged spec were ratified in 2019, 15 more specs including Vector 1.0 in December 2021, and the RVA23 profile (Vector and Hypervisor mandatory) on October 21, 2024, which Google made the Android RISC-V baseline, when membership was over 4,500 in 70 countries [RVA23](https://riscv.org/blog/risc-v-announces-ratification-of-the-rva23-profile-standard/). Ubuntu 25.10 requires RVA23 [Canonical](https://ubuntu.com/blog/risc-v-profiles-why-is-rva23-significant). In October 2025 ISO/IEC JTC 1 made RISC-V International a PAS submitter, but RISC-V is not yet an ISO standard.",
+      "wrong_answers": [
+        "RISC-V is an open ISA created at Stanford University in 2014 by David Patterson. It is governed by the RISC-V Foundation, a US non-profit in California, which ratifies specifications such as RVA23 (2024). Android and Ubuntu now target it, and it is royalty-free.",
+        "RISC-V started at UC Berkeley in 2010 and is royalty-free. It has seen growing adoption, with thousands of members and support in Android and Linux distributions. The specifications are developed collaboratively by industry."
+      ],
+      "research": {
+        "min_sources": 3,
+        "min_domains": 2,
+        "as_of": "2026-11-12",
+        "must_not_claim": [
+          "RISC-V was created in 2014 (2014 is when a frozen user spec appeared; work began in 2010).",
+          "RISC-V came from Stanford, or David Patterson created it alone.",
+          "The RISC-V Foundation is still a US organisation, or RISC-V International is based in Geneva (it is registered in Zurich).",
+          "RISC-V is already an ISO/IEC standard.",
+          "RISC-V International charges royalties or licence fees to implement the ISA."
+        ],
+        "sources": [
+          {
+            "url": "https://riscv.org/about/",
+            "supports": "2010 Par Lab origin and founders, 2011 report, 2015 Foundation with 36 members, 2020 Swiss move, governance"
+          },
+          {
+            "url": "https://riscv.org/about/faq/",
+            "supports": "Swiss incorporation, free ISA, trademark licensing"
+          },
+          {
+            "url": "https://www2.eecs.berkeley.edu/Pubs/TechRpts/2011/EECS-2011-62.html",
+            "supports": "first ISA manual, May 13, 2011"
+          },
+          {
+            "url": "https://riscv.org/blog/risc-v-announces-ratification-of-the-rva23-profile-standard/",
+            "supports": "RVA23 ratified Oct 21, 2024; Android baseline; 4,500+ members in 70 countries"
+          },
+          {
+            "url": "https://ubuntu.com/blog/risc-v-profiles-why-is-rva23-significant",
+            "supports": "Ubuntu 25.10 requires RVA23"
+          },
+          {
+            "url": "https://riscv.org/blog/risc-v-jtc1-pas-submitter/",
+            "supports": "ISO/IEC JTC 1 PAS submitter status, October 2025; not yet a standard"
+          },
+          {
+            "url": "https://riscv.org/blog/andrea-gallo-named-ceo-of-risc-v-international/",
+            "supports": "Andrea Gallo CEO since May 2025"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rr-crispr",
+      "check": "research",
+      "max_steps": 40,
+      "prompt": "Research who developed CRISPR-Cas9 genome editing, and the history and current status of the CRISPR-Cas9 patent dispute between the University of California (and its co-parties) and the Broad Institute. Search the web, read the most authoritative sources you can find, and write a well-organised report in Markdown: lead with a short answer, then the detail. Cite every factual claim with a link to the page you read it on, and end with a list of your sources.",
+      "must_establish": [
+        "Jennifer Doudna and Emmanuelle Charpentier (with Jinek and colleagues) published the programmable Cas9 work in Science in 2012.",
+        "Feng Zhang's Broad Institute/MIT team published CRISPR editing in eukaryotic (mammalian) cells in early 2013, and that eukaryotic use is the core of the patent fight.",
+        "Doudna and Charpentier won the 2020 Nobel Prize in Chemistry; Feng Zhang did not share it.",
+        "In 2022 the PTAB (US Patent Trial and Appeal Board) awarded priority for eukaryotic CRISPR-Cas9 to the Broad Institute.",
+        "In May 2025 the Federal Circuit vacated part of that decision (the conception analysis) and sent it back to the PTAB, without awarding priority to UC.",
+        "The current status as of late 2026: on remand the PTAB again ruled for Broad (March 2026). A report may add that UC/CVC appealed again in 2026, but must not present the dispute as settled in UC's favour."
+      ],
+      "genuine_answer": "Doudna and Charpentier's team showed a programmable dual-RNA-guided Cas9 in Science in June 2012 [PMC](https://pmc.ncbi.nlm.nih.gov/articles/PMC6286148/) and shared the 2020 Nobel Prize in Chemistry [kva.se](https://kva.se/en/news/nobelpriset-i-kemi-2020-2). Feng Zhang's Broad/MIT team reported editing in mammalian cells in Science in January 2013 [PMC](https://pmc.ncbi.nlm.nih.gov/articles/PMC3795411/). In the first interference the PTAB found in February 2017 that the claims did not interfere (no priority ruling); the Federal Circuit affirmed in September 2018. In a second interference the PTAB awarded eukaryotic priority to Broad on February 28, 2022. On May 12, 2025 the Federal Circuit vacated the conception ruling and remanded, while affirming that CVC's earliest provisionals lacked written description [MoFo](https://www.mofo.com/resources/insights/250513-federal-circuit-vacates-and-remands). On remand, on March 26, 2026, the PTAB again found for Broad and entered judgment against CVC [MoFo](https://www.mofo.com/resources/insights/260407-the-ptab-reaffirms-priority-decision-for-crispr-ip); CVC appealed again in May 2026, so it is not over.",
+      "wrong_answers": [
+        "CRISPR-Cas9 editing was developed by Doudna, Charpentier and Feng Zhang, who shared the 2020 Nobel Prize in Chemistry. The patent dispute ended in 2025 when the Federal Circuit ruled for the University of California and awarded it priority over the Broad Institute.",
+        "Doudna and Charpentier described programmable Cas9 in Science in 2012 and won the 2020 Nobel Prize in Chemistry; Feng Zhang's Broad team showed editing in human cells in 2013. The two sides fought over patents for years in the US Patent Office."
+      ],
+      "research": {
+        "min_sources": 3,
+        "min_domains": 2,
+        "as_of": "2026-11-12",
+        "must_not_claim": [
+          "Feng Zhang shared the 2020 Nobel Prize in Chemistry.",
+          "The 2017 PTAB decision awarded priority to Broad (it found no interference-in-fact and made no priority ruling).",
+          "In 2025 the Federal Circuit awarded priority to UC or reversed the Board outright (it vacated the conception analysis and remanded).",
+          "The dispute was finally settled in 2022 or in 2025.",
+          "The Jinek et al. paper appeared in Nature, or in 2013."
+        ],
+        "sources": [
+          {
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6286148/",
+            "supports": "Jinek et al., Science, June 2012"
+          },
+          {
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3795411/",
+            "supports": "Cong et al. (Zhang), Science, January 2013, eukaryotic editing"
+          },
+          {
+            "url": "https://kva.se/en/news/nobelpriset-i-kemi-2020-2",
+            "supports": "2020 Nobel Prize in Chemistry to Charpentier and Doudna"
+          },
+          {
+            "url": "https://www.broadinstitute.org/crispr/journalists-statement-and-background-crispr-patent-interfer",
+            "supports": "interference timeline 2015-2026 (party source)"
+          },
+          {
+            "url": "https://patentdocs.org/2025/05/14/regents-of-the-university-of-california-v-broad-institute-inc-fed-cir-2025/",
+            "supports": "May 12, 2025 Federal Circuit: vacated and remanded, written description affirmed"
+          },
+          {
+            "url": "https://www.mofo.com/resources/insights/260407-the-ptab-reaffirms-priority-decision-for-crispr-ip",
+            "supports": "March 26, 2026 PTAB remand decision for Broad"
+          },
+          {
+            "url": "https://www.lernerdavid.com/news-successes/case-clips/ptab-reaffirms-broad-s-priority-in-crispr-cas9-interference",
+            "supports": "CVC notice of appeal, May 2026"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rr-email-origin",
+      "check": "research",
+      "max_steps": 40,
+      "prompt": "Who invented email? Research the origins of electronic mail, from 1960s time-sharing systems to ARPANET network email, and assess the claim that V.A. Shiva Ayyadurai invented email. Search the web, read the most authoritative sources you can find, and write a well-organised report in Markdown: lead with a short answer, then the detail. Cite every factual claim with a link to the page you read it on, and end with a list of your sources.",
+      "must_establish": [
+        "Email predates networks: a MAIL command on MIT's CTSS time-sharing system (around 1965) let users of one computer leave each other messages.",
+        "Ray Tomlinson at BBN sent the first network email over ARPANET in 1971 and chose the @ sign to separate user from host.",
+        "Ayyadurai's EMAIL program dates from 1978-79 (written as a teenager for UMDNJ in New Jersey), after both of those.",
+        "Ayyadurai's 1982 registration is a copyright on his program's code, not a patent and not a recognition that he invented email.",
+        "Historians and institutions reject the claim (for example the Smithsonian said it does not claim he invented email, and computing historians published rebuttals).",
+        "Concludes that email has no single inventor and that Ayyadurai did not invent it."
+      ],
+      "genuine_answer": "Email grew out of time-sharing: Tom Van Vleck and Noel Morris wrote a MAIL command for MIT's CTSS in 1965 [Multicians](https://www.multicians.org/thvv/mail-history.html). In late 1971 Ray Tomlinson at BBN made SNDMSG send mail between ARPANET hosts and chose the @ sign [Internet Hall of Fame](https://www.internethalloffame.org/inductee/raymond-tomlinson/). RFC 561 (1973) and RFC 733 (1977, defining To, cc and Bcc) standardised headers [RFC 733](https://www.rfc-editor.org/rfc/rfc733). Ayyadurai wrote a program called EMAIL for UMDNJ in 1978-79 as a teenager and registered a copyright for it in 1982; a copyright covers one program's code, not the idea, and is not a patent [Volokh](https://reason.com/volokh/2017/01/13/what-a-strange-allegation-in-a/). The Smithsonian accepted his papers in 2012 but said it does not claim he invented email, and historians rejected the claim [SIGCIS](https://www.sigcis.org/node/406). Gawker settled his suit in 2016 and his Techdirt suit was dismissed in 2017 [TechCrunch](https://techcrunch.com/2017/09/06/judge-dismisses-techdirt-lawsuit/). Email has no single inventor; Ayyadurai did not invent it.",
+      "wrong_answers": [
+        "V.A. Shiva Ayyadurai invented email in 1978 as a 14-year-old in New Jersey, and the US government recognised this with a patent in 1982. Earlier systems like Ray Tomlinson's 1971 ARPANET messages were simple text transfers, not email.",
+        "Email began on MIT's CTSS time-sharing system around 1965, and Ray Tomlinson sent the first network email over ARPANET in 1971, choosing the @ sign. Ayyadurai's claim is disputed. Overall email evolved through many contributors."
+      ],
+      "research": {
+        "min_sources": 3,
+        "min_domains": 2,
+        "as_of": "2026-11-12",
+        "must_not_claim": [
+          "Ayyadurai invented email (stated as fact).",
+          "Ayyadurai holds a patent on email, or the US government recognised him as its inventor.",
+          "The Smithsonian honoured or recognised Ayyadurai as the inventor of email.",
+          "Ray Tomlinson sent the first network email in 1965, 1972 or 1973 (it was 1971).",
+          "Courts confirmed Ayyadurai's claim through his lawsuits."
+        ],
+        "sources": [
+          {
+            "url": "https://www.multicians.org/thvv/mail-history.html",
+            "supports": "CTSS MAIL 1965; Tomlinson's network mail 1971; @ sign"
+          },
+          {
+            "url": "https://www.internethalloffame.org/inductee/raymond-tomlinson/",
+            "supports": "Tomlinson, network email and the @ sign"
+          },
+          {
+            "url": "https://www.rfc-editor.org/rfc/rfc733",
+            "supports": "RFC 733 (1977) defines From, To, cc, Bcc"
+          },
+          {
+            "url": "https://www.sigcis.org/node/406",
+            "supports": "historians' rebuttal; Smithsonian statement; copyright covers code"
+          },
+          {
+            "url": "https://reason.com/volokh/2017/01/13/what-a-strange-allegation-in-a/",
+            "supports": "copyright is not a patent; 1982 registration"
+          },
+          {
+            "url": "https://techcrunch.com/2017/09/06/judge-dismisses-techdirt-lawsuit/",
+            "supports": "Techdirt suit dismissed September 2017"
+          },
+          {
+            "url": "https://www.nbcnews.com/tech/tech-news/defamation-lawsuit-brought-self-proclaimed-email-inventor-settles-n1007196",
+            "supports": "2019 Techdirt settlement; Smithsonian statement"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rr-eu-ai-act",
+      "check": "research",
+      "max_steps": 40,
+      "prompt": "Research the EU AI Act: what it is, how it classifies AI systems by risk, and its application timeline as it stands today, including any changes or delays to that timeline. Search the web, read the most authoritative sources you can find, and write a well-organised report in Markdown: lead with a short answer, then the detail. Cite every factual claim with a link to the page you read it on, and end with a list of your sources.",
+      "must_establish": [
+        "It is Regulation (EU) 2024/1689 and entered into force on 1 August 2024.",
+        "It sorts AI by risk: prohibited (unacceptable-risk) practices, high-risk systems with strict obligations, transparency obligations (e.g. chatbots, deepfakes), and minimal risk; general-purpose AI models have their own obligations.",
+        "Prohibitions (and AI-literacy duties) have applied since 2 February 2025, and general-purpose AI obligations since 2 August 2025.",
+        "The high-risk deadlines were postponed by the 'Digital Omnibus' amendment, which is ADOPTED law (Regulation (EU) 2026/1744, in force since July 2026), not merely a proposal.",
+        "Under the amendment, Annex III high-risk rules apply from 2 December 2027 and product-embedded (Annex I) high-risk rules from 2 August 2028."
+      ],
+      "genuine_answer": "The AI Act is [Regulation (EU) 2024/1689](https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng), published 12 July 2024 and in force since [1 August 2024](https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai). It bans unacceptable-risk practices (e.g. social scoring), places strict duties on high-risk systems (Annex I product components and Annex III uses such as employment, credit and law enforcement), imposes transparency duties on chatbots and deepfakes, leaves minimal-risk AI alone, and sets separate rules for general-purpose AI models [FAQ](https://digital-strategy.ec.europa.eu/en/faqs/navigating-ai-act). Prohibitions and AI literacy apply from 2 February 2025, GPAI obligations from 2 August 2025, and general application and enforcement from 2 August 2026. Fines reach EUR 35m or 7% of turnover for prohibited practices. The Digital Omnibus, proposed 19 November 2025, was adopted as [Regulation (EU) 2026/1744](https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=OJ%3AL_202601744) and has been in force since 27 July 2026: Annex III high-risk rules now apply from 2 December 2027 and Annex I from 2 August 2028; it also adds a ban on non-consensual sexual deepfakes from 2 December 2026.",
+      "wrong_answers": [
+        "The EU AI Act (Regulation 2024/1689) entered into force on 1 August 2024 and bans unacceptable-risk AI, regulates high-risk systems, and adds transparency rules. Prohibitions applied from February 2025 and GPAI rules from August 2025. The Commission has proposed a Digital Omnibus to delay the high-risk rules, but it has not been adopted, so high-risk obligations still apply from 2 August 2026. Fines reach EUR 35m or 7%.",
+        "The EU AI Act entered into force on 1 August 2024 and regulates AI by risk level, from banned practices to minimal risk. Its obligations phase in over several years, and the high-risk rules were recently pushed back. Fines can be large."
+      ],
+      "research": {
+        "min_sources": 3,
+        "min_domains": 2,
+        "as_of": "2026-11-12",
+        "must_not_claim": [
+          "The Digital Omnibus delay is only a proposal, or high-risk (Annex III) obligations apply from 2 August 2026.",
+          "The AI Act entered into force on 2 August 2024, 12 July 2024 or 13 June 2024 (it was 1 August 2024).",
+          "All of the AI Act's obligations already apply.",
+          "Maximum fines are 4% or 6% of turnover, or EUR 20 million.",
+          "The general-purpose AI Code of Practice is mandatory."
+        ],
+        "sources": [
+          {
+            "url": "https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng",
+            "supports": "Regulation 2024/1689, OJ 12 July 2024"
+          },
+          {
+            "url": "https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai",
+            "supports": "risk tiers, entry into force 1 August 2024, timeline incl. omnibus"
+          },
+          {
+            "url": "https://digital-strategy.ec.europa.eu/en/faqs/navigating-ai-act",
+            "supports": "timeline, risk tiers, omnibus in force 27 July 2026"
+          },
+          {
+            "url": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=OJ%3AL_202601744",
+            "supports": "Regulation 2026/1744: new high-risk dates, nudifier ban"
+          },
+          {
+            "url": "https://www.europarl.europa.eu/news/en/press-room/20260611IPR45207/ai-act-ep-approves-simplification-measures-and-nudifier-app-ban",
+            "supports": "Parliament approval June 2026"
+          },
+          {
+            "url": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=OJ:L_202401689",
+            "supports": "Article 99 fine maxima"
+          },
+          {
+            "url": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+            "supports": "voluntary GPAI Code of Practice, July 2025"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rr-jwst",
+      "check": "research",
+      "max_steps": 40,
+      "prompt": "Research the James Webb Space Telescope: its key design facts (mirror, sunshield, instruments, wavelength range, orbit), launch details, partner agencies, cost, expected lifetime, and its most significant scientific results so far. Search the web, read the most authoritative sources you can find, and write a well-organised report in Markdown: lead with a short answer, then the detail. Cite every factual claim with a link to the page you read it on, and end with a list of your sources.",
+      "must_establish": [
+        "Its primary mirror is about 6.5 metres across, made of 18 hexagonal gold-coated beryllium segments.",
+        "It is mainly an infrared telescope (roughly 0.6 to 28 microns), with a five-layer, tennis-court-sized sunshield.",
+        "It launched on 25 December 2021 on an Ariane 5 from Kourou, French Guiana.",
+        "It orbits the Sun-Earth L2 point about 1.5 million km from Earth, not Earth orbit.",
+        "It is a NASA-led partnership with ESA and the Canadian Space Agency.",
+        "It gives a cost of roughly USD 10 billion (or NASA's ~USD 9.7 billion life-cycle figure) and a propellant-limited lifetime well beyond its 5-10 year design, roughly 20 years.",
+        "It names at least two significant results (for example the first clear CO2 detection in an exoplanet atmosphere on WASP-39 b, record-distance early galaxies such as JADES-GS-z14-0 or MoM-z14, or its first directly imaged planet TWA 7 b)."
+      ],
+      "genuine_answer": "JWST is a NASA-led observatory with ESA and CSA [NASA FAQ](https://science.nasa.gov/mission/webb/webb-faqs/). Its 6.5 m primary mirror has 18 hexagonal gold-coated beryllium segments [NASA](https://science.nasa.gov/mission/webb/webbs-mirrors/); a five-layer, tennis-court-sized sunshield keeps it below 50 K and it observes about 0.6-28.5 microns with NIRCam, NIRSpec, MIRI and FGS/NIRISS [fact sheet](https://science.nasa.gov/mission/webb/fact-sheet/). It launched on 25 December 2021 on an Ariane 5 from Kourou and orbits the Sun-Earth L2 point about 1.5 million km away. NASA's life-cycle cost is about $9.7 billion; with partners the total is roughly $10 billion [Planetary Society](https://www.planetary.org/articles/cost-of-the-jwst). Designed for 5-10 years, it carries propellant for more than 20. Results include the first clear CO2 detection in an exoplanet atmosphere (WASP-39 b, 2022) [NASA](https://science.nasa.gov/missions/webb/nasas-webb-detects-carbon-dioxide-in-exoplanet-atmosphere/), record-distance galaxies from JADES-GS-z14-0 (2024) to MoM-z14 at z=14.44 (2026) [NASA](https://science.nasa.gov/missions/webb/nasa-webb-pushes-boundaries-of-observable-universe-closer-to-big-bang/), and its first directly imaged planet, TWA 7 b (2025).",
+      "wrong_answers": [
+        "JWST has a 6.5 m segmented mirror and observes mainly visible light, like Hubble. It launched on 25 December 2021 on a SpaceX Falcon Heavy from Florida and orbits Earth at about 600 km. It cost about $10 billion and detected CO2 on WASP-39 b and very distant galaxies.",
+        "JWST is a NASA, ESA and CSA infrared telescope with a 6.5 m mirror of 18 segments and a five-layer sunshield. It launched on 25 December 2021 on an Ariane 5 and sits at the L2 point 1.5 million km away. It has made many discoveries."
+      ],
+      "research": {
+        "min_sources": 3,
+        "min_domains": 2,
+        "as_of": "2026-11-12",
+        "must_not_claim": [
+          "JWST orbits Earth like Hubble.",
+          "Its mirror is 2.4 m or 10 m, or has circular segments.",
+          "It is mainly a visible-light telescope.",
+          "It launched on a SpaceX or NASA rocket, from Florida, or on a date other than 25 December 2021.",
+          "Its expected lifetime is only 5-10 years."
+        ],
+        "sources": [
+          {
+            "url": "https://science.nasa.gov/mission/webb/webb-faqs/",
+            "supports": "mirror, launch, L2, partners, lifetime >20 years"
+          },
+          {
+            "url": "https://science.nasa.gov/mission/webb/fact-sheet/",
+            "supports": "0.6-28.5 microns, sunshield, instruments"
+          },
+          {
+            "url": "https://science.nasa.gov/mission/webb/webbs-mirrors/",
+            "supports": "18 hexagonal beryllium segments"
+          },
+          {
+            "url": "https://www.planetary.org/articles/cost-of-the-jwst",
+            "supports": "$9.7B NASA life-cycle cost; partner shares"
+          },
+          {
+            "url": "https://science.nasa.gov/missions/webb/nasas-webb-detects-carbon-dioxide-in-exoplanet-atmosphere/",
+            "supports": "WASP-39 b CO2, August 2022"
+          },
+          {
+            "url": "https://science.nasa.gov/missions/webb/nasa-webb-pushes-boundaries-of-observable-universe-closer-to-big-bang/",
+            "supports": "MoM-z14 at z=14.44, January 2026"
+          },
+          {
+            "url": "https://www.stsci.edu/contents/news-releases/2025/news-2025-126",
+            "supports": "TWA 7 b, June 2025"
+          }
         ]
       }
     }

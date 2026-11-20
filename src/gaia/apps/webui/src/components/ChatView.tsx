@@ -37,6 +37,8 @@ import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { SessionFolderChip } from './FolderChip';
 import { PermissionModeChip } from './PermissionModeChip';
+import { ResearchChip, useResearchMode, withResearch } from './ResearchChip';
+import { HistoryNotice, LibraryNotices } from './ChatNotices';
 import { PermissionPrompt } from './PermissionPrompt';
 import { QueuedMessages } from './QueuedMessages';
 import { ContextMeter, ContextWarning } from './ContextMeter';
@@ -92,19 +94,6 @@ const NO_CARDS: RenderCardData[] = [];
 /** Notices by server message id: a refetch replaces messages, so they cannot live on them alone. */
 const historyNotices = new Map<number, string>();
 
-/** One quiet line saying older turns left the model's view. */
-function HistoryNotice({ text }: { text: string }) {
-    return <div className="history-notice" role="note">{text}</div>;
-}
-
-function LibraryNotices({ notices }: { notices: string[] }) {
-    return (
-        <div className="library-notices" role="note">
-            {notices.map((notice, index) => <div key={`${index}-${notice}`} dir="auto">{notice}</div>)}
-        </div>
-    );
-}
-
 interface ChatViewProps {
     sessionId: string;
 }
@@ -127,6 +116,7 @@ export const RESOURCES_NOTE_MS = 12_000;
 
 export function ChatView({ sessionId }: ChatViewProps) {
     const t = useT();
+    const researchMode = useResearchMode(sessionId);
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
@@ -516,7 +506,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const hasImage = fromComposer && attach.hasImage;
         const takeDraft = () => {
             if (!fromComposer) return text;
-            const composed = attach.compose(text);
+            const composed = attach.compose(withResearch(text, sessionId));
             setInput('');
             attach.clear();
             inputRef.current?.focus();
@@ -1897,8 +1887,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             ? t('composer.answerQuestion')
                             : isStreaming
                             ? t('composer.queueNext')
+                            : researchMode
+                            ? t('composer.researchPlaceholder')
                             : messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}
-                        leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
+                        leftControls={<><PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} /><ResearchChip sessionId={sessionId} disabled={!!retiredAgent} compact /></>}
                         rightControls={(
                             <>
                                 <ContextMeter

@@ -276,7 +276,14 @@ ADVERSARIAL = {
 
 def test_every_suite_loads_and_core_is_a_subset_of_full():
     suites = {name: {t.id for t in ft.load_suite(name)} for name in ft.suite_names()}
-    assert set(suites) == {"core", "full", "adversarial", "everyday", "therock"}
+    assert set(suites) == {
+        "core",
+        "full",
+        "adversarial",
+        "everyday",
+        "therock",
+        "research",
+    }
     assert suites["core"] <= suites["full"] and suites["adversarial"] <= suites["full"]
     assert suites["adversarial"] == ADVERSARIAL
     # CI runs core: only the short adversarial tasks, never the one that hangs.

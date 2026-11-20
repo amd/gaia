@@ -155,3 +155,13 @@ def test_an_unjudged_run_reports_no_quality_rather_than_zero(tmp_path):
 def test_a_directory_without_runs_is_named(tmp_path):
     with pytest.raises(FileNotFoundError, match="r1, r2"):
         ft.run_dirs(tmp_path)
+
+
+def test_a_research_command_run_is_its_own_row(tmp_path):
+    plain = _run(tmp_path / "plain", "m", "gaia", 0.1, metering.HARNESS_COUNTS)
+    command = _run(tmp_path / "cmd", "m", "gaia", 0.1, metering.HARNESS_COUNTS)
+    card = json.loads((command / "scorecard.json").read_text())
+    card["research_command"] = True
+    (command / "scorecard.json").write_text(json.dumps(card))
+    rows = report.collect([plain, command])
+    assert [r.label for r in rows] == ["GAIA", "GAIA /research"]
