@@ -28,7 +28,7 @@ Every Python agent package has the same shape:
 <id>/python/
 ├── gaia-agent.yaml          # Hub manifest (id, category, models, interfaces)
 ├── pyproject.toml           # gaia-agent-<id>, amd-gaia dep, gaia.agent entry point
-├── gaia_agent_<id>/
+├── gaia_agent_<id>/         # the flagship's is plain gaia_agent/
 │   ├── __init__.py          # build_registration() — advertises the agent
 │   └── agent.py             # the Agent subclass
 ├── tests/
