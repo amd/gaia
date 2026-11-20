@@ -75,14 +75,20 @@ describe('AgentChoice', () => {
         expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
     });
 
-    it("can't pick gaiacpp where it can't be had, and says why behind the toggle", async () => {
+    it.each([true, false])("can't pick gaiacpp where it can't be had, and says why in view under its row (inSettings %s)", async (inSettings) => {
         mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp('This is a development build; gaiacpp comes with releases.'));
-        render(<AgentChoice inSettings />);
+        render(<AgentChoice inSettings={inSettings} onPending={vi.fn()} />);
         const cpp = await radio(/gaiacpp/);
         expect(cpp).toHaveAttribute('aria-disabled', 'true');
         expect(within(cpp).getByText('Not installed')).toBeVisible();
         const why = "It isn't on this PC and can't be downloaded here: This is a development build; gaiacpp comes with releases.";
         expect(cpp).toHaveAccessibleDescription(why);
+        // Read without opening anything: the comparison stays shut, and the reason is said once.
+        expect(screen.getByRole('button', { name: 'Compare the two' })).toHaveAttribute('aria-expanded', 'false');
+        expect(screen.getAllByText(why)).toHaveLength(1);
+        expect(screen.getByText(why)).toBeVisible();
+        expect(screen.getByText(why).closest('[hidden]')).toBeNull();
+        expect(cpp.nextElementSibling).toBe(screen.getByText(why));
         fireEvent.click(cpp);
         const py = screen.getByRole('radio', { name: /gaiapy/ });
         py.focus();
@@ -90,7 +96,30 @@ describe('AgentChoice', () => {
         expect(mockedApi.updateSettings).not.toHaveBeenCalled();
         expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole('button', { name: 'Compare the two' }));
-        expect(screen.getByText(why)).toBeVisible();
+        expect(screen.getAllByText(why)).toHaveLength(1);
+    });
+
+    it.each([
+        ['no_release', 'this GAIA release has no gaiacpp to download', 'لا يتضمّن gaiacpp للتنزيل'],
+        ['unreachable', 'Check your internet connection, or try again later', 'تحقّق من اتصالك بالإنترنت'],
+        ['unverifiable', "can't be verified, so GAIA won't install it", 'تعذّر التحقّق من gaiacpp'],
+    ] as const)('says a reason the server names by code (%s) in the language in use', async (code, en, ar) => {
+        const listing = withoutGaiacpp('english from the server');
+        mockedApi.getAgentPrograms.mockResolvedValue({
+            ...listing,
+            programs: listing.programs.map((p) => (p.id === 'gaiacpp' ? { ...p, unavailable_code: code } : p)),
+        });
+        const { unmount } = render(<AgentChoice inSettings />);
+        await radio(/gaiacpp/);
+        expect(document.querySelector('.agent-choice-why')).toHaveTextContent(en);
+        unmount();
+
+        useChatStore.setState({ locale: 'ar' });
+        render(<AgentChoice inSettings />);
+        await radio(/gaiacpp/);
+        const why = document.querySelector('.agent-choice-why');
+        expect(why).toHaveTextContent(ar);
+        expect(why).not.toHaveTextContent('english from the server');
     });
 
     it("shows the server's refusal and puts the choice back", async () => {

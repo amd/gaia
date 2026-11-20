@@ -138,7 +138,8 @@ off a web address.
   model first; it then dictates the text it finds.
 - **"The voice model is not downloaded."** Dictation never downloads the voice in
   the middle of a chat (~350 MB). Press **Read aloud** on any reply once in the Agent
-  UI, or run `gaia download --agent talk`, then ask again.
+  UI, or type `/read-aloud` in the TUI, then ask again. GAIA checks for the voice
+  before it rewrites anything, so the answer comes straight away.
 - **Cannot reach Lemonade.** The app restarts the model server on its own; try again
   in a moment.
 - **A rewrite stopped part-way** because the model ran out of room. Dictate the
