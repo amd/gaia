@@ -759,8 +759,8 @@ class PlaywrightDriver:
             try:
                 if self._page.url != prev_url:
                     break
-            except Exception:  # noqa: BLE001 — mid-swap; try again
-                pass
+            except Exception as e:  # noqa: BLE001 — mid-swap; try again
+                logger.debug("Page URL unreadable mid-navigation: %s", e)
             try:
                 self._page.wait_for_timeout(50)
             except Exception:  # noqa: BLE001 — page swapped under us
@@ -768,8 +768,8 @@ class PlaywrightDriver:
 
         try:
             self._page.wait_for_load_state("domcontentloaded", timeout=10_000)
-        except Exception:  # noqa: BLE001 — already loaded, or never navigated
-            pass
+        except Exception as e:  # noqa: BLE001 — already loaded, or never navigated
+            logger.debug("Load-state wait after navigation: %s", e)
         self._await_script_redirect()
         self._settle()
 
@@ -799,8 +799,8 @@ class PlaywrightDriver:
         """
         try:
             self._page.wait_for_load_state("networkidle", timeout=3000)
-        except Exception:  # noqa: BLE001 — see docstring; this is not a failure
-            pass
+        except Exception as e:  # noqa: BLE001 — see docstring; this is not a failure
+            logger.debug("Page did not reach network idle: %s", e)
 
     def _snapshot(self) -> Dict[str, Any]:
         """Describe the page, including anything inside same-origin iframes.

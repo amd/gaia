@@ -1297,16 +1297,16 @@ class PathValidator:
         if self._on_prompt_start:
             try:
                 self._on_prompt_start()
-            except Exception:  # pragma: no cover – best-effort
-                pass
+            except Exception as e:  # pragma: no cover – best-effort
+                logger.debug("on_prompt_start callback failed: %s", e)
         try:
             yield
         finally:
             if self._on_prompt_end:
                 try:
                     self._on_prompt_end()
-                except Exception:  # pragma: no cover – best-effort
-                    pass
+                except Exception as e:  # pragma: no cover – best-effort
+                    logger.debug("on_prompt_end callback failed: %s", e)
 
     def add_allowed_path(self, path: str) -> None:
         """
