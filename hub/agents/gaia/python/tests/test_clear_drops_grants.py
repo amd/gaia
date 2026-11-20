@@ -246,3 +246,126 @@ def test_cli_reset_that_fails_to_save_keeps_the_conversation_and_its_grants(
 
     assert agent.current_session.session_id == "old"
     assert console.call_is_granted(*_TESTS)
+
+
+_STDIO_CHILD = r"""
+import sys
+import gaia_agent.agent as agent_mod
+from gaia_agent import stdio
+
+class Agent:
+    def __init__(self, config=None):
+        self.console = None
+        self.conversation_history = []
+
+    def process_query(self, query):
+        approved = self.console.confirm_tool_execution(
+            "run_shell_command", {"command": "pytest -q"}
+        )
+        return {"answer": f"approved={approved}"}
+
+agent_mod.GaiaAgent = Agent
+agent_mod.GaiaAgentConfig = lambda **kwargs: None
+stdio._model_state_event = lambda agent: {"type": "status", "message": "ready"}
+sys.exit(stdio.main(sys.argv[1:]))
+"""
+
+
+def test_real_stdio_process_asks_again_after_clear(tmp_path):
+    """The terminal UI's own sequence over the real wire: always, /clear, ask."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import gaia
+
+    env = dict(os.environ, HOME=str(tmp_path), USERPROFILE=str(tmp_path))
+    env["GAIA_TUI_HOME"] = str(tmp_path / "tui")
+    # The child must import this checkout, not whichever one is installed.
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(Path(stdio.__file__).parents[1]), str(Path(gaia.__file__).parents[1])]
+    )
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _STDIO_CHILD,
+            "--history-file",
+            str(tmp_path / "h.sqlite3"),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        env=env,
+    )
+    lines: "queue.Queue" = queue.Queue()
+    threading.Thread(
+        target=lambda: [lines.put(line) for line in child.stdout], daemon=True
+    ).start()
+    transcript = []
+
+    def send(line):
+        transcript.append(f"> {line}")
+        child.stdin.write(line + "\n")
+        child.stdin.flush()
+
+    def until(kind):
+        """The next prompt or terminal event; *kind* says which is expected."""
+        while True:
+            try:
+                line = lines.get(timeout=30)
+            except queue.Empty:
+                raise AssertionError(
+                    f"no {kind} within 30s:\n" + "\n".join(transcript)
+                ) from None
+            if not line.startswith("{"):
+                continue
+            event = json.loads(line)
+            if event.get("type") in ("needs_confirmation", "final", "error"):
+                transcript.append(f"< {event['type']} {event.get('answer', '')}")
+                return event
+
+    try:
+        send(json.dumps({stdio.QUERY_KEY: "run the tests"}))
+        ask = until("needs_confirmation")
+        assert ask["type"] == "needs_confirmation"
+        send(
+            json.dumps(
+                {
+                    stdio.CONTROL_KEY: stdio.CONTROL_TOOL_DECISION,
+                    "decision": stdio.DECISION_ALWAYS,
+                    "confirm_id": ask.get("confirm_id"),
+                }
+            )
+        )
+        assert until("final")["answer"] == "approved=True"
+
+        send(json.dumps({stdio.QUERY_KEY: "run them again"}))
+        assert until("final")["answer"] == "approved=True", "always held"
+
+        send(json.dumps({stdio.QUERY_KEY: stdio.CLEAR_CONVERSATION_QUERY}))
+        assert until("final")["answer"] == "conversation_cleared"
+
+        send(json.dumps({stdio.QUERY_KEY: "run the tests"}))
+        again = until("needs_confirmation")
+        assert again["type"] == "needs_confirmation", "\n".join(transcript)
+        send(
+            json.dumps(
+                {
+                    stdio.CONTROL_KEY: stdio.CONTROL_TOOL_DECISION,
+                    "decision": stdio.DECISION_DENY,
+                    "confirm_id": again.get("confirm_id"),
+                }
+            )
+        )
+        assert until("final")["answer"] == "approved=False"
+    finally:
+        child.stdin.close()
+        try:
+            child.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            child.kill()
+    print("\n".join(transcript))
