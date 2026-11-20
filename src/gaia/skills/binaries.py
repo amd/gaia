@@ -863,7 +863,7 @@ _GIT_DIFF_VALUE_SHORT = frozenset({"-S", "-G", "-l", "-I"})
 _GIT_DIFF_OPTIONAL_VALUE_SHORT = frozenset({"-U", "-M", "-C", "-B", "-X"})
 _GIT_LOG_VALUE_SHORT = _GIT_DIFF_VALUE_SHORT | {"-n", "-L"}
 
-#: Only the subcommands that define ``--text`` (diff, log, show, grep) exempt
+#: Only the subcommands that define ``--text`` (diff, log, show, grep, stash) exempt
 #: it; on blame or cat-file git reads it as ``--textconv``. ``--filter`` is
 #: exempt on log alone: git releases older than ``cat-file --filter`` read it
 #: there as ``--filters``.
@@ -1936,6 +1936,8 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                 denied_flags=_GIT_READ_DENIED_FLAGS,
                 denied_flag_reasons=_GIT_READ_DENIED_FLAG_REASONS,
                 value_flags=frozenset({"-m", "--message"}),
+                # `show` and `list` hand their flags to diff and log.
+                exact_options=_GIT_TEXT,
             ),
         },
     ),

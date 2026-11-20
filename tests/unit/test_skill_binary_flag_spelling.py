@@ -222,6 +222,7 @@ _GIT_EXACT_OPTIONS = {
     "log": {"--text", "--filter"},
     "show": {"--text"},
     "grep": {"--text"},
+    "stash": {"--text"},
 }
 
 
@@ -249,6 +250,8 @@ def test_git_exact_options_are_pinned_to_the_subcommands_that_define_them():
         "git show --text HEAD",
         "git grep --text foo",
         "git grep --text -eOpen x",
+        "git stash show --text",
+        "git stash list --text",
     ],
 )
 def test_a_subcommand_that_defines_the_option_may_spell_it(command):
