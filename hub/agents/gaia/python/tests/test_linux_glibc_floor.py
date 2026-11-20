@@ -196,6 +196,12 @@ def test_ca_hook_points_a_foreign_openssl_at_the_host_bundle():
     assert found == "/etc/ssl/certs/ca-certificates.crt"
 
 
+def test_ca_hook_finds_fedora_44s_only_bundle():
+    # Fedora 44's original ca-certificates: neither the Debian nor the RHEL 6+ file.
+    fedora = "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+    assert rthook._os_ca_bundle({}, _paths(), exists=lambda p: p == fedora) == fedora
+
+
 @pytest.mark.parametrize(
     "environ, paths",
     [

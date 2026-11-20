@@ -668,7 +668,7 @@ class TestStatus:
 
     def _start_with_overlay(self, manager, monkeypatch, *, refuse):
         """Start on a Linux host lacking lemond's CA file; returns each spawn."""
-        from gaia.llm.lemonade_tls import CaOverlay
+        from gaia.llm.lemonade_tls import CaOverlay, CaOverlayError
 
         overlay = CaOverlay("/etc/ssl/certs", "/m", (), "/etc/pki/bundle.pem")
         monkeypatch.setattr(sys, "platform", "linux")
@@ -681,9 +681,13 @@ class TestStatus:
         monkeypatch.setattr(
             "gaia.llm.lemonade_tls.plan_ca_overlay", lambda root, **_: overlay
         )
-        monkeypatch.setattr(
-            "gaia.llm.lemonade_tls.enter_ca_overlay", lambda o: ("enter", o)
-        )
+
+        def enter(o):
+            if refuse == "libc":
+                raise CaOverlayError("this system's C library has no unshare")
+            return ("enter", o)
+
+        monkeypatch.setattr("gaia.llm.lemonade_tls.enter_ca_overlay", enter)
         monkeypatch.setattr(manager, "is_installed", lambda: True)
         monkeypatch.setattr(manager, "write_config", lambda: None)
         monkeypatch.setattr(manager, "_health", lambda *a, **k: {"status": "ok"})
@@ -691,7 +695,7 @@ class TestStatus:
 
         def fake_popen(argv, **kwargs):
             spawned.append(kwargs)
-            if refuse and "preexec_fn" in kwargs:
+            if refuse == "kernel" and "preexec_fn" in kwargs:
                 raise lemonade_embedded.subprocess.SubprocessError(
                     "Exception occurred in preexec_fn."
                 )
@@ -721,12 +725,24 @@ class TestStatus:
         self, manager, monkeypatch, caplog
     ):
         with caplog.at_level("WARNING"):
-            spawned, _ = self._start_with_overlay(manager, monkeypatch, refuse=True)
+            spawned, _ = self._start_with_overlay(manager, monkeypatch, refuse="kernel")
 
         assert len(spawned) == 2
         assert "preexec_fn" not in spawned[1]
         assert "no CA file" in caplog.text
         assert str(manager.log_path) in caplog.text
+        assert manager._read_state()["ca_supplied"] is False
+        assert manager.ca_problem() == "no CA file"
+
+    def test_a_c_library_without_unshare_still_starts_and_says_why(
+        self, manager, monkeypatch, caplog
+    ):
+        with caplog.at_level("WARNING"):
+            spawned, _ = self._start_with_overlay(manager, monkeypatch, refuse="libc")
+
+        assert len(spawned) == 1
+        assert "preexec_fn" not in spawned[0]
+        assert "no unshare" in caplog.text and "no CA file" in caplog.text
         assert manager._read_state()["ca_supplied"] is False
         assert manager.ca_problem() == "no CA file"
 

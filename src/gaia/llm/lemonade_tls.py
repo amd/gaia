@@ -217,9 +217,17 @@ def enter_ca_overlay(overlay: CaOverlay) -> Callable[[], None]:
     Everything that can fail before the fork is resolved here: the child only
     makes system calls. A failure is written to the child's stderr (lemond's
     log) and raised, which ``subprocess`` reports as ``SubprocessError``.
+
+    Raises:
+        CaOverlayError: The C library has no ``unshare`` or ``mount``.
     """
-    libc = ctypes.CDLL(None, use_errno=True)
-    unshare, mount = libc.unshare, libc.mount
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        unshare, mount = libc.unshare, libc.mount
+    except (OSError, AttributeError) as e:
+        raise CaOverlayError(
+            f"this system's C library has no unshare/mount to call: {e}"
+        ) from e
     unshare.argtypes = [ctypes.c_int]
     mount.argtypes = [
         ctypes.c_char_p,

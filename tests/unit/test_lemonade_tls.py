@@ -349,14 +349,70 @@ def test_setup_https_paths_never_turn_verification_off():
         "_create_unverified_context",
         "PYTHONHTTPSVERIFY",
     )
+    import gaia.hub.catalog as hub_catalog
+    import gaia.hub.installer as hub_installer
+    import gaia.installer.lemonade_installer as lemonade_installer
+    import gaia.llm.providers.fireworks as fireworks
+
     for module in (
         lemonade_tls,
         lemonade_embedded,
         lemonade_client,
         init_command,
+        lemonade_installer,
         providers,
+        fireworks,
+        hub_catalog,
+        hub_installer,
         gaia_tls,
     ):
         source = Path(module.__file__).read_text(encoding="utf-8")
         for marker in off:
             assert marker not in source, f"{marker} in {module.__name__}"
+
+
+def test_a_c_library_without_unshare_is_a_ca_overlay_error(monkeypatch, tmp_path):
+    """macOS or a libc without the call: an actionable error, not AttributeError."""
+
+    class _NoCalls:
+        def __init__(self, *a, **k):
+            pass
+
+    monkeypatch.setattr(lemonade_tls.ctypes, "CDLL", _NoCalls)
+    overlay = lemonade_tls.CaOverlay("/etc/ssl/certs", str(tmp_path), (), "/b.pem")
+    with pytest.raises(CaOverlayError, match="unshare"):
+        enter_ca_overlay(overlay)
+
+
+class _Context:
+    """Records what truststore loads into a context."""
+
+    def __init__(self):
+        self.loaded = []
+        self.defaults = False
+
+    def load_verify_locations(self, cafile=None, **_):
+        self.loaded.append(cafile)
+
+    def set_default_verify_paths(self):
+        self.defaults = True
+
+
+def test_python_https_finds_fedora_44s_bundle(monkeypatch):
+    """Hub installs, the cloud key check and the Lemonade download run in Python
+    through truststore; on Fedora 44's layout it must load the system bundle."""
+    import ssl
+    from types import SimpleNamespace
+
+    openssl = pytest.importorskip("truststore._openssl")
+    monkeypatch.setattr(
+        ssl,
+        "get_default_verify_paths",
+        lambda: SimpleNamespace(cafile=None, capath=None),
+    )
+    monkeypatch.setattr(openssl.os.path, "isfile", lambda p: p == FEDORA_BUNDLE)
+    ctx = _Context()
+    with openssl._configure_context(ctx):
+        pass
+    assert ctx.loaded == [FEDORA_BUNDLE]
+    assert not ctx.defaults

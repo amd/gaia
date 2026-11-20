@@ -303,8 +303,9 @@ jobs:
           - {label: Fedora 44, os: ubuntu-latest, key: linux-x64, exe: gaia, container: 'fedora:44'}  # Fedora 45's OpenSSL 4 has no libssl.so.3 (#7010)
           # Fedora 44's original ca-certificates has no Debian-path CA file, the only one
           # lemond reads, so GAIA starts it in a user+mount namespace (#7226). Docker's
-          # default seccomp/AppArmor profiles block those namespaces; a desktop does not.
-          - {label: 'Fedora 44, original CA layout', os: ubuntu-latest, key: linux-x64, exe: gaia, ca_layout: fedora-original, container: {image: 'fedora:44', options: '--security-opt seccomp=unconfined --security-opt apparmor=unconfined'}}
+          # profiles and the Ubuntu host's AppArmor userns restriction block those
+          # namespaces; a Fedora desktop does not. Privileged only to lift the latter.
+          - {label: 'Fedora 44, original CA layout', os: ubuntu-latest, key: linux-x64, exe: gaia, ca_layout: fedora-original, container: {image: 'fedora:44', options: '--privileged'}}
     steps:
       - name: Is this platform wanted
         id: want
@@ -346,6 +347,10 @@ jobs:
           dnf install -y --setopt=install_weak_deps=False shadow-utils util-linux
           rm -f /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/pki/tls/cert.pem /etc/ssl/cert.pem
           test -s /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+          # The runner host is Ubuntu, which denies an unprivileged user namespace its
+          # capabilities; Fedora has no such restriction. Host-wide on a throwaway VM.
+          userns=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [ -e "$userns" ]; then echo 0 > "$userns"; fi
 
       - uses: actions/download-artifact@v8
         if: steps.want.outputs.run == 'true'

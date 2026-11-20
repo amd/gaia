@@ -2199,7 +2199,11 @@ class EmbeddedLemonade:
             if overlay is None:
                 process = popen()
             else:
-                from gaia.llm.lemonade_tls import ca_store_problem, enter_ca_overlay
+                from gaia.llm.lemonade_tls import (
+                    CaOverlayError,
+                    ca_store_problem,
+                    enter_ca_overlay,
+                )
 
                 try:
                     process = popen(preexec_fn=enter_ca_overlay(overlay))
@@ -2209,11 +2213,11 @@ class EmbeddedLemonade:
                         "mount namespace",
                         overlay.bundle,
                     )
-                except subprocess.SubprocessError as e:
+                except (CaOverlayError, subprocess.SubprocessError) as e:
                     # Local models still run without it, so warn rather than refuse.
                     log.warning(
-                        "This Linux kernel would not start the model server in "
-                        "its own mount namespace (%s; %s has the reason). %s",
+                        "GAIA could not start the model server in its own mount "
+                        "namespace (%s; %s has the reason). %s",
                         e,
                         self.log_path,
                         ca_store_problem(),
