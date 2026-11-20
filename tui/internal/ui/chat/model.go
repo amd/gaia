@@ -406,6 +406,12 @@ type ChatModel struct {
 	modelDisplay string
 	modelBackend string
 	modelRemote  bool
+	// plan is the running turn's plan checklist (plan.go).
+	plan livePlan
+	// ctxMeter is how full the model's context is (context.go).
+	ctxMeter contextMeter
+	// starters are the first screen's suggestions (suggestions.go).
+	starters []starter
 
 	// awaitingModelSwitch is true for the duration of a `/model <id>` turn
 	// this session itself started. A model-state ping that disagrees with
@@ -597,6 +603,7 @@ func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, se
 	m := NewChatModel(c, agentName, "")
 	m.agentID = agentID
 	m.setupVerified = setupVerified
+	m.starters = installedStarters(skillsDir())
 	return m.applyFirstBootGate()
 }
 
@@ -1410,6 +1417,10 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.hideWarmUpStage()
 	}
 
+	if next, cmd, ok := m.pickSuggestion(msg); ok {
+		return next, cmd
+	}
+
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		if m.streaming && m.cancelFn != nil && !m.cancelPending {
@@ -1888,6 +1899,11 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case "/context":
+		m.messages = append(m.messages, Message{Role: RoleStatus, Content: m.contextBreakdown()})
+		m.updateViewport()
+		return m, nil
+
 	case "/cost help":
 		m.messages = append(m.messages, Message{
 			Role:    RoleStatus,
@@ -2021,6 +2037,7 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	m.lastEventAt = m.queryStart
 	m.userWait, m.userWaitStart = 0, time.Time{}
 	m.goalFresh = false
+	m.plan = livePlan{}
 	m.updateViewport()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2099,6 +2116,7 @@ func (m *ChatModel) settleTurn() {
 	// and when the cancel lost the race it sat directly above the answer that
 	// did arrive, contradicting it.
 	m.dropCancellingNotice()
+	m.flushContextWarning()
 	if m.cancelPending {
 		m.cancelPending = false
 		m.messages = append(m.messages, Message{
@@ -2215,6 +2233,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 				last.Done = true
 				last.Success = &e.Success
 				last.End = m.now()
+				m.planToolFinished(last.Tool, e.Success)
 				if summary != "" {
 					last.Content += " → " + summary
 				}
@@ -2230,6 +2249,9 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 				last.End = m.now()
 			}
 		}
+
+	case event.PlanEvent:
+		m.updatePlan(planFromWire(legacyPlanSteps(e), e.CurrentStep))
 
 	case event.StepEvent:
 		// Not shown. "Step 2/50" is the agent loop's bound, not the user's
@@ -2674,6 +2696,9 @@ func (m ChatModel) renderWelcome() string {
 	agent := lipgloss.NewStyle().
 		Foreground(theme.Text).
 		Render("Connected to: " + m.agentIdentity() + m.coreVersionSuffix())
+	if list := m.renderSuggestions(); list != "" {
+		return title + "\n" + agent + "\n\n" + list + "\n\n" + hint
+	}
 	return title + "\n" + agent + "\n\n" + hint
 }
 

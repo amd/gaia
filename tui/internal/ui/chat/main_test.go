@@ -30,6 +30,9 @@ func TestMain(m *testing.M) {
 	// Diagnostics are always written to the session log; keep them off the
 	// developer's own ~/.gaia/logs.
 	os.Setenv(control.EnvHome, home)
+	// The first screen's suggestions read installed skills; keep them off the
+	// developer's own ~/.gaia/skills.
+	skillsDir = func() string { return filepath.Join(home, "skills") }
 	// A developer's own Local only must not change what these tests send.
 	os.Setenv("GAIA_POLICY_FILE", home+"/policy.json")
 	os.Setenv("LEMONADE_BASE_URL", "")

@@ -205,3 +205,87 @@ def test_save_through_weak_chain_never_writes(active):
             scopes=["s"],
             client_id_hash="h",
         )
+
+
+class _InstanceChain(keyring.backend.KeyringBackend):
+    """Keeps its stores in an instance attribute, not a class-level property."""
+
+    viable = False
+    get_password = set_password = delete_password = _never
+
+    def __init__(self, *members):
+        super().__init__()
+        self.backends = list(members)
+
+
+@pytest.mark.parametrize("weak_name", WEAK_NAMES)
+def test_chain_holding_stores_in_an_instance_attribute_is_expanded(active, weak_name):
+    active(_InstanceChain(StrongA(), WEAK_CLASSES[weak_name]()))
+    with pytest.raises(ConnectorsError, match=weak_name):
+        store.verify_keyring_backend()
+
+
+def test_instance_attribute_chain_of_strong_backends_is_accepted(active):
+    active(_InstanceChain(StrongA(), _InstanceChain(StrongB())))
+    store.verify_keyring_backend()
+
+
+@pytest.mark.parametrize(
+    "member",
+    [object(), "PlaintextKeyring", None, 42],
+    ids=["object", "class-name-string", "none", "int"],
+)
+def test_chain_member_that_is_not_a_keyring_backend_is_refused(active, member):
+    active(_FakeChainer(StrongA(), member))
+    with pytest.raises(ConnectorsError) as exc:
+        store.verify_keyring_backend()
+    msg = str(exc.value)
+    assert "not a keyring backend" in msg and "See docs" in msg
+
+
+def test_duck_chain_nested_inside_a_chain_is_refused(active):
+    """A member must be a real backend, even one that looks like a chain."""
+    active(_FakeChainer(StrongA(), _DuckChain(StrongB())))
+    with pytest.raises(ConnectorsError, match="not a keyring backend"):
+        store.verify_keyring_backend()
+
+
+def _repeated_chain(width: int, depth: int, leaf) -> object:
+    chain = leaf
+    for _ in range(depth):
+        chain = _FakeChainer(*([chain] * width))
+    return chain
+
+
+def test_repeated_chain_is_walked_once_per_chain(active):
+    import time
+
+    active(_repeated_chain(10, store._MAX_CHAIN_DEPTH, StrongA()))
+    started = time.monotonic()
+    store.verify_keyring_backend()
+    assert time.monotonic() - started < 2.0
+
+
+def test_weak_store_under_a_repeated_chain_is_still_refused(active):
+    import time
+
+    active(
+        _repeated_chain(10, store._MAX_CHAIN_DEPTH, WEAK_CLASSES["PlaintextKeyring"]())
+    )
+    started = time.monotonic()
+    with pytest.raises(ConnectorsError, match="PlaintextKeyring"):
+        store.verify_keyring_backend()
+    assert time.monotonic() - started < 2.0
+
+
+def test_repeated_chain_past_the_depth_limit_is_still_refused(active):
+    active(_repeated_chain(10, store._MAX_CHAIN_DEPTH + 1, StrongA()))
+    with pytest.raises(ConnectorsError, match="nested more than"):
+        store.verify_keyring_backend()
+
+
+def test_shared_chain_reached_at_two_depths_is_checked(active):
+    weak_inner = _FakeChainer(WEAK_CLASSES["EncryptedKeyring"]())
+    active(_FakeChainer(_FakeChainer(weak_inner), weak_inner))
+    with pytest.raises(ConnectorsError, match="EncryptedKeyring"):
+        store.verify_keyring_backend()
