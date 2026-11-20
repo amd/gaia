@@ -195,7 +195,7 @@ export interface AgentProgramsAnswers {
 export async function withAgentPrograms(page: Page, { gaiacpp = 'installed', download = IDLE_AGENT_DOWNLOAD, poll }: AgentProgramsAnswers = {}): Promise<void> {
     const cpp = gaiacpp === 'installed' ? AGENT_PROGRAMS.programs[1]
         : gaiacpp === 'downloadable' ? { ...AGENT_PROGRAMS.programs[1], installed: false, can_download: true }
-            : { ...AGENT_PROGRAMS.programs[1], installed: false, size_bytes: null, unavailable_reason: 'This is a development build of GAIA; gaiacpp comes with released versions.' };
+            : { ...AGENT_PROGRAMS.programs[1], installed: false, size_bytes: null, unavailable_reason: 'this GAIA release has no gaiacpp to download. Use the Python agent, or update GAIA.', unavailable_code: 'no_release' };
     const listing = { ...AGENT_PROGRAMS, programs: [AGENT_PROGRAMS.programs[0], cpp], download };
     await page.route((url) => url.pathname.startsWith('/api/agent-programs'), async (route) => {
         const { pathname } = new URL(route.request().url());

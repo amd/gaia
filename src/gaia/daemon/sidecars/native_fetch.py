@@ -23,7 +23,11 @@ from urllib.parse import unquote, urlsplit
 
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars import platform as plat
-from gaia.daemon.sidecars.errors import IntegrityError, PlatformError
+from gaia.daemon.sidecars.errors import (
+    KIND_NO_RELEASE,
+    IntegrityError,
+    PlatformError,
+)
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -150,9 +154,12 @@ def _read_text(url: str, session) -> str:
     except requests.RequestException as e:
         raise RuntimeError(f"could not reach {url}: {e}") from e
     if resp.status_code == 404:
+        # The address stays in the log: this message is shown in Settings.
+        logger.warning("gaiacpp: %s is not there (HTTP 404)", url)
         raise PlatformError(
-            f"this GAIA release has no gaiacpp to download ({url} is not there). "
-            "Use the Python agent, or update GAIA."
+            "this GAIA release has no gaiacpp to download. Use the Python "
+            "agent, or update GAIA.",
+            kind=KIND_NO_RELEASE,
         )
     if resp.status_code != 200:
         raise RuntimeError(f"{url} answered HTTP {resp.status_code}")

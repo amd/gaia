@@ -385,6 +385,12 @@
     box-shadow: var(--shadow-md);
 }
 
+/* No room above the composer: SkillCommandMenu opens it downward and caps its height. */
+.skill-menu.is-below {
+    top: calc(100% + 6px);
+    bottom: auto;
+}
+
 .skill-menu ul { list-style: none; margin: 0; padding: 0; }
 
 .skill-menu-title,
