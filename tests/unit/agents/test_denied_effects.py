@@ -1544,6 +1544,8 @@ _SAME_ACTION = [
     ("pip install pandas", "pip install pandas==2.2"),
     ("pip install pandas>=2", "pip install 'pandas[excel]<3'"),
     ('git commit -am "fix bug"', 'git commit -m "Fix the bug"'),
+    ('git commit -sam "fix bug"', 'git commit -m "Fix the bug"'),
+    ('git commit -qam "fix bug"', 'git commit -m "Fix the bug"'),
     ("npm install @scope/pkg@1.0", "npm install @scope/pkg"),
     ("pip install ./pkg[excel]", "pip install ./pkg"),
     (r'pip install "C:\My Wheels\pkg[x]"', r'pip install "C:\My Wheels\pkg"'),
@@ -1637,6 +1639,12 @@ _PROBES = [
     ('git commit -AM "fix bug"', 'git commit -m "Fix the bug"'),
     ('git commit -sam "fix bug"', 'git commit --message "Fix the bug"'),
     ('git commit -am "fix bug"', "git push"),
+    # A value-taking flag first swallows the rest of its word: no message follows.
+    ("git commit -F custom a.py", "git commit -Fcustom a.py b.py"),
+    ("git commit -Cupstream a.py b.py", "git commit -C upstream a.py"),
+    ("git commit -Fm a.py b.py", "git commit --file=m a.py"),
+    ("git commit -Sm a.py b.py", "git commit -S a.py"),
+    ("git commit -um a.py b.py", "git commit -u a.py"),
     ("git checkout -qm main -- src", "git checkout main"),
     ("git branch -fm old new", "git branch old"),
 ]

@@ -746,8 +746,9 @@ _PACKAGE_PROGRAMS = frozenset(
     {"pip", "pip3", "uv", "pipx", "conda", "mamba", "npm", "pnpm", "yarn", "winget"}
 )
 _VERSION_PIN = re.compile(r"[\[<>=!~;@ ]")
-#: ``git commit -am "msg"``. Commit only: ``checkout -m`` merges, ``branch -m`` moves.
-_COMMIT_MESSAGE_CLUSTER = re.compile(r"-[a-z]+m")
+#: ``git commit -am "msg"``: only flags that take no value may precede ``m``
+#: (``-Fm`` reads ``m`` as the file). Commit only: ``checkout -m`` merges.
+_COMMIT_MESSAGE_CLUSTER = re.compile(r"-[aeinopqsvz]+m")
 
 
 def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
@@ -763,7 +764,7 @@ def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
         if skip:
             skip = False
         elif word.lower() in flags or (
-            family == "git commit" and _COMMIT_MESSAGE_CLUSTER.fullmatch(word.lower())
+            family == "git commit" and _COMMIT_MESSAGE_CLUSTER.fullmatch(word)
         ):
             skip = True
         else:
