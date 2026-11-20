@@ -60,14 +60,13 @@ def _permission_state():
     Imported lazily, like :func:`build_session_agent`, so this module stays
     dependency-light until a session actually exists.
 
-    ``lifts_shell_gates=False`` because these sessions belong to the HTTP
-    transport: ``/sessions/{id}/bypass`` may stop asking for approval, but the
-    shell guardrails are a stdio affordance (#3373) — lifting them for a bound
-    socket is remote code execution, not a relaxed permission model.
+    ``/sessions/{id}/bypass`` is full access, the same as over stdio: gated
+    tools run unasked and the shell runs any command. The caller-auth token
+    decides who may turn it on.
     """
     from gaia_agent.stdio import PermissionState
 
-    return PermissionState(lifts_shell_gates=False)
+    return PermissionState()
 
 
 class SessionCapacityError(RuntimeError):
@@ -84,11 +83,14 @@ def _carry_session_state(old: Any, new: Any, session_id: str) -> None:
     A retained session keeps these until the caller changes them, so a
     rebuild that dropped them would quietly put an offline chat back online,
     or a private one back into memory: the conversation, loaded skills, the
-    internet switch, the memory mode, granted, read-only and withheld paths,
-    which documents are attached, the working folder, and which skills were
-    auto-loaded or unloaded, so a rebuild never auto-loads one the user dropped.
+    internet switch, the memory mode, the sources it has seen, granted,
+    read-only and withheld paths, which documents are attached, the working
+    folder, and which skills were auto-loaded or unloaded, so a rebuild never
+    auto-loads one the user dropped.
     """
     new.conversation_history = list(getattr(old, "conversation_history", None) or [])
+    # What the chat has seen, so a skill's fact check still knows its sources.
+    new._seen_sources = list(getattr(old, "_seen_sources", None) or [])
     if hasattr(old, "internet_off"):
         new.internet_off = old.internet_off
     if getattr(old, "_incognito", False) and hasattr(new, "_incognito"):

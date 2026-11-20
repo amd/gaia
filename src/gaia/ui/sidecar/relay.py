@@ -352,6 +352,15 @@ def _dispatch_one(
             status["retracts_answer"] = True
         handler._emit(status)
 
+    elif etype == "draft":
+        handler._emit(
+            {
+                "type": "draft",
+                "tool": str(event.get("tool", "")),
+                "text": str(event.get("text", "")),
+            }
+        )
+
     elif etype == "token":
         delta = event.get("delta", "")
         if delta:

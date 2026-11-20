@@ -36,6 +36,31 @@ class _World:
         self.owner = mock.Mock()
         self.owner.unload_models.return_value = True
         self.owner.stop.return_value = True
+        # Sidecar agents the daemon runs, and each process's parent.
+        self.agents = set()
+        self.parents = {}
+        self.stop_agents = mock.Mock(side_effect=self._stop_agents)
+
+    def _stop_agents(self):
+        for pid in list(self.agents):
+            self.agents.discard(pid)
+            for child in [c for c, p in self.parents.items() if p == pid]:
+                self.procs.pop(child, None)
+            self.procs.pop(pid, None)
+
+    def ancestors(self, pid):
+        chain = []
+        while pid in self.parents:
+            pid = self.parents[pid]
+            chain.append(pid)
+        return chain
+
+    def sidecar(self, pid, child=None):
+        """A sidecar agent; *child* is a one-file binary's worker process."""
+        self.agents.add(self.spawn(pid))
+        if child is not None:
+            self.parents[self.spawn(child)] = pid
+        return child or pid
 
     def spawn(self, pid, started=1.0):
         self.procs[pid] = started
@@ -51,6 +76,9 @@ class _World:
         return LemonadeClients(
             self.owner,
             busy=lambda: self.busy,
+            agent_pids=lambda: set(self.agents),
+            stop_agents=self.stop_agents,
+            ancestors=self.ancestors,
             activity=lambda: self.activity,
             timeout=lambda: self.timeout,
             identity=self.identity,
@@ -129,7 +157,7 @@ class TestAppQuitUnloads:
         assert clients.snapshot()["clients"] == []
         world.owner.unload_models.assert_called_once()
 
-    def test_a_running_sidecar_agent_keeps_the_models(self, world):
+    def test_an_open_agent_turn_keeps_the_models(self, world):
         clients = world.clients()
         app = clients.register("app", [world.spawn(10)])["client_id"]
         world.busy = True
@@ -164,6 +192,256 @@ class TestAppQuitUnloads:
             world.clients().register(kind, pids)
 
 
+class TestSidecarAgentsDoNotPinTheModels:
+    """#8504: an idle sidecar kept 7.5 GB loaded after the app quit, for good."""
+
+    def test_quitting_the_app_unloads_and_stops_the_idle_sidecar(self, world):
+        clients = world.clients()
+        app = clients.register("app", [world.spawn(10), world.spawn(11)])
+        # The frozen agent's worker process leases GAIA's server for its life.
+        clients.register("cli", [world.sidecar(500, child=501)], "gaia-agent")
+
+        assert clients.release(app["client_id"]) == {"clients": 0, "unloaded": True}
+        world.stop_agents.assert_called_once()
+        world.owner.unload_models.assert_called_once()
+
+    def test_the_app_crashing_does_the_same(self, world):
+        """Electron ended from Task Manager: no release, only its pid exits."""
+        clients = world.clients()
+        clients.register("app", [world.spawn(10), world.spawn(11)])
+        clients.register("cli", [world.sidecar(500, child=501)], "gaia-agent")
+
+        world.exit(11)
+        clients.sweep()
+
+        world.stop_agents.assert_called_once()
+        world.owner.unload_models.assert_called_once()
+
+    def test_the_app_lease_lapsing_does_the_same(self, world):
+        """A hung backend that stops renewing still lets the models go."""
+        clients = world.clients()
+        clients.register("app", [world.spawn(10)])
+        clients.register("cli", [world.sidecar(500, child=501)], "gaia-agent")
+
+        for _ in range(30):
+            world.now += 5
+            clients.sweep()
+
+        world.stop_agents.assert_called_once()
+        world.owner.unload_models.assert_called_once()
+
+    def test_agents_are_stopped_before_the_unload(self, world):
+        order = []
+        world.stop_agents.side_effect = lambda: order.append("agents")
+        world.owner.unload_models.side_effect = lambda **_: order.append("unload")
+        clients = world.clients()
+        app = clients.register("app", [world.spawn(10)])["client_id"]
+        world.sidecar(500)
+
+        clients.release(app)
+        assert order == ["agents", "unload"]
+
+    def test_an_agents_lease_alone_lets_the_idle_timeout_fire(self, world):
+        clients = world.clients()
+        clients.register("cli", [world.sidecar(500, child=501)], "gaia-agent")
+
+        world.now += world.timeout + 1
+        clients.sweep()
+        world.owner.stop.assert_called_once()
+
+    def test_an_agents_lease_does_not_count_as_connected(self, world):
+        clients = world.clients()
+        result = clients.register("cli", [world.sidecar(500)], "gaia-agent")
+
+        assert result["clients"] == 0
+        assert clients.snapshot()["clients"][0]["agent"] is True
+        assert clients.snapshot()["idle_seconds"] == 0
+
+    def test_another_app_still_open_keeps_models_and_agents(self, world):
+        clients = world.clients()
+        ui = clients.register("app", [world.spawn(10)], "agent-ui")["client_id"]
+        clients.register("app", [world.spawn(20)], "tui")
+        clients.register("cli", [world.sidecar(500)], "gaia-agent")
+
+        assert clients.release(ui)["unloaded"] is False
+        world.stop_agents.assert_not_called()
+        world.owner.unload_models.assert_not_called()
+
+    def test_a_running_cli_command_keeps_models_and_agents(self, world):
+        clients = world.clients()
+        app = clients.register("app", [world.spawn(10)])["client_id"]
+        clients.register("cli", [world.spawn(30)], "gaia api")
+        world.sidecar(500)
+
+        clients.release(app)
+        world.stop_agents.assert_not_called()
+
+        world.exit(30)
+        clients.sweep()
+        world.stop_agents.assert_called_once()
+        world.owner.unload_models.assert_called_once()
+
+    def test_an_open_turn_defers_both_until_it_ends(self, world):
+        clients = world.clients()
+        app = clients.register("app", [world.spawn(10)])["client_id"]
+        world.sidecar(500)
+        world.busy = True
+
+        clients.release(app)
+        clients.sweep()
+        world.stop_agents.assert_not_called()
+        world.owner.unload_models.assert_not_called()
+
+        world.busy = False
+        clients.sweep()
+        world.stop_agents.assert_called_once()
+        world.owner.unload_models.assert_called_once()
+
+    def test_a_turn_opening_mid_decision_keeps_the_agent(self, world):
+        clients = world.clients()
+        app = clients.register("app", [world.spawn(10)])["client_id"]
+        world.sidecar(500)
+        # Quiet when the unload is decided, a turn open by the time agents stop.
+        answers = iter([False])
+        clients._busy = lambda: next(answers, True)
+
+        clients.release(app)
+        world.stop_agents.assert_not_called()
+
+    def test_a_client_arriving_mid_decision_keeps_the_agent(self, world):
+        clients = world.clients()
+        app = clients.register("app", [world.spawn(10)])["client_id"]
+        world.sidecar(500)
+        real_observe = clients._observe
+
+        def _observe():
+            clients.register("app", [world.spawn(20)], "late")
+            return real_observe()
+
+        clients._observe = _observe
+        clients.release(app)
+        world.stop_agents.assert_not_called()
+        still_wanted = world.owner.unload_models.call_args.kwargs["still_wanted"]
+        assert still_wanted() is False
+
+    def test_a_process_the_agent_did_not_start_is_a_client(self, world):
+        """Only the agent's own process tree is discounted."""
+        clients = world.clients()
+        world.sidecar(500)
+        assert clients.register("cli", [world.spawn(30)], "gaia llm")["clients"] == 1
+
+        world.now += world.timeout + 1
+        clients.sweep()
+        world.owner.stop.assert_not_called()
+
+    def test_a_lease_naming_an_agent_and_another_process_is_a_client(self, world):
+        clients = world.clients()
+        agent = world.sidecar(500)
+        assert clients.register("app", [agent, world.spawn(10)])["clients"] == 1
+
+    def test_an_orphaned_worker_is_a_client(self, world):
+        """No parent reported (it exited, or a recycled pid is younger)."""
+        clients = world.clients()
+        world.sidecar(500)
+        assert clients.register("cli", [world.spawn(600)])["clients"] == 1
+
+    def test_an_agent_registering_calls_off_no_pending_decision(self, world):
+        clients = world.clients()
+        generation = clients._generation
+        clients.register("cli", [world.sidecar(500)], "gaia-agent")
+        assert clients._generation == generation
+
+    def test_a_cli_command_leaving_does_not_stop_agents(self, world):
+        """Rule 1 is for apps; `gaia llm` back to back keeps its sidecar."""
+        clients = world.clients()
+        cli = clients.register("cli", [world.spawn(30)])["client_id"]
+        world.sidecar(500)
+        clients.release(cli)
+        world.stop_agents.assert_not_called()
+
+    def test_an_agent_registered_as_an_app_does_not_unload_on_exit(self, world):
+        clients = world.clients()
+        lease = clients.register("app", [world.sidecar(500)])["client_id"]
+        clients.release(lease)
+        world.stop_agents.assert_not_called()
+        world.owner.unload_models.assert_not_called()
+
+    def test_an_agent_that_will_not_stop_is_logged_and_models_still_unload(
+        self, world, caplog
+    ):
+        from gaia.daemon.sidecars.errors import StopFailedError
+
+        world.stop_agents.side_effect = StopFailedError("pid 500 survived")
+        clients = world.clients()
+        app = clients.register("app", [world.spawn(10)])["client_id"]
+
+        assert clients.release(app)["unloaded"] is True
+        assert "pid 500 survived" in caplog.text
+
+    def test_no_process_tree_is_walked_when_no_agent_runs(self, world):
+        world.ancestors = mock.Mock(side_effect=AssertionError("walked"))
+        clients = world.clients()
+        assert clients.register("cli", [world.spawn(30)])["clients"] == 1
+
+
+class TestAncestorPids:
+    """Real processes: a one-file sidecar's worker is the child of its pid."""
+
+    def test_a_child_names_this_process_among_its_ancestors(self):
+        import os
+        import subprocess
+        import sys
+
+        from gaia.daemon.lemonade_clients import ancestor_pids
+
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdin=subprocess.DEVNULL,
+        )
+        try:
+            assert os.getpid() in ancestor_pids(child.pid)
+        finally:
+            child.kill()
+            child.wait(timeout=10)
+
+    @staticmethod
+    def _chain(failure):
+        """A process whose parent is 2, whose parent read raises *failure*."""
+        grandparent = mock.Mock(pid=2)
+        grandparent.parent.side_effect = failure
+        child = mock.Mock(pid=3)
+        child.parent.return_value = grandparent
+        return child
+
+    def test_a_denied_walk_keeps_the_parents_found_and_says_so(self, caplog):
+        import psutil
+
+        from gaia.daemon.lemonade_clients import ancestor_pids
+
+        child = self._chain(psutil.AccessDenied(2))
+        with mock.patch("psutil.Process", return_value=child):
+            assert ancestor_pids(3) == [2]
+        assert "could not read the parents of pid 3" in caplog.text
+
+    def test_a_process_gone_mid_walk_is_not_an_error(self, caplog):
+        import psutil
+
+        from gaia.daemon.lemonade_clients import ancestor_pids
+
+        child = self._chain(psutil.NoSuchProcess(2))
+        with mock.patch("psutil.Process", return_value=child):
+            assert ancestor_pids(3) == [2]
+        assert "could not read" not in caplog.text
+
+    def test_a_process_already_gone_has_no_ancestors(self):
+        import psutil
+
+        from gaia.daemon.lemonade_clients import ancestor_pids
+
+        with mock.patch("psutil.Process", side_effect=psutil.NoSuchProcess(9)):
+            assert ancestor_pids(9) == []
+
+
 class TestIdleTimeout:
     def test_fires_once_the_timeout_passes_with_nobody_connected(self, world):
         clients = world.clients()
@@ -195,7 +473,7 @@ class TestIdleTimeout:
         clients.sweep()
         world.owner.stop.assert_called_once()
 
-    def test_a_running_sidecar_holds_off_the_timeout(self, world):
+    def test_an_open_agent_turn_holds_off_the_timeout(self, world):
         clients = world.clients()
         world.busy = True
         world.now += 10 * world.timeout

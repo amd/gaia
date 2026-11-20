@@ -231,13 +231,15 @@ def run_python_job(
     should_stop: Callable[[], bool],
     watch: Iterable[os.PathLike | str] = (),
     ignore: Iterable[os.PathLike | str] = (),
+    marked: bool = True,
 ) -> PythonJob:
     """Run *cmd*; kill its whole process tree at *timeout* or on *should_stop*.
 
     A process the script leaves running and holding its output is killed once
     the script exits, so the run ends with the script. *watch* are folders to
     search for files the job wrote, reported only when it is killed; paths in
-    *ignore* (e.g. the job's own script) are left out.
+    *ignore* (e.g. the job's own script) are left out. *marked* False leaves
+    out the started-by-an-agent marker: full access.
 
     Raises:
         OSError: *cmd* could not be started.
@@ -249,7 +251,7 @@ def run_python_job(
     proc = subprocess.Popen(  # pylint: disable=consider-using-with
         list(cmd),
         cwd=cwd,
-        env=agent_child_env(env),
+        env=agent_child_env(env) if marked else env,
         # An inherited stdin leaves the child waiting on a pipe nobody writes
         # to, and the run only ends at the timeout.
         stdin=subprocess.DEVNULL,

@@ -92,6 +92,10 @@ def test_a_pipe_into_a_disallowed_command_is_refused(dialect, full_access, comma
     error, segments = _validate(command, full_access)
 
     assert segments == [["ls", "."], ["rm", "x"]]
+    if full_access:
+        # Full access has no disallowed command.
+        assert error is None
+        return
     assert error is not None
     assert "'rm'" in error["error"]
 
@@ -161,6 +165,10 @@ def test_a_cut_the_quoting_disagrees_with_is_refused_in_cmd(
     error, segments = _validate(command, full_access)
 
     assert segments == []
+    if full_access:
+        # No steps and no error: cmd.exe gets the whole line and reads it.
+        assert error is None
+        return
     assert error is not None
     assert error["tier"] == shell_tools.TIER_REFUSE
 

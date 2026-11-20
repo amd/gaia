@@ -10,14 +10,15 @@ The calibration against the real embedder is opt-in
 (``GAIA_SKILL_SUGGEST_CALIBRATE=1``, plus ``LEMONADE_BASE_URL`` naming a
 running Lemonade Server). It scores the labelled requests in
 ``tests/fixtures/skills/skill_suggestion_cases.json`` against every hub skill
-on disk, whatever both hold today. The suggestion test holds the defaults to
-the precision and recall measured on an older, smaller set (54 requests, 20
-hub skills). The auto-load test prints a threshold-by-margin table and holds
-the defaults to no load on a negative and :data:`AUTOLOAD_RECALL_FLOOR`.
+on disk. The requests are split in two by a hash (:func:`_half`): thresholds
+and prompts are chosen on the tuning half only, and the
+defaults are held to :data:`AUTOLOAD_BAR` and :data:`SUGGEST_BAR` on the
+held-out half.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -27,7 +28,6 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from gaia.agents.base.skill_loader import skill_doc_text
 from gaia.agents.base.skill_suggester import (
     AUTOLOAD_LEAD_EPSILON,
     DEFAULT_AUTOLOAD_MARGIN,
@@ -36,7 +36,10 @@ from gaia.agents.base.skill_suggester import (
     DEFAULT_SUGGEST_MARGIN,
     DEFAULT_SUGGEST_THRESHOLD,
     DEFAULT_SUGGEST_TOP_K,
+    DOC_PROMPT,
     MAX_AUTOLOADS_PER_TURN,
+    QUERY_CHARS,
+    QUERY_PROMPT,
     SkillMatches,
     SkillSuggester,
     autoload_env_override,
@@ -44,6 +47,7 @@ from gaia.agents.base.skill_suggester import (
     autoload_threshold_env_override,
     render_autoloaded,
     render_suggestion,
+    skill_match_text,
     suggest_env_override,
 )
 from gaia.skills.manager import ROOT_CLAUDE_IMPORT, ROOT_CLAUDE_PROJECT
@@ -78,13 +82,14 @@ class FakeEmbedder:
 
     def __call__(self, text):
         v = np.zeros(DIM, dtype=np.float32)
-        name = text.split(":", 1)[0]
-        if text == f"{name}: does {name}" and name in self.axis:
+        name = text.removeprefix(f"{DOC_PROMPT}does ")
+        if text.startswith(DOC_PROMPT) and name in self.axis:
             self.doc_calls += 1
             v[self.axis[name]] = 1.0
             return v
+        assert text.startswith(QUERY_PROMPT), text
         self.query_calls += 1
-        for skill, score in self.queries[text].items():
+        for skill, score in self.queries[text.removeprefix(QUERY_PROMPT)].items():
             v[self.axis[skill]] = score
         return v
 
@@ -98,7 +103,7 @@ def _suggester(queries, **kwargs):
 
 
 def test_defaults_are_the_calibrated_values():
-    assert DEFAULT_SUGGEST_THRESHOLD == pytest.approx(0.30)
+    assert DEFAULT_SUGGEST_THRESHOLD == pytest.approx(0.35)
     assert DEFAULT_SUGGEST_MARGIN == pytest.approx(0.02)
     assert DEFAULT_SUGGEST_TOP_K == 3
     assert DEFAULT_COMPANION_THRESHOLD == pytest.approx(0.40)
@@ -219,8 +224,8 @@ def test_an_edited_description_is_re_embedded():
     s.suggest("q", skills)
     skills["alpha"].description = "does something else now"
     s.suggest("q", skills)
-    assert calls.count("alpha: does alpha") == 1
-    assert "alpha: does something else now" in calls
+    assert calls.count(f"{DOC_PROMPT}does alpha") == 1
+    assert f"{DOC_PROMPT}does something else now" in calls
 
 
 def test_embedder_failure_means_no_suggestion_and_a_cooldown(caplog):
@@ -268,7 +273,34 @@ def test_long_requests_are_cut_before_embedding():
         return np.ones(DIM, dtype=np.float32) / np.sqrt(DIM)
 
     SkillSuggester(embed).suggest("x" * 20000, _skills(_skill("alpha")))
-    assert max(len(t) for t in seen) <= 4000
+    assert max(len(t) for t in seen) <= QUERY_CHARS + len(QUERY_PROMPT)
+
+
+# ── what is embedded ────────────────────────────────────────────────────────
+
+
+def test_a_skill_is_embedded_by_its_description_without_its_name():
+    assert skill_match_text(_skill("alpha")) == f"{DOC_PROMPT}does alpha"
+    multiline = _skill("alpha")
+    multiline.description = "\n  First line.  \nSecond line."
+    assert skill_match_text(multiline) == f"{DOC_PROMPT}First line."
+
+
+def test_a_skill_without_a_description_is_embedded_by_its_name():
+    bare = _skill("alpha")
+    bare.description = ""
+    assert skill_match_text(bare) == f"{DOC_PROMPT}alpha"
+
+
+def test_the_request_is_embedded_under_the_query_prompt():
+    seen = []
+
+    def embed(text):
+        seen.append(text)
+        return np.ones(DIM, dtype=np.float32) / np.sqrt(DIM)
+
+    SkillSuggester(embed).suggest("Draw a cat.", _skills(_skill("alpha")))
+    assert seen == [f"{DOC_PROMPT}does alpha", f"{QUERY_PROMPT}Draw a cat."]
 
 
 def test_top_k_must_be_positive():
@@ -285,6 +317,18 @@ def test_render_suggestion():
         "Call load_skill('alpha') before you start: it covers this kind of "
         "request. Also consider: beta, gamma."
     )
+
+
+def test_after_an_auto_load_the_other_matches_are_only_named_as_available():
+    """The best match is loaded already, so no name is an instruction."""
+    assert render_suggestion([], after_autoload=True) == ""
+    text = render_suggestion(["beta", "gamma"], after_autoload=True)
+    assert text == (
+        "Also available: beta, gamma. Call load_skill for one only if this "
+        "request needs it."
+    )
+    assert "before you start" not in text
+    assert len(text.splitlines()) == 1
 
 
 def test_a_suggestion_tells_the_model_to_load_the_best_match():
@@ -319,11 +363,11 @@ def _auto(queries, **kwargs):
 
 
 def test_autoload_defaults():
-    assert DEFAULT_AUTOLOAD_THRESHOLD == pytest.approx(0.55)
+    assert DEFAULT_AUTOLOAD_THRESHOLD == pytest.approx(0.40)
     assert DEFAULT_AUTOLOAD_MARGIN == pytest.approx(0.03)
     assert MAX_AUTOLOADS_PER_TURN == 2
-    # Well clear of the suggestion floor: an auto-load is a far stronger claim.
-    assert DEFAULT_AUTOLOAD_THRESHOLD >= DEFAULT_SUGGEST_THRESHOLD + 0.2
+    # Clear of the suggestion floor: an auto-load is a stronger claim.
+    assert DEFAULT_AUTOLOAD_THRESHOLD >= DEFAULT_SUGGEST_THRESHOLD + 0.05
 
 
 def test_nothing_is_auto_loaded_without_an_autoload_threshold():
@@ -367,8 +411,9 @@ def test_two_unrelated_skills_scoring_alike_are_only_suggested():
 
 
 def test_companions_of_the_best_match_are_not_ambiguity():
-    """Skills that pair score alike by design: the leader loads with its best
-    companion even though neither leads the other by the margin."""
+    """Skills that pair score alike by design, so the leader loads although it
+    does not lead its companions by the margin. They stay suggestions: neither
+    leads the other, so neither clears the bar itself."""
     skills = _skills(
         _skill("slide-decks", pairs=["report-from-sources", "office-docs"]),
         _skill("report-from-sources", pairs=["office-docs"]),
@@ -379,7 +424,7 @@ def test_companions_of_the_best_match_are_not_ambiguity():
     embed = FakeEmbedder(list(skills), {"q": {**scores, "pdf": 0.30}})
     s = SkillSuggester(embed, autoload_threshold=0.55, margin=0.05)
     assert s.select("q", skills) == SkillMatches(
-        auto_load=["slide-decks", "report-from-sources"], suggest=["office-docs"]
+        auto_load=["slide-decks"], suggest=["report-from-sources", "office-docs"]
     )
 
 
@@ -425,10 +470,41 @@ def test_a_companion_below_the_threshold_is_only_suggested():
     assert s.select("q", skills) == SkillMatches(auto_load=["alpha"], suggest=["beta"])
 
 
-def test_a_companion_above_the_threshold_can_auto_load():
+def test_a_companion_that_clears_the_bar_itself_can_auto_load():
+    """At the threshold and leading every skill but the best match."""
     skills = _skills(_skill("alpha", pairs=["beta"]), _skill("beta"), _skill("gamma"))
     s, _ = _auto({"q": {"alpha": 0.70, "beta": 0.56, "gamma": 0.30}})
     assert s.select("q", skills).auto_load == ["alpha", "beta"]
+
+
+def test_a_companion_is_not_loaded_on_the_strength_of_its_partner():
+    """Above the threshold, but no further ahead of an unrelated skill than
+    that skill is of the next: the request is about the best match only."""
+    skills = _skills(_skill("alpha", pairs=["beta"]), _skill("beta"), _skill("gamma"))
+    s, _ = _auto({"q": {"alpha": 0.70, "beta": 0.57, "gamma": 0.56}}, margin=0.20)
+    assert s.select("q", skills) == SkillMatches(
+        auto_load=["alpha"], suggest=["beta", "gamma"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mate,rival,loads", [(0.60, 0.57, True), (0.60, 0.571, False), (0.60, 0.62, False)]
+)
+def test_a_companion_must_lead_the_remaining_skills_by_the_margin(mate, rival, loads):
+    skills = _skills(_skill("alpha", pairs=["beta"]), _skill("beta"), _skill("gamma"))
+    s, _ = _auto({"q": {"alpha": 0.90, "beta": mate, "gamma": rival}})
+    assert s.select("q", skills).auto_load == (
+        ["alpha", "beta"] if loads else ["alpha"]
+    )
+
+
+def test_a_second_companion_is_not_tried_when_the_best_one_falls_short():
+    """One candidate: a weaker companion never loads past a stronger one."""
+    skills = _skills(
+        _skill("alpha", pairs=["beta", "gamma"]), _skill("beta"), _skill("gamma")
+    )
+    s, _ = _auto({"q": {"alpha": 0.90, "beta": 0.60, "gamma": 0.59}})
+    assert s.select("q", skills).auto_load == ["alpha"]
 
 
 @pytest.mark.parametrize(
@@ -561,26 +637,64 @@ def _present_cases(present):
     return kept
 
 
+def _half(request):
+    """``"tuning"`` or ``"held-out"``, by a hash of the request's text.
+
+    A request never changes half, and a new one lands in either. Choose
+    thresholds, prompts and description wording on the tuning half only: the
+    held-out half is what says whether the choice generalises.
+    """
+    digest = hashlib.sha256(request.encode("utf-8")).digest()
+    return "tuning" if digest[0] % 2 == 0 else "held-out"
+
+
+def _halves(cases):
+    halves = {"tuning": [], "held-out": []}
+    for case in cases:
+        halves[_half(case["request"])].append(case)
+    return halves
+
+
+def _negatives(cases):
+    return sum(1 for case in cases if not case["expected"])
+
+
 def test_every_hub_skill_has_labelled_requests():
     """Adding a hub skill means adding requests for it to the labelled set."""
     present = set(_hub_skills())
     cases = _cases()
+    assert len({case["request"] for case in cases}) == len(cases)
     for case in cases:
         assert not set(case["expected"]) & set(case["acceptable"]), case["request"]
     labelled = {n for case in _present_cases(present) for n in case["expected"]}
     unlabelled = sorted(present - labelled)
     assert not unlabelled, (
         f"hub skill(s) {', '.join(unlabelled)} have no request in "
-        f"{CASES.relative_to(REPO).as_posix()}. Add about three invented "
+        f"{CASES.relative_to(REPO).as_posix()}. Add about six invented "
         "requests that should suggest each one, plus a near-miss negative, "
-        "then rerun test_calibration_against_the_real_embedder."
+        "then rerun the calibration tests."
     )
     assert len(cases) >= 30
     assert sum(1 for case in cases if not case["expected"]) >= 5
 
 
-#: Questions *about* a skill's topic that scored 0.58-0.63 against that skill
-#: with embeddinggemma-300m, above the 0.55 auto-load floor.
+def test_the_split_is_fixed_and_both_halves_can_be_measured():
+    assert _half("What's unread in my mailbox?") == "tuning"
+    assert _half("Transcribe team-sync.mp4") == "held-out"
+    present = set(_hub_skills())
+    halves = _halves(_present_cases(present))
+    for name, cases in halves.items():
+        assert len(cases) >= 80, name
+        # A fifth of each half needs no skill: wrong loads have to show.
+        assert _negatives(cases) >= len(cases) // 5, name
+        covered = {n for case in cases for n in case["expected"]}
+        assert covered == present, (name, sorted(present - covered))
+        # Long task prompts, where the ask is a small part of the text.
+        assert sum(len(c["request"]) > 500 for c in cases) >= 8, name
+
+
+#: Questions *about* a skill's topic. They score as high against that skill as
+#: a real request does, so some load at any useful floor.
 EXPLAIN_NEGATIVES = {
     "What is RSS and how do RSS feeds work?": "rss-digest",
     "How does image generation with diffusion models work, conceptually?": (
@@ -630,55 +744,112 @@ def _real_embedder():
     import requests
 
     from gaia.agents.base.memory import EMBEDDING_MODEL
+    from gaia.llm.lemonade_client import (
+        EMBED_MAX_CHARS,
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
 
     base_url = os.environ.get("LEMONADE_BASE_URL", "").rstrip("/")
     if not base_url:
         pytest.fail("set LEMONADE_BASE_URL to the running Lemonade Server")
     model = os.environ.get("GAIA_SKILL_SUGGEST_EMBED_MODEL", EMBEDDING_MODEL)
+    # GAIA's own Lemonade is key-protected, and the suite hides its state file
+    # (conftest's _isolate_embedded_lemonade_paths): name the real home to read it.
+    with pytest.MonkeyPatch.context() as mp:
+        if not os.environ.get("GAIA_HOME", "").strip():
+            mp.setenv("GAIA_HOME", str(Path.home() / ".gaia"))
+        headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
     def batch(texts):
         response = requests.post(
             f"{base_url}/embeddings",
             json={"model": model, "input": list(texts)},
+            headers=headers,
             timeout=120,
         )
+        if response.status_code in (401, 403):
+            pytest.fail(
+                f"{base_url} rejected the request ({response.status_code}): "
+                + (
+                    "the resolved API key is not this server's."
+                    if headers
+                    else "no API key was found for it."
+                )
+                + " Set LEMONADE_API_KEY to the server's key."
+            )
         response.raise_for_status()
         rows = [item["embedding"] for item in response.json()["data"]]
         vecs = np.asarray(rows, dtype=np.float32)
         return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
 
-    return (lambda text: batch([text])[0]), batch
+    # Cut like the agent's own embedder (MemoryMixin._embed_text), so a long
+    # request is measured as a turn would score it.
+    return (lambda text: batch([text[:EMBED_MAX_CHARS]])[0]), batch
+
+
+#: What the suggestion defaults must reach on the held-out half, a little
+#: under what they measured so an embedder build that rounds differently does
+#: not fail it. Measured with embeddinggemma-300m, 28 hub skills:
+#:
+#:     half      requests negatives precision recall negatives-suggested
+#:     tuning         114        33      0.85   0.83   6
+#:     held-out       120        29      0.77   0.78   11
+#:
+#: A suggestion is one line the model may ignore, so recall is what it is for;
+#: the negatives suggested are near misses ("what is a pivot table?").
+SUGGEST_BAR = {"precision": 0.72, "recall": 0.72, "negatives": 0.45}
 
 
 @pytest.mark.real_model
 @pytest.mark.allow_network
-def test_calibration_against_the_real_embedder():
-    """Holds the defaults to what they measured, with pairs_with companions on.
-
-    Measured with embeddinggemma-300m over 20 hub skills: precision 0.84,
-    recall 0.93, 3 of 12 negatives suggested (all near misses).
-    """
+def test_calibration_against_the_real_embedder(capsys):
+    """Holds the suggestion defaults to :data:`SUGGEST_BAR`, companions on."""
     embed, batch = _real_embedder()
     embed("probe")  # an unreachable embedder fails here, not as recall 0
     skills = _hub_skills()
-    cases = _present_cases(set(skills))
-    suggester = SkillSuggester(embed, embed_batch_fn=batch)
-    precision, recall, negatives_hit = _measure(suggester, skills, cases)
-    print(f"precision={precision:.2f} recall={recall:.2f} negatives={negatives_hit}")
-    assert precision >= 0.80
-    assert recall >= 0.90
-    assert negatives_hit <= 3
+    halves = _halves(_present_cases(set(skills)))
+    suggester = SkillSuggester(_memoized(embed), embed_batch_fn=batch)
+    measured = {}
+    for name, cases in halves.items():
+        precision, recall, negatives_hit = _measure(suggester, skills, cases)
+        measured[name] = (precision, recall, negatives_hit / _negatives(cases))
+        with capsys.disabled():
+            print(
+                f"\nsuggestions, {name}: {len(cases)} requests, precision="
+                f"{precision:.2f} recall={recall:.2f} negatives suggested="
+                f"{negatives_hit}/{_negatives(cases)}"
+            )
+    precision, recall, negative_rate = measured["held-out"]
+    assert precision >= SUGGEST_BAR["precision"]
+    assert recall >= SUGGEST_BAR["recall"]
+    assert negative_rate <= SUGGEST_BAR["negatives"]
 
 
 #: The auto-load grid the calibration prints: floor by lead.
-SWEEP_THRESHOLDS = (0.40, 0.45, 0.50, 0.55, 0.60)
-SWEEP_MARGINS = (0.00, 0.01, 0.02, 0.03, 0.04, 0.05)
+SWEEP_THRESHOLDS = (0.35, 0.40, 0.45, 0.50, 0.55)
+SWEEP_MARGINS = (0.00, 0.03, 0.05, 0.08)
 
-#: Least share of the labelled skills the default floor and lead must load.
-#: Not a measurement: it sits under the 0.21 measured on an older 71-request
-#: set, before companions stopped counting as rivals. Raise it to what the
-#: sweep shows once the defaults are re-measured.
-AUTOLOAD_RECALL_FLOOR = 0.15
+#: What the auto-load defaults (floor 0.40, lead 0.03) must reach on the
+#: held-out half, a little under what they measured. Measured with
+#: embeddinggemma-300m, 28 hub skills:
+#:
+#:     half      requests negatives precision recall loads wrong on-negatives
+#:     tuning         114        33      0.91   0.72   68    6  4
+#:     held-out       120        29      0.93   0.59   60    4  4
+#:
+#: A companion loads only when it leads the remaining skills itself. When
+#: reaching the floor was enough, the tuning half had 74 loads, 7 wrong
+#: (0.90, 0.73): 1 of the 7 companions loaded was a labelled skill.
+#:
+#: The floor and lead this replaced (0.55, 0.03, name-and-description text
+#: with no prompt) measured precision 0.91, recall 0.11 (12 loads) on the
+#: held-out half as it stood before office-docs joined (118 requests).
+#: A wrong load costs context, not correctness (two skills a turn at most,
+#: under the host's share-of-context cap), so a few loads on requests that
+#: need no skill are accepted. They are questions about a skill's topic:
+#: see EXPLAIN_NEGATIVES.
+AUTOLOAD_BAR = {"precision": 0.88, "recall": 0.50, "negatives": 0.20}
 
 
 def _memoized(embed):
@@ -765,7 +936,10 @@ def test_the_autoload_sweep_runs_on_the_current_fixture_and_skills():
         assert 0.0 <= cell["precision"] <= 1.0 and 0.0 <= cell["recall"] <= 1.0
         assert cell["wrong"] <= cell["loads"]
     # A lower floor or a smaller lead can only load more.
-    assert cells[(0.40, 0.00)]["loads"] >= cells[(0.60, 0.05)]["loads"]
+    lowest = cells[(min(SWEEP_THRESHOLDS), min(SWEEP_MARGINS))]
+    assert (
+        lowest["loads"] >= cells[(max(SWEEP_THRESHOLDS), max(SWEEP_MARGINS))]["loads"]
+    )
     table = _sweep_table(cells)
     assert len(table.splitlines()) == 1 + len(cells)
     assert table.splitlines()[0].split() == [
@@ -803,30 +977,94 @@ def test_measure_autoload_counts_wrong_loads_and_negatives():
     }
 
 
+def _per_request(suggester, skills, cases):
+    """One line per request: what loaded, the labels, and the two best scores."""
+    lines = []
+    for case in cases:
+        scores = suggester.scores(case["request"], skills)
+        got = suggester.select(case["request"], skills).auto_load
+        allowed = set(case["expected"]) | set(case["acceptable"])
+        if [name for name in got if name not in allowed]:
+            verdict = "WRONG"
+        elif got:
+            verdict = "load"
+        else:
+            verdict = "miss" if case["expected"] else "-"
+        top = sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:2]
+        lines.append(
+            f"{verdict:5s} expected={','.join(case['expected']) or '-':22s} "
+            + " ".join(f"{name}={score:.2f}" for name, score in top)
+            + f" | {' '.join(case['request'].split())[:70]}"
+        )
+    return "\n".join(lines)
+
+
+def test_per_request_lines_name_the_verdict_and_the_best_scores():
+    skills = _skills(_skill("alpha"), _skill("beta"), _skill("gamma"))
+    queries = {
+        "right": {"alpha": 0.70, "beta": 0.30},
+        "wrong": {"gamma": 0.70},
+        "missed": {"alpha": 0.40},
+        "chat": {"beta": 0.20},
+    }
+    s = SkillSuggester(FakeEmbedder(list(skills), queries), autoload_threshold=0.55)
+    cases = [
+        {"request": "right", "expected": ["alpha"], "acceptable": []},
+        {"request": "wrong", "expected": [], "acceptable": []},
+        {"request": "missed", "expected": ["alpha"], "acceptable": []},
+        {"request": "chat", "expected": [], "acceptable": []},
+    ]
+    lines = _per_request(s, skills, cases).splitlines()
+    assert lines[0].split() == [
+        "load",
+        "expected=alpha",
+        "alpha=0.70",
+        "beta=0.30",
+        "|",
+        "right",
+    ]
+    assert [line.split()[0] for line in lines] == ["load", "WRONG", "miss", "-"]
+
+
 @pytest.mark.real_model
 @pytest.mark.allow_network
 def test_autoload_calibration_against_the_real_embedder(capsys):
-    """Prints the floor-by-lead table and holds the defaults to their bar.
+    """Prints the floor-by-lead table per half and holds the defaults to
+    :data:`AUTOLOAD_BAR` on the held-out half.
 
-    The bar for turning ``skill_autoload`` on by default: nothing loaded on a
-    request no skill should match, and :data:`AUTOLOAD_RECALL_FLOOR`.
+    Run with ``-s``. The tuning half is also printed request by request, with
+    the two best-scoring skills, to show why a request loaded or did not; the
+    held-out half is only ever shown as totals.
     """
     embed, batch = _real_embedder()
     embed("probe")  # an unreachable embedder fails here, not as recall 0
+    embed = _memoized(embed)
     skills = _hub_skills()
-    cases = _present_cases(set(skills))
-    cells = _autoload_sweep(embed, batch, skills, cases)
+    halves = _halves(_present_cases(set(skills)))
+    cells = {}
+    for name, cases in halves.items():
+        cells[name] = _autoload_sweep(embed, batch, skills, cases)
+        with capsys.disabled():
+            print(
+                f"\nauto-load sweep, {name}: {len(cases)} requests, "
+                f"{_negatives(cases)} negatives, {len(skills)} hub skills"
+            )
+            print(_sweep_table(cells[name]))
     with capsys.disabled():
-        print(
-            f"\nauto-load sweep: {len(cases)} requests, "
-            f"{sum(1 for case in cases if not case['expected'])} negatives, "
-            f"{len(skills)} hub skills"
+        suggester = SkillSuggester(
+            embed,
+            embed_batch_fn=batch,
+            autoload_threshold=DEFAULT_AUTOLOAD_THRESHOLD,
+            autoload_margin=DEFAULT_AUTOLOAD_MARGIN,
         )
-        print(_sweep_table(cells))
-    defaults = cells[(DEFAULT_AUTOLOAD_THRESHOLD, DEFAULT_AUTOLOAD_MARGIN)]
-    assert defaults["on_negatives"] == 0, defaults
-    assert defaults["recall"] >= AUTOLOAD_RECALL_FLOOR, defaults
+        print("\ntuning half at the defaults, request by request")
+        print(_per_request(suggester, skills, halves["tuning"]))
+    defaults = cells["held-out"][(DEFAULT_AUTOLOAD_THRESHOLD, DEFAULT_AUTOLOAD_MARGIN)]
+    assert defaults["precision"] >= AUTOLOAD_BAR["precision"], defaults
+    assert defaults["recall"] >= AUTOLOAD_BAR["recall"], defaults
+    negative_rate = defaults["on_negatives"] / _negatives(halves["held-out"])
+    assert negative_rate <= AUTOLOAD_BAR["negatives"], defaults
 
 
 def test_doc_text_is_what_the_fake_embedder_expects():
-    assert skill_doc_text(_skill("alpha")) == "alpha: does alpha"
+    assert skill_match_text(_skill("alpha")) == f"{DOC_PROMPT}does alpha"

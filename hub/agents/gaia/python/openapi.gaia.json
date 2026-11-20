@@ -1081,7 +1081,7 @@
     },
     "/v1/gaia/sessions/{session_id}/bypass": {
       "post": {
-        "description": "Turn unattended tool approval on or off for a session.\n\nSession-scoped rather than run-scoped because it must outlive any one turn —\nthat is the whole point of bypass — and it takes effect on the very next\ngated tool, including one in a turn already running.\n\nOnly an EXISTING session is accepted: creating one here would build a whole\nagent as a side effect of a settings toggle, and would silently succeed\nagainst a typo'd session id.",
+        "description": "Turn full access on or off for a session.\n\nOn, gated tools run unasked, the shell runs any command and Python runs any\ncode, as with the stdio transport's ``--full-access``.\n\nSession-scoped rather than run-scoped because it must outlive any one turn —\nthat is the whole point of bypass — and it takes effect on the very next\ngated tool, including one in a turn already running.\n\nOnly an EXISTING session is accepted: creating one here would build a whole\nagent as a side effect of a settings toggle, and would silently succeed\nagainst a typo'd session id.",
         "operationId": "set_bypass_v1_gaia_sessions__session_id__bypass_post",
         "parameters": [
           {

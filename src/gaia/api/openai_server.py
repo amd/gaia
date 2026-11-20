@@ -20,6 +20,7 @@ import os
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from typing import AsyncGenerator, List, Tuple
 
 import httpx
@@ -28,6 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from gaia.agents.base.api_agent import ApiAgent
+from gaia.listener_guard import keep_listening_after_client_resets
 
 from .agent_proxy import build_agent_proxy_router
 from .agent_registry import registry
@@ -186,11 +188,19 @@ def _prepend_tool_denials(agent, content: str) -> str:
     return "\n".join(list(denials.values()) + ([content] if content else []))
 
 
+@asynccontextmanager
+async def _lifespan(_app):
+    # A client resetting a queued connection must not close the listener.
+    keep_listening_after_client_resets(asyncio.get_running_loop())
+    yield
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="GAIA OpenAI-Compatible API",
     description="OpenAI-compatible API for GAIA agents",
     version="1.0.0",
+    lifespan=_lifespan,
 )
 
 # Cross-origin and caller-auth policy live in one place for every GAIA local

@@ -11,6 +11,7 @@ import { PermissionModeChip } from '../../PermissionModeChip';
 import { useChatStore } from '../../../stores/chatStore';
 import { stripIsolates } from '../../../i18n/registry';
 import { announceMobileAccess } from '../../../utils/mobileAccessEvents';
+import { useSessionPanelStore } from '../../../stores/sessionPanelStore';
 import { ENV, resetPanelState, SID, stubPanelApi } from './testUtils';
 
 vi.mock('../../../services/api');
@@ -41,7 +42,9 @@ describe('Runs on', () => {
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         expect(await screen.findByText(/This PC · GPU · Vulkan/)).toBeInTheDocument();
         expect(screen.getByText('Gemma 4 E4B')).toBeInTheDocument();
-        expect(screen.getByText('6.2 GB in use · 40.5 GB free')).toBeInTheDocument();
+        // Memory is a hover detail on the model, not a line of its own.
+        expect(screen.getByTitle('6.2 GB in use · 40.5 GB free')).toHaveTextContent('Gemma 4 E4B');
+        expect(screen.getByText('64K tokens')).toBeInTheDocument();
     });
 
     it("doesn't describe another chat's model as this one's", async () => {
@@ -71,7 +74,7 @@ describe('Runs on', () => {
                 .mockResolvedValue(loaded as never);
             render(<EnvironmentSection sessionId={SID} busy={false} />);
             const modelLine = (pattern: RegExp) => (_: string, el: Element | null) =>
-                !!el?.classList.contains('sp-meta') && pattern.test(stripIsolates(el.textContent ?? ''));
+                !!el?.classList.contains('sp-row-label') && pattern.test(stripIsolates(el.textContent ?? ''));
             expect(await screen.findByText(modelLine(/^Gemma 4 E4B · Warming up$/))).toBeInTheDocument();
 
             await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
@@ -95,9 +98,10 @@ describe('Runs on', () => {
         } as never);
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         const line = (pattern: RegExp) => (_: string, el: Element | null) =>
-            !!el?.classList.contains('sp-meta') && pattern.test(stripIsolates(el.textContent ?? ''));
+            !!el?.classList.contains('sp-row-label') && pattern.test(stripIsolates(el.textContent ?? ''));
         expect(await screen.findByText(line(/^Gemma.?4.?E4B\S* · Not loaded — it loads with your next message$/))).toBeInTheDocument();
-        expect(screen.getByText(line(/^96\.0 GB free$/))).toBeInTheDocument();
+        // Memory is the model line's hover text: what is free, never a guessed figure in use.
+        expect(screen.getByText(line(/Not loaded/))).toHaveAttribute('title', '96.0 GB free');
         expect(screen.queryByText(/in use unknown/)).not.toBeInTheDocument();
     });
 
@@ -129,8 +133,8 @@ describe('Runs on', () => {
             useChatStore.setState({ locale });
             mocked.getLocalModelStatus.mockResolvedValue(status as never);
             const { container } = render(<EnvironmentSection sessionId={SID} busy={false} />);
-            await waitFor(() => expect(container.querySelector('.sp-env-row .sp-error')).not.toBeNull());
-            return container.querySelector('.sp-env-row .sp-error') as HTMLElement;
+            await waitFor(() => expect(container.querySelector('.sp-row .sp-error')).not.toBeNull());
+            return container.querySelector('.sp-row .sp-error') as HTMLElement;
         }
 
         it.each([
@@ -180,9 +184,69 @@ describe('Can read and write', () => {
         const list = await screen.findByRole('list');
         const rows = within(list).getAllByRole('listitem');
         expect(rows[0]).toHaveTextContent('project');
-        expect(rows[0]).toHaveTextContent('Added by you');
-        expect(rows[1]).toHaveTextContent("GAIA's documents folder");
-        expect(rows[2]).toHaveTextContent('Document in this chat');
+        // A folder shows its path, with where it came from on hover.
+        expect(within(rows[0]).getByTitle('Added by you')).toHaveTextContent('C:\\Users\\me\\project');
+        // A file shows where it came from, with its path on hover.
+        expect(within(rows[1]).getByText('Document in this chat')).toHaveAttribute('title', 'C:\\Users\\me\\report.pdf');
+        expect(rows[1]).not.toHaveTextContent('C:\\Users\\me\\report.pdf');
+    });
+
+    it("keeps GAIA's own folders behind one line until asked", async () => {
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const own = await screen.findByRole('button', { name: /GAIA's own folders/ });
+        expect(own).toHaveAttribute('aria-expanded', 'false');
+        expect(own).toHaveTextContent('1');
+        expect(screen.queryByTitle("GAIA's documents folder")).not.toBeInTheDocument();
+        fireEvent.click(own);
+        expect(screen.getByTitle("GAIA's documents folder")).toBeInTheDocument();
+    });
+
+    it('leaves the chat\'s documents to their own section when asked to', async () => {
+        render(<EnvironmentSection sessionId={SID} busy={false} hideDocuments />);
+        await screen.findByText('project');
+        expect(screen.queryByText('report.pdf')).not.toBeInTheDocument();
+    });
+});
+
+describe('rows that show only when they apply', () => {
+    it('shows how full the context is once it is measured, and opens the breakdown', async () => {
+        const { rerender } = render(<EnvironmentSection sessionId={SID} busy={false} />);
+        await screen.findByText('project');
+        expect(screen.queryByRole('button', { name: /Context/ })).not.toBeInTheDocument();
+
+        rerender(<EnvironmentSection sessionId={SID} busy={false} usage={{ window: 64000, used: 17280 } as never} />);
+        const row = screen.getByRole('button', { name: /Context/ });
+        expect(row).toHaveTextContent('27%');
+        fireEvent.click(row);
+        expect(useSessionPanelStore.getState().sections.context).toBe(true);
+    });
+
+    it('names the repository and branch once the chat has changed files', async () => {
+        mocked.getSessionGit.mockResolvedValue({
+            available: true,
+            repos: [{
+                root: 'C:\\Users\\me\\project', branch: 'feature/panel', remote: null, default_branch: 'main', gh: false,
+                files: ['a.ts', 'b.ts'], uncommitted: ['a.ts', 'b.ts'], ignored: [], draft: { title: '', body: '' }, pr_blocked: null,
+            }],
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        await screen.findByText('project');
+        expect(screen.queryByText('feature/panel')).not.toBeInTheDocument();
+        expect(mocked.getSessionGit).not.toHaveBeenCalled();
+
+        act(() => useSessionPanelStore.getState().setSignals(SID, { changedFiles: 2 }));
+        expect(await screen.findByText('feature/panel')).toBeInTheDocument();
+        expect(screen.getByText('2 uncommitted')).toBeInTheDocument();
+        // The folder's name, not its whole Windows path.
+        expect(screen.getByText('feature/panel').parentElement).toHaveTextContent(/^project feature\/panel$/);
+    });
+
+    it('names the mailbox for an email chat', async () => {
+        useChatStore.setState({
+            sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email', mail_provider: 'google' }],
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        expect(await screen.findByText('Gmail')).toBeInTheDocument();
     });
 
     it("lists a library copy under the document's own name (#7224)", async () => {
@@ -293,6 +357,9 @@ describe('Can read and write', () => {
         // Not a boundary: say so rather than listing folders as if they were the limit.
         expect(await screen.findByText('Files GAIA can reach')).toBeInTheDocument();
         expect(screen.queryByText(/its own process/)).not.toBeInTheDocument();
+        // The explanation waits behind its button, so the list isn't buried under a paragraph.
+        expect(screen.queryByText(/one at a time, never all of it at once/)).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'About these folders' }));
         expect(screen.getByText(/one at a time, never all of it at once/)).toBeInTheDocument();
         expect(screen.queryByText('Can read and write')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
@@ -321,7 +388,8 @@ describe('Can read and write', () => {
         mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false });
         useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'my-sidecar' }] });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
-        expect(await screen.findByText(/applies its own limits/)).toBeInTheDocument();
+        fireEvent.click(await screen.findByRole('button', { name: 'About these folders' }));
+        expect(screen.getByText(/applies its own limits/)).toBeInTheDocument();
         expect(screen.queryByText(/inside your user folder/)).not.toBeInTheDocument();
     });
 
@@ -350,7 +418,9 @@ describe('Internet', () => {
         await waitFor(() => expect(mocked.setInternet).toHaveBeenCalledWith(SID, false));
         expect(await screen.findByText(/Offline: internet is off for this chat/)).toBeInTheDocument();
         expect(toggle).toHaveAttribute('aria-checked', 'false');
-        expect(screen.getByText('Off: web search and pages are blocked')).toBeInTheDocument();
+        expect(screen.getByTitle('Web search and pages are blocked')).toHaveTextContent('Internet');
+        // The state is written beside the switch, not left to the knob's colour.
+        expect(toggle.parentElement).toHaveTextContent('Off');
 
         fireEvent.click(screen.getByRole('button', { name: 'Turn on' }));
         await waitFor(() => expect(mocked.setInternet).toHaveBeenLastCalledWith(SID, true));

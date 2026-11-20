@@ -192,7 +192,17 @@ class ScratchpadService(DatabaseMixin):
                     f"({actual}). Use the existing columns, or drop_table "
                     "first to change the schema."
                 )
-            return f"Table '{safe_name}' already exists with columns: {columns}"
+            # Tables outlive the session that made them. A model that takes
+            # this for a fresh table inserts its rows on top of the old ones
+            # and every total comes out too large.
+            held = self._get_row_count(full_name)
+            note = (
+                f" It already holds {held} row(s) from earlier work: rows you "
+                "insert are added to them. Call drop_table first to start empty."
+                if held
+                else ""
+            )
+            return f"Table '{safe_name}' already exists with columns: {columns}.{note}"
 
         # Create table using execute() (outside any transaction)
         self.execute(f"CREATE TABLE {full_name} ({safe_columns})")
@@ -358,6 +368,10 @@ class ScratchpadService(DatabaseMixin):
             )
 
         return result
+
+    def row_count(self, name: str) -> int:
+        """Rows the table *name* (without prefix) holds now."""
+        return self._get_row_count(f"{self.TABLE_PREFIX}{self._validate_name(name)}")
 
     def drop_table(self, name: str) -> str:
         """Drop a scratchpad table.

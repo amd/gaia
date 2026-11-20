@@ -425,6 +425,28 @@ def _auth(token=_DAEMON_TOKEN):
 
 
 @needs_fastapi
+def test_the_status_reads_the_turn_counter_the_daemon_shares():
+    """The counter the unload policy reads is the one the relay counts on."""
+    from fastapi.testclient import TestClient
+
+    from gaia.daemon.app import create_app
+    from gaia.daemon.relay import RelayTurns
+
+    turns = RelayTurns()
+    app = create_app(
+        token=_DAEMON_TOKEN,
+        port=55555,
+        pid=1,
+        started_at=time.time(),
+        registry=_StubRegistry(),
+        relay_turns=turns,
+    )
+    turns.opened()
+    status = TestClient(app).get("/daemon/v1/status", headers=_auth()).json()
+    assert status["relayed_turns"] == 1
+
+
+@needs_fastapi
 def test_relay_requires_daemon_client_token():
     client = _daemon_test_client(_StubRegistry())
     r = client.post("/v1/email/query", json={"query": "hi"})  # no auth header
