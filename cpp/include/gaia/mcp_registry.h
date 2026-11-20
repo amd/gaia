@@ -60,6 +60,11 @@ public:
 ///         "args": ["-y", "@modelcontextprotocol/server-github"],
 ///         "env": {"GITHUB_TOKEN": "ghp_..."},
 ///         "description": "GitHub repository access"
+///       },
+///       "remote-tools": {
+///         "type": "http",
+///         "url": "http://localhost:8000/mcp",
+///         "headers": {"Authorization": "Bearer ${MCP_API_KEY}"}
 ///       }
 ///     }
 ///   }
@@ -115,15 +120,21 @@ public:
     static std::vector<std::string> defaultSearchPaths();
 
     /// Look up a server id.
-    /// @return The entry with `command`, `args` and `env` normalized (`args`
-    ///         an array of strings, `env` an object of strings, both present
-    ///         even when the file omits them) and every other key it carried
-    ///         left intact — ready for `MCPClient::fromConfig()` /
+    /// @return For a stdio entry, the entry with `command`, `args` and `env`
+    ///         normalized (`args` an array of strings, `env` an object of
+    ///         strings, both present even when the file omits them). For a
+    ///         Streamable HTTP entry (`"type": "http"` / `"streamable-http"`,
+    ///         or a `url` with no `type` and no `command`), the entry with
+    ///         `headers` normalized to an object of strings; `${VAR}` in header
+    ///         values is kept for `MCPClient::fromConfig()` to expand. Every
+    ///         other key is left intact — ready for `MCPClient::fromConfig()` /
     ///         `Agent::connectMcpServer()`. `std::nullopt` when no entry with
     ///         that id exists.
     /// @throws MCPRegistryError if no config file exists, a config file is
     ///         malformed, or the entry exists but is not launchable: missing
-    ///         `command`, `disabled: true`, a non-stdio `type`, or a `$keyring`
+    ///         `command` (stdio) or http(s) `url` (HTTP), both `command` and
+    ///         `url` with no `type`, `disabled: true`, a `type` other than
+    ///         stdio/http/streamable-http, or a `$keyring`
     ///         credential reference. That last one is how `gaia connectors`
     ///         stores secrets, so servers configured with one (such as
     ///         `mcp-github`) are Python-only until the C++ runtime grows

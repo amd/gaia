@@ -5,6 +5,8 @@
 
 #include "gaia/model_registry.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
@@ -98,8 +100,7 @@ json ToolCall::parsedArgs() const {
             "Model returned tool call '" + name + "' (id " + id +
             ") with arguments that are not valid JSON: " + e.what() +
             "\n  Raw arguments: " + arguments.substr(0, 400) +
-            "\n  Retry the query, or set AgentConfig::nativeToolCalls = "
-            "NativeToolCalls::Never to use the prompt-JSON path with this model.");
+            "\n  Send the call again with the arguments as one complete JSON object.");
     }
     if (!parsed.is_object()) {
         throw std::runtime_error(
@@ -160,6 +161,13 @@ ToolCall ToolCall::fromJson(const json& j) {
 
 json Message::toJson() const {
     json j;
+    // A tool result with no call id answers a tool call the model wrote as
+    // text. Strict servers reject role=tool without tool_call_id.
+    if (role == MessageRole::TOOL && !toolCallId.has_value()) {
+        j["role"] = "user";
+        j["content"] = "[Result from " + name.value_or("tool") + "]: " + content;
+        return j;
+    }
     j["role"] = roleToString(role);
     if (parts.has_value()) {
         json arr = json::array();
@@ -233,7 +241,29 @@ bool AgentConfig::useNativeToolCalls() const {
     return false;
 }
 
+bool AgentConfig::compactFeatures() const {
+    if (featureTier == "compact") return true;
+    if (featureTier == "full") return false;
+    return isCompactModel(modelId);
+}
+
+int AgentConfig::replyTokenLimit() const {
+    // A compact model's real replies stay under ~2K tokens; a longer one is a runaway
+    // repetition that would otherwise run for many minutes.
+    constexpr int kCompactReplyTokens = 4096;
+    const int limit = std::min(maxTokens, contextSize / 2);
+    return std::max(1, compactFeatures() ? std::min(limit, kCompactReplyTokens) : limit);
+}
+
+int AgentConfig::toolResultCharLimit() const {
+    // About 3 characters a token: one output may take a sixth of the window.
+    return std::max(1000, std::min(maxToolResultChars, contextSize / 2));
+}
+
 void AgentConfig::validate() const {
+    if (featureTier != "auto" && featureTier != "full" && featureTier != "compact")
+        throw std::invalid_argument("featureTier must be \"auto\", \"full\" or \"compact\", got \"" +
+                                    featureTier + "\"");
     if (baseUrl.empty())
         throw std::invalid_argument("baseUrl must not be empty");
     if (modelId.empty())
@@ -255,10 +285,60 @@ void AgentConfig::validate() const {
     // "none" is deliberately rejected: it would declare tools, forbid their use,
     // AND suppress the prompt-JSON template, leaving the agent no way to call
     // anything. Set nativeToolCalls = "never" to turn native tool calling off.
+    if (llmRetries < 0)
+        throw std::invalid_argument("llmRetries must be >= 0");
+    if (maxToolResultChars < 1000)
+        throw std::invalid_argument("maxToolResultChars must be >= 1000");
     if (toolChoice != "auto" && toolChoice != "required")
         throw std::invalid_argument(
             "toolChoice must be \"auto\" or \"required\", got \"" + toolChoice +
             "\" (to disable native tool calling set nativeToolCalls = \"never\")");
+}
+
+namespace {
+// http(s)://localhost, 127.x.x.x or [::1] — where a local Lemonade listens.
+bool isLoopbackUrl(const std::string& url) {
+    const size_t scheme = url.find("://");
+    if (scheme == std::string::npos) return false;
+    std::string host = url.substr(scheme + 3);
+    host = host.substr(0, host.find_first_of("/?#"));
+    if (!host.empty() && host[0] == '[') return host.rfind("[::1]", 0) == 0;
+    host = host.substr(0, host.find(':'));
+    if (host == "localhost") return true;
+    int octets = 0, first = -1;
+    size_t i = 0;
+    while (i < host.size()) {
+        size_t digits = 0;
+        int value = 0;
+        while (i < host.size() && std::isdigit(static_cast<unsigned char>(host[i])) && digits < 3) {
+            value = value * 10 + (host[i++] - '0');
+            ++digits;
+        }
+        if (digits == 0 || value > 255) return false;
+        if (++octets == 1) first = value;
+        if (i == host.size()) break;
+        if (host[i++] != '.') return false;
+    }
+    return octets == 4 && first == 127;
+}
+} // namespace
+
+std::string resolveApiKey(const AgentConfig& config) {
+    if (!config.apiKey.empty()) return config.apiKey;
+    if (!config.apiKeyEnv.empty()) {
+        std::string key = getEnvVar(config.apiKeyEnv.c_str());
+        if (key.empty()) {
+            throw std::invalid_argument(
+                "API key variable " + config.apiKeyEnv +
+                " is not set. Export it with the key for " + config.baseUrl +
+                ", or remove apiKeyEnv for a server without a key.");
+        }
+        return key;
+    }
+    std::string key = getEnvVar("GAIA_API_KEY");
+    // The local Lemonade's key never goes to another host.
+    if (key.empty() && isLoopbackUrl(config.baseUrl)) key = getEnvVar("LEMONADE_API_KEY");
+    return key;
 }
 
 AgentConfig AgentConfig::fromJson(const json& j) {
@@ -280,6 +360,16 @@ AgentConfig AgentConfig::fromJson(const json& j) {
     c.toolChoice            = j.value("toolChoice",            c.toolChoice);
     c.skillSet              = j.value("skillSet",              c.skillSet);
     c.skillManifest         = j.value("skillManifest",         c.skillManifest);
+    c.apiKeyEnv             = j.value("apiKeyEnv",             c.apiKeyEnv);
+    c.llmRetries            = j.value("llmRetries",            c.llmRetries);
+    c.maxToolResultChars    = j.value("maxToolResultChars",    c.maxToolResultChars);
+    c.stepBudgetNotices     = j.value("stepBudgetNotices",     c.stepBudgetNotices);
+    c.featureTier           = j.value("featureTier",           c.featureTier);
+    if (j.contains("apiKey")) {
+        throw std::invalid_argument(
+            "config must not carry an API key: name its environment variable in "
+            "\"apiKeyEnv\" instead, so the secret never lands in a config file");
+    }
     if (j.contains("responseMode")) {
         c.responseMode = responseModeFromString(j.at("responseMode").get<std::string>());
     }
@@ -326,7 +416,12 @@ json AgentConfig::toJson() const {
         {"nativeToolCalls",       nativeToolCallsToString(nativeToolCalls)},
         {"toolChoice",            toolChoice},
         {"skillSet",              skillSet},
-        {"skillManifest",         skillManifest}
+        {"skillManifest",         skillManifest},
+        {"apiKeyEnv",             apiKeyEnv},
+        {"llmRetries",            llmRetries},
+        {"maxToolResultChars",    maxToolResultChars},
+        {"stepBudgetNotices",     stepBudgetNotices},
+        {"featureTier",           featureTier}
     };
 }
 

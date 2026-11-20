@@ -179,6 +179,24 @@ TEST(JsonEventHandlerTest, ToolResultError) {
     EXPECT_EQ(result["summary"], "command not found");
 }
 
+TEST(JsonEventHandlerTest, OddToolResultsDoNotThrow) {
+    JsonEventOutputHandler handler;
+    CoutCapture cap;
+
+    handler.printToolUsage("bash_execute");
+    EXPECT_NO_THROW(handler.prettyPrintJson("plain text result", "Tool Result"));
+    EXPECT_NO_THROW(handler.prettyPrintJson({{"status", 404}}, "Tool Result"));
+    EXPECT_NO_THROW(handler.prettyPrintJson({{"note", "bad\xff" "bytes"}}, "Other"));
+
+    auto events = cap.lines();
+    ASSERT_EQ(events.size(), 4);
+    EXPECT_EQ(events[1]["type"], "tool_result");
+    EXPECT_EQ(events[1]["success"], true);
+    EXPECT_EQ(events[1]["summary"], "completed");
+    EXPECT_EQ(events[2]["summary"], "completed");
+    EXPECT_EQ(events[3]["type"], "status");
+}
+
 // ===========================================================================
 // Status Message Events
 // ===========================================================================

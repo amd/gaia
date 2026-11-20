@@ -16,6 +16,14 @@
 
 namespace gaia {
 
+/// What a file's first bytes are: UTF-8 (or ASCII) text, UTF-16 text, text in a legacy
+/// single- or double-byte encoding, or binary data.
+enum class TextKind { Utf8, Utf16, LegacyEncoding, Binary };
+GAIA_API TextKind textKind(const std::string& head);
+
+/// textKind(head) == TextKind::Binary.
+GAIA_API bool looksBinary(const std::string& head);
+
 /// Tracks the content hash of every file an agent has read, so a later write
 /// can tell "the model is editing what it saw" from "the file moved under it".
 ///
@@ -173,7 +181,7 @@ public:
     /// file_search: Search for files by glob pattern and/or content pattern.
     /// Args: {"pattern": string, "path"?: string, "content_pattern"?: string, "max_results"?: int}
     /// Returns: {"matches": [{"path": string, "line"?: int, "context"?: string}],
-    ///           "total": int, "ignored_skipped": int}
+    ///           "total": int, "ignored_skipped": int, "credential_files_skipped"?: int}
     /// Paths excluded by `.gitignore` (and `.git/` itself) are skipped and
     /// counted in ignored_skipped, so a thin result set is explained rather
     /// than mysterious.

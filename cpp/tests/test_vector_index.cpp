@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/vector_index.h>
 
@@ -110,7 +111,7 @@ protected:
     fs::path tmpDir;
 
     void SetUp() override {
-        tmpDir = fs::temp_directory_path() / "gaia_vector_index_test";
+        tmpDir = fs::temp_directory_path() / testsupport::perProcess("gaia_vector_index_test");
         fs::remove_all(tmpDir);
         fs::create_directories(tmpDir);
     }
@@ -747,6 +748,19 @@ TEST_F(VectorIndexTest, FailedLoadLeavesTheExistingIndexUsable) {
     EXPECT_TRUE(index.contains("keep"));
     EXPECT_FALSE(index.contains("other"));
     EXPECT_EQ(index.search({1.0f, 1.0f}, 1), before);
+}
+
+TEST_F(VectorIndexTest, SaveDoesNotDependOnASharedTempName) {
+    VectorIndex index(2, Metric::L2);
+    index.add("a", {1.0f, 0.0f});
+    const fs::path file = path("shared.vec");
+    // Stands in for another process's in-flight save under the old fixed name.
+    fs::create_directories(file.string() + ".tmp");
+
+    EXPECT_NO_THROW(index.save(file.string()));
+    VectorIndex loaded;
+    loaded.load(file.string());
+    EXPECT_EQ(loaded.size(), 1u);
 }
 
 TEST_F(VectorIndexTest, SaveFailsLoudlyWhenTheTargetPathIsUnusable) {
