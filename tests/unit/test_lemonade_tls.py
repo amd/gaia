@@ -311,16 +311,18 @@ def test_the_child_sees_the_file_and_the_host_does_not(tmp_path):
         "print(os.getuid(),os.getgid())"
     )
     try:
-        out = subprocess.run(
+        done = subprocess.run(
             [sys.executable, "-c", probe, str(layout["certs"])],
             preexec_fn=enter_ca_overlay(overlay),
             capture_output=True,
             text=True,
-            check=True,
-        ).stdout
+            check=False,
+        )
     except subprocess.SubprocessError as e:
+        # Only a refused namespace skips; a probe that ran and failed fails.
         pytest.skip(f"this kernel refuses unprivileged user namespaces: {e}")
-    lines = out.splitlines()
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.splitlines()
     assert "\n".join(lines[:3]) == BUNDLE_PEM.rstrip("\n")
     assert lines[3] == "readme"
     assert lines[4] == "['abcd1234.0']"

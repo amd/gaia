@@ -242,6 +242,7 @@ def enter_ca_overlay(overlay: CaOverlay) -> Callable[[], None]:
             err = ctypes.get_errno()
             raise CaOverlayError(err, f"{what}: {os.strerror(err)}")
 
+    # Runs between fork and exec of a threaded parent: no imports, logging or locks.
     def enter() -> None:
         try:
             _check(unshare(_CLONE_NEWUSER | _CLONE_NEWNS), "unshare")
