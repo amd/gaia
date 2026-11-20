@@ -219,6 +219,16 @@ describe('DiffCard', () => {
         expect(lines).toEqual(['-a', '+b']);
     });
 
+    it('marks a right-to-left override in the body, the title and the path', () => {
+        const unified = '--- /dev/null\n+++ b/report\u202Etxt.md\n@@ -0,0 +1 @@\n+hi \u202Eolleh\n';
+        const { container } = render(<DiffCard data={{ title: 'report\u202Etxt.md', path: '/d/report\u202Etxt.md', unified }} />);
+        const lines = Array.from(container.querySelectorAll('.render-diff__line')).map((el) => el.textContent);
+        expect(lines).toEqual(['+hi [U+202E]olleh']);
+        expect(container.querySelector('.render-diff__title')).toHaveTextContent('report[U+202E]txt.md');
+        expect(container.querySelector('.render-diff__path')).toHaveTextContent('/d/report[U+202E]txt.md');
+        expect(container.textContent).not.toContain('\u202E');
+    });
+
     it('shows only the changed lines of a new file, without the diff headers', () => {
         const { container } = render(<DiffCard data={{
             unified: '--- /dev/null\n+++ b/shopping.txt\n@@ -0,0 +1,3 @@\n+milk\n+eggs\n+bread\n',
