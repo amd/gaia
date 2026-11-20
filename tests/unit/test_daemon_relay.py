@@ -408,6 +408,16 @@ def test_stopping_a_crashed_sidecar_keeps_it_stopped(monkeypatch):
     assert reg.restart_if_crashed("toy") is False
 
 
+def test_an_idle_stop_on_app_quit_is_never_restarted_as_a_crash(monkeypatch):
+    monkeypatch.setattr("gaia.daemon.sidecars.registry.pid_alive", lambda pid: False)
+    reg = _toy_registry()
+    reg.ensure("toy")
+    assert reg.stop_idle() == ["toy"]
+    assert reg.restart_if_crashed("toy") is False
+    with pytest.raises(SidecarNotRunningError):
+        reg.connection("toy")
+
+
 def test_restart_if_crashed_starts_a_crashed_sidecar_again():
     reg = _toy_registry()
     reg.ensure("toy")
