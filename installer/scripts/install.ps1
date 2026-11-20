@@ -256,7 +256,7 @@ function Resolve-Pin {
 }
 
 # Resolve one platform's agent from a release candidate's gaia-agent-release.json
-# (util/flagship_rc_assets.py writes it), the file an RC core installs its
+# (util/gaiapy_rc_assets.py writes it), the file an RC core installs its
 # flagship from. Returns @{Version; Sha256; Url}, or $null after saying why.
 function Resolve-ReleaseAgent {
     param(

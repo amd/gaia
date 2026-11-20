@@ -33,7 +33,7 @@ exit codes are listed in `gaia-setup.nsi` and [Install GAIA](../../docs/guides/i
 | Linux x64 | [`linux/build-packages.sh`](linux/build-packages.sh) | `gaia_<version>_amd64.deb`, `gaia-<version>.x86_64.rpm` |
 
 **No installer is built for `win-arm64` or `linux-arm64`** — the flagship agent
-publishes no build for either, and [`fetch_sidecar.py`](fetch_sidecar.py) refuses
+publishes no build for either, and [`fetch_gaiapy.py`](fetch_gaiapy.py) refuses
 those platform keys rather than let a half-empty installer get built.
 
 ## Staging a payload
@@ -51,10 +51,10 @@ second:
 ```bash
 cd tui && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../stage/gaia-cli ./cmd/gaia && cd ..
 cp LICENSE.md stage/
-python installer/tui/fetch_sidecar.py --platform linux-x64 --out stage
+python installer/tui/fetch_gaiapy.py --platform linux-x64 --out stage
 ```
 
-`fetch_sidecar.py` verifies the downloaded sidecar's SHA-256 against the digest
+`fetch_gaiapy.py` verifies the downloaded sidecar's SHA-256 against the digest
 committed in `hub/agents/gaia/npm/binaries.lock.json` — never against one served
 by the same host as the download, which would only prove the host agrees with
 itself. A mismatch deletes the file and exits non-zero, and a placeholder digest

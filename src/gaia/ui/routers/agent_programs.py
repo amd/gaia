@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
-from gaia.daemon.sidecars import fetch, native_fetch
+from gaia.daemon.sidecars import fetch, gaiacpp_fetch
 from gaia.daemon.sidecars import platform as plat
 from gaia.daemon.sidecars.errors import IntegrityError, PlatformError, SidecarError
 from gaia.logger import get_logger
@@ -58,7 +58,7 @@ def _measure() -> None:
         logger.warning("agent programs: no size for gaiapy: %s", e)
         values[fetch.PYTHON_FLAGSHIP] = None
     try:
-        values[fetch.NATIVE_FLAGSHIP] = native_fetch.download_info().size
+        values[fetch.NATIVE_FLAGSHIP] = gaiacpp_fetch.download_info().size
         reasons[fetch.NATIVE_FLAGSHIP] = None
     except (PlatformError, IntegrityError) as e:
         logger.warning("agent programs: gaiacpp cannot be downloaded: %s", e)
@@ -115,7 +115,7 @@ def _listing() -> Dict[str, Any]:
     native_path = fetch.native_flagship()
     native_size = values.get(fetch.NATIVE_FLAGSHIP)
     native_reason = reasons.get(fetch.NATIVE_FLAGSHIP)
-    update = native_path is not None and native_fetch.update_available(native_path)
+    update = native_path is not None and gaiacpp_fetch.update_available(native_path)
     if native_path is not None and native_size is None:
         native_size = native_path.stat().st_size
     return {
@@ -163,7 +163,7 @@ def _run_download() -> None:
             from gaia.ui.sidecar import daemon_client
 
             daemon_client.stop_sidecar(FLAGSHIP_AGENT_ID)
-        native_fetch.download(_on_progress)
+        gaiacpp_fetch.download(_on_progress)
     except Exception as e:  # noqa: BLE001 - reported to the UI through the job
         logger.warning("agent programs: gaiacpp download failed: %s", e)
         with _lock:
@@ -210,7 +210,7 @@ def _refuse_while_agent_is_busy() -> None:
 
 def _start_download() -> Dict[str, Any]:
     installed = fetch.native_flagship()
-    if installed is not None and not native_fetch.update_available(installed):
+    if installed is not None and not gaiacpp_fetch.update_available(installed):
         raise HTTPException(
             status_code=409, detail="gaiacpp is already installed on this PC."
         )

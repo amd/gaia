@@ -1214,7 +1214,7 @@ jobs:
         env:
           TAG_NAME: ${{ needs.validate.outputs.tag_name }}
         run: |
-          python3 util/flagship_rc_assets.py release \
+          python3 util/gaiapy_rc_assets.py release \
             --artifacts flagship --tag "${TAG_NAME}" --commit "${GITHUB_SHA}" \
             --out release-assets
 

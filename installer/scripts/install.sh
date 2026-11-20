@@ -389,7 +389,7 @@ MANIFEST_PY
 }
 
 # Read one platform's agent version and SHA-256 out of a release candidate's
-# gaia-agent-release.json (util/flagship_rc_assets.py writes it), the file an RC
+# gaia-agent-release.json (util/gaiapy_rc_assets.py writes it), the file an RC
 # core installs its flagship from.
 #
 # Args: python, manifest path, platform key, filename. Echoes "<version> <sha256>".
