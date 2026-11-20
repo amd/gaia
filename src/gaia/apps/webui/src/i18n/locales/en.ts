@@ -1339,6 +1339,7 @@ export const enMessages = {
     'out.kind.file': 'File',
     'out.kind.export': 'Export',
     'out.kind.image': 'Image',
+    'out.kind.audio': 'Audio',
     'out.kind.document': 'Added document',
     'out.kind.memory': 'Memory saved',
     'out.kind.schedule': 'Scheduled task',

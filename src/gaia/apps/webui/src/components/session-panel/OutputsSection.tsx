@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-    Brain, CalendarClock, CornerDownRight, FileOutput, FileText, FolderOpen, Image as ImageIcon, Library,
+    Brain, CalendarClock, CornerDownRight, FileOutput, FileText, FolderOpen, Image as ImageIcon, Library, Music,
 } from 'lucide-react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
@@ -27,6 +27,7 @@ const KIND: Record<OutputKind, { label: MessageKey; Icon: typeof FileText }> = {
     file: { label: 'out.kind.file', Icon: FileText },
     export: { label: 'out.kind.export', Icon: FileOutput },
     image: { label: 'out.kind.image', Icon: ImageIcon },
+    audio: { label: 'out.kind.audio', Icon: Music },
     document: { label: 'out.kind.document', Icon: Library },
     memory: { label: 'out.kind.memory', Icon: Brain },
     schedule: { label: 'out.kind.schedule', Icon: CalendarClock },

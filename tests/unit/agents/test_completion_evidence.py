@@ -519,6 +519,37 @@ def test_generated_audio_counts_as_binary_save_evidence(tool, tmp_path):
     assert not gaps(ledger, "Saved to `sound.wav`.")
 
 
+@pytest.mark.parametrize("tool", ["generate_music", "generate_sound_effect"])
+def test_the_users_copy_of_generated_audio_backs_a_saved_claim(tool, tmp_path):
+    saved = tmp_path / "game" / "theme.wav"
+    claim = f"Saved to `{saved}`."
+    ledger = CompletionEvidence("Make a menu theme", str(tmp_path))
+    cache_copy = str(tmp_path / "cache" / "music_1.wav")
+    ledger.record(tool, {}, {"audio_path": cache_copy}, True)
+    assert gaps(ledger, claim)
+
+    ledger.record(
+        tool,
+        {"save_to": str(saved)},
+        {"audio_path": cache_copy, "saved_to": str(saved)},
+        True,
+    )
+    assert not gaps(ledger, claim)
+
+
+@pytest.mark.parametrize("tool", ["generate_music", "generate_sound_effect"])
+def test_a_refused_audio_copy_does_not_back_a_saved_claim(tool, tmp_path):
+    saved = tmp_path / "game" / "theme.wav"
+    ledger = CompletionEvidence("Make a menu theme", str(tmp_path))
+    ledger.record(
+        tool,
+        {"save_to": str(saved)},
+        {"status": "error", "error": "save_to is outside the allowed folders"},
+        False,
+    )
+    assert gaps(ledger, f"Saved to `{saved}`.")
+
+
 def test_refused_mutation_does_not_invalidate_a_completed_save(ledger):
     write(ledger)
     read(ledger)
