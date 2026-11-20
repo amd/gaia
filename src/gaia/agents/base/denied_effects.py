@@ -760,14 +760,19 @@ def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
     flags = _TEXT_FLAGS | _SHORT_TEXT_FLAGS.get(family.split(" ")[0], frozenset())
     kept: List[str] = []
     skip = False
+    # After a bare ``--`` git reads ``-am`` as a path, not a message cluster.
+    paths_only = False
     for word in rest:
         if skip:
             skip = False
         elif word.lower() in flags or (
-            family == "git commit" and _COMMIT_MESSAGE_CLUSTER.fullmatch(word)
+            family == "git commit"
+            and not paths_only
+            and _COMMIT_MESSAGE_CLUSTER.fullmatch(word)
         ):
             skip = True
         else:
+            paths_only = paths_only or word == "--"
             kept.append(word)
     return kept
 

@@ -1645,6 +1645,9 @@ _PROBES = [
     ("git commit -Fm a.py b.py", "git commit --file=m a.py"),
     ("git commit -Sm a.py b.py", "git commit -S a.py"),
     ("git commit -um a.py b.py", "git commit -u a.py"),
+    # After a bare ``--`` every word is a path, ``-am`` included.
+    ("git commit -- -am a.py b.py", "git commit a.py"),
+    ("git commit -- -am a.py b.py", "git commit --am a.py -m b.py"),
     ("git checkout -qm main -- src", "git checkout main"),
     ("git branch -fm old new", "git branch old"),
 ]
