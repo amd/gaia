@@ -13,7 +13,8 @@ Single-blob design (plan amendment A5):
 Backend allowlist (plan amendment A4):
     Plaintext or weak file-backed keyring backends (e.g. ``keyrings.alt``'s
     ``PlaintextKeyring``, ``EncryptedKeyring``, ``Win32CryptoKeyring``) are
-    explicitly refused BEFORE any write. Linux machines without
+    explicitly refused BEFORE any write — including when one sits anywhere
+    inside a chained keyring. Linux machines without
     SecretService produce an actionable error pointing at the runbook
     instead of silently writing tokens to disk in plaintext.
 
@@ -75,6 +76,54 @@ _REFUSED_BACKEND_CLASS_NAMES: frozenset[str] = frozenset(
     }
 )
 
+# Nesting limit when expanding chained backends; deeper is refused, not trusted.
+_MAX_CHAIN_DEPTH = 8
+
+
+def _refused_class_name(backend: object) -> Optional[str]:
+    """Name of the refused class ``backend`` is or derives from, else ``None``."""
+    for klass in type(backend).__mro__:
+        if klass.__name__ in _REFUSED_BACKEND_CLASS_NAMES:
+            return klass.__name__
+    return None
+
+
+def _is_chain(backend: object) -> bool:
+    from keyring.backends.chainer import ChainerBackend
+
+    if isinstance(backend, ChainerBackend):
+        return True
+    return any("backends" in vars(klass) for klass in type(backend).__mro__)
+
+
+def _write_targets(backend: object, depth: int = 0) -> List[object]:
+    """``backend`` plus every backend a chain under it can write to."""
+    if not _is_chain(backend):
+        return [backend]
+    if depth >= _MAX_CHAIN_DEPTH:
+        raise ConnectorsError(
+            f"The chained keyring backend is nested more than {_MAX_CHAIN_DEPTH} "
+            "levels deep, so GAIA cannot confirm every store it writes to is "
+            "secure. Configure a single system credential store (set "
+            f"{_KEYRING_BACKEND_ENV_VAR} to it) and restart GAIA. See "
+            "docs/security/connections.mdx."
+        )
+    try:
+        members = list(backend.backends)
+    except Exception as e:  # noqa: BLE001 - fail closed with context below
+        raise ConnectorsError(
+            f"Could not inspect the chained keyring backend "
+            f"{type(backend).__name__!r}: {e}. GAIA will not store credentials "
+            "until it can confirm every backend in the chain is secure. "
+            f"Configure a single system credential store (set "
+            f"{_KEYRING_BACKEND_ENV_VAR} to it) and restart GAIA. See "
+            "docs/security/connections.mdx."
+        ) from e
+    targets: List[object] = [backend]
+    for member in members:
+        targets.extend(_write_targets(member, depth + 1))
+    return targets
+
 
 def _connection_username(provider: str, slot: str) -> str:
     """Keyring username of one stored account: ``"<provider>:<slot>"``."""
@@ -93,8 +142,10 @@ def _provider_credentials_username(provider: str) -> str:
 
 def verify_keyring_backend() -> None:
     """
-    Raise ``ConnectorsError`` if the active keyring is one of the refused
-    backends. Called eagerly at every save and at every load — cheap, and
+    Raise ``ConnectorsError`` if the active keyring is, or derives from, one of
+    the refused backends. A chained keyring is expanded and every backend it
+    can write to is checked; a chain that cannot be inspected is refused.
+    Called eagerly at every save and at every load — cheap, and
     closes the silent-plaintext-fallback path (A4).
 
     Also the single eager choke point where an unresolvable
@@ -123,8 +174,10 @@ def verify_keyring_backend() -> None:
             f"Could not initialize the keyring backend: {e}.{hint} "
             "See docs/security/connections.mdx."
         ) from e
-    cls_name = type(backend).__name__
-    if cls_name in _REFUSED_BACKEND_CLASS_NAMES:
+    for target in _write_targets(backend):
+        cls_name = _refused_class_name(target)
+        if cls_name is None:
+            continue
         raise ConnectorsError(
             f"Insecure keyring backend {cls_name!r} is in use. GAIA refuses "
             "to store OAuth refresh tokens in plaintext. Install a secure "
