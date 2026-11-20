@@ -499,3 +499,27 @@ func TestAnUnknownAgentProgramListsGaiapy(t *testing.T) {
 		}
 	}
 }
+
+// A missing Python agent asked for as gaiapy is reported under the name the
+// user typed, with the program the search looked for beside it.
+func TestAMissingGaiapyIsReportedUnderTheNameTyped(t *testing.T) {
+	isolateNative(t)
+	for _, name := range []string{PythonAgentChoice, "GAIAPY"} {
+		err := selectAgent(NewCatalog(), name)
+		var missing *MissingProgramError
+		if !errors.As(err, &missing) {
+			t.Fatalf("%s with no Python agent installed: got %v, want a missing-program error", name, err)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, PythonAgentChoice+" (the "+PythonAgentBinary+" program) was asked for") {
+			t.Errorf("%s: the error does not name gaiapy and the program searched for: %v", name, err)
+		}
+		if strings.Contains(msg, ": "+PythonAgentBinary+" was asked for") {
+			t.Errorf("%s: the error claims gaia-agent was asked for: %v", name, err)
+		}
+	}
+	err := selectAgent(NewCatalog(), PythonAgentBinary)
+	if err == nil || !strings.Contains(err.Error(), ": "+PythonAgentBinary+" was asked for") {
+		t.Errorf("gaia-agent is no longer reported under its own name: %v", err)
+	}
+}

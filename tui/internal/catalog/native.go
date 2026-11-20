@@ -210,7 +210,11 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 		}
 		l := Find(PythonAgentBinary, FlagshipID)
 		if !l.Found() {
-			return "", missingChoiceError(PythonAgentBinary, l)
+			asked := PythonAgentBinary
+			if strings.EqualFold(name, PythonAgentChoice) {
+				asked = PythonAgentChoice + " (the " + PythonAgentBinary + " program)"
+			}
+			return "", missingChoiceError(asked, l)
 		}
 		agent.BinaryPath = l.Path
 		return "", nil
