@@ -203,7 +203,8 @@ def carry_forward(
 ) -> int:
     """Re-emit open alerts this run didn't report so the upload doesn't close them.
 
-    An alert is dropped only when its file no longer exists. Returns how many were
+    An alert is dropped only when its file no longer exists. Two lenses can file the
+    same ``dedup_key`` as separate alerts; each is carried. Returns how many were
     carried forward.
     """
     run = sarif["runs"][0]
@@ -265,7 +266,6 @@ def carry_forward(
                 "properties": {"security-severity": severity, "carried_forward": True},
             }
         )
-        reported.add(rule_id)
         carried += 1
 
     return carried

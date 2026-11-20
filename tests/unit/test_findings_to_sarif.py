@@ -208,3 +208,28 @@ def test_main_carries_forward_into_written_sarif(tmp_path):
     assert rc == 0
     results = json.loads(out.read_text(encoding="utf-8"))["runs"][0]["results"]
     assert [r["ruleId"] for r in results] == [TARSLIP_FINDING["dedup_key"]]
+
+
+def test_carry_forward_keeps_both_alerts_two_lenses_filed_under_one_key(tmp_path):
+    repo = _repo_with(tmp_path, TARSLIP_FINDING["path"])
+    first, second = _open_alert(number=1), _open_alert(number=2)
+    second["most_recent_instance"]["message"]["text"] = (
+        "A second lens's wording. " + first["most_recent_instance"]["message"]["text"]
+    )
+    sarif = f2s.to_sarif([])
+    assert f2s.carry_forward(sarif, [first, second], repo) == 2
+
+    run = sarif["runs"][0]
+    assert [r["message"]["text"] for r in run["results"]] == [
+        first["most_recent_instance"]["message"]["text"],
+        second["most_recent_instance"]["message"]["text"],
+    ]
+    assert len(run["tool"]["driver"]["rules"]) == 1
+
+
+def test_carry_forward_skips_every_alert_whose_key_the_run_reported(tmp_path):
+    repo = _repo_with(tmp_path, TARSLIP_FINDING["path"])
+    sarif = f2s.to_sarif([TARSLIP_FINDING])
+    alerts = [_open_alert(number=1), _open_alert(number=2)]
+    assert f2s.carry_forward(sarif, alerts, repo) == 0
+    assert len(sarif["runs"][0]["results"]) == 1
