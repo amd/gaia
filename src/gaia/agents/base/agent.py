@@ -11869,7 +11869,9 @@ Do NOT wrap conversational replies in JSON.
         """
         return answer
 
-    def answer_problems(self, answer: str) -> List[str]:
+    def answer_problems(  # pylint: disable=unused-argument
+        self, answer: str
+    ) -> List[str]:
         """What a subclass's own check finds wrong with *answer*, or nothing.
 
         The loop sends the problems back once per turn for the model to repair,
