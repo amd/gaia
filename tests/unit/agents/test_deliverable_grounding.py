@@ -1431,3 +1431,46 @@ def test_an_oversized_whole_number_in_a_script_does_not_crash_the_check():
     )
 
     assert [f.gate for f in findings] == [FILE]
+
+
+# ---------------------------------------------------------------------------
+# Figures the user asked to be invented are not unsourced (#8651)
+# ---------------------------------------------------------------------------
+
+SAMPLE_SALES = (
+    "| Region | Amount |\n|---|---|\n| North | $12,500.00 |\n| South | $9,800.00 |\n"
+    "| East | $15,200.00 |\n| West | $7,300.00 |\n| Central | $11,050.00 |\n"
+)
+
+
+def _sales_findings(query):
+    return _check(_md(SAMPLE_SALES), [], query=query, name="sales.md")
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "create sales.xlsx with a sheet named Data holding 5 rows of sample sales "
+        "(region, amount) using a Python script, then read it back and tell me the "
+        "total.",
+        "Make a spreadsheet of fake quarterly sales figures.",
+        "Write sales.md with some made-up numbers per region.",
+        "Fill sales.md with dummy data so I can try the chart.",
+        "I need test data for sales.md: region and amount.",
+    ],
+)
+def test_figures_the_user_asked_to_be_invented_are_not_flagged(query):
+    assert _sales_findings(query) == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "create sales.md with Q3 sales by region.",
+        "Summarise the sample report.pdf into sales.md.",
+        "Test the sales figures in sales.md against last quarter.",
+        "Write sales.md and test whether the totals match.",
+    ],
+)
+def test_figures_a_real_request_did_not_supply_are_still_flagged(query):
+    assert [f.gate for f in _sales_findings(query)] == [FILE]
