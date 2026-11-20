@@ -1,10 +1,14 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import type { SkillCommands } from '../hooks/useSkillCommands';
 import { useT } from '../i18n/useT';
 
 export const SKILL_MENU_ID = 'composer-skill-menu';
+
+/** The menu's 6px offset from the composer plus a margin from the window's top edge. */
+const EDGE_GAP = 14;
 
 export function skillOptionId(index: number): string {
     return `${SKILL_MENU_ID}-${index}`;
@@ -25,10 +29,33 @@ interface SkillCommandMenuProps {
 /** The skills a typed `/` can run, shown above the composer's text. */
 export function SkillCommandMenu({ menu, onPick }: SkillCommandMenuProps) {
     const t = useT();
+    const ref = useRef<HTMLDivElement>(null);
+    const [room, setRoom] = useState<number | null>(null);
+
+    // A centred composer (the new-chat screen) leaves less room above it than the CSS cap allows.
+    useLayoutEffect(() => {
+        if (!menu.open) return;
+        const place = () => {
+            const composer = ref.current?.offsetParent;
+            if (!composer) return;
+            setRoom(Math.max(0, Math.floor(composer.getBoundingClientRect().top - EDGE_GAP)));
+        };
+        place();
+        const sized = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(place);
+        const composer = ref.current?.offsetParent;
+        if (composer) sized?.observe(composer);
+        window.addEventListener('resize', place);
+        return () => {
+            sized?.disconnect();
+            window.removeEventListener('resize', place);
+        };
+    }, [menu.open, menu.status]);
+
     if (!menu.open) return null;
+    const style = room === null ? undefined : ({ '--skill-menu-room': `${room}px` } as CSSProperties);
     if (menu.status !== 'ready') {
         return (
-            <div className="skill-menu" role={menu.status === 'error' ? 'alert' : 'status'}>
+            <div ref={ref} style={style} className="skill-menu" role={menu.status === 'error' ? 'alert' : 'status'}>
                 <p className="skill-menu-note">
                     {menu.status === 'error'
                         ? t('composer.skillsFailed', { error: menu.error ?? '' })
@@ -38,7 +65,7 @@ export function SkillCommandMenu({ menu, onPick }: SkillCommandMenuProps) {
         );
     }
     return (
-        <div className="skill-menu">
+        <div ref={ref} style={style} className="skill-menu">
             <p className="skill-menu-title">{t('composer.skillsTitle')}</p>
             <ul id={SKILL_MENU_ID} role="listbox" aria-label={t('composer.skillsTitle')}>
                 {menu.matches.map((skill, i) => (

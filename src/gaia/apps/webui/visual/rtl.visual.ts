@@ -574,6 +574,26 @@ for (const locale of ['en', 'ar']) {
         await expect(menu).toHaveCount(0);
         expect(await audit(page)).toEqual([]);
     });
+
+    // At 800px tall the centred new-chat composer left the long list's first rows above the window.
+    test(`a long skill list fits above the new-chat message box in a short window (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 1280, height: 800 });
+        const many = Array.from({ length: 16 }, (_, i) => ({ ...SKILL_LIST[0], name: `skill-${String(i).padStart(2, '0')}` }));
+        await open(page, '', locale, (p) => p.route((url) => url.pathname === '/api/skills', (route) =>
+            route.fulfill({ json: { skills: many, invalid: {} } })));
+        const box = page.locator('.new-chat textarea').first();
+        await box.fill('/');
+        const menu = page.locator('.skill-menu');
+        await expect(menu.getByRole('option')).toHaveCount(16);
+        await shot(page, `skill-menu-short-window-${locale}`);
+
+        const [menuBox, composerBox] = [(await menu.boundingBox())!, (await page.locator('.new-chat .composer').boundingBox())!];
+        expect(menuBox.y, 'the list runs off the top of the window').toBeGreaterThanOrEqual(0);
+        expect(menuBox.y + menuBox.height, 'the list covers the message box').toBeLessThanOrEqual(composerBox.y + 1);
+        await menu.getByRole('option').first().scrollIntoViewIfNeeded();
+        await expect(menu.getByRole('option').first()).toBeInViewport();
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 const BIG_LIBRARY = Array.from({ length: 600 }, (_, i) => ({
