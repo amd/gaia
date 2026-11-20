@@ -252,7 +252,9 @@ class DictationToolsMixin:
         if not output_path:
             return None, audio_format, None
         destination = _workspace_target(self, output_path)
-        if destination.is_dir() or not destination.suffix:
+        # A trailing separator names a folder even when the name has a dot.
+        names_folder = output_path.rstrip().endswith(("/", "\\"))
+        if names_folder or destination.is_dir() or not destination.suffix:
             destination = destination / f"{stem}{SPEECH_FILE_FORMATS[audio_format]}"
         else:
             named = format_of(destination)
@@ -401,7 +403,15 @@ class DictationToolsMixin:
             script_file: Optional[Path] = None
             if script is not None:
                 script_file = audio.with_suffix(".script.md")
-                script_file.write_text(script, encoding="utf-8")
+                try:
+                    script_file.write_text(script, encoding="utf-8")
+                except OSError as exc:
+                    return {
+                        "status": "error",
+                        "error": f"The audio was recorded but its listening script "
+                        f"could not be saved: {exc}",
+                        "kept_at": str(audio),
+                    }
             script_not_copied = ""
             if user_audio is not None:
                 copy_for_user(audio, user_audio, "dictate_document")

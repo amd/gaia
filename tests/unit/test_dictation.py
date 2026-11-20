@@ -502,9 +502,9 @@ def test_text_and_markdown_files_are_read_as_they_are(tmp_path):
 
 
 def test_an_unsupported_or_empty_file_is_refused_by_name(tmp_path):
-    slides = tmp_path / "deck.pptx"
+    slides = tmp_path / "book.epub"
     slides.write_bytes(b"PK")
-    with pytest.raises(DictationError, match=r"deck\.pptx is not a document GAIA"):
+    with pytest.raises(DictationError, match=r"book\.epub is not a document GAIA"):
         document_text(str(slides))
     empty = tmp_path / "empty.txt"
     empty.write_text("  \n", encoding="utf-8")

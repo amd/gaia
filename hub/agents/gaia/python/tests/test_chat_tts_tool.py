@@ -144,6 +144,25 @@ def test_tts_saved_to_a_named_folder_still_gets_a_player(tts_tool):
     assert card["data"]["saved_to"] == str(target)
 
 
+def test_tts_an_audio_folder_that_cannot_be_made_is_a_structured_error(
+    tts_tool, monkeypatch
+):
+    import gaia.agents.tools.dictation_tools as dictation_tools
+
+    tool, _allowed = tts_tool
+
+    def no_folder(*_args, **_kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(dictation_tools, "new_speech_file", no_folder)
+    with patch("gaia.audio.lemonade_tts.LemonadeTTSClient") as client:
+        _speaks(client)
+        result = tool("Read this aloud.")
+
+    assert result == {"status": "error", "error": "[Errno 13] Permission denied"}
+    client.return_value.synthesize_file.assert_not_called()
+
+
 def test_tts_copy_that_cannot_be_saved_says_where_the_recording_is(
     tts_tool, monkeypatch
 ):

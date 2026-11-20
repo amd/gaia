@@ -260,6 +260,61 @@ class TestTTSRequestShape:
         with pytest.raises(ValueError, match="no MPEG frames"):
             mp3_frames(id3v2(b"only a tag"))
 
+    @staticmethod
+    def _info_frame(tag=b"Info", header=b"\xff\xf3\xe4\xc4", offset=13):
+        """A silent header frame as LAME writes it: the tag after the side info."""
+        size = 480 if header == b"\xff\xf3\xe4\xc4" else 417
+        body = bytearray(size - 4)
+        body[offset - 4 : offset] = tag
+        return header + bytes(body)
+
+    def test_a_pieces_info_frame_is_dropped_so_the_join_has_one_length(self):
+        # MPEG-2 mono: 9 bytes of side info, so the tag sits at byte 13.
+        for tag in (b"Info", b"Xing"):
+            frames, seconds = mp3_frames(self._info_frame(tag) + mp3_bytes(3))
+            assert frames == mp3_bytes(3)
+            assert seconds == pytest.approx(3 * 576 / 24000)
+
+    def test_mpeg1_stereo_and_vbri_headers_are_found_where_they_live(self):
+        # MPEG-1 Layer III, 128 kbps, 44.1 kHz, stereo: 32 bytes of side info.
+        mpeg1 = b"\xff\xfb\x90\x00"
+        plain = (mpeg1 + b"\x00" * 413) * 2
+        xing = self._info_frame(b"Xing", header=mpeg1, offset=36)
+        vbri = self._info_frame(b"VBRI", header=mpeg1, offset=36)
+        assert mp3_frames(xing + plain)[0] == plain
+        assert mp3_frames(vbri + plain)[0] == plain
+        # Mono MPEG-1 has 17 bytes of side info, so its tag is at byte 21.
+        mono = b"\xff\xfb\x90\xc0"
+        mono_plain = mono + b"\x00" * 413
+        assert (
+            mp3_frames(self._info_frame(header=mono, offset=21) + mono_plain)[0]
+            == mono_plain
+        )
+
+    def test_audio_that_happens_to_spell_info_is_kept(self):
+        # Only a leading frame can be a header; later ones are sound.
+        frames, seconds = mp3_frames(mp3_bytes(2) + self._info_frame())
+        assert len(frames) == 3 * 480
+        assert seconds == pytest.approx(3 * 576 / 24000)
+        # The tag at the wrong offset is sound too.
+        wrong = self._info_frame(offset=21) + mp3_bytes(1)
+        assert mp3_frames(wrong)[0] == wrong
+
+    def test_a_file_that_is_only_an_info_frame_has_no_audio(self):
+        with pytest.raises(ValueError, match="no MPEG frames"):
+            mp3_frames(self._info_frame())
+
+    def test_joined_pieces_keep_no_info_frame(self, monkeypatch, tmp_path):
+        first = self._info_frame() + mp3_bytes(2)
+        second = self._info_frame() + mp3_bytes(1)
+        Wire(monkeypatch, [mp3_response(first), mp3_response(second)])
+        out = tmp_path / "speech.mp3"
+        seconds = LemonadeTTSClient(base_url=BASE).synthesize_file(
+            ["One.", "Two."], out, audio_format="mp3"
+        )
+        assert out.read_bytes() == mp3_bytes(3)
+        assert seconds == pytest.approx(3 * 576 / 24000)
+
     def test_a_reply_that_is_not_mp3_is_refused(self, monkeypatch, tmp_path):
         Wire(monkeypatch, [pcm_response(np.zeros(4))])
         out = tmp_path / "speech.mp3"

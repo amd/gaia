@@ -3967,9 +3967,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             model = DEFAULT_TTS_MODEL
             # Recorded where the Agent UI serves inline audio from
             # (gaia.ui.generated_media), then copied to where the user asked.
-            audio = new_speech_file("speech", audio_format)
             pieces = _split_text(text.strip(), SPEECH_CHUNK_CHARS)
             try:
+                audio = new_speech_file("speech", audio_format)
                 client = LemonadeTTSClient(
                     base_url=resolve_lemonade_base_url(
                         getattr(self, "_base_url", None)

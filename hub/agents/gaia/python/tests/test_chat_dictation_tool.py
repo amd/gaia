@@ -239,6 +239,45 @@ def test_a_copy_that_cannot_be_saved_says_where_the_recording_is(
     )
 
 
+def test_a_script_that_cannot_be_written_says_where_the_recording_is(
+    dictation, monkeypatch
+):
+    real_write = Path.write_text
+
+    def read_only(self, *args, **kwargs):
+        if self.name.endswith(".script.md"):
+            raise PermissionError(13, "Permission denied")
+        return real_write(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", read_only)
+    result = dictation.tool(str(dictation.allowed / "report.md"))
+
+    assert result["status"] == "error"
+    assert "Permission denied" in result["error"]
+    kept = Path(result["kept_at"])
+    assert kept.is_file() and kept.parent == media_dir("audio")
+
+
+def test_a_folder_name_with_a_dot_is_a_folder_when_it_ends_in_a_separator(
+    dictation,
+):
+    for sep in ("/", "\\"):
+        out = dictation.allowed / "Reports v1.2"
+        result = dictation.tool(
+            str(dictation.allowed / "story.txt"), output_path=str(out) + sep
+        )
+        assert result["status"] == "success", result
+        assert result["saved_to"] == str(out / "story.mp3")
+        assert (out / "story.mp3").is_file()
+    # Without the separator it still reads as a file name, and is refused.
+    result = dictation.tool(
+        str(dictation.allowed / "story.txt"),
+        output_path=str(dictation.allowed / "Notes v2.0"),
+    )
+    assert result["status"] == "error"
+    assert "must be a folder or a file ending in .mp3" in result["error"]
+
+
 def test_a_script_copy_that_fails_does_not_undo_the_audio_copy(dictation, monkeypatch):
     """The reply must match the disk: the audio is there, only the script is not."""
     import shutil
@@ -399,7 +438,7 @@ def test_a_document_or_destination_outside_the_allowed_folders_is_refused(
 def test_a_missing_or_unsupported_document_says_so(dictation):
     missing = dictation.tool(str(dictation.allowed / "nope.pdf"))
     assert "is not a file" in missing["error"]
-    deck = dictation.allowed / "deck.pptx"
+    deck = dictation.allowed / "book.epub"
     deck.write_bytes(b"PK")
     assert "not a document GAIA can dictate" in dictation.tool(str(deck))["error"]
 

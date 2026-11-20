@@ -552,11 +552,22 @@ def _mp3_shape(frames: bytes) -> Tuple[int, ...]:
     return ((frames[1] >> 3) & 0x03, (frames[2] >> 2) & 0x03, frames[3] >> 6)
 
 
+def _is_vbr_info_frame(data: bytes, position: int, mpeg1: bool) -> bool:
+    """Whether the frame at *position* is a silent Xing/Info or VBRI header."""
+    mono = (data[position + 3] >> 6) == 0x03
+    side_info = (17 if mono else 32) if mpeg1 else (9 if mono else 17)
+    tag = position + 4 + side_info
+    return data[tag : tag + 4] in (b"Xing", b"Info") or (
+        data[position + 36 : position + 40] == b"VBRI"
+    )
+
+
 def mp3_frames(data: bytes) -> Tuple[bytes, float]:
     """``(the MPEG Layer III frames in *data*, their length in seconds)``.
 
-    Drops a leading ID3v2 tag and a trailing ID3v1 tag, so the frames of
-    several files can be written one after another as a single MP3.
+    Drops a leading ID3v2 tag, a leading Xing/Info or VBRI header frame and a
+    trailing ID3v1 tag, so the frames of several files can be written one after
+    another as a single MP3.
 
     Raises:
         ValueError: *data* holds anything other than whole Layer III frames.
@@ -585,6 +596,11 @@ def mp3_frames(data: bytes) -> Tuple[bytes, float]:
         length = samples // 8 * bitrate // rate + ((header[2] >> 1) & 0x01)
         if position + length > end:
             raise ValueError("the last MPEG frame is cut short")
+        if position == start and _is_vbr_info_frame(data, position, mpeg1):
+            # Its frame count and seek table describe this piece alone, and
+            # would make a player misread the length of the joined file.
+            start = position = position + length
+            continue
         position += length
         seconds += samples / rate
     if position == start:
