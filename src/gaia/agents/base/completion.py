@@ -206,6 +206,10 @@ _MODIFIER = re.compile(
     r"(?:the|a|an|all|every|each|on|of|in|to|with|from|my|your|our|this|these)\b)"
     r"[a-z][a-z-]*\b"
 )
+# A bare extension before "file(s)" names a format ("a .txt file"); alone it
+# can still be a dotfile to write ("save it to .env").
+_EXTENSION_ONLY = re.compile(r"\.[A-Za-z0-9]+")
+_FILE_NOUN = re.compile(r"\s+files?\b", re.I)
 _NEGATED_TARGET = re.compile(r"\b(?:not|instead of|rather than)\s*$", re.I)
 _NOT_REQUEST = re.compile(
     r"\b(?:do not|don't|never|without|how (?:do|can|would)|explain how|"
@@ -446,6 +450,12 @@ def _scan_paths(text: str, immediate: bool, modifiers: bool = False) -> list[str
             and _MODIFIER.match(text[match.end() :])
         ):
             path = None  # "a Three.js scene": the name describes another noun
+        if (
+            path is not None
+            and _EXTENSION_ONLY.fullmatch(path)
+            and _FILE_NOUN.match(text[match.end() :])
+        ):
+            path = None  # "as a .txt file": a file type, not a file name
         if path is not None:
             paths.append(path)
         elif immediate and not paths:
