@@ -12074,6 +12074,12 @@ Do NOT wrap conversational replies in JSON.
         if _text(on_disk) == _text(shown):
             evidence.read_by_framework(key)
 
+    def _working_folder(self) -> str:
+        """The chat's working folder; the process's own only when the chat names none."""
+        from gaia.agents.tools.workspace_paths import _workspace_default
+
+        return _workspace_default(self) or os.getcwd()
+
     def _verification_project_root(self) -> Optional[str]:
         """The project this turn works in, from the shared project-root resolver."""
         for hook in ("_project_map_root", "_script_project_root"):
@@ -12143,7 +12149,7 @@ Do NOT wrap conversational replies in JSON.
         """
         if not answer or not answer.strip():
             return []
-        roots = [os.getcwd(), self._verification_project_root()]
+        roots = [self._working_folder(), self._verification_project_root()]
         return ungrounded(
             strip_verification_scope(answer),
             self._request_text(query),
@@ -12242,7 +12248,9 @@ Do NOT wrap conversational replies in JSON.
             return None
         written_keys = {evidence.key(path) for path in written}
         # Files a tool read, a script named, or the request names.
-        locate = path_locator([os.getcwd(), self._verification_project_root()])
+        locate = path_locator(
+            [self._working_folder(), self._verification_project_root()]
+        )
         records = getattr(self, "_turn_tool_executions", None) or []
         request = self._request_text(getattr(self, "_current_query", "") or "")
         named = (locate(raw) for raw in input_paths(records) + mentioned_paths(request))
@@ -12264,7 +12272,7 @@ Do NOT wrap conversational replies in JSON.
             written,
             self._pending_deliverables(),
             prose=next(iter(prose.values())) if len(prose) == 1 else "",
-            folder=os.getcwd(),
+            folder=self._working_folder(),
             # An empty file the request asks for is not a miss.
             empty_ok=[
                 path
@@ -12392,7 +12400,7 @@ Do NOT wrap conversational replies in JSON.
                 strip_verification_scope(answer),
                 self._request_text(query),
                 history,
-                [os.getcwd(), self._verification_project_root()],
+                [self._working_folder(), self._verification_project_root()],
             )
         self._turn_ungrounded = unverified_reasons(findings)
 

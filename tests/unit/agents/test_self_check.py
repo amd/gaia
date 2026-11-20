@@ -718,6 +718,29 @@ def test_a_file_in_a_mistyped_copy_of_the_working_folder_is_raised(tmp_path):
     assert mechanical_findings("Write answers.md", [str(report)], folder=str(home))
 
 
+def test_the_mistyped_folder_check_uses_the_chats_folder(agent, tmp_path, monkeypatch):
+    """The Agent UI and the daemon start in the home folder, not the chat's."""
+    home = tmp_path / "home"
+    chat = home / "Projects"
+    chat.mkdir(parents=True)
+    monkeypatch.chdir(home)
+    agent.working_directory = str(chat)
+    slip = home / "Projcts" / "answers.md"
+    sent, _ = _script(
+        agent,
+        _call("write_file", file_path=str(slip), content="# Answers\n"),
+        {"answer": "Saved answers.md."},
+        PASS,
+    )
+
+    agent.process_query("Write answers.md", max_steps=6)
+
+    assert slip.is_file()
+    asked = _checks(sent[-1])
+    assert len(asked) == 1 and "probably mistyped" in asked[0]["content"]
+    assert str(chat) in asked[0]["content"]
+
+
 def test_a_file_written_elsewhere_on_purpose_is_not_raised(tmp_path):
     home = tmp_path / "project-v1"
     home.mkdir()
