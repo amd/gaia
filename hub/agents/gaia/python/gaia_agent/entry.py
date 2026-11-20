@@ -95,6 +95,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     that was selected — never a quiet switch to the other.
     """
     try:
+        from gaia.platform_guard import avoid_wmi
+    except ImportError:  # amd-gaia older than the WMI guard; the pin allows it
+        print(
+            "WARNING: this amd-gaia cannot keep the agent off WMI, so on a busy "
+            "Windows PC the agent may crash. Fix: update the amd-gaia package.",
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        avoid_wmi()
+    try:
         from gaia.tls import use_os_trust_store
     except ImportError:  # amd-gaia older than the trust-store switch; the pin allows it
         print(

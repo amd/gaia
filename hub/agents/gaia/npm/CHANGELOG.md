@@ -17,6 +17,9 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   and the rest as one line each, with how to bring one back. A summarized
   skill keeps all its tools, so only the text shrinks. On a 64K window or
   smaller, at most one skill auto-loads per turn; large windows keep two.
+- **The sidecar no longer crashes on a busy Windows PC.** It died with an access
+  violation in Python's `_wmi` module when a WMI query timed out. It now reads
+  OS and CPU facts without WMI.
 - **Full access runs any command.** It used to refuse a program outside a
   short developer list (`pip`, `where`, `rmdir`, `gaia`, a program given by its
   full path), a package install outside a virtual environment, a path outside
