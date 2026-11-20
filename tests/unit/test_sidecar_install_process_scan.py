@@ -106,3 +106,32 @@ def test_a_script_run_from_the_folder_is_found_by_its_cmdline(tmp_path, monkeypa
 
     with pytest.raises(StopFailedError, match="77"):
         mod.assert_no_live_process_in(install_dir, "email")
+
+
+def test_a_path_shared_by_many_processes_is_resolved_once(tmp_path, monkeypatch):
+    """Hundreds of processes share a few executables; resolving each per process took seconds."""
+    install_dir = tmp_path / "agents" / "email"
+    install_dir.mkdir(parents=True)
+    inside = str(install_dir / "email.exe")
+    _machine(
+        monkeypatch,
+        [
+            _Proc(200 + i, exe="/usr/bin/shared", cmdline=["/usr/bin/shared"])
+            for i in range(50)
+        ]
+        + [_Proc(300, exe=inside), _Proc(301, exe=inside)],
+    )
+    resolved = []
+    real_resolve = mod.Path.resolve
+
+    def counting_resolve(self, *args, **kwargs):
+        resolved.append(str(self))
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(mod.Path, "resolve", counting_resolve)
+
+    with pytest.raises(StopFailedError, match="300, 301"):
+        mod.assert_no_live_process_in(install_dir, "email")
+
+    assert resolved.count(str(mod.Path("/usr/bin/shared"))) == 1
+    assert resolved.count(inside) == 1

@@ -420,6 +420,8 @@ def assert_no_live_process_in(install_dir: Path, agent_id: str) -> None:
 
     target = install_dir.resolve()
     survivors = []
+    # Most processes share a few executables; resolving each once keeps the scan fast.
+    inside: dict[str, bool] = {}
     # Attributes are read one at a time: inside process_iter, a read error
     # ends the whole scan.
     for proc in psutil.process_iter():
@@ -434,12 +436,15 @@ def assert_no_live_process_in(install_dir: Path, agent_id: str) -> None:
         for candidate in candidates:
             if not candidate:
                 continue
-            try:
-                Path(candidate).resolve().relative_to(target)
-            except (ValueError, OSError):
-                continue
-            survivors.append(proc.pid)
-            break
+            if candidate not in inside:
+                try:
+                    Path(candidate).resolve().relative_to(target)
+                    inside[candidate] = True
+                except (ValueError, OSError):
+                    inside[candidate] = False
+            if inside[candidate]:
+                survivors.append(proc.pid)
+                break
     if survivors:
         unique = sorted(set(survivors))
         raise StopFailedError(

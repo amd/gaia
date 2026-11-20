@@ -656,6 +656,34 @@ async def test_a_cut_off_reply_is_dated_when_the_turn_was_last_alive(
     assert reply["content"].endswith(INTERRUPTED_TURN_NOTICE)
 
 
+async def test_a_reply_saved_at_the_same_tick_as_a_later_message_stays_above_it(
+    tmp_path,
+):
+    """A coarse clock gives the turn's last save and a later reply one timestamp."""
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    now = [0]
+    try:
+        with patch.object(db, "_now", lambda: _at(now[0])):
+            sid = db.create_session()["id"]
+            with _as_server("B"):
+                db.begin_turn(sid, "question to B")
+                journal = restart_recovery.TurnJournal(db, sid, interval=0.0)
+                now[0] = 5
+                journal.observe(_chunk("B's partial answer"))
+            with _as_server("A"):
+                db.add_message(sid, "assistant", "A's answer", ends_turn=True)
+            with _as_server("C"):
+                assert recover_interrupted_work(db)["turns"] == 1
+            contents = [m["content"] for m in db.get_messages(sid)]
+    finally:
+        db.close()
+    assert contents == [
+        "question to B",
+        f"B's partial answer\n\n{INTERRUPTED_TURN_NOTICE}",
+        "A's answer",
+    ]
+
+
 async def test_the_question_and_its_marker_are_saved_together(tmp_path):
     db = ChatDatabase(str(tmp_path / "chat.db"))
     try:

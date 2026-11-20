@@ -17,6 +17,13 @@ class Host(ShellToolsMixin):
         return False
 
 
+@pytest.fixture(autouse=True)
+def _absolute_path_only(monkeypatch):
+    """A relative PATH entry on the test machine (e.g. ``%NVM_HOME%``) makes every read ask."""
+    entries = os.environ.get("PATH", "").split(os.pathsep)
+    monkeypatch.setenv("PATH", os.pathsep.join(e for e in entries if os.path.isabs(e)))
+
+
 @pytest.fixture
 def host(tmp_path):
     return Host(tmp_path)
