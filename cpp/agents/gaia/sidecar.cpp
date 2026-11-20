@@ -984,8 +984,10 @@ private:
                 json usage = {{"steps", r.value("steps_taken", 0)}, {"tools_used", s->console->toolsUsed()},
                               {"elapsed", elapsed}};
                 if (r.contains("usage") && r["usage"].is_object()) {
-                    usage["tokens"] = r["usage"].value("total_tokens", 0);
+                    // The UI prices `tokens` as output, so it must not include the prompt.
+                    usage["tokens"] = r["usage"].value("completion_tokens", 0);
                     usage["input_tokens"] = r["usage"].value("prompt_tokens", 0);
+                    if (r["usage"].contains("cached_tokens")) usage["cached_tokens"] = r["usage"]["cached_tokens"];
                 }
                 if (run->cancelled) {
                     terminal = {{"type", "final"}, {"answer", ""}};
