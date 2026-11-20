@@ -25,6 +25,8 @@ from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAM
         ("/research\nmulti-line topic", "multi-line topic"),
         ("/research", ""),
         ("/research   ", ""),
+        ("/research-report the EU AI Act", "the EU AI Act"),
+        ("/research-report", ""),
     ],
 )
 def test_a_leading_research_command_names_its_topic(text, topic):
@@ -36,6 +38,7 @@ def test_a_leading_research_command_names_its_topic(text, topic):
     [
         "research RISC-V",
         "/researcher notes",
+        "/research-reports x",
         "please /research this",
         "/model x",
         "",
@@ -100,6 +103,18 @@ def test_research_loads_the_skill_and_briefs_the_model(model_id):
         assert research.RESEARCH_SKILL in agent.loaded_skills
         # Its instructions are in the session context the model gets this turn.
         assert "# Research Report" in agent.session_context
+
+
+def test_the_skills_own_command_is_a_research_turn_too():
+    # /research-report is also the generic /<skill-name> command; it must not
+    # skip the brief and the citation check that /research gets.
+    with _agent() as (agent, seen):
+        agent.process_query("/research-report the RISC-V ISA")
+        (sent,) = seen
+        assert research.RESEARCH_BRIEF in sent
+        assert sent.endswith("the RISC-V ISA")
+        assert "/research-report" not in sent
+        assert research.RESEARCH_SKILL in agent.loaded_skills
 
 
 def test_memory_and_history_keep_the_topic_not_the_brief():
@@ -291,6 +306,15 @@ def test_the_flagship_records_a_read_only_of_a_downloaded_file(monkeypatch):
             ("download_file", _PDF),
             ("read_file", "/tmp/papers/2401.00001.pdf"),
         ]
+
+
+def test_a_link_the_user_gave_is_not_invented_but_still_needs_a_read():
+    report = f"The court revived it [source]({_WSGR})."
+    request = f"what happened in {_WSGR}"
+    (problem,) = research.citation_problems(report, [], request)
+    assert "never opened" in problem
+    fetched = ("fetch_page", {"url": _WSGR}, {"status": "success", "content": "x"})
+    assert research.citation_problems(report, [fetched], request) == []
 
 
 def test_only_a_research_turn_checks_citations():

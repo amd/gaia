@@ -698,7 +698,9 @@ _QUESTION_TITLE_MAX_CHARS = 60
 #: A link or image the user typed: ``[text](target)`` / ``![alt](target)``.
 _MARKDOWN_LINK_RE = _re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
 #: The Research switch sends ``/research <topic>``; the topic is the title.
-_RESEARCH_COMMAND_RE = _re.compile(r"\A\s*/research(?=\s|\Z)", _re.IGNORECASE)
+_RESEARCH_COMMAND_RE = _re.compile(
+    r"\A\s*/research(?:-report)?(?=\s|\Z)", _re.IGNORECASE
+)
 #: A cloud model may reason before it answers, and only some providers let a
 #: request turn that off; this leaves room for the reasoning and the title.
 _CLOUD_TITLE_MAX_TOKENS = 512

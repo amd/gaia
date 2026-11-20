@@ -21,23 +21,43 @@ import (
 
 const researchCommand = "/research"
 
+// researchCommands start a research turn: the research-report skill's own
+// /research-report command is the same turn as /research.
+var researchCommands = []string{"/research-report", researchCommand}
+
 var researchChipStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Accent)
 
-// isResearchCommand reports whether a line starts with the /research command,
-// bare or with a topic. "/researcher" is not it.
-func isResearchCommand(query string) bool {
-	trimmed := strings.TrimLeftFunc(query, unicode.IsSpace)
-	if !strings.HasPrefix(strings.ToLower(trimmed), researchCommand) {
-		return false
+// researchCommandLen is the length of the research command a line starts
+// with, after leading space, or -1 when it starts with none. "/researcher" is
+// not one.
+func researchCommandLen(trimmed string) int {
+	lower := strings.ToLower(trimmed)
+	for _, command := range researchCommands {
+		if !strings.HasPrefix(lower, command) {
+			continue
+		}
+		rest := trimmed[len(command):]
+		if rest == "" || unicode.IsSpace(rune(rest[0])) {
+			return len(command)
+		}
 	}
-	rest := trimmed[len(researchCommand):]
-	return rest == "" || unicode.IsSpace(rune(rest[0]))
+	return -1
 }
 
-// researchTopic is what follows /research, "" for a bare one.
+// isResearchCommand reports whether a line starts with a research command,
+// bare or with a topic.
+func isResearchCommand(query string) bool {
+	return researchCommandLen(strings.TrimLeftFunc(query, unicode.IsSpace)) >= 0
+}
+
+// researchTopic is what follows the research command, "" for a bare one.
 func researchTopic(query string) string {
 	trimmed := strings.TrimLeftFunc(query, unicode.IsSpace)
-	return strings.TrimSpace(trimmed[len(researchCommand):])
+	n := researchCommandLen(trimmed)
+	if n < 0 {
+		return ""
+	}
+	return strings.TrimSpace(trimmed[n:])
 }
 
 // withResearch is the line to send: prefixed while research mode is on.

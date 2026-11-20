@@ -10,12 +10,17 @@
  */
 export const RESEARCH_COMMAND = '/research';
 
-/** True when *text* already starts with the `/research` command. */
+/** The research-report skill's own `/research-report` is the same turn. */
+const RESEARCH_COMMANDS = ['/research-report', RESEARCH_COMMAND];
+
+/** True when *text* already starts with `/research` or `/research-report`. */
 export function isResearchMessage(text: string): boolean {
-    const trimmed = text.trimStart();
-    if (!trimmed.toLowerCase().startsWith(RESEARCH_COMMAND)) return false;
-    const next = trimmed.charAt(RESEARCH_COMMAND.length);
-    return next === '' || /\s/.test(next);
+    const trimmed = text.trimStart().toLowerCase();
+    return RESEARCH_COMMANDS.some((command) => {
+        if (!trimmed.startsWith(command)) return false;
+        const next = trimmed.charAt(command.length);
+        return next === '' || /\s/.test(next);
+    });
 }
 
 /** The message to send: prefixed with `/research` while research mode is on. */

@@ -656,7 +656,8 @@ per-turn selection, and asks for a report that cites a fetched page for every
 claim. Its cited links are then checked against the pages it fetched, and any
 it could not back are listed under the report. The Agent UI's Research switch
 and the TUI's `/research` both send this
-form, so a caller gets the same behavior by sending it too. See
+form, so a caller gets the same behavior by sending it too. `/research-report`
+is the same turn. See
 [`SPEC.md`](./SPEC.md#query-request-body) for the exact contract.
 
 **`document-extract` ships bundled but not enabled.** `gaia-voice` routes a

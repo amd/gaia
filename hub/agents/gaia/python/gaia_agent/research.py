@@ -24,6 +24,8 @@ from gaia.web.citations import cited_urls, evidence_from_calls, uncited_reads
 RESEARCH_COMMAND = "/research"
 #: The skill a research turn runs on.
 RESEARCH_SKILL = "research-report"
+#: Typing the skill's own ``/research-report`` command is a research turn too.
+_RESEARCH_COMMANDS = ("/" + RESEARCH_SKILL, RESEARCH_COMMAND)
 #: Tools a research turn cannot do without.
 RESEARCH_TOOLS = ("search_web", "fetch_page")
 
@@ -59,20 +61,21 @@ def _split_notes(text: str) -> Tuple[str, str]:
 def split_research_command(text: object) -> Optional[Tuple[str, str]]:
     """``(notes, topic)`` for a ``/research`` message, ``None`` for any other.
 
-    Only a leading ``/research`` followed by whitespace or the end counts, after
-    any notes the app put first: ``/researcher`` and a ``/research``
-    mid-sentence are ordinary text. A bare ``/research`` has topic ``""``.
+    Only a leading ``/research`` or ``/research-report`` followed by whitespace
+    or the end counts, after any notes the app put first: ``/researcher`` and a
+    ``/research`` mid-sentence are ordinary text. A bare one has topic ``""``.
     """
     if not isinstance(text, str):
         return None
     notes, rest = _split_notes(text)
     stripped = rest.lstrip()
-    if not stripped.lower().startswith(RESEARCH_COMMAND):
-        return None
-    after = stripped[len(RESEARCH_COMMAND) :]
-    if after and not after[0].isspace():
-        return None
-    return notes, after.strip()
+    for command in _RESEARCH_COMMANDS:
+        if not stripped.lower().startswith(command):
+            continue
+        after = stripped[len(command) :]
+        if not after or after[0].isspace():
+            return notes, after.strip()
+    return None
 
 
 def parse_research_command(text: object) -> Optional[str]:
@@ -160,13 +163,17 @@ def _as_page_reads(calls: Iterable[Tuple[str, Any, Any]]) -> List[Tuple[str, Any
     return out
 
 
-def citation_problems(report: str, calls: Iterable[Tuple[str, Any, Any]]) -> List[str]:
+def citation_problems(
+    report: str, calls: Iterable[Tuple[str, Any, Any]], request: str = ""
+) -> List[str]:
     """What is wrong with a research report's citations, as plain sentences.
 
     *calls* are the conversation's web tool calls as ``(name, args, result)``,
-    including ``download_file`` and the reads of the files it saved.
+    including ``download_file`` and the reads of the files it saved. A link in
+    the user's *request* is not invented, though citing it still needs a read.
     """
-    evidence = evidence_from_calls(_as_page_reads(calls))
+    asked = [("request", {"text": request}, None)] if request else []
+    evidence = evidence_from_calls(asked + _as_page_reads(calls))
     unread, invented = uncited_reads(report, evidence)
     problems = []
     if invented:

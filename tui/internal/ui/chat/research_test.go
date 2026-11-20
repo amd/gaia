@@ -30,7 +30,10 @@ func TestResearchCommandIsRecognisedOnlyAtTheStart(t *testing.T) {
 		"/research RISC-V":      true,
 		"  /RESEARCH jwst":      true,
 		"/research\tthe EU act": true,
+		"/research-report jwst": true,
+		"/research-report":      true,
 		"/researcher notes":     false,
+		"/research-reports x":   false,
 		"please /research this": false,
 		"research RISC-V":       false,
 	} {
@@ -39,6 +42,9 @@ func TestResearchCommandIsRecognisedOnlyAtTheStart(t *testing.T) {
 		}
 	}
 	if got := researchTopic("  /research   the EU AI Act "); got != "the EU AI Act" {
+		t.Fatalf("topic = %q", got)
+	}
+	if got := researchTopic("/research-report jwst"); got != "jwst" {
 		t.Fatalf("topic = %q", got)
 	}
 }
@@ -93,6 +99,9 @@ func TestResearchModeLeavesOtherCommandsAlone(t *testing.T) {
 	m.researchMode = true
 	if got := m.withResearch("/research already"); got != "/research already" {
 		t.Fatalf("doubled the command: %q", got)
+	}
+	if got := m.withResearch("/research-report jwst"); got != "/research-report jwst" {
+		t.Fatalf("prefixed the skill's own command: %q", got)
 	}
 	if got := m.withResearch("   "); got != "   " {
 		t.Fatalf("prefixed an empty line: %q", got)

@@ -9,7 +9,9 @@ describe('research mode', () => {
         expect(isResearchMessage('/research RISC-V')).toBe(true);
         expect(isResearchMessage('  /RESEARCH jwst')).toBe(true);
         expect(isResearchMessage('/research')).toBe(true);
+        expect(isResearchMessage('/research-report jwst')).toBe(true);
         expect(isResearchMessage('/researcher notes')).toBe(false);
+        expect(isResearchMessage('/research-reports jwst')).toBe(false);
         expect(isResearchMessage('please /research this')).toBe(false);
     });
 
@@ -20,6 +22,7 @@ describe('research mode', () => {
 
     it('never doubles the command or prefixes an empty message', () => {
         expect(withResearchCommand('/research jwst', true)).toBe('/research jwst');
+        expect(withResearchCommand('/research-report jwst', true)).toBe('/research-report jwst');
         expect(withResearchCommand('   ', true)).toBe('   ');
     });
 });

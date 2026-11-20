@@ -308,7 +308,8 @@ the turn's context gets a research brief: cite, inline, a page fetched in the
 conversation for every factual claim, and end with a Sources list. Bracketed
 notes a caller puts before the command (the Agent UI's `[This chat is working
 in the folder …]`) stay in front of the topic. A bare `/research` asks the user
-for a topic.
+for a topic. `/research-report`, the skill's own `/<skill-name>` command, is the
+same research turn, brief and citation check included.
 Before a research turn's answer is final, its cited links are checked against
 the conversation's `search_web`, `fetch_page` and `download_file` results (a
 PDF counts once its downloaded file is read): a link that was never fetched, or that appears in

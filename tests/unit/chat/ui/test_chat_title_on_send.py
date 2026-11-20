@@ -119,6 +119,7 @@ def test_a_research_message_is_named_by_its_topic():
     assert ch._title_from_question("/research the EU AI Act") == "the EU AI Act"
     assert ch._title_from_question("  /RESEARCH\njwst") == "jwst"
     assert ch._title_from_question("/researcher notes") == "/researcher notes"
+    assert ch._title_from_question("/research-report jwst") == "jwst"
     assert ch._title_from_question("/research") is None
 
 
