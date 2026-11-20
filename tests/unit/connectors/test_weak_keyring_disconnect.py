@@ -33,6 +33,7 @@ from gaia.connectors.errors import (
 )
 
 SERVICE = store.SERVICE_NAME
+PROVIDERS = ["google", "microsoft", "microsoft_work"]
 ALICE = ("alice-sub", "alice@example.com", "rt-alice-secret")
 BOB = ("bob-sub", "bob@example.com", "rt-bob-secret")
 
@@ -116,11 +117,11 @@ def _activate(monkeypatch, backend):
     monkeypatch.setattr(keyring.core, "_keyring_backend", backend)
 
 
-def _seed(monkeypatch, provider, *people, items=None):
+def _seed(monkeypatch, provider, *people, items=None, account_types=None):
     """Sign ``people`` in on a strong keyring holding ``items``; return its items."""
     writer = StrongKeyring(items)
     _activate(monkeypatch, writer)
-    for account_id, email, refresh in people:
+    for i, (account_id, email, refresh) in enumerate(people):
         accounts.save_signed_in_account(
             provider,
             account_id=account_id,
@@ -128,6 +129,7 @@ def _seed(monkeypatch, provider, *people, items=None):
             refresh_token=refresh,
             scopes=["openid"],
             client_id_hash="hash",
+            account_type=(account_types or {}).get(i),
             add_account=True,
         )
     return dict(writer.items)
@@ -145,6 +147,7 @@ def refused(request, monkeypatch):
         _activate(monkeypatch, backend)
         return recorder
 
+    install.kind = request.param
     return install
 
 
@@ -294,14 +297,110 @@ def test_an_unknown_account_is_still_named_as_unknown(
     assert recorder.items == before
 
 
-def test_nothing_stored_is_idempotent(refused, no_provider_call):
+def _outcome(result):
+    return {
+        k: result[k] for k in ("revoke_supported", "revoked_remotely", "revoke_error")
+    }
+
+
+# What a secure keyring reports for a slot with no token: no grant to revoke.
+NOTHING_TO_REVOKE = {
+    "revoke_supported": True,
+    "revoked_remotely": True,
+    "revoke_error": None,
+}
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_nothing_stored_is_idempotent(provider, refused, monkeypatch, no_provider_call):
     from gaia.connectors.handler import disconnect
 
     recorder = refused({})
-    result = asyncio.run(disconnect("google", all_accounts=True))
+    result = asyncio.run(disconnect(provider, all_accounts=True))
     assert recorder.items == {}
     assert result["remaining_accounts"] == 0
     assert _writes(recorder) == []
+    assert _outcome(result) == NOTHING_TO_REVOKE
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_nothing_stored_default_account_asks_for_no_revoke(
+    provider, refused, monkeypatch, no_provider_call
+):
+    recorder = refused({})
+    result = asyncio.run(api.revoke_connection_async(provider))
+    assert _outcome(result) == NOTHING_TO_REVOKE
+    assert _writes(recorder) == []
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_an_indexed_account_whose_token_is_gone_asks_for_no_revoke(
+    provider, refused, monkeypatch, no_provider_call
+):
+    items = _seed(monkeypatch, provider, ALICE)
+    items.pop((SERVICE, f"{provider}:default"))
+    recorder = refused(items)
+
+    result = asyncio.run(api.revoke_connection_async(provider, all_accounts=True))
+
+    assert _outcome(result) == NOTHING_TO_REVOKE
+    assert _index_section(provider) is None
+    assert _writes(recorder) == []
+
+
+def test_only_the_account_with_a_token_asks_for_a_revoke(
+    refused, monkeypatch, no_provider_call
+):
+    items = _seed(monkeypatch, "google", ALICE, BOB)
+    items.pop((SERVICE, f"google:{accounts.slot_for(BOB[0])}"))
+    refused(items)
+
+    result = asyncio.run(api.revoke_connection_async("google", all_accounts=True))
+
+    by_email = {a["account_email"]: a for a in result["accounts"]}
+    assert "did not revoke" in by_email[ALICE[1]]["revoke_error"]
+    assert by_email[BOB[1]]["revoke_error"] is None
+    assert result["revoke_supported"] is False
+
+
+def test_the_message_names_the_keyring_problem_accurately(
+    refused, monkeypatch, no_provider_call
+):
+    refused(_seed(monkeypatch, "google", ALICE))
+    message = asyncio.run(api.revoke_connection_async("google"))["revoke_error"]
+    if refused.kind == "weak":
+        assert "not secure" in message
+        assert "could not confirm" not in message
+    else:
+        assert "could not confirm" in message
+        assert "not secure" not in message
+
+
+def test_a_work_account_saved_under_microsoft_gets_the_work_page(
+    refused, monkeypatch, no_provider_call
+):
+    from gaia.connectors.providers.microsoft import (
+        ACCOUNT_TYPE_PERSONAL,
+        ACCOUNT_TYPE_WORK,
+    )
+
+    refused(
+        _seed(
+            monkeypatch,
+            "microsoft",
+            ALICE,
+            BOB,
+            account_types={0: ACCOUNT_TYPE_PERSONAL, 1: ACCOUNT_TYPE_WORK},
+        )
+    )
+
+    result = asyncio.run(api.revoke_connection_async("microsoft", all_accounts=True))
+
+    by_email = {a["account_email"]: a["revoke_error"] for a in result["accounts"]}
+    assert "https://account.live.com/consent/Manage" in by_email[ALICE[1]]
+    assert "https://myapps.microsoft.com" not in by_email[ALICE[1]]
+    assert "https://myapps.microsoft.com" in by_email[BOB[1]]
+    assert "https://account.live.com" not in by_email[BOB[1]]
 
 
 # ---------------------------------------------------------------------------

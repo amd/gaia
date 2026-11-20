@@ -64,6 +64,9 @@ from gaia.connectors.grants import (
     revoke_agent_grant,
 )
 from gaia.connectors.store import (
+    UninspectableKeyringError,
+    WeakKeyringError,
+    connection_slot_in_use,
     keyring_read_refusal,
 )
 from gaia.connectors.store import list_connections as _store_list
@@ -525,15 +528,22 @@ def get_connection(
 
 
 async def _revoke_one(
-    provider: str, acct: Account, *, weak_keyring: bool = False
+    provider: str, acct: Account, *, refusal: Optional[WeakKeyringError] = None
 ) -> Dict[str, Any]:
     from gaia.connectors.flow import (
         not_revoked_on_weak_keyring,
+        nothing_to_revoke,
         revoke_provider_token,
     )
 
-    if weak_keyring:
-        result = not_revoked_on_weak_keyring(provider)
+    if refusal is not None and connection_slot_in_use(provider, slot=acct.slot):
+        result = not_revoked_on_weak_keyring(
+            provider,
+            uninspectable=isinstance(refusal, UninspectableKeyringError),
+            account_type=acct.account_type,
+        )
+    elif refusal is not None:
+        result = nothing_to_revoke()
     else:
         result = await revoke_provider_token(provider, slot=acct.slot)
     remaining = await locked_write(
@@ -591,18 +601,18 @@ async def revoke_connection_async(
             "not both."
         )
     # Revoking reads the token, which a weak keyring refuses; delete anyway.
-    weak = keyring_read_refusal() is not None
+    refusal = keyring_read_refusal()
     if all_accounts:
         stored = _accounts.accounts_for_delete(provider) or [_nothing_stored(provider)]
         results = [
-            await _revoke_one(provider, acct, weak_keyring=weak) for acct in stored
+            await _revoke_one(provider, acct, refusal=refusal) for acct in stored
         ]
         await locked_write(provider, _accounts.remove_all_accounts, provider)
         return _combine_revokes(results)
     slot = _accounts.resolve_slot(provider, account)
     match = [a for a in _accounts.accounts_for_delete(provider) if a.slot == slot]
     return await _revoke_one(
-        provider, match[0] if match else _nothing_stored(provider), weak_keyring=weak
+        provider, match[0] if match else _nothing_stored(provider), refusal=refusal
     )
 
 

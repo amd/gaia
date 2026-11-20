@@ -89,6 +89,10 @@ class WeakKeyringError(ConnectorsError):
     """
 
 
+class UninspectableKeyringError(WeakKeyringError):
+    """A chained keyring GAIA cannot fully inspect; it may be secure, or not."""
+
+
 def _refused_class_name(backend: object) -> Optional[str]:
     """Name of the refused class ``backend`` is or derives from, else ``None``."""
     for klass in type(backend).__mro__:
@@ -108,7 +112,7 @@ def _is_chain(backend: object) -> bool:
 
 
 def _chain_error(detail: str) -> ConnectorsError:
-    return WeakKeyringError(
+    return UninspectableKeyringError(
         f"{detail} GAIA will not store credentials until it can confirm every "
         "backend in the chain is secure. Configure a single system credential "
         f"store (set {_KEYRING_BACKEND_ENV_VAR} to it) and restart GAIA. See "
@@ -131,7 +135,7 @@ def _write_targets(
     if id(backend) in expanded:
         return []
     if depth >= _MAX_CHAIN_DEPTH:
-        raise WeakKeyringError(
+        raise UninspectableKeyringError(
             f"The chained keyring backend is nested more than {_MAX_CHAIN_DEPTH} "
             "levels deep, so GAIA cannot confirm every store it writes to is "
             "secure. Configure a single system credential store (set "
@@ -224,7 +228,7 @@ def verify_keyring_backend() -> None:
         )
 
 
-def keyring_read_refusal() -> Optional[str]:
+def keyring_read_refusal() -> Optional[WeakKeyringError]:
     """Why keyring reads are refused (a weak or uninspectable backend), else None.
 
     For delete paths that must still work there. Any other backend failure
@@ -233,7 +237,7 @@ def keyring_read_refusal() -> Optional[str]:
     try:
         verify_keyring_backend()
     except WeakKeyringError as e:
-        return str(e)
+        return e
     return None
 
 

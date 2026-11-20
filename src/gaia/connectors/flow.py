@@ -785,6 +785,14 @@ async def revoke_provider_token(
     return result
 
 
+def nothing_to_revoke() -> Dict[str, Any]:
+    """The revoke outcome for an account with no token stored: no live grant.
+
+    Reads nothing from the keyring, so it answers on one that refuses reads.
+    """
+    return {"revoke_supported": True, "revoked_remotely": True, "revoke_error": None}
+
+
 #: Where a user removes GAIA's access by hand, per OAuth provider id.
 REVOKE_PAGES: Dict[str, Tuple[str, str]] = {
     "google": ("Google", "https://myaccount.google.com/permissions"),
@@ -793,24 +801,41 @@ REVOKE_PAGES: Dict[str, Tuple[str, str]] = {
 }
 
 
-def not_revoked_on_weak_keyring(provider_id: str) -> Dict[str, Any]:
+def not_revoked_on_weak_keyring(
+    provider_id: str,
+    *,
+    uninspectable: bool = False,
+    account_type: Optional[str] = None,
+) -> Dict[str, Any]:
     """The revoke outcome when the keyring refuses reads (weak or uninspectable).
 
     Revoking needs the stored refresh token, which GAIA will not read from
     such a keyring, so only the local copy is removed. ``revoke_error`` tells
-    the user where to revoke GAIA's access by hand.
+    the user where to revoke GAIA's access by hand. ``uninspectable`` is a
+    chain GAIA could not check, which may well be secure; ``account_type``
+    sends a work account saved under ``microsoft`` to the work page.
     """
+    from gaia.connectors.providers.microsoft import ACCOUNT_TYPE_WORK
+
+    page_id = provider_id
+    if provider_id == "microsoft" and account_type == ACCOUNT_TYPE_WORK:
+        page_id = "microsoft_work"
     label, page = REVOKE_PAGES.get(
-        provider_id, (provider_id, "your account's connected-apps page")
+        page_id, (provider_id, "your account's connected-apps page")
     )
+    if uninspectable:
+        why = "GAIA could not confirm the keyring on this PC is secure"
+        fix = "use a single system credential store"
+    else:
+        why = "The keyring on this PC is not secure"
+        fix = "switch to a secure credential store"
     return {
         "revoke_supported": False,
         "revoked_remotely": False,
         "revoke_error": (
-            "The keyring on this PC is not secure, so GAIA removed the sign-in "
-            "without reading it and did not revoke GAIA's access at "
-            f"{label}. To revoke it, remove GAIA at {page}. To keep using "
-            "connectors, switch to a secure credential store: "
+            f"{why}, so GAIA removed the sign-in without reading it and did "
+            f"not revoke GAIA's access at {label}. To revoke it, remove GAIA "
+            f"at {page}. To keep using connectors, {fix}: "
             "https://amd-gaia.ai/docs/security/connections"
         ),
     }
