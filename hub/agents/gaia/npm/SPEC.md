@@ -454,15 +454,17 @@ context meter fills during a long turn instead of staying blank until `final`.
 The counts are the shared estimate; the `final.context` copy that follows is
 measured with the loaded model's own tokenizer when it can be.
 
-A request with `surface: "agent_ui"` may also be streamed `mood` events
-(contract ≥ 2.31): `{ "type": "mood", "mood": "happy" }`. That surface's prompt
-asks the model to open a reply with a `[mood:WORD]` tag naming its own
-reaction; the agent takes the tag out of the text, so it never appears in
+`mood` (contract ≥ 2.31), when `true`, lets the model say how it feels. The
+request may then be streamed `mood` events, `{ "type": "mood", "mood": "happy" }`.
+The session's prompt asks the model to open a reply with a `[mood:WORD]` tag
+naming its own reaction; the agent takes the tag out of the text, so it never appears in
 `token` or `final.answer`, and sends the word as this event. The words are
 happy, excited, love, laugh, playful, proud, curious, surprised, confused,
 skeptical, worried, sad, embarrassed, angry, determined and sleepy. The event
 is not terminal, a reply without a tag sends none, and a client may ignore
-it. Other surfaces get no mood line in the prompt and no event.
+it. The field is part of the prompt, so send the same value on every turn of
+a session. Without it there is no mood line in the prompt and no event, and
+pre-2.31 binaries `422` it.
 
 `reasoning` (contract ≥ 2.22), when `true`, streams the model's reasoning as
 `reasoning` events, `{ "type": "reasoning", "delta": "…" }`, so a client can

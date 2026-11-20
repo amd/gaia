@@ -71,6 +71,7 @@ from gaia.ui.sidecar.profiles import (
     grants_supported,
     internet_supported,
     memory_supported,
+    mood_supported,
     profile_for,
     reasoning_supported,
     scope_supported,
@@ -2298,6 +2299,7 @@ def _session_agent_kwargs(
         "ui_session_id": session_id,
         "memory_incognito": memory_incognito,
         "surface": "agent_ui",
+        "express_mood": True,
     }
 
 
@@ -3281,6 +3283,7 @@ def _dispatch_sidecar_query(
                 "agent_ui" if surface_supported(profile, handle.api_version) else None
             ),
             reasoning=reasoning_supported(profile, handle.api_version),
+            mood=mood_supported(profile, handle.api_version),
             max_steps=max_steps,
             turns=relayed_turns,
         )

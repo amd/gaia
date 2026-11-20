@@ -109,8 +109,8 @@ AGENT_ID = "gaia"
 #: ``turns``: the turn's first call is measured before the answer streams.
 #: 2.29 added ``final.route``: the model a ``hybrid`` session's turn ran on.
 #: 2.30 added ``DELETE /sessions/{id}``: end a session and stop its MCP servers.
-#: 2.31 added the non-terminal ``mood`` event: the one-word mood the model opened
-#: its reply with, sent only to an ``agent_ui`` caller.
+#: 2.31 added ``/query``'s ``mood`` field and the non-terminal ``mood`` event: the
+#: one-word mood the model opened its reply with, for a caller that asked.
 API_VERSION = "2.31"
 
 #: How long the stream allows the turn's context measurement before naming the
@@ -360,6 +360,16 @@ class QueryRequest(_Strict):
             "Stream the model's reasoning as `reasoning` events with a `delta` "
             "(contract >= 2.22), for a client that shows it apart from status "
             "lines. Without it, reasoning folds into `status` lines as before."
+        ),
+    )
+
+    mood: bool = Field(
+        default=False,
+        description=(
+            "Ask the model to name its mood (contract >= 2.31). The prompt then "
+            "asks for a one-word tag at the start of a reply; the agent removes "
+            "the tag from the text and sends the word as a `mood` event. Send the "
+            "same value on every turn of a session: it is part of the prompt."
         ),
     )
 
@@ -1842,6 +1852,8 @@ async def query(request: QueryRequest):
             kwargs["working_directory"] = request.working_directory
         if request.surface is not None:
             kwargs["surface"] = request.surface
+        if request.mood:
+            kwargs["express_mood"] = True
         if request.session_id:
             # Cross-turn document retention: ChatAgent persists its indexed-doc
             # set per UI session, so dropping this makes the agent forget a

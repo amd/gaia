@@ -62,7 +62,10 @@ class MoodFilter:
     a tag is held until it resolves. :meth:`flush` returns whatever is still
     held once the reply ends. Reasoning and code are left alone: a model weighs
     tags while it thinks, and a tag in backticks is one the user asked to see.
-    Only the first mood of a reply is reported.
+    Only the first mood of a reply is reported. Reasoning that arrives with no
+    opening marker is only known as such when its closing marker comes: a tag
+    in it is already gone and reported by then, and the reply's own tag is
+    reported after it.
     """
 
     def __init__(self, on_mood: Optional[Callable[[str], None]] = None):
@@ -88,12 +91,18 @@ class MoodFilter:
             out.append(self._show(buffer[start:at]))
             start = at + 1
             char = buffer[at]
-            if char == "<":
+            if char == "<" and not self._in_code:
                 marker = next(
                     (m for m in _THINK_MARKERS if buffer.startswith(m, at)), None
                 )
                 if marker:
-                    self._thinking = marker == _THINK_MARKERS[0]
+                    opens = marker == _THINK_MARKERS[0]
+                    if not opens and not self._thinking:
+                        # The template opened the block, so the text so far was
+                        # reasoning: the reply and its mood start here.
+                        self._shown_text = self._in_code = False
+                        self._skip = self.mood = None
+                    self._thinking = opens
                     out.append(marker)
                     start = at + len(marker)
                     continue

@@ -151,7 +151,8 @@ function useUntil(deadline: number): boolean {
     useEffect(() => {
         const left = deadline - Date.now();
         if (left <= 0) return;
-        const timer = setTimeout(() => expire(deadline), left);
+        // A little late, so the clock is past the deadline when this re-renders.
+        const timer = setTimeout(() => expire(deadline), left + 50);
         return () => clearTimeout(timer);
     }, [deadline]);
     return Date.now() < deadline;

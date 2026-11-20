@@ -200,6 +200,23 @@ def test_a_tag_the_user_asked_to_see_in_code_stays(sizes):
     assert heard == ["happy"]
 
 
+@pytest.mark.parametrize("sizes", [[1], [5], [1000]])
+def test_reasoning_with_no_opening_marker_does_not_hide_the_replys_mood(sizes):
+    # The tag weighed there is gone before the closing marker shows what it was.
+    text = "Should I say [mood:sad]? No.</think>\n[mood:happy] Hi!"
+    shown, heard = _stream(text, sizes)
+    assert shown == "Should I say ? No.</think>\nHi!"
+    assert heard == ["sad", "happy"]
+
+
+@pytest.mark.parametrize("sizes", [[1], [4], [1000]])
+def test_a_reasoning_marker_quoted_in_code_does_not_switch_the_filter_off(sizes):
+    text = "Models wrap thoughts in `<think>` tags. [mood:curious] Want an example?"
+    shown, heard = _stream(text, sizes)
+    assert shown == "Models wrap thoughts in `<think>` tags. Want an example?"
+    assert heard == ["curious"]
+
+
 def test_only_the_first_mood_of_a_reply_is_reported():
     shown, heard = _stream("[mood:happy] Yes! [mood:excited] Really.", [5])
     assert shown == "Yes! Really."

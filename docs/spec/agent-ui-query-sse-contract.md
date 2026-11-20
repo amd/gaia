@@ -90,6 +90,7 @@ net-new agent instrumentation.
 | `internet_off` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.23** — when true, blocks tools and commands that contact another host for this retained session. Send it every turn when the caller owns the setting; omit it to retain the current mode. |
 | `working_directory` | string (absolute path) | no | **Flagship (`gaia`) only, contract ≥ 2.24** — chat workspace for resolving relative file paths. It is separate from `allowed_paths`, which controls access. Relative paths are rejected with 422. |
 | `turns` | array of arrays of objects | no | **Flagship (`gaia`) only, contract ≥ 2.25**: earlier turns as the model saw them, including tool calls and results. Send `turns` instead of `context`; `context` must then be `[]`. `turns: []` clears retained history and enables `final.model_messages` and the pre-answer `context_usage` event (contract ≥ 2.28). |
+| `mood` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.31**: `true` asks the model to name its mood. The prompt then asks for a one-word tag at the start of a reply; the agent removes the tag from the text and sends the word as a `mood` event. It is part of the prompt, so send the same value on every turn of a session. Older binaries reject it with 422. |
 
 ```jsonc
 // JSON Schema (draft 2020-12) — request body
@@ -137,7 +138,8 @@ net-new agent instrumentation.
         }
       }
     },
-    "reasoning": { "type": "boolean", "default": false }
+    "reasoning": { "type": "boolean", "default": false },
+    "mood": { "type": "boolean", "default": false }
   },
   "dependentRequired": {
     "changes_turn_id": ["session_id"]
@@ -215,7 +217,7 @@ as "no documents are indexed" about a file the user can see attached.
 The contract is exactly these `type` values (design §0.2 — the original seven,
 plus `needs_input` added as an additive MINOR by #2469, `reasoning`, sent
 only on request, by contract 2.22, `context_usage`, streamed before the
-answer by contract 2.28, and `mood`, sent to an `agent_ui` caller by
+answer by contract 2.28, and `mood`, sent only on request, by
 contract 2.31). No others are valid on
 the wire; a receiver applies the §7 unknown-type rule to anything else.
 
@@ -227,7 +229,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
 | `context_usage` | `{window, used, turns_in_view, turns_hidden, ...}` | update the composer's context meter; **not terminal**. The sidecar streams it before the answer for a caller that sent `turns` (contract ≥ 2.28), in the same shape an in-process turn streams at turn start, so the meter fills during a long turn instead of waiting for `final` |
-| `mood` | `{mood}` | the one-word mood the model opened its reply with, e.g. `happy`, `curious`, `sad`; **not terminal**. A front-end may act it out (the Agent UI plays it on GAIA's eyes) or ignore it. The flagship sends it only to a caller whose request set `surface: "agent_ui"` (contract ≥ 2.31): that caller's prompt asks the model for the tag, and the tag itself never reaches `token` or `final.answer`. A reply with no tag sends no event |
+| `mood` | `{mood}` | the one-word mood the model opened its reply with, e.g. `happy`, `curious`, `sad`; **not terminal**. A front-end may act it out (the Agent UI plays it on GAIA's eyes) or ignore it. Sent only when the request asked for it (`mood: true`, contract ≥ 2.31): that session's prompt asks the model for the tag, and the tag itself never reaches `token` or `final.answer`. A reply with no tag sends no event |
 | `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) `risk_note` (why the agent's checks don't cover the call), `file_path` (where a relative write lands) and `script` (for `execute_python_file`, the file's content as read when the prompt was built, capped at 400 lines with the rest counted in `hidden_lines`, or `unreadable` saying why there is none) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
 | `final` | `{answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?, route?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `failure: "model_server_down"` means the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25), and `route` is a `hybrid` session's routing decision, whose `model` is the concrete model the turn ran on: bill and label the turn by it (contract >= 2.29) |
