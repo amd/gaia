@@ -284,6 +284,8 @@ Ask for research and GAIA writes a report you can check: it searches the web, re
 - **TUI:** type `/research <topic>` for one message, or `/research` alone to switch research mode on for every message.
 - **Headless:** `gaia -p "/research <topic>"`.
 
+While research mode is on, a message that starts with an installed skill's command, such as `/summarize <text>`, runs that skill instead of being researched. Anything else that starts with `/`, such as a path or a name that isn't an installed skill, is researched like any other message.
+
 All three send the turn as `/research <topic>`, and the agent handles it the same way whichever app sent it. Typing the skill's own command, `/research-report <topic>`, is the same research turn. It loads the [`research-report`](/guides/starter-skills#research-report) skill, keeps its instructions in the prompt for the turn, and adds a research brief to the turn, so memory keeps your topic as you wrote it. The brief asks for a report shaped like this:
 
 - the answer up front, then a section per part of the question;

@@ -67,6 +67,7 @@ beforeEach(() => {
         model_loaded: 'Gemma-4-E4B-it-GGUF',
     } as never);
     mocked.listAgents.mockResolvedValue({ agents: [], total: 0 });
+    mocked.listSkills.mockResolvedValue({ skills: [], invalid: {} });
     mocked.listSessions.mockResolvedValue({ sessions: [], total: 0 });
     mocked.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
     mocked.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });

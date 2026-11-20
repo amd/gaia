@@ -1,10 +1,13 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { useEffect } from 'react';
 import { Telescope } from 'lucide-react';
 import { useT } from '../i18n/useT';
+import * as api from '../services/api';
 import { researchOn, useChatStore } from '../stores/chatStore';
-import { withResearchCommand } from '../utils/research';
+import { log } from '../utils/logger';
+import { rememberInstalledSkills, withResearchCommand } from '../utils/research';
 
 /** Whether research mode is on for *sessionId* (null: the new-chat screen). */
 export function useResearchMode(sessionId: string | null): boolean {
@@ -31,6 +34,16 @@ export function ResearchChip({ sessionId, disabled, compact = false }: {
     const on = useResearchMode(sessionId);
     const setResearch = useChatStore((s) => s.setResearch);
     const setOn = (value: boolean) => setResearch(sessionId, value);
+    // A `/<skill>` command runs its skill rather than being researched, so research mode needs the skill names.
+    useEffect(() => {
+        if (!on) return;
+        let live = true;
+        api.listSkills().then(
+            (r) => { if (live) rememberInstalledSkills(r.skills.map((s) => s.name)); },
+            (e: unknown) => log.chat.warn('Research mode could not read the installed skills; /<skill> commands will be researched', e),
+        );
+        return () => { live = false; };
+    }, [on]);
     return (
         <button
             type="button"
