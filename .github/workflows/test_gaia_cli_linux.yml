@@ -73,7 +73,6 @@ jobs:
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
-          # Note: 'blender' excluded as bpy requires Blender runtime
           install-package: '.[dev,talk,rag,mcp,api]'
 
       - name: Install Lemonade Server (PPA)

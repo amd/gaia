@@ -671,9 +671,7 @@ jobs:
 
       - name: Verify CLI entry points
         run: |
-          # Only core-wheel console_scripts belong here. gaia-emr / gaia-code
-          # moved to the standalone gaia-agent-emr / gaia-agent-code hub
-          # packages and are no longer installed by ``pip install amd-gaia``.
+          # Only core-wheel console_scripts belong here.
           gaia --help
           gaia-mcp --help
 
