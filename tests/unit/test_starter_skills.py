@@ -76,6 +76,7 @@ STARTER_PACK = frozenset(
         "research-report",
         "rss-digest",
         "send-email",
+        "slide-decks",
         "source-watch",
         "summarize",
         "transcribe-meeting",

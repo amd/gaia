@@ -259,6 +259,13 @@ const SHARED_WITH_LIGHT = new Set([
     '--code-success',
     '--code-warning',
     '--code-danger',
+    '--slide-paper',
+    '--slide-ink',
+    '--slide-ink-dim',
+    '--slide-accent',
+    '--slide-on-accent',
+    '--slide-panel',
+    '--slide-rule',
 ]);
 
 describe('token declarations', () => {

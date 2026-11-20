@@ -2859,7 +2859,7 @@ export interface OutputItem {
   created_at: string | null;
   detail: string | null;
   id: string;
-  kind: "file" | "export" | "image" | "document" | "memory" | "schedule";
+  kind: "file" | "export" | "image" | "audio" | "document" | "memory" | "schedule";
   message_id: number | null;
   name: string;
   openable: boolean;

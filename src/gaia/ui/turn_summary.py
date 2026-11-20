@@ -65,6 +65,8 @@ _SCHEDULE_ADD_RE = re.compile(
 #: The host the built-in ``search_web`` sends its queries to (``WebClient``).
 _SEARCH_HOST = "duckduckgo.com"
 
+_AUDIO_TOOLS = frozenset({"generate_music", "generate_sound_effect"})
+
 #: File types the rail may hand to the default app: nothing that runs code,
 #: so no scripts or programs, and no HTML, SVG or XML, which can open in a browser.
 OPENABLE_SUFFIXES = frozenset(
@@ -91,6 +93,7 @@ OPENABLE_SUFFIXES = frozenset(
         ".gif",
         ".webp",
         ".bmp",
+        ".wav",
     }
 )
 
@@ -332,6 +335,21 @@ class TurnLedger:
                             "detail": args.get("prompt"),
                         }
                     )
+            elif tool in _AUDIO_TOOLS and isinstance(data, dict):
+                kept = data.get("audio_path")
+                saved = data.get("saved_to")
+                # The user's copy is the one to open; GAIA's own is for the player.
+                path = saved if isinstance(saved, str) and saved else kept
+                if isinstance(path, str) and path:
+                    item = {
+                        "kind": "audio",
+                        "name": Path(path).name,
+                        "path": path,
+                        "detail": args.get("prompt"),
+                    }
+                    if path != kept and isinstance(kept, str):
+                        item["copy_of"] = kept
+                    out.append(item)
             elif tool in _INDEX_TOOLS:
                 path = args.get(_INDEX_TOOLS[tool])
                 if isinstance(path, str) and path:

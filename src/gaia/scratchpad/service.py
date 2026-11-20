@@ -369,6 +369,10 @@ class ScratchpadService(DatabaseMixin):
 
         return result
 
+    def row_count(self, name: str) -> int:
+        """Rows the table *name* (without prefix) holds now."""
+        return self._get_row_count(f"{self.TABLE_PREFIX}{self._validate_name(name)}")
+
     def drop_table(self, name: str) -> str:
         """Drop a scratchpad table.
 
