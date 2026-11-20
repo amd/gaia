@@ -333,7 +333,7 @@ def _refuse(error: Exception) -> KeyringRefused:
     message = (
         "The OS credential store is locked: its unlock prompt was closed "
         f"({error}). GAIA won't ask again for {minutes} minutes; to unlock it "
-        "now, choose Try again under Settings → Model, or connect or test a "
+        "now, choose Try again under Settings → Agent & model, or connect or test a "
         "connector."
     )
     with _refusal_lock:

@@ -28,30 +28,75 @@ and talks to Lemonade; for `gaiacpp` the Go side asks Lemonade directly.
 
 ### Which agent program runs
 
-The flagship has two programs behind it. `gaia-cli` runs the native one,
-`gaiacpp`, when it is installed, and the Python one, `gaia-agent`, otherwise,
-so an install that only has `gaia-agent` behaves as before. The header says
+The flagship has two programs behind it: the Python one, `gaia-agent`, and the
+native one, `gaiacpp`. `gaia-cli` runs `gaia-agent` unless `gaiacpp` is asked
+for, the same default as the Agent UI and the daemon, so an installed `gaiacpp`
+the user never picked can't take away `--use-claude` or `--resume`. The header says
 which is answering: `agent gaia v<x> (gaiacpp)` for the native agent, plain
 `agent gaia v<x>` for the Python one.
 
-With nothing asked for, `gaiacpp` is looked for only where an install puts
-it, in this order, and the first match wins:
+When `gaiacpp` is asked for by name, it is looked for in this order, and the
+first match wins:
 
-1. `PATH`
-2. The folder `gaia-cli` itself is in
-3. `~/.gaia/agents/gaia/`, then its `bin/`
+1. The file `GAIA_GAIACPP_PATH` names, when it is set and is a file
+2. `~/.gaia/bin/`, where the Agent UI downloads it. This is the `bin` folder
+   of GAIA's home, so `GAIA_HOME` (or, without it, `GAIA_CONFIG_DIR`) moves it
+3. The folder `gaia-cli` itself is in
+4. `PATH`
+5. `~/.gaia/agents/gaia/`, then its `bin/`
+
+The first four are the Agent UI backend's order
+(`native_flagship_candidates` in `src/gaia/daemon/sidecars/fetch.py`), so both
+apps run the same file for one saved choice. `GAIA_GAIACPP_PATH` is shared with
+the Agent UI; `GAIA_TUI_AGENT` and `--agent-program` are the terminal UI's own.
+
+The copy that is found is checked before it is run (`catalog.VerifyNative`,
+the counterpart of `verified_native_flagship`). When a `gaiacpp.install.json`
+sits beside a file named `gaiacpp` (`gaiacpp.exe` on Windows), which is what the
+Agent UI's download writes, the file's SHA-256 must equal the record's
+`sha256`. A mismatch, an unreadable record or one with no checksum is an error
+that names the file and the record; no other copy and no other program is run
+in its place. No record means no check: an installer's copy or a build of your
+own has none. A path given to `--agent-program` or `GAIA_TUI_AGENT` is checked
+the same way. `TestNativeNamesMatchTheBackend` fails when the record's file
+name or the variable's name drifts from the Python side.
 
 A build in your checkout is **not** picked up by itself: starting `gaia-cli`
 from inside a repository never runs whatever sits in its `cpp/build`.
 
-To choose, set `GAIA_TUI_AGENT` or pass `--agent-program` (the flag wins). It
-applies to the flagship only, so `gaia-cli run email` ignores it. A named
-program that is not found is an error that lists where it looked; the other
-program is never run in its place. `--mock` replaces whichever was chosen.
+Which program a launch runs is decided by the first of these that is set
+(`agentChoice` in `internal/cli/root.go`):
+
+| Order | Source | Value | Session |
+|---|---|---|---|
+| 1 | `--agent-program` | A name or a path, from the table below | Pinned |
+| 2 | `GAIA_TUI_AGENT` | The same | Pinned |
+| 3 | `flagship_agent` in `~/.gaia/config.json` | `gaiapy` (runs `gaia-agent`) or `gaiacpp`; any other value stops the launch with an error naming the file and the key | Free |
+| 4 | Nothing | `gaia-agent`, even when `gaiacpp` is installed | Free |
+
+It applies to the flagship only, so `gaia-cli run email` ignores it and never
+reads the saved choice. A named or saved program that is not found is an error
+that lists where it looked; the other program is never run in its place.
+`--mock` replaces whichever was chosen, skips the saved choice, and pins the
+session.
+
+`/agent` in the chat lists both programs and `/agent gaiapy` / `/agent gaiacpp`
+relaunches the flagship on the other program in the running session
+(`switchProgram` in `internal/ui/root/agentprogram.go`). The program is
+resolved again from what is installed (`catalog.ForFlagship`), then goes
+through the readiness gate and `launchAgent` like an `/agents` switch. Only
+once it is running is `flagship_agent` written (`commitProgramSwitch`, through
+`preflight.WriteFlagshipAgent`: the same locked read-modify-write as the other
+shared keys, and the key the Agent UI and `gaia config set flagship_agent`
+use), so a switch that is cancelled at the gate or fails to start saves
+nothing. In a pinned session the choice is saved and the session is left
+alone. The switch
+to `gaiacpp` is refused, with nothing saved, in a `--use-claude` session and in
+a reopened one, the two cases a `gaiacpp` launch refuses on the command line.
 
 | Value | What runs |
 |---|---|
-| `gaiacpp` | The first `gaiacpp` in the three places above, then `cpp/build/Debug`, `cpp/build/Release` and `cpp/build` in the working directory and up to seven folders above it |
+| `gaiacpp` | The first `gaiacpp` in the five places above, then `cpp/build/Debug`, `cpp/build/Release` and `cpp/build` in the working directory and up to seven folders above it |
 | A path to `gaiacpp` | That file. It counts as `gaiacpp` when it is named `gaiacpp` or `gaiacpp-<platform>`, as the release assets are |
 | `gaia-agent` | The Python agent as installed: the first `gaia-agent` on `PATH`, in a finished install under `~/.gaia/agents/gaia/`, or in `cpp/build`. On an install whose record puts the flagship behind the daemon (`artifact_kind: binary`) it stays behind the daemon, and the first chat frame says so, because the `gaia-agent` file in that install is the daemon's HTTP sidecar |
 | A path to `gaia-agent` | That file, spawned by `gaia-cli` itself, even on a daemon install |

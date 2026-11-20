@@ -151,6 +151,9 @@ type ChatModel struct {
 	setupChoices *modelsetup.Choices
 	// gpuApplies is whether /gpu means anything on this PC (an integrated GPU).
 	gpuApplies bool
+	// agentProgramHost is set when the host answers AgentProgramMsg (/agent).
+	agentProgramHost bool
+
 	// agentsPanel is the in-chat "/agents" listing (nil unless open). It only
 	// lists and selects (agents.SelectedMsg's own doc comment); switching to
 	// the picked agent is the root model's job, so a SelectedMsg is left to
@@ -1780,6 +1783,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	}
 	if isVoiceCommand(query) {
 		return m.runVoiceCommand(commandArg(query, voiceCommand))
+	}
+	if isAgentCommand(query) {
+		return m.runAgentCommand(commandArg(query, agentCommand))
 	}
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched

@@ -60,8 +60,16 @@ type Resume struct {
 	ID   string
 }
 
-func RunFlagship(dev bool, mockAgent, agentChoice string, ctrl *control.Options, fullAccess, fullAccessSaved bool, useClaude bool, claudeModel string, trace *event.TraceWriter, resume Resume) error {
-	cat, agentNotice, err := loadCatalog(mockAgent, agentChoice, catalog.FlagshipID)
+// AgentChoice is the agent program a launch asked for. Pin names what fixed it
+// for this session (a flag or a variable); empty when the saved choice or the
+// catalog decided, which /agent may then change.
+type AgentChoice struct {
+	Program string
+	Pin     string
+}
+
+func RunFlagship(dev bool, mockAgent string, agentChoice AgentChoice, ctrl *control.Options, fullAccess, fullAccessSaved bool, useClaude bool, claudeModel string, trace *event.TraceWriter, resume Resume) error {
+	cat, agentNotice, err := loadCatalog(mockAgent, agentChoice.Program, catalog.FlagshipID)
 	if err != nil {
 		return err
 	}
@@ -97,6 +105,7 @@ func RunFlagship(dev bool, mockAgent, agentChoice string, ctrl *control.Options,
 	}
 	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
+		WithAgentPin(agentChoice.Pin).
 		WithFullAccess(fullAccess).
 		WithFullAccessNotice(joinNotices(notice, agentNotice)).
 		WithClaude(useClaude, claudeModel).
@@ -127,15 +136,11 @@ func loadCatalog(mockAgent, agentChoice, agentID string) (*catalog.Catalog, stri
 		cat.SetMockBinary(mockAgent)
 		return cat, "", nil
 	}
-	cat.DiscoverBinaries()
 	if agentID != catalog.FlagshipID {
+		cat.DiscoverBinaries()
 		return cat, "", nil
 	}
-	notice, err := cat.SelectFlagshipAgent(agentChoice)
-	if err != nil {
-		return nil, "", err
-	}
-	return cat, notice, nil
+	return catalog.ForFlagship(agentChoice)
 }
 
 func joinNotices(notices ...string) string {
@@ -384,8 +389,8 @@ func beforeExit(m tea.Model) {
 // that overrode the binary for one entry point and not the other let a test
 // spawn the real agent while believing it had substituted a stand-in.
 // Returns the process exit code.
-func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, fullAccess bool, useClaude bool, claudeModel, mockAgent, agentChoice string, trace *event.TraceWriter) (int, error) {
-	cat, agentNotice, err := loadCatalog(mockAgent, agentChoice, agentID)
+func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, fullAccess bool, useClaude bool, claudeModel, mockAgent string, agentChoice AgentChoice, trace *event.TraceWriter) (int, error) {
+	cat, agentNotice, err := loadCatalog(mockAgent, agentChoice.Program, agentID)
 	if err != nil {
 		return 1, err
 	}
@@ -509,6 +514,7 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	// first message.
 	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
+		WithAgentPin(agentChoice.Pin).
 		WithFullAccess(fullAccess).
 		WithFullAccessNotice(agentNotice).
 		WithClaude(useClaude, claudeModel).

@@ -149,7 +149,7 @@ def get_limit(db) -> Optional[float]:
     except ValueError as e:
         raise ValueError(
             f"The saved monthly spending limit {raw!r} is not a number. Set it "
-            "again in Settings › Model."
+            "again in Settings › Agent & model."
         ) from e
     return value
 
@@ -332,7 +332,7 @@ def limit_refusal(db, model_id: Optional[str]) -> Optional[str]:
         f"This month's cloud chats have cost about ${report['total_usd']:.2f} at "
         f"list price, which reaches your ${report['limit_usd']:.2f} monthly limit, "
         f"so GAIA stopped before sending this to {name}. To go on, raise the "
-        "limit or allow more this month in Settings › Model, or pick a model "
+        "limit or allow more this month in Settings › Agent & model, or pick a model "
         "that runs on this PC."
     )
 

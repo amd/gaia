@@ -770,7 +770,7 @@ def choose_chat_model(
     if entry is None or not entry["chat_choice"]:
         raise UnknownModel(
             f"{model_id} is not a chat model GAIA knows or one this Lemonade "
-            "Server has downloaded. Download it first (Settings → Model in the "
+            "Server has downloaded. Download it first (Settings → Agent & model in the "
             "Agent UI), then pick it."
         )
     model_id = entry["id"]
@@ -990,7 +990,7 @@ def _download_entry(model_id: str):
     if entry is None:
         raise UnknownModel(
             f"{model_id} is not a model GAIA knows or one in this Lemonade "
-            "Server. Add it in Settings → Model first."
+            "Server. Add it in Settings → Agent & model first."
         )
     return plan, entry
 

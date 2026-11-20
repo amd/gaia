@@ -99,12 +99,34 @@ var mockAgent string
 var agentProgram string
 
 // agentChoice is the agent program asked for: the flag, else GAIA_TUI_AGENT,
-// else "" for the one the catalog picks.
-func agentChoice() string {
-	if agentProgram != "" {
-		return agentProgram
+// else the saved flagship_agent, else none, which leaves it to the catalog.
+// A saved value GAIA does not know is an error, never read as no choice.
+func agentChoice() (ui.AgentChoice, error) {
+	if strings.TrimSpace(agentProgram) != "" {
+		return ui.AgentChoice{Program: agentProgram, Pin: "--agent-program"}, nil
 	}
-	return os.Getenv(catalog.AgentEnv)
+	if env := os.Getenv(catalog.AgentEnv); strings.TrimSpace(env) != "" {
+		return ui.AgentChoice{Program: env, Pin: catalog.AgentEnv}, nil
+	}
+	if mockAgent != "" {
+		// The stand-in replaces whichever program would have run.
+		return ui.AgentChoice{Pin: "--mock"}, nil
+	}
+	saved, err := preflight.ReadFlagshipAgent()
+	if err != nil {
+		return ui.AgentChoice{}, fmt.Errorf("could not read the saved agent program: %w. "+
+			"Or pass --agent-program to choose one for this launch", err)
+	}
+	return ui.AgentChoice{Program: saved.Program()}, nil
+}
+
+// agentProgramFor is the agent program for a launch of agentID alone. Only
+// the flagship has two programs, so nothing is read for any other agent.
+func agentProgramFor(agentID string) (ui.AgentChoice, error) {
+	if agentID != catalog.FlagshipID {
+		return ui.AgentChoice{}, nil
+	}
+	return agentChoice()
 }
 
 // tracePath is --trace's raw value: "" (off), traceAutoPath (bare --trace), or
@@ -238,7 +260,11 @@ var rootCmd = &cobra.Command{
 		if err := update.RemoveLeftover(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
-		if err := ui.RunFlagship(dev, mockAgent, agentChoice(), ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace, resume); err != nil {
+		choice, err := agentChoice()
+		if err != nil {
+			return err
+		}
+		if err := ui.RunFlagship(dev, mockAgent, choice, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace, resume); err != nil {
 			return err
 		}
 		// An install the user asked for in /update runs now, after the TUI
@@ -347,8 +373,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&agentProgram, "agent-program", "",
 		"which agent program GAIA runs on: "+catalog.NativeAgentBinary+" (the native agent), "+
 			catalog.PythonAgentBinary+" (the Python agent), or a path to either. Unset runs "+
-			catalog.NativeAgentBinary+" when it is installed and "+catalog.PythonAgentBinary+
-			" otherwise; a named one that is missing is an error. Overrides "+catalog.AgentEnv)
+			"the one saved with /agent ("+preflight.FlagshipAgentKey+" in config.json), else "+
+			catalog.PythonAgentBinary+"; a named one that is missing is an error. Overrides "+catalog.AgentEnv)
 	rootCmd.PersistentFlags().StringVar(&tracePath, "trace", "",
 		"record every agent event — tool calls WITH their arguments, results, errors "+
 			"and timings — to a JSONL file, one event per line, for later inspection. "+
