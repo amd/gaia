@@ -33,7 +33,7 @@ The policy, in three rules:
    running command each keep the models.
 
 Leases are not the only evidence of use. A process too old to lease still sends
-its requests to this server, so both rules also read the server's own
+its requests to this server, so every rule also reads the server's own
 ``/health``: a model marked busy, or a ``last_use`` that moved since the last
 look, is traffic. No unload or stop happens while a request is in flight, and
 each re-reads the server as its last step, so a request that lands mid-decision
@@ -346,7 +346,7 @@ class LemonadeClients:
 
     def sweep(self) -> None:
         """Drop clients whose processes exited or whose lease lapsed, then
-        apply both rules."""
+        apply the rules."""
         now = self._clock()
         with self._lock:
             if now - self._last_sweep > LEASE_TTL / 2:
