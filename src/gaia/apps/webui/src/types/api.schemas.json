@@ -6821,6 +6821,20 @@
     "title": "WarmUpStatus",
     "type": "object"
   },
+  "WindowVisibility": {
+    "description": "Whether the desktop app's window is out of sight.",
+    "properties": {
+      "hidden": {
+        "title": "Hidden",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "hidden"
+    ],
+    "title": "WindowVisibility",
+    "type": "object"
+  },
   "WorkInProgress": {
     "description": "Work that quitting or unloading the model would cut short.",
     "properties": {
