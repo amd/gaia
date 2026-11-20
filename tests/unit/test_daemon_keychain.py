@@ -108,9 +108,9 @@ def test_store_py_works_on_top_of_the_backend(os_store, backend, monkeypatch):
 
     # Daemon and sidecar share one process here; keep the daemon on the OS store.
     daemon_side = SimpleNamespace(
-        get_password=os_store.get_password,
-        set_password=os_store.set_password,
-        delete_password=os_store.delete_password,
+        read=os_store.get_password,
+        write=os_store.set_password,
+        delete=os_store.delete_password,
         errors=keyring.errors,
     )
     monkeypatch.setattr(keychain_routes, "_keyring", lambda: daemon_side)

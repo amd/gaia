@@ -2,26 +2,22 @@
 # SPDX-License-Identifier: MIT
 """An agent must not change the user's system packages to get around a tool.
 
-After ``run_python`` broke, an agent with full access ran ``python -m pip
-install openpyxl`` into the user's system Python. Full access swaps the
-per-binary shell policy for the developer set, which names ``python``, so the
-pip policy (and its refusal of installs outside the project) never fired.
+After ``run_python`` broke, an agent ran ``python -m pip install openpyxl``
+into the user's system Python. Outside full access such an install is asked
+about once. Full access runs it, like every other command.
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from gaia.agents.tools import package_installs
 from gaia.agents.tools.package_installs import system_install_target
-from gaia.agents.tools.shell_tools import (
-    TIER_CONFIRM_ONCE,
-    TIER_REFUSE,
-    ShellToolsMixin,
-)
+from gaia.agents.tools.shell_tools import TIER_CONFIRM_ONCE, ShellToolsMixin
 
 
 def _interpreter(root: Path, venv: bool) -> Path:
@@ -166,8 +162,8 @@ def _refusal(command: str, full_access: bool):
     )
 
 
-class TestFullAccessRefusesSystemInstalls:
-    """Full access asks nothing, so the install is refused, with guidance."""
+class TestFullAccessRunsSystemInstalls:
+    """Full access asks nothing and refuses nothing: the install runs."""
 
     @pytest.mark.parametrize(
         "command",
@@ -178,17 +174,11 @@ class TestFullAccessRefusesSystemInstalls:
             'powershell -Command "python -m pip install openpyxl"',
         ],
     )
-    def test_refused_before_anything_runs(self, system_python, command):
-        error = _refusal(command, full_access=True)
-        assert error is not None, command
-        assert error["tier"] == TIER_REFUSE
-        assert error["executed"] is False
-        assert error.get("system_install") is True
-        assert "virtual environment" in error["hint"]
-        assert "tell the user" in error["hint"].lower()
+    def test_not_refused_under_full_access(self, system_python, command):
+        assert _refusal(command, full_access=True) is None
 
-    def test_the_tool_itself_refuses_too(self, system_python, tmp_path, monkeypatch):
-        """The executor re-checks, so a call that skipped the pre-flight still stops."""
+    def test_the_tool_itself_runs_it(self, system_python, tmp_path, monkeypatch):
+        """The executor agrees with the pre-flight: the install is started."""
         import gaia.agents.base.tools as tools_mod
 
         captured = {}
@@ -204,19 +194,21 @@ class TestFullAccessRefusesSystemInstalls:
         host = _Host(full_access=True)
         host.register_shell_tools()
         ran = []
-        monkeypatch.setattr(
-            "gaia.agents.tools.shell_tools._run_step",
-            lambda *a, **k: ran.append(a),
-        )
+
+        def fake_step(step, *args, **kwargs):
+            # Nothing is installed: the step is recorded, not started.
+            ran.append(step.text)
+            return subprocess.CompletedProcess(step.text, 0, "", "")
+
+        monkeypatch.setattr("gaia.agents.tools.shell_tools._run_step", fake_step)
 
         result = captured["run_shell_command"](
             command="python -m pip install openpyxl",
             working_directory=str(tmp_path),
         )
 
-        assert result["status"] == "error"
-        assert result["tier"] == TIER_REFUSE
-        assert ran == []
+        assert result["status"] == "success", result
+        assert ran == ["python -m pip install openpyxl"]
 
     def test_an_install_into_the_active_venv_still_runs_unasked(
         self, tmp_path, monkeypatch

@@ -278,7 +278,7 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
-| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14), and on a run the caller can answer, grant out-of-scope paths unasked (still inside `GAIA_ALLOWED_PATHS`); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
+| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Turn full access on or off for one session (≥ 2.14): gated tools run unasked, the shell runs any command and Python runs any code. On a run the caller can answer, the file tools are granted out-of-scope paths unasked (still inside `GAIA_ALLOWED_PATHS`) |
 | `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.23) |
 | `GET`  | `/v1/gaia/sessions/{session_id}/grants` | The session's "always" answers, `{ key, label }` each (≥ 2.26) |
 | `DELETE` | `/v1/gaia/sessions/{session_id}/grants` | Revoke one (`?key=`) or all of them (≥ 2.26) |
@@ -299,6 +299,26 @@ UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
 `documents`, `allowed_paths`, `working_directory`, `memory`, `internet_off`,
 `changes_turn_id`, `surface`) is optional.
+
+A `query` that starts with `/research` is a research turn: the agent loads its
+`research-report` skill (or reuses it) and keeps the skill's instructions in the
+prompt for the turn and the next few. The topic after `/research` becomes the
+user's message, so memory and the conversation keep what the user asked, and
+the turn's context gets a research brief: cite, inline, a page fetched in the
+conversation for every factual claim, and end with a Sources list. Bracketed
+notes a caller puts before the command (the Agent UI's `[This chat is working
+in the folder …]`) stay in front of the topic. A bare `/research` asks the user
+for a topic. `/research-report`, the skill's own `/<skill-name>` command, is the
+same research turn, brief and citation check included.
+Before a research turn's answer is final, its cited links are checked against
+the conversation's `search_web`, `fetch_page` and `download_file` results (a
+PDF counts once its downloaded file is read): a link that was never fetched, or that appears in
+no result at all, is sent back to the model once to fetch or drop. Links still
+unbacked after that are listed in the `final` answer under "I couldn't confirm
+all of this".
+The agent needs `search_web` and `fetch_page` for it; a profile without them
+ends the turn with an `error` naming the missing tools. Any other `query` runs
+unchanged.
 
 `max_steps` (≥ 1) caps agent-loop steps for this turn. Omit it and the default
 is **1000** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
@@ -477,7 +497,15 @@ its own prompt is in `prompt_context`: `working_directory` (where a shell call
 runs, when the model's arguments don't say it), `risk_note` (why the
 agent's checks don't cover the call, which is then approved once) and
 `file_path` (the absolute path a write lands at, when the model gave a relative
-one). A prompt
+one) and `script` (for `execute_python_file`, the file's content as read when
+the prompt was built: `{ text, hidden_lines }` with up to 400 lines or 48,000
+characters and a count of the lines left out, or `{ unreadable }`, one of
+`missing`, `not_text`, `too_large`, `unreadable`). Show `script` to the user:
+the path alone does not say what will run. A credential file, or a path no
+approval can grant, never reaches a prompt: the call is refused first and the
+file is not opened. A file that changes after the
+prompt was built is not run; the call returns an error and the agent asks
+again. A prompt
 the agent raises on its own, such as `allow_path_access`, has the path it asks
 about in `args`.
 
@@ -747,11 +775,16 @@ files; a `.env` file cannot set that switch itself.
 environment the sidecar starts in — absolute folders joined with `;` on
 Windows and `:` elsewhere. The scope becomes the overlap with the agent's own scope;
 an entry outside it is ignored with a warning and never widens it. Out-of-scope
-paths are refused without a prompt in every mode, including full access. The
+paths are refused without a prompt in every mode, including full access, for
+the file tools. The
 scratch directory stays writable. An empty, relative or missing entry stops
 the sidecar at startup, before it binds a port. It confines the agent's tools
-— every file tool, search, index and shell path check — not code they run: a
-`run_python` script or shell command can still read anything the OS user can,
+— every file tool, search, index, and the shell path check outside full access
+— not code they run: under full access the shell and Python tools run in any
+folder, and a `run_python` script or shell command can always read anything the OS user can
+(outside full access, code whose text names a credential folder or file is refused before it runs,
+a credential file only when the code reads it,
+but code that works a path out while it runs is not caught),
 so isolating a run from files it must not see needs a separate OS user,
 container or VM.
 
@@ -770,12 +803,20 @@ a JSON line carrying a `gaia_control` key: a back-channel that answers a
 confirmation prompt *while* a turn is in flight, toggles full access or
 "accept edits" (file edits inside the starting folder run unasked; commands still
 ask), and stops a turn (`cancel`) without ending the process — so loaded skills,
-"always" grants, history and the permission mode survive a cancel. When stdin
+"always" grants, history and the permission mode survive a cancel. Clearing the
+conversation (the `clear_conversation` query or the `clear_history` control) drops
+its "always" grants with its history; full access and loaded skills stay. When stdin
 closes mid-turn (the host has gone), the running turn is cancelled and saved in
 the session history as interrupted: "This answer was interrupted when GAIA
 closed." The question is saved when the turn starts, so it survives even if the
 host kills the process before the turn ends. Another process sharing the
 history file leaves a turn that is still running out of its model view.
+
+Over stdio, a recorded turn is followed by the same `context_usage` event,
+measured for the next message, so the terminal UI's context meter moves with
+every answer; and a turn that runs a plan sends it on a `status` as
+`plan: {steps, current_step}`. Both are in §10.3 of
+`docs/spec/agent-ui-query-sse-contract.md`.
 
 Contract 2.14 gave the HTTP surface the same three capabilities per run and per
 session — `/tool_decision`, `/sessions/{id}/bypass` (the route keeps its
@@ -787,7 +828,8 @@ of the process (embeddings stay on Lemonade either way).
 Sessions a host can list and reopen are stdio-only too: `--history-file` plus
 `--session-kind` keeps the session's title, status (`running`, `waiting` on a
 permission prompt, `done`, `failed`) and a readable transcript beside the
-transcript file. The terminal UI's `/sessions` and `--resume` read it. The
+transcript file. The terminal UI's `/sessions` and `--resume` read it, and
+reopen a session in a new process, so it starts with no "always" grants. The
 layout is §10.4 of `docs/spec/agent-ui-query-sse-contract.md`.
 
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
@@ -825,37 +867,31 @@ keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model
 remotely, so a local server URL alone does not establish local inference.
 
-`--full-access` turns off more than the prompt. It also lifts the shell
-tool's own guardrails for the session: the shell-only operators — redirection
-(`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`) and the
-newline — parse and run, chaining (`&&`, `||`, `;`, `|`) already ran by
-default, the read-only binary allowlist is replaced by a developer set
-(`node`, `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`,
-`timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`/`git`,
-which already had their own paths), and the shell rate limit is dropped. `git`
-being in that set means the policy that holds `git push`, `git reset` and
-`git rebase` also stops applying under bypass. Without bypass those commands ask
-the user once, and are refused only on a run nobody can answer; the destructive
-forms (`git push --force`, `git reset --hard`) are refused with no prompt. That is
-arbitrary code execution in the working directory, which is why it exists only
-on this transport: one local parent process on a private pipe. It is **not**
-reachable over HTTP, and the request body cannot ask for it —
-`POST /v1/gaia/sessions/{id}/bypass` stops an HTTP session's approval prompts
-but never lifts these shell gates. A command those gates hold is never run
-unasked there: on a run someone can answer it still emits `needs_confirmation`
-and waits for `/tool_decision`, and on a run nobody can answer it is refused.
-`rm` is excluded
-from the developer set — not a boundary, since anything in the set can delete a
-file, but a tripwire against an accidental recursive delete. Redirection has one
-exception: a command that is nothing but a skill-granted CLI runs argv-only
-rather than through a shell, so a `>` there is refused with an explanation
-instead of reaching the binary as a literal argument.
+`--full-access` turns off more than the prompt. It also lifts every guardrail
+of the shell and Python tools for the session. The shell runs any program, by
+name or by full path, `rm`, `rmdir` and `del` included: there is no command
+list. The line goes to a shell (`sh`, or `cmd.exe` on Windows), so redirection
+(`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`), loops,
+conditions and several lines all run. No working folder, `cd`, path argument,
+link, credential file, package install or address is refused, the shell rate
+limit is dropped, and `run_python` / `execute_python_file` run their code
+unchecked. A refusal GAIA made by itself is not kept against later calls. What
+still holds: a call the user declined stays declined for that request, calendar
+changes and outgoing mail wait for a person, and a program that is not
+installed fails with the shell's own error. Without full access those commands
+ask the user once, or are refused on a run nobody can answer.
+
+That is arbitrary code execution with the user's account.
+`POST /v1/gaia/sessions/{id}/bypass` turns the same mode on for an HTTP
+session, so guard that route: it is behind the caller-auth token like the rest
+of the API, and a sidecar started without a token refuses to turn it on (`403`). A request with no `session_id` has no mode and never gets it, and
+the query body cannot ask for it.
 
 Every shell command run under bypass is recorded with its full arguments and its
 per-segment breakdown in `~/.gaia/cache/file_audit.log` — skipping the prompt
 does not skip the record. Treat that file as sensitive; arguments are verbatim.
-The host can toggle bypass mid-session over `gaia_control`, and the shell gates
-follow on the very next command.
+The host can toggle full access mid-session over `gaia_control`, and the shell
+follows on the very next command.
 
 `--use-claude` is the one with a reach beyond the machine, and it cannot be
 turned on for what this package delivers: the terminal UI **refuses** the launch

@@ -20,6 +20,7 @@ type canonicalEventsFixture struct {
 		StdioExtension []string `json:"stdio_extension"`
 		PhaseExtension []string `json:"phase_extension"`
 		HistoryCut     []string `json:"history_cut_extension"`
+		Plan           []string `json:"plan_extension"`
 	} `json:"events"`
 }
 
@@ -63,6 +64,7 @@ func TestCanonicalEventStructsMatchTheSharedFixture(t *testing.T) {
 		CanonicalTypeNeedsInput:        CanonicalNeedsInputEvent{},
 		CanonicalTypeFinal:             CanonicalFinalEvent{},
 		CanonicalTypeError:             CanonicalErrorEvent{},
+		CanonicalTypeContextUsage:      CanonicalContextUsageEvent{},
 	}
 	if len(structs) != len(f.Events) {
 		t.Errorf("the TUI knows %d canonical types, the fixture lists %d", len(structs), len(f.Events))
@@ -74,7 +76,7 @@ func TestCanonicalEventStructsMatchTheSharedFixture(t *testing.T) {
 			continue
 		}
 		want := append(append(append([]string(nil), spec.Fields...), spec.StdioExtension...), spec.PhaseExtension...)
-		want = append(want, spec.HistoryCut...)
+		want = append(append(want, spec.HistoryCut...), spec.Plan...)
 		sort.Strings(want)
 		if got := jsonFields(v); strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Errorf("%s decodes %v, fixture says %v", etype, got, want)

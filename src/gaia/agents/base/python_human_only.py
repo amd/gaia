@@ -110,7 +110,7 @@ def python_human_only_refusal(
 ) -> Optional[Dict[str, Any]]:
     """The final refusal for a Python call that runs ``gaia skill``, or None.
 
-    No tier: neither an approval nor full access lifts it.
+    No tier: no approval lifts it. Full access never reaches it.
     """
     from gaia.agents.tools.shell_tools import NOT_APPROVABLE
     from gaia.skills.binaries import human_only_message

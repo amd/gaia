@@ -16,9 +16,10 @@ import App from '../App';
 import * as api from '../services/api';
 import * as memoryApi from '../services/memoryApi';
 import * as scheduleApi from '../services/scheduleApi';
-import { useChatStore } from '../stores/chatStore';
+import { NEW_CHAT_RESEARCH, researchOn, useChatStore } from '../stores/chatStore';
 import { useModelStore } from '../stores/modelStore';
 import type { Session, SetupCheck, StartCard } from '../types';
+import { AGENT_PROGRAMS } from '../test/setupApiMocks';
 
 const mocked = vi.mocked(api);
 
@@ -80,6 +81,7 @@ beforeEach(() => {
         compatible: true, blockers: [], warnings: [], ram_gb: 32, gpu_name: null, npu_detected: false, disk_free_gb: 100,
     } as never);
     mocked.getSetupStatus.mockResolvedValue({ state: 'idle' });
+    mocked.getAgentPrograms.mockResolvedValue(AGENT_PROGRAMS);
     mocked.getLemonadeTarget.mockResolvedValue({
         mode: 'gaia', saved_mode: null, source: 'gaia', base_url: null, saved_base_url: null,
         api_key_stored: false, gaia_installed: false, offer: false, what_gaia_does: '',
@@ -95,7 +97,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], pendingPrompt: null,
         draftPermissionMode: 'ask', defaultPermissionMode: 'ask', showMemoryDashboard: false, showSchedules: false, settingsSection: null,
-        draftDocumentIds: [], draftPrivate: false, locale: 'en',
+        draftDocumentIds: [], draftPrivate: false, research: {}, locale: 'en',
     });
 });
 
@@ -229,6 +231,18 @@ describe('a new chat', () => {
         await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
         expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ folders: ['/home/u/site'] });
         expect(useChatStore.getState().draftFolder).toBeNull();
+    });
+
+    it('researches the first message when Research was on, and keeps it on for that chat only', async () => {
+        useChatStore.setState({ research: { [NEW_CHAT_RESEARCH]: true } });
+        render(<App />);
+        await sendFirstMessage('the history of RISC-V');
+
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(mocked.sendMessageStream.mock.calls[0].slice(0, 2)).toEqual(['sess-new-0001', '/research the history of RISC-V']);
+        const state = useChatStore.getState();
+        expect(researchOn(state, 'sess-new-0001')).toBe(true);
+        expect(researchOn(state, null)).toBe(false);
     });
 
     it('sends "ask" too, so a full-access default in config cannot hide behind the chip', async () => {

@@ -38,7 +38,7 @@ var terms = []term{
 // chatAt builds a streaming chat model at one geometry.
 func chatAt(t *testing.T, tm term) ChatModel {
 	t.Helper()
-	m := NewChatModel(&nullClient{}, "gaia", "", false)
+	m := NewChatModel(&nullClient{}, "gaia", "")
 	m.width, m.height = tm.width, tm.height
 	m.resize()
 	m.streaming = true
@@ -93,7 +93,7 @@ func TestWorkLogWrapsRatherThanClipping(t *testing.T) {
 	}{
 		{
 			name: "shell command keeps its flags",
-			feed: []interface{}{shellCall(longShell)},
+			feed: []interface{}{shellCall(longShell), shellDone()},
 			want: longShell,
 		},
 		{
@@ -117,6 +117,7 @@ func TestWorkLogWrapsRatherThanClipping(t *testing.T) {
 					Type: "tool_call", Tool: "fetch_page",
 					Args: []byte(`{"url":"` + longURL + `"}`),
 				},
+				event.CanonicalToolResultEvent{Type: "tool_result", Tool: "fetch_page", Preview: longURL},
 			},
 			want: longURL,
 		},
@@ -145,7 +146,8 @@ func TestWorkLogWrapsRatherThanClipping(t *testing.T) {
 			name: "the legacy transport keeps its argument",
 			feed: []interface{}{
 				event.ToolStartEvent{Tool: "run_shell_command"},
-				event.ToolArgsEvent{Args: []byte(`{"command":"` + longShell + `"}`)},
+				event.ToolArgsEvent{Tool: "run_shell_command", Args: []byte(`{"command":"` + longShell + `"}`)},
+				event.ToolEndEvent{Success: true},
 			},
 			want: longShell,
 		},
@@ -214,22 +216,30 @@ func TestWorkLogStaysWithinItsHeightBudget(t *testing.T) {
 }
 
 // On a 12-row terminal the budget is two rows and one wrapped command is three.
-// Trimming the newest action away leaves an EMPTY region — a blank screen, the
-// one thing this region exists to prevent.
+// The running call is the status line, which is never blank; once it has
+// finished, its bullet is cut to fit and the cut is marked.
 func TestWorkLogNeverRendersEmpty(t *testing.T) {
 	m := feed(t, chatAt(t, term{"tiny", 60, 12}), shellCall(strings.Repeat("gaia --flag ", 40)))
+	if line := ansi.Strip(m.statusLine(time.Now())); !strings.Contains(line, "Run gaia") {
+		t.Fatalf("the running action is not on screen: %q", line)
+	}
+	m = feed(t, m, shellDone())
 	rows := rowsOf(m.renderLiveRegion())
 	t.Logf("\n%s", strings.Join(rows, "\n"))
-
 	if flat(rows) == "" {
 		t.Fatal("the live region rendered nothing at all")
 	}
 	if !strings.Contains(flat(rows), "gaia --flag") {
-		t.Errorf("the running action is not on screen:\n%s", strings.Join(rows, "\n"))
+		t.Errorf("the finished action is not on screen:\n%s", strings.Join(rows, "\n"))
 	}
 	if !strings.Contains(flat(rows), "…") {
 		t.Errorf("the action was cut to fit with nothing saying so:\n%s", strings.Join(rows, "\n"))
 	}
+}
+
+// shellDone closes the open shell call.
+func shellDone() event.CanonicalToolResultEvent {
+	return event.CanonicalToolResultEvent{Type: "tool_result", Tool: "run_shell_command", Data: []byte(`{"success":true}`)}
 }
 
 // One action must not spend the whole region on itself: the log's job is to
@@ -242,6 +252,7 @@ func TestOneLongActionCannotFillTheRegion(t *testing.T) {
 		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_skills"},
 		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "list_skills", Preview: "18 skills"},
 		shellCall(strings.Repeat("gaia --flag ", 80)),
+		shellDone(),
 	)
 	rows := rowsOf(m.renderLiveRegion())
 	t.Logf("\n%s", strings.Join(rows, "\n"))
@@ -261,7 +272,7 @@ func TestOneLongActionCannotFillTheRegion(t *testing.T) {
 	if n := len(rows); n > m.logRows() {
 		t.Errorf("one action pushed the region to %d rows, past its %d-row budget", n, m.logRows())
 	}
-	if !strings.Contains(flat(rows), "Checking your installed skills") {
+	if !strings.Contains(flat(rows), "Check your installed skills") {
 		t.Errorf("the long command pushed the earlier action out of a region that had room:\n%s", strings.Join(rows, "\n"))
 	}
 }
@@ -272,10 +283,10 @@ func TestRepeatCounterSurvivesWrapping(t *testing.T) {
 	m := chatAt(t, term{"standard", 80, 24})
 	m.expandWork = true // the folded row is TestAFoldedRowKeepsItsCounter
 	for i := 0; i < 13; i++ {
-		m = feed(t, m, shellCall(longShell))
+		m = feed(t, m, shellCall(longShell), shellDone())
 	}
 	got := flat(rowsOf(m.renderLiveRegion()))
-	if !strings.Contains(got, "x13") {
+	if !strings.Contains(got, "Ran 13 commands") {
 		t.Errorf("the repeat count was lost in the wrap: %s", got)
 	}
 	// Both, or the counter is being bought with the command it counts —
@@ -400,52 +411,20 @@ func TestWrapLog(t *testing.T) {
 	}
 }
 
-// The cut marker has to land in the TEXT. Appended to the rendered row instead,
-// it follows the live line's elapsed clock — where it reads as part of the timer
-// rather than as "there is more of this command than fits".
+// The cut marker has to land in the TEXT, before the clock. The status line
+// is the one row with a clock, and a long running call is cut inside its words.
 func TestTheCutMarkerLandsInTheTextNotAfterTheClock(t *testing.T) {
 	m := chatAt(t, term{"tiny", 60, 12})
-	// 12 rows leaves the region two, and the still-working hint (nothing has
-	// completed after 20s) takes one of them — so the live row is the ONLY row,
-	// and it is the row carrying the clock.
 	m.queryStart = time.Now().Add(-30 * time.Second)
-	m = feed(t, m, shellCall(strings.Repeat("gaia --flag ", 40)))
-	rows := rowsOf(m.renderLiveRegion())
-	t.Logf("\n%s", strings.Join(rows, "\n"))
-
-	if !strings.Contains(flat(rows), "…") {
-		t.Fatalf("the cut was not marked at all:\n%s", strings.Join(rows, "\n"))
+	args, _ := json.Marshal(map[string]string{"command": "true", "description": strings.Repeat("Check every flag ", 10)})
+	m = feed(t, m, event.CanonicalToolCallEvent{Type: "tool_call", Tool: "run_shell_command", Args: args})
+	line := ansi.Strip(m.statusLine(time.Now()))
+	t.Logf("%q", line)
+	if !strings.Contains(line, "… (30s)") {
+		t.Errorf("the cut is not marked inside the text, ahead of the clock: %q", line)
 	}
-	for _, r := range rows {
-		if liveClock.MatchString(strings.TrimRight(r, "… ")) && strings.HasSuffix(strings.TrimRight(r, " "), "…") {
-			t.Errorf("the cut marker was appended after the elapsed clock: %q", r)
-		}
-	}
-}
-
-// Only the first row of a live action carries the clock, so only the first row
-// pays for it. Charging every wrapped row for a number none of them shows threw
-// away two words a row on the longest lines in the log.
-func TestOnlyTheClockRowPaysForTheClock(t *testing.T) {
-	m := chatAt(t, term{"standard", 80, 24})
-	m.expandWork = true // folded, there are no continuation rows
-	m = feed(t, m, shellCall(longShell+" "+longShell))
-	rows := rowsOf(m.renderLiveRegion())
-	t.Logf("\n%s", strings.Join(rows, "\n"))
-
-	widest := 0
-	for _, r := range rows[1:] {
-		if w := ansi.StringWidth(strings.TrimSpace(r)); w > widest {
-			widest = w
-		}
-	}
-	if narrowed := m.logWidth() - elapsedReserve; widest <= narrowed {
-		t.Errorf("continuation rows reach only %d columns; the measure without the clock is %d", widest, m.logWidth())
-	}
-	for _, r := range rows {
-		if w := ansi.StringWidth(r); w > 80 {
-			t.Errorf("row is %d columns on an 80-column terminal: %q", w, r)
-		}
+	if w := ansi.StringWidth(line); w > 60 {
+		t.Errorf("the status line is %d columns on a 60-column terminal: %q", w, line)
 	}
 }
 
@@ -478,7 +457,8 @@ func TestHeldHeightPadsAboveTheLog(t *testing.T) {
 			},
 		)
 	}
-	m.activity = nil // the log empties, the held height stays
+	// The log shrinks to one short finished step; the held height stays.
+	m.activity = []ActivityItem{{Kind: "tool", Tool: "noop", Content: "Short step", Done: true}}
 	rows := rowsOf(m.liveRegionView())
 	t.Logf("%d rows:\n%s", len(rows), strings.Join(rows, "\n"))
 

@@ -37,6 +37,8 @@ import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { SessionFolderChip } from './FolderChip';
 import { PermissionModeChip } from './PermissionModeChip';
+import { ResearchChip, useResearchMode, withResearch } from './ResearchChip';
+import { HistoryNotice, LibraryNotices } from './ChatNotices';
 import { PermissionPrompt } from './PermissionPrompt';
 import { QueuedMessages } from './QueuedMessages';
 import { ContextMeter, ContextWarning } from './ContextMeter';
@@ -62,7 +64,7 @@ import { useChatExport } from '../hooks/useChatExport';
 import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
-import { isPlaceholderTitle } from '../utils/sessionTitle';
+import { isPlaceholderTitle, shownTitle } from '../utils/sessionTitle';
 import { laterTurns, lastSentMessage } from '../utils/editLast';
 import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
 import { requestErrorParam } from '../utils/requestErrors';
@@ -71,6 +73,7 @@ import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { ModelServerDownNotice } from './ModelServerDownNotice';
 import { useChatDraft } from '../hooks/useSavedDraft';
+import { followSlideEvent, settleSlideDraft, SLIDE_PREVIEW_ENABLED } from '../stores/slideDraftStore';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
 import { useOpeningMessage } from '../hooks/useOpeningMessage';
 import { getT, useT } from '../i18n/useT';
@@ -90,19 +93,6 @@ const NO_CARDS: RenderCardData[] = [];
 
 /** Notices by server message id: a refetch replaces messages, so they cannot live on them alone. */
 const historyNotices = new Map<number, string>();
-
-/** One quiet line saying older turns left the model's view. */
-function HistoryNotice({ text }: { text: string }) {
-    return <div className="history-notice" role="note">{text}</div>;
-}
-
-function LibraryNotices({ notices }: { notices: string[] }) {
-    return (
-        <div className="library-notices" role="note">
-            {notices.map((notice, index) => <div key={`${index}-${notice}`} dir="auto">{notice}</div>)}
-        </div>
-    );
-}
 
 interface ChatViewProps {
     sessionId: string;
@@ -126,6 +116,7 @@ export const RESOURCES_NOTE_MS = 12_000;
 
 export function ChatView({ sessionId }: ChatViewProps) {
     const t = useT();
+    const researchMode = useResearchMode(sessionId);
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
@@ -515,7 +506,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const hasImage = fromComposer && attach.hasImage;
         const takeDraft = () => {
             if (!fromComposer) return text;
-            const composed = attach.compose(text);
+            const composed = attach.compose(withResearch(text, sessionId));
             setInput('');
             attach.clear();
             inputRef.current?.focus();
@@ -765,6 +756,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onAgentEvent: (event) => {
                 // The client's own "waiting to start" notice is not the server taking the message.
                 if (!(event.type === 'status' && event.phase === 'waiting')) accepted();
+                // A draft event is only the preview's; nothing else draws it.
+                if (SLIDE_PREVIEW_ENABLED ? followSlideEvent(sessionId, event) : event.type === 'draft') return;
                 // The queue is this chat's, so it stays current even after the view moved on.
                 if (event.type === 'followup_taken' && event.text) {
                     const takenText = event.text;
@@ -986,6 +979,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             },
             onDone: (event) => {
                 accepted();
+                settleSlideDraft(sessionId);
                 useNotificationStore.getState().dismissSessionPrompts(sessionId);
                 useChatStore.getState().closeSessionQuestions(sessionId);
                 if (doneHandled) return;
@@ -1106,6 +1100,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             },
             onError: (err) => {
                 const interrupted = isStreamInterrupted(err);
+                // An interrupted stream may be picked up again; any other error ends the turn.
+                if (!interrupted) settleSlideDraft(sessionId);
                 // A queued message the server never took goes back in line, or shows as failed with a retry.
                 // So does a direct send a busy chat refused.
                 const requeued = queuedSettled && !reattach && !interrupted && !!optimisticUser
@@ -1631,7 +1627,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            aria-label={session?.title || 'Chat'}
+            aria-label={shownTitle(session?.title) || 'Chat'}
         >
             <TurnAnnouncer busy={busy} />
             <header className="task-header">
@@ -1654,7 +1650,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         />
                     ) : (
                         <button type="button" className="task-title" onClick={startEditTitle} title={t('row.rename')}>
-                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : session?.title}</span>
+                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : shownTitle(session?.title)}</span>
                             <Edit3 size={12} aria-hidden="true" className="task-title-edit" />
                         </button>
                     )}
@@ -1891,8 +1887,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             ? t('composer.answerQuestion')
                             : isStreaming
                             ? t('composer.queueNext')
+                            : researchMode
+                            ? t('composer.researchPlaceholder')
                             : messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}
-                        leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
+                        leftControls={<><PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} /><ResearchChip sessionId={sessionId} disabled={!!retiredAgent} compact /></>}
                         rightControls={(
                             <>
                                 <ContextMeter

@@ -729,3 +729,106 @@ def test_a_failed_short_snippet_is_not_told_to_save_it(
 
     assert result["status"] == "error"
     assert "write_file" not in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Full access: the Python tools run where and what they are asked to
+# ---------------------------------------------------------------------------
+
+
+def test_full_access_runs_in_a_project_outside_the_allowed_paths(
+    make_run_python, project, tmp_path, monkeypatch
+):
+    """The case ``test_a_disallowed_project_the_user_chose_is_refused`` refuses."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(project)
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
+    agent, run_python = make_run_python(elsewhere)
+    agent.console.full_access = True
+
+    result = run_python(code="open('ran.txt', 'w').write('x')")
+
+    assert result["status"] == "success", result
+    assert (project / "ran.txt").exists()
+
+
+def test_full_access_runs_with_a_chosen_root_the_map_drops(
+    make_run_python, project, tmp_path, monkeypatch
+):
+    allowed = tmp_path / "docs"
+    allowed.mkdir()
+    monkeypatch.chdir(allowed)
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
+    agent, run_python = make_run_python(allowed)
+    monkeypatch.setattr(agent, "_project_map_root", lambda: None, raising=False)
+    agent.console.full_access = True
+
+    result = run_python(code="print(6 * 7)")
+
+    assert result["status"] == "success", result
+    assert result["stdout"].strip() == "42"
+
+
+@pytest.mark.parametrize("full_access", [False, True])
+def test_a_script_outside_the_allowed_paths_runs_only_under_full_access(
+    make_run_python, project, tmp_path, monkeypatch, full_access
+):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    script = elsewhere / "hello.py"
+    script.write_text("print('from elsewhere')\n", encoding="utf-8")
+    monkeypatch.chdir(project)
+    agent, _run_python = make_run_python(project)
+    agent.console.full_access = full_access
+    execute_python_file = _TOOL_REGISTRY["execute_python_file"]["function"]
+
+    result = execute_python_file(file_path=str(script))
+
+    if full_access:
+        assert result["status"] == "success", result
+        assert "from elsewhere" in result["stdout"]
+    else:
+        assert result["status"] == "error"
+        assert "Access denied" in result["error"]
+
+
+@pytest.mark.parametrize("full_access", [False, True])
+def test_the_child_is_guarded_and_marked_only_without_full_access(
+    make_run_python, project, monkeypatch, full_access
+):
+    from gaia_agent import chat_agent
+    from gaia_agent.python_runner import GUARDED_FOLDERS_ENV
+
+    seen = {}
+    real = chat_agent.run_python_job
+
+    def spy(cmd, **kwargs):
+        seen.update(env=dict(kwargs["env"]), marked=kwargs.get("marked", True))
+        return real(cmd, **kwargs)
+
+    monkeypatch.setattr(chat_agent, "run_python_job", spy)
+    monkeypatch.chdir(project)
+    agent, run_python = make_run_python(project)
+    agent.console.full_access = full_access
+
+    result = run_python(code="print(1)")
+
+    assert result["status"] == "success", result
+    assert (GUARDED_FOLDERS_ENV in seen["env"]) is not full_access
+    assert seen["marked"] is not full_access
+
+
+def test_full_access_does_not_run_in_a_folder_the_user_removed(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
+    agent, run_python = make_run_python(project)
+    agent.console.full_access = True
+    agent.path_validator.withhold_path(str(project))
+
+    result = run_python(code="open('ran.txt', 'w').write('x')")
+
+    assert result["status"] == "error"
+    assert not (project / "ran.txt").exists()

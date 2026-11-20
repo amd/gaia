@@ -23,7 +23,7 @@ const tablePayload = `{
 // newTestChat returns a model sized to an 80x24 terminal with a turn in flight.
 func newTestChat(t *testing.T) ChatModel {
 	t.Helper()
-	m := NewChatModel(&nullClient{}, "notes", "", false)
+	m := NewChatModel(&nullClient{}, "notes", "")
 	m.width, m.height = 80, 24
 	m.resize()
 	m.streaming = true
@@ -165,11 +165,12 @@ func TestCardRendersInlineAboveTheLiveRegion(t *testing.T) {
 	)
 	m.updateViewport()
 
-	view := ansi.Strip(m.viewport.View())
+	// The running call is the status line, drawn under the transcript.
+	view := ansi.Strip(m.View())
 	cardAt := strings.Index(view, "Sarah Chen")
-	liveAt := strings.Index(view, "archive_messages")
+	liveAt := strings.Index(view, "Run archive_messages")
 	if cardAt < 0 || liveAt < 0 {
-		t.Fatalf("expected both the card and the live region in the viewport:\n%s", view)
+		t.Fatalf("expected both the card and the running call on screen:\n%s", view)
 	}
 	if cardAt > liveAt {
 		t.Errorf("card rendered below the live region; ordering of work and results is lost:\n%s", view)

@@ -268,7 +268,22 @@ def _translated_events():
     errors = CanonicalTranslator(
         run_id=None, agent_id=stdio.AGENT_ID, debug=False
     ).translate({"type": "agent_error", "content": "boom"})
-    return events + finals + errors
+    return events + finals + errors + [_context_usage_event()]
+
+
+def _context_usage_event():
+    """The meter stdio writes itself once a turn is recorded."""
+    from gaia.agents.base.history import SessionHistory
+
+    class _Agent:
+        device = "gpu"
+        system_prompt = "prompt"
+        conversation_history = SessionHistory()
+
+    out = io.StringIO()
+    stdio._write_context(_Agent(), out)
+    _Agent.conversation_history.close()
+    return json.loads(out.getvalue())
 
 
 def test_every_field_the_tui_reads_is_emitted():
@@ -323,3 +338,39 @@ def test_history_cut_status_matches_the_fixture():
     assert set(event) - {"type"} == set(EVENTS["status"]["fields"]) | set(
         EVENTS["status"]["history_cut_extension"]
     )
+
+
+def test_plan_status_matches_the_fixture():
+    from gaia.ui.sse_translation import CanonicalTranslator
+
+    (event,) = CanonicalTranslator(run_id=None, agent_id="gaia").translate(
+        {
+            "type": "plan",
+            "steps": ["read_file", "write_file"],
+            "current_step": 0,
+            "items": [{"tool": "read_file"}, {"tool": "write_file"}],
+        }
+    )
+
+    assert event["type"] == "status"
+    assert set(event) - {"type"} == set(EVENTS["status"]["fields"]) | set(
+        EVENTS["status"]["plan_extension"]
+    )
+    assert set(event["plan"]) == {"steps", "current_step"}
+
+
+def test_context_usage_matches_the_fixture(tmp_path):
+    from gaia.agents.base.history import SessionHistory
+
+    class _Agent:
+        device = "gpu"
+        system_prompt = "prompt"
+        conversation_history = SessionHistory(tmp_path / "s.db")
+
+    out = io.StringIO()
+    stdio._write_context(_Agent(), out)
+    event = json.loads(out.getvalue())
+
+    assert event["type"] == "context_usage"
+    assert set(event) - {"type"} == set(EVENTS["context_usage"]["fields"])
+    _Agent.conversation_history.close()

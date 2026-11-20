@@ -18,6 +18,11 @@ Type a question, send it, and watch GAIA work through it. This page covers every
   while GAIA is working. In a chat, the folder chip beside the model names the
   folder GAIA works in; click it to see and manage the chat's folders in the
   session panel.
+- **Research:** the telescope chip next to the message box. While it is on,
+  each message in that chat is researched: GAIA searches the web, reads the
+  sources and writes a report that cites each page it read. Turned on before a
+  new chat's first message, it stays on in the chat that starts; other chats
+  are not affected. Typing `/research <topic>` does the same for one message. See [Deep research](/guides/gaia#deep-research).
 
 `Enter` sends and `Shift+Enter` starts a new line. The rest are under [Shortcuts](/guides/agent-ui/documents#shortcuts).
 
@@ -129,7 +134,10 @@ size and use the arrows to step through the others in that message.
 Music and sound effects it generates show a player with the file name and
 length (see [Local Music and Sound Effects](/guides/audio-generation)). Both
 still show when you reopen the chat. Only files GAIA saved in its own
-generation folders are shown this way. Speaking to GAIA through a microphone
+generation folders are shown this way. While a track is made, the step reads "Composing 30 s of
+music" or "Generating a 3 s sound effect". Ask GAIA to save it into a folder of
+yours and it puts a copy there too, never replacing a file that already exists;
+each track is listed under **Outputs** in the session panel. Speaking to GAIA through a microphone
 is not part of this; voice input is tracked in
 [#702](https://github.com/amd/gaia/issues/702).
 

@@ -29,20 +29,19 @@ from __future__ import annotations
 
 import ast
 import contextvars
-import functools
 import ipaddress
 import logging
 import ntpath
 import os
 import re
 import shlex
-import socket
 import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from gaia.agents.base.call_risk import DESTRUCTIVE, shell_command_risk
 from gaia.agents.base.command_wrappers import unwrap_command_argv
+from gaia.canonical_path import canonical_path
 
 logger = logging.getLogger(__name__)
 
@@ -410,49 +409,16 @@ def _path_within(child: str, parent: str) -> bool:
     return child.startswith(parent + os.sep) or child.startswith(parent + "/")
 
 
-_UNC_DRIVE_RE = re.compile(r"^\\\\([^\\]+)\\([A-Za-z])\$(\\.*)?$")
-
-
-@functools.lru_cache(maxsize=1)
-def _local_hosts() -> frozenset:
-    r"""Host names an administrative share (``\\host\c$``) means this PC by."""
-    return frozenset({"localhost", "127.0.0.1", "::1", socket.gethostname().lower()})
-
-
-def _windows_spelling(path: str) -> str:
-    r"""One spelling for the many Windows has for a file.
-
-    ``\\?\C:\x``, ``\\localhost\c$\x``, ``C:\x::$DATA``, ``C:\x:stream`` and
-    ``C:\x.`` all open ``C:\x``.
-    """
-    path = path.replace("/", "\\")
-    lowered = path.lower()
-    if lowered.startswith("\\\\?\\unc\\"):
-        path = "\\\\" + path[8:]
-    elif lowered.startswith(("\\\\?\\", "\\\\.\\")):
-        path = path[4:]
-    share = _UNC_DRIVE_RE.match(path)
-    if share and share.group(1).lower() in _local_hosts():
-        path = f"{share.group(2)}:{share.group(3) or chr(92)}"
-    drive, rest = os.path.splitdrive(path)
-    parts = [
-        part if part in (".", "..") else part.split(":", 1)[0].rstrip(" .")
-        for part in rest.split("\\")
-    ]
-    return drive + "\\".join(parts)
-
-
 def _canonical(path: str) -> str:
-    """The form every target is compared in, wherever it was spelled."""
-    if os.name == "nt":
-        path = _windows_spelling(path)
+    """The form every target is compared in, wherever it was spelled.
+
+    The same canonical form the path validator judges by, with a named NTFS
+    stream compared as its file.
+    """
     try:
-        # Expands 8.3 short names and follows links, as opening the file would.
-        path = os.path.realpath(path)
-    except (OSError, ValueError) as e:
-        logger.debug(
-            "compared a target as written; resolving it failed (%s)", type(e).__name__
-        )
+        path = canonical_path(path, for_comparison=True)
+    except (OSError, ValueError) as e:  # UncheckablePathError included
+        logger.debug("compared a target as written: %s", e)
     return os.path.normcase(os.path.abspath(path))
 
 
@@ -2362,13 +2328,21 @@ class DeniedEffects:
         return denial
 
     def conflict(
-        self, tool_name: str, tool_args: Optional[Dict[str, Any]]
+        self,
+        tool_name: str,
+        tool_args: Optional[Dict[str, Any]],
+        by_user_only: bool = False,
     ) -> Optional[Tuple[Denial, Effect]]:
-        """The earlier denial this call would route around, if any."""
+        """The earlier denial this call would route around, if any.
+
+        *by_user_only* looks only at what a person declined.
+        """
         if not self:
             return None
         wanted, operands, _ = _read_call(tool_name, tool_args, self.cwd)
         for denial in self.denials:
+            if by_user_only and not denial.by_user:
+                continue
             for denied in denial.effects:
                 for effect in wanted:
                     if not denied.overlaps(effect):

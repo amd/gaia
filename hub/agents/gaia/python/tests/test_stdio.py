@@ -2431,6 +2431,69 @@ def test_a_smaller_model_that_hides_turns_shows_a_notice(tmp_path, monkeypatch):
     agent.conversation_history.close()
 
 
+def _context_reports(out):
+    return [e for e in map(json.loads, _lines(out)) if e.get("type") == "context_usage"]
+
+
+def test_a_turn_reports_how_full_the_context_is(tmp_path):
+    from gaia.agents.base import history
+
+    agent = _HistoryAgent()
+    agent.system_prompt = "You are GAIA."
+    agent.conversation_history = history.SessionHistory(tmp_path / "session.db")
+    events = [json.loads(line) for line in _lines(_run(agent, "read the report"))]
+    reports = [e for e in events if e.get("type") == "context_usage"]
+    assert len(reports) == 1
+    # Sent before the terminal event, so the reader is still listening.
+    assert events.index(reports[0]) < len(events) - 1
+    report = reports[0]
+    assert report["window"] > 0
+    assert report["system"] > 0
+    # The turn just recorded is in the next message's view.
+    assert report["turns_in_view"] == 1 and report["history"] > 0
+    assert report["history_budget"] <= report["window"] // 2
+    assert report["at_risk"] == []
+    agent.conversation_history.close()
+
+
+def test_document_results_are_counted_apart_from_the_conversation(tmp_path):
+    from gaia.agents.base import history
+
+    agent = _HistoryAgent()
+    agent.conversation_history = history.SessionHistory(tmp_path / "session.db")
+    agent.conversation_history.record(
+        [
+            {"role": "user", "content": "read big.txt"},
+            {"role": "assistant", "content": "", "tool_calls": []},
+            {"role": "tool", "name": "read_file", "content": "word " * 2000},
+            {"role": "assistant", "content": "done"},
+        ]
+    )
+    out = io.StringIO()
+    stdio._write_context(agent, out)
+    (report,) = _context_reports(out)
+    assert report["documents"] > report["history"]
+    agent.conversation_history.close()
+
+
+def test_the_context_report_warns_before_turns_drop(tmp_path, monkeypatch):
+    from gaia.agents.base import history
+
+    agent = _HistoryAgent()
+    agent.conversation_history = history.SessionHistory(tmp_path / "session.db")
+    monkeypatch.setattr(history, "history_budget", lambda *args: 100)
+    monkeypatch.setattr(history, "count_tokens", lambda *args: 10)
+    at_risk = []
+    for i in range(8):
+        (report,) = _context_reports(_run(agent, f"q{i}"))
+        at_risk.append(report["at_risk"])
+    # Each turn costs 10 of 100. Under three quarters of the budget nothing is
+    # at risk; at it, the oldest turns are named before overflow drops them.
+    assert at_risk[:7] == [[]] * 7
+    assert at_risk[7][0] == "q0"
+    agent.conversation_history.close()
+
+
 def test_persistence_failure_emits_one_error_and_no_premature_final(monkeypatch):
     agent = _HistoryAgent()
     agent._script = [{"type": "final_answer", "content": "done"}]
@@ -2474,6 +2537,7 @@ def test_clear_conversation_resets_only_history(monkeypatch):
     agent.conversation_history = []
     agent.model_id = "chosen-model"
     agent.loaded_skills = {"coding": "loaded"}
+    agent._web_calls = [("fetch_page", {"url": "https://old.example"}, "page")]
     state = stdio.PermissionState(full_access=True)
     seen = []
 
@@ -2488,6 +2552,8 @@ def test_clear_conversation_resets_only_history(monkeypatch):
     stdio.dispatch_query(agent, "\x00gaia:clear_conversation\x00", wire, state=state)
     stdio.dispatch_query(agent, "second", wire, state=state)
     assert seen == [[], []]
+    # A page read before the clear must not back a later report's citation.
+    assert agent._web_calls == []
     assert agent.model_id == "chosen-model"
     assert agent.loaded_skills == {"coding": "loaded"}
     assert state.full_access

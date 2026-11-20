@@ -9,7 +9,7 @@ You choose which model answers, the app tells you where each chat goes, and GAIA
 
 ## Choose a model
 
-Open **Settings → Model** (or the model chip in the message box):
+Open **Settings → Agent & model** (or the model chip in the message box):
 
 | Provider | What it needs | Where your chat goes |
 |---|---|---|
@@ -21,7 +21,7 @@ On this PC, GAIA offers the two ways to run a model it has tested: the GPU, and 
 
 ### The model in use
 
-**Settings → Model** opens on the **Model in use** card: the model, what it runs
+**Settings → Agent & model** opens on the **Model in use** card: the model, what it runs
 on, **Switch model** for the models ready to use, and **Context size**. Below
 it, models sit in groups you can open and close: **Downloaded**, **Available to
 download** and **Not available on this PC**, with the reason. A search opens
@@ -73,11 +73,11 @@ reloads its model and never starts that server for you.
   the list fills in on its own.
 - If you close the OS key store's unlock or "new keyring" prompt without
   unlocking it, GAIA doesn't ask again for five minutes. The model list and
-  **Settings → Model** say the key store is locked and offer **Try again**,
+  **Settings → Agent & model** say the key store is locked and offer **Try again**,
   which asks the OS once more.
   Connecting a provider, picking a cloud model, or connecting or testing a
   connector also asks again.
-- In **Settings → Model**, the AMD LLM Gateway is greyed out when its host
+- In **Settings → Agent & model**, the AMD LLM Gateway is greyed out when its host
   can't be reached from this network. It reads "No network
   available — can't reach llm-api.amd.com (needs AMD's network or VPN)". Connect
   to AMD's network or VPN, then press **Check again**. First-run setup leaves
@@ -85,7 +85,7 @@ reloads its model and never starts that server for you.
   again once you are on AMD's network to see it. When Lemonade runs on
   another machine, or a proxy carries this PC's traffic, the check is skipped and
   the gateway stays choosable.
-- In **Settings → Model**, recommended Fireworks models appear by default. Choose
+- In **Settings → Agent & model**, recommended Fireworks models appear by default. Choose
   **Show all models** to reveal the rest; searching also finds unranked models.
   Each recommendation includes the benchmark result behind the pick.
 - The model you choose is remembered across restarts (shared with the TUI). If
@@ -93,7 +93,7 @@ reloads its model and never starts that server for you.
 - Switching from a local model to a cloud one shows the privacy note first.
 
 If you chose a cloud provider during setup and this PC has no model server yet,
-the banner, **Settings → Model** and **Settings → Advanced** offer **Set up local
+the banner, **Settings → Agent & model** and **Settings → Advanced** offer **Set up local
 models**. It reopens setup on **On this PC**, and **Back to GAIA** leaves it with
 nothing changed. Finishing it switches GAIA to the model it installed.
 
@@ -114,13 +114,13 @@ budget.
 
 ## Cloud cost and limits
 
-Before you pick a cloud model, setup and **Settings → Model** show what it
+Before you pick a cloud model, setup and **Settings → Agent & model** show what it
 costs per million tokens at the provider's list price; a model with no
 published price says "price unknown". In setup the listed models are a
 choice: the provider's top pick is marked **Default** and picked, and the
 model you pick is the one chat uses. Once the key works, setup says so and
 names that model. The AMD LLM Gateway is listed only on a network that can
-reach it, unless you picked it before. **Settings → Model** also shows what
+reach it, unless you picked it before. **Settings → Agent & model** also shows what
 this month's cloud chats (background goal runs included) have cost and lets
 you set a monthly limit; once it is reached, goals wait instead of running. GAIA warns
 when you're close, and once you reach it, it stops before sending a chat to the
@@ -186,9 +186,10 @@ When the same question comes back after you allowed it once, the prompt says
 so and highlights **Always allow**. It never answers for you, and a different
 tool or a riskier call gets no hint.
 
-Pick **Full access** from the shield to stop most of these questions in a chat
-(you confirm once). It does not open the shell: a gated `run_shell_command` — a
-delete, `git add` — still asks, and runs only when you allow it.
+Pick **Full access** from the shield to stop these questions in a chat
+(you confirm once). It opens the shell too: `run_shell_command` runs any
+command, a delete or `git add` included, without asking, and Python code runs
+as written. A calendar change and an outgoing email still ask.
 **Settings → Permissions** lists every chat with full access or "always allow"
 answers and lets you revoke them. Grants end when GAIA restarts.
 
@@ -200,8 +201,8 @@ the message box's shield for that chat. Chats already open keep their mode. It
 can only be changed on the PC running GAIA, not from a phone over mobile access.
 
 A Hub-installed GAIA, which runs as its own process, follows the chat's mode
-too, from agent contract 2.14. It stops asking, but its shell guardrails stay
-on, so those commands still reach you as a confirmation. If the mode can't be
+too, from agent contract 2.14. It stops asking and its shell runs any
+command, the same as in the terminal UI. If the mode can't be
 passed on when a turn starts, that turn stops with an error, so it never runs
 with full access you turned off.
 

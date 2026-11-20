@@ -51,6 +51,7 @@ from gaia.agents.base.call_risk import (
     EXACT_TEXT_ARG,
     NEEDS_PERSON_ARG,
     RISK_NOTE_ARG,
+    SCRIPT_ARG,
     SHELL_TOOLS,
 )
 from gaia.agents.base.chunk_index import OUTPUT_TOOLS
@@ -141,6 +142,7 @@ from gaia.agents.base.planted_instructions import (
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.python_human_only import python_human_only_refusal
 from gaia.agents.base.python_scope import python_scope_refusal
+from gaia.agents.base.script_preview import script_prompt_args
 from gaia.agents.base.self_check import (
     BUILT_SUFFIXES,
     PROSE_SUFFIXES,
@@ -150,6 +152,16 @@ from gaia.agents.base.self_check import (
     quotes_figures,
     read_verdict,
     self_check_prompt,
+)
+from gaia.agents.base.skill_budget import (
+    SUMMARIZED_THIS_TURN_HEADER,
+    SUMMARY_HEADER,
+    fit_skill_filter,
+    note_skill_request,
+    render_key,
+    skill_budget_report,
+    summarized_skills,
+    summary_line,
 )
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
@@ -185,6 +197,7 @@ from gaia.agents.base.tools import (
     _TOOL_REGISTRY,
     bare_tool_name,
     describe_registry,
+    partial_json_string,
     tool_build,
     tool_call_progress_message,
 )
@@ -216,6 +229,7 @@ from gaia.agents.base.verification import (
 )
 
 # First-party imports
+from gaia.canonical_path import UncheckablePathError, canonical_path
 from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
 from gaia.credential_shapes import redact_file_content, redact_tool_output
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
@@ -362,19 +376,36 @@ def local_max_output_tokens(ctx_size: int) -> int:
 _SKILLS_PROMPT_FRAGMENT = "get_skills_system_prompt"
 
 
-def _skill_change_note(before: Dict[str, str], after: Dict[str, str]) -> str:
-    """What changed in the shown skills, as a message for the model."""
+def _skill_change_note(
+    before: Dict[str, str],
+    after: Dict[str, str],
+    summaries: Optional[Dict[str, str]] = None,
+) -> str:
+    """What changed in the shown skills, as a message for the model.
+
+    *summaries* maps each loaded skill cut to one line to fit the context
+    window to that line: it is still loaded, so it is never called inactive.
+    """
+    summaries = summaries or {}
     added = [text for name, text in after.items() if before.get(name) != text]
     removed = sorted(set(before) - set(after))
+    shrunk = [name for name in removed if name in summaries]
+    dropped = [name for name in removed if name not in summaries]
     parts = []
     if added:
         parts.append(
             "==== SKILLS LOADED THIS TURN (follow them from here on) ====\n"
             + "\n\n".join(added)
         )
-    if removed:
+    if shrunk:
         parts.append(
-            f"Skills no longer active: {', '.join(removed)}. "
+            SUMMARIZED_THIS_TURN_HEADER
+            + "\n"
+            + "\n".join(summaries[name] for name in shrunk)
+        )
+    if dropped:
+        parts.append(
+            f"Skills no longer active: {', '.join(dropped)}. "
             "Stop following their instructions."
         )
     return "\n\n".join(parts)
@@ -919,6 +950,11 @@ COMPUTATION_FAILED = (
     "computed. Do not report computed figures (totals, sums, counts, averages). "
     "Fix the error and run it again, or tell the user what is needed."
 )
+
+#: How many user messages and tool results an agent keeps for fact checks.
+SEEN_SOURCES_MAX = 200
+#: Longest text kept for one of them, in characters.
+SEEN_SOURCE_MAX_CHARS = 20_000
 
 # Tools whose result is nothing but a receipt for what the agent itself just
 # did. EVERY other tool is treated as bringing in content the user did not type
@@ -2379,14 +2415,23 @@ def _with_replaced_answer(reply: str, replaced: str) -> Optional[str]:
 _SELF_CHECK_FULL_STEPS = 3
 
 
-def _answer_after_self_check(reply: str, earlier: str) -> Tuple[str, str]:
+def _answer_after_self_check(
+    reply: str, earlier: str, worked: bool = False
+) -> Tuple[str, str]:
     """``(answer, verdict)`` once the model has replied to the self-check.
 
     A pass keeps *earlier* as it was. A miss the model could not fix is added
     to it in one plain line. Anything else is a new answer, unless it is only
-    a short acknowledgement of the check.
+    a short acknowledgement of the check. When tools ran after the check
+    (*worked*), the reply describes the fixed work and is the answer whatever
+    verdict line it ends with.
     """
     verdict = read_verdict(reply)
+    if worked and verdict.rest:
+        answer = _with_replaced_answer(verdict.rest, earlier) or verdict.rest
+        if verdict.result == "miss":
+            return f"{answer.rstrip()}\n\n{miss_note(verdict.miss)}", "miss"
+        return answer, "new answer"
     if verdict.result == "pass":
         return earlier, "pass"
     if verdict.result == "miss":
@@ -2408,6 +2453,8 @@ _MAX_CHECKED_DELIVERABLES = 8
 # Post-edit read-back. Repair steps are granted on top of max_steps, so a model
 # under budget pressure has no reason to skip fixing what it broke.
 _VERIFY_REPAIR_STEPS = 2
+#: Steps an answer check's repair gets: a few page reads, then the answer.
+_ANSWER_REPAIR_STEPS = 6
 # Rounds per turn; past that the turn is looping and the gaps go into the answer.
 _MAX_EDIT_VERIFICATIONS = 2
 # Past this size a file is checked for presence only.
@@ -3238,6 +3285,17 @@ def _with_resolved_target(prompt_args: Any, preflight: Any) -> Any:
     return {**prompt_args, "file_path": target}
 
 
+def _judged_path(path: str) -> str:
+    """*path* as the path validator judges it, or as given when it cannot.
+
+    One the validator cannot canonicalise is refused by it, with the reason.
+    """
+    try:
+        return canonical_path(path)
+    except UncheckablePathError:
+        return path
+
+
 def _record_refused_write(
     agent: Any, tool_name: str, tool_args: Any, result: Any
 ) -> None:
@@ -3261,7 +3319,7 @@ def _record_refused_write(
         return
     try:
         target = os.path.abspath(str(target_of(tool_args)))
-        real = os.path.realpath(target)
+        real = _judged_path(target)
     except (KeyError, TypeError, ValueError, OSError) as e:
         logger.debug("could not resolve the refused write's target: %s", e)
         return
@@ -3501,6 +3559,17 @@ class Agent(abc.ABC):
     # matched once). Always-on skills (the manifest's plain ``skills:`` list)
     # are exempt and always render in full — see ``_always_on_skill_names``.
     _active_skill_filter: Optional[List[str]] = None
+
+    #: Scale loaded-skill bodies to the model's context window
+    #: (``gaia.agents.base.skill_budget``); a loaded skill's tools stay listed.
+    #: Off by default, so every agent that has not opted in renders as before.
+    SKILL_CONTEXT_BUDGET: ClassVar[bool] = False
+    #: This turn's skill budget plan; ``None`` until the first opted-in turn.
+    _skill_budget: Optional[Any] = None
+    #: Skills explicitly loaded since the last turn began, most recent first.
+    _skill_requests: Optional[List[str]] = None
+    #: ``(model key, (window, source, budget))`` for the skill budget.
+    _skill_window_cache: Optional[Any] = None
 
     #: Explicit re-activations (``load_skill`` on an already-loaded skill)
     #: pinned active for this many upcoming turns. Without it the escape
@@ -3885,6 +3954,8 @@ Do NOT wrap conversational replies in JSON.
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
+        # User messages and tool results, for skill tools that check facts (note_seen).
+        self._seen_sources: List[Tuple[str, Dict[str, Any], str]] = []
         self.max_steps = max_steps if max_steps is not None else default_max_steps()
         self.debug_prompts = debug_prompts
         self.show_prompts = show_prompts  # Separate flag for displaying prompts
@@ -4346,6 +4417,7 @@ Do NOT wrap conversational replies in JSON.
                     else list(self._active_tool_filter)
                 ),
                 skills_active=sorted(getattr(self, "loaded_skills", {}) or {}),
+                skill_budget=skill_budget_report(self),
                 history_messages=len(getattr(self, "conversation_history", []) or []),
                 started=min((t0 for _, t0, _ in pre_spans), default=None),
                 prompt_fragments={
@@ -4606,6 +4678,16 @@ Do NOT wrap conversational replies in JSON.
             if skill.body and (active is None or skill.name in active)
         }
 
+    def _skill_summaries_shown(self) -> Dict[str, str]:
+        """Each loaded skill summarized to fit the window, as its one line."""
+        skills = getattr(self, "_loaded_skills", None) or {}
+        return {
+            name: summary_line(
+                skills[name], _skill_menu_description(skills[name].description)
+            )
+            for name in summarized_skills(self)
+        }
+
     def _turn_session_context(
         self, messages: List[Dict[str, Any]]
     ) -> Tuple[str, List[Dict[str, Any]]]:
@@ -4631,7 +4713,7 @@ Do NOT wrap conversational replies in JSON.
                     "shown": shown,
                 }
             return live, []
-        note = _skill_change_note(pin["shown"], shown)
+        note = _skill_change_note(pin["shown"], shown, self._skill_summaries_shown())
         if not note:
             return pin["context"], []
         message = {"role": "user", "content": note}
@@ -4948,7 +5030,7 @@ Do NOT wrap conversational replies in JSON.
         ):
             return None
         try:
-            target = Path(os.path.realpath(str(target_of(prompt_args))))
+            target = Path(_judged_path(str(target_of(prompt_args))))
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.debug("could not resolve the write's target: %s", e)
             return None
@@ -5636,6 +5718,11 @@ Do NOT wrap conversational replies in JSON.
         # pylint: disable-next=assignment-from-none
         new_filter = self._select_skills_for_turn(user_input)
         new_filter = self._union_sticky_skills(new_filter)
+        summarized = summarized_skills(self)
+        new_filter = fit_skill_filter(self, new_filter, new_turn=True)
+        if summarized_skills(self) != summarized:
+            self._apply_skill_filter(new_filter)
+            return
         if new_filter == self._active_skill_filter:
             return
         if self._rendered_skill_bodies(new_filter) == self._rendered_skill_bodies(
@@ -5703,17 +5790,23 @@ Do NOT wrap conversational replies in JSON.
         skill always brings its instructions back, even when the per-turn
         selector missed it — mirrors ``search_tools`` for tools.
         Callers still need to call :meth:`rebuild_system_prompt` themselves.
+
+        Under a skill context budget the explicit ask ranks first, so its body
+        shows in full even if that summarizes another loaded skill.
         """
+        note_skill_request(self, name)
         current = self._active_skill_filter
-        if current is None:
-            return
-        # Pin the explicit ask for the next few turns too — a follow-up like
-        # "yes, continue" scores nothing against the skill's description, and
-        # collapsing the body one turn after the user asked for it strands
-        # the model mid-recipe.
-        self._pin_skill_body(name)
-        if name not in current:
-            self._active_skill_filter = sorted(set(current) | {name})
+        if current is not None:
+            # Pin the explicit ask for the next few turns too — a follow-up
+            # like "yes, continue" scores nothing against the skill's
+            # description, and collapsing the body one turn after the user
+            # asked for it strands the model mid-recipe.
+            self._pin_skill_body(name)
+            if name not in current:
+                current = sorted(set(current) | {name})
+        fitted = fit_skill_filter(self, current)
+        if fitted != self._active_skill_filter:
+            self._active_skill_filter = fitted
 
     @property
     def _always_on_skill_names(self) -> FrozenSet[str]:
@@ -6039,11 +6132,10 @@ Do NOT wrap conversational replies in JSON.
             # the sticky pin is set even when the body is ALREADY active this
             # turn, or an explicit ask made while selection happened to match
             # would still collapse on the next low-scoring follow-up.
-            if self._active_skill_filter is not None:
-                filter_changed = name not in self._active_skill_filter
-                self._note_skill_active(name)
-                if filter_changed:
-                    self.rebuild_system_prompt()
+            before = render_key(self)
+            self._note_skill_active(name)
+            if render_key(self) != before:
+                self.rebuild_system_prompt()
             _offer_skill_tools(self, self.loaded_skills[name])
             return self.loaded_skills[name]
 
@@ -6642,13 +6734,19 @@ Do NOT wrap conversational replies in JSON.
             )
 
         active = self._active_skill_names()
+        summarized = set(summarized_skills(self))
         body_sections = []
+        summary_lines = []
         menu_lines = []
         for skill in sorted(skills.values(), key=lambda s: s.name):
             if skill.name in active:
                 if skill.body:
                     body = _skill_prompt_body(self, skill)
                     body_sections.append(f"--- SKILL: {skill.name} ---\n{body}")
+            elif skill.name in summarized:
+                summary_lines.append(
+                    summary_line(skill, _skill_menu_description(skill.description))
+                )
             else:
                 menu_lines.append(
                     f"- {skill.name}: {_skill_menu_description(skill.description)}"
@@ -6660,6 +6758,8 @@ Do NOT wrap conversational replies in JSON.
                 f"==== LOADED SKILLS (active this turn) ====\n{SKILL_LIMITS_RULE}\n\n"
                 + "\n\n".join(body_sections)
             )
+        if summary_lines:
+            parts.append(SUMMARY_HEADER + "\n" + "\n".join(summary_lines))
         if menu_lines:
             rule = "" if parts else f"{SKILL_LIMITS_RULE}\n"
             parts.append(
@@ -6768,6 +6868,8 @@ Do NOT wrap conversational replies in JSON.
         provider = getattr(getattr(self, "chat", None), "llm_client", None)
         if provider is not None and hasattr(provider, "tool_call_progress"):
             provider.tool_call_progress = self._report_tool_call_progress
+        if provider is not None and hasattr(provider, "tool_call_draft"):
+            provider.tool_call_draft = self._report_tool_call_draft
         if provider is not None and hasattr(provider, "reasoning_progress"):
             provider.reasoning_progress = self._report_reasoning_progress
         backend = getattr(provider, "_backend", None)
@@ -6824,6 +6926,14 @@ Do NOT wrap conversational replies in JSON.
         self.console.report_phase(
             "tool_call", tool_call_progress_message(tool, chars), chars=chars
         )
+
+    def _report_tool_call_draft(self, tool: str, arguments: str) -> None:
+        field = (self._tools_registry.get(tool) or {}).get("draft_argument")
+        if not field:
+            return
+        text = partial_json_string(arguments, field)
+        if text:
+            self.console.report_draft(tool, text)
 
     def _report_reasoning_progress(self, words: int) -> None:
         self.console.report_phase(
@@ -8496,6 +8606,8 @@ Do NOT wrap conversational replies in JSON.
         Two sources: a tool's own ``@tool(preflight=...)`` check, and — duck-typed
         like :meth:`_call_is_pre_authorized` — a host that implements
         ``policy_refusal_for_call``.
+
+        Full access skips the Python tools' checks: the code runs as written.
         """
         if self.internet_off:
             from gaia.agents.base.offline import offline_refusal
@@ -8505,7 +8617,7 @@ Do NOT wrap conversational replies in JSON.
             )
             if refusal is not None:
                 return refusal
-        if tool_name in PYTHON_TOOLS:
+        if tool_name in PYTHON_TOOLS and not Agent._full_access_on(self):
             folders = self._python_call_folders()
             refusal = (
                 python_human_only_refusal(tool_name, tool_args, folders)
@@ -8529,6 +8641,13 @@ Do NOT wrap conversational replies in JSON.
         if not callable(refuses):
             return None
         return refuses(tool_name, tool_args)  # pylint: disable=not-callable
+
+    def _full_access_on(self) -> bool:
+        """Whether a person turned full access on for this session.
+
+        Called unbound inside this class: test doubles borrow these methods.
+        """
+        return getattr(getattr(self, "console", None), "full_access", False) is True
 
     def _python_call_folders(self) -> List[str]:
         """Where a Python tool's relative paths may resolve, most likely first."""
@@ -8568,7 +8687,10 @@ Do NOT wrap conversational replies in JSON.
         shown this exact call and said yes, which already is their answer to
         it, so the confirmation prompt is not shown a second time.
         """
-        conflict = self._denied_effects.conflict(tool_name, tool_args)
+        # Only the user's own no outlasts turning full access on.
+        conflict = self._denied_effects.conflict(
+            tool_name, tool_args, by_user_only=Agent._full_access_on(self)
+        )
         if conflict is None:
             return None, False
         denial, effect = conflict
@@ -9071,6 +9193,47 @@ Do NOT wrap conversational replies in JSON.
             return result
         return attach_task_lessons(result, lessons.record(tool_name, tool_args, result))
 
+    #: How many user messages and tool results ``seen_sources`` keeps.
+    SEEN_SOURCES_MAX = SEEN_SOURCES_MAX
+
+    def note_seen(self, source: str, args: Dict[str, Any], content: Any) -> None:
+        """Record a user message or tool result, so tools can check facts against it."""
+        # A test agent built via __new__ has no list yet.
+        seen = self.__dict__.setdefault("_seen_sources", [])
+        if isinstance(content, str):
+            text = content
+        else:
+            try:
+                text = json.dumps(content, default=str, ensure_ascii=False)
+            except (TypeError, ValueError, RecursionError) as exc:
+                # Tuple keys or a cycle: the result is still a good tool result.
+                logger.warning(
+                    "Could not serialise the %s result for fact checks (%s); "
+                    "keeping its str() form.",
+                    source,
+                    exc,
+                )
+                text = str(content)
+        seen.append((source, dict(args or {}), text[:SEEN_SOURCE_MAX_CHARS]))
+        del seen[:-SEEN_SOURCES_MAX]
+
+    def clear_seen_sources(self) -> None:
+        """Forget them, when the conversation is cleared."""
+        self.__dict__["_seen_sources"] = []
+
+    def seen_sources(self) -> List[Tuple[str, Dict[str, Any], str]]:
+        """``(source, args, text)`` for each user message and tool result this conversation.
+
+        Earlier user messages restored from history come first; tool results
+        exist only for turns this agent ran.
+        """
+        restored = [
+            ("user", {}, str(m.get("content") or ""))
+            for m in (getattr(self, "conversation_history", None) or [])
+            if isinstance(m, dict) and m.get("role") == "user"
+        ]
+        return restored + list(getattr(self, "_seen_sources", []))
+
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
@@ -9217,6 +9380,7 @@ Do NOT wrap conversational replies in JSON.
                 NEEDS_PERSON_ARG,
                 EXACT_TEXT_ARG,
                 RESOLVED_PATH_ARG,
+                SCRIPT_ARG,
                 SITE_ARG,
             )
         )
@@ -9247,6 +9411,7 @@ Do NOT wrap conversational replies in JSON.
             if (
                 ledger is not None
                 and not not_a_no
+                and not Agent._full_access_on(self)
                 and isinstance((tool_args or {}).get("command"), str)
             ):
                 ledger.record(
@@ -9308,6 +9473,8 @@ Do NOT wrap conversational replies in JSON.
         scratch = _scratch_reached_by(self, tool_name, prompt_args)
         if scratch:
             prompt_args = {**prompt_args, SCRATCH_ARG: scratch}
+        # A path does not say what a script does, so its prompt shows the script.
+        prompt_args = script_prompt_args(self, tool_name, prompt_args)
         # A write outside the chat's folders is asked about once: its own
         # prompt says so, and a person's yes to it grants that one file.
         outside = self._write_target_outside_scope(tool_name, prompt_args)
@@ -9349,8 +9516,9 @@ Do NOT wrap conversational replies in JSON.
             tool_name, tool_args
         ):
             # Handed-over text asks for no command or file change; a person
-            # asked to approve one would only be pressing Deny.
-            if hands_over_text_only(
+            # asked to approve one would only be pressing Deny. Under full
+            # access nobody is asked, so the call runs.
+            if not Agent._full_access_on(self) and hands_over_text_only(
                 str(
                     getattr(self, "_original_user_input", None)
                     or getattr(self, "_current_query", "")
@@ -9584,7 +9752,6 @@ Do NOT wrap conversational replies in JSON.
             logger.debug(f"Tool execution result: {result}")
             _record_refused_write(self, tool_name, tool_args, result)
             self._fold_tool_usage(tool_name, result)
-            return result
         except ToolExecutionTimeout as e:
             # Bounded-execution guard fired: the tool body blocked past its
             # limit. Fail loud with an actionable message — name the tool, the
@@ -9654,6 +9821,9 @@ Do NOT wrap conversational replies in JSON.
                 "tool_args": tool_args,
                 "plan_step": self.current_step + 1 if self.current_plan else None,
             }
+        # Outside the try: a bookkeeping failure must not fail a tool that ran.
+        Agent.note_seen(self, tool_name, tool_args, result)
+        return result
 
     def _generate_max_steps_message(
         self,
@@ -11766,6 +11936,25 @@ Do NOT wrap conversational replies in JSON.
         """
         return answer
 
+    def answer_problems(  # pylint: disable=unused-argument
+        self, answer: str
+    ) -> List[str]:
+        """What a subclass's own check finds wrong with *answer*, or nothing.
+
+        The loop sends the problems back once per turn for the model to repair,
+        then names any left over in the answer. Empty by default.
+        """
+        return []
+
+    def answer_repair_prompt(self, problems: List[str]) -> str:
+        """The message that asks the model to repair :meth:`answer_problems`."""
+        return (
+            "[check:answer] "
+            + " ".join(problems)
+            + " This check is internal: answer the user without mentioning it. "
+            + _GIVE_ANSWER_AGAIN
+        )
+
     def _note_verification_signal(
         self,
         tool_name: str,
@@ -12015,6 +12204,22 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _self_check_plan(self) -> Optional[Dict[str, Any]]:
+        """:meth:`_build_self_check_plan`, which can never end the turn.
+
+        The check reads files the model just wrote, with parsers that raise
+        their own error classes on a malformed one. It is advisory: a check
+        that cannot run is logged with its traceback and the answer goes out
+        without it.
+        """
+        try:
+            return self._build_self_check_plan()
+        except Exception:  # advisory: see the docstring
+            logger.exception(
+                "%s could not run; the turn goes on without it", SELF_CHECK_TAG
+            )
+            return None
+
+    def _build_self_check_plan(self) -> Optional[Dict[str, Any]]:
         """What this turn's self-check would cover, or ``None`` when it owes none.
 
         A turn owes one when it wrote a document or data file and either read
@@ -12059,6 +12264,7 @@ Do NOT wrap conversational replies in JSON.
             written,
             self._pending_deliverables(),
             prose=next(iter(prose.values())) if len(prose) == 1 else "",
+            folder=os.getcwd(),
             # An empty file the request asks for is not a miss.
             empty_ok=[
                 path
@@ -12141,16 +12347,18 @@ Do NOT wrap conversational replies in JSON.
         out, and stays. Whatever code still sees wrong is said in the answer,
         whether or not the model agreed. Logs what the check cost.
         """
+        records = getattr(self, "_turn_tool_executions", None) or []
         if reply is None:
             answer, verdict = opened["answer"], "unanswered"
         else:
-            answer, verdict = _answer_after_self_check(reply, opened["answer"])
+            answer, verdict = _answer_after_self_check(
+                reply, opened["answer"], worked=len(records) > opened["tools"]
+            )
         left = []
         if verdict != "miss":
             left = (self._self_check_plan() or {}).get("findings") or []
         if left:
             answer = f"{answer.rstrip()}\n\n" + "\n".join(miss_note(f) for f in left)
-        records = getattr(self, "_turn_tool_executions", None) or []
         logger.info(
             "%s done verdict=%s seconds=%.1f model_steps=%d tool_calls=%d "
             "code_findings_left=%d",
@@ -12473,6 +12681,8 @@ Do NOT wrap conversational replies in JSON.
         coverage = self._completion_evidence.read_coverage_gap(answer or "")
         if coverage and coverage not in gaps:
             gaps.append(coverage)
+        if answer and answer.strip() and not model_failed:
+            gaps.extend(p for p in self.answer_problems(answer) if p not in gaps)
         if gaps and answer and answer.strip() and not blocking_gaps(gaps):
             answer = caveated_answer(answer, gaps)
         elif gaps:
@@ -13123,6 +13333,13 @@ Do NOT wrap conversational replies in JSON.
 
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
+        # The user's own words: memory recall prepends past chats' text, not theirs.
+        Agent.note_seen(
+            self,
+            "user",
+            {},
+            getattr(self, "_original_user_input", None) or user_input,
+        )
         self._single_tool_done = False
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())
@@ -13262,6 +13479,7 @@ Do NOT wrap conversational replies in JSON.
         cut_off_continuations = 0
         stream_cut_offs = 0
         completion_corrections = 0
+        answer_repaired = False
         # The self-check goes out once a turn. While it is open this holds
         # the answer it was sent about, and when and where it went out.
         self_check_sent = False
@@ -16097,6 +16315,28 @@ Do NOT wrap conversational replies in JSON.
                         messages.append({"role": "user", "content": check})
                         conversation.append({"role": "user", "content": check})
                         continue
+                answer_issues = self.answer_problems(answer_candidate)
+                if answer_issues:
+                    if not answer_repaired:
+                        answer_repaired = True
+                        # An acknowledgement-only reply must not replace the report.
+                        answer_before_completion_check = unfinalized_answer
+                        steps_limit += _ANSWER_REPAIR_STEPS
+                        repair = self.answer_repair_prompt(answer_issues)
+                        self._turn_scope.widen(repair)
+                        self._reopen_turn_scope(conversation)
+                        messages.append({"role": "user", "content": repair})
+                        conversation.append({"role": "user", "content": repair})
+                        logger.info(
+                            "Answer check found %d problem(s); asked once for a "
+                            "repair (step limit now %d)",
+                            len(answer_issues),
+                            steps_limit,
+                        )
+                        continue
+                    completion_gaps.extend(
+                        p for p in answer_issues if p not in completion_gaps
+                    )
                 # Validate after subclass rewriting, before console/SSE emission.
                 final_test_claim = unsupported_test_claim(
                     answer_candidate, self._turn_tool_executions
@@ -16243,17 +16483,23 @@ Do NOT wrap conversational replies in JSON.
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
             self.execution_state = self.STATE_COMPLETION
+            # A repair that ran out of steps keeps the report it was repairing.
+            repair_draft = answer_before_completion_check if answer_repaired else None
             try:
-                cap_answer = self._closing_answer(
-                    messages,
-                    conversation,
-                    self._with_unwritten_note(
-                        _TIME_LIMIT_ANSWER_PROMPT.format(seconds=seconds)
-                        if time_limit_reached
-                        else _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit)
-                    ),
-                    steps_taken,
-                    run_one_call=time_limit_reached,
+                cap_answer = (
+                    repair_draft
+                    if repair_draft is not None
+                    else self._closing_answer(
+                        messages,
+                        conversation,
+                        self._with_unwritten_note(
+                            _TIME_LIMIT_ANSWER_PROMPT.format(seconds=seconds)
+                            if time_limit_reached
+                            else _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit)
+                        ),
+                        steps_taken,
+                        run_one_call=time_limit_reached,
+                    )
                 )
             except Exception as e:  # noqa: BLE001 - the reason goes in the answer
                 logger.warning("Could not write the closing summary: %s", e)
@@ -16458,6 +16704,8 @@ Do NOT wrap conversational replies in JSON.
                 for gap in completion_gaps
                 if gap not in blocking_gaps(completion_gaps)
             ],
+            # How this turn's skill bodies were fitted to the model's window.
+            "skill_budget": skill_budget_report(self),
             # Retries behind this turn's model calls, and whether the model
             # stayed unreachable (the run is then "failed", never "success").
             "model_retries": {

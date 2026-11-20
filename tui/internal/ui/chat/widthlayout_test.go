@@ -33,7 +33,7 @@ var terminalSizes = []struct {
 
 func sizedChat(t *testing.T, w, h int) ChatModel {
 	t.Helper()
-	m := NewChatModel(&nullClient{}, "gaia", "", false)
+	m := NewChatModel(&nullClient{}, "gaia", "")
 	m.width, m.height = w, h
 	m.resize()
 	m.streaming = true
@@ -89,14 +89,15 @@ const minSupportedCols = 20
 // to its own floor of 8, and the row printed past the last column anyway.
 func TestNoRowShearsOnACrampedTerminal(t *testing.T) {
 	for w := minSupportedCols; w <= 48; w++ {
-		// The opening frame of a turn: the idle live line, before any event.
+		// The opening frame of a turn: the status line, before any event.
 		idle := sizedChat(t, w, 10)
-		checkRowsFit(t, w, "opening frame", idle.liveRegionView())
+		idle.streaming = true
+		checkRowsFit(t, w, "opening frame", idle.liveRegionView()+"\n"+idle.statusLine(time.Now()))
 
 		// A turn under way: a live row with a clock, a wrapped action, an
 		// outcome, and the "still working" hint, all at once.
 		m := sizedChat(t, w, 10)
-		m.dev = true
+		m.streaming = true
 		m.queryStart = time.Now().Add(-2 * stillWorkingAfter)
 		m = feed(t, m,
 			event.CanonicalToolCallEvent{
@@ -104,20 +105,22 @@ func TestNoRowShearsOnACrampedTerminal(t *testing.T) {
 				Args: json.RawMessage(`{"command":"` + strings.Repeat("z", 200) + `"}`),
 			},
 		)
-		checkRowsFit(t, w, "live row + hint", m.liveRegionView())
+		now := time.Now()
+		checkRowsFit(t, w, "live row + hint", m.liveRegionView()+"\n"+m.statusLine(now)+"\n"+m.statusTip(now))
 
-		// And with the action closed, so the outcome and --dev payload rows draw.
+		// And with the action closed, so its bullet and outcome draw.
 		m = feed(t, m, event.CanonicalToolResultEvent{
 			Type: "tool_result", Tool: "run_shell_command",
 			Preview: strings.Repeat("d", 200),
 		})
 		checkRowsFit(t, w, "closed action", m.liveRegionView())
 
-		// A repeated call stacks the "xN" counter onto whichever row is live.
-		rep := ActivityItem{Kind: "tool", Tool: "get_message", Content: strings.Repeat("m", 200), Repeat: 13}
+		// A repeated call stacks the "xN" counter onto its bullet; live, the
+		// status line carries an hour-long clock.
+		rep := ActivityItem{Kind: "tool", Tool: "get_message", Content: strings.Repeat("m", 200)}
 		for _, live := range []bool{true, false} {
 			checkRowsFit(t, w, "repeated action", strings.Join(
-				sizedChat(t, w, 10).renderActivityItem(rep, live, 3720*time.Second, 0), "\n"))
+				rowsFor(sizedChat(t, w, 10), rep, 14, live, 3720*time.Second), "\n"))
 		}
 	}
 }
@@ -165,7 +168,7 @@ func TestWorkLogRowsFitTheTerminal(t *testing.T) {
 	for _, tc := range terminalSizes {
 		t.Run(tc.name, func(t *testing.T) {
 			m := sizedChat(t, tc.width, tc.height)
-			m.dev = true
+			m.expandWork = true
 			m = feed(t, m,
 				event.CanonicalToolCallEvent{
 					Type:      "tool_call",
@@ -196,20 +199,19 @@ func TestWorkLogRowsFitTheTerminal(t *testing.T) {
 	}
 }
 
-// The live line hangs a clock off its right edge. That clock is appended after
+// The status line hangs a clock off its right edge. That clock is appended after
 // the text is truncated, so it has to come out of the same budget — otherwise
-// it is the one row that always overruns, on exactly the wide terminals this
-// change opens up.
+// it is the one row that always overruns.
 func TestTheLiveLineLeavesRoomForItsClock(t *testing.T) {
 	for _, tc := range terminalSizes {
 		t.Run(tc.name, func(t *testing.T) {
 			m := sizedChat(t, tc.width, tc.height)
 			item := ActivityItem{Kind: "tool", Tool: "run_shell_command", Content: strings.Repeat("z", 500)}
 			for _, elapsed := range []time.Duration{9 * time.Second, 125 * time.Second, 3720 * time.Second} {
-				for _, line := range m.renderActivityItem(item, true, elapsed, 0) {
+				for _, line := range rowsFor(m, item, 1, true, elapsed) {
 					if w := ansi.StringWidth(ansi.Strip(line)); w > tc.width {
-						t.Errorf("the live line is %d columns wide at %s on a %d-column terminal",
-							w, formatElapsed(elapsed), tc.width)
+						t.Errorf("the status line is %d columns wide at %s on a %d-column terminal",
+							w, humanDuration(elapsed), tc.width)
 					}
 				}
 			}
@@ -217,34 +219,42 @@ func TestTheLiveLineLeavesRoomForItsClock(t *testing.T) {
 	}
 }
 
-// A wider terminal has to actually SHOW more. Wrapping already saved the tail
-// from being lost; a wider window is what stops it needing a second row at all,
-// which is the difference between reading one line and reading a paragraph.
+// A wider terminal has to actually SHOW more: a headline is one row, so the
+// columns a wide window adds are more of the same line, tail included.
 func TestAWiderTerminalShowsMoreOnOneRow(t *testing.T) {
 	item := ActivityItem{Kind: "tool", Tool: "run_shell_command", Content: longNarration}
-	rendered := func(w int) []string {
-		m := sizedChat(t, w, 40)
-		m.expandWork = true // folded, the narrow row is clipped rather than wrapped
-		return m.renderActivityItem(item, false, 0, 0)
-	}
+	rendered := func(w int) []string { return rowsFor(sizedChat(t, w, 40), item, 1, false, 0) }
 
 	narrow, wide := rendered(80), rendered(240)
 	if ansi.StringWidth(ansi.Strip(wide[0])) <= ansi.StringWidth(ansi.Strip(narrow[0])) {
 		t.Fatalf("a 240-column terminal drew the same %d columns on its first row an 80-column one did",
 			ansi.StringWidth(ansi.Strip(wide[0])))
 	}
-	// With room for the whole command, it is one row and the tail is on it.
-	if len(wide) != 1 {
-		t.Errorf("a 240-column terminal spent %d rows on a line that fits in one", len(wide))
-	}
 	if !strings.Contains(ansi.Strip(wide[0]), "2026-01-01") {
-		t.Errorf("the tail of the command is missing on a 240-column terminal: %q", ansi.Strip(wide[0]))
+		t.Errorf("the tail of the line is missing on a 240-column terminal: %q", ansi.Strip(wide[0]))
 	}
-	// The same line does not fit an 80-column window, so it costs a second row
-	// there — which is exactly the cost a wide window buys back.
-	if len(narrow) < 2 {
+	if strings.Contains(ansi.Strip(narrow[0]), "2026-01-01") {
 		t.Errorf("an 80-column terminal fitted a %d-column line on one row", displayWidth(longNarration))
 	}
+}
+
+// rowsFor draws one action the way the screen does: as a bullet once it has
+// finished (n calls of it), or as the status line while it runs.
+func rowsFor(m ChatModel, item ActivityItem, n int, live bool, elapsed time.Duration) []string {
+	if live {
+		item.Done = false
+		m.activity = []ActivityItem{item}
+		m.streaming = true
+		now := time.Now()
+		m.queryStart = now.Add(-elapsed)
+		return []string{m.statusLine(now), m.statusTip(now)}
+	}
+	item.Done = true
+	items := make([]ActivityItem, n)
+	for i := range items {
+		items[i] = item
+	}
+	return m.renderEntries(buildEntries(items, m.expandWork, true), true)
 }
 
 // Capture must not pre-empt layout. Cutting the narration when the event
@@ -305,10 +315,9 @@ func TestProseFollowsTheTerminalBelowTheCap(t *testing.T) {
 	}
 }
 
-// The "still working" hint is part of the live region's height budget, which
-// spends exactly one row on it. At 50 fixed columns it wrapped to two on a
-// narrow terminal, so the region overran the budget that had already been
-// decremented for it.
+// The "still working" tip has exactly one row under the status line, reserved
+// whether or not it shows. At 50 fixed columns it wrapped to two on a narrow
+// terminal, so it would overrun the row reserved for it.
 func TestTheStillWorkingHintFitsAndStaysOneRow(t *testing.T) {
 	for _, tc := range terminalSizes {
 		t.Run(tc.name, func(t *testing.T) {
@@ -318,19 +327,15 @@ func TestTheStillWorkingHintFitsAndStaysOneRow(t *testing.T) {
 			m.queryStart = time.Now().Add(-2 * stillWorkingAfter)
 			m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Message: "Working out how to answer"})
 
-			out := ansi.Strip(m.renderLiveRegion())
+			out := ansi.Strip(m.statusTip(time.Now()))
 			if !strings.Contains(out, "still working") {
-				t.Fatalf("the hint did not render at all:\n%s", out)
+				t.Fatalf("the tip did not render at all: %q", out)
 			}
-			for _, line := range strings.Split(out, "\n") {
-				if w := ansi.StringWidth(line); w > tc.width {
-					t.Errorf("a live-region row is %d columns wide on a %d-column terminal: %q",
-						w, tc.width, line)
-				}
+			if strings.Contains(out, "\n") {
+				t.Errorf("the tip wrapped onto a second row: %q", out)
 			}
-			if rows := len(strings.Split(out, "\n")); rows > m.logRows() {
-				t.Errorf("the live region is %d rows on a %d-row terminal; the budget is %d",
-					rows, tc.height, m.logRows())
+			if w := ansi.StringWidth(out); w > tc.width {
+				t.Errorf("the tip is %d columns wide on a %d-column terminal: %q", w, tc.width, out)
 			}
 		})
 	}
@@ -346,9 +351,8 @@ func TestAReservedCounterAndClockStack(t *testing.T) {
 			item := ActivityItem{
 				Kind: "tool", Tool: "get_message",
 				Content: strings.Repeat("m", 400),
-				Repeat:  13,
 			}
-			for _, line := range m.renderActivityItem(item, true, 3720*time.Second, 0) {
+			for _, line := range append(rowsFor(m, item, 14, false, 0), rowsFor(m, item, 1, true, 3720*time.Second)...) {
 				if w := ansi.StringWidth(ansi.Strip(line)); w > tc.width {
 					t.Errorf("a repeated live row is %d columns wide on a %d-column terminal: %q",
 						w, tc.width, ansi.Strip(line))
@@ -458,10 +462,6 @@ func TestCaptureCoversTheWidestWindowTheTUIAccepts(t *testing.T) {
 	}
 	if rowsWorth := logDetailRows * widestLogMeasure; detailMax < rowsWorth {
 		t.Errorf("detailMax %d cannot fill the %d rows an outcome will render", detailMax, logDetailRows)
-	}
-	if devPayloadWidth < widestLogMeasure {
-		t.Errorf("a --dev payload is captured at %d columns but one row can show %d",
-			devPayloadWidth, widestLogMeasure)
 	}
 }
 

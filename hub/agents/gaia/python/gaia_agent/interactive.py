@@ -231,6 +231,12 @@ def interactive_mode(agent: ChatAgent):
                                 "press Ctrl-C; unsaved changes will be lost."
                             )
                             continue
+                    # A fresh conversation keeps none of the old one's "always" answers.
+                    reset_approvals = getattr(
+                        getattr(agent, "console", None), "reset_tool_approvals", None
+                    )
+                    if callable(reset_approvals):
+                        reset_approvals()
                     # Create new session
                     agent.current_session = agent.session_manager.create_session()
                     reset_route = getattr(agent, "reset_hybrid_route", None)

@@ -3033,6 +3033,12 @@ afterwards (or `swebench <run_dir>` does, later).
         "Claude Code has with its permissions skipped",
     )
     tasks_run_parser.add_argument(
+        "--research-command",
+        action="store_true",
+        help="Send each research task as `/research <prompt>`, GAIA's research "
+        "mode (gaia harness only)",
+    )
+    tasks_run_parser.add_argument(
         "--meter",
         choices=["fireworks"],
         default=None,
@@ -4424,7 +4430,10 @@ def _handle_eval_tasks(args):
             if "error" in grade:
                 print(f"  {task_id}: judge failed - {grade['error']}")
             else:
-                scores = " ".join(f"{a}={grade[a]}" for a in ft.AXES)
+                shown = ft.AXES + tuple(
+                    k for k in ft.RESEARCH_AXES + ft.RESEARCH_VERDICTS if k in grade
+                )
+                scores = " ".join(f"{a}={grade[a]}" for a in shown)
                 print(f"  {task_id}: {scores} | {grade['one_line']}")
 
         print(f"[JUDGE] {judge_model}")
@@ -4505,6 +4514,7 @@ def _handle_eval_tasks(args):
                 therock_url=args.therock_url,
                 fence=args.fence,
                 full_access=args.full_access,
+                research_command=args.research_command,
                 repeats=args.repeats,
                 meter=args.meter,
                 fireworks_account=args.fireworks_account,
@@ -5006,6 +5016,10 @@ def _init_model_choices(args, profile: str):
 
 
 def main():
+    from gaia.platform_guard import avoid_wmi
+
+    # Before anything asks `platform`: a timed-out WMI query crashes the process.
+    avoid_wmi()
     from gaia.logger import configure
 
     log_manager = configure()
@@ -9018,13 +9032,19 @@ def _diag_gaia_processes(gaia_dir):
     except (OSError, ValueError, AttributeError) as e:
         notes.append(f"lemonade: unreadable {state_path}: {type(e).__name__}")
 
-    pid_path = gaia_dir / "backend.pid"
-    try:
-        found.append(("ui backend", int(pid_path.read_text().strip()), None))
-    except FileNotFoundError:
-        pass
-    except (OSError, ValueError) as e:
-        notes.append(f"ui backend: unreadable {pid_path}: {type(e).__name__}")
+    # One record per desktop app (backend-pids/<app pid>.pid); backend.pid is
+    # what older apps wrote.
+    pid_dir = gaia_dir / "backend-pids"
+    pid_paths = [gaia_dir / "backend.pid"]
+    if pid_dir.is_dir():
+        pid_paths += sorted(pid_dir.glob("*.pid"))
+    for pid_path in pid_paths:
+        try:
+            found.append(("ui backend", int(pid_path.read_text().strip()), None))
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as e:
+            notes.append(f"ui backend: unreadable {pid_path}: {type(e).__name__}")
     return found, notes
 
 

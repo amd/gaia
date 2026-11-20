@@ -27,6 +27,8 @@ import { PanelSection } from './PanelSection';
 import { EnvironmentSection } from './EnvironmentSection';
 import { OutputsSection } from './OutputsSection';
 import { ChangesSection } from './ChangesSection';
+import { SlidePreview } from './SlidePreview';
+import { SLIDE_PREVIEW_ENABLED } from '../../stores/slideDraftStore';
 import { BrowserPaneToggle } from '../browser-pane/BrowserPane';
 import { AgentInfoSection } from './AgentInfoSection';
 import { SkillsSection } from './SkillsSection';
@@ -149,6 +151,7 @@ function PanelBody({ sessionId, messages, busy, usage, onUsage, onJumpToMessage 
         <PanelSettled.Provider value={settled}>
             <div className="sp-body">
                 <FocusBar facets={focus.facets} />
+                {SLIDE_PREVIEW_ENABLED && <SlidePreview sessionId={sessionId} />}
                 <EnvironmentSection sessionId={sessionId} busy={busy} usage={usage} hideDocuments />
                 <PlanSection plan={focus.plan} />
                 <ScheduleSection schedules={focus.schedules} />

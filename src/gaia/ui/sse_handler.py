@@ -511,6 +511,27 @@ def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
 _ANSWER_FIRST_RE = re.compile(r'\s*\{\s*"answer"\s*:')
 
 
+#: Longest string argument a plan item carries; a plan is re-sent every step.
+_PLAN_ARG_MAX = 300
+
+
+def _plan_item(step: Any) -> Dict[str, Any]:
+    """One plan step as ``{tool, description, args}`` for a client to narrate."""
+    if not isinstance(step, dict):
+        return {"description": str(step)}
+    item: Dict[str, Any] = {}
+    if step.get("tool"):
+        item["tool"] = str(step["tool"])
+    if step.get("description"):
+        item["description"] = str(step["description"])
+    args = step.get("tool_args")
+    if isinstance(args, dict) and args:
+        item["args"] = {
+            k: (v[:_PLAN_ARG_MAX] if isinstance(v, str) else v) for k, v in args.items()
+        }
+    return item
+
+
 class SSEOutputHandler(OutputHandler):
     """
     OutputHandler that queues agent events as JSON for SSE streaming.
@@ -828,6 +849,7 @@ class SSEOutputHandler(OutputHandler):
                 "steps": plan_strs,
                 "step_narrations": narrations,
                 "current_step": current_step,
+                "items": [_plan_item(step) for step in plan],
             }
         )
 
@@ -933,6 +955,8 @@ class SSEOutputHandler(OutputHandler):
         latency_ms = self.record_tool_result(data, success)
         event = {
             "type": "tool_result",
+            # Which call this answers, so a client can follow one tool's results.
+            "tool": self._last_tool_name,
             "title": title,
             "summary": summary,
             "success": success,
@@ -961,6 +985,9 @@ class SSEOutputHandler(OutputHandler):
         # summary may be incomplete instead of making them infer truncation.
         if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
             event["summary_truncated"] = True
+        # The file a tool wrote, so a client can offer to open it.
+        if isinstance(data, dict) and isinstance(data.get("path"), str):
+            event["path"] = data["path"]
         # Where the tool wrote, resolved: a relayed turn's Outputs need it.
         if isinstance(data, dict):
             for key in RESULT_PATH_KEYS:
@@ -1193,6 +1220,9 @@ class SSEOutputHandler(OutputHandler):
                 **counts,
             }
         )
+
+    def report_draft(self, tool: str, text: str):
+        self._emit({"type": "draft", "tool": tool, "text": text})
 
     # === Structured-render map (#2109) ===
 

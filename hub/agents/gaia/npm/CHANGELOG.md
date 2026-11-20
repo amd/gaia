@@ -8,6 +8,87 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **Ask for research with `/research`.** A query that starts with `/research`
+  loads the `research-report` skill for the turn and asks for a report that
+  cites, for every claim, a page the agent fetched, with a check for newer
+  developments and a Sources list. The Agent UI's Research switch and the TUI's
+  `/research` send this form. Typing the skill's own `/research-report` is the
+  same research turn. A profile without web tools refuses it by name.
+- **Research citations are checked before the answer is final.** A cited link
+  the agent never fetched, or one that matches no search result or page (a
+  retyped link), goes back to the model once to fetch or drop; any left is
+  listed under the report.
+- **`research-report` 1.1.0.** The whole cited report now goes in the reply
+  (not only in a saved file), encyclopedias lead to primary sources instead of
+  standing in for them, long pages are read with `find`, anything that can
+  change gets a search for newer developments, and a refused web search is
+  stated in the report.
+
+- **Skills fit the model's context window.** On a 64K local model, two or
+  three loaded skills and their tools took each request from ~23K to ~40K
+  tokens and the model followed its instructions less well. Loaded skill
+  bodies now share 5% of the window (1,000 to 6,000 tokens: ~3,300 at 64K,
+  6,000 at 120K and up), and auto-load uses the same budget. Over that, the
+  skill loaded most recently or most relevant to the request is shown in full
+  and the rest as one line each, with how to bring one back. A summarized
+  skill keeps all its tools, so only the text shrinks. On a 64K window or
+  smaller, at most one skill auto-loads per turn; large windows keep two.
+- **Clearing a conversation forgets its "always" answers.** `/clear` in the
+  terminal UI, `clear_history` from a host, and `/reset` in `gaia chat` used to
+  keep them, so a command approved "always" in the cleared chat still ran
+  unasked in the next one. Now the same command asks again. Other sessions keep
+  their answers, and full access and loaded skills are unchanged.
+- **Resuming a conversation forgets the current one's "always" answers.**
+  `/resume` in `gaia chat` kept them, so a command approved "always" in one
+  conversation ran unasked in the one resumed after it. The resumed
+  conversation now starts with none. A resume that fails (unknown or unreadable
+  session) leaves the current conversation and its answers as they were.
+- **Code that names a credential folder or reads a credential file is refused before it runs.**
+  `run_python`, `execute_python_file` (the script and its arguments) and a shell
+  line that hands code to an interpreter could open `.env` or files inside
+  `~/.ssh` after one approval, though the file tools refuse them outright. Such
+  code is now refused before the prompt, whatever "always" was granted, and the
+  prompt for a code tool says GAIA checks the code's text, not what it does when
+  it runs. A credential file is refused only when the
+  code reads it; code that writes or only names one runs. `execute_python_file`
+  pointed at a credential file itself, or at a
+  path no approval can grant, is refused the same way: no `needs_confirmation`
+  is sent for it and the file is never read into one.
+
+- **An "always allow" label can no longer read reversed.** `always_scope` and
+  `always_label` name a file or skill the model chose, and a name holding a
+  right-to-left override or a zero-width character was sent raw, so a button
+  built from it showed `invoice<U+202E>txt.exe` as a name ending in `exe.txt`.
+  Both now carry such a character as `[U+XXXX]`. The grant still covers the
+  real file.
+- **The terminal UI can show the plan and how full the context is.** Over
+  stdio, a planned turn's `status` now carries the plan and its current step,
+  and every recorded turn is followed by the `context_usage` event the HTTP
+  server already streams, measured for the next message.
+- **Generated music and sound effects can be saved into a folder of the
+  user's.** `generate_music` and `generate_sound_effect` take `save_to`, an
+  absolute folder or a new `.wav` path, and write a copy there as
+  `saved_to`; the original stays in GAIA's audio folder as `audio_path`, so
+  the chat still plays it. Relative paths, missing folders, existing files and
+  places the write policy forbids are refused before anything is generated.
+  The track is listed under the session panel's Outputs, and the work log
+  reads "Composing 30 s of music" or "Generating a 3 s sound effect".
+
+- **The sidecar no longer crashes on a busy Windows PC.** It died with an access
+  violation in Python's `_wmi` module when a WMI query timed out. It now reads
+  OS and CPU facts without WMI.
+- **Full access runs any command.** It used to refuse a program outside a
+  short developer list (`pip`, `where`, `rmdir`, `gaia`, a program given by its
+  full path), a package install outside a virtual environment, a path outside
+  the allowed folders, a credential file and `gaia skill`, and one refused
+  delete then blocked later Python for the rest of the request. Now
+  `run_shell_command` and `run_python` run what they are given: any program,
+  `rm` included, any shell syntax (loops, conditions, several lines), any
+  folder. `POST /v1/gaia/sessions/{id}/bypass` gives an HTTP session the same
+  full access, so an Agent UI chat's Full access no longer asks before a gated
+  shell command; a sidecar started without a caller-auth token refuses to turn
+  it on (`403`). A call you declined stays declined, and calendar changes and
+  outgoing mail still wait for you. The other modes are unchanged.
 - **Every chat on a PC embeds with one embedder, the GPU one.** The embedder
   was chosen per session, so a chat on the other device could clear all of
   memory's vectors. It is now one per PC, on an NPU PC too: FastFlowLM's NPU
@@ -119,8 +200,9 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   - A skill that grants a command-line program stays a suggestion in Ask mode.
     Under full access it loads, with a warning naming the program. Switch full
     access off and the skill is unloaded at the next turn.
-  - The skill bodies in the prompt, plus the new one, must fit in 18% of the
-    model's context window (about 5,900 tokens of the default 32,768).
+  - The skill bodies in the prompt, plus the new one, must fit in the
+    model's skill body budget (5% of its context window, 1,000 to 6,000
+    tokens).
   - A skill unloaded earlier in the session is not auto-loaded again.
   - `GAIA_SKILL_AUTOLOAD_TAU` and `GAIA_SKILL_AUTOLOAD_MARGIN` (or
     `skill_autoload_threshold` and `skill_autoload_margin`) set the 0.40 and
@@ -488,6 +570,18 @@ Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   in its consent.
 
 ### Changed
+
+- **The prompt to run a Python file shows the file.** `execute_python_file`
+  asked with only a path, so a script the agent had just written to its
+  scratch folder was approved unread. `needs_confirmation` now carries
+  `prompt_context.script`: `{ text, hidden_lines }` with up to 400 lines (48,000
+  characters) of the file as it was when the prompt was built, or
+  `{ unreadable }` (`missing`, `not_text`, `too_large`, `unreadable`) when there
+  is nothing to show. `summary` shows the first lines under the path and, when
+  it leaves lines out, the file's full path to read them at. If the
+  file differs from what the prompt showed when the run starts, the run is refused and the agent
+  asks again with the new content. `args` still holds exactly the model's
+  arguments.
 
 - **The standalone email agent is gone; mail is this agent's job.**
   `@amd-gaia/agent-email` and `gaia-agent-email` are removed, along with

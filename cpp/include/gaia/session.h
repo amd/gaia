@@ -20,6 +20,7 @@ struct GAIA_API SessionInfo {
     std::string timestamp;    ///< ISO 8601 creation time.
     std::string preview;      ///< First user message (truncated to ~100 chars).
     size_t messageCount = 0;  ///< Total messages in session.
+    std::string problem;      ///< Why the file could not be read; empty for a readable session.
 };
 
 /// Persistent session store for agent conversation history.
@@ -74,11 +75,14 @@ public:
     bool remove(const std::string& id);
 
     /// List all saved sessions, sorted by timestamp (newest first).
-    /// @return Vector of SessionInfo for every valid session file in the directory.
+    /// A file that cannot be read is still listed, with SessionInfo::problem set
+    /// and no timestamp, so it sorts last.
+    /// @return Vector of SessionInfo for every session file in the directory.
     std::vector<SessionInfo> list() const;
 
     /// Generate a unique session ID based on current timestamp.
-    /// Format: "session-YYYYMMDD-HHMMSS" (with disambiguation suffix if needed).
+    /// Format: "session-YYYYMMDD-HHMMSS", then "-N" for every id after the
+    /// process's first. Safe to call from several threads.
     /// @return A unique session identifier string.
     static std::string generateId();
 

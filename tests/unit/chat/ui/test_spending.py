@@ -339,7 +339,7 @@ def test_a_cloud_turn_is_refused_once_the_limit_is_reached(db):
     refusal = spending.limit_refusal(db, FLASH)
     assert "reaches your $0.01 monthly limit" in refusal
     assert "stopped before sending this to Fireworks AI" in refusal
-    assert "Settings › Model" in refusal
+    assert "Settings › Agent & model" in refusal
     # A model on this PC is never stopped by the cloud limit.
     assert spending.limit_refusal(db, "Gemma-4-E4B-it-GGUF") is None
 
