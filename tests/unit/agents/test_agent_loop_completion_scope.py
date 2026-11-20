@@ -968,7 +968,12 @@ def test_a_shell_cat_that_showed_the_whole_file_is_a_read_back(tmp_path):
         "gc out.toml",
         "Get-Content -Path out.toml",
         "Get-Content -LiteralPath 'out.toml'",
-        "gc -Path .\\out.toml",
+        pytest.param(
+            "gc -Path .\\out.toml",
+            marks=pytest.mark.skipif(
+                sys.platform != "win32", reason="a backslash path is Windows-only"
+            ),
+        ),
         "Get-Content -Raw out.toml",
         "Get-Content -Path out.toml -Raw",
         "Get-Content out.toml -Encoding UTF8",
