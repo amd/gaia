@@ -69,10 +69,14 @@ _CHAT_MODEL = "Qwen3-30B-A3B-Instruct-2507-GGUF"
 _VULKAN_CHAT_ARGS = f"{CHAT_LLAMACPP_ARGS} {VULKAN_TOKEN_TABLE_ARGS}"
 
 
-def _sent_load_on(client, default_backend, chosen=None, system="Windows"):
+_GPU = {"amd_igpu": {"available": True, "name": "AMD Radeon"}}
+
+
+def _sent_load_on(client, default_backend, chosen=None, system="Windows", devices=_GPU):
     with (
         patch("gaia.llm.lemonade_client.platform.system", return_value=system),
         patch.object(client, "_default_llamacpp_backend", return_value=default_backend),
+        patch.object(client, "get_system_info", return_value={"devices": devices}),
         patch(
             "gaia.llm.lemonade_client.preferred_llamacpp_backend", return_value=chosen
         ),
@@ -86,6 +90,17 @@ def test_on_vulkan_a_chat_load_keeps_the_token_tables_on_the_gpu(client):
     assert sent["llamacpp_args"] == _VULKAN_CHAT_ARGS
     # Saved together, so a reload never pairs the override with another backend.
     assert sent["llamacpp_backend"] == "vulkan"
+
+
+@pytest.mark.parametrize(
+    "devices", [{}, {"amd_igpu": {"available": False}}, {"amd_dgpu": []}]
+)
+def test_a_pc_with_no_gpu_gets_no_vulkan_override(client, devices):
+    """The Vulkan build runs on the CPU there; naming a Vulkan device stops
+    llama-server from starting."""
+    sent = _sent_load_on(client, "vulkan", devices=devices)
+    assert sent["llamacpp_args"] == CHAT_LLAMACPP_ARGS
+    assert "llamacpp_backend" not in sent
 
 
 @pytest.mark.parametrize(

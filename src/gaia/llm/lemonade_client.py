@@ -6593,6 +6593,31 @@ class LemonadeClient:
         backend = llamacpp.get("default_backend")
         return backend if isinstance(backend, str) and backend else None
 
+    def _token_table_backend(self, backend: Optional[str]) -> Optional[str]:
+        """*backend* when its token tables can go on a GPU, else None.
+
+        A PC with no GPU still runs the Vulkan build, on the CPU, and
+        llama.cpp refuses to start when told to use a Vulkan device there.
+        """
+        if backend != "vulkan":
+            return None
+        try:
+            info = self.get_system_info(timeout=15)
+        except LemonadeAuthError:
+            raise
+        except LemonadeClientError as e:
+            self.log.warning(
+                f"Could not read {self.base_url}/system-info to see whether "
+                f"this PC has a GPU ({e}); leaving the token tables in system RAM."
+            )
+            return None
+        devices = info.get("devices")
+        from gaia.llm.model_fit import gpu_available
+
+        if not isinstance(devices, dict) or not gpu_available(devices):
+            return None
+        return backend
+
     def _post_embedder_load(
         self,
         url: str,
@@ -10355,6 +10380,7 @@ class LemonadeClient:
             request_data["llamacpp_backend"] = chosen_backend
         if llamacpp_args == CHAT_LLAMACPP_ARGS and platform.system() != "Darwin":
             chat_backend = chosen_backend or self._default_llamacpp_backend()
+            chat_backend = self._token_table_backend(chat_backend)
             llamacpp_args = with_vulkan_token_tables(llamacpp_args, chat_backend)
             if chat_backend == "vulkan":
                 # Saved with the args, so a reload never pairs them with
@@ -10377,7 +10403,9 @@ class LemonadeClient:
             if backend:
                 request_data["llamacpp_backend"] = backend
             if llamacpp_args == EMBEDDER_LLAMACPP_ARGS:
-                llamacpp_args = embedder_llamacpp_args(backend)
+                llamacpp_args = embedder_llamacpp_args(
+                    self._token_table_backend(backend)
+                )
         if model_name in EMBEDDER_MODELS:
             # Saved so Lemonade's own auto-loads (``/embeddings``) keep the
             # ubatch too; never into the config of a server the user runs.

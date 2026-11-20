@@ -44,15 +44,25 @@ def fresh_state(monkeypatch):
     monkeypatch.setattr(lemonade_client, "preferred_llamacpp_backend", lambda: None)
 
 
-def _recording_client(calls, default_backend="vulkan", failing_backends=()):
+_GPU = {"amd_igpu": {"available": True, "name": "AMD Radeon"}}
+_NO_GPU = {"amd_igpu": {"available": False}}
+
+
+def _recording_client(
+    calls, default_backend="vulkan", failing_backends=(), devices=None
+):
     """A client whose HTTP layer records calls and fails the named backends."""
     client = LemonadeClient(verbose=False)
+    devices = _GPU if devices is None else devices
 
     def fake_send(method, url, data=None, **kwargs):
         endpoint = url.rsplit("/", 1)[-1]
         calls.append((endpoint, dict(data or {})))
         if endpoint == "system-info":
-            return {"recipes": {"llamacpp": {"default_backend": default_backend}}}
+            return {
+                "recipes": {"llamacpp": {"default_backend": default_backend}},
+                "devices": devices,
+            }
         if endpoint == "load" and (data or {}).get("llamacpp_backend") in (
             failing_backends
         ):
@@ -132,6 +142,19 @@ def test_only_vulkan_keeps_the_token_table_on_the_gpu():
     for backend in ("cpu", "rocm", "metal", None):
         assert embedder_llamacpp_args(backend) == EMBEDDER_LLAMACPP_ARGS
     assert without_vulkan_token_tables(_VULKAN_ARGS) == EMBEDDER_LLAMACPP_ARGS
+
+
+def test_a_pc_with_no_gpu_gets_no_vulkan_token_table_override(not_macos):
+    """The Vulkan build runs on the CPU there, and llama.cpp won't start when
+    told to use a Vulkan device that does not exist."""
+    calls = []
+    client = _recording_client(calls, devices=_NO_GPU)
+
+    client.load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
+
+    (load,) = _loads(calls)
+    assert load["llamacpp_args"] == EMBEDDER_LLAMACPP_ARGS
+    assert load["llamacpp_backend"] == "vulkan"
 
 
 def test_the_cpu_fallback_drops_the_vulkan_token_table_override(not_macos):
@@ -256,6 +279,7 @@ def test_the_first_embedding_loads_the_embedder_once(not_macos):
     client.embeddings("two", model=DEFAULT_EMBEDDING_MODEL)
 
     assert [endpoint for endpoint, _ in calls] == [
+        "system-info",
         "system-info",
         "load",
         "embeddings",
