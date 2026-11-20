@@ -37,7 +37,7 @@ dist/gaia-1.4.0.x86_64.rpm
 - `--payload` is a directory that already contains two executables named
   `gaia-cli` and `gaia-agent`, no extension, and `core/`, the frozen `gaia` with
   its `_internal` folder. The script copies them; it does not build them. A
-  `gaiacpp` there, the native agent `gaia-cli` runs in place of `gaia-agent`, is
+  `gaiacpp` there, the native agent a user can switch `gaia-cli` to, is
   packaged too; `tui_installers.yml` stages it from the release's own build. The
   core installs to `/usr/lib/gaia`, linked as `/usr/bin/gaia`, and a pre-remove
   script stops a daemon running it before the package is removed or upgraded.

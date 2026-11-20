@@ -1642,7 +1642,7 @@ export const enMessages = {
     'images.settings.chatModelCannot': "{model}, the chat model, is too small to be offered image creation, so these settings won't be used until you switch.",
     'images.settings.chooseChatModel': "Choose a chat model",
     'images.settings.modelGone': "{model} is no longer on this PC's Lemonade. Choose another model.",
-    'images.settings.noModels': "No image model is downloaded. Download one in Settings › Model.",
+    'images.settings.noModels': "No image model is downloaded. Download one in Settings › Agent & model.",
     'images.settings.model': "Model",
     'images.settings.downloadsOnFirstUse': "{model} (downloads on first use, {size})",
     'images.settings.size': "Size",

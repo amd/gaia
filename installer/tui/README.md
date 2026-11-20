@@ -7,9 +7,10 @@ puts these executables on disk and on `PATH`:
 - **`gaia-agent`** — the flagship agent the Terminal UI spawns as a child process
   (`TransportSubprocess` in `tui/internal/catalog/catalog.go`)
 - **`gaiacpp`** — the native flagship agent, on Windows x64, Linux x64 and Apple
-  silicon. The Terminal UI runs it in place of `gaia-agent` when it sits beside
-  `gaia-cli` (`FindNative` in `tui/internal/catalog/native.go`); an Intel Mac
-  package has none, so it runs `gaia-agent`
+  silicon. The Terminal UI runs it from beside `gaia-cli` in place of
+  `gaia-agent` once the user picks it with `/agent gaiacpp` (`FindNative` in
+  `tui/internal/catalog/native.go`); an Intel Mac package has none, so it runs
+  `gaia-agent`
 
 Shipping only the first installs a front end with nothing behind it, which is
 why the sidecar is bundled rather than fetched on first run.

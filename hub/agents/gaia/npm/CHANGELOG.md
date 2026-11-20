@@ -18,6 +18,19 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   is refused with "attach it to this chat again" instead of advice to re-add a
   folder under Environment.
 
+- **Editing a config, data or skill file after the tests marks "tests pass"
+  stale again.** Since 0.3.6 a requested `settings.yaml`, `app.json`,
+  `schema.sql`, `Dockerfile` or similar file, or a `SKILL.md` or prompt file,
+  could be edited after the test run and the agent still reported the old pass.
+  Now only docs and requested reports (prose, text, tables, documents, images)
+  leave the run standing; anything under a `skills` or `prompts` folder counts
+  as a change.
+- **A slow script that times out is offered more time again.** A data or build
+  script killed at its timeout was told to run the linter on the changed files.
+  It now gets the background-run and longer-timeout options back; test and lint
+  runs are still scoped to the changed files.
+- **`read_tool_output` with a `to_entry` past the last part returns what is
+  there** instead of an error.
 - **Ask for research with `/research`.** A query that starts with `/research`
   loads the `research-report` skill for the turn and asks for a report that
   cites, for every claim, a page the agent fetched, with a check for newer
