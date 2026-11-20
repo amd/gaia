@@ -838,8 +838,17 @@ def test_a_bundled_library_keeps_its_own_hint(monkeypatch):
     result = _python_run_result(
         _failed(stderr), "", stderr, 0.1, system_python_runs=True
     )
-    assert "pip is not available" in result["error"]
+    assert "pandas is not installed in this Python" in result["error"]
     assert "system Python" not in result["error"]
+
+
+@pytest.mark.parametrize("frozen", [True, False])
+def test_only_the_frozen_build_says_pip_is_unavailable(monkeypatch, frozen):
+    monkeypatch.setattr(chat_agent, "is_frozen", lambda: frozen)
+    for module in ("pandas", "duckdb"):
+        hint = chat_agent._missing_library_hint(f"No module named '{module}'")
+        if hint is not None:
+            assert ("pip is not available" in hint) is frozen
 
 
 def test_a_missing_bundled_library_names_the_setup_command(monkeypatch):

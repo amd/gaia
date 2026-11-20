@@ -6348,11 +6348,32 @@ Let me know your answer!
             sys.exit(run_agent_refresh())
 
         if args.data_libraries:
-            if profile != "gaia" or args.agent_only or args.no_data_libraries:
+            model_flags = [
+                flag
+                for flag, value in (
+                    ("--use-model", getattr(args, "use_model", None)),
+                    ("--skip-model", getattr(args, "skip_model", None)),
+                    ("--download-model", getattr(args, "download_model", None)),
+                    ("--chat-model", getattr(args, "chat_model", None)),
+                    ("--load", getattr(args, "load", False)),
+                    ("--plan", getattr(args, "plan", False)),
+                    ("--force-models", getattr(args, "force_models", False)),
+                )
+                if value
+            ]
+            if (
+                profile != "gaia"
+                or args.agent_only
+                or args.no_data_libraries
+                or model_flags
+            ):
                 print(
                     "Error: --data-libraries only installs the recommended "
                     "Python libraries; it does not combine with --profile, "
-                    "--minimal, --agent-only or --no-data-libraries.",
+                    "--minimal, --agent-only, --no-data-libraries or model "
+                    "options"
+                    + (f" ({', '.join(model_flags)})" if model_flags else "")
+                    + ".",
                     file=sys.stderr,
                 )
                 sys.exit(2)

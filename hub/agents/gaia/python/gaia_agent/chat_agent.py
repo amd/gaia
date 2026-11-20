@@ -446,8 +446,8 @@ def _missing_library_hint(stderr_line: str) -> Optional[str]:
     module = match.group(1).split(".")[0] if match else None
     if module in _SETUP_ONLY_LIBRARIES and not is_frozen():
         return (
-            f"{module} is not installed in this Python and pip is not "
-            "available. Retry now without it; to have it in later runs, tell "
+            f"{module} is not installed in this Python. Retry now without it; "
+            "to have it in later runs, tell "
             f"the user to run `{DATA_LIBRARIES_SETUP_COMMAND}` in a terminal."
         )
     if module not in BUNDLED_LIBRARIES.values():
@@ -455,8 +455,10 @@ def _missing_library_hint(stderr_line: str) -> Optional[str]:
     route = _STDLIB_ROUTES.get(module, "the standard library only")
     if module in _STDLIB_ROUTES:
         route = f"{route} from the standard library"
+    # A source install has pip; only the frozen build has no way to add it.
+    unavailable = " and pip is not available" if is_frozen() else ""
     hint = (
-        f"{module} is not installed in this Python and pip is not available. "
+        f"{module} is not installed in this Python{unavailable}. "
         f"Retry now without it, using {route}."
     )
     if is_frozen():

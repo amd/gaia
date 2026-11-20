@@ -137,17 +137,32 @@ def pinned_libraries() -> Dict[str, str]:
     return pins
 
 
+#: hub/agents/gaia/python/gaia_agent in a source checkout, innermost first; the
+#: same layout ``gaia_agent.agent._CHECKOUT_LAYOUT`` matches.
+_AGENT_CHECKOUT_LAYOUT = ("gaia_agent", "python", "gaia", "agents", "hub")
+
+
 def bundled_skill_roots() -> List[str]:
     """Folders holding the skills that ship with the GAIA agent, if it is importable.
 
     A source install has the agent package; an install that runs the agent
     binary has none, and that binary carries its own libraries.
     """
-    if importlib.util.find_spec("gaia_agent") is None:
+    # Found, never imported: the agent loads numpy, which pip then cannot
+    # replace on Windows while this process holds it.
+    spec = importlib.util.find_spec("gaia_agent")
+    if spec is None or not spec.submodule_search_locations:
         return []
-    from gaia_agent.agent import _bundled_skill_roots
-
-    return _bundled_skill_roots()
+    package = Path(next(iter(spec.submodule_search_locations))).resolve()
+    candidates = [package / "skills"]
+    parents = list(package.parents)[: len(_AGENT_CHECKOUT_LAYOUT) - 1]
+    if (package.name, *(p.name for p in parents)) == _AGENT_CHECKOUT_LAYOUT:
+        candidates.append(parents[-1] / "skills")
+    roots: List[str] = []
+    for directory in candidates:
+        if directory.is_dir() and str(directory) not in roots:
+            roots.append(str(directory))
+    return roots
 
 
 def skill_dependencies(roots: Optional[List[str]] = None) -> Dict[str, List[str]]:

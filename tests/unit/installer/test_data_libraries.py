@@ -13,6 +13,7 @@ install is reported and never called success.
 
 import ast
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -30,6 +31,8 @@ from gaia.installer.init_command import InitCommand
 
 REPO = Path(__file__).resolve().parents[3]
 PINS = ["pandas==2.3.3", "openpyxl==3.1.5"]
+# The real lookup, before the fixture below stubs it out.
+_BUNDLED_SKILL_ROOTS = data_libraries.bundled_skill_roots
 
 
 def _setup_kwargs() -> dict:
@@ -480,6 +483,25 @@ class TestCli:
         assert code == 2
         assert "--data-libraries" in capsys.readouterr().err
 
+    @pytest.mark.parametrize(
+        "flags",
+        [
+            ["--use-model", "Gemma-4-E4B-it-GGUF"],
+            ["--skip-model", "Gemma-4-E4B-it-GGUF"],
+            ["--plan"],
+            ["--force-models"],
+            ["--check", "--load"],
+        ],
+    )
+    def test_the_flag_refuses_model_options(self, monkeypatch, capsys, flags):
+        monkeypatch.setattr(
+            data_libraries, "run_command", lambda **kw: pytest.fail("step ran")
+        )
+        assert self._main(monkeypatch, "--data-libraries", *flags) == 2
+        err = capsys.readouterr().err
+        refused = [f for f in flags if f.startswith("--") and f != "--check"]
+        assert "--data-libraries" in err and refused[0] in err
+
     def test_the_opt_out_reaches_setup(self, monkeypatch):
         seen = {}
 
@@ -490,3 +512,69 @@ class TestCli:
         monkeypatch.setattr(init_command, "run_init", run_init)
         assert self._main(monkeypatch, "--yes", "--no-data-libraries") == 0
         assert seen["no_data_libraries"] is True
+
+
+def test_finding_the_skills_never_imports_the_agent_or_numpy():
+    # pip cannot replace numpy's DLLs on Windows while this process holds them.
+    code = (
+        "import sys\n"
+        "from gaia.installer import data_libraries\n"
+        "data_libraries.skill_dependencies()\n"
+        "print(sorted(m for m in ('numpy', 'gaia_agent.agent') if m in sys.modules))\n"
+    )
+    paths = [str(REPO / "src"), str(REPO / "hub" / "agents" / "gaia" / "python")]
+    env_path = os.pathsep.join(paths)
+    out = subprocess.run(
+        [sys.executable, "-c", f"import sys; sys.path[:0] = {paths!r}\n{code}"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={**os.environ, "PYTHONPATH": env_path},
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().splitlines()[-1] == "[]"
+
+
+def test_the_skill_folders_match_the_agents_own():
+    from gaia_agent.agent import _CHECKOUT_LAYOUT, _bundled_skill_roots
+
+    assert _BUNDLED_SKILL_ROOTS() == _bundled_skill_roots()
+    assert data_libraries._AGENT_CHECKOUT_LAYOUT == _CHECKOUT_LAYOUT
+
+
+def _fake_agent(root: Path) -> Path:
+    package = root / "gaia_agent"
+    (package / "skills").mkdir(parents=True)
+    (package / "__init__.py").write_text("raise ImportError('never import me')\n")
+    return package
+
+
+def test_an_installed_agent_trusts_no_skills_folder_beside_the_environment(
+    tmp_path, monkeypatch
+):
+    site = tmp_path / "env" / "lib" / "site-packages"
+    package = _fake_agent(site)
+    (tmp_path / "env" / "skills").mkdir()
+    (site / "skills").mkdir()
+    monkeypatch.delitem(sys.modules, "gaia_agent", raising=False)
+    monkeypatch.syspath_prepend(str(site))
+
+    assert _BUNDLED_SKILL_ROOTS() == [str((package / "skills").resolve())]
+
+
+def test_a_checkout_adds_hub_skills(tmp_path, monkeypatch):
+    python_dir = tmp_path / "hub" / "agents" / "gaia" / "python"
+    package = _fake_agent(python_dir)
+    (tmp_path / "hub" / "skills").mkdir()
+    monkeypatch.delitem(sys.modules, "gaia_agent", raising=False)
+    monkeypatch.syspath_prepend(str(python_dir))
+
+    assert _BUNDLED_SKILL_ROOTS() == [
+        str((package / "skills").resolve()),
+        str((tmp_path / "hub" / "skills").resolve()),
+    ]
+
+
+def test_no_agent_package_means_no_bundled_skills(monkeypatch):
+    monkeypatch.setattr(data_libraries.importlib.util, "find_spec", lambda name: None)
+    assert _BUNDLED_SKILL_ROOTS() == []
