@@ -281,6 +281,8 @@ type ChatModel struct {
 	// key except Ctrl+C goes to it (including Esc, which means "deny" here,
 	// not "cancel the turn" — see handleKey).
 	confirmation *components.ConfirmationModel
+	// answer keeps typing meant for the composer from answering it.
+	answer answerGuard
 
 	// fullAccess is true while the agent runs every gated tool without
 	// asking. OFF on a fresh launch, always, and never restored from anywhere:
@@ -1146,6 +1148,17 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, cmd
 
+	case confirmHoldMsg:
+		return m.resolveConfirmHold(msg)
+
+	case control.InputBatchEndMsg:
+		// A driver's keys ["y"] is a whole answer; it does not wait out the hold.
+		if m.confirmation != nil && m.confirmation.Pending() && m.answer.held != "" &&
+			m.answer.seq == m.confirmation.Seq() {
+			return m.releaseHeldAnswer()
+		}
+		return m, nil
+
 	case components.ConfirmationDecidedMsg:
 		if m.confirmation == nil || m.confirmation.RunID() != msg.RunID || m.confirmation.Seq() != msg.Seq {
 			// Stale — a decision for a confirmation that is no longer up (already
@@ -1356,10 +1369,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// belongs to it: the issue's contract is "Esc denies", not "Esc cancels the
 	// turn". Ctrl+C is still the universal way out.
 	if m.confirmation != nil && msg.Type != tea.KeyCtrlC {
-		c, cmd := m.confirmation.Update(msg)
-		m.confirmation = &c
-		m.updateViewport()
-		return m, cmd
+		return m.handleConfirmationKey(msg)
 	}
 
 	// A pending question owns the keyboard: the run is blocked on it, so a
@@ -3377,6 +3387,10 @@ func (m ChatModel) echoRow(prefix, text, hint string) string {
 // genuinely different outcomes — one reaches the agent within a step, the
 // other waits out the whole turn — so the row must not name them alike.
 func (m ChatModel) midTurnEnterHint() string {
+	// Enter belongs to a pending prompt, so the message waits for the answer.
+	if m.confirmation != nil && m.confirmation.Pending() {
+		return "answer the prompt first"
+	}
 	if m.followUpSupported() && !isSlashCommand(m.input.Value()) {
 		return "⏎ sends to the running turn"
 	}
