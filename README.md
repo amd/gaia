@@ -139,7 +139,7 @@ For complete setup instructions including Lemonade Server, see the **[Quickstart
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| **Processor** | AMD Ryzen AI 300-series | AMD Ryzen AI Max+ 395 |
+| **Processor** | AMD Ryzen AI 300-series (Apple Silicon on macOS) | AMD Ryzen AI Max+ 395 |
 | **OS** | Windows 10/11, macOS 14+ (Apple Silicon), Linux (glibc 2.38+) | - |
 | **RAM** | 16GB | 64GB |
 

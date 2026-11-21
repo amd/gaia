@@ -55,15 +55,14 @@ For security issues, **do not file a public issue** — open a private [security
 
 The PR template asks for these because they make review faster and better:
 
-- **Summary** — what changed, in plain English. *Not* a copy of the commit log.
-- **Why** — the motivation. "Fixes a crash on startup" beats "Refactors `LemonadeClient`."
+- **Why this matters** — what was broken or missing before, and what works now, in two or three sentences. "Fixes a crash on startup" beats "Refactors `LemonadeClient`."
 - **Linked issue** — `Closes #N` at the top.
 - **Test plan** — specific commands or steps a reviewer can run. `pytest tests/unit/test_chat_preflight.py -k triggers_load` is signal; "I tested it" is not.
+- **Evidence** — real-world proof on the surface you changed, or N/A with a reason.
 
-A good Summary + Why example:
+A good "Why this matters" example:
 
-> **Summary:** Replace the silent fallback in `LemonadeClient` with a clear startup-time error.
-> **Why:** When Lemonade Server isn't running, GAIA was returning empty responses with no indication of why. Users were filing bugs for the silent failure rather than the underlying setup issue.
+> When Lemonade Server isn't running, GAIA returned empty responses with no reason given, so users filed bugs about the silence instead of the setup problem. It now stops at startup with an error that says how to start the server.
 
 ---
 

@@ -19,7 +19,7 @@ What `gaia eval` runs against. The framework that runs it is
 | `retrieval/` | Datasets and sources for `gaia eval retrieval` |
 | `tasks/` | Outcome-scored tasks for `gaia eval tasks`, and the SWE-bench subsets |
 | `analysis/` | Snapshots used in eval write-ups |
-| `results/` | Local run output. Its `baseline.json` is a small local baseline from April 2026 that `docs/guides/eval-ci.mdx` still describes, not a release baseline |
+| `results/` | Local run output. Its `baseline.json` is a small local baseline from April 2026, not a release baseline |
 
 Baselines are not here. The committed ones are under
 [`tests/fixtures/eval_baselines/`](../tests/fixtures/eval_baselines/), copied unedited from
