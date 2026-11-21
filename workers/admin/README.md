@@ -200,6 +200,8 @@ Source names with a space need `%20` in the URL, for example `only=code%20stats`
   older than that, `npx wrangler d1 export gaia-admin --remote --output backup.sql`.
 - **Schema changes:** add a numbered file under `migrations/`, then
   `npx wrangler d1 migrations apply gaia-admin --remote` before `npx wrangler deploy`.
+  After `0011_item_draft.sql`, run one collection with `full=1&only=issues` so pull
+  requests opened before it get their draft state; until then they count as not drafts.
 
 ### If something is wrong
 
@@ -230,7 +232,9 @@ Source names with a space need `%20` in the URL, for example `only=code%20stats`
   the whole range in whole days, weeks (Monday start, UTC) or months, and say where
   collection began when the range reaches further back.
 - A pending contributor is a person, never a bot, with at least one issue or pull request
-  still open at the last collection. The headline counts people outside the core team; the
+  still open at the last collection. Draft pull requests are work in progress and do not
+  count; a pull request that is a draft now is left out for its whole history, since
+  earlier draft states are not recorded. The headline counts people outside the core team; the
   **Everyone** switch adds the core team. It needs no extra collection: it is worked out
   from the stored issues and pull requests, so its history goes back to the first one.
 - "Pass rate on main" counts push and nightly runs only: issue- and comment-triggered

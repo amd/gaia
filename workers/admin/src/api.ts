@@ -204,7 +204,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
   if (path === "/api/momentum") {
     const people = parsePeople(url.searchParams);
     const keep = keepAuthor(people);
-    const allItems = await all<ItemRow>("SELECT kind, created_at, closed_at, merged_at, assoc, author FROM items");
+    const allItems = await all<ItemRow>("SELECT kind, created_at, closed_at, merged_at, assoc, author, draft FROM items");
     const allCommits = await all<CommitRow>("SELECT day, at, author FROM commits");
     const weekly = await all<{ author: string; week: string; commits: number; additions: number; deletions: number }>(
       "SELECT author, week, commits, additions, deletions FROM contributor_weekly",

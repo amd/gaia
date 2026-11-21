@@ -4,7 +4,8 @@
 /**
  * Pending contributors: people (bots left out) with at least one issue or pull
  * request still open. Someone with an open pull request is waiting on review;
- * someone with only an open issue is waiting on an answer or a fix.
+ * someone with only an open issue is waiting on an answer or a fix. Draft pull
+ * requests are work in progress, so nobody is waiting on them.
  */
 
 import { isExternal, type Aliases } from "./growth";
@@ -49,9 +50,11 @@ export function pendingContributors(items: ItemRow[], maintainers: Set<string>, 
     if (!l || i.created_at > l.created_at) latest.set(key(i.author), i);
   }
   const core = new Set([...latest].filter(([, i]) => !isExternal(i, maintainers)).map(([k]) => k));
+  // Draft state is only known as of the last collection, so a draft is left out for its whole life.
+  const waiting = mine.filter((i) => !(i.kind === "pr" && i.draft));
 
   const people = new Map<string, PendingPerson>();
-  for (const i of mine) {
+  for (const i of waiting) {
     if (i.closed_at && i.closed_at < until) continue;
     const k = key(i.author);
     const p = people.get(k) ?? { author: who(i.author), accounts: [], core: core.has(k), openPrs: 0, openIssues: 0, oldestPr: null, oldestIssue: null };
@@ -70,7 +73,7 @@ export function pendingContributors(items: ItemRow[], maintainers: Set<string>, 
     (a, b) => Number(!a.oldestPr) - Number(!b.oldestPr) || first(a).localeCompare(first(b)) || a.author.localeCompare(b.author),
   );
 
-  if (!mine.length) return { people: list, daily: [] };
+  if (!waiting.length) return { people: list, daily: [] };
   // An item counts as open from the day it was opened until the day before it closed.
   const changes = new Map<string, { who: string; pr: number; issue: number }[]>();
   const change = (day: string, k: string, kind: string, n: number) => {
@@ -78,7 +81,7 @@ export function pendingContributors(items: ItemRow[], maintainers: Set<string>, 
     changes.set(day, c);
     c.push({ who: k, pr: kind === "pr" ? n : 0, issue: kind === "pr" ? 0 : n });
   };
-  for (const i of mine) {
+  for (const i of waiting) {
     change(dayOf(i.created_at), key(i.author), i.kind, 1);
     if (i.closed_at && i.closed_at < until) change(dayOf(i.closed_at), key(i.author), i.kind, -1);
   }
@@ -86,7 +89,7 @@ export function pendingContributors(items: ItemRow[], maintainers: Set<string>, 
   const n = { outsidePr: 0, outsideIssue: 0, corePr: 0, coreIssue: 0 };
   const slot = (k: string, o: { pr: number; issue: number }): keyof typeof n | null =>
     o.pr > 0 ? (core.has(k) ? "corePr" : "outsidePr") : o.issue > 0 ? (core.has(k) ? "coreIssue" : "outsideIssue") : null;
-  const start = mine.reduce((m, i) => (i.created_at < m ? i.created_at : m), mine[0]!.created_at);
+  const start = waiting.reduce((m, i) => (i.created_at < m ? i.created_at : m), waiting[0]!.created_at);
   const daily = dayAxis(dayOf(start), lastDay).map((day) => {
     for (const c of changes.get(day) ?? []) {
       const o = open.get(c.who) ?? { pr: 0, issue: 0 };

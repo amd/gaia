@@ -33,6 +33,21 @@ describe("pendingContributors", () => {
     ]);
   });
 
+  it("leaves out draft pull requests: they are work in progress", () => {
+    const { people, daily } = run([
+      { ...item("pr", "kim", "2026-10-01"), draft: 1 },
+      { ...item("pr", "lee", "2026-10-01"), draft: 1 },
+      item("issue", "lee", "2026-10-03"),
+      { ...item("pr", "max", "2026-10-02"), draft: 0 },
+    ]);
+    expect(people.map((p) => [p.author, p.openPrs, p.openIssues])).toEqual([
+      ["max", 1, 0],
+      ["lee", 0, 1],
+    ]);
+    expect(daily.at(-1)).toMatchObject({ outsidePr: 1, outsideIssue: 1 });
+    expect(daily[0]!.day).toBe("2026-10-02");
+  });
+
   it("leaves out bots and items with no author", () => {
     const { people, daily } = run([item("pr", "dependabot[bot]", "2026-10-01"), item("issue", "github-actions", "2026-10-01"), item("issue", null, "2026-10-01")]);
     expect(people).toEqual([]);

@@ -164,13 +164,14 @@ describe("/api/momentum core and outside split", () => {
 
   it("lists pending contributors: people with something open, grouped by core team and outside", async () => {
     const db = memoryD1();
-    await put(db, "items", ["number", "kind", "created_at", "closed_at", "merged_at", "assoc", "author"], [
-      [1, "pr", iso(20), null, null, "NONE", "carol"],
-      [2, "issue", iso(5), null, null, "NONE", "carol"],
-      [3, "issue", iso(4), null, null, "NONE", "dave"],
-      [4, "pr", iso(3), null, null, "NONE", "alice-work"],
-      [5, "pr", iso(3), iso(2), iso(2), "NONE", "erin"],
-      [6, "issue", iso(3), null, null, "NONE", "github-actions[bot]"],
+    await put(db, "items", ["number", "kind", "created_at", "closed_at", "merged_at", "assoc", "author", "draft"], [
+      [1, "pr", iso(20), null, null, "NONE", "carol", 0],
+      [2, "issue", iso(5), null, null, "NONE", "carol", null],
+      [3, "issue", iso(4), null, null, "NONE", "dave", null],
+      [4, "pr", iso(3), null, null, "NONE", "alice-work", 0],
+      [5, "pr", iso(3), iso(2), iso(2), "NONE", "erin", 0],
+      [6, "issue", iso(3), null, null, "NONE", "github-actions[bot]", null],
+      [7, "pr", iso(6), null, null, "NONE", "fay", 1],
     ]);
     // The people filter hides carol from the page's other numbers; she is still waiting.
     const m = await get(db, "/api/momentum", "range=30&core=" + encodeURIComponent("alice+alice-work") + "&exclude=carol");
