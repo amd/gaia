@@ -61,7 +61,7 @@ def test_dispatch_offers_every_driver_update_runner(embeddings):
 @pytest.mark.parametrize(
     "label, expected",
     [
-        (None, DEVLAB_POOL),  # push / pull_request / merge_group / workflow_call
+        (None, DEVLAB_POOL),  # push / pull_request / merge_group
         ("", DEVLAB_POOL),
         ("devlab", DEVLAB_POOL),
         ("stx", ["stx"]),
