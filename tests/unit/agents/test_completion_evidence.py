@@ -2057,3 +2057,129 @@ def test_backups_carried_from_earlier_turns_match_by_name(tmp_path):
     soft = []
     assert later.gaps(answer, _claims_file_write, soft=soft) == []
     assert soft == []
+
+
+_TRIAGE = "/log-triage What went wrong in app.log? Save the findings to report.json"
+
+
+def _triaged(tmp_path, query=_TRIAGE):
+    (tmp_path / "app.log").write_text("ERROR boom\n")
+    ledger = CompletionEvidence(query, str(tmp_path))
+    write(ledger, "report.json")
+    read(ledger, "report.json")
+    return ledger
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I saved report.json with the 3 errors in app.log.",
+        "I saved the findings to report.json, covering every error in app.log.",
+        "I saved the findings to report.json with the 3 errors in app.log.",
+    ],
+)
+def test_a_log_the_request_only_reads_is_not_a_claimed_save(tmp_path, answer):
+    assert gaps(_triaged(tmp_path), answer) == []
+
+
+def test_a_named_input_saved_to_explicitly_is_still_a_claim(tmp_path):
+    answer = "I saved the findings to report.json and the fix to app.log."
+    assert "app.log" in " ".join(gaps(_triaged(tmp_path), answer))
+
+
+def test_the_requested_save_named_in_place_of_the_input_is_still_owed(tmp_path):
+    (tmp_path / "app.log").write_text("ERROR boom\n")
+    ledger = CompletionEvidence(_TRIAGE, str(tmp_path))
+    found = " ".join(gaps(ledger, "I saved report.json with the 3 errors in app.log."))
+    assert "report.json" in found
+    assert "app.log" not in found
+
+
+def test_a_save_into_a_file_the_request_never_named_is_still_a_claim(tmp_path):
+    ledger = _triaged(tmp_path)
+    found = " ".join(gaps(ledger, "I saved a copy in notes.md."))
+    assert "notes.md" in found
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I wrote the fix in app.log.",
+        "I saved the fix in app.log.",
+        "I saved the corrected lines at app.log.",
+    ],
+)
+def test_a_claimed_save_in_a_named_input_alone_is_still_a_claim(tmp_path, answer):
+    assert "app.log" in " ".join(gaps(_triaged(tmp_path), answer))
+
+
+def test_a_claimed_save_in_a_named_input_is_owed_beside_the_missing_output(tmp_path):
+    (tmp_path / "app.log").write_text("ERROR boom\n")
+    ledger = CompletionEvidence(_TRIAGE, str(tmp_path))
+    found = " ".join(gaps(ledger, "I wrote the fix in app.log."))
+    assert "app.log" in found
+    assert "report.json" in found
+
+
+def _fixed_and_noted(tmp_path, query):
+    for name in ("config.py", "utils.py", "app.log"):
+        (tmp_path / name).write_text("x = 1\n")
+    ledger = CompletionEvidence(query, str(tmp_path))
+    write(ledger, "notes.md")
+    read(ledger, "notes.md")
+    return ledger
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Fix the bug in config.py and save a summary to notes.md",
+        "config.py has a bug, fix it and save a summary to notes.md",
+        "The bug in config.py needs fixing. Save a summary to notes.md",
+        "In config.py, fix the off-by-one and save a summary to notes.md",
+        "Update config.py and save a summary to notes.md",
+        "Fix config.py using the traceback in app.log and save a summary to notes.md",
+    ],
+)
+def test_a_file_the_request_asks_to_change_is_not_a_read_only_input(tmp_path, query):
+    answer = "I wrote the fix in config.py and saved the summary to notes.md."
+    found = " ".join(gaps(_fixed_and_noted(tmp_path, query), answer))
+    assert "config.py" in found
+    assert "app.log" not in found
+
+
+def test_every_file_the_request_asks_to_change_is_owed(tmp_path):
+    query = (
+        "Fix the bug in config.py and the typo in utils.py and save a summary "
+        "to notes.md"
+    )
+    answer = (
+        "I wrote the fix in config.py, the typo fix in utils.py, and saved the "
+        "summary to notes.md."
+    )
+    found = " ".join(gaps(_fixed_and_noted(tmp_path, query), answer))
+    assert "config.py" in found
+    assert "utils.py" in found
+
+
+def test_the_input_an_edit_draws_on_stays_read_only(tmp_path):
+    query = (
+        "Fix config.py using the traceback in app.log and save a summary to notes.md"
+    )
+    ledger = _fixed_and_noted(tmp_path, query)
+    write(ledger, "config.py")
+    read(ledger, "config.py")
+    answer = "I saved the summary to notes.md, covering the traceback in app.log."
+    assert gaps(ledger, answer) == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Read app.log, suggest a fix, and save it to notes.md",
+        "Explain how to fix app.log and save notes to notes.md",
+    ],
+)
+def test_a_fix_the_request_never_asks_for_leaves_the_log_read_only(tmp_path, query):
+    answer = "I saved the summary to notes.md with the errors in app.log."
+    assert gaps(_fixed_and_noted(tmp_path, query), answer) == []
