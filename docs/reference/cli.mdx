@@ -447,11 +447,11 @@ canonical choices list):
 
 | Profile | Models | Description | Approx Size |
 |---------|--------|-------------|-------------|
-| `gaia` **(default)** | The chat model for this PC (see [Choosing models](#choosing-models)), user.embeddinggemma-300m-GGUF | The flagship [GAIA agent](/guides/gaia) — chat, documents, data, web, memory | ~3–30 GB |
+| `gaia` **(default)** | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | The flagship [GAIA agent](/guides/gaia) — chat, documents, data, web, memory | ~6 GB |
 | `minimal` | Gemma-4-E4B-it-GGUF | Fast setup with Gemma 4 E4B multimodal model | ~6 GB |
 | `sd` | SDXL-Turbo, Gemma-4-E4B-it-GGUF | Image generation with multi-modal AI (LLM + SD) | ~10 GB |
-| `chat` | The chat model for this PC, user.embeddinggemma-300m-GGUF | Interactive chat with RAG and vision support (the flagship's base class, without the flagship itself) | ~3–30 GB |
-| `rag` | The chat model for this PC, user.embeddinggemma-300m-GGUF | Document Q&A with retrieval | ~3–30 GB |
+| `chat` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Interactive chat with RAG and vision support (the flagship's base class, without the flagship itself) | ~6 GB |
+| `rag` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Document Q&A with retrieval | ~6 GB |
 | `mcp` | _(none)_ | Sets up the MCP servers config (`~/.gaia/mcp_servers.json`) — no Lemonade install or model downloads | – |
 | `vlm` | Gemma-4-E4B-it-GGUF | Vision pipeline for document and image extraction | ~6 GB |
 | `npu` | gemma4-it-e4b-FLM, user.embeddinggemma-300m-GGUF | The flagship [GAIA agent](/guides/gaia) on the Ryzen AI NPU via the FLM backend (requires XDNA2 NPU) | ~10 GB |
@@ -2472,8 +2472,9 @@ are fetched separately, and only the ones your hardware needs:
 | `flm:npu` | ~169 MB | Ryzen AI NPU |
 | `llamacpp:rocm` | ~4.3 GB | ROCm, including a per-GPU runtime |
 
-GAIA's default models (the Qwen3.5, Gemma 4 and Qwen3.6 chat models, `embeddinggemma-300m`) run on the
-`llamacpp` backends, so CPU + Vulkan is enough for the common case:
+GAIA's default models (the chat model [setup picks for this PC](#choosing-models)
+and `embeddinggemma-300m`) run on the `llamacpp` backends, so CPU + Vulkan is
+enough for the common case:
 
 ```bash
 gaia lemonade embedded install-backend llamacpp:vulkan

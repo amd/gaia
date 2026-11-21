@@ -447,12 +447,10 @@ def capacity_from_system_info(info: Dict[str, Any]) -> MachineCapacity:
 def _installed_ram_gb(info: Dict[str, Any], physical_gb: float) -> Optional[float]:
     """Installed RAM: ``Physical Memory``, plus an APU's carve-out where the OS
     leaves it out (Linux), so a 32 GB Linux laptop is not judged a 24 GB one.
-    Linux reports a distro or kernel name; a report that names no OS is taken
-    as it stands."""
+    Same rule as the NPU's figure (:func:`_physical_counts_carve_out`)."""
     if physical_gb <= 0:
         return None
-    os_version = str(info.get("OS Version") or "").strip().lower()
-    if not os_version or os_version.startswith(("windows", "macos", "darwin")):
+    if _physical_counts_carve_out(info):
         return physical_gb
     for vendor, integrated, gpu in _gpu_entries(info.get("devices") or {}):
         if vendor == "AMD" and integrated:
@@ -464,9 +462,11 @@ def _physical_counts_carve_out(info: Dict[str, Any]) -> bool:
     """Lemonade's ``Physical Memory`` includes an APU's GPU carve-out.
 
     True on Windows, where it is installed RAM; on Linux it is ``MemTotal``,
-    which the carve-out is already out of.
+    which the carve-out is already out of. A report naming no OS counts as
+    Windows, the reading that never overstates memory on either path.
     """
-    return str(info.get("OS Version") or "").lower().startswith("windows")
+    os_version = str(info.get("OS Version") or "").strip().lower()
+    return not os_version or os_version.startswith("windows")
 
 
 def _npu_memory_gb(

@@ -154,8 +154,7 @@ func installedRAMGB(info systemInfo) float64 {
 	if physical <= 0 {
 		return 0
 	}
-	os := strings.ToLower(strings.TrimSpace(info.OSVersion))
-	if os == "" || strings.HasPrefix(os, "windows") || strings.HasPrefix(os, "macos") || strings.HasPrefix(os, "darwin") {
+	if physicalCountsCarveOut(info) {
 		return physical
 	}
 	for _, src := range []struct {
@@ -171,15 +170,21 @@ func installedRAMGB(info systemInfo) float64 {
 	return physical
 }
 
+// physicalCountsCarveOut mirrors gaia.llm.model_fit._physical_counts_carve_out:
+// only a Windows Lemonade reports installed RAM; Linux's MemTotal is already
+// without the carve-out. A report naming no OS counts as Windows.
+func physicalCountsCarveOut(info systemInfo) bool {
+	os := strings.ToLower(strings.TrimSpace(info.OSVersion))
+	return os == "" || strings.HasPrefix(os, "windows")
+}
+
 // npuMemoryGB mirrors gaia.llm.model_fit._npu_memory_gb.
 func npuMemoryGB(info systemInfo) float64 {
 	physical := physicalMemoryGB(info.PhysicalMemory)
 	if info.Devices.NPU == nil || !info.Devices.NPU.Available || physical <= 0 {
 		return 0
 	}
-	// Only a Windows Lemonade reports installed RAM; Linux's MemTotal is
-	// already without the carve-out.
-	if !strings.HasPrefix(strings.ToLower(info.OSVersion), "windows") {
+	if !physicalCountsCarveOut(info) {
 		return physical
 	}
 	carveOut := 0.0
