@@ -16491,6 +16491,62 @@ Do NOT wrap conversational replies in JSON.
                     # Silent mode - just stop
                     break
 
+        return self._conclude_query(
+            account_refused=account_refused,
+            answer_before_completion_check=answer_before_completion_check,
+            answer_repaired=answer_repaired,
+            cancelled_by_console=cancelled_by_console,
+            completion_gaps=completion_gaps,
+            conversation=conversation,
+            filename=filename,
+            final_answer=final_answer,
+            loop_break_answer_unprinted=loop_break_answer_unprinted,
+            messages=messages,
+            model_call_failed=model_call_failed,
+            model_messages=model_messages,
+            self_check_open=self_check_open,
+            start_time=start_time,
+            step_timer=step_timer,
+            steps_limit=steps_limit,
+            steps_taken=steps_taken,
+            thought_only_stop=thought_only_stop,
+            time_limit_reached=time_limit_reached,
+            trace=trace,
+            turn_record=turn_record,
+            user_input=user_input,
+            user_stopped=user_stopped,
+            verification_scope_applied=verification_scope_applied,
+        )
+
+    def _conclude_query(
+        self,
+        *,
+        account_refused,
+        answer_before_completion_check,
+        answer_repaired,
+        cancelled_by_console,
+        completion_gaps,
+        conversation,
+        filename,
+        final_answer,
+        loop_break_answer_unprinted,
+        messages,
+        model_call_failed,
+        model_messages,
+        self_check_open,
+        start_time,
+        step_timer,
+        steps_limit,
+        steps_taken,
+        thought_only_stop,
+        time_limit_reached,
+        trace,
+        turn_record,
+        user_input,
+        user_stopped,
+        verification_scope_applied,
+    ) -> Dict[str, Any]:
+        """Everything ``_process_query_impl`` does once its step loop has ended."""
         if (
             final_answer is None
             and self_check_open is not None
