@@ -16,6 +16,7 @@ import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.rag_tools import (
+    _RRF_K,
     RAGToolsMixin,
     _adaptive_max,
     _fuse_dense_and_keyword,
@@ -121,9 +122,31 @@ def test_extra_scores_rank_after_the_dense_list():
     scored = _fuse_extra_scores(5, ["x"], [("e1", 0.4), ("e2", 0.3)])
 
     assert [chunk for chunk, _ in scored] == ["e1", "e2"]
-    # Ranked just after the five dense chunks: 1/66, 1/67.
-    assert abs(scored[0][1] - 1 / 66) < 1e-9
-    assert abs(scored[1][1] - 1 / 67) < 1e-9
+    # Ranked just after the five dense chunks, rescaled to a 0-1 scale:
+    # (k + 1) / 2 * 1/66, (k + 1) / 2 * 1/67.
+    assert abs(scored[0][1] - (_RRF_K + 1) / 2 / 66) < 1e-9
+    assert abs(scored[1][1] - (_RRF_K + 1) / 2 / 67) < 1e-9
+
+
+def test_relevance_scores_stay_on_a_zero_to_one_scale(tmp_path):
+    # A chunk ranked first by both lists scores exactly 1.0.
+    fused = _fuse_dense_and_keyword([("a", 0.58), ("b", 0.55)], ["a", "c"])
+    assert fused[0][0] == "a"
+    assert fused[0][1] == pytest.approx(1.0)
+    assert all(0.0 <= score <= 1.0 for _, score in fused)
+
+    # ...and the scores a search reports stay in range too.
+    doc = tmp_path / "policy.md"
+    chunks = [SEMANTIC_BEST, BOTH, KEYWORD_ONLY] + _fillers(3)
+    search, _one_file, _rag = _tools(
+        doc, chunks, dense=([SEMANTIC_BEST, BOTH], [0.58, 0.55])
+    )
+    result = search(query="cancellation fee")
+
+    assert result["status"] == "success", result
+    scores = [c["relevance_score"] for c in result["chunks"]]
+    assert scores
+    assert all(0.0 <= score <= 1.0 for score in scores)
 
 
 def test_keyword_hit_no_longer_outranks_the_top_dense_match(tmp_path):
@@ -200,5 +223,5 @@ def test_debug_mode_reports_chunk_indices_without_a_scan(tmp_path):
     debug = result["debug_info"]
     assert debug["total_chunks_before_dedup"] == 3
     assert debug["total_chunks_after_dedup"] == 3
-    assert debug["chunks_before_dedup_indices"] == [0, 1]
+    assert debug["chunks_before_dedup_indices"] == [0, 1, 2]
     assert debug["chunks_after_dedup_indices"] == [0, 2, 1]

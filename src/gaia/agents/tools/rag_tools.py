@@ -729,6 +729,13 @@ def _adaptive_max(total_chunks: int, max_chunks: int) -> int:
 #: Reciprocal-rank-fusion constant: each list contributes 1 / (k + rank).
 _RRF_K = 60
 
+#: Rescale for fused scores: a chunk ranked first by both lists scores
+#: 1 / (k + 1) from each, so multiplying by (k + 1) / 2 puts the fused
+#: score on a 0-1 scale (a chunk first in both lists scores 1.0). The
+#: factor is positive, so the ordering is unchanged; only the reported
+#: ``relevance_score`` stops reading near zero.
+_RRF_RESCALE = (_RRF_K + 1) / 2
+
 
 def _keyword_ranks(keyword: List[str]) -> Dict[str, int]:
     """1-based rank of each chunk in a keyword ranking, best first."""
@@ -749,8 +756,9 @@ def _fuse_dense_and_keyword(
     (typically 0.3-0.6), so any keyword hit filled the slots ahead of the
     semantic matches.
 
-    Returns (chunk, fused_score) pairs, best first. Ties break toward the
-    better dense score, then the better keyword rank.
+    Returns (chunk, fused_score) pairs, best first, with fused scores on
+    a 0-1 scale (a chunk ranked first by both lists scores 1.0). Ties
+    break toward the better dense score, then the better keyword rank.
     """
     fused: Dict[str, float] = {}
     dense_scores: Dict[str, float] = {}
@@ -761,7 +769,7 @@ def _fuse_dense_and_keyword(
     for chunk, rank in ranks.items():
         fused[chunk] = fused.get(chunk, 0.0) + 1.0 / (_RRF_K + rank)
     return sorted(
-        fused.items(),
+        ((chunk, score * _RRF_RESCALE) for chunk, score in fused.items()),
         key=lambda item: (
             -item[1],
             -dense_scores.get(item[0], 0.0),
@@ -782,6 +790,8 @@ def _fuse_extra_scores(
     its keyword term when the keyword ranking likes it too. They are scored,
     not ranked against the main list: the caller adds them after the top, so
     a document the search leaves out still gets its best passage in.
+    Scores are rescaled to the same 0-1 scale as
+    :func:`_fuse_dense_and_keyword`.
     """
     ranks = _keyword_ranks(keyword)
     scored = []
@@ -789,7 +799,7 @@ def _fuse_extra_scores(
         fused = 1.0 / (_RRF_K + dense_count + 1 + position)
         if chunk in ranks:
             fused += 1.0 / (_RRF_K + ranks[chunk])
-        scored.append((chunk, fused))
+        scored.append((chunk, fused * _RRF_RESCALE))
     return sorted(scored, key=lambda item: item[1], reverse=True)
 
 
@@ -1514,9 +1524,10 @@ class RAGToolsMixin:
                         keyword_chunks
                     )
                     # Show which chunks were found before deduplication
+                    # (dense and keyword alike, matching the count above)
                     all_chunk_indices = [
                         chunk_index.get(chunk, "keyword_context")
-                        for chunk in all_chunks
+                        for chunk in list(all_chunks) + list(keyword_chunks)
                     ]
                     debug_info["chunks_before_dedup_indices"] = all_chunk_indices
                     debug_info["deduplication_note"] = (
@@ -2024,9 +2035,10 @@ class RAGToolsMixin:
                         keyword_chunks
                     )
                     # Show which chunks were found before deduplication
+                    # (dense and keyword alike, matching the count above)
                     all_chunk_indices = [
                         chunk_index.get(chunk, "keyword_context")
-                        for chunk in all_chunks
+                        for chunk in list(all_chunks) + list(keyword_chunks)
                     ]
                     debug_info["chunks_before_dedup_indices"] = all_chunk_indices
                     debug_info["deduplication_note"] = (
