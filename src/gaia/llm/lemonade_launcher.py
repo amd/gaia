@@ -353,8 +353,18 @@ def server_down_advice(base_url: Optional[str] = None) -> str:
     return APP_OTHER_SERVER_DOWN_HINT
 
 
-#: A server the user pointed GAIA at, that GAIA can't find installed here.
+#: A server the user pointed GAIA at; the Agent UI translates this exact sentence.
 OTHER_SERVER_START_HINT = f"{APP_OTHER_SERVER_START_HINT}."
+
+
+def chosen_server_start_hint(base_url: str) -> str:
+    """How to start the server at *base_url* the user chose, naming its address."""
+    from gaia.llm.lemonade_client import _endpoint_label
+
+    label = _endpoint_label(base_url)
+    if not label:
+        return OTHER_SERVER_START_HINT
+    return f"The model server GAIA uses is at {label}. {OTHER_SERVER_START_HINT}"
 
 
 def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
@@ -373,6 +383,13 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
             instruction=CLI_OWN_SERVER_START_HINT,
             command="gaia lemonade embedded start",
         )
+
+    from gaia.llm.lemonade_client import configured_lemonade_url
+
+    # The tray or an install here starts a different server than the one chosen.
+    chosen = configured_lemonade_url()
+    if chosen:
+        return StartHint(instruction=chosen_server_start_hint(chosen))
 
     tooling = resolve_lemonade()
     system = platform.system()
@@ -424,12 +441,6 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
         return StartHint(
             instruction="Start the Lemonade app from Applications, then retry."
         )
-
-    from gaia.llm.lemonade_client import configured_lemonade_url
-
-    # Setup can't fix a server the user chose; installing GAIA's would not reach it.
-    if configured_lemonade_url():
-        return StartHint(instruction=OTHER_SERVER_START_HINT)
 
     return StartHint(
         instruction=(
