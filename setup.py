@@ -93,6 +93,7 @@ setup(
     ],
     package_data={
         "gaia.eval.memory": ["scenarios/*.yaml"],
+        "gaia.eval.bench": ["swebench_verified_ids.json"],
         # Browser-mode Agent UI bundle. Recursive globs in package_data are
         # unreliable across setuptools versions, so we list shallow patterns
         # here and back them up with `recursive-include` in MANIFEST.in. The
