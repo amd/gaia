@@ -248,7 +248,7 @@ jobs:
         with:
           ref: ${{ inputs.ref || inputs.tag || github.ref }}
           sparse-checkout: |
-            util/flagship_rc_assets.py
+            util/gaiapy_rc_assets.py
             hub/agents/gaia/python/gaiapy/__init__.py
             hub/agents/gaia/python/gaia-agent.yaml
           sparse-checkout-cone-mode: false
@@ -267,7 +267,7 @@ jobs:
           set -euo pipefail
           # 0.25.4-rc.3 is tagged v0.25.4-rc3.
           [ -n "${TAG}" ] || TAG="v${VERSION/-rc./-rc}"
-          python3 util/flagship_rc_assets.py release \
+          python3 util/gaiapy_rc_assets.py release \
             --artifacts flagship --tag "${TAG}" --commit "${COMMIT}" --out release-assets
           ls -l release-assets
 

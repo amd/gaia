@@ -4,7 +4,6 @@
 name: Lemonade Server Smoke Test
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:

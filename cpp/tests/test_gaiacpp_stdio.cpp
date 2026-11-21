@@ -27,7 +27,7 @@
 #include <thread>
 #include <vector>
 
-#include "../agents/bash/bash_tools.h"
+#include "../agents/gaiacpp/bash_tools.h"
 #include "../agents/gaiacpp/gaia_agent.h"
 #include "../agents/gaiacpp/stdio_server.h"
 #include "gaia/memory_store.h"

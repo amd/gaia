@@ -2755,6 +2755,7 @@ export const enMessages = {
     'settings.connectors.notRevoked': "Disconnected locally, but the provider did not confirm the revoke ({reason}). It may still show as connected in your account's app permissions.",
     'settings.connectors.localOnly': 'Disconnected locally. {reason}',
     'settings.connectors.noRevokeApi': "Disconnected locally. This provider has no API to revoke access remotely — remove GAIA from your account's connected-apps page if you want to fully revoke it.",
+    'settings.connectors.nothingStored': 'Nothing was stored for this connector, so there was nothing to disconnect or revoke.',
     'settings.connectors.setupRequired': 'Setup required',
     'settings.connectors.paused': 'Paused',
     'settings.connectors.notWorking': 'Not working',

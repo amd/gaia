@@ -255,12 +255,12 @@ jobs:
               ;;
             artifact)
               # Verified against the hash its freeze leg recorded.
-              python util/flagship_rc_assets.py stage --artifacts flagship --platform win32-x64 --out stage/win-x64
+              python util/gaiapy_rc_assets.py stage --artifacts flagship --platform win32-x64 --out stage/win-x64
               ;;
             pinned)
               # Verified against hub/agents/gaia/npm/binaries.lock.json; a
               # placeholder or mismatched digest fails the build.
-              python installer/tui/fetch_sidecar.py --platform win-x64 --out stage/win-x64
+              python installer/tui/fetch_gaiapy.py --platform win-x64 --out stage/win-x64
               ;;
             *)
               echo "::error::sidecar must be pinned, artifact or stub (got '${SIDECAR}')."

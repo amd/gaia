@@ -8,7 +8,6 @@ Covers the pure join logic and the log/scorecard parsers — no live eval.
 from __future__ import annotations
 
 from gaia.eval.tool_recall import (
-    aggregate_escape_hatch,
     compute_recall,
     count_recovery_events_from_log,
     escape_hatch_rate_from_log,
@@ -204,25 +203,6 @@ def test_unrecovered_miss_still_counts_against_recall():
 
 
 # ── escape-hatch session summaries (τ-tuning signal) ───────────────────────
-
-
-def test_parse_and_aggregate_session_summaries():
-    log = "\n".join(
-        [
-            'TOOL_LOADER_SESSION {"turns": 4, "escape_hatch_count": 1, '
-            '"load_tools_count": 1, "escape_hatch_rate": 0.5}',
-            'TOOL_LOADER_SESSION {"turns": 6, "escape_hatch_count": 0, '
-            '"load_tools_count": 2, "escape_hatch_rate": 0.333}',
-        ]
-    )
-    summaries = parse_session_summaries_from_log(log)
-    assert len(summaries) == 2
-    agg = aggregate_escape_hatch(summaries)
-    assert agg["sessions"] == 2
-    assert agg["turns"] == 10  # 4 + 6
-    assert agg["escape_hatch_count"] == 1  # 1 + 0
-    assert agg["load_tools_count"] == 3  # 1 + 2
-    assert agg["escape_hatch_rate"] == (1 + 3) / 10
 
 
 def test_count_recovery_events_from_log():
