@@ -114,7 +114,9 @@ from gaia.agents.base.verification import (
     NOT_EXECUTED,
     OUT_OF_TIME,
     TIME_LIMIT_CUT_RUN,
+    TIME_LIMIT_NO_LONGER_RUN,
     cut_by_time_limit,
+    time_capped,
 )
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.registry import machine_embedding_model
@@ -502,14 +504,14 @@ def _shell_runs_any_python(agent: Any) -> bool:
 
 
 def _stopped_run_result(agent: Any, job: Any, timeout: int) -> Dict[str, Any]:
-    """A killed job's result; one the time limit cut short is not told to ask for longer."""
-    result = stopped_job_result(job, timeout)
-    if job.stopped == "timeout" and cut_by_time_limit(agent):
-        result["error"] = (
-            f"Timed out after {timeout}s; the script and every process it "
-            f"started were stopped. {TIME_LIMIT_CUT_RUN}"
-        )
-    return result
+    """A killed job's result; never told to ask for a timeout the turn can't give."""
+    advice = None
+    if job.stopped == "timeout":
+        if cut_by_time_limit(agent):
+            advice = TIME_LIMIT_CUT_RUN
+        elif time_capped(agent, timeout + 1) <= timeout:
+            advice = TIME_LIMIT_NO_LONGER_RUN
+    return stopped_job_result(job, timeout, advice=advice)
 
 
 #: On every Python run's result: a model that assumes the last call's

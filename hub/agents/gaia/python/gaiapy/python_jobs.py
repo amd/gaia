@@ -1076,14 +1076,21 @@ def watch_folders(*candidates: Optional[os.PathLike | str]) -> List[Path]:
     return folders
 
 
-def stopped_job_result(job: PythonJob, timeout: int) -> Dict[str, object]:
-    """The tool result for a job that was killed before it finished."""
+def stopped_job_result(
+    job: PythonJob, timeout: int, advice: Optional[str] = None
+) -> Dict[str, object]:
+    """The tool result for a job that was killed before it finished.
+
+    *advice* replaces the "pass a larger timeout" sentence on a timeout.
+    """
     if job.stopped == "timeout":
+        advice = advice or (
+            "If the job legitimately needs longer, pass a larger timeout "
+            f"(max {MAX_PYTHON_TIMEOUT}), or make it do less per run."
+        )
         error = (
             f"Timed out after {timeout}s; the script and every process it "
-            "started were stopped. If the job legitimately needs longer, pass "
-            f"a larger timeout (max {MAX_PYTHON_TIMEOUT}), or make it do less "
-            "per run."
+            f"started were stopped. {advice}"
         )
     else:
         error = (
