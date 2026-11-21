@@ -202,9 +202,10 @@ export interface ConnectorRow {
     /**
      * Per-agent MCP-tool-visibility activation snapshot (issue #1005).
      * Keys are namespaced agent ids (``builtin:chat``,
-     * ``custom:<hash>:<id>``, …), values are ``true`` when the agent is
-     * explicitly activated. Absence means inactive — activations are
-     * opt-in. Populated only for ``type === 'mcp_server'`` connectors;
+     * ``custom:<hash>:<id>``, …), values are ``true`` when the agent can
+     * see the server's tools and ``false`` once turned off. Absence means
+     * inactive, except that a ``custom`` server reports ``installed:gaia``
+     * as ``true`` until turned off. Populated only for ``type === 'mcp_server'`` connectors;
      * OAuth connectors always return ``{}`` because activation writes
      * are rejected for them at the API layer.
      */

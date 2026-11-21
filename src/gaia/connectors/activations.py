@@ -57,7 +57,6 @@ Atomicity guarantees mirror :mod:`gaia.connectors.grants`:
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 import os
@@ -299,9 +298,6 @@ def list_agent_activations(connector_id: str) -> Dict[str, bool]:
 
 
 def _in_catalog(connector_id: str) -> bool:
-    # The catalog needs keyring; without it no server came from the catalog.
-    if importlib.util.find_spec("keyring") is None:
-        return False
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
     from gaia.connectors.registry import REGISTRY
 
