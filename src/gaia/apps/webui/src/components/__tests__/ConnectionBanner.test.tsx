@@ -180,6 +180,27 @@ describe('the model server is down', () => {
         }
     });
 
+    it('names the address of the server the user chose, in Arabic too', () => {
+        const chosen = "The model server GAIA uses is at 127.0.0.1:4328. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.";
+        useChatStore.setState({ systemStatus: { lemonade_running: false, lemonade_probe: 'down', start_command: null, start_instruction: chosen } as SystemStatus });
+        const english = render(<ConnectionBanner />);
+        expect(english.container).toHaveTextContent(chosen);
+        expect(english.container).not.toHaveTextContent('tray');
+        english.unmount();
+
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            const { container } = render(<ConnectionBanner />);
+            expect(container).toHaveTextContent('127.0.0.1:4328');
+            expect(container).toHaveTextContent('خادم النماذج الذي يستخدمه GAIA موجود على');
+            expect(container).toHaveTextContent('لا يشغّل خادم النماذج هذا');
+            // The English sentence is gone; only the test locale's gloss repeats it.
+            expect(container.textContent).not.toContain(chosen);
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
+    });
+
     it('offers a way to set up local models when none are installed, and only then', () => {
         const opened = vi.fn();
         window.addEventListener('gaia:set-up-local', opened);
