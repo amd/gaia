@@ -142,7 +142,7 @@
 .mc-name {
     color: var(--text-primary);
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 500;
     overflow-wrap: anywhere;
 }
 
@@ -168,7 +168,7 @@
     border-radius: var(--radius-full);
     color: var(--accent);
     font-size: 11.5px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.5;
 }
 
@@ -218,7 +218,7 @@
     align-items: center;
     gap: 8px 12px;
 }
-.mc-default-label { color: var(--text-primary); font-size: 13px; font-weight: 600; }
+.mc-default-label { color: var(--text-primary); font-size: 13px; font-weight: 500; }
 /* Scoped under .mc-default to win over .settings-input's flex: 1, which loads later. */
 .mc-default .mc-select { flex: 1 1 12rem; min-inline-size: 0; max-inline-size: 100%; }
 
@@ -255,7 +255,7 @@
 .mc-summary-stats { display: flex; flex-wrap: wrap; gap: 4px 20px; }
 .mc-stat { display: inline-flex; align-items: baseline; gap: 6px; font-size: 13px; }
 .mc-stat-label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); }
-.mc-stat-value { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mc-stat-value { color: var(--text-primary); font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mc-stat-path { overflow-wrap: anywhere; }
 
 .mc-disk {
@@ -298,7 +298,7 @@
 /* ── Download progress ──────────────────────────────────────────── */
 .dl { display: flex; flex-direction: column; gap: 12px; }
 .dl-overall { display: flex; flex-direction: column; gap: 6px; }
-.dl-overall-line { color: var(--text-primary); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.dl-overall-line { color: var(--text-primary); font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; }
 
 .dl-list { display: flex; flex-direction: column; gap: 10px; list-style: none; }
 
@@ -314,7 +314,7 @@
 }
 
 .dl-row-head { display: flex; align-items: center; gap: 8px; min-inline-size: 0; }
-.dl-name { flex: 1; min-inline-size: 0; color: var(--text-primary); font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+.dl-name { flex: 1; min-inline-size: 0; color: var(--text-primary); font-size: 13.5px; font-weight: 500; overflow-wrap: anywhere; }
 .dl-state { color: var(--text-secondary); font-size: 12.5px; }
 .dl-pct { color: var(--text-primary); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 
@@ -479,7 +479,7 @@
     transition: background var(--duration-fast) var(--ease), border-color var(--duration-fast) var(--ease);
 }
 .gpu-preset:hover { background: var(--bg-hover); }
-.gpu-preset.is-active { border-color: var(--accent-light); background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+.gpu-preset.is-active { border-color: var(--accent-light); background: var(--accent-dim); color: var(--accent); font-weight: 500; }
 .gpu-preset:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .gpu-tag {
@@ -487,12 +487,12 @@
     padding: 1px 6px;
     border-radius: var(--radius-full);
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
 }
 .gpu-tag.is-recommended { background: var(--accent-dim); color: var(--accent); }
 .gpu-tag.is-max { border: 1px solid var(--accent-yellow); color: var(--text-secondary); }
 
-.gpu-unlock { color: var(--text-primary); font-size: 13.5px; font-weight: 600; }
+.gpu-unlock { color: var(--text-primary); font-size: 13.5px; font-weight: 500; }
 .gpu-unlock.is-keep,
 .gpu-unlock.is-warn { display: flex; align-items: flex-start; gap: 6px; font-weight: 400; }
 .gpu-unlock > svg { flex: none; margin-block-start: 3px; }
@@ -547,7 +547,7 @@
     color: var(--text-primary);
     animation: confirmIn var(--duration) var(--ease);
 }
-.confirm-title { font-size: 16px; font-weight: 600; }
+.confirm-title { font-size: 16px; font-weight: 500; }
 .confirm-body { display: flex; flex-direction: column; gap: 6px; color: var(--text-secondary); font-size: 13.5px; }
 .confirm-note { color: var(--text-muted); font-size: 12.5px; }
 .confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-block-start: 4px; }
@@ -568,12 +568,26 @@
 .models-apply { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 
 /* ── The download chip in the sidebar ──────────────────────────── */
+.download-chip-row {
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+    inline-size: calc(100% - 16px);
+    margin: 0 8px 6px;
+}
+.download-chip-row.is-main { inline-size: calc(100% - 24px); margin: 8px 12px 0; }
+/* Clear of the floating menu button that a closed sidebar leaves in the corner. */
+.sidebar-toggle ~ .main-content .download-chip-row.is-main {
+    inline-size: calc(100% - var(--sidebar-toggle-clearance) - 12px);
+    margin-inline-start: var(--sidebar-toggle-clearance);
+    margin-block-start: 12px;
+}
 .download-chip {
     display: flex;
     align-items: center;
     gap: 8px;
-    inline-size: calc(100% - 16px);
-    margin: 0 8px 6px;
+    flex: 1;
+    min-inline-size: 0;
     padding: 6px 10px;
     border: 1px solid var(--border-light);
     border-radius: var(--radius-md);
@@ -582,17 +596,22 @@
     text-align: start;
     animation: setupStepIn var(--duration) var(--ease);
 }
-.download-chip.is-main { inline-size: calc(100% - 24px); margin: 8px 12px 0; }
-/* Clear of the floating menu button that a closed sidebar leaves in the corner. */
-.sidebar-toggle ~ .main-content .download-chip.is-main {
-    inline-size: calc(100% - var(--sidebar-toggle-clearance) - 12px);
-    margin-inline-start: var(--sidebar-toggle-clearance);
-    margin-block-start: 12px;
-}
 .download-chip:hover { background: var(--bg-hover); }
 .download-chip-bar { flex: 1; block-size: 4px; min-inline-size: 30px; position: relative; overflow: hidden; border-radius: var(--radius-full); background: var(--bg-tertiary); }
 .download-chip-bar > span { position: absolute; inset-block: 0; inset-inline-start: 0; background: var(--accent); transition: inline-size var(--duration-slow) var(--ease-linear); }
 .download-chip.is-failed { border-color: var(--danger); }
+.download-chip-dismiss {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 6px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    background: transparent;
+    cursor: pointer;
+}
+.download-chip-dismiss:hover { background: var(--bg-hover); }
 
 /* Pinned, the summary covers a quarter of a short window and leaves one model row. */
 @media (max-height: 700px) {
@@ -636,7 +655,7 @@
 .mc-chip.is-verified { background: var(--accent-green-dim); color: var(--accent-green); }
 .mc-chip.is-untested { background: var(--accent-yellow-dim); color: var(--accent-yellow); }
 .mc-job { display: flex; flex-direction: column; gap: 8px; }
-.mc-job-title { color: var(--text-primary); font-size: 14px; font-weight: 600; }
+.mc-job-title { color: var(--text-primary); font-size: 14px; font-weight: 500; }
 .mc-job-line { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; color: var(--text-primary); font-size: 14px; }
 .mc-row.is-off { opacity: 0.7; }
 
@@ -674,3 +693,42 @@
 .setup-npu-problems ul { padding-inline-start: 20px; display: grid; gap: 4px; }
 .setup-npu-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .setup-npu-error { color: var(--danger); }
+
+.agent-choice { display: grid; gap: 8px; }
+.agent-choice > p { margin: 0; }
+.agent-choice-title { display: flex; align-items: center; gap: 6px; margin: 0; }
+.agent-choice-row { inline-size: 100%; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding-block: 8px; }
+/* Each piece keeps its own width; a choice card otherwise stretches its spans. */
+.agent-choice .agent-choice-row > span { flex: 0 1 auto; }
+.agent-choice-row > .setup-choice-tag { margin-inline-start: 0; }
+.agent-choice-what { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
+.agent-choice-name { font-family: var(--font-mono); font-size: 13.5px; font-weight: 600; }
+.agent-choice-label { font-size: 14px; }
+/* Only the name and label fade, so the "Not installed" tag stays readable. */
+.agent-choice .agent-choice-row.is-disabled { opacity: 1; }
+.agent-choice .agent-choice-row.is-disabled:hover { background: none; }
+.agent-choice .is-disabled .agent-choice-what,
+.agent-choice .is-disabled .setup-choice-tag:not(.agent-choice-off) { opacity: 0.55; }
+.agent-choice-off { border-color: var(--border-light); color: var(--text-primary); }
+.agent-choice-blocked { display: grid; gap: 4px; }
+.agent-choice-why { margin: 0; padding-inline: 12px; color: var(--text-secondary); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.agent-choice-off.is-quiet { color: var(--text-secondary); }
+.agent-choice-size { color: var(--text-secondary); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.agent-choice-more { display: inline-flex; justify-self: start; align-items: center; gap: 4px; min-block-size: 26px; color: var(--text-secondary); font-size: 12.5px; }
+.agent-choice-more:hover { color: var(--text-primary); }
+.agent-choice-chevron { transform: rotate(-90deg); transition: transform var(--duration-fast) var(--ease); }
+[dir="rtl"] .agent-choice-chevron { transform: rotate(90deg); }
+.agent-choice-chevron.is-open,
+[dir="rtl"] .agent-choice-chevron.is-open { transform: none; }
+.agent-choice-detail { display: grid; gap: 4px; color: var(--text-secondary); font-size: 13px; }
+.agent-choice-detail[hidden] { display: none; }
+.agent-choice-detail p { margin: 0; }
+.agent-choice-error { color: var(--danger); font-size: 13px; }
+.setup-agent-download { display: grid; gap: 8px; }
+/* A gaiacpp to download: its Download button sits on the row's end, beside the radio rather than in it. */
+.agent-choice-item { position: relative; }
+.agent-choice-item > .agent-choice-row { padding-inline-end: 132px; }
+.agent-choice .agent-choice-row.is-pending { cursor: default; }
+.agent-choice .agent-choice-row.is-pending:hover { background: none; }
+/* Centred by margins, not a transform: the shared button styles reset transform when pressed or disabled. */
+.agent-choice-download { position: absolute; inset-inline-end: 8px; inset-block: 0; margin-block: auto; block-size: max-content; display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 12.5px; }

@@ -3,6 +3,7 @@
 
 import { UnsupportedCard } from './UnsupportedCard';
 import { isOptionalString } from './primitiveShared';
+import { visibleName } from '../CalendarApproval';
 
 interface DiffPayload {
     title?: string;
@@ -62,10 +63,10 @@ export function DiffCard({ data }: { data: unknown }) {
             {(title || data.badge) && (
                 <div className="render-diff__title">
                     {data.badge && <span className="render-diff__badge">{data.badge}</span>}
-                    {title}
+                    {title && visibleName(title)}
                 </div>
             )}
-            {data.path && <div className="render-diff__path" dir="ltr">{wrappablePath(data.path)}</div>}
+            {data.path && <div className="render-diff__path" dir="ltr">{wrappablePath(visibleName(data.path))}</div>}
             {data.note && <div className="render-diff__note">{data.note}</div>}
             {data.unified && (
                 <pre className="render-diff__body">
@@ -74,7 +75,7 @@ export function DiffCard({ data }: { data: unknown }) {
                             className={line === HUNK_GAP ? 'render-diff__line render-diff__line--hunk' : lineClass(line)}
                             key={i}
                         >
-                            {line}
+                            {visibleName(line)}
                         </div>
                     ))}
                 </pre>

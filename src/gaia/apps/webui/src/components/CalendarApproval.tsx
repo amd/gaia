@@ -141,6 +141,36 @@ export function visibleWith(kept: ReadonlySet<string>, value: string, multiline:
     return multiline ? shown : shown.replace(/\n/g, '[U+000A]');
 }
 
+/** Prose, marked the way the approval card marks it. */
+export function visibleText(value: string, multiline: boolean): string {
+    return visibleWith(KEPT_AS_WRITTEN, value, multiline);
+}
+
+/** A file name or path from a tool, marked the way the approval card marks it. */
+export function visibleName(value: string): string {
+    return visibleText(value, false);
+}
+
+const OVERRIDES = /[\u202A-\u202E]/;
+const ISOLATE_OPEN = /[\u2066-\u2068]/;
+const ISOLATE_CLOSE = '\u2069';
+
+/** Marks overrides and unpaired isolates, which nobody types on purpose; paired isolates, marks and joiners stay. */
+export function markStrayDirection(text: string): string {
+    return text.split('\n').map((line) => {
+        const chars = [...line];
+        const stray = new Set<number>();
+        const open: number[] = [];
+        chars.forEach((char, at) => {
+            if (OVERRIDES.test(char)) stray.add(at);
+            else if (ISOLATE_OPEN.test(char)) open.push(at);
+            else if (char === ISOLATE_CLOSE && open.pop() === undefined) stray.add(at);
+        });
+        open.forEach((at) => stray.add(at));
+        return chars.map((char, at) => (stray.has(at) ? visibleText(char, false) : char)).join('');
+    }).join('\n');
+}
+
 /** `HIDDEN_NOTE` plus what `calendar_tools.py` adds to it; a Python test keeps them equal. */
 const UNSEEN_NOTE = "This text holds characters that don't show. Those that hide or reorder text " +
     'appear as [U+XXXX]; ideograph variant marks are kept as written. They are saved as written.';
@@ -154,6 +184,11 @@ export function unseenWith(kept: ReadonlySet<string>, value: unknown): boolean {
         if (point >= 0xE0100 && point <= 0xE01EF) return true;
         return variationSelector(char) ? !selectorFits(chars, at) : hidden(char, kept);
     });
+}
+
+/** Whether prose would show a code on the approval card. */
+export function unseen(value: unknown): boolean {
+    return unseenWith(KEPT_AS_WRITTEN, value);
 }
 
 const FENCE_OPEN = '<<<UNTRUSTED_TEXT>>>';
@@ -244,17 +279,22 @@ export function CalendarApproval({ tool, args }: { tool: string; args: Record<st
         const shown = text(value, multiline);
         if (shown) rows.push([label, <Name value={shown} />]);
     };
+    // An address reads left to right in any language.
+    const account = () => {
+        const shown = text(args.calendar_account);
+        if (shown) rows.push([t('permission.calendar.account'), <bdi dir="ltr">{shown}</bdi>]);
+    };
 
     if (tool === 'calendar/create_calendar_event') {
         named(t('permission.calendar.title'), args.title);
         rows.push([t('permission.calendar.when'), <When start={text(args.start)} end={text(args.end)} />]);
-        named(t('permission.calendar.account'), args.calendar_account);
+        account();
         named(t('permission.calendar.location'), args.location);
         named(t('permission.calendar.description'), args.description, true);
     } else {
         named(t('permission.calendar.event'), args.expected_title);
         rows.push([t('permission.calendar.when'), <When start={text(args.expected_start)} end="" />]);
-        named(t('permission.calendar.account'), args.calendar_account);
+        account();
         named(t('permission.calendar.newTitle'), args.new_title);
         if (text(args.new_start)) {
             rows.push([t('permission.calendar.newTime'), <When start={text(args.new_start)} end={text(args.new_end)} />]);

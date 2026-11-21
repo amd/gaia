@@ -16,8 +16,8 @@ function renderRow(model: ProviderModel = FLASH) {
     const noop = () => {};
     return render(
         <ModelRow
-            model={model} label="deepseek-v4p1-flash" current={false} remote busy={null} confirmingRemove={false}
-            onUse={noop} onDownload={noop} onAskRemove={noop} onKeep={noop} onRemove={noop}
+            model={model} label="deepseek-v4p1-flash" current={false} remote busy={null}
+            onUse={noop} onDownload={noop} onAskRemove={noop}
         />,
     );
 }

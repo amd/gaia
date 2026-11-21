@@ -358,7 +358,7 @@ func (c *Client) checkUnderLock(ctx context.Context) (*Instance, error) {
 // installGaiaHint is the one place the install commands are written, so the
 // "never installed" and "installed-but-gone" messages cannot drift apart.
 const installGaiaHint = "Reinstall GAIA from https://amd-gaia.ai/#install, which puts `gaia` " +
-	"beside gaia-tui, or run `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
+	"beside gaia-cli, or run `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
 	"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), then retry"
 
 // defaultStartCommand is what New uses when Options.StartCommand is unset.
@@ -558,8 +558,8 @@ func quoteOutput(s string) string {
 // Request is one authenticated call against the daemon.
 type Request struct {
 	Method string
-	// Path is daemon-root-relative, e.g. "/daemon/v1/agents/email/ensure" or
-	// "/v1/email/query".
+	// Path is daemon-root-relative, e.g. "/daemon/v1/agents/gaia/ensure" or
+	// "/v1/gaia/query".
 	Path string
 	// Body is the raw request body, nil for none. It is retained so the call can
 	// be replayed after a token refresh.
@@ -569,7 +569,7 @@ type Request struct {
 	// HTTPClient overrides the client used for this call. Required for a
 	// streaming call, and for anything that can outlast defaultRequestTimeout.
 	HTTPClient *http.Client
-	// Op names the operation for error messages, e.g. "stream the 'email' query".
+	// Op names the operation for error messages, e.g. "stream the 'gaia' query".
 	Op string
 	// RunScoped marks a call about state held by a running sidecar (a run or a
 	// session). A restarted daemon starts fresh sidecars, so such a call is not
@@ -851,8 +851,6 @@ func (c *Client) ensureOn(ctx context.Context, inst *Instance, agentID string) (
 // agent that has no mode switch. Only registered built-in agents have one.
 func ModeEnvVar(agentID string) string {
 	switch agentID {
-	case "email":
-		return "GAIA_EMAIL_AGENT_MODE"
 	case "gaia":
 		return "GAIA_GAIA_AGENT_MODE"
 	}

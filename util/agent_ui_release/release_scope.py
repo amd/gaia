@@ -58,7 +58,7 @@ SURFACES = [
     ),
     (
         "connectors",
-        re.compile(r"^src/gaia/connectors/|^src/gaia/mcp/|^hub/agents/email/"),
+        re.compile(r"^src/gaia/connectors/|^src/gaia/mcp/"),
     ),
     ("installer", re.compile(r"^installer/|^src/gaia/installer/|^scripts/install")),
     (

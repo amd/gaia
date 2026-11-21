@@ -242,6 +242,38 @@ def test_the_daemon_survives_reset_connections():
     _assert_survives_resets(app, "/daemon/v1/status")
 
 
+def test_the_api_server_survives_reset_connections():
+    from gaia.api.openai_server import app
+
+    _assert_survives_resets(app, "/health")
+
+
+def test_a_base_agent_api_server_survives_reset_connections():
+    from gaia.agents.base.agent import Agent
+    from gaia.agents.base.server import AgentServer
+
+    class _Agent(Agent):
+        def __init__(self):  # skip the LLM setup
+            pass
+
+        def _register_tools(self):
+            pass
+
+    _assert_survives_resets(
+        AgentServer(_Agent(), name="Reset").build_api_app(), "/health"
+    )
+
+
+def test_the_remote_agent_ui_mcp_server_survives_reset_connections(monkeypatch):
+    pytest.importorskip("mcp")
+    from gaia.mcp.servers.agent_ui_control import remote_app
+    from gaia.mcp.servers.agent_ui_mcp import create_agent_ui_mcp
+
+    monkeypatch.setenv("GAIA_MEMORY_MCP_ALWAYS", "1")
+    mcp = create_agent_ui_mcp("http://127.0.0.1:9")
+    _assert_survives_resets(remote_app(mcp, "0.0.0.0", "tok-" + "k" * 40), "/mcp")
+
+
 def test_the_agent_sidecar_survives_reset_connections(monkeypatch):
     pytest.importorskip("gaia_agent")
     from gaia_agent import caller_auth

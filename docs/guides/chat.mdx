@@ -89,6 +89,12 @@ gaia chat --stats
   </Accordion>
 </AccordionGroup>
 
+`/reset` also forgets every "always" you answered in the conversation, so the next
+action that asks will ask again. So does `/resume`: the conversation you switch to
+starts with no "always" answers, including one you resume after leaving it. If
+the session can't be found or read, you stay in the current conversation and keep
+its answers.
+
 `/quit` and `/reset` save the current session first. If saving fails, the
 conversation stays open and unchanged so you can fix the storage problem and
 retry `/save`, then `/quit` or `/reset`. To exit without saving, press `Ctrl-C`;
@@ -320,7 +326,8 @@ Qwen3.6-35B-A3B that cut what a cold first turn reads from about 21,300 tokens t
 When a turn needs something else, the session moves to the full list once, and the list
 then stays put. The full list is kept ready beside the short one, so a first task starts
 as quickly as a first "hello". That move happens before the model is asked, when your
-message names a tool, a picture or a recording, when a recalled procedure needs a tool, or
+message names a tool, a picture or a recording, when you paste a skill or ask to save,
+install, or correct one, when a recalled procedure needs a tool, or
 when a tool outside the list is
 a clearly better match than every tool on it. If the agent still lacks something, it calls
 `search_tools`, which finds tools and installed skills by what they do.

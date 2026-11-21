@@ -25,10 +25,15 @@ void McpServer::run() {
     while (std::getline(std::cin, line)) {
         if (line.empty()) continue;
 
+        json id = nullptr;
         try {
             json request = json::parse(line);
+            if (request.is_object() && request.contains("id")) id = request["id"];
+            // A notification has no id and gets no reply.
+            if (request.is_object() && !request.contains("id")) continue;
             json response = handleRequest(request);
-            std::cout << response.dump() << std::endl;
+            // Command output is not always UTF-8; a strict dump would throw and lose the reply.
+            std::cout << response.dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
             std::cout.flush();
         } catch (const json::parse_error& e) {
             json error = {
@@ -41,7 +46,7 @@ void McpServer::run() {
         } catch (const std::exception& e) {
             json error = {
                 {"jsonrpc", "2.0"},
-                {"id", nullptr},
+                {"id", id},
                 {"error", {{"code", -32603}, {"message", std::string("Internal error: ") + e.what()}}}
             };
             std::cout << error.dump() << std::endl;
@@ -185,7 +190,7 @@ json McpServer::handleToolsCall(const json& params) {
     bool isError = (result.contains("status") && result["status"] == "error")
                 || (result.contains("error") && !result.contains("success"));
 
-    std::string resultText = result.dump(2);
+    std::string resultText = result.dump(2, ' ', false, json::error_handler_t::replace);
 
     return json{
         {"content", json::array({json{{"type", "text"}, {"text", resultText}}})},

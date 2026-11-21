@@ -76,6 +76,11 @@ _DIFF_CARD_MAX_CHARS = 64_000
 #: relayed result is reduced to.
 RESULT_PATH_KEYS = ("file_path", "image_path", "audio_path")
 
+#: What a speech tool reports beside ``audio_path``: the recording's length,
+#: and where the user's copy and the listening script went. The audio card
+#: shows them as text.
+RESULT_AUDIO_KEYS = ("duration_seconds", "saved_to", "script_path")
+
 #: Generated media file types that a client may later open through an explicit
 #: card action.  Keep this intentionally narrow: a successful tool result is
 #: not enough to turn an arbitrary local file into a launchable UI payload.
@@ -511,6 +516,27 @@ def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
 _ANSWER_FIRST_RE = re.compile(r'\s*\{\s*"answer"\s*:')
 
 
+#: Longest string argument a plan item carries; a plan is re-sent every step.
+_PLAN_ARG_MAX = 300
+
+
+def _plan_item(step: Any) -> Dict[str, Any]:
+    """One plan step as ``{tool, description, args}`` for a client to narrate."""
+    if not isinstance(step, dict):
+        return {"description": str(step)}
+    item: Dict[str, Any] = {}
+    if step.get("tool"):
+        item["tool"] = str(step["tool"])
+    if step.get("description"):
+        item["description"] = str(step["description"])
+    args = step.get("tool_args")
+    if isinstance(args, dict) and args:
+        item["args"] = {
+            k: (v[:_PLAN_ARG_MAX] if isinstance(v, str) else v) for k, v in args.items()
+        }
+    return item
+
+
 class SSEOutputHandler(OutputHandler):
     """
     OutputHandler that queues agent events as JSON for SSE streaming.
@@ -679,9 +705,15 @@ class SSEOutputHandler(OutputHandler):
         self.relay_hidden_turns = 0
         self.relay_context_error: Optional[str] = None
         self.relay_performance: Optional[Dict[str, Any]] = None
+        # The route a relayed hybrid turn took, from the sidecar's ``final``.
+        self.relayed_route: Optional[Dict[str, Any]] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
+        # The turn's answer and record for later turns, sealed when the answer
+        # prints so a daemon's final event need not wait on the run thread's tail.
+        self.staged_answer: Optional[str] = None
+        self.staged_model_messages: Optional[List[Dict[str, Any]]] = None
         # Set by mark_turn_failed; the next answer event carries ``failed``.
         self._turn_failed = False
         self._turn_failure: Optional[str] = None
@@ -822,6 +854,7 @@ class SSEOutputHandler(OutputHandler):
                 "steps": plan_strs,
                 "step_narrations": narrations,
                 "current_step": current_step,
+                "items": [_plan_item(step) for step in plan],
             }
         )
 
@@ -927,6 +960,8 @@ class SSEOutputHandler(OutputHandler):
         latency_ms = self.record_tool_result(data, success)
         event = {
             "type": "tool_result",
+            # Which call this answers, so a client can follow one tool's results.
+            "tool": self._last_tool_name,
             "title": title,
             "summary": summary,
             "success": success,
@@ -941,6 +976,12 @@ class SSEOutputHandler(OutputHandler):
         # A "denied" call nobody answered is not one the user declined.
         if isinstance(data, dict) and data.get("timed_out") is True:
             event["timed_out"] = True
+        # Nor is one GAIA's own rule stopped.
+        if isinstance(data, dict) and data.get("denied_by") == "policy":
+            event["denied_by"] = "policy"
+        # Nor is one GAIA turned down itself without showing a prompt.
+        if isinstance(data, dict) and data.get("declined_by") == "agent":
+            event["declined_by"] = "agent"
         # A refusal must not read as a site contacted, relayed or not.
         if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
             event[EXECUTED_KEY] = False
@@ -949,11 +990,18 @@ class SSEOutputHandler(OutputHandler):
         # summary may be incomplete instead of making them infer truncation.
         if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
             event["summary_truncated"] = True
+        # The file a tool wrote, so a client can offer to open it.
+        if isinstance(data, dict) and isinstance(data.get("path"), str):
+            event["path"] = data["path"]
         # Where the tool wrote, resolved: a relayed turn's Outputs need it.
         if isinstance(data, dict):
             for key in RESULT_PATH_KEYS:
                 if isinstance(data.get(key), str):
                     event[key] = data[key]
+            if isinstance(data.get("audio_path"), str):
+                for key in RESULT_AUDIO_KEYS:
+                    if isinstance(data.get(key), (str, int, float)):
+                        event[key] = data[key]
             if isinstance(data.get("num_chunks"), int):
                 event["num_chunks"] = data["num_chunks"]
         # The summary drops the hits a relayed turn's sources are made of.
@@ -995,13 +1043,16 @@ class SSEOutputHandler(OutputHandler):
         # For file search results, include structured file list
         if isinstance(data, dict) and ("files" in data or "file_list" in data):
             files = data.get("file_list", data.get("files", []))
+            folders = data.get("directories")
             if isinstance(files, list):
                 # Keep the UI contract honest: "total" should never claim more accessible
                 # files than we actually include in the event payload.
                 # list_files reports bare names; the UI renders entries.
-                limited_files = [
-                    {"name": f} if isinstance(f, str) else f for f in files[:20]
-                ]
+                entries = [
+                    {"name": _entry_name(d), "kind": "folder"}
+                    for d in (folders if isinstance(folders, list) else [])
+                ] + [{"name": f} if isinstance(f, str) else f for f in files]
+                limited_files = entries[:20]
                 event["result_data"] = {
                     "type": "file_list",
                     "files": limited_files,  # Limit to 20 files
@@ -1179,16 +1230,14 @@ class SSEOutputHandler(OutputHandler):
             }
         )
 
+    def report_draft(self, tool: str, text: str):
+        self._emit({"type": "draft", "tool": tool, "text": text})
+
     # === Structured-render map (#2109) ===
 
     # Mapping from tool name to the card "kind" the frontend's render-card
-    # registry draws (spec §4.2). Shared with the sidecar's own canonical
-    # translator (``gaia_agent_email/sse_translation.py`` duplicates this map
-    # to stay dependency-light) — a test in that package
-    # (``test_render_tool_to_lang_maps_stay_in_sync``) pins the two dicts
-    # equal so the duplication can't silently drift.
+    # registry draws (spec §4.2).
     _RENDER_TOOL_TO_LANG: ClassVar[Dict[str, str]] = {
-        "pre_scan_inbox": "email_pre_scan",
         # #2765: a generic ``table`` card (no new client code) so the thread
         # view renders straight from tool data instead of model prose.
         "get_thread": "table",
@@ -1207,6 +1256,7 @@ class SSEOutputHandler(OutputHandler):
         "generate_music": "media",
         "generate_sound_effect": "media",
         "text_to_speech": "media",
+        "dictate_document": "media",
     }
 
     def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:
@@ -1299,6 +1349,9 @@ class SSEOutputHandler(OutputHandler):
             "duration_seconds",
             "duration_requested",
             "generation_time_s",
+            "saved_to",
+            "script_path",
+            "form",
         ):
             if envelope.get(key) is not None:
                 payload[key] = envelope[key]
@@ -1309,6 +1362,20 @@ class SSEOutputHandler(OutputHandler):
     def print_turn_metrics(self, record: Dict[str, Any]):
         """Stash the sealed turn record for the answer event that follows."""
         self._turn_metrics = record
+
+    def stage_final_model_messages(
+        self, answer: str, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Keep the turn's answer and record sealed at the answer for ``final``.
+
+        The agent seals them before ``print_final_answer``; the daemon reads them
+        from here so ``final`` carries the measurement and what later turns
+        replay without waiting on the run thread (which may still be storing
+        memory or writing a trace).
+        """
+        self.staged_answer = answer
+        self.staged_model_messages = messages
+        return messages
 
     def mark_turn_failed(self, failure: Optional[str] = None) -> None:
         """The answer that follows ends a turn a model failure cut short."""
@@ -2076,6 +2143,7 @@ class SSEOutputHandler(OutputHandler):
                     f"'{tool_name}' needs your approval and nobody can answer on "
                     "this run. Start the request from the GAIA terminal UI or "
                     "Agent UI to approve it there.",
+                    unattended=True,
                 )
 
         # Before auto-approve: the eval runs with it on, and this is its only no.
@@ -2159,7 +2227,7 @@ class SSEOutputHandler(OutputHandler):
             logger.info(
                 "Background mode: immediately denied confirmation for '%s'", tool_name
             )
-            self._last_denial = Denial(tool_name, unattended_message)
+            self._last_denial = Denial(tool_name, unattended_message, unattended=True)
             return False
 
         confirm_id = str(uuid.uuid4())
@@ -2190,7 +2258,7 @@ class SSEOutputHandler(OutputHandler):
         if scope is not None:
             request["always_scope"] = scope.label
             # ``always_scope`` is matched as-is by the MCP control; this is its wording.
-            always_label = grant_phrase(tool_name, scope.subject)
+            always_label = scope.phrase or grant_phrase(tool_name, scope.subject)
             if always_label:
                 request["always_label"] = always_label
         # What this call does — `pytest` is not `rm -rf` — so the prompt's label
@@ -2222,6 +2290,7 @@ class SSEOutputHandler(OutputHandler):
                 tool_name,
                 f"Confirmation for '{tool_name}' was abandoned: the run was "
                 "cancelled before the user answered.",
+                unattended=True,
             )
             return False
 
@@ -2443,7 +2512,7 @@ class SSEOutputHandler(OutputHandler):
         for the whole blocking ``read()``, and ``close()`` waits on that same
         lock — so a cross-thread ``close()`` blocks until the read returns on
         its own (proven by the real-socket test in
-        ``tests/unit/test_email_sidecar_proxy.py``). ``shutdown()`` bypasses
+        ``tests/unit/test_sidecar_proxy.py``). ``shutdown()`` bypasses
         the file-object layer entirely and wakes the parked ``recv``
         immediately; the relay's stream generator then closes the response
         itself on the way out. ``resp.close()`` remains only as the fallback
@@ -2602,8 +2671,8 @@ class SSEOutputHandler(OutputHandler):
     def resolve_user_input(self, request_id: str, response: str) -> bool:
         """Unblock a pending ``request_user_input_blocking()`` call.
 
-        Called by ``POST /api/chat/user-input`` and by the email sidecar's
-        ``POST /v1/email/query/{run_id}/respond``.  Returns ``False`` if no
+        Called by ``POST /api/chat/user-input`` and by a sidecar's
+        ``POST /v1/<agent>/query/{run_id}/respond``.  Returns ``False`` if no
         request with that ID is pending, so the caller can answer 409 rather
         than report an accepted answer nothing will read.
         """
@@ -2847,6 +2916,68 @@ def _first_line_summary(text: str) -> str:
     return f"{first} (+{len(lines) - 1} more lines)" if len(lines) > 1 else first
 
 
+def _entry_name(entry: Any) -> str:
+    """A listed file's display name: ``{"name": "a.py", "directory": "/src"}`` -> ``"a.py (/src)"``."""
+    if not isinstance(entry, dict):
+        return str(entry)
+    name = entry.get("name", entry.get("filename", entry.get("file_name", "")))
+    if not name and entry.get("file_path"):
+        name = str(entry["file_path"]).replace("\\", "/").rsplit("/", 1)[-1]
+    directory = entry.get("directory", "")
+    if directory and name:
+        return f"{name} ({directory})"
+    return str(name or directory)
+
+
+def _listing_summary(data: Dict[str, Any]) -> str:
+    """``{"files": [...], "directories": [...]}`` -> ``"Found 3 files and 2 folders: ..."``."""
+    files = data.get("file_list", data.get("files"))
+    files = files if isinstance(files, list) else []
+    folders = data.get("directories")
+    folders = folders if isinstance(folders, list) else []
+    count = data.get("count")
+    # "count" is the files a search matched, which may exceed the names it returned.
+    file_count = (
+        max(count, len(files))
+        if isinstance(count, int) and not isinstance(count, bool)
+        else len(files)
+    )
+    folder_count = len(folders)
+    total = data.get("total")
+    other = (
+        total - file_count - folder_count
+        if isinstance(total, int) and not isinstance(total, bool)
+        else 0
+    )
+    parts = [
+        format_count(n, noun)
+        for n, noun in (
+            (file_count, "files"),
+            (folder_count, "folders"),
+            (other, "other entries"),
+        )
+        if n > 0
+    ]
+    if not parts:
+        found = "no files or folders" if "directories" in data else "no files"
+    elif len(parts) == 1:
+        found = parts[0]
+    else:
+        found = ", ".join(parts[:-1]) + f" and {parts[-1]}"
+
+    names = [f"{_entry_name(d)}/" for d in folders[:5]]
+    names += [_entry_name(f) for f in files[: 5 - len(names)]]
+    names = [n for n in names if n and n != "/"]
+    display_msg = data.get("display_message", "")
+    if not names:
+        return display_msg or f"Found {found}"
+    listed = "\n".join(f"  {name}" for name in names)
+    hidden = file_count + folder_count - len(names)
+    if hidden > 0:
+        listed += f"\n  ... +{hidden} more"
+    return f"{display_msg}\n{listed}" if display_msg else f"Found {found}:\n{listed}"
+
+
 def _summarize_tool_result(data: Dict[str, Any]) -> str:
     """Create a detailed human-readable summary of a tool result."""
     if not isinstance(data, dict):
@@ -2859,6 +2990,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         lines = stdout.strip().split("\n") if stdout.strip() else []
         if rc != 0 and data.get("expected_exit"):
             return f"{data['expected_exit']} (exit {rc})"
+        if rc != 0 and isinstance(data.get("exit_code_meaning"), str):
+            # winget reports failure as a bare number and prints to stdout.
+            return f"{data['exit_code_meaning']} (exit {rc})"
         if rc != 0:
             stderr = data.get("stderr", "")
             return f"Command failed (exit {rc})" + (
@@ -2872,39 +3006,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
             return preview
         return "Command completed (no output)"
 
-    # File search results
+    # File search and folder listing results
     if "files" in data or "file_list" in data:
-        files = data.get("file_list", data.get("files", []))
-        count = data.get("count", len(files) if isinstance(files, list) else 0)
-        display_msg = data.get("display_message", "")
-        if isinstance(files, list) and files:
-            file_names = []
-            for f in files[:5]:
-                if isinstance(f, dict):
-                    name = f.get("name", f.get("filename", f.get("file_name", "")))
-                    # Fallback: extract filename from file_path if name keys are missing
-                    if not name and f.get("file_path"):
-                        name = f["file_path"].replace("\\", "/").rsplit("/", 1)[-1]
-                    directory = f.get("directory", "")
-                    if directory and name:
-                        file_names.append(f"{name} ({directory})")
-                    elif name:
-                        file_names.append(name)
-                    elif directory:
-                        file_names.append(directory)
-                else:
-                    file_names.append(str(f))
-            result = "\n".join(f"  {name}" for name in file_names)
-            if count > 5:
-                result += f"\n  ... +{count - 5} more"
-            return (
-                (display_msg + "\n" + result)
-                if display_msg
-                else f"Found {count} file(s):\n{result}"
-            )
-        if display_msg:
-            return display_msg
-        return f"Found {count} file(s)"
+        return _listing_summary(data)
 
     # Search/query results with chunks
     if "chunks" in data:

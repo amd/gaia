@@ -779,6 +779,35 @@ def replace_retrying(src: Union[str, Path], target: Union[str, Path]) -> None:
             time.sleep(_POLL_SECONDS)
 
 
+def read_bytes_retrying(path: Union[str, Path]) -> bytes:
+    """Read *path*, waiting out a brief hold the way :func:`replace_retrying` does.
+
+    A reader that skips the file's lock can open it in the instant a writer
+    renames a new copy over it, and Windows refuses that open. Retried every
+    20 ms for up to :data:`REPLACE_RETRY_SECONDS`; any other error, or a hold
+    that outlasts the budget, raises.
+    """
+    path = Path(path)
+    deadline = time.monotonic() + REPLACE_RETRY_SECONDS
+    while True:
+        try:
+            return path.read_bytes()
+        except PermissionError as e:
+            if not held_by_another_program(e):
+                raise
+            if time.monotonic() >= deadline:
+                raise PermissionError(
+                    e.errno,
+                    f"Cannot read {path}: either another program has it open and "
+                    f"did not let go within {REPLACE_RETRY_SECONDS:g}s, or this "
+                    "user may not read it. Close any editor or viewer showing it "
+                    "and check the file's permissions; if it persists, exclude "
+                    "the GAIA folder from antivirus real-time scanning",
+                    str(path),
+                ) from e
+            time.sleep(_POLL_SECONDS)
+
+
 def _is_read_only(path: Path) -> bool:
     try:
         attributes = getattr(os.stat(path), "st_file_attributes", 0)

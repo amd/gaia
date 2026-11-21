@@ -1,0 +1,89 @@
+{
+  "name": "decision",
+  "aliases": [
+    "comparison",
+    "options",
+    "decision_paper",
+    "recommendation",
+    "trade_off"
+  ],
+  "title": "Decision / comparison",
+  "description": "Comparison of options leading to a decision: recommendation first, the options against criteria, trade-offs, risks and the decision needed.",
+  "default_slides": 6,
+  "min_slides": 1,
+  "max_slides": 10,
+  "one_slide": "options",
+  "storyline": "Recommendation first, then the evidence: the same criteria for every option, scored the same way. End with exactly what you need decided and by when.",
+  "slots": [
+    {
+      "id": "title",
+      "type": "title",
+      "priority": 1,
+      "title": "<Decision>: <recommended option>",
+      "guidance": "Decision topic, audience, date."
+    },
+    {
+      "id": "recommendation",
+      "type": "bullets",
+      "priority": 1,
+      "title": "<We recommend X because Y>",
+      "guidance": "The recommendation, its main reason, cost and timing.",
+      "kind": "executive_summary"
+    },
+    {
+      "id": "options",
+      "type": "table",
+      "priority": 1,
+      "title": "<How the options compare on what matters>",
+      "guidance": "Options as columns, 3-6 criteria as rows, with values not adjectives."
+    },
+    {
+      "id": "criteria_chart",
+      "type": "chart",
+      "priority": 3,
+      "title": "<The criterion that decides it>",
+      "guidance": "The deciding criterion per option as sorted bars.",
+      "repeat": 3,
+      "grow": 1.5,
+      "spec": {
+        "chart_type": "bar",
+        "intent": "compare"
+      }
+    },
+    {
+      "id": "tradeoffs",
+      "type": "two_column",
+      "priority": 2,
+      "title": "<What we gain and what we give up>",
+      "guidance": "Left: gains of the recommendation; right: costs and what we forgo."
+    },
+    {
+      "id": "risks",
+      "type": "bullets",
+      "priority": 3,
+      "title": "<What could go wrong and how we would know>",
+      "guidance": "Top risks with an early signal and a mitigation each."
+    },
+    {
+      "id": "decision_needed",
+      "type": "bullets",
+      "priority": 1,
+      "title": "<The decision we need today>",
+      "guidance": "The exact decision, by whom, by when, and what happens next."
+    },
+    {
+      "id": "next_steps",
+      "type": "table",
+      "title": "Next steps: who does what by when",
+      "guidance": "Columns Action | Owner | Due. One row per commitment; a named owner and a date on every row.",
+      "spec": {
+        "columns": [
+          "Action",
+          "Owner",
+          "Due"
+        ]
+      },
+      "priority": 3
+    }
+  ]
+}

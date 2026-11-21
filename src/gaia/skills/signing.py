@@ -42,6 +42,7 @@ from typing import Any, Optional
 
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillValidationError
+from gaia.skills.human_only import require_user_terminal
 from gaia.skills.lock import write_text_atomic
 from gaia.skills.tiers import LOWEST_TIER
 
@@ -173,6 +174,7 @@ def generate_key(
     Raises:
         SkillSignatureError: if a key of that name exists and *force* is False.
     """
+    require_user_terminal("gaia skill keygen")
     ed25519 = _ed25519()
     from cryptography.hazmat.primitives import serialization
 
@@ -200,12 +202,38 @@ def generate_key(
         format=serialization.PublicFormat.Raw,
     )
 
-    private_path.write_text(_b64(private_raw) + "\n", encoding="utf-8")
-    os.chmod(private_path, stat.S_IRUSR | stat.S_IWUSR)
+    _write_private_key(private_path, (_b64(private_raw) + "\n").encode("utf-8"))
     public_path.write_text(_b64(public_raw) + "\n", encoding="utf-8")
 
     log.info("Generated skill signing key %s (%s)", key_id(public_raw), private_path)
     return SigningKey(private_bytes=private_raw, public_bytes=public_raw)
+
+
+def _write_private_key(path: Path, payload: bytes) -> None:
+    """Write *payload* to a new owner-only file at *path*, replacing any old one.
+
+    The file is created with mode 0600 rather than chmod'd afterwards, so the
+    key is never readable by anyone else, not even briefly. ``O_EXCL`` refuses
+    to follow a link planted at *path*.
+
+    Raises:
+        SkillSignatureError: if *path* cannot be removed or created.
+    """
+    try:
+        path.unlink(missing_ok=True)
+        fd = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+            stat.S_IRUSR | stat.S_IWUSR,
+        )
+    except OSError as exc:
+        raise SkillSignatureError(
+            f"Could not create the signing key at {path}: {exc}. Check that the "
+            f"directory is writable and that nothing else is creating {path.name} "
+            "at the same time, then run 'gaia skill keygen' again."
+        ) from exc
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(payload)
 
 
 def load_key(skills_root: Path, *, name: str = "publisher") -> SigningKey:
@@ -610,6 +638,7 @@ class TrustStore:
 
     def save(self, path: Optional[Path] = None) -> Path:
         """Persist the store. Returns the path written."""
+        require_user_terminal("gaia skill trust")
         target = Path(path) if path is not None else self.path
         if target is None:
             raise SkillValidationError(

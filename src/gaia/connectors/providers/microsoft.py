@@ -56,11 +56,11 @@ from __future__ import annotations
 
 import logging
 import os
-import zlib
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 from urllib.parse import urlencode
 
 from gaia.connectors.errors import OAuthClientNotConfiguredError
+from gaia.connectors.providers.base import client_id_hash
 from gaia.connectors.setup_routes import get_route, render_console_steps
 
 logger = logging.getLogger(__name__)
@@ -185,7 +185,7 @@ class MicrosoftOAuthProvider:
     # device-code path). Provider-agnostic hook — flow.py GETs ``userinfo_url``
     # with the access token and hands the JSON to ``parse_account_email``.
     userinfo_url: str = (
-        "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName"
+        "https://graph.microsoft.com/v1.0/me?$select=id,mail,userPrincipalName"
     )
 
     def classify_account_type(self, claims: dict) -> str | None:
@@ -203,6 +203,14 @@ class MicrosoftOAuthProvider:
         return account_type_for_tenant(
             (claims or {}).get("tid")
         ) or account_type_for_authority(self.tenant)
+
+    @staticmethod
+    def parse_account_id(userinfo: dict) -> str | None:
+        """The account's stable id: Graph ``/me`` ``id``, the user's object id.
+        It is the same on every sign-in, unlike the id_token ``sub``, which is
+        per app."""
+        account_id = userinfo.get("id")
+        return account_id if isinstance(account_id, str) and account_id else None
 
     @staticmethod
     def parse_account_email(userinfo: dict) -> str | None:
@@ -270,7 +278,7 @@ class MicrosoftOAuthProvider:
                 ),
                 console_steps=console_steps,
                 example=(
-                    "  For the email agent, copy-paste (bash) after creating "
+                    "  For mail and calendar in GAIA, copy-paste (bash) after creating "
                     "the client above:\n"
                     f"    gaia connectors configure {self.provider_id} "
                     "--client-id <ID>\n"
@@ -278,14 +286,14 @@ class MicrosoftOAuthProvider:
                     "https://graph.microsoft.com/Mail.Send "
                     'https://graph.microsoft.com/Calendars.ReadWrite"\n'
                     f"    gaia connectors connect {self.provider_id} "
-                    "--scopes $SCOPES --grant-agent installed:email"
+                    "--scopes $SCOPES --grant-agent installed:gaia"
                 ),
                 docs="https://amd-gaia.ai/docs/connectors/microsoft",
             )
         self.client_id: str = resolved_id
         # CRC32 fingerprint for log correlation / tripwire comparison only.
         # Non-cryptographic by design — not used for security.
-        self.client_id_hash: str = format(zlib.crc32(resolved_id.encode()), "08x")
+        self.client_id_hash: str = client_id_hash(resolved_id)
         # Public PKCE clients send NO secret. Empty string => omitted from the
         # token/refresh bodies. A non-empty value is the confidential-app
         # opt-in (operator set GAIA_{PREFIX}_CLIENT_SECRET / saved one).
@@ -346,12 +354,35 @@ class MicrosoftOAuthProvider:
         """
         return {"response_mode": "query"}
 
+    def account_prompt_params(
+        self,
+        *,
+        select_account: bool,
+        login_hint: str | None,
+        account_type: str | None,
+    ) -> dict:
+        """Which account Microsoft signs in: the picker when adding an account,
+        or a hint when reconnecting one. A known account kind also names its
+        home realm (``consumers`` / ``organizations``) as ``domain_hint``."""
+        params: dict = {}
+        if select_account:
+            params["prompt"] = "select_account"
+        if login_hint:
+            params["login_hint"] = login_hint
+        domain = {"personal": "consumers", "work": "organizations"}.get(
+            account_type or ""
+        )
+        if login_hint and domain:
+            params["domain_hint"] = domain
+        return params
+
     def authorization_url(
         self,
         redirect_uri: str,
         challenge: str,
         state: str,
         scopes: Iterable[str],
+        extra_params: Mapping[str, str] | None = None,
     ) -> str:
         params = {
             "client_id": self.client_id,
@@ -363,6 +394,7 @@ class MicrosoftOAuthProvider:
             "scope": " ".join(scopes),
         }
         params.update(self.authorization_params())
+        params.update(extra_params or {})
         return f"{self.auth_url}?{urlencode(params)}"
 
     def token_request_body(self, code: str, verifier: str, redirect_uri: str) -> dict:

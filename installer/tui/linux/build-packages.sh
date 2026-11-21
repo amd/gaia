@@ -27,18 +27,22 @@ readonly MAINTAINER="GAIA maintainers <gaia@amd.com>"
 readonly VENDOR="Advanced Micro Devices, Inc."
 readonly HOMEPAGE="https://amd-gaia.ai"
 readonly LICENSE_NAME="MIT"
-readonly DOC_DIR="usr/share/doc/gaia-tui"
+readonly DOC_DIR="usr/share/doc/gaia-cli"
 readonly ICON_DIR="usr/share/icons/hicolor/256x256/apps"
 readonly SUMMARY="AMD GAIA Terminal UI - local AI assistant"
 # Not `readonly`: bash 3.2 rejects `readonly name=(...)`.
-PAYLOAD_BINARIES=(gaia-tui gaia-agent)
+PAYLOAD_BINARIES=(gaia-cli gaia-agent)
+# gaiacpp, the native agent a user can switch gaia-cli to, is packaged
+# when the payload holds it. tui_installers.yml stages it wherever one is built,
+# and its smoke test fails a package that should carry it and does not.
+readonly NATIVE_AGENT="gaiacpp"
 # The frozen `gaia` core (installer/core/freeze.py): an executable and its
 # _internal folder, installed together and linked onto PATH.
 readonly CORE_DIR="usr/lib/gaia"
 readonly PRERM_FILE="${SCRIPT_DIR}/prerm"
 
 readonly DESKTOP_FILE="${SCRIPT_DIR}/gaia-tui.desktop"
-readonly ICON_FILE="${SCRIPT_DIR}/gaia-tui.png"
+readonly ICON_FILE="${SCRIPT_DIR}/gaia-cli.png"
 readonly LICENSE_FILE="${REPO_ROOT}/LICENSE.md"
 
 usage() {
@@ -48,8 +52,9 @@ Usage: build-packages.sh --version <x.y.z|x.y.z-rc.N> --payload <dir> --out <dir
 
   --version   Release version: 1.4.0, or 1.4.0-rc.2 for a release candidate.
               The candidate's packages carry 1.4.0~rc.2, which sorts before 1.4.0.
-  --payload   Directory containing the executables gaia-tui and gaia-agent, and
+  --payload   Directory containing the executables gaia-cli and gaia-agent, and
               core/, the frozen gaia (its executable and _internal folder).
+              A gaiacpp there is packaged beside them.
   --out       Directory to write the .deb and .rpm into (created if absent).
   --without-core
               Build a package with no gaia core, as releases before it shipped
@@ -126,14 +131,21 @@ fi
 # ── Inputs ──────────────────────────────────────────────────────────────────
 
 [ -d "$PAYLOAD_DIR" ] || die "--payload directory does not exist: ${PAYLOAD_DIR}" \
-    "Stage the built binaries there first; the directory must contain gaia-tui and gaia-agent."
+    "Stage the built binaries there first; the directory must contain gaia-cli and gaia-agent."
 
 for binary in "${PAYLOAD_BINARIES[@]}"; do
     [ -f "${PAYLOAD_DIR}/${binary}" ] || die \
         "payload is missing '${binary}': ${PAYLOAD_DIR}/${binary} not found." \
-        "The staging directory must contain both gaia-tui and gaia-agent (no extension)." \
+        "The staging directory must contain both gaia-cli and gaia-agent (no extension)." \
         "Check the build step that copies the binaries into ${PAYLOAD_DIR}."
 done
+
+SHIPPED_BINARIES=("${PAYLOAD_BINARIES[@]}")
+if [ -f "${PAYLOAD_DIR}/${NATIVE_AGENT}" ]; then
+    SHIPPED_BINARIES+=("$NATIVE_AGENT")
+else
+    echo "build-packages.sh: the payload has no ${NATIVE_AGENT}, so the package ships gaia-agent alone" >&2
+fi
 
 [ "$WITHOUT_CORE" -eq 1 ] || { [ -f "${PAYLOAD_DIR}/core/gaia" ] && [ -d "${PAYLOAD_DIR}/core/_internal" ]; } || die \
     "payload is missing the frozen gaia core: ${PAYLOAD_DIR}/core/gaia and core/_internal." \
@@ -186,7 +198,7 @@ chmod 0755 "$STAGE"
 install -d -m 0755 "${STAGE}/usr/bin" "${STAGE}/usr/share/applications" \
                    "${STAGE}/${ICON_DIR}" "${STAGE}/${DOC_DIR}"
 
-for binary in "${PAYLOAD_BINARIES[@]}"; do
+for binary in "${SHIPPED_BINARIES[@]}"; do
     install -m 0755 "${PAYLOAD_DIR}/${binary}" "${STAGE}/usr/bin/${binary}"
 done
 
@@ -199,7 +211,7 @@ if [ "$WITHOUT_CORE" -eq 0 ]; then
 fi
 
 install -m 0644 "$DESKTOP_FILE"  "${STAGE}/usr/share/applications/gaia-tui.desktop"
-install -m 0644 "$ICON_FILE"     "${STAGE}/${ICON_DIR}/gaia-tui.png"
+install -m 0644 "$ICON_FILE"     "${STAGE}/${ICON_DIR}/gaia-cli.png"
 install -m 0644 "$LICENSE_FILE"  "${STAGE}/${DOC_DIR}/LICENSE.md"
 
 # ── Package ─────────────────────────────────────────────────────────────────

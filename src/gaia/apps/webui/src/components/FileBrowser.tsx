@@ -22,6 +22,7 @@ import { UploadErrorToast, isExtensionSupported, getUnsupportedCategory } from '
 import type { FileEntry, BrowseResponse, QuickLink } from '../types';
 import './FileBrowser.css';
 import './UnsupportedFeature.css';
+import { visibleName, markStrayDirection } from './CalendarApproval';
 
 // File type icons mapping
 function getFileIcon(entry: FileEntry) {
@@ -102,6 +103,10 @@ interface IndexResult {
     unsupported: string[];
     failed: number;
     lastError: string;
+    /** The last failed document's ``error_kind``, when the server gave one. */
+    lastErrorKind?: string | null;
+    /** Images inside added folders, which GAIA reads only when added one by one. */
+    skippedImages: number;
 }
 
 /**
@@ -129,6 +134,8 @@ async function indexAndAttachFiles(
     const succeededFiles: string[] = [];
     let failed = 0;
     let lastError = '';
+    let lastErrorKind: string | null = null;
+    let skippedImages = 0;
     const folderPaths = new Set(entries.filter(e => e.type === 'folder').map(e => e.path));
 
     for (const filepath of supported) {
@@ -137,6 +144,12 @@ async function indexAndAttachFiles(
                 const result = await api.indexFolder(filepath);
                 const newIds: string[] = [];
                 result.documents.forEach(d => { if (d.id) newIds.push(d.id); });
+                skippedImages += result.skipped_images ?? 0;
+                // Each failed file has a library row saying why, to retry from.
+                if (result.failed > 0) {
+                    failed += result.failed;
+                    lastError = result.errors[0] ?? lastError;
+                }
                 if (newIds.length > 0) {
                     newIds.forEach(id => docIds.push(id));
                     succeededFiles.push(filepath);
@@ -148,6 +161,7 @@ async function indexAndAttachFiles(
                     // Neither attached nor held for the next chat: GAIA can't search it.
                     failed++;
                     lastError = doc.last_error ?? '';
+                    lastErrorKind = doc.error_kind ?? null;
                 } else if (doc?.id) {
                     docIds.push(doc.id);
                     succeededFiles.push(filepath);
@@ -156,6 +170,7 @@ async function indexAndAttachFiles(
         } catch (err) {
             failed++;
             lastError = err instanceof Error ? err.message : 'Unknown error';
+            lastErrorKind = (err as { reason?: string | null } | null)?.reason ?? null;
         }
     }
 
@@ -180,8 +195,8 @@ async function indexAndAttachFiles(
         // No chat is open: the agent only sees attached documents, so hold them for the next one.
         useChatStore.getState().addDraftDocuments(docIds);
     }
-    // The chat's document bar lists only documents the store knows about.
-    if (docIds.length > 0) {
+    // The chat's document bar and the library list only documents the store knows about.
+    if (docIds.length > 0 || failed > 0) {
         try {
             const data = await api.listDocuments();
             useChatStore.getState().setDocuments(data.documents || []);
@@ -190,7 +205,7 @@ async function indexAndAttachFiles(
         }
     }
 
-    return { docIds, supported, succeededFiles, unsupported, failed, lastError };
+    return { docIds, supported, succeededFiles, unsupported, failed, lastError, lastErrorKind, skippedImages };
 }
 
 const isHiddenName = (name: string) => name.startsWith('.');
@@ -202,7 +217,7 @@ interface FileBrowserProps {
 
 export function FileBrowser({ onStartChat }: FileBrowserProps) {
     const t = useT();
-    const { setShowFileBrowser, currentSessionId, updateSessionInList, setPendingPrompt } = useChatStore();
+    const { setShowFileBrowser, leaveFileBrowser, currentSessionId, updateSessionInList, setPendingPrompt } = useChatStore();
     const closeBrowser = useCallback(() => setShowFileBrowser(false), [setShowFileBrowser]);
     useEscapeToClose(true, closeBrowser);
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -240,7 +255,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
     const indexStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Upload error toast state
-    const [indexError, setIndexError] = useState<{ filename: string; error: string } | null>(null);
+    const [indexError, setIndexError] = useState<{ filename: string; error: string; kind?: string | null } | null>(null);
 
     const loadDirectory = useCallback(async (path?: string) => {
         setLoading(true);
@@ -377,16 +392,22 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                 setIndexError({
                     filename: `${result.failed} file(s)`,
                     error: result.lastError || 'Indexing failed for some files',
+                    kind: result.lastErrorKind,
                 });
             } else {
                 const added = t.plural('fileBrowser.added', result.docIds.length);
-                setIndexStatus(result.unsupported.length > 0
-                    ? `${added} ${t.plural('fileBrowser.skipped', result.unsupported.length)}`
-                    : added);
+                const parts = [added];
+                if (result.unsupported.length > 0) parts.push(t.plural('fileBrowser.skipped', result.unsupported.length));
+                if (result.skippedImages > 0) parts.push(t.plural('docs.folder.images', result.skippedImages));
+                setIndexStatus(parts.join(' '));
             }
             if (indexStatusTimerRef.current) clearTimeout(indexStatusTimerRef.current);
             indexStatusTimerRef.current = setTimeout(() => setIndexStatus(null), 5000);
             setSelectedFiles(new Set());
+            // Opened from the library: go back there to see the files land.
+            if (result.failed === 0 && result.unsupported.length === 0 && useChatStore.getState().fileBrowserFromLibrary) {
+                setShowFileBrowser(false);
+            }
         } catch (err) {
             log.doc.error('Index selected failed', err);
             setIndexError({
@@ -396,7 +417,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         } finally {
             setIndexingFiles(new Set());
         }
-    }, [selectedFiles, currentSessionId, updateSessionInList, entries, t]);
+    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setShowFileBrowser, t]);
 
     // A second click can land before the re-render that disables the button.
     const askingRef = useRef(false);
@@ -449,7 +470,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
             } else {
                 await onStartChat(prompt);
             }
-            setShowFileBrowser(false);
+            leaveFileBrowser();
             setSelectedFiles(new Set());
         } catch (err) {
             log.doc.error('Ask Agent failed', err);
@@ -462,7 +483,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
             setIndexingFiles(new Set());
             setIndexStatus(null);
         }
-    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setPendingPrompt, setShowFileBrowser, onStartChat, t]);
+    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setPendingPrompt, leaveFileBrowser, onStartChat, t]);
 
     // Build breadcrumb segments from current path
     const pathSegments = currentPath ? currentPath.replace(/\\/g, '/').split('/').filter(Boolean) : [];
@@ -515,10 +536,10 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                 key={link.path}
                                 className="fb-quick-link"
                                 onClick={() => loadDirectory(link.path)}
-                                title={link.path}
+                                title={visibleName(link.path)}
                             >
                                 {getQuickLinkIcon(link.icon)}
-                                <span>{QUICK_LINK_LABELS[link.icon] ? t(QUICK_LINK_LABELS[link.icon]) : link.name}</span>
+                                <span>{QUICK_LINK_LABELS[link.icon] ? t(QUICK_LINK_LABELS[link.icon]) : visibleName(link.name)}</span>
                             </button>
                         ))}
                     </div>
@@ -576,7 +597,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                     <span key={i} className="fb-crumb-item">
                                         <ChevronRight size={12} className="fb-crumb-sep" />
                                         <button className="fb-crumb" onClick={() => loadDirectory(crumb.path)}>
-                                            {crumb.label}
+                                            {visibleName(crumb.label)}
                                         </button>
                                     </span>
                                 ))}
@@ -658,7 +679,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                     className={`fb-entry ${entry.type} ${selectedFiles.has(entry.path) ? 'selected' : ''} ${fileUnsupported ? 'unsupported' : ''}`}
                                     onClick={() => entry.type === 'folder' ? handleEntryClick(entry) : toggleSelection(entry.path)}
                                     onDoubleClick={() => entry.type === 'folder' ? handleEntryClick(entry) : undefined}
-                                    title={fileUnsupported ? t('fileBrowser.notIndexableTitle') : entry.path}
+                                    title={fileUnsupported ? t('fileBrowser.notIndexableTitle') : visibleName(entry.path)}
                                 >
                                     <input
                                         type="checkbox"
@@ -666,10 +687,10 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                         checked={selectedFiles.has(entry.path)}
                                         onChange={() => toggleSelection(entry.path)}
                                         onClick={(e) => e.stopPropagation()}
-                                        aria-label={t('fileBrowser.selectAria', { name: entry.name })}
+                                        aria-label={t('fileBrowser.selectAria', { name: visibleName(entry.name) })}
                                     />
                                     <span className="fb-entry-icon">{getFileIcon(entry)}</span>
-                                    <span className="fb-entry-name" title={entry.path}>{entry.name}</span>
+                                    <span className="fb-entry-name" title={visibleName(entry.path)}>{visibleName(entry.name)}</span>
                                     {fileUnsupported && (
                                         <span className="fb-unsupported-badge">
                                             {t('fileBrowser.notIndexable')}
@@ -680,7 +701,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                             type="button"
                                             className="fb-entry-preview-btn"
                                             onClick={(e) => { e.stopPropagation(); handleFilePreview(entry.path); }}
-                                            aria-label={t('fileBrowser.previewAria', { name: entry.name })}
+                                            aria-label={t('fileBrowser.previewAria', { name: visibleName(entry.name) })}
                                             title={t('fileBrowser.previewTitle')}
                                         >
                                             <Eye size={14} />
@@ -697,7 +718,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                         {previewFile && (
                             <div className="fb-preview">
                                 <div className="fb-preview-header">
-                                    <span className="fb-preview-name">{previewFile.name}</span>
+                                    <span className="fb-preview-name">{visibleName(previewFile.name)}</span>
                                     <button className="btn-icon-sm" onClick={() => setPreviewFile(null)} aria-label={t('fileBrowser.closePreview')}>
                                         <X size={14} />
                                     </button>
@@ -717,7 +738,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                     <div className="fb-preview-loading">{t('fileBrowser.previewLoading')}</div>
                                 ) : previewFile.is_text && previewFile.preview_lines.length > 0 ? (
                                     <pre className="fb-preview-content">
-                                        {previewFile.preview_lines.slice(0, 30).join('\n')}
+                                        {markStrayDirection(previewFile.preview_lines.slice(0, 30).join('\n'))}
                                     </pre>
                                 ) : (
                                     <div className="fb-preview-binary">{t('fileBrowser.binary')}</div>
@@ -731,6 +752,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                         <UploadErrorToast
                             filename={indexError.filename}
                             error={indexError.error}
+                            kind={indexError.kind ?? undefined}
                             onDismiss={() => setIndexError(null)}
                         />
                     )}

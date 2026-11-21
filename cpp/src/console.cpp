@@ -9,6 +9,51 @@
 
 namespace gaia {
 
+std::string sanitizeTerminalText(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    const size_t n = text.size();
+    size_t i = 0;
+    while (i < n) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        if (c == 0x1B) {
+            ++i;
+            if (i < n && text[i] == '[') {
+                ++i;
+                while (i < n && static_cast<unsigned char>(text[i]) >= 0x20 &&
+                       static_cast<unsigned char>(text[i]) <= 0x3F) {
+                    ++i;
+                }
+                if (i < n && static_cast<unsigned char>(text[i]) >= 0x40 &&
+                    static_cast<unsigned char>(text[i]) <= 0x7E) {
+                    ++i;
+                }
+            } else if (i < n && text[i] == ']') {
+                ++i;
+                while (i < n && text[i] != 0x07 && text[i] != 0x1B && text[i] != '\n') ++i;
+                if (i < n && text[i] == 0x07) {
+                    ++i;
+                } else if (i + 1 < n && text[i] == 0x1B && text[i + 1] == '\\') {
+                    i += 2;
+                }
+            }
+            continue;
+        }
+        if (c == 0xC2 && i + 1 < n && static_cast<unsigned char>(text[i + 1]) >= 0x80 &&
+            static_cast<unsigned char>(text[i + 1]) <= 0x9F) {
+            i += 2;
+            continue;
+        }
+        if ((c < 0x20 && c != '\n' && c != '\t') || c == 0x7F) {
+            ++i;
+            continue;
+        }
+        out.push_back(text[i]);
+        ++i;
+    }
+    return out;
+}
+
 // ---- TerminalConsole ----
 
 void TerminalConsole::printProcessingStart(const std::string& query, int maxSteps,
@@ -32,13 +77,13 @@ void TerminalConsole::printStateInfo(const std::string& message) {
 
 void TerminalConsole::printThought(const std::string& thought) {
     if (!thought.empty()) {
-        std::cout << MAGENTA << "Thought: " << RESET << thought << "\n";
+        std::cout << MAGENTA << "Thought: " << RESET << sanitizeTerminalText(thought) << "\n";
     }
 }
 
 void TerminalConsole::printGoal(const std::string& goal) {
     if (!goal.empty()) {
-        std::cout << CYAN << "Goal: " << RESET << goal << "\n";
+        std::cout << CYAN << "Goal: " << RESET << sanitizeTerminalText(goal) << "\n";
     }
 }
 
@@ -53,10 +98,11 @@ void TerminalConsole::printPlan(const json& plan, int currentStep) {
 
         std::cout << color << marker << " Step " << (i + 1) << ": ";
 
-        if (plan[i].is_object() && plan[i].contains("tool")) {
-            std::cout << plan[i]["tool"].get<std::string>();
+        if (plan[i].is_object() && plan[i].contains("tool") && plan[i]["tool"].is_string()) {
+            std::cout << sanitizeTerminalText(plan[i]["tool"].get<std::string>());
         } else {
-            std::cout << plan[i].dump();
+            std::cout << sanitizeTerminalText(
+                plan[i].dump(-1, ' ', false, json::error_handler_t::replace));
         }
         std::cout << RESET << "\n";
     }
@@ -75,7 +121,8 @@ void TerminalConsole::prettyPrintJson(const json& data, const std::string& title
         std::cout << DIM << title << ":" << RESET << "\n";
     }
 
-    std::string formatted = data.dump(2);
+    std::string formatted =
+        sanitizeTerminalText(data.dump(2, ' ', false, json::error_handler_t::replace));
 
     // Truncate if very long
     if (formatted.size() > 2000) {
@@ -108,7 +155,8 @@ void TerminalConsole::stopProgress() {
 
 void TerminalConsole::printFinalAnswer(const std::string& answer,
                                        const UsageStats& /*usage*/) {
-    std::cout << "\n" << BOLD << GREEN << "Answer:" << RESET << "\n" << answer << "\n";
+    std::cout << "\n" << BOLD << GREEN << "Answer:" << RESET << "\n"
+              << sanitizeTerminalText(answer) << "\n";
 }
 
 void TerminalConsole::printCompletion(int stepsTaken, int stepsLimit) {
@@ -131,7 +179,7 @@ void TerminalConsole::printToolInfo(const std::string& name, const std::string& 
 }
 
 void TerminalConsole::printStreamToken(const std::string& token) {
-    std::cout << token << std::flush;
+    std::cout << sanitizeTerminalText(token) << std::flush;
 }
 
 void TerminalConsole::printStreamEnd() {
@@ -143,7 +191,7 @@ void TerminalConsole::printStreamEnd() {
 void SilentConsole::printFinalAnswer(const std::string& answer,
                                      const UsageStats& /*usage*/) {
     if (!silenceFinalAnswer_) {
-        std::cout << answer << "\n";
+        std::cout << sanitizeTerminalText(answer) << "\n";
     }
 }
 

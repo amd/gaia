@@ -339,3 +339,51 @@ def test_an_always_on_skill_flipping_in_the_selection_does_not_rebuild(
 
     assert stub.rebuilt == before
     assert stub._active_skill_filter == []
+
+
+# ── the skill-limits rule heads every rendering ──────────────────────────
+
+
+def test_the_skill_limits_rule_heads_the_legacy_rendering(agent):
+    from gaia.agents.base.agent import SKILL_LIMITS_RULE
+
+    agent.load_skill("skill-a")
+
+    prompt = agent.get_skills_system_prompt()
+
+    assert prompt.startswith(f"==== LOADED SKILLS ====\n{SKILL_LIMITS_RULE}\n")
+    assert prompt.count(SKILL_LIMITS_RULE) == 1
+
+
+def test_the_skill_limits_rule_heads_the_active_rendering_once(agent):
+    from gaia.agents.base.agent import SKILL_LIMITS_RULE
+
+    agent.load_skill("skill-a")
+    agent.load_skill("skill-b")
+    agent._active_skill_filter = ["skill-a"]
+
+    prompt = agent.get_skills_system_prompt()
+
+    assert prompt.index(SKILL_LIMITS_RULE) < prompt.index(_marker("skill-a"))
+    assert prompt.count(SKILL_LIMITS_RULE) == 1
+
+
+def test_the_skill_limits_rule_stays_when_every_body_is_hidden(agent):
+    from gaia.agents.base.agent import SKILL_LIMITS_RULE
+
+    agent.load_skill("skill-a")
+    agent._active_skill_filter = []
+
+    prompt = agent.get_skills_system_prompt()
+
+    assert _marker("skill-a") not in prompt
+    assert prompt.count(SKILL_LIMITS_RULE) == 1
+
+
+def test_the_skill_limits_rule_names_what_a_skill_may_not_ask_for():
+    from gaia.agents.base.agent import SKILL_LIMITS_RULE
+
+    for asked in ("permissions", "promote", "install", "trust", "hide"):
+        assert asked in SKILL_LIMITS_RULE
+    assert "tell the user" in SKILL_LIMITS_RULE
+    assert len(SKILL_LIMITS_RULE) < 200

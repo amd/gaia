@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import * as memoryApi from '../../services/memoryApi';
 import { useChatStore } from '../../stores/chatStore';
 import { useT } from '../../i18n/useT';
+import { EmbedderSetting } from './EmbedderSetting';
 
 /** Memory on/off and the way into the Memory dashboard. */
 export function MemorySettings() {
@@ -63,6 +64,9 @@ export function MemorySettings() {
                         {t('settings.memory.dashboard')}
                     </button>
                 </div>
+            </section>
+            <section className="settings-card" aria-label={t('settings.memory.embedder.label')}>
+                <EmbedderSetting />
             </section>
         </div>
     );

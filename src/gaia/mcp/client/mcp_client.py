@@ -62,6 +62,8 @@ def _resolve_keyring_refs(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
       spawn instead.
     * Missing keyring entries fail closed (raise ``ConnectorsError``) — the
       MCP server is never spawned with empty env in place of a secret.
+    * Reads go through ``gaia.connectors.keyring_access``, so a plaintext or
+      weak keyring backend raises ``ConnectorsError`` before any lookup.
 
     Plain string values pass through unchanged.
     """
@@ -82,12 +84,11 @@ def _resolve_keyring_refs(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
         if isinstance(value, dict) and "$keyring" in value:
             if keyring is None:
                 # pylint: disable=import-outside-toplevel
-                import keyring as _keyring  # noqa: I001
-
+                from gaia.connectors import keyring_access
                 from gaia.connectors.errors import ConnectorsError as _ConnectorsError
                 from gaia.connectors.store import SERVICE_NAME as _SERVICE_NAME
 
-                keyring = _keyring
+                keyring = keyring_access
                 ConnectorsError = _ConnectorsError
                 SERVICE_NAME = _SERVICE_NAME
             ref = value["$keyring"]
@@ -98,7 +99,7 @@ def _resolve_keyring_refs(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
                     f"{ref!r} points outside the gaia namespace "
                     f"(service={service!r}). Only {SERVICE_NAME!r} is allowed."
                 )
-            password = keyring.get_password(service, username)
+            password = keyring.read(service, username)
             if password is None:
                 missing.append(ref)
             else:
@@ -525,11 +526,29 @@ class MCPClient:
     def connect(self) -> bool:
         """Connect to the MCP server and initialize.
 
-        On failure, stores the error message in ``self.last_error``.
+        A server started through ``npx`` that dies before its first answer is
+        started once more: GAIA's own starts are serialized, but an npx run
+        from outside GAIA (another app, an older GAIA) may still have been
+        installing the same package. On failure, stores the error message in
+        ``self.last_error``.
 
         Returns:
             bool: True if connection and initialization successful
         """
+        if self._connect_once():
+            return True
+        package = getattr(self.transport, "died_installing", None)
+        if not isinstance(package, str):
+            return False
+        logger.info(
+            "MCP server '%s' exited on its first start through npx (%s); "
+            "starting it once more",
+            self.name,
+            package,
+        )
+        return self._connect_once()
+
+    def _connect_once(self) -> bool:
         self.last_error = None
         logger.debug(f"Connecting to MCP server '{self.name}'...")
 

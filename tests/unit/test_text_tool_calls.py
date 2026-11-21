@@ -459,3 +459,37 @@ def test_prose_tool_call_then_a_real_call_runs_only_the_real_one():
 def test_a_truncated_json_call_is_still_malformed():
     with pytest.raises(MalformedToolMarkup):
         parse_text_tool_calls('<tool_call>{"name": "read_file", "argum')
+
+
+QWEN_XML = (
+    "Writing it.\n<tool_call>\n<function=write_file>\n"
+    "<parameter=file_path>\nout/a.md\n</parameter>\n"
+    "<parameter=content>\n# A\n\nline\n</parameter>\n</function>\n</tool_call>"
+)
+
+
+def test_qwen_function_xml_becomes_a_call():
+    parsed = parse_text_tool_calls(QWEN_XML)
+    assert [(c.name, c.args) for c in parsed.calls] == [
+        ("write_file", {"file_path": "out/a.md", "content": "# A\n\nline"})
+    ]
+    assert parsed.calls[0].raw_strings is True
+    assert parsed.prose == "Writing it."
+    assert has_tool_markup(QWEN_XML)
+    assert strip_tool_markup(QWEN_XML) == "Writing it."
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "<tool_call>\n<function=write_file>\n<parameter=file_path>\nx",
+        "<function=write_file>\n<parameter=file_path>\nx</function>",
+    ],
+)
+def test_cut_off_qwen_function_xml_is_malformed(text):
+    with pytest.raises(MalformedToolMarkup):
+        parse_text_tool_calls(text)
+
+
+def test_qwen_function_xml_inside_code_is_an_example():
+    assert parse_text_tool_calls(f"Example:\n```\n{QWEN_XML}\n```") is None

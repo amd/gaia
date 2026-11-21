@@ -48,6 +48,8 @@ _TOY_A = AgentSidecarSpec(
     display_name="Toy Agent A",
     expected_api_major="1",
     token_env_var="GAIA_TOY_A_SIDECAR_TOKEN",
+    token_file_env_var="GAIA_TOY_A_SIDECAR_TOKEN_FILE",
+    secret_file_min_version="0.1.0",
     mode_env_var="GAIA_TOY_A_AGENT_MODE",
     cache_dir_name="toy-a",
 )
@@ -58,6 +60,8 @@ _TOY_B = AgentSidecarSpec(
     display_name="Toy Agent B",
     expected_api_major="1",
     token_env_var="GAIA_TOY_B_SIDECAR_TOKEN",
+    token_file_env_var="GAIA_TOY_B_SIDECAR_TOKEN_FILE",
+    secret_file_min_version="0.1.0",
     mode_env_var="GAIA_TOY_B_AGENT_MODE",
     cache_dir_name="toy-b",
 )
@@ -259,6 +263,7 @@ class _FakeManager:
         return self._mode_override or os.environ.get(self.spec.mode_env_var) or "user"
 
     uses_ignored_lemonade = False
+    exited_unexpectedly = False
 
     @property
     def is_running(self):
@@ -286,9 +291,7 @@ def _make_registry(specs=None, *, max_live=3, manager_cls=_FakeManager):
     AgentSidecarManager. Uses the registry's manager-construction seam."""
     from gaia.daemon.sidecars.registry import SidecarRegistry
 
-    reg = SidecarRegistry(
-        specs or {"email": builtin_specs()["email"]}, max_live=max_live
-    )
+    reg = SidecarRegistry(specs or {"gaia": builtin_specs()["gaia"]}, max_live=max_live)
     # Injection seam: the registry must expose an overridable manager factory so
     # tests never spawn a real AgentSidecarManager/subprocess.
     reg._manager_factory = manager_cls  # type: ignore[attr-defined]
@@ -304,17 +307,17 @@ def test_max_live_sidecars_default_constant():
 def test_registry_default_max_live_matches_constant():
     from gaia.daemon.sidecars.registry import MAX_LIVE_SIDECARS, SidecarRegistry
 
-    reg = SidecarRegistry({"email": builtin_specs()["email"]})
+    reg = SidecarRegistry({"gaia": builtin_specs()["gaia"]})
     assert reg.max_live == MAX_LIVE_SIDECARS
 
 
 def test_ensure_unknown_agent_raises_and_lists_registered_ids():
     from gaia.daemon.sidecars.errors import UnknownAgentError
 
-    reg = _make_registry({"email": builtin_specs()["email"]})
+    reg = _make_registry({"gaia": builtin_specs()["gaia"]})
     with pytest.raises(UnknownAgentError) as exc_info:
         reg.ensure("bogus-agent")
-    assert "email" in str(exc_info.value)
+    assert "gaia" in str(exc_info.value)
 
 
 def test_ensure_starts_and_returns_expected_fields():
@@ -551,6 +554,63 @@ def test_shutdown_all_stops_every_running_manager():
     assert entries["toy-b"]["state"] == "stopped"
 
 
+def test_process_ids_names_only_running_sidecars():
+    reg = _make_registry({"toy-a": _TOY_A, "toy-b": _TOY_B})
+    a = reg.ensure("toy-a")
+    b = reg.ensure("toy-b")
+    assert reg.process_ids() == {a["pid"], b["pid"]}
+
+    reg._managers["toy-b"][0].shutdown()
+    assert reg.process_ids() == {a["pid"]}
+
+
+def test_stop_idle_stops_every_running_sidecar(monkeypatch):
+    """#8504: the app quit, so nobody is left for an agent to serve."""
+    monkeypatch.setattr("gaia.daemon.sidecars.registry.pid_alive", lambda pid: False)
+    reg = _make_registry({"toy-a": _TOY_A, "toy-b": _TOY_B})
+    reg.ensure("toy-a")
+    reg.ensure("toy-b")
+
+    assert sorted(reg.stop_idle()) == ["toy-a", "toy-b"]
+    assert reg.process_ids() == set()
+    assert reg.stop_idle() == []
+
+
+def test_stop_idle_never_waits_on_an_agent_being_started_or_installed(monkeypatch):
+    monkeypatch.setattr("gaia.daemon.sidecars.registry.pid_alive", lambda pid: False)
+    reg = _make_registry({"toy-a": _TOY_A, "toy-b": _TOY_B})
+    reg.ensure("toy-a")
+    reg.ensure("toy-b")
+    reg._managers["toy-a"][1].acquire()  # an ensure or install holds it
+    try:
+        result = []
+        worker = threading.Thread(target=lambda: result.append(reg.stop_idle()))
+        worker.start()
+        worker.join(timeout=5)
+        assert not worker.is_alive(), "stop_idle blocked on a held agent lock"
+    finally:
+        reg._managers["toy-a"][1].release()
+
+    assert result == [["toy-b"]]
+    assert reg._managers["toy-a"][0].is_running
+
+
+def test_stop_idle_reports_a_survivor_after_stopping_the_rest(monkeypatch):
+    from gaia.daemon.sidecars.errors import StopFailedError
+
+    reg = _make_registry({"toy-a": _TOY_A, "toy-b": _TOY_B})
+    survivor = reg.ensure("toy-a")["pid"]
+    reg.ensure("toy-b")
+    monkeypatch.setattr(
+        "gaia.daemon.sidecars.registry.pid_alive", lambda pid: pid == survivor
+    )
+
+    with pytest.raises(StopFailedError, match=str(survivor)):
+        reg.stop_idle()
+    assert not reg._managers["toy-b"][0].is_running
+    assert not reg._managers["toy-a"][1].locked()
+
+
 # ===========================================================================
 # sidecars/ledger.py — spawn ledger for crash-reap
 # ===========================================================================
@@ -560,7 +620,7 @@ def test_record_spawn_then_read_entries_roundtrip(daemon_home):
     from gaia.daemon.sidecars import ledger
 
     ledger.record_spawn(
-        agent_id="email",
+        agent_id="gaia",
         pid=1234,
         port=55123,
         mode="dev",
@@ -570,7 +630,7 @@ def test_record_spawn_then_read_entries_roundtrip(daemon_home):
     entries = ledger.read_entries()
     assert len(entries) == 1
     e = entries[0]
-    assert e["agent_id"] == "email"
+    assert e["agent_id"] == "gaia"
     assert e["pid"] == 1234
     assert e["port"] == 55123
     assert e["mode"] == "dev"
@@ -584,15 +644,15 @@ def test_record_spawn_keeps_an_earlier_pid_of_the_same_agent(daemon_home):
     from gaia.daemon.sidecars import ledger
 
     ledger.record_spawn(
-        agent_id="email", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
+        agent_id="gaia", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
     )
     ledger.record_spawn(
-        agent_id="email", pid=2, port=200, mode="dev", argv=["b"], started_at=2.0
+        agent_id="gaia", pid=2, port=200, mode="dev", argv=["b"], started_at=2.0
     )
     entries = ledger.read_entries()
     assert [(e["agent_id"], e["pid"], e["port"]) for e in entries] == [
-        ("email", 1, 100),
-        ("email", 2, 200),
+        ("gaia", 1, 100),
+        ("gaia", 2, 200),
     ]
 
 
@@ -602,7 +662,7 @@ def test_record_spawn_replaces_a_reused_pid(daemon_home):
     from gaia.daemon.sidecars import ledger
 
     ledger.record_spawn(
-        agent_id="email", pid=7, port=100, mode="user", argv=["a"], started_at=1.0
+        agent_id="gaia", pid=7, port=100, mode="user", argv=["a"], started_at=1.0
     )
     ledger.record_spawn(
         agent_id="toy-a", pid=7, port=200, mode="user", argv=["b"], started_at=2.0
@@ -618,14 +678,14 @@ def test_remove_entry_with_pid_drops_only_that_pid(daemon_home):
 
     for pid in (1, 2):
         ledger.record_spawn(
-            agent_id="email",
+            agent_id="gaia",
             pid=pid,
             port=100 + pid,
             mode="user",
             argv=["a"],
             started_at=float(pid),
         )
-    ledger.remove_entry("email", 2)
+    ledger.remove_entry("gaia", 2)
     assert [e["pid"] for e in ledger.read_entries()] == [1]
 
 
@@ -635,7 +695,7 @@ def test_remove_entry_ignores_a_pid_recorded_for_another_agent(daemon_home):
     ledger.record_spawn(
         agent_id="toy-a", pid=5, port=100, mode="user", argv=["a"], started_at=1.0
     )
-    ledger.remove_entry("email", 5)
+    ledger.remove_entry("gaia", 5)
     assert [e["agent_id"] for e in ledger.read_entries()] == ["toy-a"]
 
 
@@ -644,9 +704,9 @@ def test_remove_entry_with_no_pid_drops_nothing(daemon_home):
     from gaia.daemon.sidecars import ledger
 
     ledger.record_spawn(
-        agent_id="email", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
+        agent_id="gaia", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
     )
-    ledger.remove_entry("email", None)
+    ledger.remove_entry("gaia", None)
     assert [e["pid"] for e in ledger.read_entries()] == [1]
 
 
@@ -654,9 +714,9 @@ def test_remove_entry_of_an_unrecorded_pid_is_a_no_op(daemon_home):
     from gaia.daemon.sidecars import ledger
 
     ledger.record_spawn(
-        agent_id="email", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
+        agent_id="gaia", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
     )
-    ledger.remove_entry("email", 999)
+    ledger.remove_entry("gaia", 999)
     assert [e["pid"] for e in ledger.read_entries()] == [1]
 
 
@@ -664,12 +724,12 @@ def test_remove_entry_deletes_only_the_named_agent(daemon_home):
     from gaia.daemon.sidecars import ledger
 
     ledger.record_spawn(
-        agent_id="email", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
+        agent_id="gaia", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
     )
     ledger.record_spawn(
         agent_id="toy-a", pid=2, port=200, mode="user", argv=["b"], started_at=2.0
     )
-    ledger.remove_entry("email", 1)
+    ledger.remove_entry("gaia", 1)
     entries = ledger.read_entries()
     assert len(entries) == 1
     assert entries[0]["agent_id"] == "toy-a"
@@ -680,14 +740,14 @@ def test_ledger_file_never_contains_a_token_field(daemon_home):
     from gaia.daemon.sidecars import ledger
 
     ledger.record_spawn(
-        agent_id="email", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
+        agent_id="gaia", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
     )
     ledger.record_spawn(
         agent_id="toy-a", pid=2, port=200, mode="dev", argv=["b"], started_at=2.0
     )
-    ledger.remove_entry("email", 1)
+    ledger.remove_entry("gaia", 1)
     ledger.record_spawn(
-        agent_id="email", pid=3, port=300, mode="user", argv=["c"], started_at=3.0
+        agent_id="gaia", pid=3, port=300, mode="user", argv=["c"], started_at=3.0
     )
     raw = paths.sidecars_ledger_path().read_text(encoding="utf-8")
     assert "token" not in raw
@@ -841,6 +901,8 @@ def test_ledger_entry_removed_when_start_fails(daemon_home, monkeypatch, tmp_pat
     m = mgr_mod.AgentSidecarManager(spec, cache_dir=tmp_path, log_dir=tmp_path / "logs")
     _wire_manager_ledger(m, spec.agent_id)
     monkeypatch.setattr(m, "_http_get", lambda url, timeout: None)
+    # The fake pid is not ours: a real host process may hold that number.
+    monkeypatch.setattr(m, "_tree_survives", lambda pid: False)
 
     with pytest.raises(SidecarSpawnError):
         m.start(max_attempts=2)
@@ -1238,7 +1300,7 @@ class _FakeRegistry:
         self._ensure_result = ensure_result
         self._ensure_error = ensure_error
         self._list_result = list_result if list_result is not None else []
-        self._stop_result = stop_result or {"agent_id": "email", "state": "stopped"}
+        self._stop_result = stop_result or {"agent_id": "gaia", "state": "stopped"}
         self._stop_error = stop_error
         self.ensure_calls = []
         self.stop_calls = []
@@ -1277,19 +1339,19 @@ def _auth(token="secret-tok"):
 def test_get_agents_returns_list_agents_payload():
     reg = _FakeRegistry(
         list_result=[
-            {"agent_id": "email", "state": "stopped", "mode": "user", "pid": None}
+            {"agent_id": "gaia", "state": "stopped", "mode": "user", "pid": None}
         ]
     )
     client = _routes_client(reg)
     r = client.get("/daemon/v1/agents", headers=_auth())
     assert r.status_code == 200
     body = r.json()
-    assert body["agents"][0]["agent_id"] == "email"
+    assert body["agents"][0]["agent_id"] == "gaia"
 
 
 def test_get_agents_entries_never_contain_token():
     reg = _FakeRegistry(
-        list_result=[{"agent_id": "email", "state": "stopped", "mode": "user"}]
+        list_result=[{"agent_id": "gaia", "state": "stopped", "mode": "user"}]
     )
     client = _routes_client(reg)
     r = client.get("/daemon/v1/agents", headers=_auth())
@@ -1300,7 +1362,7 @@ def test_get_agents_entries_never_contain_token():
 def test_post_ensure_returns_token_in_body():
     reg = _FakeRegistry(
         ensure_result={
-            "agent_id": "email",
+            "agent_id": "gaia",
             "state": "running",
             "mode": "user",
             "pid": 111,
@@ -1314,7 +1376,7 @@ def test_post_ensure_returns_token_in_body():
         }
     )
     client = _routes_client(reg)
-    r = client.post("/daemon/v1/agents/email/ensure", headers=_auth(), json={})
+    r = client.post("/daemon/v1/agents/gaia/ensure", headers=_auth(), json={})
     assert r.status_code == 200
     assert r.json()["token"] == "the-sidecar-token"
 
@@ -1322,22 +1384,22 @@ def test_post_ensure_returns_token_in_body():
 def test_post_ensure_omitted_body_defaults_mode_to_none():
     reg = _FakeRegistry(
         ensure_result={
-            "agent_id": "email",
+            "agent_id": "gaia",
             "state": "running",
             "mode": "user",
             "token": "t",
         }
     )
     client = _routes_client(reg)
-    r = client.post("/daemon/v1/agents/email/ensure", headers=_auth())
+    r = client.post("/daemon/v1/agents/gaia/ensure", headers=_auth())
     assert r.status_code == 200
-    assert reg.ensure_calls == [("email", None, None)]
+    assert reg.ensure_calls == [("gaia", None, None)]
 
 
 def test_post_ensure_passes_mode_through():
     reg = _FakeRegistry(
         ensure_result={
-            "agent_id": "email",
+            "agent_id": "gaia",
             "state": "running",
             "mode": "dev",
             "token": "t",
@@ -1345,10 +1407,10 @@ def test_post_ensure_passes_mode_through():
     )
     client = _routes_client(reg)
     r = client.post(
-        "/daemon/v1/agents/email/ensure", headers=_auth(), json={"mode": "dev"}
+        "/daemon/v1/agents/gaia/ensure", headers=_auth(), json={"mode": "dev"}
     )
     assert r.status_code == 200
-    assert reg.ensure_calls == [("email", "dev", None)]
+    assert reg.ensure_calls == [("gaia", "dev", None)]
 
 
 def test_post_ensure_passes_dev_src_dir_through():
@@ -1357,7 +1419,7 @@ def test_post_ensure_passes_dev_src_dir_through():
     new comparison gate."""
     reg = _FakeRegistry(
         ensure_result={
-            "agent_id": "email",
+            "agent_id": "gaia",
             "state": "running",
             "mode": "dev",
             "token": "t",
@@ -1365,18 +1427,18 @@ def test_post_ensure_passes_dev_src_dir_through():
     )
     client = _routes_client(reg)
     r = client.post(
-        "/daemon/v1/agents/email/ensure",
+        "/daemon/v1/agents/gaia/ensure",
         headers=_auth(),
         json={"mode": "dev", "dev_src_dir": "/some/path"},
     )
     assert r.status_code == 200
-    assert reg.ensure_calls == [("email", "dev", "/some/path")]
+    assert reg.ensure_calls == [("gaia", "dev", "/some/path")]
 
 
 def test_post_ensure_omitted_dev_src_dir_defaults_to_none():
     reg = _FakeRegistry(
         ensure_result={
-            "agent_id": "email",
+            "agent_id": "gaia",
             "state": "running",
             "mode": "dev",
             "token": "t",
@@ -1384,26 +1446,26 @@ def test_post_ensure_omitted_dev_src_dir_defaults_to_none():
     )
     client = _routes_client(reg)
     r = client.post(
-        "/daemon/v1/agents/email/ensure", headers=_auth(), json={"mode": "dev"}
+        "/daemon/v1/agents/gaia/ensure", headers=_auth(), json={"mode": "dev"}
     )
     assert r.status_code == 200
     assert reg.ensure_calls[0][2] is None
 
 
 def test_post_stop_returns_stopped_state():
-    reg = _FakeRegistry(stop_result={"agent_id": "email", "state": "stopped"})
+    reg = _FakeRegistry(stop_result={"agent_id": "gaia", "state": "stopped"})
     client = _routes_client(reg)
-    r = client.post("/daemon/v1/agents/email/stop", headers=_auth())
+    r = client.post("/daemon/v1/agents/gaia/stop", headers=_auth())
     assert r.status_code == 200
-    assert r.json() == {"agent_id": "email", "state": "stopped"}
+    assert r.json() == {"agent_id": "gaia", "state": "stopped"}
 
 
 @pytest.mark.parametrize(
     "method,url",
     [
         ("get", "/daemon/v1/agents"),
-        ("post", "/daemon/v1/agents/email/ensure"),
-        ("post", "/daemon/v1/agents/email/stop"),
+        ("post", "/daemon/v1/agents/gaia/ensure"),
+        ("post", "/daemon/v1/agents/gaia/stop"),
     ],
 )
 def test_all_agent_routes_require_a_valid_token(method, url):
@@ -1419,8 +1481,8 @@ def test_all_agent_routes_require_a_valid_token(method, url):
     "method,url",
     [
         ("get", "/daemon/v1/agents"),
-        ("post", "/daemon/v1/agents/email/ensure"),
-        ("post", "/daemon/v1/agents/email/stop"),
+        ("post", "/daemon/v1/agents/gaia/ensure"),
+        ("post", "/daemon/v1/agents/gaia/stop"),
     ],
 )
 def test_all_agent_routes_reject_wrong_token(method, url):
@@ -1434,12 +1496,12 @@ def test_unknown_agent_error_maps_to_404_listing_registered_ids():
     from gaia.daemon.sidecars.errors import UnknownAgentError
 
     reg = _FakeRegistry(
-        ensure_error=UnknownAgentError("unknown agent 'bogus'; registered: email")
+        ensure_error=UnknownAgentError("unknown agent 'bogus'; registered: gaia")
     )
     client = _routes_client(reg)
     r = client.post("/daemon/v1/agents/bogus/ensure", headers=_auth(), json={})
     assert r.status_code == 404
-    assert "email" in r.json()["detail"]
+    assert "gaia" in r.json()["detail"]
 
 
 def test_mode_conflict_error_maps_to_409_naming_both_modes():
@@ -1447,12 +1509,12 @@ def test_mode_conflict_error_maps_to_409_naming_both_modes():
 
     reg = _FakeRegistry(
         ensure_error=ModeConflictError(
-            "email is running in 'dev' but 'user' was requested; stop it first"
+            "gaia is running in 'dev' but 'user' was requested; stop it first"
         )
     )
     client = _routes_client(reg)
     r = client.post(
-        "/daemon/v1/agents/email/ensure", headers=_auth(), json={"mode": "user"}
+        "/daemon/v1/agents/gaia/ensure", headers=_auth(), json={"mode": "user"}
     )
     assert r.status_code == 409
     detail = r.json()["detail"]
@@ -1469,7 +1531,7 @@ def test_dev_src_dir_resolution_error_maps_to_400():
     reg = _FakeRegistry(ensure_error=DevSrcDirResolutionError(distinctive))
     client = _routes_client(reg)
     r = client.post(
-        "/daemon/v1/agents/email/ensure",
+        "/daemon/v1/agents/gaia/ensure",
         headers=_auth(),
         json={"mode": "dev", "dev_src_dir": "relative/path"},
     )
@@ -1481,12 +1543,12 @@ def test_capacity_error_maps_to_409_naming_running_agents():
     from gaia.daemon.sidecars.errors import CapacityError
 
     reg = _FakeRegistry(
-        ensure_error=CapacityError("capacity reached (max 3); running: email, toy-a")
+        ensure_error=CapacityError("capacity reached (max 3); running: gaia, toy-a")
     )
     client = _routes_client(reg)
     r = client.post("/daemon/v1/agents/toy-b/ensure", headers=_auth(), json={})
     assert r.status_code == 409
-    assert "email" in r.json()["detail"]
+    assert "gaia" in r.json()["detail"]
 
 
 @pytest.mark.parametrize(
@@ -1500,7 +1562,7 @@ def test_manager_level_ensure_errors_map_to_502_with_verbatim_detail(err_cls_nam
     distinctive = f"DISTINCTIVE-{err_cls_name}-MESSAGE"
     reg = _FakeRegistry(ensure_error=err_cls(distinctive))
     client = _routes_client(reg)
-    r = client.post("/daemon/v1/agents/email/ensure", headers=_auth(), json={})
+    r = client.post("/daemon/v1/agents/gaia/ensure", headers=_auth(), json={})
     assert r.status_code == 502
     assert distinctive in r.json()["detail"]
 
@@ -1523,7 +1585,7 @@ def test_ensure_errors_name_their_kind_in_a_header(err_cls_name, kind):
 
     reg = _FakeRegistry(ensure_error=getattr(sidecar_errors, err_cls_name)("x"))
     client = _routes_client(reg)
-    r = client.post("/daemon/v1/agents/email/ensure", headers=_auth(), json={})
+    r = client.post("/daemon/v1/agents/gaia/ensure", headers=_auth(), json={})
     assert r.headers[sidecar_errors.ERROR_KIND_HEADER] == kind
 
 
@@ -1532,7 +1594,7 @@ def test_stop_failed_error_maps_to_500_naming_surviving_pid():
 
     reg = _FakeRegistry(stop_error=StopFailedError("pid 4242 survived shutdown"))
     client = _routes_client(reg)
-    r = client.post("/daemon/v1/agents/email/stop", headers=_auth())
+    r = client.post("/daemon/v1/agents/gaia/stop", headers=_auth())
     assert r.status_code == 500
     assert "4242" in r.json()["detail"]
 
@@ -1541,12 +1603,12 @@ def test_stop_unknown_agent_maps_to_404():
     from gaia.daemon.sidecars.errors import UnknownAgentError
 
     reg = _FakeRegistry(
-        stop_error=UnknownAgentError("unknown agent 'bogus'; registered: email")
+        stop_error=UnknownAgentError("unknown agent 'bogus'; registered: gaia")
     )
     client = _routes_client(reg)
     r = client.post("/daemon/v1/agents/bogus/stop", headers=_auth())
     assert r.status_code == 404
-    assert "email" in r.json()["detail"]
+    assert "gaia" in r.json()["detail"]
 
 
 # ===========================================================================

@@ -232,3 +232,117 @@ def test_a_running_turn_has_no_change_kind_yet(client, session_id, tmp_path):
     (item,) = client.get(f"/api/sessions/{session_id}/outputs").json()["items"]
     assert item["name"] == "draft.md"
     assert item["change"] is None
+
+
+def test_generated_audio_is_listed_once_and_can_be_opened(client, session_id, tmp_path):
+    db = client.app.state.db
+    wav = tmp_path / "music_1.wav"
+    with fs.recording_turn(session_id) as rec:
+        # The tool snapshots its WAV like any write; it must still list once.
+        fs.before_change(wav, "generate_music")
+        wav.write_bytes(b"RIFF")
+    mid = _answer(
+        db,
+        session_id,
+        _summary(
+            outputs=[
+                {
+                    "kind": "audio",
+                    "name": wav.name,
+                    "path": str(wav),
+                    "detail": "lo-fi piano",
+                }
+            ]
+        ),
+    )
+    rec.link_message(mid)
+
+    items = client.get(f"/api/sessions/{session_id}/outputs").json()["items"]
+    assert [(i["kind"], i["name"]) for i in items] == [("audio", "music_1.wav")]
+    assert items[0]["openable"] is True and items[0]["revealable"] is True
+    assert items[0]["detail"] == "lo-fi piano"
+
+    wav.unlink()
+    (item,) = client.get(f"/api/sessions/{session_id}/outputs").json()["items"]
+    assert item["state"] == "gone"
+    assert item["openable"] is False and item["revealable"] is False
+
+
+class TestGeneratedAudioOutputs:
+    def test_a_saved_copy_is_the_output_and_names_gaias_own(self, tmp_path):
+        ledger = _ledger(
+            (
+                "generate_music",
+                {"prompt": "lo-fi piano"},
+                {
+                    "status": "success",
+                    "audio_path": str(tmp_path / "cache" / "music_1.wav"),
+                    "saved_to": str(tmp_path / "game" / "theme.wav"),
+                },
+                True,
+            )
+        )
+        (out,) = ledger.summary(location=None)["outputs"]
+        assert out == {
+            "kind": "audio",
+            "name": "theme.wav",
+            "path": str(tmp_path / "game" / "theme.wav"),
+            "detail": "lo-fi piano",
+            "copy_of": str(tmp_path / "cache" / "music_1.wav"),
+        }
+
+    def test_a_failed_generation_is_not_an_output(self, tmp_path):
+        ledger = _ledger(
+            ("generate_music", {"prompt": "x"}, {"status": "error"}, False),
+            (
+                "generate_sound_effect",
+                {"prompt": "door"},
+                {"status": "success", "audio_path": str(tmp_path / "sfx_1.wav")},
+                True,
+            ),
+        )
+        outputs = ledger.summary(location=None)["outputs"]
+        assert [(o["kind"], o["name"], o["detail"]) for o in outputs] == [
+            ("audio", "sfx_1.wav", "door")
+        ]
+        assert "copy_of" not in outputs[0]
+
+
+def test_a_saved_audio_copy_lists_once_without_gaias_own_copy(
+    client, session_id, tmp_path
+):
+    db = client.app.state.db
+    kept = tmp_path / "cache" / "music_1.wav"
+    saved = tmp_path / "game" / "theme.wav"
+    with fs.recording_turn(session_id) as rec:
+        for wav in (kept, saved):
+            wav.parent.mkdir(parents=True, exist_ok=True)
+            fs.before_change(wav, "generate_music")
+            wav.write_bytes(b"RIFF")
+    mid = _answer(
+        db,
+        session_id,
+        _summary(
+            outputs=[
+                {
+                    "kind": "audio",
+                    "name": saved.name,
+                    "path": str(saved),
+                    "detail": "menu theme",
+                    "copy_of": str(kept),
+                }
+            ]
+        ),
+    )
+    rec.link_message(mid)
+
+    items = client.get(f"/api/sessions/{session_id}/outputs").json()["items"]
+    assert [(i["kind"], i["name"]) for i in items] == [("audio", "theme.wav")]
+    assert items[0]["path"] == str(saved)
+
+
+def test_a_generated_wav_can_be_opened_from_the_outputs_rail():
+    from gaia.ui.turn_summary import is_openable
+
+    assert is_openable("C:/Users/me/music_1.WAV")
+    assert not is_openable("C:/Users/me/music_1.wav.exe")

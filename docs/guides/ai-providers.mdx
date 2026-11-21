@@ -12,7 +12,7 @@ turns the cloud choices off.
 
 ## Connect from the TUI
 
-1. Start `gaia-tui`. On a first run, setup opens by asking where chat should
+1. Start `gaia-cli`. On a first run, setup opens by asking where chat should
    run: choose **Fireworks AI** or **AMD LLM Gateway** there, and its key form
    opens once Lemonade is installed. Otherwise, with the flagship GAIA agent,
    press **p** during setup (other agents' setup screens don't offer it), or enter
@@ -87,7 +87,7 @@ Strix Halo or a 32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** eve
 else, including CPU-only PCs. Qwen3.6 must also fit the memory free when setup
 runs (about 26 GB at its smallest window): on a 48 GB Mac with other apps holding
 memory, setup picks Gemma and says how much Qwen3.6 needs and how much is free.
-GAIA keeps that pick; to use Qwen3.6 later, close those apps and choose it in **Settings → Model**. GAIA runs Qwen3.6 with thinking on, so each step
+GAIA keeps that pick; to use Qwen3.6 later, close those apps and choose it in **Settings → Agent & model**. GAIA runs Qwen3.6 with thinking on, so each step
 reasons before it answers or calls a tool. It records the pick as `default_model` in `~/.gaia/config.json`,
 so the TUI's agent starts on it. Set `gaia config set default_model <id>` to
 choose your own; `gaia init` never overwrites it, and downloads it instead of
@@ -200,7 +200,7 @@ its own, if smaller): GAIA doesn't know its memory use per token, so it doesn't
 grow the window the way it does for its own models. Removing it deletes its download too, and
 if it was your saved model the next launch uses the default.
 
-- **Agent UI:** Settings › Model › Local, open **Add a model from Hugging Face**.
+- **Agent UI:** Settings › Agent & model › Local, open **Add a model from Hugging Face**.
   The model chip's menu has **Add a model from a link…**. Added models have a
   **Remove** button.
 - **TUI:** in `/provider` › Local, press **Ctrl+A**, paste the link, and press
@@ -410,11 +410,11 @@ used from the first message; Claude is not available on that route.
 
 The choice is stored in `~/.gaia/config.json` as `last_provider` and `last_model`
 (`GAIA_CONFIG_DIR` relocates it). The Agent UI's model menu and **Settings >
-Advanced > Custom model ID** save there too. A one-shot `gaia-tui run gaia --query "…"` runs
+Advanced > Custom model ID** save there too. A one-shot `gaia-cli run gaia --query "…"` runs
 on it too. `--use-claude` overrides it for one launch;
 `gaia config set last_model ""` forgets it.
 
-For development, build `tui/bin/gaia-tui` and launch the checkout with:
+For development, build `tui/bin/gaia-cli` and launch the checkout with:
 
 ```bash
 scripts/dev/run-tui.sh --dev --control

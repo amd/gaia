@@ -326,6 +326,26 @@ def test_work_a_test_claim_correction_asks_for_is_not_refused(agent, tmp_path):
     assert "SENTINEL-PYTEST-INI" in str(tool_results(sent)[-1])
 
 
+def test_a_test_claim_correction_asks_for_no_run_once_time_is_up(agent):
+    """Told to "run the check now" with every run refused, the model tried,
+    was refused, and apologised for a run it could not make."""
+    agent.time_capped_run_seconds = lambda seconds: 0
+    sent = script(
+        agent,
+        {"answer": "dates.py is fine; all 12 tests passed."},
+        {"answer": "dates.py is fine. The tests were not run again."},
+    )
+    agent.process_query("Is the lowercase z handled in dates.py?")
+    corrections = [
+        m["content"]
+        for m in sent[-1]
+        if m.get("role") == "user" and "no tests were run" in str(m["content"])
+    ]
+    assert corrections
+    assert "no tool can run" in corrections[0]
+    assert "run the check now" not in corrections[0]
+
+
 def test_a_check_naming_a_file_adds_only_that_file(guard, tmp_path):
     guard.mark_answered()
     report = str(tmp_path / "out" / "weekly.csv")
@@ -492,13 +512,13 @@ def test_a_plan_budget_stop_does_not_count_as_the_answer(tmp_path, monkeypatch):
         )
         result = agent.process_query(
             "Using current prices online, write a 40-unit BOM to `bom.xlsx`.",
-            # The plan cap binds once half the step budget is spent.
+            # The plan cap binds with 8 of 16 steps left (half a small budget).
             max_steps=16,
         )
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(snapshot)
-    assert any("Maximum plan iterations" in str(m["content"]) for m in sent[1])
+    assert any("No room for another plan" in str(m["content"]) for m in sent[1])
     assert "[check:completion]" in sent[2][-1]["content"]
     refusals = [
         m["content"]

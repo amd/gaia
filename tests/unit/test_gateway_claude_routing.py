@@ -413,7 +413,7 @@ def test_agent_reply_cap_stays_at_the_cloud_size(fake_sdk):
         max_output_tokens=None,
         chat=SimpleNamespace(llm_client=client, effective_model="amd.Claude-Opus-5-5"),
     )
-    assert Agent._max_output_tokens(stub) == CLOUD_MAX_OUTPUT_TOKENS
+    assert Agent._output_token_cap(stub) == CLOUD_MAX_OUTPUT_TOKENS
 
 
 # ── failures are loud, never a quiet switch back to Lemonade ────────────

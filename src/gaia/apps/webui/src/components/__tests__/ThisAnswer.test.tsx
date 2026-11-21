@@ -83,7 +83,7 @@ describe('ThisAnswer', () => {
         expect(rail()).toHaveTextContent('Fireworks AI (cloud)');
 
         rerender(<Host messages={[...turn(before), USER_FOLLOW_UP]} busy />);
-        expect(rail()).toHaveTextContent('Working on this answer');
+        expect(rail()).toBeEmptyDOMElement();
         expect(rail()).not.toHaveTextContent('Fireworks AI');
         expect(rail()).not.toHaveTextContent('amd.com');
     });
@@ -166,12 +166,12 @@ describe('ThisAnswer', () => {
         expect(screen.getByText('Read on this PC and stayed here.')).toBeInTheDocument();
     });
 
-    it('says a local turn ran on this PC with no cloud charges', () => {
+    it('gives a local turn that used nothing no rows: no cost, no sites, no model', () => {
         render(<Host messages={turn(summary())} />);
         const facts = within(rail());
-        expect(facts.getByText('This PC')).toBeInTheDocument();
-        expect(facts.getByText('No cloud charges')).toBeInTheDocument();
-        expect(facts.getByText("None from GAIA's web tools")).toBeInTheDocument();
+        expect(facts.queryByText('This turn')).not.toBeInTheDocument();
+        expect(facts.queryByText('No cloud charges')).not.toBeInTheDocument();
+        expect(facts.queryByText('Websites')).not.toBeInTheDocument();
     });
 
     it('names the cloud provider, says passages were sent there, and shows the estimate', () => {
@@ -199,6 +199,12 @@ describe('ThisAnswer', () => {
         render(<Host messages={messages} />);
         expect(screen.getByText('Not reported, as the answer was stopped')).toBeInTheDocument();
         expect(screen.queryByText('Not known for this model')).not.toBeInTheDocument();
+    });
+
+    it('says a turn no reply came from is left out of spending, not that it was stopped', () => {
+        render(<Host messages={turn(summary({ model: CLOUD_MODEL, cost: { kind: 'no_reply', usd: null } }))} />);
+        expect(screen.getByText('Not counted: no reply came')).toBeInTheDocument();
+        expect(screen.queryByText(/Not reported/)).not.toBeInTheDocument();
     });
 
     it("says a priced turn's cost wasn't reported when no usage came back", () => {
@@ -243,5 +249,22 @@ describe('ThisAnswer', () => {
         render(<Host messages={turn({ cost: { kind: 'unknown' }, error: 'KeyError: model' })} />);
         expect(screen.getByRole('alert')).toHaveTextContent('KeyError: model');
         expect(screen.queryByText('Websites')).not.toBeInTheDocument();
+    });
+});
+
+describe('ThisAnswer marks hidden characters in names', () => {
+    it('shows a right-to-left override in a file or document name as a code', async () => {
+        render(<Host messages={turn(summary({
+            files: [{ path: 'C:/out/invoice\u202Etxt.md', name: 'invoice\u202Etxt.md', openable: true, mtime: 100 }],
+            documents: [{ name: 'plan\u202Efdp.md', path: 'C:/u/plan\u202Efdp.md', pages: [], passages: 1 }],
+        }))} />);
+        await act(async () => { await Promise.resolve(); });
+        const names = [...rail().querySelectorAll('.side-rail-name')];
+        expect(names.map((n) => n.textContent)).toEqual(['plan[U+202E]fdp.md', 'invoice[U+202E]txt.md']);
+        expect(names.map((n) => n.getAttribute('title'))).toEqual(['plan[U+202E]fdp.md', 'C:/out/invoice[U+202E]txt.md']);
+        expect(rail().textContent).not.toContain('\u202E');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+        expect(mockedApi.openFileInApp).toHaveBeenCalledWith('C:/out/invoice\u202Etxt.md');
     });
 });

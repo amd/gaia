@@ -60,6 +60,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], pendingPrompt: null, systemStatus: null,
         backendConnected: true, showMemoryDashboard: false, showSchedules: false, settingsSection: null,
+        setupAgain: false,
     });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
 });
@@ -75,7 +76,7 @@ async function advance(ms: number) {
 }
 
 const text = () => document.body.textContent ?? '';
-const NOTICE = "GAIA's model server isn't answering, so it can't reply yet. Your chats are still here.";
+const NOTICE = "The model server isn't answering, so GAIA can't reply yet. Your chats are still here.";
 
 describe('a set-up install whose model server is down at launch', () => {
     it('shows the chats and says the model server is not answering', async () => {
@@ -132,6 +133,42 @@ describe('a set-up install whose model server is down at launch', () => {
         expect(text()).not.toContain('First-run setup');
     });
 
+    it('shows the notice when the server stops answering while the app is open, with no reload', async () => {
+        mocked.checkSetup.mockResolvedValue(READY);
+        statusSays(true);
+        render(<App />);
+        await advance(0);
+        expect(text()).not.toContain(NOTICE);
+
+        mocked.checkSetup.mockResolvedValue(SERVER_DOWN);
+        act(() => {
+            useChatStore.getState().setSystemStatus({ lemonade_running: false, model_loaded: null, initialized: true } as never);
+        });
+        await advance(0);
+
+        expect(text()).toContain(NOTICE);
+        expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+        expect(text()).toContain('Harbor plans');
+        expect(text()).not.toContain('First-run setup');
+    });
+
+    it('never opens setup over a chat because the poll saw the server down', async () => {
+        mocked.checkSetup.mockResolvedValue(READY);
+        statusSays(true);
+        render(<App />);
+        await advance(0);
+
+        mocked.checkSetup.mockResolvedValue({ ready: false, stage: 'models', initialized: true, steps: [] });
+        act(() => {
+            useChatStore.getState().setSystemStatus({ lemonade_running: false, model_loaded: null, initialized: true } as never);
+        });
+        await advance(0);
+
+        expect(text()).not.toContain('First-run setup');
+        expect(text()).not.toContain(NOTICE);
+        expect(text()).toContain('Harbor plans');
+    });
+
     it('offers setup from the notice, for a server that will not come back', async () => {
         render(<App />);
         await advance(0);
@@ -148,6 +185,21 @@ describe('a set-up install whose model server is down at launch', () => {
         await advance(0);
 
         expect(text()).toContain('First-run setup');
+    });
+
+    it('a model list in the wrong shape keeps the chats and says so, without offering setup (#8058)', async () => {
+        mocked.checkSetup.mockResolvedValue({
+            ...SERVER_DOWN, model_list_unread: true,
+            reasons: ["Could not read the model list from http://127.0.0.1:9/api/v1: it isn't in the expected shape"],
+        });
+        render(<App />);
+        await advance(0);
+
+        expect(text()).not.toContain('First-run setup');
+        expect(text()).toContain('Harbor plans');
+        expect(text()).toContain("its list of models came back in a shape GAIA can't read");
+        expect(text()).not.toContain(NOTICE);
+        expect(screen.queryByRole('button', { name: 'Open setup' })).not.toBeInTheDocument();
     });
 
     it('a set-up PC missing something other than the server still gets setup', async () => {

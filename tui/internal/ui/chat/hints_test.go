@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/amd/gaia/tui/internal/event"
 )
 
 // The whole point of ranking: the narrower the window, the more the user needs
@@ -16,9 +18,9 @@ import (
 // right-hand truncation does the exact opposite.
 func TestANarrowBarKeepsTheWayOutAndDropsTheNiceties(t *testing.T) {
 	hints := []hint{
-		{text: "step 12", rank: rankDiagnostic},
+		{text: "Ctrl+T scroll-select", rank: rankSecondary},
 		{text: "↑↓ scroll", rank: rankAffordance},
-		{text: "Esc cancel", rank: rankInterrupt},
+		{text: "Esc to interrupt", rank: rankInterrupt},
 		{text: "Ctrl+C quit", rank: rankEscape},
 	}
 
@@ -35,7 +37,7 @@ func TestANarrowBarKeepsTheWayOutAndDropsTheNiceties(t *testing.T) {
 		}
 	}
 
-	// Tight: only the escape hatch survives, and the diagnostic goes first.
+	// Tight: only the escape hatch survives, and the secondary hint goes first.
 	tight := fitHints(hints, 12)
 	if tight != "Ctrl+C quit" {
 		t.Errorf("at 12 columns the bar reads %q; want just the way out", tight)
@@ -43,7 +45,7 @@ func TestANarrowBarKeepsTheWayOutAndDropsTheNiceties(t *testing.T) {
 
 	// Roomy: everything shows, in the order it was appended.
 	full := fitHints(hints, 80)
-	if full != "step 12 · ↑↓ scroll · Esc cancel · Ctrl+C quit" {
+	if full != "Ctrl+T scroll-select · ↑↓ scroll · Esc to interrupt · Ctrl+C quit" {
 		t.Errorf("a wide bar changed the order or lost an item: %q", full)
 	}
 }
@@ -51,13 +53,13 @@ func TestANarrowBarKeepsTheWayOutAndDropsTheNiceties(t *testing.T) {
 // Ranks decide the order of loss, not the order of display.
 func TestItemsAreDroppedByRankNotByPosition(t *testing.T) {
 	hints := []hint{
-		{text: "step 3", rank: rankDiagnostic},
+		{text: "Ctrl+T scroll-select", rank: rankSecondary},
 		{text: "End to jump to latest", rank: rankOrient},
 		{text: "Ctrl+C quit", rank: rankEscape},
 	}
 	got := fitHints(hints, 36)
-	if strings.Contains(got, "step 3") {
-		t.Errorf("the diagnostic outlived the orientation hint: %q", got)
+	if strings.Contains(got, "Ctrl+T") {
+		t.Errorf("the secondary hint outlived the orientation hint: %q", got)
 	}
 	if !strings.Contains(got, "End to jump to latest") {
 		t.Errorf("the way back to the newest content was dropped too early: %q", got)
@@ -92,27 +94,15 @@ func TestHintsAreMeasuredInColumnsNotBytes(t *testing.T) {
 	}
 }
 
-// The step counter is machinery, not progress — it stays out of a normal
-// session entirely.
-func TestTheStepCounterIsDevOnly(t *testing.T) {
+// The step counter is machinery, not progress — it is never in the bar, in any
+// mode, and there is no denominator to show when no limit is set.
+func TestTheStepCounterIsNeverShown(t *testing.T) {
 	m := newTestChat(t)
-	m.totalSteps = 7
-
+	m.streaming = true
 	for _, h := range m.statusHints() {
-		if strings.HasPrefix(h.text, "step ") {
-			t.Errorf("the agent loop's step count leaked into a normal session: %q", h.text)
+		if strings.HasPrefix(h.text, "step ") || strings.Contains(h.text, "/150") {
+			t.Errorf("the agent loop's step count leaked into the bar: %q", h.text)
 		}
-	}
-
-	m.dev = true
-	var found bool
-	for _, h := range m.statusHints() {
-		if h.text == "step 7" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("--dev lost the step counter")
 	}
 }
 
@@ -120,13 +110,13 @@ func TestTheStepCounterIsDevOnly(t *testing.T) {
 func TestHintsMatchTheState(t *testing.T) {
 	busy := newTestChat(t)
 	if got := joinHints(busy.statusHints()); !strings.Contains(got, "keep typing") ||
-		!strings.Contains(got, "Esc cancel") {
+		!strings.Contains(got, "Esc to interrupt") {
 		t.Errorf("a running turn does not advertise type-ahead or cancel: %q", got)
 	}
 
 	idle := newTestChat(t)
 	idle.streaming = false
-	if got := joinHints(idle.statusHints()); strings.Contains(got, "Esc cancel") {
+	if got := joinHints(idle.statusHints()); strings.Contains(got, "Esc to interrupt") {
 		t.Errorf("an idle session offers to cancel nothing: %q", got)
 	}
 
@@ -134,6 +124,90 @@ func TestHintsMatchTheState(t *testing.T) {
 	scrolled.followTail = false
 	if got := joinHints(scrolled.statusHints()); !strings.Contains(got, "End to jump to latest") {
 		t.Errorf("a scrolled-away reader is not told the way back: %q", got)
+	}
+}
+
+// The startup restore says what the wait is, not that typing helps; once it
+// ends the ordinary turn hints come back.
+func TestTheStartupRestoreSaysWhatItIsRestoring(t *testing.T) {
+	m, c, _ := startupChat(t, StartupRestore, "fireworks", flashID)
+	m = openChat(t, m, c)
+	got := joinHints(m.statusHints())
+	if !strings.Contains(got, "restoring "+flashID+"…") {
+		t.Fatalf("the restore turn does not say what it is restoring: %q", got)
+	}
+	if strings.Contains(got, "keep typing") {
+		t.Fatalf("the restore turn still advertises typing ahead: %q", got)
+	}
+	if !m.streaming {
+		t.Fatalf("the restore turn is not streaming, so this test proves nothing about Esc")
+	}
+	if !strings.Contains(got, "Esc cancel") {
+		t.Fatalf("Esc still cancels the restore, but the bar no longer says so: %q", got)
+	}
+
+	m = deliver(t, m,
+		ping(flashID, flashID, "fireworks", true),
+		ping(flashID, flashID, "fireworks", true),
+		event.CanonicalFinalEvent{Type: "final", Answer: "Switched to **" + flashID + "**."},
+	)
+	if got := joinHints(m.statusHints()); strings.Contains(got, "restoring") {
+		t.Fatalf("the restore hint outlived the restore: %q", got)
+	}
+	m.streaming = true
+	if got := joinHints(m.statusHints()); !strings.Contains(got, "keep typing") ||
+		!strings.Contains(got, "Esc to interrupt") {
+		t.Fatalf("a normal turn after the restore lost its hints: %q", got)
+	}
+}
+
+// A relayed restore has no stream of its own, so Esc has nothing to cancel and
+// the bar must not offer it.
+func TestARelayedRestoreDoesNotOfferEscCancel(t *testing.T) {
+	m, c, _ := startupChat(t, StartupRestore, "fireworks", flashID)
+	m = openChat(t, m, c)
+	m.streaming = false
+	got := joinHints(m.statusHints())
+	if !strings.Contains(got, "restoring "+flashID+"…") {
+		t.Fatalf("the relayed restore does not say what it is restoring: %q", got)
+	}
+	if strings.Contains(got, "Esc cancel") {
+		t.Fatalf("a restore with no stream offers a cancel Esc cannot do: %q", got)
+	}
+}
+
+// A model picked at the gate is not a restore, and an empty saved model arms
+// no opening turn at all, so neither claims to be restoring anything.
+func TestOnlyARestoreSaysRestoring(t *testing.T) {
+	picked, c, _ := startupChat(t, StartupPicked, "fireworks", flashID)
+	picked = openChat(t, picked, c)
+	if got := joinHints(picked.statusHints()); strings.Contains(got, "restoring") {
+		t.Fatalf("a gate pick claims to be a restore: %q", got)
+	}
+
+	empty, _, _ := startupChat(t, StartupRestore, "local", "   ")
+	empty.streaming = true
+	if got := joinHints(empty.statusHints()); strings.Contains(got, "restoring") {
+		t.Fatalf("an empty saved model produced a restore hint: %q", got)
+	}
+}
+
+// A model id too long for the bar is dropped whole, never cut mid-name, and
+// never at the cost of the way out.
+func TestALongRestoreNameNeverCrowdsOutTheWayOut(t *testing.T) {
+	long := "user." + strings.Repeat("Very-Long-Model-Name-", 6) + "GGUF"
+	m, c, _ := startupChat(t, StartupRestore, "local", long)
+	m = openChat(t, m, c)
+	got := joinHints(m.statusHints())
+	if !strings.Contains(got, "restoring "+long+"…") {
+		t.Fatalf("the full restore hint is missing before fitting: %q", got)
+	}
+	fitted := fitHints(m.statusHints(), 40)
+	if !strings.Contains(fitted, "Ctrl+C quit") {
+		t.Fatalf("a long model name crowded out the way out: %q", fitted)
+	}
+	if strings.Contains(fitted, "restoring") && !strings.Contains(fitted, long+"…") {
+		t.Fatalf("the model name was cut mid-word: %q", fitted)
 	}
 }
 

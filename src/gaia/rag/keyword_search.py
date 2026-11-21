@@ -11,15 +11,14 @@ from array import array
 from collections import Counter
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from gaia.rag.normalize import search_form
 from gaia.rag.text_units import WIDE_CHARS, wide_runs
 
 _WORD = re.compile(r"[^\W_]+")
 _WIDE = re.compile(f"[{WIDE_CHARS}]")
-_ARABIC_MARKS = re.compile("[\u064b-\u065f\u0670\u0640]")
+# Hamza seats fold to bare hamza, so the two spellings of one word meet.
 _ARABIC_LETTERS = str.maketrans(
-    {"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه"}
-    | {chr(0x0660 + digit): str(digit) for digit in range(10)}
-    | {chr(0x06F0 + digit): str(digit) for digit in range(10)}
+    {"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه"} | {"ؤ": "ء", "ئ": "ء"}
 )
 # "and", "so", "with", "for", "like", each on "the"; the word stays whole if short.
 _ARABIC_PREFIX = re.compile("^(?:[وف]?(?:[بلك]?ال|لل)|[وف])(?=..)")
@@ -40,7 +39,7 @@ def _wide_bigrams(run: str) -> List[str]:
 
 
 def _words(text: str) -> List[str]:
-    text = _ARABIC_MARKS.sub("", text.lower()).translate(_ARABIC_LETTERS)
+    text = search_form(text).lower().translate(_ARABIC_LETTERS)
     words = []
     for word in _WORD.findall(text):
         if _WIDE.search(word):

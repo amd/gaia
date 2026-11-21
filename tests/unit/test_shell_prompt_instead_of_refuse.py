@@ -18,6 +18,7 @@ import os
 import queue
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from unittest.mock import patch
@@ -351,15 +352,16 @@ def test_an_auto_approving_run_refuses_rather_than_widening(repo, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Full access in a relayed Agent UI chat: gated commands are asked about
+# Prompts pre-approved with the shell gates kept on: gated commands are asked about
 # ---------------------------------------------------------------------------
 
 
 def _full_access_chat(*, watched: bool = True) -> SSEOutputHandler:
-    """The handler a sidecar ``/query`` builds for a Full access chat.
+    """The handler of a host that pre-approves prompts but keeps the shell gates on.
 
-    Over the socket Full access pre-approves prompts but keeps the shell gates
-    on (#3373); ``watched`` is the caller declaring a person can answer.
+    ``PermissionState(lifts_shell_gates=False)``; ``watched`` is the caller
+    declaring a person can answer. A sidecar session's own Full access lifts
+    the gates (``test_full_access_runs_anything``).
     """
     stdio = pytest.importorskip("gaia_agent.stdio")
     handler = SSEOutputHandler()
@@ -424,6 +426,38 @@ def test_a_full_access_chat_asks_once_for_a_one_time_line(repo):
     assert len(_prompts(second_events)) == 1
     assert second["status"] == "denied"
     assert (repo / "ran.txt").read_text() == "x"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="cmd.exe runs only the first line")
+def test_a_full_access_chat_asks_for_a_heredoc_and_runs_every_line(repo):
+    command = "cat <<'EOF' > hd_notes.txt\nhello heredoc\nEOF"
+    handler = _full_access_chat()
+    agent = _agent(handler)
+
+    result, events = _drive(
+        agent, handler, _shell(command, repo), on_prompt=_answer(handler)
+    )
+
+    [request] = _prompts(events)
+    [wire] = CanonicalTranslator(run_id="r", agent_id="gaia").translate(request)
+    assert wire["summary"].startswith(command + "\n")
+    assert result["status"] == "success", result
+    assert (repo / "hd_notes.txt").read_text() == "hello heredoc\n"
+
+
+def test_a_full_access_chat_refuses_a_heredoc_hiding_a_delete(repo):
+    command = "cat <<'EOF' > out.txt\nhello\nEOF\nrm -rf a.txt"
+    handler = _full_access_chat()
+    agent = _agent(handler)
+
+    result, events = _drive(
+        agent, handler, _shell(command, repo), on_prompt=_answer(handler)
+    )
+
+    assert _prompts(events) == []
+    assert result["status"] == "error" and result["executed"] is False
+    assert (repo / "a.txt").exists()
+    assert not (repo / "out.txt").exists()
 
 
 def test_a_full_access_chat_runs_a_safe_command_unasked(repo):
@@ -522,6 +556,64 @@ def test_a_prompt_nobody_answers_refuses(repo):
     assert _staged(repo) == {"tracked.txt"}
 
 
+def test_a_timed_out_prompt_is_not_asked_again_in_the_same_turn(repo):
+    """One unanswered prompt held a chat for 20 minutes by being re-asked (#7999)."""
+    handler = SSEOutputHandler()
+    handler.confirm_timeout_seconds = 0.3
+    agent = _agent(handler)
+    _drive(agent, handler, _shell("git add a.txt", repo))
+
+    started = time.monotonic()
+    again, again_events = _drive(agent, handler, _shell("git add a.txt", repo))
+
+    assert _prompts(again_events) == []
+    assert time.monotonic() - started < 0.3
+    assert again["status"] == "denied" and again["timed_out"] is True
+    assert "Don't ask again" in again["error"] and "git add a.txt" in again["error"]
+    assert _staged(repo) == {"tracked.txt"}
+
+
+def test_a_timeout_does_not_stop_a_different_call_being_asked(repo):
+    """Nobody said no, so another action may still be put to the user."""
+    handler = SSEOutputHandler()
+    handler.confirm_timeout_seconds = 0.3
+    agent = _agent(handler)
+    _drive(agent, handler, _shell("git add a.txt", repo))
+
+    result, events = _drive(
+        agent, handler, _shell("git add b.txt", repo), on_prompt=_answer(handler)
+    )
+
+    assert len(_prompts(events)) == 1
+    assert result["status"] == "success", result
+
+
+def test_the_first_timeout_tells_the_model_to_stop_asking(repo):
+    handler = SSEOutputHandler()
+    handler.confirm_timeout_seconds = 0.3
+    agent = _agent(handler)
+
+    result, _ = _drive(agent, handler, _shell("git add a.txt", repo))
+
+    assert "Don't ask again in this request" in result["error"]
+
+
+def test_a_new_turn_asks_again_after_a_timeout(repo):
+    handler = SSEOutputHandler()
+    handler.confirm_timeout_seconds = 0.3
+    agent = _agent(handler)
+    _drive(agent, handler, _shell("git add a.txt", repo))
+
+    agent._turn_seq += 1  # what process_query does as a turn opens
+    result, events = _drive(
+        agent, handler, _shell("git add a.txt", repo), on_prompt=_answer(handler)
+    )
+
+    assert len(_prompts(events)) == 1
+    assert result["status"] == "success", result
+    assert _staged(repo) == {"tracked.txt", "a.txt"}
+
+
 def test_an_answer_to_a_different_prompt_is_not_consent(repo):
     handler = SSEOutputHandler()
     handler.confirm_timeout_seconds = 0.5
@@ -551,11 +643,37 @@ def test_an_answer_to_a_different_prompt_is_not_consent(repo):
 # ---------------------------------------------------------------------------
 
 
+def _python_runs(name: str) -> bool:
+    # Run the PATH match, not the bare name: Windows would find the venv's
+    # python beside this interpreter before searching PATH at all.
+    found = shutil.which(name)
+    if found is None:
+        return False
+    try:
+        probe = subprocess.run([found, "-c", ""], capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0
+
+
 def _python() -> str:
-    for name in ("python", "python3"):
-        if shutil.which(name):
+    """A ``python`` name the shell tool can really run from this test's PATH.
+
+    Windows' "python" can be the Store alias stub, which only prints "Python
+    was not found". Then this interpreter's folder goes first on PATH; the
+    autouse ``_restore_environ`` fixture undoes that after the test.
+    """
+    names = ("python", "python3")
+    for name in names:
+        if _python_runs(name):
             return name
-    pytest.skip("needs a python on PATH")
+    os.environ["PATH"] = os.pathsep.join(
+        [os.path.dirname(sys.executable), os.environ.get("PATH", "")]
+    )
+    for name in names:
+        if _python_runs(name):
+            return name
+    pytest.skip(f"no runnable python on PATH, nor beside {sys.executable}")
 
 
 ONCE_CASES = [

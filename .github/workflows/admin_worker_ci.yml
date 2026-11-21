@@ -5,6 +5,8 @@
 # checks the numbers the dashboard reports: download classification, daily
 # deltas, CI and eval aggregation, the pytest-summary parser, the zip reader,
 # and the Cloudflare Access token check that keeps the dashboard private.
+# The oss-dashboard skill ships a generalized copy of this Worker as a template;
+# its tests and a scaffold smoke test run here too, so the two cannot rot apart.
 
 name: Admin Dashboard Worker CI
 
@@ -12,11 +14,13 @@ on:
   pull_request:
     paths:
       - 'workers/admin/**'
+      - '.claude/skills/oss-dashboard/**'
       - '.github/workflows/admin_worker_ci.yml'
   push:
     branches: [main]
     paths:
       - 'workers/admin/**'
+      - '.claude/skills/oss-dashboard/**'
       - '.github/workflows/admin_worker_ci.yml'
 
 permissions:
@@ -50,3 +54,40 @@ jobs:
 
       - name: Unit tests (vitest)
         run: npm test
+
+  skill-template:
+    name: oss-dashboard skill template, scaffold
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .claude/skills/oss-dashboard/template
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: .claude/skills/oss-dashboard/template/package-lock.json
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check (tsc --noEmit)
+        run: npm run typecheck
+
+      - name: Unit tests (vitest)
+        run: npm test
+
+      # A project scaffolded from a real probe report must pass its own suites untouched.
+      - name: Scaffold from a fixture probe and test the result
+        run: |
+          python -I ../scripts/scaffold.py --probe ../scripts/fixtures/probe-attrs.json --out "$RUNNER_TEMP/dash" --workers-dev
+          cp -r node_modules "$RUNNER_TEMP/dash/"
+          cd "$RUNNER_TEMP/dash"
+          npm run typecheck
+          npm test

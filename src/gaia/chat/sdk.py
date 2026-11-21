@@ -26,7 +26,6 @@ from gaia.llm.lemonade_client import (
     cloud_model_provider,
     resolve_ctx_size,
 )
-from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 from gaia.llm.providers.lemonade import _NATIVE_TC_KEY, NATIVE_TOOL_CALLS_PREFIX
 from gaia.llm.retry import stopped_by_user
 from gaia.logger import get_logger
@@ -1335,6 +1334,9 @@ class AgentSDK:
         *source* is ``"claude"``, ``"cloud"``, ``"pin"`` or ``"local"``.
         """
         if self.config.use_claude:
+            # Imported here: the module loads the Anthropic SDK.
+            from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
+
             return CLAUDE_CTX_SIZE, "claude"
         model = self.config.model
         backend = getattr(self.llm_client, "_backend", None)

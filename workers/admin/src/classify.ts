@@ -37,7 +37,7 @@ function productOf(name: string): Product {
   if (/^gaia-agent-ui-/i.test(name)) return "Agent UI";
   if (/^gaia_agent_/i.test(name) || /^gaia-agent-(linux|win32|darwin)/i.test(name)) return "Agents";
   if (/^(jira|example)-.*setup\.exe$/i.test(name)) return "Agents";
-  if (/^gaia-(windows|linux|darwin)-(setup|amd64|arm64)/i.test(name)) {
+  if (/^gaia-(cli-)?(windows|linux|darwin)-(setup|amd64|arm64)/i.test(name)) {
     return /setup/i.test(name) ? "Installer" : "CLI / TUI";
   }
   if (/^Gaia(Hybrid)?Installer/i.test(name) || /^gaia-windows-installer-/i.test(name)) return "Installer";
@@ -46,12 +46,15 @@ function productOf(name: string): Product {
 }
 
 function osOf(name: string): Os {
-  if (/\.(whl|tar\.gz)$/i.test(name)) return "Cross-platform";
+  // macOS first: "darwin-x64" contains "win-x64".
+  if (/\.(dmg|pkg)$/i.test(name) || /darwin|mac/i.test(name)) return "macOS";
   if (/\.exe$/i.test(name) || /windows|win32|win-x64/i.test(name) || /^Gaia(Hybrid)?Installer/i.test(name)) {
     return "Windows";
   }
   if (/\.(deb|appimage|rpm)$/i.test(name) || /linux/i.test(name)) return "Linux";
-  if (/\.(dmg|pkg)$/i.test(name) || /darwin|mac/i.test(name)) return "macOS";
+  // electron-builder ships the Agent UI's .zip for macOS only (the updater's download there).
+  if (/^gaia-agent-ui-.*\.zip$/i.test(name)) return "macOS";
+  if (/\.(whl|tar\.gz)$/i.test(name)) return "Cross-platform";
   return "Unclassified";
 }
 

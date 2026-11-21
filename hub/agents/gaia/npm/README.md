@@ -20,7 +20,7 @@ per request with `/query`'s `provider` field (contract ≥ 2.14) — see
 [`SPEC.md` §5.5](./SPEC.md#55-other-transports).
 
 The terminal UI you get here is the published **`terminal-hub`** component — the
-exact same binary a full GAIA install runs as `gaia-tui`, not a separate build. So
+exact same binary a full GAIA install runs as `gaia-cli`, not a separate build. So
 however you arrive at the terminal UI, it behaves identically.
 
 ## What it actually does
@@ -44,7 +44,7 @@ however you arrive at the terminal UI, it behaves identically.
 - **On Linux x64, glibc 2.34 or newer** for the agent sidecar (Ubuntu 22.04,
   Debian 12 and RHEL 9 or later). An older distro cannot start the agent. Check
   with `ldd --version`.
-- The `gaia` Python CLI **0.26.0 or newer** on `PATH` for the daemon the terminal
+- The `gaia` Python CLI **0.27.0 or newer** on `PATH` for the daemon the terminal
   UI starts. An earlier core cannot run this agent, so the UI comes up with
   nothing behind it. Install it with
   `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
@@ -69,6 +69,22 @@ agent behind it.
 
 `npx @amd-gaia/gaia version` prints this matrix, plus the version and source URL of
 each binary, for the release you have installed.
+
+## Email
+
+The agent reads Gmail or Outlook once you connect the Google or Microsoft
+connector and grant it to the agent. Eight **read-only** tools list, search and
+open mail, follow a thread, list folders and find the threads waiting on your
+reply; the bundled `inbox-triage` skill does the triage judgment on top of them.
+The bundled `send-email` skill drafts, replies, forwards and sends, and asks
+before anything leaves the mailbox. The agent never archives, labels or deletes
+received mail, and every email body is read by the local model. Gemma 4 E4B
+(GPU or NPU) is not offered the mail tools; a larger model is. Setup and the
+full tool list:
+[Email guide](https://amd-gaia.ai/docs/guides/email).
+
+There is no separate email agent: the standalone `@amd-gaia/agent-email` package
+was removed, and mail is this agent's job.
 
 ## Commands
 
@@ -113,7 +129,7 @@ never touch stdout, which the terminal UI owns.
 | --------------- | ---------------------------------------- |
 | Agent sidecar   | `~/.gaia/agents/gaia/gaia-agent[.exe]`   |
 | Install record  | `~/.gaia/agents/gaia/.installed`         |
-| Terminal UI     | `~/.gaia/npm-cache/gaia-<version>/gaia-tui[.exe]` |
+| Terminal UI     | `~/.gaia/npm-cache/gaia-<version>/gaia-cli[.exe]` |
 
 The sidecar goes into the GAIA daemon's own cache directory on purpose: the daemon
 is what spawns and supervises it, and it does its own SHA-256 check on the way. By
@@ -127,7 +143,7 @@ the binary was already cached, so an install left by an earlier version repairs
 itself the next time you run. A `--platform` fetch stages a binary for a
 *different* machine, so it deliberately leaves no record.
 
-The terminal UI is installed as `gaia-tui`, **never** as `gaia` — a file named
+The terminal UI is installed as `gaia-cli`, **never** as `gaia` — a file named
 `gaia` in a cache directory would shadow the `gaia` shim npm puts on your `PATH`.
 
 ## Ports
@@ -188,6 +204,13 @@ await shutdown(proc);
 `/v1/gaia/query` streams Server-Sent Events terminated by exactly one `final` or
 `error`. `fetchAll()` also returns the TUI's path if you would rather launch that.
 
+**Want a researched, cited report?** Start the query with `/research`, as in
+`"query": "/research the history of RISC-V"`. The agent loads its
+`research-report` skill for the turn and answers with a report that links every
+claim to a page it fetched. Before the answer is final, every cited link is
+checked against the pages the agent opened; any it could not back is listed
+under the report. See [`SPEC.md` §5.1](./SPEC.md#query-request-body).
+
 **Reuse the same `session_id` for every turn in a conversation.** It is what
 lets a document you had it index, or a skill you had it load, survive to the
 next question — drop it (or mint a new one per call) and the agent still
@@ -197,8 +220,10 @@ characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a 400. See
 and eviction behavior.
 
 **Attaching files to a conversation? Send them in `documents`** (contract ≥
-2.16): the absolute paths, the whole set on every turn. The agent indexes any it
-has not read yet before answering, and can read those exact files and nothing
+2.16): the absolute paths, the whole set on every turn, an empty list when none
+are left. The agent indexes any it has not read yet before answering (up to 100
+documents or 10,000 passages; it loads any other by name when asked about it),
+stops searching and can no longer read any you left out, and can read those exact files and nothing
 else beside them. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Private chat, or memory off? Send `memory` every turn** (contract ≥ 2.18):
@@ -238,8 +263,8 @@ event's `args` are exactly the arguments the model sent for the gated call,
 each value capped at 64,000 characters; `args_truncated: true` means one was
 cut, so don't auto-approve that call. What the agent adds to its own prompt —
 the folder a shell call runs in, a risk note, the full path of a relative
-write — comes in `prompt_context`, never
-in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+write, the content of a Python file it asks to run — comes in
+`prompt_context`, never in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Serving the turn from the Agent UI? Send `surface: "agent_ui"`** (contract ≥
 2.20), and the agent points recurring requests at the **Scheduled tasks** page
@@ -285,7 +310,8 @@ reject `turns` with `422`.
 An answer ends with one line such as `I haven't confirmed this works — the
 tests didn't pass.` when a check failed or was blocked, or a change went
 unchecked. It appears only then; a confirmed or purely conversational turn has
-no such line. It is part of `final.answer`, so show it to the user rather than
+no such line, and neither has an answer that itself reports failed tests and
+claims no success. It is part of `final.answer`, so show it to the user rather than
 trimming it. Details in [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
@@ -302,7 +328,7 @@ version and a source URL for each:
 | Agent sidecar | the `gaia` agent, at this package's version | this package's release           |
 | Terminal UI   | the `terminal-hub` component, at its own version | the core GAIA release       |
 
-The terminal UI is **consumed, not rebuilt**. It is byte-for-byte the `gaia-tui`
+The terminal UI is **consumed, not rebuilt**. It is byte-for-byte the `gaia-cli`
 binary a core install ships, so there is no second copy that could lag behind or
 behave differently — which is the entire reason it is sourced this way.
 

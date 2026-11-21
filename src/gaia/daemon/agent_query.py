@@ -3,8 +3,8 @@
 """Thin-client driver: run an agent's ``/query`` loop through the daemon relay
 and render the canonical SSE event stream to the console (V2-8, #2152).
 
-This is the CLI's data plane. ``gaia email "<q>"`` (and, later, ``gaia api`` /
-other front-doors) ensure the daemon + sidecar, then stream
+This is the CLI's data plane. ``gaia chat``, ``gaia -p`` and other front-doors
+ensure the daemon + sidecar, then stream
 ``POST /v1/<agent>/query`` through the daemon relay (``ANY /v1/<agent>/*``,
 #2150), presenting ONLY the daemon client token — the sidecar's port and bearer
 never leave the daemon. The seven canonical event types (spec #2015/#2016) —
@@ -74,7 +74,7 @@ class ConsoleRenderer:
     """Render canonical SSE events to the console.
 
     The agent's answer (streamed ``token`` deltas and the terminal ``final``)
-    goes to **stdout** so ``gaia email -q`` stays pipe-friendly — its stdout is
+    goes to **stdout** so ``gaia -p`` stays pipe-friendly — its stdout is
     the answer, matching the retired in-process path. Progress (``status`` /
     ``tool_call`` / ``tool_result`` / ``needs_confirmation``) and errors go to
     **stderr** so they never pollute a captured answer. ``--verbose`` widens the
@@ -428,7 +428,7 @@ def run_query(
             if response.status_code != 200:
                 raise DaemonError(
                     f"the daemon relay refused the '{agent_id}' query "
-                    f"(HTTP {response.status_code}): {client._error_detail(response)} "
+                    f"(HTTP {response.status_code}): {client.error_detail(response)} "
                     f"Check `gaia daemon status` and the daemon log at "
                     f"{paths.log_path()}."
                 )

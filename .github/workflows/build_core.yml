@@ -6,7 +6,7 @@
 #
 # Callers pack it so a user's PC never installs a Python package:
 #   build-installers.yml  the desktop app (resources/core)
-#   tui_installers.yml    the terminal .pkg / .deb / .rpm (beside gaia-tui)
+#   tui_installers.yml    the terminal .pkg / .deb / .rpm (beside gaia-cli)
 #   windows_setup.yml     the Windows setup's terminal component
 # Each passes its own artifact_prefix and only the platforms it packs, so two
 # callers in one run never upload the same artifact name. Dispatch it on its
@@ -301,6 +301,11 @@ jobs:
           - {label: macOS arm64, os: macos-latest, key: darwin-arm64, exe: gaia}
           - {label: Ubuntu 24.04, os: ubuntu-24.04, key: linux-x64, exe: gaia}
           - {label: Fedora 44, os: ubuntu-latest, key: linux-x64, exe: gaia, container: 'fedora:44'}  # Fedora 45's OpenSSL 4 has no libssl.so.3 (#7010)
+          # Fedora 44's original ca-certificates has no Debian-path CA file, the only one
+          # lemond reads, so GAIA starts it in a user+mount namespace (#7226). Docker's
+          # profiles and the Ubuntu host's AppArmor userns restriction block those
+          # namespaces; a Fedora desktop does not. Privileged only to lift the latter.
+          - {label: 'Fedora 44, original CA layout', os: ubuntu-latest, key: linux-x64, exe: gaia, ca_layout: fedora-original, container: {image: 'fedora:44', options: '--privileged'}}
     steps:
       - name: Is this platform wanted
         id: want
@@ -335,6 +340,18 @@ jobs:
           dnf install -y --setopt=install_weak_deps=False \
             $(grep -v '^#' installer/core/fedora-engine-packages.txt)
 
+      - name: Leave only Fedora's own CA bundle, as the original ca-certificates did
+        if: steps.want.outputs.run == 'true' && matrix.ca_layout == 'fedora-original'
+        run: |
+          # Before the files go: dnf itself verifies against them.
+          dnf install -y --setopt=install_weak_deps=False shadow-utils util-linux
+          rm -f /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/pki/tls/cert.pem /etc/ssl/cert.pem
+          test -s /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+          # The runner host is Ubuntu, which denies an unprivileged user namespace its
+          # capabilities; Fedora has no such restriction. Host-wide on a throwaway VM.
+          userns=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [ -e "$userns" ]; then echo 0 > "$userns"; fi
+
       - uses: actions/download-artifact@v8
         if: steps.want.outputs.run == 'true'
         with:
@@ -362,6 +379,7 @@ jobs:
         shell: bash
         env:
           RUN_FLAGSHIP: ${{ needs.rc-flagship.result == 'success' }}
+          CA_LAYOUT: ${{ matrix.ca_layout }}
         run: |
           set -euo pipefail
           if [ "${RUN_FLAGSHIP}" = "true" ]; then
@@ -370,7 +388,16 @@ jobs:
             export GAIA_RC_FLAGSHIP_URL="file:///${dir#/}"
             echo "The release candidate installs this run's flagship from ${GAIA_RC_FLAGSHIP_URL}"
           fi
-          bash installer/core/real_engine_check.sh "${RUNNER_TEMP}/core/${{ matrix.exe }}" "${RUNNER_TEMP}/real-engine"
+          as_user=()
+          if [ "${CA_LAYOUT}" = "fedora-original" ]; then
+            # A desktop user, as on a real PC: container root's id would be unmapped
+            # from the runner-owned HOME inside lemond's namespace.
+            useradd -m gaia-user
+            chown -R gaia-user "${RUNNER_TEMP}/core"
+            install -d -o gaia-user "${RUNNER_TEMP}/real-engine"
+            as_user=(runuser -u gaia-user -- env HOME=/home/gaia-user)
+          fi
+          ${as_user[@]+"${as_user[@]}"} bash installer/core/real_engine_check.sh "${RUNNER_TEMP}/core/${{ matrix.exe }}" "${RUNNER_TEMP}/real-engine"
 
       - uses: actions/upload-artifact@v7
         if: failure() && steps.want.outputs.run == 'true'

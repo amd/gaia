@@ -20,6 +20,7 @@ import http.client
 import json
 import os
 import re
+import ssl
 import sys
 import time
 import urllib.error
@@ -39,7 +40,7 @@ class LinkResult(NamedTuple):
 
 # Regex patterns for extracting links
 # Matches [text](url) but not ![image](url) image tags with broken links
-MD_LINK_RE = re.compile(r'(?<!!)\[([^\]]*)\]\(([^)]+)\)')
+MD_LINK_RE = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)]+)\)")
 # Matches bare URLs in text
 BARE_URL_RE = re.compile(r'(?<=["\s(])https?://[^\s)"\'<>]+')
 # Matches href="url" in HTML/JSX
@@ -95,6 +96,7 @@ SKIP_PATTERNS = [
     r"github\.com/amd/gaia/(blob|tree)/main/",  # Same-repo links (may 404 during PRs before merge)
     r"https?://(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)",  # RFC1918 private IPs (example URLs in docs)
     r"^https?://t\.me/",  # Telegram deep-links (e.g. BotFather) — valid but unresolvable from CI runners
+    r"^https?://slack\.com/signin",  # Sign-in page 403s automated requests
 ]
 
 
@@ -145,7 +147,7 @@ def extract_links(filepath: Path) -> List[Tuple[int, str]]:
                 links.append((i, url))
 
         # Bare URLs (only if not already captured)
-        existing_urls = {u for _, u in links if _== i}  # noqa: E741
+        existing_urls = {u for _, u in links if _ == i}  # noqa: E741
         for match in BARE_URL_RE.finditer(line):
             url = match.group(0).strip().rstrip(".,;:)")
             if url not in existing_urls:
@@ -196,12 +198,14 @@ def check_internal_link(
     # Try with and without extensions
     candidates = [target]
     if not target.suffix:
-        candidates.extend([
-            target.with_suffix(".mdx"),
-            target.with_suffix(".md"),
-            target / "index.mdx",
-            target / "index.md",
-        ])
+        candidates.extend(
+            [
+                target.with_suffix(".mdx"),
+                target.with_suffix(".md"),
+                target / "index.mdx",
+                target / "index.md",
+            ]
+        )
     elif target.suffix == ".mdx":
         candidates.append(target.with_suffix(".md"))
 
@@ -274,7 +278,10 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
                     return "broken", f"HTTP {code}"
             except urllib.error.HTTPError as e2:
                 if e2.code in (403, 408, 429) or e2.code >= 500:
-                    return "warning", f"HTTP {e2.code} (may require auth or be rate limited)"
+                    return (
+                        "warning",
+                        f"HTTP {e2.code} (may require auth or be rate limited)",
+                    )
                 return "broken", f"HTTP {e2.code}"
             except (OSError, http.client.HTTPException) as e2:
                 return "warning", f"connection error on GET fallback: {e2}"
@@ -301,6 +308,12 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
         reason_str = str(reason).lower()
         if "timed out" in reason_str or "handshake" in reason_str:
             return "warning", f"URL error: {reason} (SSL/network timeout)"
+        # The site let its certificate lapse; the link still points at the right place.
+        if isinstance(reason, ssl.SSLCertVerificationError) and "expired" in reason_str:
+            return (
+                "warning",
+                f"URL error: {reason} (the site's certificate has expired)",
+            )
         return "broken", f"URL error: {reason}"
     except TimeoutError:
         return "warning", "timeout"

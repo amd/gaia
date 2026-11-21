@@ -6,13 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScheduleManager, formatNextRun } from '../ScheduleManager';
 import { useChatStore } from '../../stores/chatStore';
 import { useScheduleStore } from '../../stores/scheduleStore';
-import { parseScheduleInput } from '../../services/api';
+import { parseScheduleInput } from '../../services/scheduleApi';
 import { stripIsolates } from '../../i18n/registry';
 import { dateLocale, translator } from '../../i18n/useT';
 import { readsAs } from '../../test/readsAs';
 import type { Schedule } from '../../types';
 
 vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 const schedule: Schedule = {
     id: 's1',
@@ -48,7 +49,7 @@ function leftoverEnglish(root: HTMLElement): string[] {
 
 const attrs = (root: HTMLElement) =>
     [...root.querySelectorAll('[title], [aria-label], [placeholder]')].flatMap((el) =>
-        ['title', 'aria-label', 'placeholder'].map((a) => el.getAttribute(a)).filter((v): v is string => !!v && v !== schedule.description));
+        ['title', 'aria-label', 'placeholder'].map((a) => el.getAttribute(a)).filter((v): v is string => !!v && v !== schedule.description && v !== schedule.name && v !== schedule.prompt));
 
 beforeEach(() => {
     act(() => useChatStore.getState().setLocale('ar'));

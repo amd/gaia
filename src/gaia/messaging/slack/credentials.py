@@ -48,18 +48,17 @@ class SlackCredentials:
 
 
 def _keyring():
-    """Import keyring through the connectors guard for an actionable error."""
-    from gaia.connectors._keyring import keyring, normalize_keyring_backend_env
+    """The checked keyring access, imported through the connectors guard."""
+    from gaia.connectors import keyring_access
 
-    normalize_keyring_backend_env()
-    return keyring
+    return keyring_access
 
 
 def save(bot_token: str, app_token: str) -> None:
     """Store both tokens in the OS keyring."""
     keyring = _keyring()
-    keyring.set_password(SERVICE_NAME, BOT_TOKEN_KEY, bot_token)
-    keyring.set_password(SERVICE_NAME, APP_TOKEN_KEY, app_token)
+    keyring.write(SERVICE_NAME, BOT_TOKEN_KEY, bot_token)
+    keyring.write(SERVICE_NAME, APP_TOKEN_KEY, app_token)
     log.info("Stored Slack tokens in the OS keyring under %s", SERVICE_NAME)
 
 
@@ -68,7 +67,7 @@ def clear() -> None:
     keyring = _keyring()
     for key in (BOT_TOKEN_KEY, APP_TOKEN_KEY):
         try:
-            keyring.delete_password(SERVICE_NAME, key)
+            keyring.delete(SERVICE_NAME, key)
         except keyring.errors.PasswordDeleteError:
             # Already absent — the desired end state either way.
             log.debug("No stored Slack credential for %s", key)
@@ -85,10 +84,14 @@ def load() -> SlackCredentials:
     bot = os.environ.get(BOT_TOKEN_ENV_VAR)
     app = os.environ.get(APP_TOKEN_ENV_VAR)
     if not (bot and app):
+        from gaia.connectors.errors import ConnectorsError
+
         try:
             keyring = _keyring()
-            bot = bot or keyring.get_password(SERVICE_NAME, BOT_TOKEN_KEY)
-            app = app or keyring.get_password(SERVICE_NAME, APP_TOKEN_KEY)
+            bot = bot or keyring.read(SERVICE_NAME, BOT_TOKEN_KEY)
+            app = app or keyring.read(SERVICE_NAME, APP_TOKEN_KEY)
+        except ConnectorsError as e:
+            raise SlackCredentialsError(str(e)) from e
         except Exception as e:  # noqa: BLE001 - re-raised with the remedy below
             raise SlackCredentialsError(
                 f"Could not read the Slack tokens from the OS keyring: {e}. "

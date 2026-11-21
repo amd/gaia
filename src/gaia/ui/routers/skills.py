@@ -42,8 +42,8 @@ def list_skills() -> Dict[str, Any]:
 def _skills_from_agent() -> Dict[str, Any]:
     """Ask the installed GAIA agent, through the daemon, which skills it has."""
     from gaia.daemon.sidecars.errors import SidecarError
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE, skills_supported
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE, skills_supported
 
     try:
         handle = daemon_client.acquire_handle(GAIA_PROFILE.agent_id)
@@ -100,7 +100,7 @@ def preview_skill_link(body: SkillLinkRequest) -> Dict[str, Any]:
     try:
         return preview_link(body.url).to_dict()
     except SkillLinkError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_link_error(e)) from e
     except SkillError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -125,9 +125,18 @@ def add_skill_link(body: SkillLinkAddRequest) -> Dict[str, Any]:
     except SkillLinkChangedError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except SkillLinkError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_link_error(e)) from e
     except SkillError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+def _link_error(e: Exception) -> str:
+    """*e* as the desktop app shows it: a missing link gets a remedy without a terminal."""
+    from gaia.skills.link import APP_LOCAL_COPY_REMEDY, SkillLinkNotFoundError
+
+    if isinstance(e, SkillLinkNotFoundError):
+        return f"{e} {APP_LOCAL_COPY_REMEDY} Then reopen Settings > Skills."
+    return str(e)
 
 
 @router.delete("/api/skills/{name}")

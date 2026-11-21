@@ -290,6 +290,10 @@ def check_read(path: str | os.PathLike) -> Path:
     refusal = read_access_error(call.agent, str(resolved))
     if refusal is not None:
         raise SkillPermissionError(refusal["error"])
+    # So a check tool's read of a file this turn wrote counts as reading it back.
+    evidence = getattr(call.agent, "_completion_evidence", None)
+    if evidence is not None:
+        evidence.expect_skill_read(str(resolved))
     return resolved
 
 
@@ -307,6 +311,10 @@ def check_write(path: str | os.PathLike, *, content_size: int = 0) -> Path:
     refusal = write_access_error(call.agent, str(resolved), content_size=content_size)
     if refusal is not None:
         raise SkillPermissionError(refusal["error"])
+    # So the turn's completion check counts the file this tool saves.
+    evidence = getattr(call.agent, "_completion_evidence", None)
+    if evidence is not None:
+        evidence.expect_skill_write(str(resolved))
     return resolved
 
 
@@ -684,15 +692,15 @@ class SkillPreferences:
         return self._store.get(self._call.skill_name)
 
     def _skipped(self) -> Optional[PreferenceWrite]:
-        agent = self._call.agent
-        if not getattr(agent, "_incognito", False):
-            return None
-        from gaia.agents.base.memory import memory_off_reason
+        from gaia.agents.base.memory_privacy import memory_writes_refused
 
+        reason = memory_writes_refused(self._call.agent)
+        if reason is None:
+            return None
         return PreferenceWrite(
             saved=False,
             preferences=self.get(),
-            note=f"{memory_off_reason(agent)} The preference was not saved.",
+            note=f"{reason} The preference was not saved.",
         )
 
     def update(self, changes: Dict[str, Any]) -> PreferenceWrite:
