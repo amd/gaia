@@ -27,10 +27,7 @@ freeze = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(freeze)
 
 RELEASE_WORKFLOW = (
-    Path(__file__).resolve().parents[5]
-    / ".github"
-    / "workflows"
-    / "build_flagship_sidecar.yml"
+    Path(__file__).resolve().parents[5] / ".github" / "workflows" / "build_gaiapy.yml"
 )
 
 

@@ -409,7 +409,7 @@ jobs:
       !cancelled() &&
       needs.validate.result == 'success' &&
       needs.validate.outputs.is_rc == 'true'
-    uses: ./.github/workflows/build_flagship_sidecar.yml
+    uses: ./.github/workflows/build_gaiapy.yml
 
   # ── gaiacpp: the agent as one native binary ─────────────────────────
   # Built, smoke-tested on each platform and stamped with this release's
