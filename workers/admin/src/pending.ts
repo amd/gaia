@@ -15,7 +15,7 @@ export interface PendingPerson {
   author: string;
   /** Their accounts that have something open; more than one only when the core team joins them with +. */
   accounts: string[];
-  /** Core team: a maintainer account, or an organisation member or collaborator on any open item. */
+  /** Core team: a maintainer account, or an owner, member or collaborator on their most recent item. */
   core: boolean;
   openPrs: number;
   openIssues: number;
@@ -42,9 +42,13 @@ export function pendingContributors(items: ItemRow[], maintainers: Set<string>, 
   const who = (login: string) => alias.get(login.toLowerCase()) ?? login;
   const key = (login: string) => who(login).toLowerCase();
   const mine = items.filter((i): i is ItemRow & { author: string } => !!i.author && !isBot(i.author) && i.created_at < until);
-  // One answer per person for the whole history, or someone would change group between two of their own items.
-  const core = new Set<string>();
-  for (const i of mine) if (!isExternal(i, maintainers)) core.add(key(i.author));
+  // Today's answer for the whole history, so nobody changes group between two of their own items; a past collaborator now outside is outside.
+  const latest = new Map<string, ItemRow>();
+  for (const i of mine) {
+    const l = latest.get(key(i.author));
+    if (!l || i.created_at > l.created_at) latest.set(key(i.author), i);
+  }
+  const core = new Set([...latest].filter(([, i]) => !isExternal(i, maintainers)).map(([k]) => k));
 
   const people = new Map<string, PendingPerson>();
   for (const i of mine) {

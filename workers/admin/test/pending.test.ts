@@ -56,9 +56,15 @@ describe("pendingContributors", () => {
     ]);
   });
 
-  it("keeps a person in one group even when only some of their items carry a core association", () => {
-    const { people } = run([item("issue", "ivy", "2026-09-01", "2026-09-02", "COLLABORATOR"), item("pr", "ivy", "2026-10-01")]);
-    expect(people[0]).toMatchObject({ author: "ivy", core: true });
+  it("places each person by their most recent item, for their whole history", () => {
+    // A past collaborator who now sends pull requests from outside is waiting as an outsider.
+    const was = run([item("issue", "ivy", "2026-09-01", "2026-09-02", "COLLABORATOR"), item("pr", "ivy", "2026-10-01")]);
+    expect(was.people[0]).toMatchObject({ author: "ivy", core: false });
+    expect(was.daily.at(-1)).toMatchObject({ outsidePr: 1, corePr: 0 });
+    // Someone who has since joined counts as core, back to their first item.
+    const now = run([item("pr", "jo", "2026-09-01"), item("issue", "jo", "2026-10-01", null, "MEMBER")]);
+    expect(now.people[0]).toMatchObject({ author: "jo", core: true });
+    expect(now.daily.find((d) => d.day === "2026-09-01")).toMatchObject({ outsidePr: 0, corePr: 1 });
   });
 
   it("counts people open at the end of each day, a pull request outranking issues", () => {
