@@ -103,7 +103,10 @@ from gaia.agents.registry import DEFAULT_EMBEDDING_MODEL
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
-from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
+from gaia.agents.tools.skill_library_tools import (
+    SkillLibraryToolsMixin,
+    uncaptured_skill_path,
+)
 from gaia.config import GaiaConfig
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.llm.hybrid import (
@@ -123,6 +126,9 @@ logger = get_logger(__name__)
 #: Bundled skills ship inside the package so they survive both the wheel and the
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+
+#: Answer-check problem when the user named a skill folder and nothing captured it.
+_SKILL_NOT_ADDED = "No skill was added from"
 
 # Rendered in a code repository for a model that gets the full project context
 # (gaia.project_context). General software practice, not any one repo's rules:
@@ -646,16 +652,42 @@ class GaiaAgent(
 
     def answer_problems(self, answer):
         problems = super().answer_problems(answer)
-        if self._research_brief != RESEARCH_BRIEF:
-            return problems
         request = getattr(self, "_original_user_input", None) or ""
+        if self._research_brief != RESEARCH_BRIEF:
+            called = {r.get("tool") for r in self._turn_tool_executions}
+            path = (
+                uncaptured_skill_path(str(request), called)
+                if "capture_skill" in self._tools_registry
+                else ""
+            )
+            if path:
+                problems.append(f"{_SKILL_NOT_ADDED} `{path}`.")
+            return problems
         return problems + citation_problems(
             answer or "", list(self._web_calls), str(request)
         )
 
+    def required_calls(self):
+        calls = list(super().required_calls())
+        if "capture_skill" not in self._tools_registry:
+            return calls
+        called = {r.get("tool") for r in self._turn_tool_executions}
+        request = str(getattr(self, "_original_user_input", None) or "")
+        path = uncaptured_skill_path(request, called)
+        if path:
+            # capture_skill still asks the user before it copies anything.
+            calls.append(("capture_skill", {"source": path}))
+        return calls
+
     def answer_repair_prompt(self, problems):
         if self._research_brief != RESEARCH_BRIEF:
-            return super().answer_repair_prompt(problems)
+            prompt = super().answer_repair_prompt(problems)
+            if any(p.startswith(_SKILL_NOT_ADDED) for p in problems):
+                prompt += (
+                    " Call capture_skill with source set to that path now; it "
+                    "asks the user and reports whether the skill was added."
+                )
+            return prompt
         return CITATION_REPAIR.format(problems=" ".join(problems))
 
     def _start_research_turn(self) -> None:

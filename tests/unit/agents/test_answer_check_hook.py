@@ -101,6 +101,76 @@ def test_an_agent_without_a_check_answers_once(monkeypatch, tmp_path):
     assert result["result"] == "BAD but unchecked"
 
 
+def test_a_reply_of_only_markup_debris_gets_one_repair(monkeypatch, tmp_path):
+    # Qwen3.5-2B's whole reply to "how many files are in my documents folder?".
+    agent = _make(_PlainAgent, monkeypatch, tmp_path)
+    sent = _script(agent, '\n\n"}', "You have 12 files there.")
+    result = agent.process_query("question")
+    assert len(sent) == 2
+    (repair,) = _repairs(sent)
+    assert "garbled" in repair
+    assert result["result"] == "You have 12 files there."
+
+
+class _KeepingAgent(Agent):
+    """Asked to keep something; flags any answer until ``keep`` has run."""
+
+    def _get_system_prompt(self):
+        return "Answer."
+
+    def _register_tools(self):
+        from gaia.agents.base.tools import tool
+
+        agent = self
+
+        @tool
+        def keep(fact: str) -> dict:
+            """Keep a fact."""
+            agent.kept.append(fact)
+            return {"status": "stored"}
+
+    def _kept_this_turn(self):
+        return any(r.get("tool") == "keep" for r in self._turn_tool_executions)
+
+    def answer_problems(self, answer):
+        return [] if self._kept_this_turn() else ["Nothing was kept."]
+
+    def required_calls(self):
+        return (
+            [] if self._kept_this_turn() else [("keep", {"fact": "router is 10.0.0.1"})]
+        )
+
+
+def test_a_call_the_repair_ignored_is_made_once_and_answered_from(
+    monkeypatch, tmp_path
+):
+    agent = _make(_KeepingAgent, monkeypatch, tmp_path)
+    agent.kept = []
+    sent = _script(agent, "Got it.", "Got it, really.", "Saved: router is 10.0.0.1.")
+    result = agent.process_query("remember the router is 10.0.0.1")
+    assert agent.kept == ["router is 10.0.0.1"]
+    assert len(sent) == 3
+    ran = [
+        m["content"]
+        for m in sent[-1]
+        if m.get("role") == "user" and "needed `keep`" in str(m.get("content"))
+    ]
+    assert len(ran) == 1 and "'status': 'stored'" in ran[0]
+    assert result["result"] == "Saved: router is 10.0.0.1."
+
+
+def test_a_required_call_is_made_at_most_once_per_turn(monkeypatch, tmp_path):
+    agent = _make(_KeepingAgent, monkeypatch, tmp_path)
+    agent.kept = []
+    agent.required_calls = lambda: [("keep", {"fact": "x y"})]
+    agent.answer_problems = lambda answer: ["Nothing was kept."]
+    sent = _script(agent, "a", "b", "c")
+    result = agent.process_query("remember x y")
+    assert agent.kept == ["x y"]
+    assert len(sent) == 3
+    assert "Nothing was kept." in result["result"]
+
+
 _PAGE = "https://www.example.org/report/page-one"
 
 

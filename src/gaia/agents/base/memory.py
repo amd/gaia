@@ -620,6 +620,64 @@ SAVE_WHEN_ASKED_PROMPT = (
     "your answer."
 )
 
+#: A sentence telling the user something was kept in memory.
+_SAVE_CLAIM = re.compile(
+    r"\bi(?:'ve|\s+have|'ll|\s+will)?\s+(?:now\s+|also\s+)?"
+    r"(?:saved|stored|remembered|noted|save|store|remember|note)\b"
+    r"|\b(?:is|was|has\s+been|have\s+been)\s+(?:now\s+)?"
+    r"(?:saved|stored|remembered|noted)\b"
+    r"|^\W*(?:saved|stored|remembered|noted)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NOT_SAVED = re.compile(
+    r"\b(?:not|never|no|nothing|none|cannot|unable|refus\w*|block\w*|\w+n't)\b",
+    re.IGNORECASE,
+)
+
+
+#: Answer-check problems, also shown to the user when the repair doesn't take.
+_REFUSED_SAVE = "This was not saved to memory."
+_REFUSED_SECRET = (
+    "This was not saved to memory: GAIA does not keep passwords or other secrets."
+)
+_NOTHING_SAVED = "Nothing was saved to memory."
+
+
+#: "remember (that) X" / "don't forget (that) X": X is the fact.
+_FACT_AFTER = re.compile(
+    r"\b(?:remember|memori[sz]e|don'?t\s+forget)\s*(?:that\b|this:|:)?\s*(.+)",
+    re.IGNORECASE | re.DOTALL,
+)
+#: "X. Please remember this." / "X, keep that in mind": X is before the request.
+_ONLY_A_POINTER = re.compile(r"^(?:it|this|that|them)\b\W*$", re.IGNORECASE)
+
+
+def fact_to_keep(request: str) -> str:
+    """The fact in *request* the user asked to remember, in their words, or "".
+
+    "" when the request is not a plain remember request or names nothing.
+    """
+    text = (request or "").strip()
+    if not asks_to_keep_in_memory(text):
+        return ""
+    after = _FACT_AFTER.search(text)
+    fact = after.group(1).strip() if after else ""
+    if not re.search(r"\w", fact) or _ONLY_A_POINTER.match(fact):
+        start = _STORAGE_REQUEST.search(text)
+        before = text[: start.start()].strip() if start else ""
+        colon = text.split(":", 1)[1].strip() if ":" in text else ""
+        fact = before if re.search(r"\w", before) else colon
+    fact = fact.strip().rstrip(".!")
+    return fact if len(fact.split()) >= 2 else ""
+
+
+def claims_memory_save(answer: str) -> bool:
+    """True when *answer* tells the user something was saved, with no denial beside it."""
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", answer or ""):
+        if _SAVE_CLAIM.search(sentence) and not _NOT_SAVED.search(sentence):
+            return True
+    return False
+
 
 def _saved_despite(ignored: Dict[str, str], knowledge_id: str) -> str:
     """What remember tells the model after saving without a bad optional argument.
@@ -4790,6 +4848,74 @@ class MemoryMixin(ProceduralMemoryMixin):
         if not asks_to_keep_in_memory(text) or self._looks_like_credential(text):
             return None
         return SAVE_WHEN_ASKED_PROMPT
+
+    def _memory_saves_this_turn(self) -> List[Dict[str, Any]]:
+        """This turn's remember / update_memory results, oldest first."""
+        turn = getattr(self, "_turn_tool_executions", None)
+        if getattr(self, "_memory_saves_turn", None) is not turn:
+            self._memory_saves_turn = turn
+            self._memory_saves = []
+        return self._memory_saves
+
+    def _execute_tool_timed(self, tool_name, tool_args):
+        result = super()._execute_tool_timed(tool_name, tool_args)
+        name = str(tool_name or "").strip().removesuffix("()").replace("-", "_")
+        if name.lower() in ("remember", "update_memory"):
+            self._memory_saves_this_turn().append(
+                result if isinstance(result, dict) else {"status": "error"}
+            )
+        return result
+
+    def answer_problems(self, answer):
+        """Adds what the answer says about memory that this turn's saves don't back.
+
+        Small models repeat "Stored" over a refusal, or say "got it" and never
+        call remember; a nudge alone did not stop either.
+        """
+        problems = super().answer_problems(answer)
+        saves = self._memory_saves_this_turn()
+        if any(s.get("status") in ("stored", "updated") for s in saves):
+            return problems
+        # Only a turn the user asked to remember: "saved" elsewhere is a file.
+        request = getattr(self, "_original_user_input", None) or ""
+        if not asks_to_keep_in_memory(request):
+            return problems
+        refused = [s for s in saves if s.get("status") == "skipped"]
+        if refused and claims_memory_save(answer):
+            secret = _CREDENTIAL_NOT_STORED in str(refused[-1].get("message") or "")
+            problems.append(_REFUSED_SECRET if secret else _REFUSED_SAVE)
+            return problems
+        called = {r.get("tool") for r in getattr(self, "_turn_tool_executions", [])}
+        if self._unsaved_memory_request(called):
+            problems.append(_NOTHING_SAVED)
+        return problems
+
+    def required_calls(self):
+        calls = list(super().required_calls())
+        saves = self._memory_saves_this_turn()
+        if saves:
+            return calls
+        called = {r.get("tool") for r in getattr(self, "_turn_tool_executions", [])}
+        if not self._unsaved_memory_request(called):
+            return calls
+        fact = fact_to_keep(getattr(self, "_original_user_input", None) or "")
+        if fact:
+            calls.append(("remember", {"fact": fact}))
+        return calls
+
+    def answer_repair_prompt(self, problems):
+        prompt = super().answer_repair_prompt(problems)
+        if _REFUSED_SAVE in problems or _REFUSED_SECRET in problems:
+            prompt += (
+                " Your answer says it was saved; remember refused it. Say plainly "
+                "that it was not saved, and why. Do not call remember again."
+            )
+        if _NOTHING_SAVED in problems:
+            prompt += (
+                " Call remember now with what the user asked you to keep, then "
+                "give your answer."
+            )
+        return prompt
 
     @classmethod
     def _looks_like_credential(cls, text: str) -> bool:

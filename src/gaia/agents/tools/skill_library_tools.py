@@ -65,6 +65,7 @@ this turn's query matched it.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
@@ -92,6 +93,32 @@ SKILL_LIBRARY_TOOL_NAMES = (
 _CHARS_PER_TOKEN = 4
 
 _DOCS_URL = "https://amd-gaia.ai/docs/spec/agent-skills"
+
+
+#: "add the skill at C:/x/receipt-format", "install the skill from ~/skills/foo".
+_SKILL_AT_PATH = re.compile(
+    r"\b(?:add|install|capture|import)\b[^.?!\n]{0,30}?\bskill\b[^.?!\n]{0,20}?"
+    r"\b(?:at|from|in)\s+(?:([`'\"])((?:[A-Za-z]:[\\/]|~[\\/]|/)[^`'\"\n]+)\1"
+    r"|((?:[A-Za-z]:[\\/]|~[\\/]|/)[^\s`'\"]+))",
+    re.IGNORECASE,
+)
+_DONT = re.compile(r"\b(?:don'?t|do\s+not|never|not\s+yet)\b", re.IGNORECASE)
+
+
+def uncaptured_skill_path(request: str, tools_called: Set[str]) -> str:
+    """The folder the user asked to add as a skill when capture_skill never ran, or ""."""
+    if "capture_skill" in tools_called:
+        return ""
+    text = request or ""
+    match = _SKILL_AT_PATH.search(text)
+    if not match:
+        return ""
+    # A "don't" near the request may hold it back; stay quiet rather than guess.
+    if _DONT.search(text[max(0, match.start() - 40) : match.start()]) or _DONT.search(
+        text[match.end() :]
+    ):
+        return ""
+    return (match.group(2) or match.group(3)).rstrip(".,;:)?!")
 
 
 def estimate_prompt_tokens(text: str) -> int:
