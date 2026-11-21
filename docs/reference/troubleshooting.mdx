@@ -52,7 +52,7 @@ icon: "bug"
 
     - **A warning says GAIA "could not switch HTTPS verification to the system
       certificate store"** — the `truststore` package is missing or broken. Run
-      `pip install --upgrade "truststore>=0.10.0"` in GAIA's environment. The warning
+      `pip install --upgrade "truststore>=0.10.3"` in GAIA's environment. The warning
       appears in the terminal, or in `gaia daemon logs` (add `--agent <id>` for an
       agent's own requests).
     - **No such warning in either place** — the proxy's root certificate is not in the OS
@@ -912,11 +912,16 @@ error. To run the chat model in the cloud instead, see
 
   <Accordion title="Cloud models and downloads fail: the certificate store has no ca-certificates.crt" icon="certificate">
     **Cause:** the model server inside GAIA trusts HTTPS sites through exactly
-    one file, `/etc/ssl/certs/ca-certificates.crt`. The `ca-certificates`
-    package Fedora 44 first shipped leaves that file out, so every cloud model
-    and every model download fails. GAIA says so in setup's cloud step and in
-    a failed download, and `~/.gaia/lemonade/lemond.log` shows
-    `Problem with the SSL CA cert`. Your key is not the problem.
+    one file, `/etc/ssl/certs/ca-certificates.crt`, and ignores
+    `SSL_CERT_FILE`. Where that file is missing (the `ca-certificates`
+    package Fedora 44 first shipped leaves it out), GAIA starts the model
+    server in a private view of the filesystem that shows your system's own
+    bundle at that path, so cloud models and downloads work with no change to
+    your system. That needs unprivileged user namespaces; when the kernel
+    refuses them, every cloud model and every model download fails. GAIA then
+    says so in setup's cloud step and in a failed download, and
+    `~/.gaia/lemonade/lemond.log` shows `Problem with the SSL CA cert`. Your
+    key is not the problem.
 
     **Fix:** install your system's updates (GNOME Software, or
     `sudo dnf upgrade ca-certificates`); the updated package adds the file.

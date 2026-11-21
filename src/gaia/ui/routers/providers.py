@@ -1286,12 +1286,11 @@ def _use_known_models(provider: str, key: str, *, persist_key: bool = True) -> N
     from gaia.llm.fireworks_known_models import KnownModelsError, use_known_models
     from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
     from gaia.llm.lemonade_launcher import gaia_runs_lemonade
-    from gaia.llm.lemonade_tls import ca_store_problem
     from gaia.llm.providers.fireworks import ModelListState, check_model_list
 
     name = _NAMES[provider]
     runs_lemonade = gaia_runs_lemonade(_base_url())
-    ca_problem = ca_store_problem() if runs_lemonade else None
+    ca_problem = EmbeddedLemonade().ca_problem() if runs_lemonade else None
     if ca_problem:
         raise ProviderError(ca_problem, 503)
     check = check_model_list(key) if provider == FIREWORKS else None

@@ -155,7 +155,12 @@ class _RelayedFailure(_StreamAgent):
 @pytest.mark.parametrize(
     "model, local", [(FLASH, False), ("Gemma-4-E4B-it-GGUF", True)]
 )
-async def test_a_cloud_chat_is_not_told_its_model_is_local(db, model, local):
+async def test_a_cloud_chat_is_not_told_its_model_is_local(
+    db, model, local, monkeypatch
+):
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.configured_lemonade_url", lambda: None
+    )
     events = await _stream_turn(db, model, _RelayedFailure(model, fail=False))
 
     [error] = [e for e in events if e.get("type") == "agent_error"]

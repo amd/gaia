@@ -57,6 +57,7 @@ from .agent_loop import agent_loop
 
 # pylint: enable=unused-import
 from .database import ChatDatabase
+from .document_copies import move_library_files_out_of_shared_folder
 from .document_monitor import DocumentMonitor
 from .memory_settings import memory_enabled
 from .restart_recovery import recover_interrupted_work, sweep_interrupted_work
@@ -533,6 +534,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     db = ChatDatabase(db_path)
     # What a crashed or closed server left mid-way, before anything new starts.
     recover_interrupted_work(db)
+    # Chats must not reach each other's documents through the folder they share.
+    move_library_files_out_of_shared_folder(db)
 
     # Background indexing: track running tasks by document ID
     # so we can report status and cancel them.

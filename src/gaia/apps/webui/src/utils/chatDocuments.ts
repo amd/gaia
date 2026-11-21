@@ -10,7 +10,7 @@
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import type { Document } from '../types';
-import { isServerFailure } from './documentFailure';
+import { needsRetry, waitsForServerReturn } from './documentFailure';
 import { log } from './logger';
 
 /** Attach *ids* to the chat's entry in the session list, without repeats. */
@@ -36,7 +36,7 @@ export function showAddedDocuments(sessionId: string, added: Document[]): void {
  */
 export interface DropFailure {
     name: string;
-    stage: 'upload' | 'unreadable' | 'server' | 'attach';
+    stage: 'upload' | 'unreadable' | 'server' | 'busy' | 'attach';
     error: unknown;
 }
 
@@ -57,7 +57,9 @@ export async function addDroppedFiles(sessionId: string | null, files: File[]): 
             const doc = await api.uploadDocumentBlob(file);
             if (doc?.indexing_status === 'failed') {
                 // Attaching it would promise the chat a file it can't search.
-                const stage = isServerFailure(doc.error_kind) ? 'server' : 'unreadable';
+                const stage = waitsForServerReturn(doc.error_kind)
+                    ? 'server'
+                    : needsRetry(doc.error_kind) ? 'busy' : 'unreadable';
                 log.doc.warn(`"${file.name}" couldn't be added (${doc.error_kind ?? 'unreadable'}); not attaching it`);
                 failures.push({ name: file.name, stage, error: doc.last_error ?? null });
             } else if (sessionId && doc?.id) {

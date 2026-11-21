@@ -22,8 +22,8 @@
 
 #include <gaia/lemonade_client.h>
 
-#include "../agents/gaia/delegation.h"
-#include "../agents/gaia/gaia_agent.h"
+#include "../agents/gaiacpp/delegation.h"
+#include "../agents/gaiacpp/gaia_agent.h"
 
 using namespace gaia;
 namespace fs = std::filesystem;

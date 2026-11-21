@@ -541,16 +541,19 @@ textarea:focus-visible {
 *:dir(rtl) {
     --fade-to: left;
 }
-@keyframes fade-cut-inline {
-    from, to {
-        -webkit-mask-image: linear-gradient(to var(--fade-to), #000 calc(100% - var(--fade-size)), transparent);
-        mask-image: linear-gradient(to var(--fade-to), #000 calc(100% - var(--fade-size)), transparent);
+/* Without scroll timelines the animation would run on the clock and fade text that fits. */
+@supports (animation-timeline: scroll()) {
+    @keyframes fade-cut-inline {
+        from, to {
+            -webkit-mask-image: linear-gradient(to var(--fade-to), #000 calc(100% - var(--fade-size)), transparent);
+            mask-image: linear-gradient(to var(--fade-to), #000 calc(100% - var(--fade-size)), transparent);
+        }
     }
-}
-@keyframes fade-cut-block {
-    from, to {
-        -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
-        mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
+    @keyframes fade-cut-block {
+        from, to {
+            -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
+            mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
+        }
     }
 }
 

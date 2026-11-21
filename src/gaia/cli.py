@@ -9430,13 +9430,9 @@ def _handle_daemon_status():
 
 def _daemon_http_detail(response) -> str:
     """The actionable `detail` from a daemon error response (or the raw status)."""
-    try:
-        body = response.json()
-    except ValueError:
-        return f"HTTP {response.status_code}"
-    if isinstance(body, dict) and body.get("detail"):
-        return str(body["detail"])
-    return f"HTTP {response.status_code}"
+    from gaia.daemon.client import error_detail
+
+    return error_detail(response)
 
 
 def _fetch_daemon_agents(inst) -> list:
