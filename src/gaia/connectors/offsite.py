@@ -27,3 +27,18 @@ def refuse_offsite_connector(spec: ConnectorSpec) -> None:
     message = offsite_blocked_message(spec)
     if message:
         raise ConfigurationError(message)
+
+
+def offsite_server_blocked_message(server_name: str) -> str | None:
+    """Why the MCP server saved as ``server_name`` is refused under Local only.
+
+    Checked when a server starts and on every tool call, so a connector turned
+    on before Local only cannot keep running or answering after it.
+    """
+    # Registers the catalog specs; a hand-added server isn't a catalog connector.
+    import gaia.connectors.catalog.mcp_servers  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    if server_name not in REGISTRY:
+        return None
+    return offsite_blocked_message(REGISTRY.get(server_name))

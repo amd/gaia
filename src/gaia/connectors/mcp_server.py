@@ -33,7 +33,11 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 from gaia.config import mcp_servers_path
 from gaia.connectors import keyring_access
 from gaia.connectors._keyring import keyring  # actionable error if missing (#1621)
-from gaia.connectors.errors import ConnectorsError, InvalidConfigValueError
+from gaia.connectors.errors import (
+    ConfigurationError,
+    ConnectorsError,
+    InvalidConfigValueError,
+)
 from gaia.connectors.handler import register_handler
 from gaia.connectors.spec import ConnectorSpec
 from gaia.connectors.store import SERVICE_NAME
@@ -423,6 +427,12 @@ class McpServerHandler:
                 f"Settings → Connectors or `gaia connectors configure {connector_id}`."
             )
 
+        if enabled:
+            from gaia.connectors.offsite import offsite_server_blocked_message
+
+            blocked = offsite_server_blocked_message(connector_id)
+            if blocked:
+                raise ConfigurationError(blocked)
         servers[connector_id]["disabled"] = not enabled
         _write_mcp_servers_json(servers)
 
