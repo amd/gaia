@@ -442,6 +442,18 @@ def _gemma_downloaded(client) -> bool:
     return bool(client.check_model_available(DEFAULT_MODEL_NAME))
 
 
+def _floor_without_room(client, choice: "ChatModelChoice") -> bool:
+    """Whether the pick is the ladder's floor on a PC with no room left for it."""
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_LADDER, ladder_verdict
+
+    if choice.model_id != DEFAULT_MODEL_LADDER[-1] or choice.capacity is None:
+        return False
+    fits, _ = ladder_verdict(
+        client, choice.model_id, choice.capacity, judge_free_memory=False
+    )
+    return fits is False
+
+
 def _local_model_in_use(client, config, on_npu: bool) -> Optional[str]:
     """The downloaded local model last chatted on, or None.
 
@@ -2705,6 +2717,12 @@ class InitCommand:
                     if cap
                     else ""
                 )
+                if cap and _floor_without_room(client, choice):
+                    where = (
+                        ", the smallest model GAIA offers. It shares memory with "
+                        f"your other apps: this PC has {format_gb(cap.memory_gb)} "
+                        f"GB for models{kept} ({cap.memory_source})"
+                    )
                 self._print(f"   Chat model: {choice.model_id}{where}")
                 for skipped_id, reason in choice.skipped:
                     self._print(f"   Not using {skipped_id}: {reason}")

@@ -618,6 +618,33 @@ def test_the_chat_model_line_counts_the_memory_kept_for_other_apps(monkeypatch):
     )
 
 
+def test_an_8gb_laptop_hears_the_2b_is_the_smallest_and_shares_memory(monkeypatch):
+    """With nothing left for models, the line must not read as "it doesn't fit"."""
+    from gaia.installer import init_command
+    from gaia.llm.model_fit import MachineCapacity
+
+    laptop = MachineCapacity(
+        memory_gb=8.0,
+        memory_source="AMD iGPU",
+        disk_free_gb=500.0,
+        installed_ram_gb=8.0,
+        carve_out_gb=2.0,
+    )
+    choice = init_command.ChatModelChoice(
+        model_id=TINY_DEFAULT_MODEL_NAME, user_set=False, skipped=[], capacity=laptop
+    )
+    monkeypatch.setattr(init_command, "resolve_init_chat_model", lambda *a, **k: choice)
+    cmd = InitCommand(profile="gaia", yes=True)
+    said = []
+    monkeypatch.setattr(cmd, "_print", lambda text, *a, **k: said.append(text))
+    cmd._chat_model(object())
+    assert said[0] == (
+        f"   Chat model: {TINY_DEFAULT_MODEL_NAME}, the smallest model GAIA offers. "
+        "It shares memory with your other apps: this PC has 0 GB for models "
+        "once 10 GB is kept for other apps (AMD iGPU)"
+    )
+
+
 def _laptop16(monkeypatch):
     """This PC's pick is the 2B, as on a 16 GB laptop once other apps keep 10 GB."""
     from gaia.llm.model_fit import MachineCapacity
