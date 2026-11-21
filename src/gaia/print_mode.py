@@ -147,7 +147,9 @@ def summarize(
     if result.get("time_limit_reached"):
         record["time_limit_reached"] = True
     if record["is_error"]:
-        record["error"] = _turn_error(result)
+        # The agent words its errors for the TUI; this is a terminal command.
+        record["error"] = _cli(_turn_error(result))
+        record["result"] = _cli(record["result"])
     if verbose:
         record["conversation"] = conversation
     return record
@@ -173,6 +175,18 @@ def configure_console(console: Any, skip_permissions: bool, full_access: bool) -
     console.auto_approve_gated_tools = skip_permissions or full_access
     # Asked for by name on the command line, as the TUI's /full-access is.
     console.full_access = full_access
+
+
+def _describe(exc: BaseException) -> str:
+    """An exception as the user reads it.
+
+    A plain ValueError is a bad flag, setting or input, worded for the user.
+    Any other type, its subclasses (a JSON or Unicode decode error) included,
+    is unexpected, and its class name helps a bug report.
+    """
+    if type(exc) is ValueError and str(exc):
+        return str(exc)
+    return f"{type(exc).__name__}: {exc}"
 
 
 def _emit_failure(output_format: str, message: str, code: int = 1) -> int:
@@ -269,8 +283,7 @@ def run(
         # DEBUG, not INFO: the console handler prints INFO, traceback and all.
         log.debug("gaia -p failed", exc_info=True)
         return _emit_failure(
-            output_format,
-            _explain_routed(settings, route, exc) or f"{type(exc).__name__}: {exc}",
+            output_format, _explain_routed(settings, route, exc) or _describe(exc)
         )
 
     if output_format == "json":

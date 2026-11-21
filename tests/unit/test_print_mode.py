@@ -1573,6 +1573,52 @@ def test_an_exception_mid_turn_is_reported_not_a_traceback(stub_env, capsys, fmt
         assert captured.out == ""
 
 
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_a_bad_setting_reads_as_a_sentence_without_a_class_name(stub_env, capsys, fmt):
+    message = "GAIA_SKILL_AUTOLOAD_TAU must be a float, got 'abc'"
+
+    class _BadSetting(_StubAgent):
+        def process_query(self, text):
+            raise ValueError(message)
+
+    sys.modules["gaiapy.agent"].GaiaAgent = _BadSetting
+    assert print_mode.run("q", model="m", output_format=fmt) == 1
+    captured = capsys.readouterr()
+    assert f"gaia -p: {message}" in captured.err
+    assert "ValueError" not in captured.err
+    if fmt == "json":
+        assert json.loads(captured.out)["error"] == message
+
+
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_a_failed_turn_names_the_model_flag_not_the_tui(stub_env, capsys, fmt):
+    from gaia.llm.surface_hints import CLI_MODEL_SWITCH_HINT, TUI_MODEL_SWITCH_HINT
+
+    error = (
+        "fireworks.no-such-model isn't available on Fireworks AI (HTTP 404). "
+        f"Trying again won't help. {TUI_MODEL_SWITCH_HINT}"
+    )
+    _StubAgent.result = {"status": "error", "result": error, "error": error}
+    assert print_mode.run("q", model="m", output_format=fmt) == 1
+    captured = capsys.readouterr()
+    assert "/model in the TUI" not in captured.out + captured.err
+    assert CLI_MODEL_SWITCH_HINT in captured.err
+    if fmt == "json":
+        record = json.loads(captured.out)
+        assert record["error"].endswith(CLI_MODEL_SWITCH_HINT)
+        assert record["result"].endswith(CLI_MODEL_SWITCH_HINT)
+
+
+def test_a_decode_error_keeps_its_class_name(stub_env, capsys):
+    class _BadJson(_StubAgent):
+        def process_query(self, text):
+            json.loads("not json")
+
+    sys.modules["gaiapy.agent"].GaiaAgent = _BadJson
+    assert print_mode.run("q", model="m") == 1
+    assert "JSONDecodeError: " in capsys.readouterr().err
+
+
 def test_a_failed_turn_says_why_on_stderr(stub_env, capsys):
     _StubAgent.result = {
         "status": "error",
