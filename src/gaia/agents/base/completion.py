@@ -273,6 +273,9 @@ def _drop_refused_quotes(text: str) -> str:
 
 
 _DESTINATION = re.compile(r"\b(?:to|into|in|at|as)\s+|\s*(?:→|->|=>)\s*", re.I)
+# Where an answer puts a save, as opposed to where it says content sits.
+_SAVED_TO = re.compile(r"\b(?:to|into|as)\s+|\s*(?:→|->|=>)\s*", re.I)
+_PLACE = re.compile(r"\b(?:in|at)\s+", re.I)
 # A path named as where content comes from: "the items from minutes.txt".
 _SOURCE = re.compile(r"\b(?:from|of|using|based on)\s+", re.I)
 # A target named without a path: "in minutes.txt as a markdown file".
@@ -751,6 +754,10 @@ class CompletionEvidence:
         # Wider than ``requested``: every file the request asks to produce.
         self.outputs = named_outputs(self.query)
         self.instructed = save_instructed(self.query)
+        # Files the request names but never asks to produce: what it reads.
+        self.inputs = {
+            self.request_key(path) for path in mentioned_paths(self.query)
+        } - {self.request_key(path) for path in self.outputs}
         # The paths the request names and their folders: where a bare output
         # ("also make tables.xlsx") lands.
         self.named_folders = list(
@@ -1457,6 +1464,19 @@ class CompletionEvidence:
             paths = [path for path in named if not self._is_backup(path)]
             if named and not paths:
                 continue
+            # "Saved report.json with the errors in app.log": the log it read.
+            placed = set(destination_paths(sentence, _PLACE)) - set(
+                destination_paths(sentence, _SAVED_TO)
+            )
+            read_only = {
+                p for p in paths if p in placed and self.request_key(p) in self.inputs
+            }
+            if read_only:
+                paths = [p for p in paths if p not in read_only] or [
+                    p
+                    for p in _scan_paths(sentence, immediate=False)
+                    if p not in read_only
+                ]
             if not checkable and not _FIRST_PERSON.search(sentence):
                 if soft is not None:
                     soft.extend(

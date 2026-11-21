@@ -2057,3 +2057,45 @@ def test_backups_carried_from_earlier_turns_match_by_name(tmp_path):
     soft = []
     assert later.gaps(answer, _claims_file_write, soft=soft) == []
     assert soft == []
+
+
+_TRIAGE = "/log-triage What went wrong in app.log? Save the findings to report.json"
+
+
+def _triaged(tmp_path, query=_TRIAGE):
+    (tmp_path / "app.log").write_text("ERROR boom\n")
+    ledger = CompletionEvidence(query, str(tmp_path))
+    write(ledger, "report.json")
+    read(ledger, "report.json")
+    return ledger
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I saved report.json with the 3 errors in app.log.",
+        "I saved the findings to report.json, covering every error in app.log.",
+        "I saved the findings to report.json with the 3 errors in app.log.",
+    ],
+)
+def test_a_log_the_request_only_reads_is_not_a_claimed_save(tmp_path, answer):
+    assert gaps(_triaged(tmp_path), answer) == []
+
+
+def test_a_named_input_saved_to_explicitly_is_still_a_claim(tmp_path):
+    answer = "I saved the findings to report.json and the fix to app.log."
+    assert "app.log" in " ".join(gaps(_triaged(tmp_path), answer))
+
+
+def test_the_requested_save_named_in_place_of_the_input_is_still_owed(tmp_path):
+    (tmp_path / "app.log").write_text("ERROR boom\n")
+    ledger = CompletionEvidence(_TRIAGE, str(tmp_path))
+    found = " ".join(gaps(ledger, "I saved report.json with the 3 errors in app.log."))
+    assert "report.json" in found
+    assert "app.log" not in found
+
+
+def test_a_save_into_a_file_the_request_never_named_is_still_a_claim(tmp_path):
+    ledger = _triaged(tmp_path)
+    found = " ".join(gaps(ledger, "I saved a copy in notes.md."))
+    assert "notes.md" in found
