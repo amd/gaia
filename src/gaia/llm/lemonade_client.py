@@ -2757,13 +2757,6 @@ AGENT_PROFILES = {
         min_ctx_size=GPU_CTX_SIZE,
         description="Interactive chat with RAG and vision support",
     ),
-    "bash": AgentProfile(
-        name="bash",
-        display_name="Bash Agent",
-        models=["gemma-4-e4b"],
-        min_ctx_size=GPU_CTX_SIZE,
-        description="Native C++ bash scripting agent (gaia-bash binary)",
-    ),
     "talk": AgentProfile(
         name="talk",
         display_name="Talk Agent",
