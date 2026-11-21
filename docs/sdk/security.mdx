@@ -66,7 +66,10 @@ Three things are wider on purpose:
   and image files saved directly in `~/.gaia/cache/sd/images` (not links or
   hard links), so a follow-up can summarize a transcript or edit, upscale or
   describe a generated image. Both are read-only to file tools, and a session
-  confined by `GAIA_ALLOWED_PATHS` does not get them.
+  confined by `GAIA_ALLOWED_PATHS` does not get them. A shell line that only
+  reads may name a generated image too, quoted or not, including `type` and a
+  single PowerShell read such as `Get-Item '<path>'`; any line that could write
+  to it is refused.
 - `capture_skill` may copy a local skill folder from anywhere, because every
   capture asks the user first with the source shown.
 
