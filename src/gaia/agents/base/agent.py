@@ -13373,6 +13373,100 @@ Do NOT wrap conversational replies in JSON.
         )
         return f"{note}\n\n{user_input}"
 
+    def _recover_from_parse_error(
+        self,
+        parse_exc: ValueError,
+        *,
+        steps_taken: int,
+        step_results: List[Any],
+        messages: List[Dict[str, Any]],
+        parse_failures: int,
+        markup_retries: int,
+    ) -> Tuple[Optional[str], int]:
+        """Handle a model reply whose tool call could not be parsed.
+
+        Records the error and either gives up or asks the model to try again.
+        Returns ``(answer, markup_retries)``: ``answer`` is the reply to end the
+        turn with when the retries are used up, else None after the retry
+        prompt has been appended to ``messages``.
+        """
+        logger.warning(
+            "Tool-call parse failed (step %d): %s — recovering with retry prompt",
+            steps_taken,
+            parse_exc,
+        )
+        self.error_history.append(
+            {
+                "step": steps_taken,
+                "error": str(parse_exc),
+                "type": "tool_call_parse_error",
+            }
+        )
+        # Pull the most recent successful image path
+        # out of step_results so both the recovery prompt and the
+        # give-up fallback can surface it.  When the SD two-step
+        # flow's step-1 succeeded and step-2 parse-failed, the
+        # canonical path is the breadcrumb the model needs to
+        # retry verbatim, and the breadcrumb the user needs in the
+        # final answer so the successful generation isn't lost.
+        # No-op for agents that don't emit ``image_path``.
+        _last_image_path = next(
+            (
+                r["image_path"]
+                for r in reversed(step_results)
+                if isinstance(r, dict)
+                and r.get("status") == "success"
+                and r.get("image_path")
+            ),
+            None,
+        )
+        if isinstance(parse_exc, MalformedToolMarkup):
+            if markup_retries >= _MAX_MARKUP_RETRIES:
+                return _TOOL_MARKUP_FAILURE_ANSWER, markup_retries
+            markup_retries += 1
+        # If we've already retried several times, give up gracefully and
+        # answer in plain text rather than spamming the user.
+        if parse_failures >= 3:
+            if _last_image_path:
+                return (
+                    f"I generated your image at `{_last_image_path}`, "
+                    "but I couldn't finish the follow-up step. "
+                    "Try asking for the next step in a fresh message."
+                ), markup_retries
+            return (
+                "I had trouble formatting my tool call. Could you "
+                "rephrase or break the request into smaller pieces?"
+            ), markup_retries
+        assistant_msg = "[I tried to call a tool but it could not be parsed.]"
+        user_msg = self._tool_call_retry_prompt(parse_exc)
+        if _last_image_path:
+            user_msg += (
+                f"\n\nYour previous step generated an image at "
+                f"`{_last_image_path}`. If your next tool call "
+                "needs this path, copy that string VERBATIM — do "
+                "not retype it."
+            )
+            logger.info(
+                "[PARSE-RECOVERY] injected canonical image_path=%s",
+                _last_image_path,
+            )
+        # Push a synthetic assistant turn + recovery user message so the
+        # next LLM call has context. Don't include the raw envelope to
+        # keep noise out of the conversation history.
+        messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_msg,
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": user_msg,
+            }
+        )
+        return None, markup_retries
+
     def _process_query_impl(
         self,
         user_input: str,
@@ -14673,86 +14767,19 @@ Do NOT wrap conversational replies in JSON.
                 markup_retries = 0
                 self._mark_errors_recovered()
             except ValueError as parse_exc:
-                logger.warning(
-                    "Tool-call parse failed (step %d): %s — recovering with retry prompt",
-                    steps_taken,
-                    parse_exc,
-                )
-                self.error_history.append(
-                    {
-                        "step": steps_taken,
-                        "error": str(parse_exc),
-                        "type": "tool_call_parse_error",
-                    }
-                )
                 error_count += 1
                 parse_failures += 1
-                # Pull the most recent successful image path
-                # out of step_results so both the recovery prompt and the
-                # give-up fallback can surface it.  When the SD two-step
-                # flow's step-1 succeeded and step-2 parse-failed, the
-                # canonical path is the breadcrumb the model needs to
-                # retry verbatim, and the breadcrumb the user needs in the
-                # final answer so the successful generation isn't lost.
-                # No-op for agents that don't emit ``image_path``.
-                _last_image_path = next(
-                    (
-                        r["image_path"]
-                        for r in reversed(step_results)
-                        if isinstance(r, dict)
-                        and r.get("status") == "success"
-                        and r.get("image_path")
-                    ),
-                    None,
+                given_up, markup_retries = self._recover_from_parse_error(
+                    parse_exc,
+                    steps_taken=steps_taken,
+                    step_results=step_results,
+                    messages=messages,
+                    parse_failures=parse_failures,
+                    markup_retries=markup_retries,
                 )
-                if isinstance(parse_exc, MalformedToolMarkup):
-                    if markup_retries >= _MAX_MARKUP_RETRIES:
-                        final_answer = _TOOL_MARKUP_FAILURE_ANSWER
-                        break
-                    markup_retries += 1
-                # If we've already retried several times, give up gracefully and
-                # answer in plain text rather than spamming the user.
-                if parse_failures >= 3:
-                    if _last_image_path:
-                        final_answer = (
-                            f"I generated your image at `{_last_image_path}`, "
-                            "but I couldn't finish the follow-up step. "
-                            "Try asking for the next step in a fresh message."
-                        )
-                    else:
-                        final_answer = (
-                            "I had trouble formatting my tool call. Could you "
-                            "rephrase or break the request into smaller pieces?"
-                        )
+                if given_up is not None:
+                    final_answer = given_up
                     break
-                assistant_msg = "[I tried to call a tool but it could not be parsed.]"
-                user_msg = self._tool_call_retry_prompt(parse_exc)
-                if _last_image_path:
-                    user_msg += (
-                        f"\n\nYour previous step generated an image at "
-                        f"`{_last_image_path}`. If your next tool call "
-                        "needs this path, copy that string VERBATIM — do "
-                        "not retype it."
-                    )
-                    logger.info(
-                        "[PARSE-RECOVERY] injected canonical image_path=%s",
-                        _last_image_path,
-                    )
-                # Push a synthetic assistant turn + recovery user message so the
-                # next LLM call has context. Don't include the raw envelope to
-                # keep noise out of the conversation history.
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": assistant_msg,
-                    }
-                )
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": user_msg,
-                    }
-                )
                 steps_taken += 1
                 continue
             logger.debug(f"Parsed response: {parsed}")
