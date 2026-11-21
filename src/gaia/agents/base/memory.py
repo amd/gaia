@@ -46,6 +46,7 @@ import sqlite3
 import sys
 import threading
 import time
+import unicodedata
 import weakref
 from collections import deque
 from contextlib import nullcontext
@@ -462,12 +463,25 @@ def _forget_text(item: Dict) -> Tuple[str, ...]:
 
 
 #: Phones type "don’t": the memory guards match a straight apostrophe.
-_APOSTROPHES = str.maketrans(dict.fromkeys("\u2018\u2019\u02bc\u2032", "'"))
+_APOSTROPHES = str.maketrans(
+    dict.fromkeys(
+        "\u2018\u2019\u201b\u02b9\u02bb\u02bc\u02c8\u2032\u2035\uff07`\u00b4", "'"
+    )
+)
 
 
 def _straight_apostrophes(text: str) -> str:
     """*text* with each apostrophe look-alike made "'", so its length is unchanged."""
     return text.translate(_APOSTROPHES)
+
+
+def _normalised(text: str) -> str:
+    """*text* in NFKC, with no invisible format characters and straight apostrophes."""
+    # The acute accent first: NFKC turns it into a space and a combining mark.
+    text = unicodedata.normalize("NFKC", _straight_apostrophes(text))
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf").translate(
+        _APOSTROPHES
+    )
 
 
 _FORGET_SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
@@ -652,9 +666,9 @@ _REFUSED_SECRET = (
 _NOTHING_SAVED = "Nothing was saved to memory."
 
 
-#: "remember (that) X" / "don't forget (that) X": X is the fact.
+#: "remember (that) X" / "keep in mind (that) X": X is the fact.
 _FACT_AFTER = re.compile(
-    r"\b(?:remember|memori[sz]e|don'?t\s+forget)\s*(?:that\b|this:|:)?\s*(.+)",
+    r"\b(?:remember|memori[sz]e|keep\s+in\s+mind)\s*(?:that\b|this:|:)?\s*(.+)",
     re.IGNORECASE | re.DOTALL,
 )
 #: "X. Please remember this." / "X, keep that in mind": X is before the request.
@@ -674,53 +688,69 @@ def _one_fact(text: str, last: bool = False) -> str:
     return _NEXT_INSTRUCTION.split(sentence, maxsplit=1)[0].strip()
 
 
+#: Longest message a forced save reads; a longer one is left to the model.
+_FORCED_SAVE_MAX_CHARS = 20_000
+#: The words that ask to keep something in memory. A forced save needs exactly one.
+_MEMORY_ASK = re.compile(
+    r"\bremember\w*|\bmemori[sz]\w*|\bin\s+mind\b|\bmemor(?:y|ies)\b", re.IGNORECASE
+)
+#: Any of these anywhere in the message, and the model decides what to keep.
+#: Deliberately blunt: "remember that I'm not vegan" is left to the model too.
+_DECLINE_SIGNAL = re.compile(
+    r"\b(?:not|never|no|nah|nope|nevermind|cannot|forget\w*|skip\w*|cancel\w*"
+    r"|ignore|disregard|undo|delete|erase|remove|except|unless"
+    r"|nicht|nein|kein\w*|nunca|jamais|nada|non)\b"
+    r"|n\s*'+\s*t\b"
+    r"|\b(?:do|does|did|wo|ca|could|would|should|must|need|is|are|was|were"
+    r"|has|have|had|ai|might)\s*n\s*t\b"
+    r"|\brather\s+(?:you|u)\b|\bprefer\s+(?:you|u|that\s+you)\b"
+    r"|\bhold\s+off\b|\bscratch\s+that\b|\bsecond\s+thoughts?\b"
+    r"|\bchanged?\s+my\s+mind\b",
+    re.IGNORECASE,
+)
+
+
 def _facts_in(part: str):
-    """Each "remember X" in *part* outside pasted text and not declined, first first."""
+    """Each "remember X" in *part* outside pasted text, first first."""
     pos = 0
     while (m := _FACT_AFTER.search(part, pos)) is not None:
-        if not _is_material(part, m.start()) and not _HELD_BACK.search(
-            _clause_before(part, m.start())
-        ):
+        if not _is_material(part, m.start()):
             yield m
         pos = m.start() + 1
 
 
-def fact_to_keep(request: str) -> str:
-    """The fact in *request* the user asked to remember, in their words, or "".
+def _may_force_a_save(text: str) -> bool:
+    """True only for one request to remember with no "not", "don't", "forget" or
+    other decline anywhere in *text*, which is already normalised."""
+    # A combining mark inside a word must not hide it from the scan.
+    scan = "".join(ch for ch in text if not unicodedata.category(ch).startswith("M"))
+    return len(_MEMORY_ASK.findall(scan)) == 1 and not _DECLINE_SIGNAL.search(scan)
 
-    "" when the request is not a plain remember request or names nothing.
+
+def fact_to_keep(request: str) -> str:
+    """The fact in *request* the user asked to remember, or "".
+
+    GAIA saves this itself when the model skips the save, so it is strict: ""
+    unless the message holds exactly one request to remember and nothing that
+    could decline it. Every other request is left to the model.
     """
-    original = (request or "").strip()
-    text = _straight_apostrophes(original)
+    if len(request or "") > _FORCED_SAVE_MAX_CHARS:
+        return ""
+    text = _normalised(request or "").strip()
+    if len(text) > _FORCED_SAVE_MAX_CHARS or not _may_force_a_save(text):
+        return ""
     if not asks_to_keep_in_memory(text):
         return ""
     # The user's own paragraphs only, and never a quote they pasted.
-    parts = _own_words(text)
-    after, rest = None, ""
-    for i, part in enumerate(parts):
-        after = next(_facts_in(part), None)
-        if after:
-            rest = " ".join([part[after.start(1) :], *parts[i + 1 :]])
-            break
+    after = next((m for part in _own_words(text) for m in _facts_in(part)), None)
     fact = _one_fact(after.group(1)) if after else ""
     if not re.search(r"\w", fact) or _ONLY_A_POINTER.match(fact):
         start = _STORAGE_REQUEST.search(text)
         before = _one_fact(text[: start.start()], last=True) if start else ""
         colon = _one_fact(text.split(":", 1)[1]) if ":" in text else ""
         fact = before if re.search(r"\w", before) else colon
-        rest = text[start.end() :] if start else text
     fact = fact.strip().rstrip(".!")
-    # "Remember X, but don't remember Y": Y is declined, so don't guess at X.
-    if _DECLINED.search(rest) or any(
-        _HELD_BACK.search(_clause_before(fact, v.start()))
-        for v in _KEEP_IN_MEMORY.finditer(fact)
-    ):
-        return ""
-    if len(fact.split()) < 2:
-        return ""
-    # Same length after straightening, so the user's own apostrophes are kept.
-    at = text.find(fact)
-    return original[at : at + len(fact)] if at >= 0 else fact
+    return fact if len(fact.split()) >= 2 else ""
 
 
 def claims_memory_save(answer: str) -> bool:
@@ -776,17 +806,6 @@ _HELD_BACK = re.compile(
 )
 
 
-#: After the fact, a part the user declines: "but don't keep my SSN in mind",
-#: "no need to remember it", "forget my address".
-_DECLINED = re.compile(
-    r"\b(?:don't|do\s+not|doesn't|never|not|shouldn't|won't|no\s+need\s+to)\s+"
-    r"(?:(?!(?:and|but|or|then)\b)\w+\s+){0,4}?"
-    r"(?:remember|memori[sz]e|save|store|keep|record)\b"
-    r"|(?:^|[.!?,;:\n]\s*|\b(?:but|and|please|pls|just|so|then|also)\s+)forget\b",
-    re.IGNORECASE,
-)
-
-
 def _clause_before(part: str, start: int) -> str:
     """The words of *part*'s clause that come before *start*."""
     return re.split(r"[.?!,;\n]", part[:start])[-1]
@@ -806,7 +825,7 @@ def _is_material(part: str, start: int) -> bool:
 
 def asks_to_keep_in_memory(text: str) -> bool:
     """True when *text* asks the agent to remember something it says."""
-    for part in _own_words(_straight_apostrophes(text or "")):
+    for part in _own_words(_normalised(text or "")):
         for request in _STORAGE_REQUEST.finditer(part):
             end = _SENTENCE_END.search(part, request.end())
             verb = _KEEP_IN_MEMORY.search(part, request.start())
