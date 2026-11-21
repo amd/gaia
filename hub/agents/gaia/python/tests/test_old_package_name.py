@@ -81,6 +81,8 @@ def test_the_frozen_binary_carries_the_old_name():
 
     assert "gaiapy" in freeze.COLLECT_SUBMODULES
     assert "gaia_agent" in freeze.HIDDEN_IMPORTS
+    # gaia_agent has no submodule files of its own to collect.
+    assert "gaia_agent" not in freeze.COLLECT_SUBMODULES
     assert not freeze.is_excluded("gaia_agent")
     assert not any(
         m == "gaia_agent" or m.startswith("gaia_agent.") for m in freeze.EXCLUDES

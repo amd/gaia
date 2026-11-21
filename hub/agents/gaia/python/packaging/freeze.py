@@ -98,8 +98,6 @@ COLLECT_SUBMODULES = [
     "keyring",
     # The agent package registers tools lazily inside functions.
     "gaiapy",
-    # The package's old name; skills loaded at runtime may still import it.
-    "gaia_agent",
     # connector provider discovery is dynamic.
     "gaia.connectors",
     # pydantic v2 ships a compiled core; collect data to be safe.
@@ -123,8 +121,8 @@ COLLECT_DATA: list[str] = []
 # only when they are installed and the binary otherwise boots without them.
 # anthropic: ``--use-claude`` and ``/model``, which the TUI forwards to the binary.
 REQUIRED_IMPORTS = ["anthropic"]
-# Modules only ever imported by name at runtime. gaia_agent is the package's
-# old name, which a skill's tools.py loaded at runtime may still import.
+# Modules only ever imported by name at runtime. gaia_agent, the package's old
+# name, is only an alias for gaiapy, so it has no submodules of its own to collect.
 HIDDEN_IMPORTS = [tiktoken_bundle.PLUGIN_MODULE, "gaia_agent"]
 # importlib.metadata version probes + entry-point agent discovery.
 COPY_METADATA = ["keyring", "amd-gaia", "gaia-agent-gaia"]
