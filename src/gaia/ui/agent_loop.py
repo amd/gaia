@@ -624,7 +624,10 @@ class AgentLoop:
                     rag_paths, lib_paths = _helpers._resolve_rag_paths(
                         db, session.get("document_ids", [])
                     )
-                    allowed = _helpers._compute_allowed_paths(rag_paths + lib_paths)
+                    allowed = _helpers._with_attachments(
+                        _helpers._compute_allowed_paths(rag_paths + lib_paths),
+                        _helpers._chat_upload_paths(db, session_id, []),
+                    )
                     config = GaiaAgentConfig(
                         model_id=model_id,
                         streaming=False,

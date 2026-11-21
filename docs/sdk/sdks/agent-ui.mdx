@@ -1942,8 +1942,10 @@ Used to reach the UI from a phone.
 
 <AccordionGroup>
   <Accordion title="POST /api/documents/upload">
-    Multipart drag-and-drop upload. Stores the file in the library and
-    enqueues it for indexing. Content already in the library returns the
+    Multipart drag-and-drop upload. Stores a copy of the file in the library
+    (under `$GAIA_HOME/chat/documents/`) and enqueues it for indexing. A chat's
+    agent can read the copy only once it is attached to that chat; other chats
+    can't list or open it. Content already in the library returns the
     existing document; if that document's stored file is gone, the new copy
     takes its place. A file that can't be read is a **422** whose
     `detail.status` is one of the `error_kind` values listed under
