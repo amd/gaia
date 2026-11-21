@@ -488,13 +488,14 @@ def _kill_tree(pid: int) -> None:
     from gaia.utils.process_tree import kill_pid_tree
 
     try:
-        cmdline = " ".join(psutil.Process(pid).cmdline())
+        proc = psutil.Process(pid)
+        cmdline = " ".join(proc.cmdline())
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return
     if "discord" not in cmdline or "start" not in cmdline:
         log.warning("Pid %s is not a Discord bridge (%s); not killing it", pid, cmdline)
         return
-    kill_pid_tree(pid)
+    kill_pid_tree(proc)
 
 
 def run_stop(*, emit: Callable[[str], None] = print) -> int:
