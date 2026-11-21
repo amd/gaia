@@ -666,10 +666,12 @@ def _one_fact(text: str, last: bool = False) -> str:
 
 
 def _facts_in(part: str):
-    """Each "remember X" in *part* outside text the user pasted, first first."""
+    """Each "remember X" in *part* outside pasted text and not declined, first first."""
     pos = 0
     while (m := _FACT_AFTER.search(part, pos)) is not None:
-        if not _is_material(part, m.start()):
+        if not _is_material(part, m.start()) and not _HELD_BACK.search(
+            _clause_before(part, m.start())
+        ):
             yield m
         pos = m.start() + 1
 
@@ -694,6 +696,12 @@ def fact_to_keep(request: str) -> str:
         colon = _one_fact(text.split(":", 1)[1]) if ":" in text else ""
         fact = before if re.search(r"\w", before) else colon
     fact = fact.strip().rstrip(".!")
+    # "Remember X, but don't remember Y": Y is declined, so don't guess at X.
+    if any(
+        _HELD_BACK.search(_clause_before(fact, v.start()))
+        for v in _KEEP_IN_MEMORY.finditer(fact)
+    ):
+        return ""
     return fact if len(fact.split()) >= 2 else ""
 
 

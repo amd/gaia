@@ -273,6 +273,29 @@ def test_a_request_not_to_remember_never_forces_a_save(request_text):
 @pytest.mark.parametrize(
     "request_text, fact",
     [
+        (
+            "Never remember my phone number 555-1234. Remember that I live in Austin.",
+            "I live in Austin",
+        ),
+        ("Don't remember my old address. Remember that I'm vegan.", "I'm vegan"),
+        (
+            "Do not remember that I'm in Austin, and remember that my dog is Rex",
+            "my dog is Rex",
+        ),
+        (
+            "Remember that my dog is Rex, but don't remember my phone number 555-1234",
+            "",
+        ),
+        ("Remember that my dog is Rex and never remember my address 12 Elm St", ""),
+    ],
+)
+def test_a_declined_fact_is_never_the_one_saved(request_text, fact):
+    assert fact_to_keep(request_text) == fact
+
+
+@pytest.mark.parametrize(
+    "request_text, fact",
+    [
         ("Don't forget that my dog is Rex.", "my dog is Rex"),
         ("If you don't mind, remember that my dog is Rex.", "my dog is Rex"),
         ("Remember that I'm not vegan.", "I'm not vegan"),
