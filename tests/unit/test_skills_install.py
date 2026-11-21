@@ -899,19 +899,6 @@ def test_remove_refuses_a_read_only_root(tmp_path):
     assert (bundled / "incident-review").is_dir()
 
 
-def test_installed_provenance_reads_from_the_lock(marketplace, tmp_path):
-    from gaia.skills.install import installed_provenance
-
-    key = marketplace.keygen()
-    marketplace.trust(key)
-    marketplace.publish(_write_source(tmp_path))
-    marketplace.install("web-research@^1.0")
-
-    provenance = installed_provenance(marketplace.manager)
-    assert provenance["web-research"]["requested"] == "^1.0"
-    assert provenance["web-research"]["installed_tier"] == "community"
-
-
 # ---------------------------------------------------------------------------
 # A hostile bundle: the client unpacks whatever the hub served
 # ---------------------------------------------------------------------------

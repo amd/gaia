@@ -400,24 +400,6 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# gaia-bash agent binary
-# ---------------------------------------------------------------------------
-option(GAIA_BUILD_BASH_AGENT "Build the gaia-bash coding agent" ON)
-if(GAIA_BUILD_BASH_AGENT)
-    add_executable(gaia-bash
-        agents/bash/main.cpp
-        agents/bash/bash_agent.cpp
-        agents/bash/bash_tools.cpp
-        agents/bash/mcp_server.cpp
-    )
-    target_include_directories(gaia-bash PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/agents/bash
-    )
-    target_link_libraries(gaia-bash PRIVATE gaia::gaia_core)
-
-endif()
-
-# ---------------------------------------------------------------------------
 # gaiacpp: the general-purpose GAIA agent (headless, serve, interactive)
 # ---------------------------------------------------------------------------
 option(GAIA_BUILD_GAIA_AGENT "Build the gaiacpp agent" ON)
@@ -428,7 +410,7 @@ if(GAIA_BUILD_GAIA_AGENT)
         agents/gaiacpp/delegation.cpp
         agents/gaiacpp/sidecar.cpp
         agents/gaiacpp/stdio_server.cpp
-        agents/bash/bash_tools.cpp
+        agents/gaiacpp/bash_tools.cpp
     )
     # A GAIA release stamps its own version (0.25.4, 0.25.4-rc.1); the daemon
     # and the release checks read it back from `gaiacpp --version`.
@@ -516,7 +498,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_media_tools.cpp
         agents/gaiacpp/gaia_agent.cpp
         agents/gaiacpp/delegation.cpp
-        agents/bash/bash_tools.cpp
+        agents/gaiacpp/bash_tools.cpp
         tests/test_console.cpp
         tests/test_http_client.cpp
         tests/test_lemonade_client.cpp
@@ -565,7 +547,7 @@ if(GAIA_BUILD_TESTS)
         # the repo root. test_skill.cpp discovers them from disk: skills/ must
         # conform, <vendor>_skills/ are third-party inputs that need not.
         GAIA_REPO_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures"
-        # test_skill_sets.cpp parses cpp/agents/bash/gaia-agent.yaml to prove a
+        # test_skill_sets.cpp parses cpp/agents/vlm/gaia-agent.yaml to prove a
         # real shipped manifest that declares no skills stays empty and falsy.
         GAIA_CPP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     )

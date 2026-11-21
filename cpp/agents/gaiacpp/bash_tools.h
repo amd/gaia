@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
-// Bash-specific tool callbacks for the GAIA BashAgent.
+// Shell tool callbacks for gaiacpp.
 // Provides shell execution and environment inspection tools.
 
 #pragma once
@@ -16,7 +16,7 @@
 
 namespace gaia {
 
-/// Bash-specific tool callbacks for the BashAgent.
+/// Shell tool callbacks for gaiacpp.
 ///
 /// Provides two tools:
 ///   - bash_execute: Run a shell command with timeout and output capture
