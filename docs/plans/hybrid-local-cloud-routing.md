@@ -41,8 +41,7 @@ quality**. Cost is secondary, and it matters only with a premium cloud model.
    it for the UI, and Go computes it for the TUI, pinned by shared golden fixtures.
    Neither client routes.
 
-Builds on [`skill-bound-task-execution.md`](skill-bound-task-execution.md)
-(`requires.class`): the tier is decided at the skill boundary, and Lemonade's own
+The tier is decided at the skill boundary (a skill's `requires.class`), and Lemonade's own
 router is used only as a guardrail, never to pick the tier.
 
 ---
