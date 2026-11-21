@@ -415,3 +415,22 @@ def admits_unverified(answer: str) -> bool:
     The generated ``Verification:`` footer says "unverified" too; strip it first.
     """
     return bool(_ADMISSION.search(answer or ""))
+
+
+#: A request for invented figures: "sample sales", "fake quarterly figures".
+#: The noun must follow (a determiner can't sit between), so "test the
+#: figures" and "the sample in report.pdf" don't count.
+_INVENTED_DATA = re.compile(
+    r"\b(?:sample|example|fake|dummy|mock|made[\s-]up|placeholder|test|synthetic"
+    r"|fictional|fictitious|invented|random)\s+"
+    r"(?:(?!(?:the|a|an|this|that|these|those|my|our|your|their|its|whether|if)\b)"
+    r"[\w-]+\s+){0,2}"
+    r"(?:data(?:set)?|figures|numbers|rows|values|records|entries|sales|prices"
+    r"|amounts)\b(?!\.\w)",
+    re.IGNORECASE,
+)
+
+
+def asks_for_invented_data(query: str) -> bool:
+    """True when *query* asks for sample, fake or other made-up figures."""
+    return bool(_INVENTED_DATA.search(query or ""))

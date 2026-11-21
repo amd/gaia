@@ -51,7 +51,7 @@ from typing import (
     Tuple,
 )
 
-from gaia.agents.base.claims import admits_unverified
+from gaia.agents.base.claims import admits_unverified, asks_for_invented_data
 from gaia.agents.base.grounding import (
     _EXEC_WORDS,
     _TABLE_RULE,
@@ -1910,8 +1910,10 @@ def file_findings(
     the model typing their text. A figure in one of those is the program's
     output unless a call this turn typed it, so only typed figures are
     reported there.
+
+    A request for sample or made-up data sources every figure it gets.
     """
-    if not files:
+    if not files or asks_for_invented_data(query):
         return []
     typed = _typed_numbers(records) if built else frozenset()
     written = {_basename(path) for path in files}
