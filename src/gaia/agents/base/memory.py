@@ -650,6 +650,19 @@ _FACT_AFTER = re.compile(
 )
 #: "X. Please remember this." / "X, keep that in mind": X is before the request.
 _ONLY_A_POINTER = re.compile(r"^(?:it|this|that|them)\b\W*$", re.IGNORECASE)
+#: Where one sentence or instruction ends and the next begins. The whitespace
+#: after the stop keeps "192.168.1.1" and "v2.5" whole.
+_FACT_BOUNDARY = re.compile(r"(?<=[.!?])\s+|\n+")
+_NEXT_INSTRUCTION = re.compile(r"[,;]?\s+(?:and\s+)?then\b|;\s*", re.IGNORECASE)
+
+
+def _one_fact(text: str, last: bool = False) -> str:
+    """The first sentence of *text* (the last, with *last*), cut before "and then …"."""
+    sentences = [s for s in _FACT_BOUNDARY.split(text.strip()) if s.strip()]
+    if not sentences:
+        return ""
+    sentence = sentences[-1] if last else sentences[0]
+    return _NEXT_INSTRUCTION.split(sentence, maxsplit=1)[0].strip()
 
 
 def fact_to_keep(request: str) -> str:
@@ -661,11 +674,11 @@ def fact_to_keep(request: str) -> str:
     if not asks_to_keep_in_memory(text):
         return ""
     after = _FACT_AFTER.search(text)
-    fact = after.group(1).strip() if after else ""
+    fact = _one_fact(after.group(1)) if after else ""
     if not re.search(r"\w", fact) or _ONLY_A_POINTER.match(fact):
         start = _STORAGE_REQUEST.search(text)
-        before = text[: start.start()].strip() if start else ""
-        colon = text.split(":", 1)[1].strip() if ":" in text else ""
+        before = _one_fact(text[: start.start()], last=True) if start else ""
+        colon = _one_fact(text.split(":", 1)[1]) if ":" in text else ""
         fact = before if re.search(r"\w", before) else colon
     fact = fact.strip().rstrip(".!")
     return fact if len(fact.split()) >= 2 else ""

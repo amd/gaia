@@ -157,6 +157,12 @@ def test_a_call_the_repair_ignored_is_made_once_and_answered_from(
     ]
     assert len(ran) == 1 and "'status': 'stored'" in ran[0]
     assert result["result"] == "Saved: router is 10.0.0.1."
+    # The user sees the call GAIA made, like any other tool step.
+    agent.console.print_tool_usage.assert_any_call("keep")
+    agent.console.pretty_print_json.assert_any_call(
+        {"fact": "router is 10.0.0.1"}, "Arguments"
+    )
+    agent.console.print_tool_complete.assert_called()
 
 
 def test_a_required_call_is_made_at_most_once_per_turn(monkeypatch, tmp_path):

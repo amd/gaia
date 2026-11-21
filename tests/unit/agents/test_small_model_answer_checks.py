@@ -221,6 +221,21 @@ def test_an_os_file_refusal_tells_the_model_to_hand_it_to_the_user(tmp_path):
         ),
         ("What do you remember about me?", ""),
         ("remember this", ""),
+        # The fact ends with its sentence: what follows is a separate request.
+        (
+            "Remember that I prefer metric units. Now convert 5 miles to km.",
+            "I prefer metric units",
+        ),
+        (
+            "Please remember my dog is Rex, and then list my Downloads folder",
+            "my dog is Rex",
+        ),
+        ("Remember my build is v2.5; then run the tests.", "my build is v2.5"),
+        (
+            "Convert 5 miles. My dog is Rex. Please remember this.",
+            "My dog is Rex",
+        ),
+        ("Save this to your memory: I like tea. Then open my notes.", "I like tea"),
     ],
 )
 def test_the_fact_a_request_asks_to_keep(request_text, fact):

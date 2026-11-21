@@ -16449,7 +16449,15 @@ Do NOT wrap conversational replies in JSON.
                                     "content": {"tool": name, "tool_args": args},
                                 }
                             )
-                            result = self._execute_tool_timed(name, args)
+                            self.console.print_tool_usage(name)
+                            self.console.pretty_print_json(args, "Arguments")
+                            self.console.start_progress(f"Executing {name}")
+                            try:
+                                result = self._execute_tool_timed(name, args)
+                            finally:
+                                self.console.stop_progress()
+                            self.console.pretty_print_json(result, "Result")
+                            self.console.print_tool_complete()
                             tool_call_log.append((name, str(args)))
                             ran = (
                                 f"[check:answer] The user's request needed `{name}`, "

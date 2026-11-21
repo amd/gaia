@@ -2472,8 +2472,9 @@ are fetched separately, and only the ones your hardware needs:
 | `flm:npu` | ~169 MB | Ryzen AI NPU |
 | `llamacpp:rocm` | ~4.3 GB | ROCm, including a per-GPU runtime |
 
-GAIA's default models (`Gemma-4-E4B-it-GGUF`, `embeddinggemma-300m`) run on the
-`llamacpp` backends, so CPU + Vulkan is enough for the common case:
+GAIA's default models (the chat model [setup picks for this PC](#choosing-models)
+and `embeddinggemma-300m`) run on the `llamacpp` backends, so CPU + Vulkan is
+enough for the common case:
 
 ```bash
 gaia lemonade embedded install-backend llamacpp:vulkan
