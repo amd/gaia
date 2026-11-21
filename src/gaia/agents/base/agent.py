@@ -15308,6 +15308,881 @@ Do NOT wrap conversational replies in JSON.
                 return "continue"
         return None
 
+    def _handle_answer(self, turn: _TurnState, user_input: str) -> Optional[str]:
+        """Check the model's answer and, when it holds up, make it the turn's final answer.
+
+        Returns "break" or "continue" when the step loop must do that, else None.
+        """
+        if "answer" in turn.parsed:
+            # Every check below must see the text the user will see.
+            answer_candidate = _with_answer_beside_tool_calls(
+                turn.parsed["answer"], turn.answer_beside_tool_calls
+            )
+            answer_candidate = _with_earlier_answer(
+                answer_candidate, turn.answer_given_mid_turn
+            )
+            # FastFlowLM occasionally ends a long prefill with zero tokens.
+            if (
+                turn.parsed.get("empty_response")
+                and turn.steps_taken < turn.steps_limit - 1
+                and turn.unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+            ):
+                turn.unfinished_answer_reprompts += 1
+                logger.warning(
+                    "[WORKFLOW] Empty model reply at step %d; asking again",
+                    turn.steps_taken,
+                )
+                turn.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Your last reply was empty. Make the next tool "
+                            "call, or answer the user from the results above."
+                        ),
+                    }
+                )
+                return "continue"
+            if (
+                _asks_permission_to_index(answer_candidate)
+                and self._user_asked_to_index(user_input)
+                and any(name in self._tools_registry for name in _INDEX_TOOL_NAMES)
+                and turn.steps_taken < turn.steps_limit - 1
+                and turn.unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+            ):
+                turn.unfinished_answer_reprompts += 1
+                logger.warning(
+                    "[WORKFLOW] Asked permission to index what the user said "
+                    "to index; asking it to index"
+                )
+                turn.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "The user already told you to index it. Call "
+                            "index_directory or index_document on that path "
+                            "now, then answer their question."
+                        ),
+                    }
+                )
+                return "continue"
+            turn.completion_gaps = []
+            if turn.self_check_open is not None:
+                # The reply is a verdict on the answer already given, so
+                # every check below judges that answer, not the verdict.
+                answer_candidate = self._close_self_check(
+                    turn.self_check_open,
+                    _without_tool_markup(answer_candidate),
+                    turn.steps_taken,
+                )
+                turn.self_check_open = None
+            # Guard against incomplete workflows: detect when the LLM outputs
+            # planning text ("Let me now search...") as a final answer after
+            # calling index_document but before issuing a query tool call.
+            # This is a known failure pattern — the agent stops mid-workflow.
+            _INDEX_TOOLS = (
+                "index_document",
+                "index_directory",
+                "index_folder",
+            )
+            _PLANNING_PHRASES = (
+                "let me now",
+                "i'll now",
+                "i will now search",
+                "i will now query",
+                "i'll check",
+                "let me check",
+                "let me search",
+                "let me query",
+                "now search within",
+                "search within this",
+                "now search for",
+                "query it now",
+                "search the document",
+                "let me look",
+                "i'll look",
+                "i will look",
+                "let me retrieve",
+                "i'll retrieve",
+                "let me find",
+            )
+            last_was_index = bool(
+                turn.tool_call_history
+                and any(
+                    turn.tool_call_history[-1][0].lower().startswith(p)
+                    for p in _INDEX_TOOLS
+                )
+            )
+            # Post-index query guard: catch when the agent indexed a document but
+            # answers from LLM memory without querying it first. This is a
+            # hallucination pattern — the agent returns confident-sounding wrong
+            # answers because it never retrieved the document's actual content.
+            turn._QUERY_TOOLS = (
+                "query_specific_file",
+                "query_documents",
+                "search_indexed_chunks",
+            )
+            last_index_pos = -1
+            for _pos, (_tname, _) in enumerate(turn.tool_call_log):
+                if any(_tname.lower().startswith(_p) for _p in _INDEX_TOOLS):
+                    last_index_pos = _pos
+            query_after_index = any(
+                _pos > last_index_pos
+                and any(_tname.lower().startswith(_q) for _q in turn._QUERY_TOOLS)
+                for _pos, (_tname, _) in enumerate(turn.tool_call_log)
+            )
+            if (
+                last_index_pos >= 0
+                and not query_after_index
+                and turn.steps_taken < turn.steps_limit - 1
+            ):
+                logger.debug(
+                    "[WORKFLOW] Post-index answer without query — forcing query tool call: %s",
+                    answer_candidate[:80],
+                )
+                # Deterministic fix: extract the file path from the last index_document
+                # call and execute query_specific_file directly, bypassing the LLM.
+                # This is more reliable than sending a correction and hoping the LLM
+                # complies, since the LLM may loop on the same hallucination.
+                _last_indexed_file = None
+                for _tname, _targs_str in reversed(turn.tool_call_log):
+                    if any(_tname.lower().startswith(_p) for _p in _INDEX_TOOLS):
+                        try:
+                            # tool_call_log stores str(tool_args) which is Python repr
+                            # (single-quoted keys), NOT JSON — use ast.literal_eval
+                            if isinstance(_targs_str, str):
+                                try:
+                                    _targs = ast.literal_eval(_targs_str)
+                                except (ValueError, SyntaxError):
+                                    _targs = json.loads(_targs_str)
+                            else:
+                                _targs = _targs_str
+                            _last_indexed_file = (
+                                _targs.get("file_path")
+                                or _targs.get("path")
+                                or _targs.get("document_path")
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            logger.debug(
+                                "Could not read the indexed file from the "
+                                "index_document call: %s",
+                                e,
+                            )
+                        break
+                if _last_indexed_file:
+                    # Inject a fake assistant tool-call so the conversation shows
+                    # the query happening, then execute it and inject the result.
+                    _forced_query = (
+                        user_input[:120] if user_input else "summary overview key facts"
+                    )
+                    _forced_tool_call = {
+                        "thought": "I indexed the document but must query it before answering.",
+                        "tool": "query_specific_file",
+                        "tool_args": {
+                            "file_path": _last_indexed_file,
+                            "query": _forced_query,
+                        },
+                    }
+                    turn.conversation.append(
+                        {"role": "assistant", "content": _forced_tool_call}
+                    )
+                    _forced_result = self._execute_tool_timed(
+                        "query_specific_file",
+                        {"file_path": _last_indexed_file, "query": _forced_query},
+                    )
+                    turn.tool_call_log.append(
+                        ("query_specific_file", str(_forced_tool_call["tool_args"]))
+                    )
+                    turn.messages.append(
+                        {
+                            "role": "user",
+                            "content": f"Tool result: {_forced_result}",
+                        }
+                    )
+                    logger.debug(
+                        "[WORKFLOW] Forced query result injected, resuming loop."
+                    )
+                else:
+                    # No file path extractable — fall back to correction message
+                    turn.messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "SYSTEM: You indexed a document but answered without querying it. "
+                                "You MUST call query_specific_file or query_documents NOW. "
+                                "Output a query tool call immediately."
+                            ),
+                        }
+                    )
+                return "continue"
+
+            unfinished_kind = _unfinished_answer_kind(answer_candidate)
+            if turn.no_action_requested and unfinished_kind == "narration":
+                # A plan or a stated next step is what this turn asked for.
+                unfinished_kind = None
+            can_reprompt_unfinished = (
+                turn.steps_taken < turn.steps_limit - 1
+                and turn.unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+            )
+            if unfinished_kind and not can_reprompt_unfinished:
+                logger.warning(
+                    "[WORKFLOW] Not re-prompting unfinished %s answer: re-prompt "
+                    "budget or step limit reached (%d/%d re-prompts, "
+                    "step %d/%d): %s",
+                    unfinished_kind,
+                    turn.unfinished_answer_reprompts,
+                    _MAX_UNFINISHED_ANSWER_REPROMPTS,
+                    turn.steps_taken,
+                    turn.steps_limit,
+                    answer_candidate[-120:],
+                )
+            turn.stopped_on_announced_step = (
+                unfinished_kind == "narration" and not can_reprompt_unfinished
+            )
+            if turn.stopped_on_announced_step:
+                # Never hand over the announcement as if it were the answer.
+                answer_candidate = _unfinished_step_answer(answer_candidate)
+            if unfinished_kind == "tool_markup" and can_reprompt_unfinished:
+                turn.unfinished_answer_reprompts += 1
+                logger.debug(
+                    "[WORKFLOW] Blocking tool-call markup as final answer: %s",
+                    answer_candidate[:120],
+                )
+                turn.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Your answer contains a tool call written out as "
+                            'text (for example `<invoke name=...>` or a `{"tool": '
+                            "...}` object), so it was never run. Issue it as a "
+                            "real tool call now, or give the final answer if the "
+                            "task is complete."
+                        ),
+                    }
+                )
+                return "continue"
+
+            # An answer about named workspace files that never opened one.
+            # Plan steps run outside tool_call_log; the turn record has them.
+            if (
+                not turn.look_first_reprompted
+                and not turn.no_look_requested
+                and not turn.tool_call_log
+                and not self._turn_tool_executions
+                and turn.steps_taken < turn.steps_limit - 1
+                and any(name in self._tools_registry for name in _LOOK_TOOLS)
+            ):
+                unlooked = named_workspace_paths(
+                    getattr(self, "_original_user_input", None) or user_input,
+                    os.getcwd(),
+                )
+                if unlooked:
+                    turn.look_first_reprompted = True
+                    # Grounding's look gate would ask the same thing again.
+                    turn.grounding_fired.add(LOOK)
+                    logger.info(
+                        "[WORKFLOW] Answer named %s without a tool call; asking "
+                        "the agent to look first",
+                        unlooked,
+                    )
+                    correction = LOOK_FIRST_PROMPT.format(
+                        paths=", ".join(f"`{p}`" for p in unlooked[:3])
+                    )
+                    turn.messages.append({"role": "user", "content": correction})
+                    turn.conversation.append({"role": "user", "content": correction})
+                    return "continue"
+
+            # "Please remember this" answered with "noted" and no save.
+            unsaved = getattr(self, "_unsaved_memory_request", None)
+            if (
+                unsaved
+                and not turn.save_reprompted
+                and turn.steps_taken < turn.steps_limit - 1
+            ):
+                called = {name for name, _ in turn.tool_call_log} | {
+                    record.get("tool") for record in self._turn_tool_executions
+                }
+                nudge = unsaved(called)
+                if nudge:
+                    turn.save_reprompted = True
+                    logger.info(
+                        "[WORKFLOW] Asked to remember, nothing saved; asking "
+                        "the agent to save it"
+                    )
+                    turn.messages.append({"role": "user", "content": nudge})
+                    turn.conversation.append({"role": "user", "content": nudge})
+                    return "continue"
+
+            # Universal planning-text guard: catch any short response that is
+            # only an intent sentence ("I'll check...", "Let me query...") with
+            # no actual answer, regardless of whether tools were already called.
+            # This covers three cases:
+            #   1. post-index planning (index_document → "Let me now search...")
+            #   2. no-tool planning on follow-up turns ("I'll check the remote work policy")
+            #   3. post-tool planning after getting results ("I need more info... Let me query")
+            # The honest ending quotes the announcement; it is final, not planning.
+            is_planning_text = (
+                not turn.stopped_on_announced_step
+                and not turn.no_action_requested
+                and len(answer_candidate) < 500
+                and any(
+                    phrase in answer_candidate.lower() for phrase in _PLANNING_PHRASES
+                )
+            )
+            if is_planning_text and turn.steps_taken < turn.steps_limit - 1:
+                if unfinished_kind == "narration":
+                    # Same budget as the narration re-prompt, so the turn can end.
+                    turn.unfinished_answer_reprompts += 1
+                # Inject a correction message and continue the loop to force the answer
+                logger.debug(
+                    "[WORKFLOW] Blocking planning-only response as final answer: %s",
+                    answer_candidate[:80],
+                )
+                correction = (
+                    "You produced planning text instead of an answer. "
+                    "You already have the data from the tool results above — "
+                    "output the final answer NOW based on what you retrieved. "
+                    "Do not call another tool. Just answer the question directly."
+                )
+                if last_was_index:
+                    correction = (
+                        "You indexed the document but haven't answered the question yet. "
+                        "Call query_specific_file or query_documents NOW to retrieve the "
+                        "actual content. Output a tool call JSON — not planning text."
+                    )
+                elif not turn.tool_call_history and not self._turn_tool_executions:
+                    correction = (
+                        "You said you would look that up but called no tools. "
+                        "Call the appropriate tool RIGHT NOW. "
+                        "Output a JSON tool call — not another planning sentence."
+                    )
+                turn.messages.append({"role": "user", "content": correction})
+                return (
+                    "continue"  # Don't set final_answer — loop again to force the query
+                )
+
+            if unfinished_kind == "narration" and can_reprompt_unfinished:
+                turn.unfinished_answer_reprompts += 1
+                logger.debug(
+                    "[WORKFLOW] Blocking narrated next step as final answer: %s",
+                    answer_candidate[-120:],
+                )
+                turn.messages.append(
+                    {
+                        "role": "user",
+                        "content": _narration_reprompt(answer_candidate),
+                    }
+                )
+                return "continue"
+
+            # Tool-syntax artifact guard: catch responses that are just a tool-call label
+            # like "[tool:query_specific_file]" — Qwen3 confusion where the model writes
+            # the tool invocation syntax as its answer text instead of calling it.
+            _TOOL_ARTIFACT_PATTERN = re.compile(
+                r"^\s*\[tool:[a-zA-Z_]+\]\s*$", re.MULTILINE
+            )
+            if (
+                _TOOL_ARTIFACT_PATTERN.match(answer_candidate.strip())
+                and turn.steps_taken < turn.steps_limit - 1
+            ):
+                logger.debug(
+                    "[WORKFLOW] Blocking tool-syntax artifact as final answer: %s",
+                    answer_candidate[:80],
+                )
+                turn.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "SYSTEM: Your response is just a tool call label (e.g. '[tool:query_specific_file]'), "
+                            "not an actual answer. You have already gathered the information you need from your "
+                            "previous tool calls. Write a complete prose answer to the user's question using "
+                            "the information already retrieved."
+                        ),
+                    }
+                )
+                return "continue"
+
+            # Raw JSON hallucination guard: catch responses that contain fake tool-output
+            # JSON blobs instead of actual prose answers. This is a failure mode where
+            # the LLM writes what it imagines a tool would return rather than calling it.
+            _RAW_JSON_PATTERNS = [
+                r'```json\s*\{[^`]*"status"\s*:',
+                r'```json\s*\{[^`]*"documents"\s*:',
+                r'```json\s*\{[^`]*"chunks"\s*:',
+                r'\{\s*"status"\s*:\s*"success"',
+                r'\{\s*"documents"\s*:\s*\[',
+            ]
+            is_raw_json = any(
+                re.search(p, answer_candidate, re.DOTALL) for p in _RAW_JSON_PATTERNS
+            )
+            if is_raw_json and turn.steps_taken < turn.steps_limit - 1:
+                logger.debug(
+                    "[WORKFLOW] Blocking raw-JSON hallucination as final answer: %s",
+                    answer_candidate[:120],
+                )
+                turn.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "SYSTEM: Your response contains raw JSON that looks like a fabricated "
+                            "tool output. Do NOT write JSON in your response. If you need data, "
+                            "call the actual tool. Otherwise, write your answer in plain prose. "
+                            "Provide a clean prose answer to the user's question now."
+                        ),
+                    }
+                )
+                return "continue"
+
+            # Only a generate_image call that ran leaves an outcome to check
+            # the answer against; a mention of the capability is not one.
+            image_outcome_recorded = (
+                turn.capability_tool_last_succeeded is not None
+                and any(_is_image_tool(_n) for _n in self._tools_registry)
+            )
+            # The record cannot say what the answer claims, so the answer
+            # is read — but only against an outcome that exists.
+            _IMAGE_AVAILABILITY_CLAIM = [
+                r"stable diffusion.*active",
+                r"stable diffusion.*when",
+                r"image generation.*flag",
+                r"generate images when",
+                r"can generate images",
+                r"i can.*create.*image",
+            ]
+            _IMAGE_OUTCOME_REPORTED = [
+                r"not available",
+                r"unavailable",
+                r"not.*active",
+                r"not.*enabled",
+                r"can't generate",
+                r"cannot generate",
+                r"unable to generate",
+                r"tried.*generat",
+                r"attempted.*generat",
+                r"generat.*error",
+                r"generat.*fail",
+                r"image.*generat.*not",
+                r"success",
+                r"generated.*image",
+                r"here.*image",
+            ]
+            if (
+                image_outcome_recorded
+                and not turn.image_outcome_corrected
+                and turn.steps_taken < turn.steps_limit - 1
+                and any(
+                    re.search(_p, answer_candidate, re.IGNORECASE)
+                    for _p in _IMAGE_AVAILABILITY_CLAIM
+                )
+                and not any(
+                    re.search(_p, answer_candidate, re.IGNORECASE)
+                    for _p in _IMAGE_OUTCOME_REPORTED
+                )
+            ):
+                turn.image_outcome_corrected = True
+                _outcome = (
+                    "generate_image succeeded"
+                    if turn.capability_tool_last_succeeded
+                    else "generate_image returned an error"
+                )
+                logger.debug(
+                    "[WORKFLOW] Answer ignores the recorded outcome (%s): %s",
+                    _outcome,
+                    answer_candidate[:80],
+                )
+                turn.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"SYSTEM: This turn {_outcome}. Your answer says when "
+                            "image generation is available instead of what "
+                            "happened. Answer again and report that outcome."
+                        ),
+                    }
+                )
+                return "continue"
+
+            # A request it never looked at, values no tool produced, or
+            # work it never did: one correction per gate, and only before
+            # the answer counts — after it the scope guard refuses lookups.
+            fresh = (
+                []
+                if self._turn_scope.answered
+                else [
+                    f
+                    for f in self._grounding_findings(
+                        answer_candidate, user_input, self._grounding_history
+                    )
+                    if f.gate not in turn.grounding_fired
+                ]
+            )
+            if fresh and turn.steps_taken < turn.steps_limit - 1:
+                turn.grounding_fired.update(f.gate for f in fresh)
+                logger.info(
+                    "[check:grounding] %s fired at step %d",
+                    ",".join(sorted({f.gate for f in fresh})),
+                    turn.steps_taken,
+                )
+                correction = {
+                    "role": "user",
+                    "content": grounding_correction(fresh),
+                }
+                turn.messages.append(correction)
+                turn.conversation.append(dict(correction))
+                return "continue"
+
+            # An answer, not a plan or a narrated step: from here on, calls
+            # must serve the request rather than start new work.
+            if turn.budget_stop_pending:
+                # Running out of plan budget is not finishing the request.
+                turn.budget_stop_pending = False
+            elif not self._turn_scope.answered:
+                self._turn_scope.mark_answered()
+                turn.conversation.append(
+                    {
+                        "role": "system",
+                        "content": {
+                            "type": ANSWERED_MARKER,
+                            "step": turn.steps_taken,
+                        },
+                    }
+                )
+            # Changed code after the last test run: ask once for the run.
+            if (
+                not turn.verify_after_change_reprompted
+                and turn.steps_taken < turn.steps_limit - 1
+            ):
+                _correction = self._verify_after_change_prompt()
+                if _correction:
+                    turn.verify_after_change_reprompted = True
+                    logger.info(
+                        "%s fired at step %d",
+                        VERIFY_AFTER_CHANGE_TAG,
+                        turn.steps_taken,
+                    )
+                    self._reopen_turn_scope(turn.conversation)
+                    turn.messages.append({"role": "user", "content": _correction})
+                    turn.conversation.append({"role": "user", "content": _correction})
+                    return "continue"
+            # Last guard before the answer is sealed: the footer below
+            # already knows whether a test ran, so an answer that reports a
+            # pass count the record cannot show gets one chance to fix it.
+            test_claim = unsupported_test_claim(
+                answer_candidate, self._turn_tool_executions
+            )
+            if test_claim:
+                claim, why = test_claim
+                can_correct_claim = (
+                    turn.steps_taken < turn.steps_limit - 1
+                    and turn.test_claim_corrections < _MAX_TEST_CLAIM_CORRECTIONS
+                    and claim.lower() not in turn.corrected_test_claims
+                )
+                if not can_correct_claim:
+                    logger.warning(
+                        "[WORKFLOW] Rejecting unsupported test claim %r (%s): "
+                        "%d/%d corrections used, step %d/%d",
+                        claim,
+                        why,
+                        turn.test_claim_corrections,
+                        _MAX_TEST_CLAIM_CORRECTIONS,
+                        turn.steps_taken,
+                        turn.steps_limit,
+                    )
+                    # Kept, with the gap named after it below.
+                    turn.completion_gaps = [why + "."]
+                else:
+                    turn.test_claim_corrections += 1
+                    turn.corrected_test_claims.add(claim.lower())
+                    logger.debug(
+                        "[WORKFLOW] Correcting unsupported test claim %r (%s)",
+                        claim,
+                        why,
+                    )
+                    # The next answer replaces this one wholesale, so it
+                    # must carry the whole answer, not just the fixed claim.
+                    # With the time limit up no run can start: don't ask for one.
+                    remedy = (
+                        "The time limit is up and no tool can run, so drop "
+                        "the claim, or say when the check last ran and "
+                        "that it was not repeated. "
+                        if self.time_capped_run_seconds(1) == 0
+                        else "Either run the check now, or drop the claim. "
+                    )
+                    correction = {
+                        "role": "user",
+                        "content": (
+                            f'Your answer says "{claim}", but {why}. '
+                            f"{remedy}"
+                            "Then give your complete answer again: it "
+                            "replaces the one above, which the user will "
+                            "not see."
+                        ),
+                    }
+                    self._reopen_turn_scope(turn.conversation)
+                    turn.messages.append(correction)
+                    turn.conversation.append(dict(correction))
+                    return "continue"
+
+            # A message that landed DURING this model call was never seen
+            # by it, and the step-boundary drain above has already run —
+            # sealing here would drop words the route reported delivered.
+            # Cancel check mirrors that drain's: a turn told to stop leaves
+            # the message queued rather than consuming it. Bounded by
+            # steps_limit, which also makes the last step seal normally.
+            _cancel = getattr(self, "_cancel_event", None)
+            if (
+                turn.steps_taken < turn.steps_limit
+                and not (_cancel is not None and _cancel.is_set())
+                and self._drain_followups(turn.messages, turn.conversation)
+            ):
+                return "continue"
+
+            # Last chance to catch an edit that reported success but left a
+            # missing, empty or unparsable file.
+            if self._verify_edits_on and self._files_written_this_turn():
+                if self._edit_verification_rounds < _MAX_EDIT_VERIFICATIONS:
+                    edit_problems = self._verify_turn_edits()
+                    if edit_problems:
+                        turn.steps_limit += _VERIFY_REPAIR_STEPS
+                        repair = {
+                            "role": "user",
+                            "content": _EDIT_VERIFICATION_PROMPT.format(
+                                problems="\n".join(f"- {p}" for p in edit_problems),
+                                steps=_VERIFY_REPAIR_STEPS,
+                            ),
+                        }
+                        turn.messages.append(repair)
+                        turn.conversation.append(dict(repair))
+                        logger.info(
+                            "Post-edit verification found %d problem(s); "
+                            "granted %d repair step(s) (limit now %d)",
+                            len(edit_problems),
+                            _VERIFY_REPAIR_STEPS,
+                            turn.steps_limit,
+                        )
+                        return "continue"
+                else:
+                    # Out of repair rounds: still-broken files go into the answer.
+                    self._edit_verification_findings = self._edit_problems()
+                    turn.completion_gaps.extend(
+                        p
+                        for p in self._edit_verification_findings
+                        if p not in turn.completion_gaps
+                    )
+
+            unfinalized_answer = _without_tool_markup(answer_candidate)
+            if turn.answer_before_completion_check is not None:
+                restored = _with_replaced_answer(
+                    unfinalized_answer, turn.answer_before_completion_check
+                )
+                turn.answer_before_completion_check = None
+                # Only once the work done since backs what it said.
+                restored_soft: List[str] = []
+                if (
+                    restored is not None
+                    and not self._completion_evidence.gaps(
+                        restored,
+                        _write_claims_for(self._completion_evidence),
+                        asserts_file_write=_claims_file_write,
+                        soft=restored_soft,
+                    )
+                    and not restored_soft
+                ):
+                    unfinalized_answer = restored
+            answer_candidate = self.finalize_answer(
+                unfinalized_answer, turn.conversation
+            )
+            self._check_extraction_sources()
+            soft_gaps: List[str] = []
+            artifact_gaps = self._completion_evidence.gaps(
+                answer_candidate,
+                _write_claims_for(self._completion_evidence),
+                asserts_file_write=_claims_file_write,
+                soft=soft_gaps,
+            )
+            extraction_gaps = self._extraction_ledger.gaps(self._turn_outputs())
+            artifact_gaps.extend(extraction_gaps)
+            if artifact_gaps or soft_gaps:
+                if (
+                    turn.completion_corrections < _MAX_FILE_WRITE_CLAIM_REPROMPTS
+                    and turn.steps_taken < turn.steps_limit - 1
+                    and any(
+                        name in self._tools_registry
+                        for name in (
+                            "write_file",
+                            "write_python_file",
+                            "write_markdown_file",
+                            "edit_file",
+                            "read_file",
+                            "run_python",
+                            "search_tools",
+                        )
+                    )
+                ):
+                    turn.completion_corrections += 1
+                    turn.answer_before_completion_check = unfinalized_answer
+                    correction = (
+                        (
+                            "[check:completion] "
+                            + " ".join(artifact_gaps)
+                            + (
+                                " For incomplete extraction, call `extract_document_items` on each source file. Never replace enumeration with a summary."
+                                if extraction_gaps
+                                else ""
+                            )
+                            + " Use `write_file` for a missing requested save, then "
+                            "`read_file` with offset=0 and limit=8000 to observe that exact output. Follow all "
+                            "continuation pages. Report only contents observed in "
+                            "tool results. An unrelated tool or file is not evidence. "
+                            "This check is internal: answer the user without "
+                            "mentioning it or the read's offset and pages. "
+                            + _GIVE_ANSWER_AGAIN
+                        )
+                        if artifact_gaps
+                        else (
+                            "[check:completion] "
+                            + " ".join(soft_gaps)
+                            + " If the file is needed, write it with `write_file` and read it back. "
+                            "If you were describing where something is usually saved, or a file "
+                            "from an earlier turn, say so without claiming you saved it now. "
+                            + _GIVE_ANSWER_AGAIN
+                        )
+                    )
+                    refused = set(self._completion_evidence.refused.values())
+                    if artifact_gaps and set(artifact_gaps) <= refused:
+                        unconfirmed = self._completion_evidence.unconfirmed
+                        if unconfirmed & set(artifact_gaps):
+                            # Nobody said no, but retrying unasked skips them.
+                            correction = (
+                                "[check:completion] "
+                                + " ".join(artifact_gaps)
+                                + " Do not retry that write now. Say it was "
+                                "not saved because the approval expired, ask "
+                                "whether to try again, and give your complete "
+                                "answer again."
+                            )
+                        else:
+                            # Asking for the write again would re-ask a "no".
+                            correction = (
+                                "[check:completion] "
+                                + " ".join(artifact_gaps)
+                                + " Do not retry that write, here or anywhere "
+                                "else. Say it was not saved, and give your "
+                                "complete answer again."
+                            )
+                    else:
+                        self._turn_scope.widen(correction)
+                        if artifact_gaps:
+                            # Writing and reading back the deliverable is the
+                            # request's work, even when a script produces it.
+                            self._reopen_turn_scope(turn.conversation)
+                    turn.messages.append({"role": "user", "content": correction})
+                    turn.conversation.append({"role": "user", "content": correction})
+                    return "continue"
+                turn.completion_gaps.extend(artifact_gaps)
+            elif not turn.self_check_sent and not turn.completion_gaps:
+                turn.self_check_sent = True
+                check = self._self_check_message(turn.steps_taken, turn.steps_limit)
+                if check:
+                    turn.self_check_open = {
+                        "answer": unfinalized_answer,
+                        "at": time.monotonic(),
+                        "step": turn.steps_taken,
+                        "tools": len(self._turn_tool_executions),
+                    }
+                    # A fix the check asks for is the request's own work.
+                    self._turn_scope.widen(check)
+                    self._reopen_turn_scope(turn.conversation)
+                    turn.messages.append({"role": "user", "content": check})
+                    turn.conversation.append({"role": "user", "content": check})
+                    return "continue"
+            answer_issues = self.answer_problems(answer_candidate)
+            if answer_issues:
+                if not turn.answer_repaired:
+                    turn.answer_repaired = True
+                    # An acknowledgement-only reply must not replace the report.
+                    turn.answer_before_completion_check = unfinalized_answer
+                    turn.steps_limit += _ANSWER_REPAIR_STEPS
+                    repair = self.answer_repair_prompt(answer_issues)
+                    self._turn_scope.widen(repair)
+                    self._reopen_turn_scope(turn.conversation)
+                    turn.messages.append({"role": "user", "content": repair})
+                    turn.conversation.append({"role": "user", "content": repair})
+                    logger.info(
+                        "Answer check found %d problem(s); asked once for a "
+                        "repair (step limit now %d)",
+                        len(answer_issues),
+                        turn.steps_limit,
+                    )
+                    return "continue"
+                turn.completion_gaps.extend(
+                    p for p in answer_issues if p not in turn.completion_gaps
+                )
+            # Validate after subclass rewriting, before console/SSE emission.
+            final_test_claim = unsupported_test_claim(
+                answer_candidate, self._turn_tool_executions
+            )
+            if (
+                final_test_claim
+                and final_test_claim[1] + "." not in turn.completion_gaps
+            ):
+                turn.completion_gaps.append(final_test_claim[1] + ".")
+            coverage_gap = self._completion_evidence.read_coverage_gap(answer_candidate)
+            if coverage_gap and coverage_gap not in turn.completion_gaps:
+                turn.completion_gaps.append(coverage_gap)
+            if turn.completion_gaps:
+                # Never discard the work: keep it and name what is unconfirmed.
+                answer_candidate = caveated_answer(
+                    answer_candidate, turn.completion_gaps
+                )
+            else:
+                self._note_ungrounded(answer_candidate, user_input)
+            inventory = self._extraction_ledger.render()
+            if inventory:
+                # Never ask another synthesis call to reproduce the set; it condenses.
+                answer_candidate += "\n\n" + inventory
+                if not turn.completion_gaps:
+                    saved = sorted(self._extraction_ledger.verified)
+                    if saved:
+                        answer_candidate += (
+                            "\n\nI saved the full list to "
+                            + ", ".join(f"`{path}`" for path in saved)
+                            + " and checked the file."
+                        )
+            turn.final_answer = self._with_verification_scope(answer_candidate)
+            turn.verification_scope_applied = True
+            self.execution_state = self.STATE_COMPLETION
+            # Compute the real token total BEFORE printing the answer so it
+            # can ride the same event, instead of the post-loop aggregation
+            # below which runs after print_final_answer already fired.
+            # Output tokens only — "tokens actually generated",
+            # matching the tok/s calc downstream which is also output-only.
+            _pre_input_tokens, pre_output_tokens = _sum_conversation_tokens(
+                turn.conversation, self._tool_reported_usage
+            )
+            if turn.stopped_on_announced_step:
+                self._announce_turn_failed()
+            # Sealed before the answer prints: total_s must mean "until it
+            # was on screen", and the console folds the record into that
+            # same event.
+            turn.turn_record = self._finish_turn_record(
+                turn.final_answer, turn.steps_taken
+            )
+            self._publish_turn_metrics(turn.turn_record)
+            turn.model_messages = self._stage_final_model_messages(
+                turn.messages, turn.final_answer
+            )
+            self.console.print_final_answer(
+                turn.final_answer,
+                streaming=self.streaming,
+                total_tokens=pre_output_tokens,
+                input_tokens=_pre_input_tokens,
+                cached_tokens=_sum_cached_tokens(turn.conversation),
+                ttft_seconds=_query_ttft_seconds(turn.conversation),
+                tok_per_s=_query_tok_per_s(turn.conversation),
+            )
+            return "break"
+        return None
+
     def _process_query_impl(
         self,
         user_input: str,
@@ -15946,887 +16821,11 @@ Do NOT wrap conversational replies in JSON.
             )
 
             # Check for final answer (after collecting stats)
-            if "answer" in turn.parsed:
-                # Every check below must see the text the user will see.
-                answer_candidate = _with_answer_beside_tool_calls(
-                    turn.parsed["answer"], turn.answer_beside_tool_calls
-                )
-                answer_candidate = _with_earlier_answer(
-                    answer_candidate, turn.answer_given_mid_turn
-                )
-                # FastFlowLM occasionally ends a long prefill with zero tokens.
-                if (
-                    turn.parsed.get("empty_response")
-                    and turn.steps_taken < turn.steps_limit - 1
-                    and turn.unfinished_answer_reprompts
-                    < _MAX_UNFINISHED_ANSWER_REPROMPTS
-                ):
-                    turn.unfinished_answer_reprompts += 1
-                    logger.warning(
-                        "[WORKFLOW] Empty model reply at step %d; asking again",
-                        turn.steps_taken,
-                    )
-                    turn.messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "Your last reply was empty. Make the next tool "
-                                "call, or answer the user from the results above."
-                            ),
-                        }
-                    )
-                    continue
-                if (
-                    _asks_permission_to_index(answer_candidate)
-                    and self._user_asked_to_index(user_input)
-                    and any(name in self._tools_registry for name in _INDEX_TOOL_NAMES)
-                    and turn.steps_taken < turn.steps_limit - 1
-                    and turn.unfinished_answer_reprompts
-                    < _MAX_UNFINISHED_ANSWER_REPROMPTS
-                ):
-                    turn.unfinished_answer_reprompts += 1
-                    logger.warning(
-                        "[WORKFLOW] Asked permission to index what the user said "
-                        "to index; asking it to index"
-                    )
-                    turn.messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "The user already told you to index it. Call "
-                                "index_directory or index_document on that path "
-                                "now, then answer their question."
-                            ),
-                        }
-                    )
-                    continue
-                turn.completion_gaps = []
-                if turn.self_check_open is not None:
-                    # The reply is a verdict on the answer already given, so
-                    # every check below judges that answer, not the verdict.
-                    answer_candidate = self._close_self_check(
-                        turn.self_check_open,
-                        _without_tool_markup(answer_candidate),
-                        turn.steps_taken,
-                    )
-                    turn.self_check_open = None
-                # Guard against incomplete workflows: detect when the LLM outputs
-                # planning text ("Let me now search...") as a final answer after
-                # calling index_document but before issuing a query tool call.
-                # This is a known failure pattern — the agent stops mid-workflow.
-                _INDEX_TOOLS = (
-                    "index_document",
-                    "index_directory",
-                    "index_folder",
-                )
-                _PLANNING_PHRASES = (
-                    "let me now",
-                    "i'll now",
-                    "i will now search",
-                    "i will now query",
-                    "i'll check",
-                    "let me check",
-                    "let me search",
-                    "let me query",
-                    "now search within",
-                    "search within this",
-                    "now search for",
-                    "query it now",
-                    "search the document",
-                    "let me look",
-                    "i'll look",
-                    "i will look",
-                    "let me retrieve",
-                    "i'll retrieve",
-                    "let me find",
-                )
-                last_was_index = bool(
-                    turn.tool_call_history
-                    and any(
-                        turn.tool_call_history[-1][0].lower().startswith(p)
-                        for p in _INDEX_TOOLS
-                    )
-                )
-                # Post-index query guard: catch when the agent indexed a document but
-                # answers from LLM memory without querying it first. This is a
-                # hallucination pattern — the agent returns confident-sounding wrong
-                # answers because it never retrieved the document's actual content.
-                turn._QUERY_TOOLS = (
-                    "query_specific_file",
-                    "query_documents",
-                    "search_indexed_chunks",
-                )
-                last_index_pos = -1
-                for _pos, (_tname, _) in enumerate(turn.tool_call_log):
-                    if any(_tname.lower().startswith(_p) for _p in _INDEX_TOOLS):
-                        last_index_pos = _pos
-                query_after_index = any(
-                    _pos > last_index_pos
-                    and any(_tname.lower().startswith(_q) for _q in turn._QUERY_TOOLS)
-                    for _pos, (_tname, _) in enumerate(turn.tool_call_log)
-                )
-                if (
-                    last_index_pos >= 0
-                    and not query_after_index
-                    and turn.steps_taken < turn.steps_limit - 1
-                ):
-                    logger.debug(
-                        "[WORKFLOW] Post-index answer without query — forcing query tool call: %s",
-                        answer_candidate[:80],
-                    )
-                    # Deterministic fix: extract the file path from the last index_document
-                    # call and execute query_specific_file directly, bypassing the LLM.
-                    # This is more reliable than sending a correction and hoping the LLM
-                    # complies, since the LLM may loop on the same hallucination.
-                    _last_indexed_file = None
-                    for _tname, _targs_str in reversed(turn.tool_call_log):
-                        if any(_tname.lower().startswith(_p) for _p in _INDEX_TOOLS):
-                            try:
-                                # tool_call_log stores str(tool_args) which is Python repr
-                                # (single-quoted keys), NOT JSON — use ast.literal_eval
-                                if isinstance(_targs_str, str):
-                                    try:
-                                        _targs = ast.literal_eval(_targs_str)
-                                    except (ValueError, SyntaxError):
-                                        _targs = json.loads(_targs_str)
-                                else:
-                                    _targs = _targs_str
-                                _last_indexed_file = (
-                                    _targs.get("file_path")
-                                    or _targs.get("path")
-                                    or _targs.get("document_path")
-                                )
-                            except Exception as e:  # noqa: BLE001
-                                logger.debug(
-                                    "Could not read the indexed file from the "
-                                    "index_document call: %s",
-                                    e,
-                                )
-                            break
-                    if _last_indexed_file:
-                        # Inject a fake assistant tool-call so the conversation shows
-                        # the query happening, then execute it and inject the result.
-                        _forced_query = (
-                            user_input[:120]
-                            if user_input
-                            else "summary overview key facts"
-                        )
-                        _forced_tool_call = {
-                            "thought": "I indexed the document but must query it before answering.",
-                            "tool": "query_specific_file",
-                            "tool_args": {
-                                "file_path": _last_indexed_file,
-                                "query": _forced_query,
-                            },
-                        }
-                        turn.conversation.append(
-                            {"role": "assistant", "content": _forced_tool_call}
-                        )
-                        _forced_result = self._execute_tool_timed(
-                            "query_specific_file",
-                            {"file_path": _last_indexed_file, "query": _forced_query},
-                        )
-                        turn.tool_call_log.append(
-                            ("query_specific_file", str(_forced_tool_call["tool_args"]))
-                        )
-                        turn.messages.append(
-                            {
-                                "role": "user",
-                                "content": f"Tool result: {_forced_result}",
-                            }
-                        )
-                        logger.debug(
-                            "[WORKFLOW] Forced query result injected, resuming loop."
-                        )
-                    else:
-                        # No file path extractable — fall back to correction message
-                        turn.messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "SYSTEM: You indexed a document but answered without querying it. "
-                                    "You MUST call query_specific_file or query_documents NOW. "
-                                    "Output a query tool call immediately."
-                                ),
-                            }
-                        )
-                    continue
-
-                unfinished_kind = _unfinished_answer_kind(answer_candidate)
-                if turn.no_action_requested and unfinished_kind == "narration":
-                    # A plan or a stated next step is what this turn asked for.
-                    unfinished_kind = None
-                can_reprompt_unfinished = (
-                    turn.steps_taken < turn.steps_limit - 1
-                    and turn.unfinished_answer_reprompts
-                    < _MAX_UNFINISHED_ANSWER_REPROMPTS
-                )
-                if unfinished_kind and not can_reprompt_unfinished:
-                    logger.warning(
-                        "[WORKFLOW] Not re-prompting unfinished %s answer: re-prompt "
-                        "budget or step limit reached (%d/%d re-prompts, "
-                        "step %d/%d): %s",
-                        unfinished_kind,
-                        turn.unfinished_answer_reprompts,
-                        _MAX_UNFINISHED_ANSWER_REPROMPTS,
-                        turn.steps_taken,
-                        turn.steps_limit,
-                        answer_candidate[-120:],
-                    )
-                turn.stopped_on_announced_step = (
-                    unfinished_kind == "narration" and not can_reprompt_unfinished
-                )
-                if turn.stopped_on_announced_step:
-                    # Never hand over the announcement as if it were the answer.
-                    answer_candidate = _unfinished_step_answer(answer_candidate)
-                if unfinished_kind == "tool_markup" and can_reprompt_unfinished:
-                    turn.unfinished_answer_reprompts += 1
-                    logger.debug(
-                        "[WORKFLOW] Blocking tool-call markup as final answer: %s",
-                        answer_candidate[:120],
-                    )
-                    turn.messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "Your answer contains a tool call written out as "
-                                'text (for example `<invoke name=...>` or a `{"tool": '
-                                "...}` object), so it was never run. Issue it as a "
-                                "real tool call now, or give the final answer if the "
-                                "task is complete."
-                            ),
-                        }
-                    )
-                    continue
-
-                # An answer about named workspace files that never opened one.
-                # Plan steps run outside tool_call_log; the turn record has them.
-                if (
-                    not turn.look_first_reprompted
-                    and not turn.no_look_requested
-                    and not turn.tool_call_log
-                    and not self._turn_tool_executions
-                    and turn.steps_taken < turn.steps_limit - 1
-                    and any(name in self._tools_registry for name in _LOOK_TOOLS)
-                ):
-                    unlooked = named_workspace_paths(
-                        getattr(self, "_original_user_input", None) or user_input,
-                        os.getcwd(),
-                    )
-                    if unlooked:
-                        turn.look_first_reprompted = True
-                        # Grounding's look gate would ask the same thing again.
-                        turn.grounding_fired.add(LOOK)
-                        logger.info(
-                            "[WORKFLOW] Answer named %s without a tool call; asking "
-                            "the agent to look first",
-                            unlooked,
-                        )
-                        correction = LOOK_FIRST_PROMPT.format(
-                            paths=", ".join(f"`{p}`" for p in unlooked[:3])
-                        )
-                        turn.messages.append({"role": "user", "content": correction})
-                        turn.conversation.append(
-                            {"role": "user", "content": correction}
-                        )
-                        continue
-
-                # "Please remember this" answered with "noted" and no save.
-                unsaved = getattr(self, "_unsaved_memory_request", None)
-                if (
-                    unsaved
-                    and not turn.save_reprompted
-                    and turn.steps_taken < turn.steps_limit - 1
-                ):
-                    called = {name for name, _ in turn.tool_call_log} | {
-                        record.get("tool") for record in self._turn_tool_executions
-                    }
-                    nudge = unsaved(called)
-                    if nudge:
-                        turn.save_reprompted = True
-                        logger.info(
-                            "[WORKFLOW] Asked to remember, nothing saved; asking "
-                            "the agent to save it"
-                        )
-                        turn.messages.append({"role": "user", "content": nudge})
-                        turn.conversation.append({"role": "user", "content": nudge})
-                        continue
-
-                # Universal planning-text guard: catch any short response that is
-                # only an intent sentence ("I'll check...", "Let me query...") with
-                # no actual answer, regardless of whether tools were already called.
-                # This covers three cases:
-                #   1. post-index planning (index_document → "Let me now search...")
-                #   2. no-tool planning on follow-up turns ("I'll check the remote work policy")
-                #   3. post-tool planning after getting results ("I need more info... Let me query")
-                # The honest ending quotes the announcement; it is final, not planning.
-                is_planning_text = (
-                    not turn.stopped_on_announced_step
-                    and not turn.no_action_requested
-                    and len(answer_candidate) < 500
-                    and any(
-                        phrase in answer_candidate.lower()
-                        for phrase in _PLANNING_PHRASES
-                    )
-                )
-                if is_planning_text and turn.steps_taken < turn.steps_limit - 1:
-                    if unfinished_kind == "narration":
-                        # Same budget as the narration re-prompt, so the turn can end.
-                        turn.unfinished_answer_reprompts += 1
-                    # Inject a correction message and continue the loop to force the answer
-                    logger.debug(
-                        "[WORKFLOW] Blocking planning-only response as final answer: %s",
-                        answer_candidate[:80],
-                    )
-                    correction = (
-                        "You produced planning text instead of an answer. "
-                        "You already have the data from the tool results above — "
-                        "output the final answer NOW based on what you retrieved. "
-                        "Do not call another tool. Just answer the question directly."
-                    )
-                    if last_was_index:
-                        correction = (
-                            "You indexed the document but haven't answered the question yet. "
-                            "Call query_specific_file or query_documents NOW to retrieve the "
-                            "actual content. Output a tool call JSON — not planning text."
-                        )
-                    elif not turn.tool_call_history and not self._turn_tool_executions:
-                        correction = (
-                            "You said you would look that up but called no tools. "
-                            "Call the appropriate tool RIGHT NOW. "
-                            "Output a JSON tool call — not another planning sentence."
-                        )
-                    turn.messages.append({"role": "user", "content": correction})
-                    continue  # Don't set final_answer — loop again to force the query
-
-                if unfinished_kind == "narration" and can_reprompt_unfinished:
-                    turn.unfinished_answer_reprompts += 1
-                    logger.debug(
-                        "[WORKFLOW] Blocking narrated next step as final answer: %s",
-                        answer_candidate[-120:],
-                    )
-                    turn.messages.append(
-                        {
-                            "role": "user",
-                            "content": _narration_reprompt(answer_candidate),
-                        }
-                    )
-                    continue
-
-                # Tool-syntax artifact guard: catch responses that are just a tool-call label
-                # like "[tool:query_specific_file]" — Qwen3 confusion where the model writes
-                # the tool invocation syntax as its answer text instead of calling it.
-                _TOOL_ARTIFACT_PATTERN = re.compile(
-                    r"^\s*\[tool:[a-zA-Z_]+\]\s*$", re.MULTILINE
-                )
-                if (
-                    _TOOL_ARTIFACT_PATTERN.match(answer_candidate.strip())
-                    and turn.steps_taken < turn.steps_limit - 1
-                ):
-                    logger.debug(
-                        "[WORKFLOW] Blocking tool-syntax artifact as final answer: %s",
-                        answer_candidate[:80],
-                    )
-                    turn.messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "SYSTEM: Your response is just a tool call label (e.g. '[tool:query_specific_file]'), "
-                                "not an actual answer. You have already gathered the information you need from your "
-                                "previous tool calls. Write a complete prose answer to the user's question using "
-                                "the information already retrieved."
-                            ),
-                        }
-                    )
-                    continue
-
-                # Raw JSON hallucination guard: catch responses that contain fake tool-output
-                # JSON blobs instead of actual prose answers. This is a failure mode where
-                # the LLM writes what it imagines a tool would return rather than calling it.
-                _RAW_JSON_PATTERNS = [
-                    r'```json\s*\{[^`]*"status"\s*:',
-                    r'```json\s*\{[^`]*"documents"\s*:',
-                    r'```json\s*\{[^`]*"chunks"\s*:',
-                    r'\{\s*"status"\s*:\s*"success"',
-                    r'\{\s*"documents"\s*:\s*\[',
-                ]
-                is_raw_json = any(
-                    re.search(p, answer_candidate, re.DOTALL)
-                    for p in _RAW_JSON_PATTERNS
-                )
-                if is_raw_json and turn.steps_taken < turn.steps_limit - 1:
-                    logger.debug(
-                        "[WORKFLOW] Blocking raw-JSON hallucination as final answer: %s",
-                        answer_candidate[:120],
-                    )
-                    turn.messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "SYSTEM: Your response contains raw JSON that looks like a fabricated "
-                                "tool output. Do NOT write JSON in your response. If you need data, "
-                                "call the actual tool. Otherwise, write your answer in plain prose. "
-                                "Provide a clean prose answer to the user's question now."
-                            ),
-                        }
-                    )
-                    continue
-
-                # Only a generate_image call that ran leaves an outcome to check
-                # the answer against; a mention of the capability is not one.
-                image_outcome_recorded = (
-                    turn.capability_tool_last_succeeded is not None
-                    and any(_is_image_tool(_n) for _n in self._tools_registry)
-                )
-                # The record cannot say what the answer claims, so the answer
-                # is read — but only against an outcome that exists.
-                _IMAGE_AVAILABILITY_CLAIM = [
-                    r"stable diffusion.*active",
-                    r"stable diffusion.*when",
-                    r"image generation.*flag",
-                    r"generate images when",
-                    r"can generate images",
-                    r"i can.*create.*image",
-                ]
-                _IMAGE_OUTCOME_REPORTED = [
-                    r"not available",
-                    r"unavailable",
-                    r"not.*active",
-                    r"not.*enabled",
-                    r"can't generate",
-                    r"cannot generate",
-                    r"unable to generate",
-                    r"tried.*generat",
-                    r"attempted.*generat",
-                    r"generat.*error",
-                    r"generat.*fail",
-                    r"image.*generat.*not",
-                    r"success",
-                    r"generated.*image",
-                    r"here.*image",
-                ]
-                if (
-                    image_outcome_recorded
-                    and not turn.image_outcome_corrected
-                    and turn.steps_taken < turn.steps_limit - 1
-                    and any(
-                        re.search(_p, answer_candidate, re.IGNORECASE)
-                        for _p in _IMAGE_AVAILABILITY_CLAIM
-                    )
-                    and not any(
-                        re.search(_p, answer_candidate, re.IGNORECASE)
-                        for _p in _IMAGE_OUTCOME_REPORTED
-                    )
-                ):
-                    turn.image_outcome_corrected = True
-                    _outcome = (
-                        "generate_image succeeded"
-                        if turn.capability_tool_last_succeeded
-                        else "generate_image returned an error"
-                    )
-                    logger.debug(
-                        "[WORKFLOW] Answer ignores the recorded outcome (%s): %s",
-                        _outcome,
-                        answer_candidate[:80],
-                    )
-                    turn.messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                f"SYSTEM: This turn {_outcome}. Your answer says when "
-                                "image generation is available instead of what "
-                                "happened. Answer again and report that outcome."
-                            ),
-                        }
-                    )
-                    continue
-
-                # A request it never looked at, values no tool produced, or
-                # work it never did: one correction per gate, and only before
-                # the answer counts — after it the scope guard refuses lookups.
-                fresh = (
-                    []
-                    if self._turn_scope.answered
-                    else [
-                        f
-                        for f in self._grounding_findings(
-                            answer_candidate, user_input, self._grounding_history
-                        )
-                        if f.gate not in turn.grounding_fired
-                    ]
-                )
-                if fresh and turn.steps_taken < turn.steps_limit - 1:
-                    turn.grounding_fired.update(f.gate for f in fresh)
-                    logger.info(
-                        "[check:grounding] %s fired at step %d",
-                        ",".join(sorted({f.gate for f in fresh})),
-                        turn.steps_taken,
-                    )
-                    correction = {
-                        "role": "user",
-                        "content": grounding_correction(fresh),
-                    }
-                    turn.messages.append(correction)
-                    turn.conversation.append(dict(correction))
-                    continue
-
-                # An answer, not a plan or a narrated step: from here on, calls
-                # must serve the request rather than start new work.
-                if turn.budget_stop_pending:
-                    # Running out of plan budget is not finishing the request.
-                    turn.budget_stop_pending = False
-                elif not self._turn_scope.answered:
-                    self._turn_scope.mark_answered()
-                    turn.conversation.append(
-                        {
-                            "role": "system",
-                            "content": {
-                                "type": ANSWERED_MARKER,
-                                "step": turn.steps_taken,
-                            },
-                        }
-                    )
-                # Changed code after the last test run: ask once for the run.
-                if (
-                    not turn.verify_after_change_reprompted
-                    and turn.steps_taken < turn.steps_limit - 1
-                ):
-                    _correction = self._verify_after_change_prompt()
-                    if _correction:
-                        turn.verify_after_change_reprompted = True
-                        logger.info(
-                            "%s fired at step %d",
-                            VERIFY_AFTER_CHANGE_TAG,
-                            turn.steps_taken,
-                        )
-                        self._reopen_turn_scope(turn.conversation)
-                        turn.messages.append({"role": "user", "content": _correction})
-                        turn.conversation.append(
-                            {"role": "user", "content": _correction}
-                        )
-                        continue
-                # Last guard before the answer is sealed: the footer below
-                # already knows whether a test ran, so an answer that reports a
-                # pass count the record cannot show gets one chance to fix it.
-                test_claim = unsupported_test_claim(
-                    answer_candidate, self._turn_tool_executions
-                )
-                if test_claim:
-                    claim, why = test_claim
-                    can_correct_claim = (
-                        turn.steps_taken < turn.steps_limit - 1
-                        and turn.test_claim_corrections < _MAX_TEST_CLAIM_CORRECTIONS
-                        and claim.lower() not in turn.corrected_test_claims
-                    )
-                    if not can_correct_claim:
-                        logger.warning(
-                            "[WORKFLOW] Rejecting unsupported test claim %r (%s): "
-                            "%d/%d corrections used, step %d/%d",
-                            claim,
-                            why,
-                            turn.test_claim_corrections,
-                            _MAX_TEST_CLAIM_CORRECTIONS,
-                            turn.steps_taken,
-                            turn.steps_limit,
-                        )
-                        # Kept, with the gap named after it below.
-                        turn.completion_gaps = [why + "."]
-                    else:
-                        turn.test_claim_corrections += 1
-                        turn.corrected_test_claims.add(claim.lower())
-                        logger.debug(
-                            "[WORKFLOW] Correcting unsupported test claim %r (%s)",
-                            claim,
-                            why,
-                        )
-                        # The next answer replaces this one wholesale, so it
-                        # must carry the whole answer, not just the fixed claim.
-                        # With the time limit up no run can start: don't ask for one.
-                        remedy = (
-                            "The time limit is up and no tool can run, so drop "
-                            "the claim, or say when the check last ran and "
-                            "that it was not repeated. "
-                            if self.time_capped_run_seconds(1) == 0
-                            else "Either run the check now, or drop the claim. "
-                        )
-                        correction = {
-                            "role": "user",
-                            "content": (
-                                f'Your answer says "{claim}", but {why}. '
-                                f"{remedy}"
-                                "Then give your complete answer again: it "
-                                "replaces the one above, which the user will "
-                                "not see."
-                            ),
-                        }
-                        self._reopen_turn_scope(turn.conversation)
-                        turn.messages.append(correction)
-                        turn.conversation.append(dict(correction))
-                        continue
-
-                # A message that landed DURING this model call was never seen
-                # by it, and the step-boundary drain above has already run —
-                # sealing here would drop words the route reported delivered.
-                # Cancel check mirrors that drain's: a turn told to stop leaves
-                # the message queued rather than consuming it. Bounded by
-                # steps_limit, which also makes the last step seal normally.
-                _cancel = getattr(self, "_cancel_event", None)
-                if (
-                    turn.steps_taken < turn.steps_limit
-                    and not (_cancel is not None and _cancel.is_set())
-                    and self._drain_followups(turn.messages, turn.conversation)
-                ):
-                    continue
-
-                # Last chance to catch an edit that reported success but left a
-                # missing, empty or unparsable file.
-                if self._verify_edits_on and self._files_written_this_turn():
-                    if self._edit_verification_rounds < _MAX_EDIT_VERIFICATIONS:
-                        edit_problems = self._verify_turn_edits()
-                        if edit_problems:
-                            turn.steps_limit += _VERIFY_REPAIR_STEPS
-                            repair = {
-                                "role": "user",
-                                "content": _EDIT_VERIFICATION_PROMPT.format(
-                                    problems="\n".join(f"- {p}" for p in edit_problems),
-                                    steps=_VERIFY_REPAIR_STEPS,
-                                ),
-                            }
-                            turn.messages.append(repair)
-                            turn.conversation.append(dict(repair))
-                            logger.info(
-                                "Post-edit verification found %d problem(s); "
-                                "granted %d repair step(s) (limit now %d)",
-                                len(edit_problems),
-                                _VERIFY_REPAIR_STEPS,
-                                turn.steps_limit,
-                            )
-                            continue
-                    else:
-                        # Out of repair rounds: still-broken files go into the answer.
-                        self._edit_verification_findings = self._edit_problems()
-                        turn.completion_gaps.extend(
-                            p
-                            for p in self._edit_verification_findings
-                            if p not in turn.completion_gaps
-                        )
-
-                unfinalized_answer = _without_tool_markup(answer_candidate)
-                if turn.answer_before_completion_check is not None:
-                    restored = _with_replaced_answer(
-                        unfinalized_answer, turn.answer_before_completion_check
-                    )
-                    turn.answer_before_completion_check = None
-                    # Only once the work done since backs what it said.
-                    restored_soft: List[str] = []
-                    if (
-                        restored is not None
-                        and not self._completion_evidence.gaps(
-                            restored,
-                            _write_claims_for(self._completion_evidence),
-                            asserts_file_write=_claims_file_write,
-                            soft=restored_soft,
-                        )
-                        and not restored_soft
-                    ):
-                        unfinalized_answer = restored
-                answer_candidate = self.finalize_answer(
-                    unfinalized_answer, turn.conversation
-                )
-                self._check_extraction_sources()
-                soft_gaps: List[str] = []
-                artifact_gaps = self._completion_evidence.gaps(
-                    answer_candidate,
-                    _write_claims_for(self._completion_evidence),
-                    asserts_file_write=_claims_file_write,
-                    soft=soft_gaps,
-                )
-                extraction_gaps = self._extraction_ledger.gaps(self._turn_outputs())
-                artifact_gaps.extend(extraction_gaps)
-                if artifact_gaps or soft_gaps:
-                    if (
-                        turn.completion_corrections < _MAX_FILE_WRITE_CLAIM_REPROMPTS
-                        and turn.steps_taken < turn.steps_limit - 1
-                        and any(
-                            name in self._tools_registry
-                            for name in (
-                                "write_file",
-                                "write_python_file",
-                                "write_markdown_file",
-                                "edit_file",
-                                "read_file",
-                                "run_python",
-                                "search_tools",
-                            )
-                        )
-                    ):
-                        turn.completion_corrections += 1
-                        turn.answer_before_completion_check = unfinalized_answer
-                        correction = (
-                            (
-                                "[check:completion] "
-                                + " ".join(artifact_gaps)
-                                + (
-                                    " For incomplete extraction, call `extract_document_items` on each source file. Never replace enumeration with a summary."
-                                    if extraction_gaps
-                                    else ""
-                                )
-                                + " Use `write_file` for a missing requested save, then "
-                                "`read_file` with offset=0 and limit=8000 to observe that exact output. Follow all "
-                                "continuation pages. Report only contents observed in "
-                                "tool results. An unrelated tool or file is not evidence. "
-                                "This check is internal: answer the user without "
-                                "mentioning it or the read's offset and pages. "
-                                + _GIVE_ANSWER_AGAIN
-                            )
-                            if artifact_gaps
-                            else (
-                                "[check:completion] "
-                                + " ".join(soft_gaps)
-                                + " If the file is needed, write it with `write_file` and read it back. "
-                                "If you were describing where something is usually saved, or a file "
-                                "from an earlier turn, say so without claiming you saved it now. "
-                                + _GIVE_ANSWER_AGAIN
-                            )
-                        )
-                        refused = set(self._completion_evidence.refused.values())
-                        if artifact_gaps and set(artifact_gaps) <= refused:
-                            unconfirmed = self._completion_evidence.unconfirmed
-                            if unconfirmed & set(artifact_gaps):
-                                # Nobody said no, but retrying unasked skips them.
-                                correction = (
-                                    "[check:completion] "
-                                    + " ".join(artifact_gaps)
-                                    + " Do not retry that write now. Say it was "
-                                    "not saved because the approval expired, ask "
-                                    "whether to try again, and give your complete "
-                                    "answer again."
-                                )
-                            else:
-                                # Asking for the write again would re-ask a "no".
-                                correction = (
-                                    "[check:completion] "
-                                    + " ".join(artifact_gaps)
-                                    + " Do not retry that write, here or anywhere "
-                                    "else. Say it was not saved, and give your "
-                                    "complete answer again."
-                                )
-                        else:
-                            self._turn_scope.widen(correction)
-                            if artifact_gaps:
-                                # Writing and reading back the deliverable is the
-                                # request's work, even when a script produces it.
-                                self._reopen_turn_scope(turn.conversation)
-                        turn.messages.append({"role": "user", "content": correction})
-                        turn.conversation.append(
-                            {"role": "user", "content": correction}
-                        )
-                        continue
-                    turn.completion_gaps.extend(artifact_gaps)
-                elif not turn.self_check_sent and not turn.completion_gaps:
-                    turn.self_check_sent = True
-                    check = self._self_check_message(turn.steps_taken, turn.steps_limit)
-                    if check:
-                        turn.self_check_open = {
-                            "answer": unfinalized_answer,
-                            "at": time.monotonic(),
-                            "step": turn.steps_taken,
-                            "tools": len(self._turn_tool_executions),
-                        }
-                        # A fix the check asks for is the request's own work.
-                        self._turn_scope.widen(check)
-                        self._reopen_turn_scope(turn.conversation)
-                        turn.messages.append({"role": "user", "content": check})
-                        turn.conversation.append({"role": "user", "content": check})
-                        continue
-                answer_issues = self.answer_problems(answer_candidate)
-                if answer_issues:
-                    if not turn.answer_repaired:
-                        turn.answer_repaired = True
-                        # An acknowledgement-only reply must not replace the report.
-                        turn.answer_before_completion_check = unfinalized_answer
-                        turn.steps_limit += _ANSWER_REPAIR_STEPS
-                        repair = self.answer_repair_prompt(answer_issues)
-                        self._turn_scope.widen(repair)
-                        self._reopen_turn_scope(turn.conversation)
-                        turn.messages.append({"role": "user", "content": repair})
-                        turn.conversation.append({"role": "user", "content": repair})
-                        logger.info(
-                            "Answer check found %d problem(s); asked once for a "
-                            "repair (step limit now %d)",
-                            len(answer_issues),
-                            turn.steps_limit,
-                        )
-                        continue
-                    turn.completion_gaps.extend(
-                        p for p in answer_issues if p not in turn.completion_gaps
-                    )
-                # Validate after subclass rewriting, before console/SSE emission.
-                final_test_claim = unsupported_test_claim(
-                    answer_candidate, self._turn_tool_executions
-                )
-                if (
-                    final_test_claim
-                    and final_test_claim[1] + "." not in turn.completion_gaps
-                ):
-                    turn.completion_gaps.append(final_test_claim[1] + ".")
-                coverage_gap = self._completion_evidence.read_coverage_gap(
-                    answer_candidate
-                )
-                if coverage_gap and coverage_gap not in turn.completion_gaps:
-                    turn.completion_gaps.append(coverage_gap)
-                if turn.completion_gaps:
-                    # Never discard the work: keep it and name what is unconfirmed.
-                    answer_candidate = caveated_answer(
-                        answer_candidate, turn.completion_gaps
-                    )
-                else:
-                    self._note_ungrounded(answer_candidate, user_input)
-                inventory = self._extraction_ledger.render()
-                if inventory:
-                    # Never ask another synthesis call to reproduce the set; it condenses.
-                    answer_candidate += "\n\n" + inventory
-                    if not turn.completion_gaps:
-                        saved = sorted(self._extraction_ledger.verified)
-                        if saved:
-                            answer_candidate += (
-                                "\n\nI saved the full list to "
-                                + ", ".join(f"`{path}`" for path in saved)
-                                + " and checked the file."
-                            )
-                turn.final_answer = self._with_verification_scope(answer_candidate)
-                turn.verification_scope_applied = True
-                self.execution_state = self.STATE_COMPLETION
-                # Compute the real token total BEFORE printing the answer so it
-                # can ride the same event, instead of the post-loop aggregation
-                # below which runs after print_final_answer already fired.
-                # Output tokens only — "tokens actually generated",
-                # matching the tok/s calc downstream which is also output-only.
-                _pre_input_tokens, pre_output_tokens = _sum_conversation_tokens(
-                    turn.conversation, self._tool_reported_usage
-                )
-                if turn.stopped_on_announced_step:
-                    self._announce_turn_failed()
-                # Sealed before the answer prints: total_s must mean "until it
-                # was on screen", and the console folds the record into that
-                # same event.
-                turn.turn_record = self._finish_turn_record(
-                    turn.final_answer, turn.steps_taken
-                )
-                self._publish_turn_metrics(turn.turn_record)
-                turn.model_messages = self._stage_final_model_messages(
-                    turn.messages, turn.final_answer
-                )
-                self.console.print_final_answer(
-                    turn.final_answer,
-                    streaming=self.streaming,
-                    total_tokens=pre_output_tokens,
-                    input_tokens=_pre_input_tokens,
-                    cached_tokens=_sum_cached_tokens(turn.conversation),
-                    ttft_seconds=_query_ttft_seconds(turn.conversation),
-                    tok_per_s=_query_tok_per_s(turn.conversation),
-                )
+            step_exit = self._handle_answer(turn, user_input)
+            if step_exit == "break":
                 break
+            if step_exit == "continue":
+                continue
 
             # Check if we're at the limit and ask user if they want to continue
             if turn.steps_taken == turn.steps_limit and turn.final_answer is None:
