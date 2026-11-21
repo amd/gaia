@@ -205,48 +205,66 @@ def test_an_os_file_refusal_tells_the_model_to_hand_it_to_the_user(tmp_path):
     assert not _is_os_file(Path.home() / ".ssh" / "id_rsa")
 
 
+# The only shapes GAIA saves on its own: the whole message is one plain-ASCII
+# sentence asking to remember one fact.
 @pytest.mark.parametrize(
     "request_text, fact",
     [
+        ("Remember that my dog's name is Rex.", "my dog's name is Rex"),
+        ("Please remember my favourite colour is teal", "my favourite colour is teal"),
+        ("Keep in mind that I work nights.", "I work nights"),
+        ("Please keep in mind that I am in Austin", "I am in Austin"),
+        ("My birthday is March 3. Please remember that.", "My birthday is March 3"),
+        ("My dog is Rex please remember this", "My dog is Rex"),
         (
-            "ok then just remember the router admin page is 192.168.1.1",
+            "Please remember the router admin page is 192.168.1.1.",
             "the router admin page is 192.168.1.1",
         ),
-        ("Remember that my daughter's name is Mia.", "my daughter's name is Mia"),
-        ("I work at AMD, remember that.", "I work at AMD"),
-        ("Save this to your memory: I like tea.", "I like tea"),
-        (
-            "Jordan, ML engineer at AMD. Please remember this.",
-            "Jordan, ML engineer at AMD",
-        ),
-        ("What do you remember about me?", ""),
-        ("remember this", ""),
-        # The fact ends with its sentence: what follows is a separate request.
-        (
-            "Remember that I prefer metric units. Now convert 5 miles to km.",
-            "I prefer metric units",
-        ),
-        (
-            "Please remember my dog is Rex, and then list my Downloads folder",
-            "my dog is Rex",
-        ),
-        ("Remember my build is v2.5; then run the tests.", "my build is v2.5"),
-        (
-            "Convert 5 miles. My dog is Rex. Please remember this.",
-            "My dog is Rex",
-        ),
-        ("Save this to your memory: I like tea. Then open my notes.", "I like tea"),
+        ("remember my build is v2.5", "my build is v2.5"),
+        ("Remember that my kids are Sam and Lee!", "my kids are Sam and Lee"),
+        ("  Remember that my rate is 20% or $40/hour.  ", "my rate is 20% or $40/hour"),
+        # A phone's curly apostrophe is the one non-ASCII character read as ASCII.
+        ("Remember that my daughter\u2019s name is Mia.", "my daughter's name is Mia"),
     ],
 )
-def test_the_fact_a_request_asks_to_keep(request_text, fact):
+def test_the_fact_a_plain_request_asks_to_keep(request_text, fact):
     assert fact_to_keep(request_text) == fact
+    assert _host(request_text).required_calls() == [("remember", {"fact": fact})]
 
 
-def test_an_ignored_request_to_remember_becomes_a_required_call():
-    host = _host("ok then just remember the router admin page is 192.168.1.1")
-    assert host.required_calls() == [
-        ("remember", {"fact": "the router admin page is 192.168.1.1"})
-    ]
+# Plain requests GAIA leaves to the model: it is still told to save, but GAIA
+# doesn't save on its own because the message is more than the one shape.
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "ok then just remember the router admin page is 192.168.1.1",
+        "I work at AMD, remember that.",
+        "Jordan, ML engineer at AMD. Please remember this.",
+        "Save this to your memory: I like tea.",
+        "remember: I prefer metric units",
+        "Remember that I prefer metric units. Now convert 5 miles to km.",
+        "Please remember my dog is Rex, and then list my Downloads folder",
+        "Remember my build is v2.5; then run the tests.",
+        "Convert 5 miles. My dog is Rex. Please remember this.",
+        "Remember that my wife's name is Anna. Also what's 2+2?",
+        "remember the router admin page is 192.168.1.1. Thanks!",
+        "Remember that I prefer short replies.\n\nUnrelated: what is 2+2?",
+        "Remember that my email is me@example.com",
+        "Remember that my dog\u200b is Rex.",
+        "\uff32\uff45\uff4d\uff45\uff4d\uff42\uff45\uff52 that my dog is Rex.",
+        "Remember that my dog is Rex..",
+        "Remember that my dog is Rex!!",
+        "Remember that my dog is Rex?",
+        "Remember that my dog\tis Rex.",
+        "Remember that my dog is Rex. Please remember that.",
+        "Remember that Rex.",
+        "remember this",
+        "What do you remember about me?",
+    ],
+)
+def test_more_than_the_one_shape_is_left_to_the_model(request_text):
+    assert fact_to_keep(request_text) == ""
+    assert _host(request_text).required_calls() == []
 
 
 def test_no_required_call_for_a_secret_or_after_a_save():
@@ -432,45 +450,12 @@ def test_no_forced_save_unless_exactly_one_plain_request(request_text):
     assert _host(request_text).required_calls() == []
 
 
-@pytest.mark.parametrize(
-    "request_text, fact",
-    [
-        (
-            "Remember that my wife's name is Anna. Also what's 2+2?",
-            "my wife's name is Anna",
-        ),
-        (
-            "Remember that I prefer metric units. Now convert 5 miles to km.",
-            "I prefer metric units",
-        ),
-        (
-            "remember the router admin page is 192.168.1.1. Thanks!",
-            "the router admin page is 192.168.1.1",
-        ),
-        (
-            "Remember that I prefer short replies.\n\nUnrelated: what is 2+2?",
-            "I prefer short replies",
-        ),
-        ("Keep in mind that I work nights.", "I work nights"),
-        # Look-alike apostrophes, fullwidth letters and invisible characters
-        # don't stop a plain request; the fact is saved normalised.
-        ("Remember that my daughter’s name is Mia.", "my daughter's name is Mia"),
-        ("Remember that my dog\u200b is Rex.", "my dog is Rex"),
-        ("Ｒｅｍｅｍｂｅｒ that my dog is Rex.", "my dog is Rex"),
-    ],
-)
-def test_the_fact_stops_at_the_users_own_sentence(request_text, fact):
-    assert fact_to_keep(request_text) == fact
-
-
-def test_a_message_over_the_scan_limit_is_left_to_the_model():
-    filler = "The weather was nice today. " * 800  # ~22 KB, no decline in it
-    assert len(filler) > 20_000
-    assert fact_to_keep("Remember that my dog is Rex. " + filler) == ""
-    assert fact_to_keep(filler + " Remember that my dog is Rex.") == ""
-    # Under the limit, the same plain request is still forced.
-    short = "Remember that my dog is Rex. " + filler[:15_000]
-    assert fact_to_keep(short) == "my dog is Rex"
+def test_a_message_over_300_characters_is_left_to_the_model():
+    head = "Remember that my dog is Rex and "
+    fill = "Rex likes long walks and " * 20
+    text = (head + fill)[:299] + "."
+    assert len(text) == 300 and fact_to_keep(text)
+    assert fact_to_keep(text[:-1] + "a.") == ""
 
 
 _DECLINED_FACTS = (
@@ -528,6 +513,376 @@ def test_a_declined_fact_is_never_returned_in_any_shape():
         if fact_to_keep(text)
     ]
     assert leaked == []
+
+
+_OPENERS = ("", "Please ", "ok ", "Hi. ", "Translate this: ")
+_ASKS = ("remember ", "remember that ", "keep in mind that ", "note that ")
+_FACTS = ("my dog is Rex", "my phone is 555-1234", "I live at 12 Elm St")
+_TAILS = (
+    "",
+    ".",
+    "!",
+    "..",
+    "?",
+    ", ok",
+    " and then open my notes",
+    ". Thanks",
+    " jk",
+    "; done",
+    "\nAnd one more thing",
+    " maar niet",
+)
+
+
+def test_whatever_is_forced_is_one_bare_fact_from_the_message():
+    forced = 0
+    for opener in _OPENERS:
+        for ask in _ASKS:
+            for fact in _FACTS:
+                for tail in _TAILS:
+                    for text in (opener + ask + fact + tail, fact + tail):
+                        kept = fact_to_keep(text)
+                        if not kept:
+                            continue
+                        forced += 1
+                        assert kept == fact, text
+                        assert opener in ("", "Please "), text
+                        assert ask != "note that ", text
+                        assert tail in ("", ".", "!"), text
+    assert forced  # the plain shapes do force: the check is not vacuous
+
+
+# Every probe the third and fourth reviews used against the old rule. Each has
+# text around the request, a non-ASCII character or a decline, so none matches
+# the one shape GAIA saves on its own.
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        pytest.param(
+            "Don\uff07t remember my phone number 555-1234. Remember that I live in Austin.",
+            id="fullwidth ' before",
+        ),
+        pytest.param(
+            "Remember that I live in Austin, but don\uff07t remember my phone 555-1234.",
+            id="fullwidth ' after",
+        ),
+        pytest.param(
+            "Remember my SSN is 123-45-6789, but don\uff07t keep it in mind.",
+            id="fullwidth after, pointer",
+        ),
+        pytest.param(
+            "Don`t remember my phone 555-1234. Remember that I live in Austin.",
+            id="backtick before",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. Actually don`t save that.",
+            id="backtick after",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. Actually don\xb4t save that.",
+            id="acute accent",
+        ),
+        pytest.param(
+            "Don\u200b't remember my phone 555-1234. Remember that I live in Austin.",
+            id="zwsp in don't before",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don\u200b't store it.", id="zwsp after"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but do\u200b not store it.",
+            id="zwsp do not",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but do n't store it.", id="do n't"
+        ),
+        pytest.param(
+            "Do n't remember my phone 555-1234. Remember that I live in Austin.",
+            id="do n't before",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234\nbut don't store it",
+            id="newline between clauses",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234\n\nActually, don't store that.",
+            id="paragraph break decline",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234.\n\nSome notes.\n\nActually don't store that.",
+            id="3 paragraphs, decline last",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234.\n\nmiddle para: don't store that.\n\nThanks!",
+            id="decline in middle paragraph",
+        ),
+        pytest.param(
+            'Remember my phone is 555-1234. My friend said "don\'t store that".',
+            id="decline in quote (info)",
+        ),
+        pytest.param(
+            'Translate this: "Don\'t remember my phone 555-1234. Remember that I live in Austin."',
+            id="quoted pasted block",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice. I had a long day at work and the weather was nice.  Oh and don't store the phone.",
+            id="very long, decline beyond 500",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234 \U0001f64f but don't store it \U0001f605",
+            id="emoji",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, pero no lo guardes, don't save it.",
+            id="mixed lang",
+        ),
+        pytest.param(
+            "Recuerda que vivo en Austin. Remember my phone is 555-1234 but nicht speichern, don\u2019t keep it.",
+            id="mixed + curly",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but I'd rather you didn't save it.",
+            id="didn't save",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234... on second thought, please don't.",
+            id="please don't (no verb)",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. Never mind, forget it.",
+            id="never mind forget",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234 \u2014 scratch that, don't remember it.",
+            id="em dash",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. I do NOT want it stored.",
+            id="want it stored",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. Please DON\u2019T save.", id="caps curly"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, don\u2019\u2019t save it.",
+            id="double curly",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, dont save it.", id="dont no apostrophe"
+        ),
+        pytest.param(
+            "Remember that I live in Austin and don't remember my phone 555-1234.",
+            id="and don't remember Y",
+        ),
+        pytest.param(
+            "Don't save my phone 555-1234 anywhere. Remember that I live in Austin.",
+            id="before, positive later",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. Wait, don't put it in memory.",
+            id="rv3 decline 2",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. Do not write that down.", id="rv3 decline 3"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. Actually, don't hold on to it.",
+            id="rv3 decline 4",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. On second thought, I don't want you to keep it.",
+            id="rv3 decline 5",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. Actually no, don't.", id="rv3 decline 6"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. I'd prefer you not retain it.",
+            id="rv3 decline 7",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but do n\u043et save it.",
+            id="cyrillic o in not",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but d\u043en't save it.",
+            id="cyrillic o in don't",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but d\u03bf n\u03bft save it.",
+            id="greek omicron not",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. N\u0435ver mind, f\u043erget it.",
+            id="cyrillic never/forget",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don\u200f't save it.",
+            id="RLM inside don't",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but \u202et'nod\u202c save it.",
+            id="RLO reversed don't",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don&apos;t save it.", id="&apos;"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don&#39;t save it.", id="&#39;"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don&rsquo;t save it.", id="&rsquo;"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but **don't** save it.", id="markdown bold"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but _do_ _not_ save it.",
+            id="markdown underscores",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but d o n ' t save it.", id="spaced letters"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but n-o-t really, don ' t.", id="hyphenated"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234.\n```\nNOT\n```", id="NOT in code block"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but do n\not save it.",
+            id="line break mid-word n/ot",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but do no\nt save it.", id="line break no/t"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don'\nt save it.",
+            id="line break don'/t",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but do\xadnot save it.", id="soft hyphen"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, ma non salvarlo.", id="italian non"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, mas n\xe3o guarde.",
+            id="portuguese nao composed",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, mas na\u0303o guarde.",
+            id="portuguese nao decomposed",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234\u3002\u4fdd\u5b58\u3057\u306a\u3044\u3067\u304f\u3060\u3055\u3044\u3002",
+            id="japanese",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, \u043d\u043e \u043d\u0435 \u0441\u043e\u0445\u0440\u0430\u043d\u044f\u0439.",
+            id="russian",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, \u4e0d\u8981\u4fdd\u5b58.", id="chinese"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, maar niet opslaan.", id="dutch niet"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, men spara inte.", id="swedish inte"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, ale nie zapisuj.", id="polish nie"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, ne le garde pas.", id="french ne pas"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, mais ne l'enregistre pas.",
+            id="french ne...pas 2",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. Actually, refrain from storing it.",
+            id="refrain",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. Wait, scrap that.", id="scrap that"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234. Just kidding, leave it out.",
+            id="just kidding",
+        ),
+        pytest.param("Remember my phone is 555-1234. Strike that.", id="strike that"),
+        pytest.param("Remember my phone is 555-1234. Abort.", id="abort"),
+        pytest.param(
+            "Remember my phone is 555-1234. Actually, keep it out of your notes.",
+            id="keep it out",
+        ),
+        pytest.param("Remember my phone is 555-1234... jk", id="jk"),
+        pytest.param(
+            "Remember my phone is 555-1234. Stop, I take that back.", id="take back"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234 - n0t really, d0n't.", id="zero for o"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don\u2019\u200dt save it.", id="ZWJ"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don'\u0301t save it.",
+            id="combining after '",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but do\u2060not save it.", id="word joiner"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but \uff4e\uff4f\uff54 save it.",
+            id="fullwidth not",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but \U0001d427\U0001d428\U0001d42d save it.",
+            id="math bold not",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but \u24dd\u24de\u24e3 save it.",
+            id="circled not",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don\u02bct save it.",
+            id="modifier apostrophe",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don\u055at save it.",
+            id="armenian apostrophe",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don\ua78ct save it.", id="saltillo"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don\u05f3t save it.", id="hebrew geresh"
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don\u2019\u2019t save it.",
+            id="double curly",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but d\u043en\u2019t save it.",
+            id="cyr o + curly",
+        ),
+        pytest.param(
+            'Remember my phone is 555-1234, but don"t save it.',
+            id="double quote as apos",
+        ),
+        pytest.param(
+            "Remember my phone is 555-1234, but don\u02b9t save it.",
+            id="prime-like modifier",
+        ),
+        pytest.param("Remember my phone is 555-1234, but don't\xa0save it.", id="nbsp"),
+    ],
+)
+def test_no_review_probe_forces_a_save(request_text):
+    assert fact_to_keep(request_text) == ""
+    assert _host(request_text).required_calls() == []
 
 
 @pytest.mark.parametrize(

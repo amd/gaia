@@ -666,40 +666,42 @@ _REFUSED_SECRET = (
 _NOTHING_SAVED = "Nothing was saved to memory."
 
 
-#: "remember (that) X" / "keep in mind (that) X": X is the fact.
-_FACT_AFTER = re.compile(
-    r"\b(?:remember|memori[sz]e|keep\s+in\s+mind)\s*(?:that\b|this:|:)?\s*(.+)",
-    re.IGNORECASE | re.DOTALL,
+#: The longest message a forced save reads; anything longer is left to the model.
+_FORCED_SAVE_MAX_CHARS = 300
+#: Characters a forced fact may hold. No comma: one starts a second clause
+#: ("..., maar niet opslaan"), so a fact with one is left to the model.
+_FACT = r"(?P<fact>[A-Za-z0-9 '\"/:%$.\-]+?)"
+#: The only messages GAIA saves on its own, the whole message and nothing more:
+#: "(Please) remember (that) X." / "(Please) keep in mind (that) X." and
+#: "X. Please remember that." / "X. Please remember this."
+_FORCED_SAVE_SHAPES = (
+    re.compile(
+        r"(?:please\s+)?(?:remember|keep\s+in\s+mind)(?:\s+that)?\s+"
+        + _FACT
+        + r"[.!]?",
+        re.IGNORECASE,
+    ),
+    re.compile(_FACT + r"\.?\s+please\s+remember\s+(?:that|this)[.!]?", re.IGNORECASE),
 )
-#: "X. Please remember this." / "X, keep that in mind": X is before the request.
-_ONLY_A_POINTER = re.compile(r"^(?:it|this|that|them)\b\W*$", re.IGNORECASE)
-#: Where one sentence or instruction ends and the next begins. The whitespace
-#: after the stop keeps "192.168.1.1" and "v2.5" whole.
-_FACT_BOUNDARY = re.compile(r"(?<=[.!?])\s+|\n+")
-_NEXT_INSTRUCTION = re.compile(r"[,;]?\s+(?:and\s+)?then\b|;\s*", re.IGNORECASE)
-
-
-def _one_fact(text: str, last: bool = False) -> str:
-    """The first sentence of *text* (the last, with *last*), cut before "and then …"."""
-    sentences = [s for s in _FACT_BOUNDARY.split(text.strip()) if s.strip()]
-    if not sentences:
-        return ""
-    sentence = sentences[-1] if last else sentences[0]
-    return _NEXT_INSTRUCTION.split(sentence, maxsplit=1)[0].strip()
-
-
-#: Longest message a forced save reads; a longer one is left to the model.
-_FORCED_SAVE_MAX_CHARS = 20_000
+#: A second sentence inside the fact: a stop, "!" or "?" before a space or the end.
+_SECOND_SENTENCE = re.compile(r"[.!?](?:\s|$)|[!?]")
+#: A second clause that may change or take back the first.
+_SECOND_CLAUSE = re.compile(
+    r"\b(?:but|then|except|unless|though|although|however|instead|actually|wait"
+    r"|also|jk|kidding|abort|strike|scrap|scratch|stop|cancel\w*|undo|forget\w*)\b",
+    re.IGNORECASE,
+)
 #: The words that ask to keep something in memory. A forced save needs exactly one.
 _MEMORY_ASK = re.compile(
     r"\bremember\w*|\bmemori[sz]\w*|\bin\s+mind\b|\bmemor(?:y|ies)\b", re.IGNORECASE
 )
-#: Any of these anywhere in the message, and the model decides what to keep.
+#: A negation or decline anywhere in the message leaves the save to the model.
 #: Deliberately blunt: "remember that I'm not vegan" is left to the model too.
 _DECLINE_SIGNAL = re.compile(
     r"\b(?:not|never|no|nah|nope|nevermind|cannot|forget\w*|skip\w*|cancel\w*"
     r"|ignore|disregard|undo|delete|erase|remove|except|unless"
-    r"|nicht|nein|kein\w*|nunca|jamais|nada|non)\b"
+    r"|nicht|nein|kein\w*|nunca|jamais|nada|non|niet|nie|inte|ikke|nej|ne|pas"
+    r"|nao|nem|nu)\b"
     r"|n\s*'+\s*t\b"
     r"|\b(?:do|does|did|wo|ca|could|would|should|must|need|is|are|was|were"
     r"|has|have|had|ai|might)\s*n\s*t\b"
@@ -710,47 +712,37 @@ _DECLINE_SIGNAL = re.compile(
 )
 
 
-def _facts_in(part: str):
-    """Each "remember X" in *part* outside pasted text, first first."""
-    pos = 0
-    while (m := _FACT_AFTER.search(part, pos)) is not None:
-        if not _is_material(part, m.start()):
-            yield m
-        pos = m.start() + 1
-
-
-def _may_force_a_save(text: str) -> bool:
-    """True only for one request to remember with no "not", "don't", "forget" or
-    other decline anywhere in *text*, which is already normalised."""
-    # A combining mark inside a word must not hide it from the scan.
-    scan = "".join(ch for ch in text if not unicodedata.category(ch).startswith("M"))
-    return len(_MEMORY_ASK.findall(scan)) == 1 and not _DECLINE_SIGNAL.search(scan)
-
-
 def fact_to_keep(request: str) -> str:
     """The fact in *request* the user asked to remember, or "".
 
-    GAIA saves this itself when the model skips the save, so it is strict: ""
-    unless the message holds exactly one request to remember and nothing that
-    could decline it. Every other request is left to the model.
+    GAIA saves this itself when the model skips the save, so it only reads one
+    fixed shape: the whole message is a single plain-ASCII sentence such as
+    "Remember that my dog's name is Rex." or "My birthday is March 3. Please
+    remember that.", with no comma, no negation, no second clause and at most
+    300 characters. Every other request is left to the model.
     """
-    if len(request or "") > _FORCED_SAVE_MAX_CHARS:
+    text = _straight_apostrophes(request or "").strip()
+    if (
+        len(text) > _FORCED_SAVE_MAX_CHARS
+        or not all(" " <= ch <= "~" for ch in text)
+        or len(_MEMORY_ASK.findall(text)) != 1
+        or _DECLINE_SIGNAL.search(text)
+        or not asks_to_keep_in_memory(text)
+    ):
         return ""
-    text = _normalised(request or "").strip()
-    if len(text) > _FORCED_SAVE_MAX_CHARS or not _may_force_a_save(text):
-        return ""
-    if not asks_to_keep_in_memory(text):
-        return ""
-    # The user's own paragraphs only, and never a quote they pasted.
-    after = next((m for part in _own_words(text) for m in _facts_in(part)), None)
-    fact = _one_fact(after.group(1)) if after else ""
-    if not re.search(r"\w", fact) or _ONLY_A_POINTER.match(fact):
-        start = _STORAGE_REQUEST.search(text)
-        before = _one_fact(text[: start.start()], last=True) if start else ""
-        colon = _one_fact(text.split(":", 1)[1]) if ":" in text else ""
-        fact = before if re.search(r"\w", before) else colon
-    fact = fact.strip().rstrip(".!")
-    return fact if len(fact.split()) >= 2 else ""
+    for shape in _FORCED_SAVE_SHAPES:
+        match = shape.fullmatch(text)
+        if match is None:
+            continue
+        fact = match.group("fact").strip()
+        if (
+            _SECOND_SENTENCE.search(fact)
+            or _SECOND_CLAUSE.search(fact)
+            or len(fact.split()) < 2
+        ):
+            return ""
+        return fact
+    return ""
 
 
 def claims_memory_save(answer: str) -> bool:
