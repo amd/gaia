@@ -67,7 +67,7 @@ def work(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def flagship(work):
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     agent = GaiaAgent(
         config=GaiaAgentConfig(silent_mode=True, allowed_paths=[str(work)])
@@ -353,7 +353,7 @@ def test_nothing_is_saved_in_a_private_chat(loaded, monkeypatch):
 
 
 def test_skill_folder_ships_its_assets():
-    from gaia_agent.agent import _bundled_skill_roots
+    from gaiapy.agent import _bundled_skill_roots
 
     root = next(
         Path(r) / SKILL for r in _bundled_skill_roots() if (Path(r) / SKILL).is_dir()

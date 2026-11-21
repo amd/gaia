@@ -6,13 +6,13 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-from gaia_agent.engineering_tools import (
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.engineering_tools import (
     ENGINEERING_SKILL,
     ENGINEERING_TOOL_NAMES,
     EngineeringToolsMixin,
 )
-from gaia_agent.stdio import build_parser
+from gaiapy.stdio import build_parser
 
 from gaia.agents.base.console import OutputHandler
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -198,7 +198,7 @@ def test_setup_failure_is_visible_without_breaking_daily_host(registered, monkey
         def start(self):
             self.target()
 
-    monkeypatch.setattr("gaia_agent.engineering_tools.threading.Thread", InlineThread)
+    monkeypatch.setattr("gaiapy.engineering_tools.threading.Thread", InlineThread)
     host._start_engineering_setup()
     assert finished.is_set()
     assert call("engineering_status")["error"] == "cache is not writable"
@@ -218,7 +218,7 @@ def test_code_scope_approval_binds_the_displayed_revision(registered):
 
 
 def test_overlapping_chat_construction_never_sees_developer_tools(monkeypatch):
-    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+    from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
     monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
     monkeypatch.setattr(GaiaAgent, "_start_engineering_setup", lambda self: None)

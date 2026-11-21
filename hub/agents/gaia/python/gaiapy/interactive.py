@@ -7,7 +7,7 @@ Interactive terminal chat loop that ``gaia chat`` runs the flagship in.
 import os
 from pathlib import Path
 
-from gaia_agent.chat_agent import ChatAgent
+from gaiapy.chat_agent import ChatAgent
 
 from gaia.logger import get_logger
 

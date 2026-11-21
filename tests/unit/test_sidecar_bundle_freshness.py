@@ -15,10 +15,10 @@ FIVE_DAYS = 5 * 24 * 3600
 
 
 def _stale_bundle(root: Path) -> list[Path]:
-    (root / "gaia_agent" / "skills" / "summarize").mkdir(parents=True)
+    (root / "gaiapy" / "skills" / "summarize").mkdir(parents=True)
     paths = [
-        root / "gaia_agent" / "gaia-agent.yaml",
-        root / "gaia_agent" / "skills" / "summarize" / "SKILL.md",
+        root / "gaiapy" / "gaia-agent.yaml",
+        root / "gaiapy" / "skills" / "summarize" / "SKILL.md",
         root / "lib.so",
     ]
     for path in paths:

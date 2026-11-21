@@ -8,9 +8,9 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from gaia_agent import stdio
-from gaia_agent.agent import GaiaAgent
-from gaia_agent.chat_agent import ChatAgent
+from gaiapy import stdio
+from gaiapy.agent import GaiaAgent
+from gaiapy.chat_agent import ChatAgent
 
 from gaia.llm import hybrid
 from gaia.llm.hybrid import HybridRouter, HybridSettings, RouteDecision
@@ -165,12 +165,12 @@ def test_agent_built_on_hybrid_starts_on_the_cheap_model(monkeypatch):
 
     monkeypatch.setattr(ChatAgent, "__init__", fake_init)
     monkeypatch.setattr(
-        "gaia_agent.agent.HybridRouter",
+        "gaiapy.agent.HybridRouter",
         lambda: SimpleNamespace(
             settings=SimpleNamespace(cheap_model=CHEAP, strong_model=STRONG)
         ),
     )
-    from gaia_agent.agent import GaiaAgentConfig
+    from gaiapy.agent import GaiaAgentConfig
 
     agent = GaiaAgent(GaiaAgentConfig(model_id="hybrid"))
     assert seen["model_id"] == CHEAP and agent.hybrid_router is not None

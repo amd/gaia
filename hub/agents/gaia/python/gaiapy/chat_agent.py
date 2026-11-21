@@ -44,8 +44,8 @@ except ImportError as _watchdog_err:
     logger.debug("watchdog not available: %s", _watchdog_err)
     Observer = None
 
-from gaia_agent.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
-from gaia_agent.python_jobs import (
+from gaiapy.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
+from gaiapy.python_jobs import (
     DEFAULT_PYTHON_TIMEOUT,
     describe_code,
     files_written_by,
@@ -58,15 +58,15 @@ from gaia_agent.python_jobs import (
     stopped_job_result,
     watch_folders,
 )
-from gaia_agent.python_runner import (
+from gaiapy.python_runner import (
     BUNDLED_LIBRARIES,
     GUARDED_FOLDERS_ENV,
     is_frozen,
     python_command,
 )
-from gaia_agent.session import SessionManager
-from gaia_agent.tool_bundles import PROFILE_TOOL_CONFIGS
-from gaia_agent.tool_requests import requested_tools
+from gaiapy.session import SessionManager
+from gaiapy.tool_bundles import PROFILE_TOOL_CONFIGS
+from gaiapy.tool_requests import requested_tools
 
 from gaia.agents.base.agent import Agent, _withheld_skill_tools, default_max_steps
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, READ, call_risk

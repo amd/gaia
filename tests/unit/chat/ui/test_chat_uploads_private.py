@@ -416,7 +416,7 @@ def test_a_shared_index_cache_does_not_hand_over_another_chats_copy(tmp_path, co
 
 def test_a_relayed_chat_drops_a_detached_copy_for_good(tmp_path, copies):
     """The sidecar path: taken off, the copy is refused; attached again, it reads."""
-    server = pytest.importorskip("gaia_agent.server")
+    server = pytest.importorskip("gaiapy.server")
     _, mine, theirs = copies
     validator, asked = _chat_validator(mine, theirs)
     agent = _Agent(_index(tmp_path, validator), validator)

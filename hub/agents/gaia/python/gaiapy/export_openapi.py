@@ -12,7 +12,7 @@ contract (#1645).
 
 The spec is built from a minimal FastAPI app that mounts ONLY the gaia router
 plus the three probe routes (``/health``, ``/version``,
-``/v1/gaia/version``) — the same operations ``gaia_agent.server.build_app``
+``/v1/gaia/version``) — the same operations ``gaiapy.server.build_app``
 serves (pinned by ``test_openapi_artifact``), built without touching the real
 caller-auth environment (no token file, no live model-server probe wiring).
 Only the ``info`` block differs from the live ``/openapi.json``: its title and
@@ -21,10 +21,10 @@ version are pinned here so regenerating on any machine yields the same bytes.
 Usage::
 
     # Regenerate the committed artifact (run after changing routes/contract):
-    python -m gaia_agent.export_openapi
+    python -m gaiapy.export_openapi
 
     # CI drift check — non-zero exit if the committed file is stale:
-    python -m gaia_agent.export_openapi --check
+    python -m gaiapy.export_openapi --check
 """
 
 from __future__ import annotations
@@ -50,13 +50,13 @@ ARTIFACT_PATH = Path(__file__).resolve().parents[1] / "openapi.gaia.json"
 def build_app():
     """Build a minimal FastAPI app mounting ONLY the gaia router + probes.
 
-    Mirrors ``gaia_agent.server.build_app`` route-for-route, without its
+    Mirrors ``gaiapy.server.build_app`` route-for-route, without its
     caller-auth env wiring or model-server warm-up lifespan — this app's
     whole purpose is a static schema, never a request.
     """
     from fastapi import FastAPI
-    from gaia_agent import __version__, caller_auth
-    from gaia_agent.server import AGENT_ID, API_VERSION, router
+    from gaiapy import __version__, caller_auth
+    from gaiapy.server import AGENT_ID, API_VERSION, router
 
     app = FastAPI(
         title=OPENAPI_TITLE,
@@ -137,7 +137,7 @@ def main(argv=None) -> int:
             return 0
         print(
             f"OpenAPI artifact is STALE or missing: {args.output}\n"
-            "Regenerate it with:  python -m gaia_agent.export_openapi",
+            "Regenerate it with:  python -m gaiapy.export_openapi",
             file=sys.stderr,
         )
         return 1

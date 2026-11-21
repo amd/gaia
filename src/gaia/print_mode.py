@@ -681,7 +681,7 @@ def _run_turn(
 
     model = _model_on_disk(model, base_url, yes=yes)
     try:
-        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+        from gaiapy.agent import GaiaAgent, GaiaAgentConfig
     except ImportError:
         # The agent ships as its own binary here, as the apps do: run the turn
         # on it through the daemon, which brings up the model server for it.

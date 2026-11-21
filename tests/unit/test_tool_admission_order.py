@@ -25,7 +25,7 @@ from gaia.agents.base.tool_loader import ToolLoader
 
 # build_doc_agent_skeleton builds a doc-profile ChatAgent, which ships in the
 # flagship gaia-agent-gaia wheel (#6099); skip when a framework-only env lacks it.
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from gaia.eval.tool_cost import build_doc_agent_skeleton  # noqa: E402
 

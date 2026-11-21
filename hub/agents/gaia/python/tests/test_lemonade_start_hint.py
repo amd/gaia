@@ -14,12 +14,12 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import stdio as stdio_mod  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import stdio as stdio_mod  # noqa: E402
 
 from gaia.llm.lemonade_launcher import StartHint  # noqa: E402
 

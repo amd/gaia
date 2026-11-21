@@ -275,9 +275,9 @@ def test_the_remote_agent_ui_mcp_server_survives_reset_connections(monkeypatch):
 
 
 def test_the_agent_sidecar_survives_reset_connections(monkeypatch):
-    pytest.importorskip("gaia_agent")
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
+    pytest.importorskip("gaiapy")
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
 
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)

@@ -182,7 +182,7 @@ func TestAnAgentThatDiedBeforeSwitchingShowsItsErrorAndHandsBackTheChoice(t *tes
 	// default, so leaving it there without a word would run the wrong model.
 	m, c, saves := startupChat(t, StartupRestore, "claude", "claude-sonnet-5")
 	m = openChat(t, m, c)
-	m = deliver(t, m, event.CanonicalErrorEvent{Type: "error", Detail: "ImportError: no module named gaia_agent"})
+	m = deliver(t, m, event.CanonicalErrorEvent{Type: "error", Detail: "ImportError: no module named gaiapy"})
 	errs := errorsIn(m)
 	if len(errs) != 2 || !strings.Contains(errs[0], "ImportError") {
 		t.Fatalf("want the crash verbatim, then the restore line; got %q", errs)

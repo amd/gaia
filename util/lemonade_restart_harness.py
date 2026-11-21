@@ -852,7 +852,7 @@ EMBED_REQUEST = FIRST_REQUEST.replace(
 MODEL_SWITCH_SETUP = """
 from types import SimpleNamespace
 from gaia.llm.providers.lemonade import LemonadeProvider
-from gaia_agent import stdio
+from gaiapy import stdio
 provider = LemonadeProvider(model=None)
 provider._backend.model_load_listener = client.model_load_listener
 chat = SimpleNamespace(llm_client=provider, config=SimpleNamespace(
@@ -1425,7 +1425,7 @@ def run_tui(args) -> Dict[str, Any]:
         shim_dir = g.root / "bin"
         shim_dir.mkdir(exist_ok=True)
         (shim_dir / "gaia-agent.cmd").write_text(
-            f'@"{g.python}" -m gaia_agent.stdio %*\r\n', encoding="utf-8"
+            f'@"{g.python}" -m gaiapy.stdio %*\r\n', encoding="utf-8"
         )
         rng = random.Random(args.seed)
         sessions = []

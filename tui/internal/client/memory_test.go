@@ -46,7 +46,7 @@ func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		// Mirror the real agent: a query arrives wrapped so its newlines
-		// survive, and a bare line is still accepted (gaia_agent.stdio.parse_query).
+		// survive, and a bare line is still accepted (gaiapy.stdio.parse_query).
 		query := scanner.Text()
 		if strings.HasPrefix(query, "{") {
 			var wrapper map[string]string

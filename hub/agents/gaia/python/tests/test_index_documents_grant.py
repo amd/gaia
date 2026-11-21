@@ -13,9 +13,9 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.chat_agent import ChatAgent  # noqa: E402
+from gaiapy.chat_agent import ChatAgent  # noqa: E402
 
 from gaia.security import PathValidator  # noqa: E402
 

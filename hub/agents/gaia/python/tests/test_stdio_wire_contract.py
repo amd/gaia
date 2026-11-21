@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Pin ``gaia_agent.stdio`` against the shared TUI wire fixture.
+"""Pin ``gaiapy.stdio`` against the shared TUI wire fixture.
 
 The Go TUI keeps its own copies of these literals, and its end-to-end tests
 drive a Go mock agent, so a rename here would leave every Go test green while
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from gaia_agent import stdio
+from gaiapy import stdio
 
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 

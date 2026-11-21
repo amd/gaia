@@ -155,7 +155,7 @@ def test_a_shell_named_inside_text_to_translate_is_not_a_shell_request():
 
 
 def test_a_shell_named_inside_text_to_translate_does_not_offer_the_shell():
-    tool_requests = pytest.importorskip("gaia_agent.tool_requests")
+    tool_requests = pytest.importorskip("gaiapy.tool_requests")
     assert tool_requests.requested_tools(SHELL_SENTENCE, ["run_shell_command"]) == []
 
 
@@ -202,7 +202,7 @@ def test_a_save_the_instruction_asks_for_is_still_owed(request_text):
 
 
 def test_a_translation_that_asks_for_the_shell_still_gets_it():
-    tool_requests = pytest.importorskip("gaia_agent.tool_requests")
+    tool_requests = pytest.importorskip("gaiapy.tool_requests")
     request_text = "Translate README.md to French using the shell"
     assert tool_requests.requested_tools(request_text, ["run_shell_command"]) == [
         "run_shell_command"

@@ -19,7 +19,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
-from gaia_agent.agent import _bundled_skill_roots
+from gaiapy.agent import _bundled_skill_roots
 
 from gaia.skills.audit import audit_skill
 from gaia.skills.capture import code_is_deferred
@@ -52,7 +52,7 @@ CODE_SKILLS = [d for d in _bundled_skill_dirs() if _ships_code(d)]
 
 @pytest.fixture(scope="module")
 def flagship():
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     return GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
 
@@ -195,7 +195,7 @@ def test_the_send_email_skill_asks_before_any_mail_leaves_on_the_flagship(
 def test_the_browser_pane_skill_is_gated_on_the_flagship(tmp_path):
     """Its tools stay off the list until it loads; browser_eval then asks every
     time, and the others ask through the browser gate, by site and control."""
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     from gaia.agents.base.tools import _TOOL_REGISTRY
     from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
@@ -314,8 +314,8 @@ def test_the_freeze_bundles_every_starter_skill():
 
 
 def test_the_freeze_lands_skills_where_the_frozen_agent_looks():
-    """``gaia_agent/skills`` is ``_SKILLS_DIR`` relative to the package."""
-    from gaia_agent.agent import _SKILLS_DIR
+    """``gaiapy/skills`` is ``_SKILLS_DIR`` relative to the package."""
+    from gaiapy.agent import _SKILLS_DIR
 
     assert freeze.SKILLS_DEST == f"{_SKILLS_DIR.parent.name}/{_SKILLS_DIR.name}"
 

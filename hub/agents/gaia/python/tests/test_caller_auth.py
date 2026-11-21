@@ -25,10 +25,10 @@ import asyncio
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
 
 _TOKEN = "s3cret-session-token"
 _BASE_URL = "http://127.0.0.1:8141"
@@ -58,7 +58,7 @@ def _client(monkeypatch, *, token: str | None) -> TestClient:
         monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
     else:
         monkeypatch.setenv(caller_auth.TOKEN_ENV_VAR, token)
-    from gaia_agent.server import build_app
+    from gaiapy.server import build_app
 
     return TestClient(build_app(), base_url=_BASE_URL)
 
@@ -117,7 +117,7 @@ def test_every_route_on_the_router_is_gated(monkeypatch):
     still passed. Anything mounted under /v1/gaia now has to answer 401 without
     a token, whether or not whoever added it thought to come here.
     """
-    from gaia_agent import server as server_mod
+    from gaiapy import server as server_mod
 
     client = _client(monkeypatch, token=_TOKEN)
     run = _QUERY_BODY["run_id"]

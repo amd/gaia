@@ -109,7 +109,7 @@ func (m ChatModel) applyFirstBootGate() ChatModel {
 // be wrong for them. So it states what did not run and leaves whether that
 // matters to what the user observes. Embeddings have no Anthropic equivalent,
 // so those features do need Lemonade either way (see
-// hub/agents/gaia/python/gaia_agent/stdio.py).
+// hub/agents/gaia/python/gaiapy/stdio.py).
 var setupSkippedForClaudeNotice = "Local setup skipped — `gaia init` was not run " +
 	"and the Lemonade server was not started for this session. If document search, " +
 	"memory or the code index turn out not to work, that is why: run `" +

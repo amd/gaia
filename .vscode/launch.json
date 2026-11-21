@@ -33,7 +33,7 @@
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": true,
-            "purpose": ["Stops at entry to set breakpoints", "Use to debug model selection", "Set breakpoint on model_id in hub/agents/gaia/python/gaia_agent/chat_agent.py"]
+            "purpose": ["Stops at entry to set breakpoints", "Use to debug model selection", "Set breakpoint on model_id in hub/agents/gaia/python/gaiapy/chat_agent.py"]
         },
         {
             "name": "Chat Agent Debug - With Query",
