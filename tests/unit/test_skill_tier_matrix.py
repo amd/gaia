@@ -175,3 +175,12 @@ def test_full_list_skills_has_no_hub_hint(library_agent):
     payload = library_agent._execute_tool("list_skills", {})
 
     assert "hint" not in payload
+
+
+def test_load_skill_names_install_skill_only_as_conditional(library_agent):
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    hint = _TOOL_REGISTRY["load_skill"]["parameters"]["name"]["description"]
+
+    assert "install_skill if you have that tool" in hint
+    assert "tell the user it is not installed" in hint

@@ -781,8 +781,9 @@ class SkillLibraryToolsMixin:
             load_skill again to bring them back.
 
             Args:
-                name: Skill name, as shown by list_skills. Install it first
-                    with install_skill if list_skills does not show it.
+                name: Skill name, as shown by list_skills. If it is not listed,
+                    install it with install_skill if you have that tool;
+                    otherwise tell the user it is not installed.
 
             Returns:
                 Tier, directory (resolve relative paths against it), tools
