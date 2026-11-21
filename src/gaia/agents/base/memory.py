@@ -461,6 +461,15 @@ def _forget_text(item: Dict) -> Tuple[str, ...]:
     return fact_words(str(item.get("content", "")))
 
 
+#: Phones type "don’t": the memory guards match a straight apostrophe.
+_APOSTROPHES = str.maketrans(dict.fromkeys("\u2018\u2019\u02bc\u2032", "'"))
+
+
+def _straight_apostrophes(text: str) -> str:
+    """*text* with each apostrophe look-alike made "'", so its length is unchanged."""
+    return text.translate(_APOSTROPHES)
+
+
 _FORGET_SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
 _FORGET_VERB = re.compile(r"\b(?:forget|erase|delete|remove)\b", re.IGNORECASE)
 #: "Could you forget X?" asks for it; "Did you forget X?" doesn't.
@@ -485,7 +494,7 @@ _FORGET_WHAT_END = re.compile(
 
 def _forget_requests(user_input: str) -> List[str]:
     """What *user_input* asks to forget, one entry per request."""
-    text = user_input.replace("\u2019", "'")
+    text = _straight_apostrophes(user_input)
     asked = []
     for sentence in _FORGET_SENTENCE.findall(text):
         sentence = sentence.strip()
@@ -681,28 +690,37 @@ def fact_to_keep(request: str) -> str:
 
     "" when the request is not a plain remember request or names nothing.
     """
-    text = (request or "").strip()
+    original = (request or "").strip()
+    text = _straight_apostrophes(original)
     if not asks_to_keep_in_memory(text):
         return ""
     # The user's own paragraphs only, and never a quote they pasted.
-    after = next(
-        (m for part in _own_words(text) for m in _facts_in(part)),
-        None,
-    )
+    parts = _own_words(text)
+    after, rest = None, ""
+    for i, part in enumerate(parts):
+        after = next(_facts_in(part), None)
+        if after:
+            rest = " ".join([part[after.start(1) :], *parts[i + 1 :]])
+            break
     fact = _one_fact(after.group(1)) if after else ""
     if not re.search(r"\w", fact) or _ONLY_A_POINTER.match(fact):
         start = _STORAGE_REQUEST.search(text)
         before = _one_fact(text[: start.start()], last=True) if start else ""
         colon = _one_fact(text.split(":", 1)[1]) if ":" in text else ""
         fact = before if re.search(r"\w", before) else colon
+        rest = text[start.end() :] if start else text
     fact = fact.strip().rstrip(".!")
     # "Remember X, but don't remember Y": Y is declined, so don't guess at X.
-    if any(
+    if _DECLINED.search(rest) or any(
         _HELD_BACK.search(_clause_before(fact, v.start()))
         for v in _KEEP_IN_MEMORY.finditer(fact)
     ):
         return ""
-    return fact if len(fact.split()) >= 2 else ""
+    if len(fact.split()) < 2:
+        return ""
+    # Same length after straightening, so the user's own apostrophes are kept.
+    at = text.find(fact)
+    return original[at : at + len(fact)] if at >= 0 else fact
 
 
 def claims_memory_save(answer: str) -> bool:
@@ -758,6 +776,17 @@ _HELD_BACK = re.compile(
 )
 
 
+#: After the fact, a part the user declines: "but don't keep my SSN in mind",
+#: "no need to remember it", "forget my address".
+_DECLINED = re.compile(
+    r"\b(?:don't|do\s+not|doesn't|never|not|shouldn't|won't|no\s+need\s+to)\s+"
+    r"(?:(?!(?:and|but|or|then)\b)\w+\s+){0,4}?"
+    r"(?:remember|memori[sz]e|save|store|keep|record)\b"
+    r"|(?:^|[.!?,;:\n]\s*|\b(?:but|and|please|pls|just|so|then|also)\s+)forget\b",
+    re.IGNORECASE,
+)
+
+
 def _clause_before(part: str, start: int) -> str:
     """The words of *part*'s clause that come before *start*."""
     return re.split(r"[.?!,;\n]", part[:start])[-1]
@@ -777,7 +806,7 @@ def _is_material(part: str, start: int) -> bool:
 
 def asks_to_keep_in_memory(text: str) -> bool:
     """True when *text* asks the agent to remember something it says."""
-    for part in _own_words(text or ""):
+    for part in _own_words(_straight_apostrophes(text or "")):
         for request in _STORAGE_REQUEST.finditer(part):
             end = _SENTENCE_END.search(part, request.end())
             verb = _KEEP_IN_MEMORY.search(part, request.start())

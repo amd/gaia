@@ -293,6 +293,92 @@ def test_a_declined_fact_is_never_the_one_saved(request_text, fact):
     assert fact_to_keep(request_text) == fact
 
 
+# Phones and word processors type these instead of a straight apostrophe.
+_CURLY = ("’", "‘", "ʼ", "′")
+
+
+@pytest.mark.parametrize("mark", _CURLY)
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "I don't want you to remember that my dog is Rex",
+        "You won't need to remember this: my dog is Rex",
+        "I don't want you to remember my phone number 555-1234",
+        "You shouldn't remember that my PIN changed",
+        "It doesn't need to remember that my dog is Rex",
+    ],
+)
+def test_a_curly_apostrophe_still_declines_the_save(request_text, mark):
+    host = _host(request_text.replace("'", mark))
+    assert host.required_calls() == []
+    assert "Nothing was saved to memory." not in host.answer_problems("Okay.")
+
+
+@pytest.mark.parametrize("mark", _CURLY)
+@pytest.mark.parametrize(
+    "request_text, fact",
+    [
+        (
+            "Don't remember my phone number 555-1234. Remember that I live in Austin.",
+            "I live in Austin",
+        ),
+        (
+            "Remember that I live in Austin, but don't remember my phone number "
+            "555-1234",
+            "",
+        ),
+        ("Don't remember my old address. Remember that I'm vegan.", "I'm vegan"),
+        ("I don't want you to remember that my dog is Rex", ""),
+    ],
+)
+def test_a_curly_apostrophe_never_saves_the_declined_fact(request_text, fact, mark):
+    request_text = request_text.replace("'", mark)
+    kept = fact_to_keep(request_text)
+    assert kept == fact.replace("'", mark)
+    assert "555" not in kept and "address" not in kept
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Remember that my cat is Tom but please don't keep my SSN 123-45-6789 in mind",
+        "Remember my SSN 123-45-6789 is private; no need to remember it",
+        "Remember my SSN 123-45-6789 is private. No need to remember that.",
+        "Remember that my cat is Tom, but forget my SSN 123-45-6789",
+        "Remember that my cat is Tom and do not store my SSN 123-45-6789",
+        "Remember that my cat is Tom but don't save my address 12 Elm St",
+        "Remember that my cat is Tom; never record my address 12 Elm St",
+        "Remember my dog is Rex.\n\nAlso, don't keep my address 12 Elm St.",
+        "My dog is Rex. Please remember this. Don't store my address 12 Elm St.",
+        "Remember that my cat is Tom but please don’t keep my SSN in mind",
+    ],
+)
+def test_a_later_decline_cancels_the_forced_save(request_text):
+    assert fact_to_keep(request_text) == ""
+
+
+@pytest.mark.parametrize(
+    "request_text, fact",
+    [
+        # "forget" only declines as an instruction, not inside the fact.
+        ("Remember that I tend to forget names", "I tend to forget names"),
+        (
+            "Remember that my dog is Rex and don't forget my cat is Tom",
+            "my dog is Rex and don't forget my cat is Tom",
+        ),
+        # A negation that governs another verb is not a decline.
+        (
+            "Remember that I'm not keen on early meetings",
+            "I'm not keen on early meetings",
+        ),
+        # The user's own apostrophe is what gets saved.
+        ("Remember that my daughter’s name is Mia.", "my daughter’s name is Mia"),
+    ],
+)
+def test_a_decline_cue_inside_the_fact_is_not_a_decline(request_text, fact):
+    assert fact_to_keep(request_text) == fact
+
+
 @pytest.mark.parametrize(
     "request_text, fact",
     [
