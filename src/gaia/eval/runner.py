@@ -49,10 +49,10 @@ from gaia.eval.eval_lock import exclusive_eval
 from gaia.eval.fixture_env import fixture_fingerprint
 from gaia.eval.fixture_env import from_env as fixture_env_from_env
 from gaia.eval.fixture_env import localize
-from gaia.eval.process_tree import kill_tree as _kill_tree
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
 from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
+from gaia.utils.process_tree import kill_tree as _kill_tree
 
 logger = logging.getLogger(__name__)
 

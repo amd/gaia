@@ -32,7 +32,7 @@ evals, with history, so we see trends rather than snapshots.
 |------|---------|
 | Users | Installs per release by OS and product (update-feed polling separated from installs), installs over time, PyPI and npm |
 | Growth | Monthly growth rate of stars and forks, active and new contributors, retention, outside share of merged PRs and bus factor, each scored against a target |
-| Developers | Issue and PR flow, backlog, time to merge and close (median and P90), commits, lines of code, contributors, stars and forks |
+| Developers | Issue and PR flow, backlog, time to merge and close (median and P90), pending contributors, commits, lines of code, contributors, stars and forks |
 | CI | Run outcomes, unit-test counts, where CI time goes, per-workflow health and runtime |
 | Evals | Pass rate per run and tier tied to the commit or release measured, per-category and per-scenario results, regressions, SWE-bench |
 

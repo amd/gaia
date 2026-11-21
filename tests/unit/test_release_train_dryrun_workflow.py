@@ -27,7 +27,7 @@ DRYRUN = WORKFLOWS / "release_train_dryrun.yml"
 # Reusable workflows the dry run may call: builds and tests, nothing that uploads.
 ALLOWED_CALLEES = {
     "./.github/workflows/build-installers.yml",
-    "./.github/workflows/build_flagship_sidecar.yml",
+    "./.github/workflows/build_gaiapy.yml",
     "./.github/workflows/test_agent_gaia_npm.yml",
     "./.github/workflows/tui_installers.yml",
     "./.github/workflows/windows_setup.yml",

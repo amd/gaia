@@ -24,7 +24,7 @@ the flagship's npm-style one (``win32-x64``).
 
 Usage::
 
-    python installer/tui/fetch_sidecar.py --platform win-x64 --out dist/payload
+    python installer/tui/fetch_gaiapy.py --platform win-x64 --out dist/payload
 """
 
 from __future__ import annotations

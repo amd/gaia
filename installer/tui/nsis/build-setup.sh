@@ -93,7 +93,7 @@ for f in "${PAYLOAD}/gaia-cli.exe" "${PAYLOAD}/gaia-agent.exe" "${PAYLOAD}/gaiac
   [ -f "${f}" ] || {
     echo "build-setup.sh: payload is incomplete -- '${f}' is missing." >&2
     echo "  --payload must hold gaia-cli.exe (cross-compiled from tui/), gaia-agent.exe" >&2
-    echo "  (installer/tui/fetch_sidecar.py --platform win-x64), gaiacpp.exe" >&2
+    echo "  (installer/tui/fetch_gaiapy.py --platform win-x64), gaiacpp.exe" >&2
     echo "  (installer/tui/fetch_gaiacpp.py stage --platform win-x64), the repo's LICENSE.md" >&2
     echo "  and core/, the gaia-core-win32-x64 build (.github/workflows/build_core.yml)." >&2
     exit 1

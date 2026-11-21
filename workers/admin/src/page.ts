@@ -506,6 +506,10 @@ var INFO={` + INFO_COMMON + String.raw`
 'k-prs':['Open pull requests','PRs open now, and how many have waited more than 14 days. Green: 10% or fewer are that old. Amber: up to 25%. Red: more than 25%, which means review is not keeping up.'],
 'k-commits':['Commits','Commits on the default branch in the window, and the people who made them (by GitHub login), against the window before. Green: at least 75% as many active contributors as before. Amber: 50 to 75%. Red: below 50%.'],
 'k-ttm':['Time to merge','Median and 90th-percentile time from a PR opening to merging, for PRs merged in the window. Bands from LinearB’s 2026 benchmarks (8.1 million PRs): elite under 25 hours, good up to 72. Green: median under 25 hours and P90 under 3 days. Amber: median up to 3 days, P90 up to 161 hours. Red: slower.'],
+'k-pending':['Pending contributors','People outside the core team (bots left out) with at least one issue or pull request still open at the last collection, and the change over the window. Coloured by how many of those with an open pull request have waited more than 14 days on their oldest one, the same cut-offs as Open PRs (a proposed default). Draft pull requests are left out: they are work in progress, so nobody is waiting on them. Green: 10% or fewer. Amber: up to 25%. Red: more.'],
+'pend':['Pending contributors over time','People with something still open at the end of each period. Someone with an open pull request is counted once, under pull requests, whatever issues they also have open. Who counts as core team is today’s answer applied to the whole history: a maintainer account, or an owner, member or collaborator on their most recent issue or pull request. Bots and draft pull requests are left out (a pull request that is a draft now is left out for its whole life, since earlier draft states are not recorded); ignores the people filter above.'],
+'pend-wait':['How long they have waited','Each pending person once, by the age of their longest-open pull request, or of their longest-open issue when they have no pull request open.'],
+'pend-who':['Who is pending','Everyone counted above, longest-waiting pull requests first. Oldest open PR is coloured as a proposed default. Green: within 3 days. Amber: up to 14. Red: longer. A count links to that person’s open items on GitHub.'],
 'k-ttc':['Time to close','Median and 90th-percentile time from an issue opening to closing, for issues closed in the window. No published benchmark exists, so these are a proposed default. Closing a batch of old issues raises it for a while, though the backlog shrinks, so while more issues are closed than opened and the backlog is shrinking it is never red, at worst amber. Green: median within 14 days and P90 within 90. Amber: median up to 30 days or P90 up to 180. Red: median over 30 days or P90 over 180.'],
 'issues':['Issues opened and closed','Per period. When closed bars are taller than opened, the backlog shrank. Click a legend entry to hide or show it.'],
 'backlog':['Open issues','Issues open at the end of each period (opened so far minus closed so far). Pull requests are excluded.'],
@@ -519,8 +523,8 @@ var INFO={` + INFO_COMMON + String.raw`
 'split':['Core team and outside contributors','The same pull-request numbers for the core team (maintainer accounts plus organisation members and collaborators) and for everyone else, bots left out. Ignores the people filter above. Merge time uses LinearB’s bands, as above. Wait vs core shows how much longer outside PRs take, for context only: core PRs are often self-merged within the hour, so the ratio is large even when outside PRs merge quickly.'],
 'who':['Contributors in the range','Everyone who committed, opened a PR or opened an issue in the selected window. Lines come from GitHub’s per-contributor weekly statistics, so they cover whole weeks and count a merged branch’s commits for each author; their sum is larger than the repository total in the Lines of code chart. Untick a person, or use the buttons, to leave them out of every number on this page.'],
 'community':['Stars and forks','Rebuilt from GitHub’s dated stargazer and fork lists, so the full history is available. Total is the running count; New is how many were added in each period.']};
-var MINE=__MAINTAINERS__,TEAM=__TEAM__;
-var P={pm:qs.get('pm')||'active',comm:qs.get('comm')||'stars',cmode:qs.get('cmode')||'total',bots:qs.get('bots')!=='0',
+var MINE=__MAINTAINERS__,TEAM=__TEAM__,REPO=__REPO__;
+var P={pw:pick(qs.get('pw'),['outside','all'],'outside'),pm:qs.get('pm')||'active',comm:qs.get('comm')||'stars',cmode:qs.get('cmode')||'total',bots:qs.get('bots')!=='0',
   exclude:(qs.get('exclude')!==null?qs.get('exclude'):(function(){try{return localStorage.getItem('gaia-admin-exclude')||'';}catch(e){return '';}})()).split(',').filter(Boolean)};
 var HB=[[0,1/24,'<1h'],[1/24,6/24,'1–6h'],[6/24,1,'6–24h'],[1,3,'1–3d'],[3,7,'3–7d'],[7,14,'1–2w'],[14,30,'2–4w'],[30,90,'1–3mo'],[90,1e9,'3mo+']];
 function peopleQuery(){return 'exclude='+encodeURIComponent(P.exclude.join(','))+'&bots='+(P.bots?'1':'0');}
@@ -552,7 +556,30 @@ function drawKpis(){var m=D.momentum;if(!m){el('ov').innerHTML='';return;}var s=
   if(ttcLv==='bad'&&cr!=null&&cr>=1&&gr!=null&&gr<0)ttcLv='warn';
   h+=kpi('k-ttc','Time to close',ddur(s.medianDaysToClose),'P90 '+ddur(s.p90DaysToClose)+' · '+fmt(s.issuesClosed)+' closed issues',ttcLv,'median '+ddur(s.medianDaysToClose)+', P90 '+ddur(s.p90DaysToClose)+' (healthy: median within 14 days)');
   p90Led('k-ttc',level(s.medianDaysToClose,{good:14,warn:30,higher:false}),level(s.p90DaysToClose,{good:90,warn:180,higher:false}),s.p90DaysToClose);
+  var pd=m.pending;if(pd){var out=pd.people.filter(function(r){return !r.core;}),wp=out.filter(function(r){return r.openPrs;}),old=wp.filter(function(r){return ageDays(r.oldestPr)>14;}).length,sh=wp.length?old/wp.length:null,at=sinceDay(),was=null;
+    pd.daily.forEach(function(r){if(r.day<at)was=r.outsidePr+r.outsideIssue;});
+    h+=kpi('k-pending','Pending contributors',fmt(out.length),fmt(wp.length)+' with an open PR · '+fmt(out.length-wp.length)+' with issues only'+(was==null?'':' · '+(out.length>=was?'+':'')+fmt(out.length-was)+' over '+rt),level(sh,{good:.1,warn:.25,higher:false}),sh==null?'':old+' of '+wp.length+' outside people with an open PR have waited more than 14 days');}
   el('ov').innerHTML='<div class="strip">'+h+'</div>';drawSplit();}
+var WAITB=[[0,1,'<1d'],[1,3,'1–3d'],[3,7,'3–7d'],[7,14,'1–2w'],[14,30,'2–4w'],[30,90,'1–3mo'],[90,1e9,'3mo+']],PR_WAIT={good:3,warn:14,higher:false};
+function ageDays(iso){return iso?Math.max(0,(asOfMs()-Date.parse(iso))/864e5):null;}
+/* People with an issue or pull request still open: over time, by how long they have waited, and by name. */
+function drawPending(){var m=D.momentum,pd=m&&m.pending,all=P.pw==='all';
+  document.querySelectorAll('[data-pw]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.pw===P.pw));});
+  if(!pd||!pd.daily.length){emptyBox('pend','No history collected yet.');emptyBox('pend-wait','No history collected yet.');el('pend-who').innerHTML='';return;}
+  var x=series(pd.daily.map(function(r){return {day:r.day,pr:r.outsidePr+(all?r.corePr:0),issue:r.outsideIssue+(all?r.coreIssue:0)};}),{pr:'last',issue:'last'});
+  chart('pend',{partial:false,keys:x.b.map(function(r){return r.key;}),gran:x.g,type:'bar',stacked:true,title:'Pending contributors',h:220,
+    series:[{name:'With an open pull request',color:'var(--s2)',vals:x.b.map(function(r){return r.pr;})},{name:'With open issues only',color:'var(--s1)',vals:x.b.map(function(r){return r.issue;})}]});
+  var rows=pd.people.filter(function(r){return all||!r.core;}),labs=WAITB.map(function(b){return b[2];}),cp=WAITB.map(function(){return 0;}),ci=WAITB.map(function(){return 0;}),ages=[];
+  rows.forEach(function(r){var a=ageDays(r.oldestPr||r.oldestIssue),t=r.oldestPr?cp:ci;ages.push(a);for(var i=0;i<WAITB.length;i++){if(a>=WAITB[i][0]&&a<WAITB[i][1]){t[i]++;break;}}});
+  if(!rows.length){emptyBox('pend-wait','Nobody is waiting.');el('pend-who').innerHTML='<div class="empty">'+(all?'Nobody has':'Nobody outside the core team has')+' an issue or pull request open.</div>';return;}
+  ages.sort(function(a,b){return a-b;});var mid=ages.length>>1,med=ages.length%2?ages[mid]:(ages[mid-1]+ages[mid])/2;
+  chart('pend-wait',{keys:labs,cats:labs,catName:'Waiting',type:'bar',stacked:true,title:'How long pending contributors have waited',h:220,note:'Median wait '+ddur(med)+' across '+plural(rows.length,'person','people')+'.',
+    series:[{name:'On a pull request',color:'var(--s2)',vals:cp},{name:'On issues only',color:'var(--s1)',vals:ci}]});
+  var repo=REPO.split('/').map(encodeURIComponent).join('/');
+  var link=function(n,kind,r){return n&&REPO&&r.accounts.length===1?'<a href="https://github.com/'+repo+'/'+(kind==='pr'?'pulls':'issues')+'?q='+encodeURIComponent('is:open is:'+kind+' author:'+r.accounts[0])+'" target="_blank" rel="noopener">'+fmt(n)+'</a>':fmt(n);};
+  el('pend-who').innerHTML='<div class="scroll" style="max-height:420px"><table><tr><th>Person</th>'+(all?'<th>Group</th>':'')+'<th class="n">Open PRs</th><th class="n">Open issues</th><th class="n">Oldest open PR</th><th class="n">Oldest open issue</th><th>Waiting since</th></tr>'
+   +rows.map(function(r){var ap=ageDays(r.oldestPr);return '<tr><td class="trunc mono" style="max-width:220px;font-size:12px"'+(r.accounts.length>1?' title="'+esc(r.accounts.join(', '))+'"':'')+'><a href="https://github.com/'+encodeURIComponent(r.author)+'" target="_blank" rel="noopener">'+esc(r.author)+'</a></td>'+(all?'<td>'+(r.core?'Core team':'Outside')+'</td>':'')
+     +'<td class="n">'+link(r.openPrs,'pr',r)+'</td><td class="n">'+link(r.openIssues,'issue',r)+'</td><td'+cellLv(ap,PR_WAIT)+'>'+ddur(ap)+'</td><td class="n">'+ddur(ageDays(r.oldestIssue))+'</td><td>'+esc((r.oldestPr||r.oldestIssue).slice(0,10))+'</td></tr>';}).join('')+'</table></div>';}
 function drawSplit(){var m=D.momentum,box=el('split');if(!box)return;if(!m||!m.split){box.innerHTML='';return;}var x=m.split;
   var row=function(name,c,pv,ratio){var mp=pv&&pv.prsMerged>=20?pace(c.prsMerged,pv.prsMerged):null;
     return '<tr><td>'+name+'</td><td class="n">'+(wk(c.prsMerged)?fmt(Math.round(c.prsMerged*7/Number(S.range))):fmt(c.prsMerged))+'</td><td'+cellLv(mp,PACE)+'>'+(mp==null?'—':(mp>=0?'+':'')+Math.round(mp*100)+'%')+'</td><td'+cellLv(c.medianDaysToMerge,MERGE_MED)+'>'+ddur(c.medianDaysToMerge)+'</td><td'+cellLv(c.p90DaysToMerge,MERGE_P90)+'>'+ddur(c.p90DaysToMerge)+'</td><td class="n">'+(ratio==null?'—':ratio.toFixed(1)+'×')+'</td><td class="n">'+fmt(c.openPrs)+'</td><td class="n">'+fmt(c.issuesOpened)+'</td><td class="n">'+fmt(c.openIssues)+'</td></tr>';};
@@ -621,10 +648,11 @@ function drawCommunity(){var t=D.traction;
   var hl=P.comm==='forks'?t.forksHeadline:t.starsHeadline,last=src.length?src[src.length-1].total:null,note=hl!=null&&last!=null&&hl!==last?'GitHub’s own count is '+fmt(hl)+'; its dated list returns '+fmt(last)+'. The chart follows the dated list because it carries the history.':'';
   if(P.cmode==='total'){var tt=x.b.map(function(r){return r.total;}),v=tt.filter(function(z){return z!=null;});chart('community',{keys:K,gran:x.g,type:'line',title:name,h:220,note:note,series:[{name:'Total '+name.toLowerCase(),color:c,vals:tt}],ymin:v.length?Math.max(0,Math.floor(Math.min.apply(null,v)*0.9)):0});}
   else chart('community',{keys:K,gran:x.g,type:'bar',title:name,h:220,series:[{name:'New '+name.toLowerCase(),color:c,vals:x.b.map(function(r){return r.added;})}]});}
-function render(){ATTN=[];setUrl({pm:P.pm!=='active'?P.pm:'',comm:P.comm!=='stars'?P.comm:'',cmode:P.cmode!=='total'?P.cmode:'',exclude:P.exclude.join(','),bots:P.bots?'':'0'});
-  syncShell();drawKpis();drawPeople();drawCharts();drawCommunity();drawAttention();drawStatus();}
-function jobs(){return [['momentum','/api/momentum?'+peopleQuery()+'&core='+encodeURIComponent(MINE.join(','))],['traction','/api/traction'],['status','/api/status']];}
+function render(){ATTN=[];setUrl({pw:P.pw!=='outside'?P.pw:'',pm:P.pm!=='active'?P.pm:'',comm:P.comm!=='stars'?P.comm:'',cmode:P.cmode!=='total'?P.cmode:'',exclude:P.exclude.join(','),bots:P.bots?'':'0'});
+  syncShell();drawKpis();drawPeople();drawPending();drawCharts();drawCommunity();drawAttention();drawStatus();}
+function jobs(){return [['momentum','/api/momentum?'+peopleQuery()+'&core='+encodeURIComponent(TEAM.raw)],['traction','/api/traction'],['status','/api/status']];}
 function reload(){load(jobs(),render);}
+document.querySelectorAll('[data-pw]').forEach(function(b){b.addEventListener('click',function(){P.pw=b.dataset.pw;delete Z.pend;render();});});
 document.querySelectorAll('[data-pm]').forEach(function(b){b.addEventListener('click',function(){P.pm=b.dataset.pm;delete Z.people;render();});});
 document.querySelectorAll('[data-comm]').forEach(function(b){b.addEventListener('click',function(){P.comm=b.dataset.comm;delete Z.community;render();});});
 document.querySelectorAll('[data-cmode]').forEach(function(b){b.addEventListener('click',function(){P.cmode=b.dataset.cmode;delete Z.community;render();});});
@@ -817,13 +845,21 @@ export function parseMaintainerGroups(raw: string | undefined, label = "MAINTAIN
   return groups;
 }
 
-export function renderDevelopersPage(team: { people: string[][]; source: string; updatedAt: string | null; updatedBy: string | null } = { people: [], source: "deploy", updatedAt: null, updatedBy: null }): string {
+export function renderDevelopersPage(
+  team: { people: string[][]; source: string; updatedAt: string | null; updatedBy: string | null } = { people: [], source: "deploy", updatedAt: null, updatedBy: null },
+  /** owner/name, for links to a person's open items; without it the counts are plain numbers. */
+  repo = "",
+): string {
   const maintainers = team.people.flat();
   const body = `
 <div class="card chips" id="people-bar" style="padding:10px 16px;margin-bottom:14px"></div>
 <div class="card team" id="team" hidden></div>
 <div id="ov"><div class="skel"></div></div>
 <section class="stack"><div class="card"><div class="ch"><span class="t">Core team and outside contributors${infoBtn("split", "Core team and outside contributors")}</span><span class="d">The same pull-request numbers for each group, bots left out.</span></div><div id="split"></div></div></section>
+<section class="stack"><div class="head"><h2>Pending contributors</h2></div>
+<div class="grid2">${card("pend", "Pending over time", "People with an issue or pull request still open, at the end of each period.", seg("pw", [["outside", "Outside"], ["all", "Everyone"]], "Who"))}${card("pend-wait", "How long they have waited", "Each person by their longest-open pull request, or issue if they have none.")}</div>
+<div class="card"><div class="ch"><span class="t">Who is pending${infoBtn("pend-who", "Who is pending")}</span><span class="d">Longest-waiting pull requests first.</span></div><div id="pend-who"></div></div>
+</section>
 <section class="stack"><div class="head"><h2>Issues</h2></div>
 <div class="grid2">${card("issues", "Opened and closed", "Closed taller than opened means the backlog shrank.")}${card("backlog", "Open issues", "Backlog at the end of each period.")}</div></section>
 <section class="stack"><div class="head"><h2>Pull requests</h2></div>
@@ -842,7 +878,7 @@ ${card("community", "Stars and forks", "Growth of the GitHub community.", seg("c
     "Developers",
     "How fast the project moves and who moves it: issues, pull requests, commits, lines of code, contributors and the GitHub community.",
     body,
-    DEV_JS.replace("__MAINTAINERS__", () => JSON.stringify(maintainers)).replace(
+    DEV_JS.replace("__MAINTAINERS__", () => JSON.stringify(maintainers)).replace("__REPO__", () => JSON.stringify(repo).replace(/</g, "\\u003c")).replace(
       "__TEAM__",
       // < escaped so nothing in a saved value can close the script tag; a function so $ patterns stay literal.
       () => JSON.stringify({ raw: team.people.map((g) => g.join("+")).join(","), source: team.source, at: team.updatedAt, by: team.updatedBy }).replace(/</g, "\\u003c"),
