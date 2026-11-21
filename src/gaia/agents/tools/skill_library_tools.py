@@ -772,6 +772,8 @@ class SkillLibraryToolsMixin:
         # Activation
         # ------------------------------------------------------------------
 
+        # A model not offered install_skill gets Agent._fit_load_skill_hint's
+        # ``name`` wording instead.
         @tool
         def load_skill(name: str) -> dict:
             """Activate an installed skill and show its full instructions now.
