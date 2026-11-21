@@ -9,7 +9,7 @@ command, and any process whose ``LemonadeClient`` is aimed at it, under any
 every 30 seconds. It ends when they all exit, when the client releases it, or
 when it goes :data:`LEASE_TTL` without a renewal.
 
-The policy, in two rules:
+The policy, in three rules:
 
 1. **An app closes, the models go.** When an app (``kind="app"``: Agent UI or
    TUI) leaves and no other GAIA client remains, every model is unloaded from
@@ -23,8 +23,17 @@ The policy, in two rules:
    next client starts it again, and a client that finds it stopped mid-request
    restarts it and sends the request once more.
 
+3. **Hidden and unused, the models go.** An app tells the daemon when its
+   window is hidden (in the tray or minimised). Once every connected client is
+   such an app and the server has served no request for
+   ``hidden_idle_unload_minutes`` (``gaia config``; 15 by default, 0 turns it
+   off), every model is unloaded: a GAIA left in the tray gives its memory
+   back. The server and the agents keep running, and the next request loads
+   the model again. An app whose window is showing, a terminal app and a
+   running command each keep the models.
+
 Leases are not the only evidence of use. A process too old to lease still sends
-its requests to this server, so both rules also read the server's own
+its requests to this server, so every rule also reads the server's own
 ``/health``: a model marked busy, or a ``last_use`` that moved since the last
 look, is traffic. No unload or stop happens while a request is in flight, and
 each re-reads the server as its last step, so a request that lands mid-decision
@@ -130,6 +139,19 @@ def idle_timeout_seconds() -> Optional[float]:
     return minutes * 60.0 if minutes > 0 else None
 
 
+def hidden_idle_unload_seconds() -> Optional[float]:
+    """How long unused models stay loaded under hidden apps, or None for ever.
+
+    Raises:
+        GaiaConfigError: ``~/.gaia/config.json`` is unreadable or holds a
+            value that is not a whole number of minutes.
+    """
+    from gaia.config import GaiaConfig
+
+    minutes = GaiaConfig.load().hidden_idle_unload_minutes
+    return minutes * 60.0 if minutes > 0 else None
+
+
 @dataclass
 class _Client:
     client_id: str
@@ -139,6 +161,9 @@ class _Client:
     renewed_at: float = 0.0
     # Runs inside a sidecar agent, so it holds nothing open on its own.
     agent: bool = False
+    # The app reported its window in the tray or minimised, and since when.
+    hidden: bool = False
+    hidden_since: Optional[float] = None
 
     def to_dict(self) -> dict:
         return {
@@ -147,6 +172,7 @@ class _Client:
             "name": self.name,
             "pids": [pid for pid, _ in self.processes],
             "agent": self.agent,
+            "hidden": self.hidden,
         }
 
 
@@ -171,6 +197,8 @@ class LemonadeClients:
             (:meth:`~gaia.daemon.lemonade.EmbeddedLemonadeOwner.activity`);
             None when it is not running. Defaults to the owner's.
         timeout: Returns the idle timeout in seconds, or None when it is off.
+        hidden_idle: Returns how long unused models stay loaded while every
+            app is hidden, in seconds, or None when they stay loaded.
         identity: Returns a process's identity, or None when it is gone.
         clock: Monotonic seconds.
     """
@@ -185,6 +213,7 @@ class LemonadeClients:
         ancestors: Callable[[int], List[int]] = ancestor_pids,
         activity: Optional[Callable[[], Optional["LemonadeActivity"]]] = None,
         timeout: Callable[[], Optional[float]] = idle_timeout_seconds,
+        hidden_idle: Callable[[], Optional[float]] = hidden_idle_unload_seconds,
         identity: Callable[[int], Optional[ProcessIdentity]] = process_identity,
         clock: Callable[[], float] = time.monotonic,
     ):
@@ -195,6 +224,7 @@ class LemonadeClients:
         self._ancestors = ancestors
         self._activity = activity or owner.activity
         self._timeout = timeout
+        self._hidden_idle = hidden_idle
         self._identity = identity
         self._clock = clock
         self._lock = threading.Lock()
@@ -217,6 +247,9 @@ class LemonadeClients:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._timeout_error: Optional[str] = None
+        # The models were unloaded for idleness and nothing has used the
+        # server since.
+        self._idle_unloaded = False
 
     # -- registration ------------------------------------------------------
 
@@ -226,6 +259,7 @@ class LemonadeClients:
         pids: List[int],
         name: str = "",
         client_id: Optional[str] = None,
+        hidden: Optional[bool] = None,
     ) -> dict:
         """Add a client that lives as long as every one of *pids*.
 
@@ -233,6 +267,8 @@ class LemonadeClients:
             client_id: Re-register under this id. Clients repeat their
                 registration periodically, so one registered with a daemon
                 that has since restarted is known to the new one too.
+            hidden: The app's window is in the tray or minimised. None, from
+                a client that does not say, leaves what is known unchanged.
 
         Returns:
             ``client_id``, how many ``clients`` hold the server open (a sidecar
@@ -248,6 +284,7 @@ class LemonadeClients:
         with self._lock:
             if client_id in self._clients:
                 self._clients[client_id].renewed_at = self._clock()
+                self._set_hidden(self._clients[client_id], hidden)
                 return {
                     "client_id": client_id,
                     "clients": len(self._users()),
@@ -278,6 +315,7 @@ class LemonadeClients:
             agent=self._in_agent([pid for pid, _ in processes]),
         )
         with self._lock:
+            self._set_hidden(client, hidden)
             self._clients[client.client_id] = client
             if not client.agent:
                 self._generation += 1
@@ -308,7 +346,7 @@ class LemonadeClients:
 
     def sweep(self) -> None:
         """Drop clients whose processes exited or whose lease lapsed, then
-        apply both rules."""
+        apply the rules."""
         now = self._clock()
         with self._lock:
             if now - self._last_sweep > LEASE_TTL / 2:
@@ -343,6 +381,7 @@ class LemonadeClients:
             )
         self._after_departure()
         self._check_idle()
+        self._check_hidden_idle()
 
     def snapshot(self) -> dict:
         """The connected clients and the idle clock, for status routes."""
@@ -364,6 +403,26 @@ class LemonadeClients:
     def _users(self) -> List[_Client]:
         """The clients holding the server open. Call with the lock held."""
         return [c for c in self._clients.values() if not c.agent]
+
+    def _set_hidden(self, client: _Client, hidden: Optional[bool]) -> None:
+        """Record what *client* says of its window. Call with the lock held."""
+        if hidden is None or hidden == client.hidden:
+            return
+        client.hidden = hidden
+        client.hidden_since = self._clock() if hidden else None
+        logger.info(
+            "lemonade clients: %s window %s",
+            client.name,
+            "hidden" if hidden else "showing",
+        )
+
+    def _hidden_since(self) -> Optional[float]:
+        """When the last app went out of sight, or None while any client is in
+        use: a showing window, a terminal app or a command. Lock held."""
+        users = self._users()
+        if not users or not all(c.kind == "app" and c.hidden for c in users):
+            return None
+        return max(c.hidden_since or 0.0 for c in users)
 
     def _in_agent(self, pids: List[int]) -> bool:
         """Every one of *pids* is a sidecar agent or runs under one.
@@ -403,6 +462,7 @@ class LemonadeClients:
             moved = self._looked and seen is not None and seen.marker != self._marker
             if seen is not None and (seen.busy or moved):
                 self._active_at = now
+                self._idle_unloaded = False
             self._marker = None if seen is None else seen.marker
             self._looked = True
         return seen
@@ -529,6 +589,55 @@ class LemonadeClients:
             return
         if stopped:
             logger.info("lemonade clients: idle timeout stopped GAIA's Lemonade")
+
+    def _check_hidden_idle(self) -> None:
+        """Rule 3: unload models nobody is using while every app is hidden."""
+        from gaia.config import GaiaConfigError
+        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+
+        with self._lock:
+            hidden_since = self._hidden_since()
+        if hidden_since is None:
+            return
+        try:
+            limit = self._hidden_idle()
+        except GaiaConfigError:
+            # _check_idle reports a broken config; this rule stays off with it.
+            return
+        if limit is None or self._busy():
+            return
+        seen = self._observe()
+        if seen is None or seen.busy:
+            return
+        with self._lock:
+            idle_since = max(self._active_at or 0.0, hidden_since)
+            if self._idle_unloaded or self._clock() - idle_since < limit:
+                return
+
+        def _still_wanted() -> bool:
+            # A window shown, a client arriving or a request mid-decision wins.
+            with self._lock:
+                if self._hidden_since() is None:
+                    return False
+            return not self._busy() and self._still_quiet(seen.marker)
+
+        try:
+            unloaded = self._owner.unload_models(still_wanted=_still_wanted)
+        except EmbeddedLemonadeError as e:
+            logger.error("lemonade clients: could not unload idle models: %s", e)
+            return
+        if unloaded:
+            # The unload itself changes what the server reports; take that as
+            # the new baseline so it is not read as someone using the server.
+            self._observe()
+            with self._lock:
+                self._idle_unloaded = True
+            logger.info(
+                "lemonade clients: every GAIA app hidden and no request for %g "
+                "minutes; unloaded every model from GAIA's Lemonade Server (the "
+                "next request loads it again)",
+                limit / 60,
+            )
 
     def _unchanged_since(self, generation: int) -> bool:
         """No client registered since *generation*, and none is connected."""

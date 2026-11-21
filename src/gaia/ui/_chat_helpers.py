@@ -2379,8 +2379,14 @@ def relayed_context_reason(profile, api_version, handler) -> Optional[str]:
 
 
 def forget_relayed_context(session_id: str) -> None:
+    """Drop everything kept in memory for a chat that was deleted."""
     with _relayed_contexts_lock:
         _relayed_contexts.pop(session_id, None)
+    _history_cuts.pop(session_id, None)
+    _relay_clips.pop(session_id, None)
+    _AUTO_TITLE_FAILURES.pop(session_id, None)
+    _AUTO_TITLE_ATTEMPTS.pop(session_id, None)
+    _AUTO_TITLE_SETTLED.discard(session_id)
 
 
 def relayed_context(session_id: str) -> Optional[dict]:

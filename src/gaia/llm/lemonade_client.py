@@ -697,6 +697,29 @@ EMBEDDER_MODELS = frozenset(
 #: than its ubatch (default 512), so every embedder load carries this one.
 EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
+#: llama.cpp otherwise keeps the token tables in host RAM (2.2 GB for
+#: Gemma-4-E4B); the pattern also matches Gemma's per-layer table. Names a
+#: Vulkan device, so any other backend refuses to start with it.
+VULKAN_TOKEN_TABLE_ARGS = "-ot token_embd.weight=Vulkan0"
+
+
+def with_vulkan_token_tables(args: str, backend: Optional[str]) -> str:
+    """*args* for a load on *backend*, keeping the token tables on a Vulkan GPU."""
+    if backend == "vulkan":
+        return f"{args} {VULKAN_TOKEN_TABLE_ARGS}"
+    return args
+
+
+def embedder_llamacpp_args(backend: Optional[str]) -> str:
+    """GAIA's llama.cpp args for an embedder loaded on *backend*."""
+    return with_vulkan_token_tables(EMBEDDER_LLAMACPP_ARGS, backend)
+
+
+def without_vulkan_token_tables(args: str) -> str:
+    """*args* with the Vulkan-only token-table override removed."""
+    return " ".join(args.replace(VULKAN_TOKEN_TABLE_ARGS, " ").split())
+
+
 #: A reranker scores query + chunk as one input, which must fit one ubatch; the
 #: ubatch cannot exceed the batch (default 2048), so both are raised together.
 RERANKER_BATCH_TOKENS = 4096
@@ -893,10 +916,14 @@ NPU_BACKEND_INSTALL_TIMEOUT = 600  # seconds; the FastFlowLM release download
 # llama.cpp keeps up to 32 context checkpoints per slot in host RAM (63 MB each
 # for Qwen3.6-35B); 16 halves that and re-reads no more tokens on a new chat,
 # an edit or a regenerate.
+# llama.cpp's warm-up run at load leaves ~250 MB of GPU memory allocated and
+# makes the first reply no faster.
+# An 8-bit KV cache takes half the GPU memory of the 16-bit default (0.5 GB at
+# 64K for Gemma-4-E4B, 2.5 GB at 262K for Qwen3.6-35B).
 # Args the user saved for the model in Lemonade win (users_llamacpp_args).
 CHAT_LLAMACPP_ARGS = (
     "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5 "
-    "--ctx-checkpoints 16"
+    "--ctx-checkpoints 16 --no-warmup --cache-type-k q8_0 --cache-type-v q8_0"
 )
 #: Slots requests are pinned to (llama.cpp ``id_slot``). Left to LRU, a memory
 #: extraction landed on the conversation's slot and overwrote it, and the next
@@ -913,6 +940,9 @@ FULL_TOOLS_SLOT = 2
 _GAIA_SAVED_CHAT_ARGS = frozenset(
     {
         CHAT_LLAMACPP_ARGS,
+        with_vulkan_token_tables(CHAT_LLAMACPP_ARGS, "vulkan"),
+        "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5 "
+        "--ctx-checkpoints 16",
         "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
         "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
         "--parallel 1",
@@ -991,10 +1021,10 @@ def _recent_crash(key: tuple) -> Optional[Tuple[float, str]]:
 
 def _load_args_hint(sent_args: Optional[str], users_args: Optional[str]) -> str:
     """Which llama.cpp args the failed load used, and how the user changes them."""
-    if sent_args == CHAT_LLAMACPP_ARGS:
+    if sent_args and without_vulkan_token_tables(sent_args) == CHAT_LLAMACPP_ARGS:
         return (
             f" GAIA started it with its chat flags (llamacpp_args "
-            f"'{CHAT_LLAMACPP_ARGS}'), which some models and llama.cpp builds "
+            f"'{sent_args}'), which some models and llama.cpp builds "
             "cannot start with. To use your own llama.cpp arguments instead, "
             "save them for the model in Lemonade (its model settings, or a "
             "load with save_options); GAIA then loads it with those. See "
@@ -6555,13 +6585,38 @@ class LemonadeClient:
             raise
         except LemonadeClientError as e:
             self.log.warning(
-                f"Could not read {self.base_url}/system-info to pick the embedding "
-                f"model's llama.cpp backend ({e}); letting Lemonade choose it."
+                f"Could not read {self.base_url}/system-info to see which "
+                f"llama.cpp backend this PC uses ({e}); letting Lemonade choose it."
             )
             return None
         llamacpp = (info.get("recipes") or {}).get("llamacpp") or {}
         backend = llamacpp.get("default_backend")
         return backend if isinstance(backend, str) and backend else None
+
+    def _token_table_backend(self, backend: Optional[str]) -> Optional[str]:
+        """*backend* when its token tables can go on a GPU, else None.
+
+        A PC with no GPU still runs the Vulkan build, on the CPU, and
+        llama.cpp refuses to start when told to use a Vulkan device there.
+        """
+        if backend != "vulkan":
+            return None
+        try:
+            info = self.get_system_info(timeout=15)
+        except LemonadeAuthError:
+            raise
+        except LemonadeClientError as e:
+            self.log.warning(
+                f"Could not read {self.base_url}/system-info to see whether "
+                f"this PC has a GPU ({e}); leaving the token tables in system RAM."
+            )
+            return None
+        devices = info.get("devices")
+        from gaia.llm.model_fit import gpu_available
+
+        if not isinstance(devices, dict) or not gpu_available(devices):
+            return None
+        return backend
 
     def _post_embedder_load(
         self,
@@ -6596,6 +6651,10 @@ class LemonadeClient:
             with _PINNED_BACKENDS_LOCK:
                 _CPU_FALLBACK_EMBEDDERS.add((self.base_url, model_name))
             request_data["llamacpp_backend"] = "cpu"
+            if request_data.get("llamacpp_args"):
+                request_data["llamacpp_args"] = without_vulkan_token_tables(
+                    request_data["llamacpp_args"]
+                )
             return self._post_load_with_transient_retry(
                 url, request_data, timeout, model_name, load_retries
             )
@@ -7904,9 +7963,26 @@ class LemonadeClient:
             payload = {"model": embedding_model, "input": input_texts}
 
             url = f"{self.base_url}/embeddings"
-            response = self._send_request("POST", url, data=payload, timeout=timeout)
-
-            return response
+            try:
+                return self._send_request("POST", url, data=payload, timeout=timeout)
+            except Exception as e:
+                if embedding_model not in EMBEDDER_MODELS or not self._is_model_error(
+                    e
+                ):
+                    raise
+                # Another GAIA process reloads the embedder around an indexing
+                # job; a request landing in that gap finds no model loaded.
+                self.log.warning(
+                    f"Embedding model '{embedding_model}' was not loaded when the "
+                    f"request arrived ({e}); loading it and sending the request "
+                    "once more."
+                )
+            active_model = self.model
+            try:
+                self.load_model(embedding_model, prompt=False)
+            finally:
+                self.model = active_model
+            return self._send_request("POST", url, data=payload, timeout=timeout)
 
         except Exception as e:
             self.log.error(f"Error generating embeddings: {str(e)}")
@@ -10302,6 +10378,14 @@ class LemonadeClient:
         )
         if chosen_backend:
             request_data["llamacpp_backend"] = chosen_backend
+        if llamacpp_args == CHAT_LLAMACPP_ARGS and platform.system() != "Darwin":
+            chat_backend = chosen_backend or self._default_llamacpp_backend()
+            chat_backend = self._token_table_backend(chat_backend)
+            llamacpp_args = with_vulkan_token_tables(llamacpp_args, chat_backend)
+            if chat_backend == "vulkan":
+                # Saved with the args, so a reload never pairs them with
+                # another backend.
+                request_data["llamacpp_backend"] = chat_backend
         avoiding_rocm = False
         if managed_embedder:
             with _PINNED_BACKENDS_LOCK:
@@ -10318,6 +10402,10 @@ class LemonadeClient:
                 backend = "cpu"
             if backend:
                 request_data["llamacpp_backend"] = backend
+            if llamacpp_args == EMBEDDER_LLAMACPP_ARGS:
+                llamacpp_args = embedder_llamacpp_args(
+                    self._token_table_backend(backend)
+                )
         if model_name in EMBEDDER_MODELS:
             # Saved so Lemonade's own auto-loads (``/embeddings``) keep the
             # ubatch too; never into the config of a server the user runs.

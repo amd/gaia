@@ -406,17 +406,19 @@ class TrayManager {
 
   /** @returns {{message: string, detail: string}} Where the closed window went and how to quit. */
   closeNoticeText() {
-    const loaded = "Closing the window keeps your model loaded, so the next chat starts quickly.";
+    // The daemon unloads a hidden, unused app's models (hidden_idle_unload_minutes).
+    const memory =
+      "If GAIA sits there unused, it frees your model's memory after a while, and your next message loads the model again.";
     if (this.closeAction === "minimize") {
       return {
         message: "GAIA is still running, minimized.",
-        detail: `${loaded} Click GAIA in your dock or the Activities overview to bring it back. To stop it, right-click GAIA there and choose Quit.`,
+        detail: `Click GAIA in your dock or the Activities overview to bring it back. To stop it, right-click GAIA there and choose Quit. ${memory}`,
       };
     }
     const where = process.platform === "darwin" ? "menu bar" : "tray";
     return {
       message: `GAIA is still running in the ${where}.`,
-      detail: `Quit from the ${where} menu to stop it. ${loaded}`,
+      detail: `Quit from the ${where} menu to stop it. ${memory}`,
     };
   }
 

@@ -157,6 +157,8 @@ function restartHarness({ quitWhileSpawning }) {
     waitForBackend: jest.fn(async () => true),
     trayManager: null,
     backendPort: 4300,
+    backendAnswering: false,
+    windowVisibility: { backendStarted: jest.fn() },
     RESTART_TIMEOUT: 90000,
   };
   const updaterHook = main.match(/electronAutoUpdater\.on\("before-quit-for-update", \(\) => \{[\s\S]*?\n\}\);/);
@@ -187,6 +189,7 @@ test.each([
   expect(h.context.isIntentionalKill).toBe(true);
   expect(h.context.backendProcess).toBeNull();
   expect(h.context.waitForBackend).not.toHaveBeenCalled();
+  expect(h.context.windowVisibility.backendStarted).not.toHaveBeenCalled();
 });
 
 test("an update install stops the supervisor before it can spawn again", () => {
@@ -202,6 +205,15 @@ test("with no quit under way, a restart adopts the new backend", async () => {
   await expect(h.restartBackend()).resolves.toEqual({ port: 4300 });
   expect(h.context.backendProcess).toBe(h.child);
   expect(h.portManager.killBackend).not.toHaveBeenCalled();
+  // A new backend knows nothing of the window: an app in the tray says so again.
+  expect(h.context.backendAnswering).toBe(true);
+  expect(h.context.windowVisibility.backendStarted).toHaveBeenCalledTimes(1);
+});
+
+test("a backend that exits is no longer told about the window", () => {
+  const onExit = block('child.on("exit"');
+  // Only the exit of the backend in use: a later one may already be answering.
+  expect(onExit).toMatch(/if \(!backendProcess\) backendAnswering = false;/);
 });
 
 test("a crashed window is offered a reload; GAIA keeps running", () => {

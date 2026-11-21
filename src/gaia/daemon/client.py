@@ -1086,6 +1086,7 @@ def register_lemonade_client(
     name: str = "",
     client_id: Optional[str] = None,
     host_dir: Optional[Path] = None,
+    hidden: Optional[bool] = None,
 ) -> str:
     """Tell the running daemon this process is using GAIA's Lemonade.
 
@@ -1100,6 +1101,8 @@ def register_lemonade_client(
         client_id: Repeat an earlier registration, so a daemon that restarted
             since learns of this client too. A no-op on the daemon that has it.
         host_dir: Register with another GAIA home's daemon (see :func:`attach`).
+        hidden: An app's window is in the tray or minimised. Sent only when
+            given; a daemon that predates it ignores the field.
 
     Returns:
         The client id to release with.
@@ -1124,16 +1127,14 @@ def register_lemonade_client(
             "over."
         )
     url = f"{inst.base_url}{API_PREFIX}/lemonade/clients"
+    body = {"kind": kind, "pids": list(pids), "name": name, "client_id": client_id}
+    if hidden is not None:
+        body["hidden"] = hidden
     try:
         r = requests.post(
             url,
             headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
-            json={
-                "kind": kind,
-                "pids": list(pids),
-                "name": name,
-                "client_id": client_id,
-            },
+            json=body,
             timeout=_CLIENTS_TIMEOUT,
         )
     except requests.exceptions.RequestException as e:

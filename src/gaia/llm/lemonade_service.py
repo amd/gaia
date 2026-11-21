@@ -66,6 +66,7 @@ __all__ = [
     "ensure_daemon_owns_lemonade",
     "ensure_lemonade_running",
     "hold_lemonade_open",
+    "set_window_hidden",
     "lease_gaia_lemonade",
     "release_lemonade_hold",
     "install_supervisor",
@@ -92,6 +93,9 @@ APP_PID_ENV = "GAIA_APP_PID"
 _LEASE: Optional["_Lease"] = None
 # Set once a client library asked for the lease (lease_gaia_lemonade).
 _AUTO_LEASED = False
+#: What this app last said of its window (in the tray or minimised), or None
+#: when it never said. Sent with every lease registration.
+_WINDOW_HIDDEN: Optional[bool] = None
 _HELD_LOCK = threading.Lock()
 
 #: How often a lease is renewed. The daemon drops one not renewed within its
@@ -356,15 +360,51 @@ def _register(lease: _Lease, host_dir: Optional[Path]) -> None:
     from gaia.daemon import client as daemon_client
 
     previous = lease.ids.get(host_dir)
+    # Only an app that reported its window says so; others send the old shape.
+    said = {} if _WINDOW_HIDDEN is None else {"hidden": _WINDOW_HIDDEN}
     if host_dir is None:
         client_id = daemon_client.register_lemonade_client(
-            lease.kind, lease.pids, lease.name, *([previous] if previous else [])
+            lease.kind,
+            lease.pids,
+            lease.name,
+            *([previous] if previous else []),
+            **said,
         )
     else:
         client_id = daemon_client.register_lemonade_client(
-            lease.kind, lease.pids, lease.name, previous, host_dir=host_dir
+            lease.kind, lease.pids, lease.name, previous, host_dir=host_dir, **said
         )
     lease.ids[host_dir] = client_id
+
+
+def set_window_hidden(hidden: bool) -> None:
+    """Tell the daemon this app's window went out of sight, or came back.
+
+    The daemon unloads GAIA's models once every app has been hidden and unused
+    for ``hidden_idle_unload_minutes``. Sent at once when this process holds a
+    lease, and with every renewal after, so a daemon that restarts or a lease
+    taken later learns it too.
+    """
+    global _WINDOW_HIDDEN
+    from gaia.daemon.errors import DaemonError
+
+    with _HELD_LOCK:
+        _WINDOW_HIDDEN = hidden
+        lease = _LEASE
+    if lease is None:
+        return
+    for host_dir in lease.daemons():
+        try:
+            _register(lease, host_dir)
+        except DaemonError as e:
+            log.warning(
+                "Could not tell the GAIA daemon this %s's window is %s (%s); the "
+                "lease renewal sends it again within %gs.",
+                lease.kind,
+                "hidden" if hidden else "showing",
+                e,
+                HOLD_RENEW_SECONDS,
+            )
 
 
 def hold_lemonade_open(

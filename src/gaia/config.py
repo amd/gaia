@@ -246,6 +246,12 @@ class GaiaConfig:
             many minutes, so its memory goes back to the system. 0 keeps it
             running until ``gaia daemon stop``. Never applies to a server
             ``LEMONADE_BASE_URL`` names.
+        hidden_idle_unload_minutes: Unload every model from GAIA's own Lemonade
+            Server once every open GAIA app has had its window hidden (in the
+            tray or minimised) and the server has served no request for this
+            many minutes, so a GAIA left in the tray gives its memory back.
+            The next message loads the model again. 0 keeps models loaded for
+            as long as an app is open.
         llamacpp_backend: The llama.cpp backend (``vulkan``, ``rocm``, ``metal``
             or ``cpu``) GAIA asks Lemonade for when it loads a local chat
             model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
@@ -323,6 +329,7 @@ class GaiaConfig:
     lemonade_api_key_stored: bool = False
     lemonade_env_url_ignored: Optional[str] = None
     lemonade_idle_timeout_minutes: int = 15
+    hidden_idle_unload_minutes: int = 15
     llamacpp_backend: Optional[str] = None
     cloud_reasoning_effort: str = "off"
     context_sizes: Dict[str, int] = field(default_factory=dict)

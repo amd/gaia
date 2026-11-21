@@ -163,6 +163,23 @@ describe("TrayManager without a tray host", () => {
     expect(`${message} ${detail}`).not.toMatch(/tray|AppIndicator/i);
   });
 
+  test.each([
+    ["win32", { available: true, reason: "ok" }],
+    ["darwin", { available: true, reason: "ok" }],
+    ["linux", { available: false, reason: "no-host" }],
+  ])("on %s the notice says the model's memory is freed, not kept", (platform, host) => {
+    // A hidden, unused app gives its models back; the notice used to promise
+    // that closing the window "keeps your model loaded".
+    setPlatform(platform);
+    const mgr = newTray();
+    mgr.config.tray = { ...ON };
+    mgr.setHost(host);
+    const { detail } = mgr.closeNoticeText();
+    expect(detail).toMatch(/frees your model's memory after a while/);
+    expect(detail).toMatch(/your next message loads the model again/);
+    expect(detail).not.toMatch(/keeps your model loaded/);
+  });
+
   test("the first-close notice waits for the tray check, so it names the right place", () => {
     setPlatform("linux");
     const mgr = newTray();

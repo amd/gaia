@@ -163,6 +163,7 @@ export interface ApiSchemas {
   VisionModelRequest: VisionModelRequest;
   Voice: Voice;
   WarmUpStatus: WarmUpStatus;
+  WindowVisibility: WindowVisibility;
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
   gaia__ui__routers__system__DownloadModelRequest: Gaia_Ui_Routers_System__DownloadModelRequest;
@@ -1694,6 +1695,12 @@ export interface UserInputRequest {
  */
 export interface VisionModelRequest {
   model_id?: string | null;
+}
+/**
+ * Whether the desktop app's window is out of sight.
+ */
+export interface WindowVisibility {
+  hidden: boolean;
 }
 /**
  * Work that quitting or unloading the model would cut short.
