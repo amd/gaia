@@ -34,6 +34,18 @@ def test_the_old_name_works_when_it_is_imported_first():
     assert done.returncode == 0
 
 
+def test_a_module_runs_by_its_old_name():
+    done = subprocess.run(
+        [sys.executable, "-m", "gaia_agent.entry", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert done.returncode == 0, done.stderr
+    assert "--serve" in done.stdout
+
+
 def test_find_spec_does_not_invent_a_missing_submodule():
     assert importlib.util.find_spec("gaia_agent.no_such_module") is None
     assert importlib.util.find_spec("gaia_agent.tool_bundles") is not None

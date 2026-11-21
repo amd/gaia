@@ -34,6 +34,11 @@ class _OldNameFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     def exec_module(self, module):
         """Nothing to run: the module was executed under its real name."""
 
+    def get_code(self, fullname):
+        """``python -m gaia_agent.x`` runs ``gaiapy.x``'s code as ``__main__``."""
+        new = _NEW + fullname[len(_OLD) :]
+        return importlib.util.find_spec(new).loader.get_code(new)
+
 
 sys.meta_path.insert(0, _OldNameFinder())
 sys.modules[_OLD] = gaiapy
