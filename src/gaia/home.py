@@ -4,11 +4,21 @@
 
 A leaf module — standard library only — so :mod:`gaia.logger`, which every
 other module imports, can resolve the home without an import cycle.
-:mod:`gaia.config` re-exports both functions.
+:mod:`gaia.config` re-exports :func:`gaia_home` and :func:`default_gaia_home`.
 """
 
 import os
 from pathlib import Path
+from typing import List
+
+#: The Agent UI's chat data below the GAIA home: every chat's database, the
+#: files attached to messages, and the copy of each document dragged into a
+#: chat. Never granted as a folder: a chat opens only what is attached to it
+#: (see ``PathValidator.chat_data_root_of``).
+CHAT_DATA_SUBDIR = Path("chat")
+
+#: Where the Agent UI keeps its copy of each document dragged into a chat.
+DOCUMENT_COPIES_SUBDIR = CHAT_DATA_SUBDIR / "documents"
 
 
 def gaia_home() -> Path:
@@ -35,3 +45,18 @@ def default_gaia_home() -> Path:
     """``~/.gaia``: the home of a process with no ``GAIA_HOME``, and so of the
     machine's default daemon and its Lemonade Server."""
     return Path.home() / ".gaia"
+
+
+def chat_data_dirs() -> List[Path]:
+    """Every folder the Agent UI may keep chat data in, read at call time.
+
+    The Agent UI resolves its home from ``GAIA_HOME`` alone, so with only
+    ``GAIA_CONFIG_DIR`` set its chat data sits under ``~/.gaia`` rather than
+    :func:`gaia_home`; both are listed.
+    """
+    dirs = [gaia_home() / CHAT_DATA_SUBDIR]
+    if not (os.environ.get("GAIA_HOME") or "").strip():
+        default = default_gaia_home() / CHAT_DATA_SUBDIR
+        if default not in dirs:
+            dirs.append(default)
+    return dirs

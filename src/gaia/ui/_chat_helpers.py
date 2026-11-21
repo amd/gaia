@@ -4344,7 +4344,11 @@ async def _get_chat_response(
             )
 
         attached = attached_upload_paths(request.message)
-        allowed = _with_attachments(_compute_allowed_paths(all_doc_paths), attached)
+        # Every upload in the chat, not just this turn's: no prompt opens them later.
+        allowed = _with_attachments(
+            _compute_allowed_paths(all_doc_paths),
+            _chat_upload_paths(db, request.session_id, attached),
+        )
 
         model_id = session.get("model")
         custom_model = db.get_setting("custom_model")
@@ -4797,7 +4801,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             )
 
         attached = attached_upload_paths(request.message)
-        allowed = _with_attachments(_compute_allowed_paths(all_doc_paths), attached)
+        # Every upload in the chat, not just this turn's: no prompt opens them later.
+        allowed = _with_attachments(
+            _compute_allowed_paths(all_doc_paths),
+            _chat_upload_paths(db, request.session_id, attached),
+        )
         model_id = session.get("model")
 
         # Use custom model override if set in user settings
@@ -6549,8 +6557,9 @@ async def _index_document(
             pages["total"] = _page_total(filepath)
             _report("reading", 0, pages["total"])
         # Allow access to the file's directory (and user home) since the UI
-        # explicitly selected this file via the file browser.
-        allowed = [str(filepath.parent), str(Path.home())]
+        # explicitly selected this file via the file browser. The file itself
+        # too: no folder grant opens a copy in GAIA's chat data.
+        allowed = [str(filepath), str(filepath.parent), str(Path.home())]
         # The embedder chat searches with, so the upload's vectors are reused.
         config = RAGConfig(
             allowed_paths=allowed, embedding_model=machine_embedding_model()

@@ -50,6 +50,7 @@ from ..utils import (
     compute_file_hash,
     compute_file_hash_from_fd,
     doc_to_response,
+    document_copies_dir,
     ensure_document_path_allowed,
     harden_served_file,
     managed_documents_dir,
@@ -109,16 +110,19 @@ def _cleanup_temp(path: Path) -> None:
 
 
 def _is_server_owned(filepath: str) -> bool:
-    """Return True if *filepath* lives inside the server-managed docs dir.
+    """Return True if *filepath* lives in a folder the server owns.
 
-    Used by ``delete_document`` to decide whether to unlink the on-disk file.
+    That is GAIA's documents folder or its folder of document copies. Used by
+    ``delete_document`` to decide whether to unlink the on-disk file.
     User-provided paths (from ``upload-path``) are NOT server-owned and must
     be left untouched on delete.
     """
     try:
         resolved = Path(filepath).resolve()
-        managed = managed_documents_dir().resolve()
-        return resolved.is_relative_to(managed)
+        return any(
+            resolved.is_relative_to(owned.resolve())
+            for owned in (managed_documents_dir(), document_copies_dir())
+        )
     except (OSError, ValueError):
         return False
 
@@ -397,7 +401,7 @@ async def upload_document_blob(
     required because browser File objects do not expose an absolute
     filesystem path.
 
-    The blob is streamed to ``managed_documents_dir()`` with an abort-on-overflow
+    The blob is streamed to ``document_copies_dir()`` with an abort-on-overflow
     size check, deduplicated by SHA-256 content hash, then indexed via the
     standard RAG pipeline. Files are capped at ``MAX_DOCUMENT_UPLOAD_SIZE``.
 
@@ -423,12 +427,13 @@ async def upload_document_blob(
             detail=unsupported_type_message(display_name),
         )
 
-    # 3. Ensure the managed directory exists
-    managed_dir = managed_documents_dir()
+    # 3. Ensure the copies directory exists. Not GAIA's documents folder: every
+    # chat may use that one, and this copy is only for the chats it's attached to.
+    copies_dir = document_copies_dir()
     try:
-        managed_dir.mkdir(parents=True, exist_ok=True)
+        copies_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        logger.error("Failed to create managed docs dir %s: %s", managed_dir, e)
+        logger.error("Failed to create document copies dir %s: %s", copies_dir, e)
         raise HTTPException(
             status_code=500, detail="Failed to prepare document storage"
         )
@@ -436,7 +441,7 @@ async def upload_document_blob(
     # 4. Stream-write to a .partial file, hashing as we go, aborting on
     # oversize. try/finally ensures the partial is cleaned up on any exit
     # path (including ClientDisconnect and CancelledError).
-    partial_path: Path | None = managed_dir / f"{_short_id()}.partial"
+    partial_path: Path | None = copies_dir / f"{_short_id()}.partial"
     final_path: Path | None = None
     hasher = hashlib.sha256()
     bytes_written = 0
@@ -496,7 +501,7 @@ async def upload_document_blob(
         safe_stem = _sanitize_stem(Path(display_name).stem)
         try:
             final_path = reserve_copy_path(
-                managed_dir,
+                copies_dir,
                 safe_stem,
                 ext,
                 taken=lambda p: db.path_held_by_other_content(str(p), file_hash),
@@ -740,7 +745,7 @@ async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
     """Remove a document from the library.
 
     For blob-uploaded documents (files the server owns under
-    ``managed_documents_dir()``), the on-disk file is also unlinked as a
+    ``document_copies_dir()``), the on-disk file is also unlinked as a
     best-effort cleanup. User-owned files from ``upload-path`` are left
     alone.
     """
