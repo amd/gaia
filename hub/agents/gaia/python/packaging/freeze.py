@@ -98,6 +98,8 @@ COLLECT_SUBMODULES = [
     "keyring",
     # The agent package registers tools lazily inside functions.
     "gaiapy",
+    # The package's old name; skills loaded at runtime may still import it.
+    "gaia_agent",
     # connector provider discovery is dynamic.
     "gaia.connectors",
     # pydantic v2 ships a compiled core; collect data to be safe.
