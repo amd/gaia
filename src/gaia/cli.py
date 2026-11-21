@@ -4245,7 +4245,7 @@ def _handle_eval_retrieval(args):
     print((opts.out_dir / "report.md").read_text(encoding="utf-8"))
     print(f"[OUTPUT] {(opts.out_dir / 'results.json').resolve()}")
 
-    failed = bool(opts.errors)
+    failed = bool(opts.errors or opts.label_errors)
     if args.gate:
         baseline = json.loads(Path(args.gate).read_text(encoding="utf-8"))
         passed, lines = runner.compare(baseline, results, args.tolerance)
@@ -4256,6 +4256,12 @@ def _handle_eval_retrieval(args):
         failed |= not passed
     if opts.errors:
         print(f"[ERROR] {len(opts.errors)} hard case(s) crashed: {opts.errors}")
+    if opts.label_errors:
+        print(
+            f"[ERROR] {len(opts.label_errors)} question label(s) do not match the "
+            "extracted text, so those questions were not scored. Fix them in "
+            f"eval/retrieval/datasets/: {opts.label_errors}"
+        )
     if failed:
         sys.exit(1)
 
