@@ -13467,6 +13467,106 @@ Do NOT wrap conversational replies in JSON.
         )
         return None, markup_retries
 
+    def _accept_plan(
+        self, parsed: Dict[str, Any], messages: List[Dict[str, Any]], user_input: str
+    ) -> bool:
+        """Validate the plan the model sent and make it the current plan.
+
+        Returns True when the plan was malformed and the model has been asked
+        for a corrected one, so the step loop goes straight to its next turn.
+        """
+        # Validate that plan is actually a list, not a string or other type
+        if not isinstance(parsed["plan"], list):
+            logger.error(
+                f"Invalid plan format: expected list, got {type(parsed['plan']).__name__}. "
+                f"Plan content: {parsed['plan']}"
+            )
+            # The "continue" below asks the LLM to correct itself —
+            # not a fatal top-level failure.
+            self.console.print_error(
+                f"LLM returned invalid plan format (expected array, got {type(parsed['plan']).__name__}). "
+                "Asking for correction...",
+                recoverable=True,
+            )
+
+            # Create error recovery prompt
+            error_msg = (
+                "ERROR: You provided a plan in the wrong format.\n"
+                "Expected: an array of step objects\n"
+                f"You provided: {type(parsed['plan']).__name__}\n\n"
+                "The correct format is:\n"
+                f'{{"plan": [{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}]}}\n\n'
+                f"Please create a proper plan as an array of step objects for: {user_input}"
+            )
+            messages.append({"role": "user", "content": error_msg})
+
+            # Continue to next iteration to get corrected plan
+            return True
+
+        # Validate that plan items are dictionaries with required fields
+        invalid_steps = []
+        for i, step in enumerate(parsed["plan"]):
+            if not isinstance(step, dict):
+                invalid_steps.append((i, type(step).__name__, step))
+            elif "tool" not in step or not step["tool"]:
+                invalid_steps.append((i, "missing tool field", step))
+            elif "tool_args" not in step:
+                # Auto-add empty tool_args for convenience
+                # LLMs sometimes omit this for tools with all optional parameters
+                step["tool_args"] = {}
+                logger.debug(
+                    f"Auto-added empty tool_args for step {i+1}: {step['tool']}"
+                )
+
+        if invalid_steps:
+            logger.error(f"Invalid plan steps found: {invalid_steps}")
+            # The "continue" below asks the LLM to correct itself —
+            # not a fatal top-level failure.
+            self.console.print_error(
+                f"Plan contains {len(invalid_steps)} invalid step(s). Asking for correction...",
+                recoverable=True,
+            )
+
+            # Create detailed error message
+            error_details = "\n".join(
+                [
+                    f"Step {i+1}: {issue} - {step}"
+                    for i, issue, step in invalid_steps[:3]  # Show first 3 errors
+                ]
+            )
+
+            error_msg = (
+                f"ERROR: Your plan contains invalid steps:\n{error_details}\n\n"
+                f"Each step must be a dictionary with 'tool' and 'tool_args' fields:\n"
+                f'{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}\n\n'
+                f"Please create a corrected plan for: {user_input}"
+            )
+            messages.append({"role": "user", "content": error_msg})
+
+            # Continue to next iteration to get corrected plan
+            return True
+
+        # Plan is valid - proceed with execution
+        plan = parsed["plan"]
+        top_args = parsed.get("tool_args")
+        if (
+            plan
+            and parsed.get("tool") == plan[0]["tool"]
+            and isinstance(top_args, dict)
+            and top_args
+        ):
+            # The direct call is the one the model wrote out in full;
+            # its plan copy is often a stand-in for the same content.
+            plan[0] = {**plan[0], "tool_args": top_args}
+        self.current_plan = plan
+        self.current_step = 0
+        self.total_plan_steps = len(self.current_plan)
+        self.execution_state = self.STATE_EXECUTING_PLAN
+        logger.debug(
+            f"New plan created with {self.total_plan_steps} steps: {self.current_plan}"
+        )
+        return False
+
     def _process_query_impl(
         self,
         user_input: str,
@@ -15025,99 +15125,8 @@ Do NOT wrap conversational replies in JSON.
                 break
 
             # Process plan if available
-            if "plan" in parsed:
-                # Validate that plan is actually a list, not a string or other type
-                if not isinstance(parsed["plan"], list):
-                    logger.error(
-                        f"Invalid plan format: expected list, got {type(parsed['plan']).__name__}. "
-                        f"Plan content: {parsed['plan']}"
-                    )
-                    # The "continue" below asks the LLM to correct itself —
-                    # not a fatal top-level failure.
-                    self.console.print_error(
-                        f"LLM returned invalid plan format (expected array, got {type(parsed['plan']).__name__}). "
-                        "Asking for correction...",
-                        recoverable=True,
-                    )
-
-                    # Create error recovery prompt
-                    error_msg = (
-                        "ERROR: You provided a plan in the wrong format.\n"
-                        "Expected: an array of step objects\n"
-                        f"You provided: {type(parsed['plan']).__name__}\n\n"
-                        "The correct format is:\n"
-                        f'{{"plan": [{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}]}}\n\n'
-                        f"Please create a proper plan as an array of step objects for: {user_input}"
-                    )
-                    messages.append({"role": "user", "content": error_msg})
-
-                    # Continue to next iteration to get corrected plan
-                    continue
-
-                # Validate that plan items are dictionaries with required fields
-                invalid_steps = []
-                for i, step in enumerate(parsed["plan"]):
-                    if not isinstance(step, dict):
-                        invalid_steps.append((i, type(step).__name__, step))
-                    elif "tool" not in step or not step["tool"]:
-                        invalid_steps.append((i, "missing tool field", step))
-                    elif "tool_args" not in step:
-                        # Auto-add empty tool_args for convenience
-                        # LLMs sometimes omit this for tools with all optional parameters
-                        step["tool_args"] = {}
-                        logger.debug(
-                            f"Auto-added empty tool_args for step {i+1}: {step['tool']}"
-                        )
-
-                if invalid_steps:
-                    logger.error(f"Invalid plan steps found: {invalid_steps}")
-                    # The "continue" below asks the LLM to correct itself —
-                    # not a fatal top-level failure.
-                    self.console.print_error(
-                        f"Plan contains {len(invalid_steps)} invalid step(s). Asking for correction...",
-                        recoverable=True,
-                    )
-
-                    # Create detailed error message
-                    error_details = "\n".join(
-                        [
-                            f"Step {i+1}: {issue} - {step}"
-                            for i, issue, step in invalid_steps[
-                                :3
-                            ]  # Show first 3 errors
-                        ]
-                    )
-
-                    error_msg = (
-                        f"ERROR: Your plan contains invalid steps:\n{error_details}\n\n"
-                        f"Each step must be a dictionary with 'tool' and 'tool_args' fields:\n"
-                        f'{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}\n\n'
-                        f"Please create a corrected plan for: {user_input}"
-                    )
-                    messages.append({"role": "user", "content": error_msg})
-
-                    # Continue to next iteration to get corrected plan
-                    continue
-
-                # Plan is valid - proceed with execution
-                plan = parsed["plan"]
-                top_args = parsed.get("tool_args")
-                if (
-                    plan
-                    and parsed.get("tool") == plan[0]["tool"]
-                    and isinstance(top_args, dict)
-                    and top_args
-                ):
-                    # The direct call is the one the model wrote out in full;
-                    # its plan copy is often a stand-in for the same content.
-                    plan[0] = {**plan[0], "tool_args": top_args}
-                self.current_plan = plan
-                self.current_step = 0
-                self.total_plan_steps = len(self.current_plan)
-                self.execution_state = self.STATE_EXECUTING_PLAN
-                logger.debug(
-                    f"New plan created with {self.total_plan_steps} steps: {self.current_plan}"
-                )
+            if "plan" in parsed and self._accept_plan(parsed, messages, user_input):
+                continue
 
             # === Native parallel tool_calls fan-out ===
             #
