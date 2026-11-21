@@ -10,7 +10,7 @@ work may raise the floor or lower the ceiling, never the reverse.
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from gaia.eval import tool_cost  # noqa: E402
 from gaia.eval import tool_recall  # noqa: E402

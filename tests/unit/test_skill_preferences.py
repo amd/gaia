@@ -170,14 +170,14 @@ def test_the_ui_lists_edits_and_resets_preferences(home, client):
     assert not Path(home / "skill-preferences" / "slide-decks.json").exists()
 
 
-# Where the agent runs as its own binary (the apps), the UI has no gaia_agent.
+# Where the agent runs as its own binary (the apps), the UI has no gaiapy.
 
 
 @pytest.fixture
 def no_agent_package(monkeypatch):
     import sys
 
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", None)
     from gaia.ui.routers import skills as skills_router
 
     return skills_router
@@ -217,7 +217,7 @@ def test_no_bundled_skill_ships_a_preferences_schema():
     repo = Path(__file__).resolve().parents[2]
     bundled = [
         repo / "hub" / "skills",
-        repo / "hub" / "agents" / "gaia" / "python" / "gaia_agent" / "skills",
+        repo / "hub" / "agents" / "gaia" / "python" / "gaiapy" / "skills",
     ]
     found = [p for root in bundled for p in root.rglob("preferences.schema.json")]
     assert not found, found

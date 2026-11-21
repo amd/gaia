@@ -19,7 +19,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from gaia_agent.agent import GaiaAgent
+from gaiapy.agent import GaiaAgent
 
 from gaia.agents.base.tool_loader import ToolBundle, ToolLoader
 

@@ -26,9 +26,9 @@ from gaia.agents.base.tool_loader import DEFAULT_THRESHOLD, ToolLoader
 
 # DOC_BUNDLES ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS  # noqa: E402
+from gaiapy.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS  # noqa: E402
 
 DIM = 768
 

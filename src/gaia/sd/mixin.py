@@ -94,6 +94,8 @@ class SDToolsMixin:
     - get_generation_history: Get recent generations from this session
     - create_image_variation: Vary an existing PNG (opt-in,
       ``init_sd(enable_variation_tools=True)``)
+    - edit_image / upscale_image: Edit a PNG or JPEG, or upscale a PNG
+      (opt-in, ``init_sd(enable_edit_tools=True)``)
 
     Attributes:
         sd_client: LemonadeClient instance for API calls
@@ -135,7 +137,7 @@ class SDToolsMixin:
         default_cfg: Optional[float] = None,
         enable_3d_tools: bool = False,
         enable_variation_tools: bool = False,
-        enable_edit_tools: bool = True,
+        enable_edit_tools: bool = False,
         follow_user_settings: bool = False,
     ) -> None:
         """
@@ -155,8 +157,8 @@ class SDToolsMixin:
             enable_3d_tools: Register the opt-in image-to-3D tool.
             enable_variation_tools: Register the opt-in
                 ``create_image_variation`` tool.
-            enable_edit_tools: Register edit and upscale tools. Standalone
-                SD profiles default to enabled; flagship callers opt in separately.
+            enable_edit_tools: Register the opt-in ``edit_image`` and
+                ``upscale_image`` tools.
             follow_user_settings: Take the model, size and steps from the
                 user's ``image_model`` / ``image_size`` / ``image_steps`` in
                 ``~/.gaia/config.json``, read at every generation, ahead of
@@ -434,6 +436,23 @@ class SDToolsMixin:
         except OSError as exc:
             return None, {"status": "error", "error": f"Cannot read image: {exc}"}
 
+    def _image_model_missing(self, model: str, action: str) -> Optional[Dict[str, Any]]:
+        """Refuse a model that is not downloaded, so a call never starts a download."""
+        if action == "edit" and model in self.SD_MODELS:
+            return None
+        try:
+            downloaded = {m.get("id") for m in self.sd_client.list_sd_models()}
+        except LemonadeClientError as exc:
+            return {"status": "error", "error": str(exc)}
+        if model in downloaded:
+            return None
+        return {
+            "status": "error",
+            "error": f"The {action} model '{model}' is not downloaded in Lemonade. "
+            f"Download it ({describe_client_hint('pull', model).instruction}) "
+            "or call list_sd_models() to pick a downloaded model.",
+        }
+
     def _save_image_reply(
         self, response: Any, *, prefix: str, source: Path, model: str
     ) -> tuple[Optional[List[str]], Optional[str]]:
@@ -453,7 +472,7 @@ class SDToolsMixin:
             paths = [
                 str(
                     self._save_image(
-                        f"{prefix}_{source.stem}_{index}", image_bytes, model
+                        f"{prefix}_{index}_{source.stem}", image_bytes, model
                     )
                 )
                 for index, image_bytes in enumerate(images, start=1)
@@ -475,7 +494,14 @@ class SDToolsMixin:
         if error:
             return error
         selected_model = model or LemonadeClient.IMAGE_EDIT_DEFAULT_MODEL
+        missing = self._image_model_missing(selected_model, "edit")
+        if missing:
+            return missing
+        legacy_sd = selected_model in self.SD_MODELS
         try:
+            self.sd_client.load_model(
+                selected_model, auto_download=legacy_sd, prompt=False, timeout=600
+            )
             response = self.sd_client.edit_image(
                 source,
                 prompt,
@@ -512,6 +538,9 @@ class SDToolsMixin:
         if error:
             return error
         selected_model = model or LemonadeClient.IMAGE_UPSCALE_DEFAULT_MODEL
+        missing = self._image_model_missing(selected_model, "upscale")
+        if missing:
+            return missing
         try:
             response = self.sd_client.upscale_image(
                 source, model=selected_model, timeout=900

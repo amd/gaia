@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """A release candidate ships the flagship built from its own commit.
 
-Covers util/flagship_rc_assets.py (the pre-release packager) and the workflow
+Covers util/gaiapy_rc_assets.py (the pre-release packager) and the workflow
 wiring that makes an RC unpublishable without that build.
 """
 
@@ -21,7 +21,7 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
 def _load():
     spec = importlib.util.spec_from_file_location(
-        "flagship_rc_assets", REPO_ROOT / "util" / "flagship_rc_assets.py"
+        "gaiapy_rc_assets", REPO_ROOT / "util" / "gaiapy_rc_assets.py"
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -112,7 +112,7 @@ def _jobs(name):
 def test_an_rc_cannot_be_approved_or_released_without_its_flagship():
     jobs = _jobs("publish.yml")
     flagship = jobs["rc-flagship"]
-    assert flagship["uses"] == "./.github/workflows/build_flagship_sidecar.yml"
+    assert flagship["uses"] == "./.github/workflows/build_gaiapy.yml"
     assert "is_rc == 'true'" in flagship["if"]
     for name in ("approve-publish", "github-release"):
         assert "rc-flagship" in jobs[name]["needs"]
@@ -132,7 +132,7 @@ def test_the_rc_release_attaches_the_flagship():
     attach = next(
         s for s in steps if s.get("name", "").startswith("Attach the flagship")
     )
-    assert "flagship_rc_assets.py release" in attach["run"]
+    assert "gaiapy_rc_assets.py release" in attach["run"]
 
 
 def test_the_rc_real_engine_check_installs_this_runs_flagship():
@@ -141,7 +141,7 @@ def test_the_rc_real_engine_check_installs_this_runs_flagship():
 
     core = _jobs("build_core.yml")
     pack = "\n".join(s.get("run", "") for s in core["rc-flagship"]["steps"])
-    assert "flagship_rc_assets.py release" in pack
+    assert "gaiapy_rc_assets.py release" in pack
     assert "inputs.flagship == 'artifact'" in core["rc-flagship"]["if"]
 
     real = core["real-engine"]
@@ -173,9 +173,9 @@ def test_every_rc_core_build_waits_for_and_gets_the_flagship():
 def test_flagship_releases_freeze_through_the_same_workflow():
     assert (
         _jobs("release_agent_gaia.yml")["freeze"]["uses"]
-        == "./.github/workflows/build_flagship_sidecar.yml"
+        == "./.github/workflows/build_gaiapy.yml"
     )
-    freeze = _jobs("build_flagship_sidecar.yml")["freeze"]
+    freeze = _jobs("build_gaiapy.yml")["freeze"]
     runs = "\n".join(s.get("run", "") for s in freeze["steps"])
     assert re.search(r"freeze\.py\"? --onefile", runs)
     assert "smoke_test.py" in runs

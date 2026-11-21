@@ -74,9 +74,9 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from gaia_agent import __version__ as agent_version
-from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
-from gaia_agent.session_index import IndexedOut, SessionIndex, guarded, open_index
+from gaiapy import __version__ as agent_version
+from gaiapy.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
+from gaiapy.session_index import IndexedOut, SessionIndex, guarded, open_index
 
 from gaia.agents.base.readiness import (
     probe_model_present,
@@ -114,7 +114,7 @@ AUDIT_LEVEL = logging.INFO
 #: — so without this, turning unattended approval ON leaves no record
 #: anywhere. ``_configure_logging`` pins it to the log FILE; it must never
 #: reach stdout, which is the wire.
-AUDIT_LOGGER_NAME = "gaia_agent.stdio.audit"
+AUDIT_LOGGER_NAME = "gaiapy.stdio.audit"
 audit = get_logger(AUDIT_LOGGER_NAME)
 
 #: Backstop for a confirmation whose client can no longer answer it.
@@ -1509,8 +1509,8 @@ def follow_settings(agent: Any, config_kwargs: Dict[str, Any]) -> Any:
     changed = getattr(agent, "built_settings_changed", None)
     if not callable(changed) or changed() is not True:
         return agent
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-    from gaia_agent.session_registry import _carry_session_state, close_agent
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.session_registry import _carry_session_state, close_agent
 
     kwargs = {
         k: v
@@ -1919,6 +1919,8 @@ def run_turn(
     permission slate and no way to answer — the safe default, not a convenient
     one: no grant is ever inherited by accident.
     """
+    from gaiapy.session_registry import pop_skill_reload_warning
+
     from gaia.agents.base.history import SessionHistory
     from gaia.ui.sse_handler import SSEOutputHandler
 
@@ -1965,6 +1967,11 @@ def run_turn(
     worker.start()
 
     try:
+        while not handler.cancelled.is_set():
+            warning = pop_skill_reload_warning(agent)
+            if warning is None:
+                break
+            _write(warning, out)
         terminated = False
         terminal_event = None
         # The answer as it went out on the wire. Captured here because this is
@@ -2367,7 +2374,7 @@ def main(argv: Optional[list] = None) -> int:
     # A failure here is fatal and must say so on the turn the user actually
     # sent, not vanish into a dead pipe.
     try:
-        from gaia_agent.agent import (
+        from gaiapy.agent import (
             GaiaAgent,
             GaiaAgentConfig,
             check_skill_set_selection,

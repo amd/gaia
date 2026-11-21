@@ -270,7 +270,7 @@ tools keep their own rules. Tokens in command output are still masked.
 
 **Both transports.** The stdio transport sets `full_access` from
 `--full-access` or the control channel. The HTTP transport
-(`hub/agents/gaia/python/gaia_agent/server.py`) sets it per session through
+(`hub/agents/gaia/python/gaiapy/server.py`) sets it per session through
 `POST /v1/gaia/sessions/{id}/bypass`, which the Agent UI calls when a chat is
 switched to Full access. Token auth and `HostOriginMiddleware`
 (`caller_auth.py`) guard that route. A request with no session has no mode, so

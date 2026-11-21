@@ -337,9 +337,9 @@ def _run_scheduled_prompt(
         return _relay_scheduled_prompt(db, prompt, cancel_event, console)
 
     try:
-        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+        from gaiapy.agent import GaiaAgent, GaiaAgentConfig
     except ModuleNotFoundError as e:
-        if (e.name or "").partition(".")[0] != "gaia_agent":
+        if (e.name or "").partition(".")[0] != "gaiapy":
             raise RuntimeError(_scheduled_import_error(e)) from e
         raise RuntimeError(_flagship_missing_message(registry)) from e
     except ImportError as e:

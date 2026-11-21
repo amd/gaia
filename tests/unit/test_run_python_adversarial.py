@@ -23,9 +23,9 @@ from unittest.mock import patch
 import psutil
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.python_jobs import (  # noqa: E402
+from gaiapy.python_jobs import (  # noqa: E402
     DEFAULT_PYTHON_TIMEOUT,
     MAX_PYTHON_TIMEOUT,
     resolve_python_timeout,

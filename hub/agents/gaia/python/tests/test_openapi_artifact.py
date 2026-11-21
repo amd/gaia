@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent import export_openapi  # noqa: E402
+from gaiapy import export_openapi  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -29,7 +29,7 @@ def spec() -> dict:
 def test_committed_openapi_artifact_is_up_to_date():
     assert export_openapi.check_artifact(), (
         "openapi.gaia.json is stale. Regenerate it with:\n"
-        "  python -m gaia_agent.export_openapi"
+        "  python -m gaiapy.export_openapi"
     )
 
 
@@ -107,8 +107,8 @@ def test_docs_url_is_disabled_but_openapi_json_is_reachable():
 def test_exported_operations_match_the_real_server(spec, monkeypatch):
     # The export app copies the probe routes by hand; a route added only to
     # server.build_app must not be missing from the published contract.
-    from gaia_agent import caller_auth
-    from gaia_agent.server import build_app
+    from gaiapy import caller_auth
+    from gaiapy.server import build_app
 
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)

@@ -244,7 +244,7 @@ Both are refused with a message naming the file and why. Edit such a file yourse
 To narrow the scope for one run without code, set `GAIA_ALLOWED_PATHS` before the agent starts — see [Narrowing file access](/reference/cli#narrowing-file-access). It narrows (except that an Agent UI chat with no attached documents and no overlap is scoped to the listed folders), refuses out-of-scope paths without prompting, and confines GAIA's tools but not code they run. Embedding the agent, you can construct it with an explicit list:
 
 ```python
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 agent = GaiaAgent(config=GaiaAgentConfig(
     allowed_paths=["/home/me/Documents", "/home/me/projects"],
@@ -331,7 +331,7 @@ The agent runs as a **sidecar** — a self-contained HTTP service the GAIA daemo
 | `DELETE /v1/gaia/sessions/{session_id}/grants` | Revoke one "always" answer (`?key=`) or all of them, from the next gated call; an unknown key is a 404 (contract >= 2.26). |
 | `GET /v1/gaia/sessions/{session_id}/tools` | The tools a session's agent can call now: name, description and category each; an unknown session is a 404 (contract >= 2.27). |
 
-The full, **machine-readable** contract — every field, its type, and which are required — is the committed [`openapi.gaia.json`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/openapi.gaia.json), regenerated from the live routes by `python -m gaia_agent.export_openapi` and checked for drift in CI. What follows is the summary a client author needs; the artifact is the source of truth.
+The full, **machine-readable** contract — every field, its type, and which are required — is the committed [`openapi.gaia.json`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/openapi.gaia.json), regenerated from the live routes by `python -m gaiapy.export_openapi` and checked for drift in CI. What follows is the summary a client author needs; the artifact is the source of truth.
 
 ### The `/query` body
 

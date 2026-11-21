@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for installer/tui/fetch_sidecar.py.
+"""Unit tests for installer/tui/fetch_gaiapy.py.
 
 This script is the integrity boundary for a binary that ends up inside a signed
 installer, so every branch is exercised offline: the committed lock is replaced
@@ -18,11 +18,11 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parents[2] / "installer" / "tui" / "fetch_sidecar.py"
-_spec = importlib.util.spec_from_file_location("fetch_sidecar", _SCRIPT)
-fetch_sidecar = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
-sys.modules["fetch_sidecar"] = fetch_sidecar
-_spec.loader.exec_module(fetch_sidecar)  # type: ignore[union-attr]
+_SCRIPT = Path(__file__).resolve().parents[2] / "installer" / "tui" / "fetch_gaiapy.py"
+_spec = importlib.util.spec_from_file_location("fetch_gaiapy", _SCRIPT)
+fetch_gaiapy = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+sys.modules["fetch_gaiapy"] = fetch_gaiapy
+_spec.loader.exec_module(fetch_gaiapy)  # type: ignore[union-attr]
 
 PLACEHOLDER = "PENDING-replace-with-real-sha256"
 VERSION = "0.1.1"
@@ -63,10 +63,10 @@ def _lock(platforms: dict, *, version: str = VERSION) -> dict:
 @pytest.fixture
 def write_lock(tmp_path, monkeypatch):
     """Point the script at a temp repo root; return a writer for its lock."""
-    monkeypatch.setattr(fetch_sidecar, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(fetch_gaiapy, "_repo_root", lambda: tmp_path)
 
     def _write(lock: dict) -> Path:
-        path = tmp_path / fetch_sidecar.BINARIES_LOCK
+        path = tmp_path / fetch_gaiapy.BINARIES_LOCK
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(lock), encoding="utf-8")
         return path
@@ -124,15 +124,15 @@ def serve(monkeypatch):
             asked.append(url)
             return _FakeResponse(payload if url.endswith("manifest.json") else body)
 
-        monkeypatch.setattr(fetch_sidecar.urllib.request, "urlopen", _urlopen)
+        monkeypatch.setattr(fetch_gaiapy.urllib.request, "urlopen", _urlopen)
         return asked
 
     return _serve
 
 
 def run_main(monkeypatch, *argv) -> int:
-    monkeypatch.setattr(sys, "argv", ["fetch_sidecar.py", *[str(a) for a in argv]])
-    return fetch_sidecar.main()
+    monkeypatch.setattr(sys, "argv", ["fetch_gaiapy.py", *[str(a) for a in argv]])
+    return fetch_gaiapy.main()
 
 
 def exit_status(excinfo) -> int:
@@ -148,52 +148,52 @@ def exit_status(excinfo) -> int:
 
 def test_placeholder_digest_is_a_hard_stop(write_lock):
     lock_path = write_lock(_lock({WIN_KEY: _platform_entry(sha256=PLACEHOLDER)}))
-    sidecar, _ = fetch_sidecar._sidecar_lock()
+    sidecar, _ = fetch_gaiapy._sidecar_lock()
     with pytest.raises(SystemExit) as e:
-        fetch_sidecar._expected_sha256(sidecar, WIN_KEY, lock_path)
+        fetch_gaiapy._expected_sha256(sidecar, WIN_KEY, lock_path)
     message = str(e.value)
     assert PLACEHOLDER in message
-    assert fetch_sidecar.LOCK_GENERATOR in message
+    assert fetch_gaiapy.LOCK_GENERATOR in message
     assert "flagship-lock/v" in message  # names the fix: merge the lock PR
     assert "origin verifying itself" in message  # rules out the tempting fallback
 
 
 def test_truncated_digest_is_a_hard_stop(write_lock):
     lock_path = write_lock(_lock({WIN_KEY: _platform_entry(sha256=BODY_SHA[:32])}))
-    sidecar, _ = fetch_sidecar._sidecar_lock()
+    sidecar, _ = fetch_gaiapy._sidecar_lock()
     with pytest.raises(SystemExit) as e:
-        fetch_sidecar._expected_sha256(sidecar, WIN_KEY, lock_path)
-    assert fetch_sidecar.LOCK_GENERATOR in str(e.value)
+        fetch_gaiapy._expected_sha256(sidecar, WIN_KEY, lock_path)
+    assert fetch_gaiapy.LOCK_GENERATOR in str(e.value)
 
 
 def test_missing_sha256_key_is_a_hard_stop(write_lock):
     lock_path = write_lock(_lock({WIN_KEY: _platform_entry(sha256=_OMIT)}))
-    sidecar, _ = fetch_sidecar._sidecar_lock()
+    sidecar, _ = fetch_gaiapy._sidecar_lock()
     with pytest.raises(SystemExit) as e:
-        fetch_sidecar._expected_sha256(sidecar, WIN_KEY, lock_path)
+        fetch_gaiapy._expected_sha256(sidecar, WIN_KEY, lock_path)
     assert "no real sha256" in str(e.value)
     assert "cannot be verified" in str(e.value)
 
 
 def test_absent_platform_is_not_an_error_but_a_distinct_signal(write_lock):
     lock_path = write_lock(_lock({"linux-x64": _platform_entry()}))
-    sidecar, _ = fetch_sidecar._sidecar_lock()
-    with pytest.raises(fetch_sidecar.NoSidecarForPlatform):
-        fetch_sidecar._expected_sha256(sidecar, WIN_KEY, lock_path)
+    sidecar, _ = fetch_gaiapy._sidecar_lock()
+    with pytest.raises(fetch_gaiapy.NoSidecarForPlatform):
+        fetch_gaiapy._expected_sha256(sidecar, WIN_KEY, lock_path)
 
 
 def test_digest_case_is_normalized(write_lock):
     lock_path = write_lock(_lock({WIN_KEY: _platform_entry(sha256=BODY_SHA.upper())}))
-    sidecar, _ = fetch_sidecar._sidecar_lock()
-    assert fetch_sidecar._expected_sha256(sidecar, WIN_KEY, lock_path) == BODY_SHA
+    sidecar, _ = fetch_gaiapy._sidecar_lock()
+    assert fetch_gaiapy._expected_sha256(sidecar, WIN_KEY, lock_path) == BODY_SHA
 
 
 def test_unreadable_lock_names_the_path_and_the_generator(tmp_path, monkeypatch):
-    monkeypatch.setattr(fetch_sidecar, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(fetch_gaiapy, "_repo_root", lambda: tmp_path)
     with pytest.raises(SystemExit) as e:
-        fetch_sidecar._sidecar_lock()
-    assert str(fetch_sidecar.BINARIES_LOCK.name) in str(e.value)
-    assert fetch_sidecar.LOCK_GENERATOR in str(e.value)
+        fetch_gaiapy._sidecar_lock()
+    assert str(fetch_gaiapy.BINARIES_LOCK.name) in str(e.value)
+    assert fetch_gaiapy.LOCK_GENERATOR in str(e.value)
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +205,7 @@ def test_digest_mismatch_deletes_the_partial_and_stops(tmp_path, serve):
     serve()
     dest = tmp_path / "gaia-agent.exe"
     with pytest.raises(SystemExit) as e:
-        fetch_sidecar._download_and_verify(
+        fetch_gaiapy._download_and_verify(
             "https://hub.amd-gaia.ai/x", dest, DECOY_SHA, None
         )
     assert exit_status(e) == 1
@@ -219,7 +219,7 @@ def test_size_mismatch_deletes_the_partial_and_stops(tmp_path, serve):
     serve()
     dest = tmp_path / "gaia-agent"
     with pytest.raises(SystemExit) as e:
-        fetch_sidecar._download_and_verify(
+        fetch_gaiapy._download_and_verify(
             "https://hub.amd-gaia.ai/x", dest, BODY_SHA, len(BODY) + 1
         )
     assert "size mismatch" in str(e.value)
@@ -230,7 +230,7 @@ def test_verified_download_replaces_any_existing_file(tmp_path, serve):
     serve()
     dest = tmp_path / "gaia-agent"
     dest.write_bytes(b"stale")
-    fetch_sidecar._download_and_verify(
+    fetch_gaiapy._download_and_verify(
         "https://hub.amd-gaia.ai/x", dest, BODY_SHA, len(BODY)
     )
     assert dest.read_bytes() == BODY
@@ -274,7 +274,7 @@ def test_absent_platform_exits_three_and_placeholder_exits_one(
     serve()
     assert (
         run_main(monkeypatch, "--platform", "win-x64", "--out", tmp_path / "a")
-        == fetch_sidecar.EXIT_NO_SIDECAR_FOR_PLATFORM
+        == fetch_gaiapy.EXIT_NO_SIDECAR_FOR_PLATFORM
     )
     assert "Build no installer for win-x64" in capsys.readouterr().err
 
@@ -340,7 +340,7 @@ def test_missing_filename_in_the_lock_is_a_hard_stop(
     with pytest.raises(SystemExit) as e:
         run_main(monkeypatch, "--platform", "win-x64", "--out", tmp_path / "payload")
     assert str(lock_path) in str(e.value)
-    assert fetch_sidecar.LOCK_GENERATOR in str(e.value)
+    assert fetch_gaiapy.LOCK_GENERATOR in str(e.value)
 
 
 def test_empty_filename_in_the_lock_is_a_hard_stop(
@@ -377,10 +377,10 @@ def test_platforms_without_a_flagship_build_are_argparse_errors(
     with pytest.raises(SystemExit) as e:
         run_main(monkeypatch, "--platform", platform, "--out", tmp_path / "payload")
     assert exit_status(e) == 2
-    assert platform not in fetch_sidecar.PLATFORM_KEYS
+    assert platform not in fetch_gaiapy.PLATFORM_KEYS
 
 
 def test_platform_has_sidecar_reflects_the_lock(write_lock):
     write_lock(_lock({WIN_KEY: _platform_entry()}))
-    assert fetch_sidecar.platform_has_sidecar("win-x64") is True
-    assert fetch_sidecar.platform_has_sidecar("linux-x64") is False
+    assert fetch_gaiapy.platform_has_sidecar("win-x64") is True
+    assert fetch_gaiapy.platform_has_sidecar("linux-x64") is False

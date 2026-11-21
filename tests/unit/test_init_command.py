@@ -943,7 +943,7 @@ class TestSkipChatModel(unittest.TestCase):
         it would waste several GB of bandwidth/disk for a model that is
         never loaded. The embedder is still required: RAG/memory/code-index
         embeddings have no Claude equivalent (Anthropic has no embeddings
-        API — see hub/agents/gaia/python/gaia_agent/stdio.py)."""
+        API — see hub/agents/gaia/python/gaiapy/stdio.py)."""
         from gaia.installer.init_command import InitCommand
 
         cmd = InitCommand(profile="chat", yes=True, skip_chat_model=True)
@@ -1462,7 +1462,7 @@ class TestCheckSetupStatus(unittest.TestCase):
 
     def test_an_importable_checkout_package_is_not_an_installed_agent(self):
         """The apps run the flagship binary; a source checkout's importable
-        gaia_agent package must not stand in for it."""
+        gaiapy package must not stand in for it."""
         import importlib.util
 
         self._remove_flagship()
@@ -1470,7 +1470,7 @@ class TestCheckSetupStatus(unittest.TestCase):
         with patch(
             "importlib.util.find_spec",
             side_effect=lambda name, *a: (
-                MagicMock() if name == "gaia_agent" else real_find_spec(name, *a)
+                MagicMock() if name == "gaiapy" else real_find_spec(name, *a)
             ),
         ):
             status, _ = self._check_with_models()

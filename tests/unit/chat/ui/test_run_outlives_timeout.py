@@ -166,10 +166,10 @@ async def test_timed_out_goal_tick_holds_session_until_worker_exits(
     session = db.get_session(sid)
 
     # The tick imports GaiaAgent before it checks the cache; a cache hit never uses it.
-    fake_mod = types.ModuleType("gaia_agent.agent")
+    fake_mod = types.ModuleType("gaiapy.agent")
     fake_mod.GaiaAgent = fake_mod.GaiaAgentConfig = object
-    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("x"))
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
+    monkeypatch.setitem(sys.modules, "gaiapy", types.ModuleType("x"))
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", fake_mod)
     (tmp_path / ".gaia" / "chat").mkdir(parents=True)
     (tmp_path / ".gaia" / "chat" / "initialized").touch()
     monkeypatch.setenv("GAIA_HOME", str(tmp_path / ".gaia"))

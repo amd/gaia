@@ -15,7 +15,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 from gaia.agents.base.skill_loader import DEFAULT_SKILL_THRESHOLD, SkillLoader
 

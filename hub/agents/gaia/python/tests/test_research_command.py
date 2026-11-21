@@ -8,8 +8,8 @@ import contextlib
 from types import SimpleNamespace
 
 import pytest
-from gaia_agent import research, stdio
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy import research, stdio
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.model_features import TIER_ENV

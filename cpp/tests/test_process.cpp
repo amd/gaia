@@ -659,7 +659,7 @@ TEST_F(ShellSessionTest, TimeoutKillsTheWholeProcessTree) {
 #include <functional>
 #include <nlohmann/json.hpp>
 
-#include "../agents/bash/bash_tools.h"
+#include "../agents/gaiacpp/bash_tools.h"
 
 namespace {
 

@@ -761,7 +761,7 @@ def fake_hub(tmp_path):
 
     def rc_agent(tag=RC_TAG, digest_overrides=None, platforms=None):
         """Stage a candidate's frozen agent + gaia-agent-release.json, the
-        shape util/flagship_rc_assets.py attaches to a pre-release."""
+        shape util/gaiapy_rc_assets.py attaches to a pre-release."""
         tag_dir = root / "releases" / "download" / tag
         tag_dir.mkdir(parents=True, exist_ok=True)
         entries = {}

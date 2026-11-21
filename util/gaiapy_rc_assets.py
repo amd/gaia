@@ -5,7 +5,7 @@
 
 The Agent Hub has no pre-release channel, so a core release candidate cannot
 publish its flagship there. Instead publish.yml freezes the flagship from the
-RC's commit (build_flagship_sidecar.yml) and this script turns those artifacts
+RC's commit (build_gaiapy.yml) and this script turns those artifacts
 into pre-release assets, plus ``gaia-agent-release.json``, the one file an RC
 core reads to install them (``gaia.hub.prerelease``). Keep the two in step.
 
@@ -15,11 +15,11 @@ A required platform that is missing or does not match stops the release.
 Usage::
 
     # assemble the pre-release assets
-    python util/flagship_rc_assets.py release --artifacts artifacts \\
+    python util/gaiapy_rc_assets.py release --artifacts artifacts \\
         --tag v0.25.0-rc3 --commit "$GITHUB_SHA" --out release-assets
 
     # stage one platform's binary under its installed name (Windows setup)
-    python util/flagship_rc_assets.py stage --artifacts artifacts \\
+    python util/gaiapy_rc_assets.py stage --artifacts artifacts \\
         --platform win32-x64 --out stage/win-x64
 """
 
@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-AGENT_INIT = REPO_ROOT / "hub/agents/gaia/python/gaia_agent/__init__.py"
+AGENT_INIT = REPO_ROOT / "hub/agents/gaia/python/gaiapy/__init__.py"
 AGENT_YAML = REPO_ROOT / "hub/agents/gaia/python/gaia-agent.yaml"
 
 RELEASE_MANIFEST_NAME = "gaia-agent-release.json"

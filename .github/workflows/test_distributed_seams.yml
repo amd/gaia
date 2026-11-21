@@ -16,7 +16,6 @@
 name: Distributed Seams
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:

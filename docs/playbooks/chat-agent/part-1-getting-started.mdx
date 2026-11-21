@@ -5,7 +5,7 @@ icon: "book-open-reader"
 ---
 
 <Info>
-  **Source Code:** [`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
+  **Source Code:** [`hub/agents/gaia/python/gaiapy/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaiapy/chat_agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
 </Info>
 
 <Badge text="development" color="orange" />
@@ -104,7 +104,7 @@ Get a working agent running to understand the basic flow.
         ```
 
         <Info>
-        Create your agent scripts in this folder. `ChatAgent` ships in the flagship `gaia-agent-gaia` package (`gaia_agent.chat_agent`); its PyPI publishing is paused ([#2240](https://github.com/amd/gaia/issues/2240)), so install it from the repository subdirectory. The `rag` extra adds document-processing dependencies (faiss, pypdf, pypdfium2).
+        Create your agent scripts in this folder. `ChatAgent` ships in the flagship `gaia-agent-gaia` package (`gaiapy.chat_agent`); its PyPI publishing is paused ([#2240](https://github.com/amd/gaia/issues/2240)), so install it from the repository subdirectory. The `rag` extra adds document-processing dependencies (faiss, pypdf, pypdfium2).
         </Info>
 
         <Note>
@@ -151,7 +151,7 @@ Get a working agent running to understand the basic flow.
 
     ```python title="my_chat_agent.py"
     import json
-    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+    from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
     # Create agent with a document
     config = ChatAgentConfig(

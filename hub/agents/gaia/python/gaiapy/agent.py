@@ -50,15 +50,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, FrozenSet, List, Optional, Set, Tuple
 
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
-from gaia_agent.connectors import MAILBOX_REQUIREMENTS
-from gaia_agent.engineering_tools import (
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
+from gaiapy.connectors import MAILBOX_REQUIREMENTS
+from gaiapy.engineering_tools import (
     ENGINEERING_SKILL,
     ENGINEERING_TOOL_NAMES,
     EngineeringToolsMixin,
 )
-from gaia_agent.profiles import get_profile_spec
-from gaia_agent.research import (
+from gaiapy.profiles import get_profile_spec
+from gaiapy.research import (
     CITATION_REPAIR,
     DOWNLOAD_READ_TOOLS,
     RESEARCH_BRIEF,
@@ -145,11 +145,11 @@ You are working in the code repository at the current directory. Work like a car
 - Before you finish, re-read the task's requirements and the project's writing rules and check your draft against each one: right format, required sections present, length within limits, nothing the rules forbid. Fix what fails, then deliver."""
 
 #: This file's parent folders in a source checkout, nearest first.
-_CHECKOUT_LAYOUT = ("gaia_agent", "python", "gaia", "agents", "hub")
+_CHECKOUT_LAYOUT = ("gaiapy", "python", "gaia", "agents", "hub")
 
 
 def _checkout_skills_dir(agent_file: Path) -> Optional[Path]:
-    """``hub/skills`` when *agent_file* sits at hub/agents/gaia/python/gaia_agent/.
+    """``hub/skills`` when *agent_file* sits at hub/agents/gaia/python/gaiapy/.
 
     A bundled root's code runs without ``gaia skill promote``, and an installed
     package sits at no fixed depth, so a bare ``parents[4]`` would trust
@@ -567,7 +567,7 @@ class GaiaAgent(
         if route.notice:
             self.console.print_warning(route.notice)
         if route.model != self.model_id:
-            from gaia_agent.stdio import switch_concrete_model
+            from gaiapy.stdio import switch_concrete_model
 
             # Raises with the model's own remedy; never runs the other model.
             try:

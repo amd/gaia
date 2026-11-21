@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 //
 // gaiacpp as the GAIA daemon's "gaia" sidecar: the HTTP + SSE contract the
-// Agent UI speaks to the Python flagship (hub/agents/gaia/python/gaia_agent/
+// Agent UI speaks to the Python flagship (hub/agents/gaia/python/gaiapy/
 // server.py), at API 2.14 — chat with streaming, tool activity, approvals,
 // Stop and bypass. Started by the daemon as `gaiacpp --host H --port P`.
 

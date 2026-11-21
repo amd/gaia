@@ -14,9 +14,9 @@ import os
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent import server as server_mod  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
 
 
 class _Resp:

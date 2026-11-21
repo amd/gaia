@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
 
 import gaia.skills  # noqa: E402
 from gaia.skills.errors import SkillError  # noqa: E402

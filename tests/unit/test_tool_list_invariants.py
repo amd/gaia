@@ -23,12 +23,12 @@ import types
 import numpy as np
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent import stdio  # noqa: E402
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
-from gaia_agent.chat_agent import MAX_TOOL_SEARCHES, ChatAgent  # noqa: E402
-from gaia_agent.tool_bundles import FULL_BUNDLES, FULL_CORE_TOOLS  # noqa: E402
+from gaiapy import stdio  # noqa: E402
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
+from gaiapy.chat_agent import MAX_TOOL_SEARCHES, ChatAgent  # noqa: E402
+from gaiapy.tool_bundles import FULL_BUNDLES, FULL_CORE_TOOLS  # noqa: E402
 
 from gaia.agents.base.history import SessionHistory  # noqa: E402
 from gaia.agents.base.memory import MemoryMixin  # noqa: E402

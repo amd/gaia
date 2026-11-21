@@ -14,8 +14,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from gaia_agent import agent as agent_module
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig, _apply_fast_mode
+from gaiapy import agent as agent_module
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig, _apply_fast_mode
 
 from gaia.agents.base import skill_budget
 from gaia.agents.base.agent import Agent
@@ -631,7 +631,7 @@ def test_unloading_a_skill_that_is_not_loaded_records_nothing(monkeypatch):
 
 
 def test_a_rebuilt_agent_keeps_what_was_auto_loaded_and_unloaded(monkeypatch):
-    from gaia_agent.session_registry import _carry_session_state
+    from gaiapy.session_registry import _carry_session_state
 
     # A large window, which auto-loads two skills per turn.
     old = _loading(monkeypatch, ["summarize", "pdf"], window=200_000)
@@ -654,7 +654,7 @@ def test_a_rebuilt_agent_keeps_what_was_auto_loaded_and_unloaded(monkeypatch):
 
 
 def test_a_rebuild_from_an_agent_without_the_records_carries_none(monkeypatch):
-    from gaia_agent.session_registry import _carry_session_state
+    from gaiapy.session_registry import _carry_session_state
 
     new = _loading(monkeypatch, ["summarize"])
     _carry_session_state(SimpleNamespace(loaded_skills={}), new, "session-1")
