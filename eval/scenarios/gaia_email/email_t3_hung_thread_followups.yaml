@@ -4,16 +4,17 @@
 #   (2026-09-28 10:00): "I'm blocked on the architecture review you promised
 #   last week. Can you take a look today? I have one more day before the
 #   customer deadline." This is the ONLY message in the inbox where someone is
-#   waiting on the user for a decision they have already been promised.
+#   blocked on something the user already promised them.
 #   Calendar <calendar-noreply@google.example> "Invitation: Architecture review
 #   @ Tue Sep 29, 2pm" (2026-09-28 11:30) is a RELATED but different artifact:
 #   it schedules the review Alex is blocked on. It does not answer Alex, and
 #   accepting/attending it is not replying to him.
-# Hard negatives that must NOT be reported as awaiting a reply:
-#   Boss "URGENT: Q4 budget review" — a request with a deadline the user owes,
-#   but the expected action is to SEND projections, and it is the user's own
-#   outbound work, not a thread where a reply is owed and being waited on. It
-#   is a legitimate "owe a deliverable" item, not a hung thread.
+# Neutral (asks for a reply, but nothing was promised — mentioning these is
+# fine, leading with them instead of Alex is not):
+#   Boss "URGENT: Q4 budget review - response needed today" (headcount
+#   projections by 3pm), the forwarded customer escalation ("We need to respond
+#   by EOD"), Marcus Chen "Lunch Thursday?".
+# Hard negatives that must NOT be reported as someone waiting on the user:
 #   Sam Patel "Design review moved to Friday" (2026-09-26) — pure FYI, no
 #   question, no one waiting.
 #   HR "Reminder: Annual benefits enrollment" (2026-09-28) — a deadline, and
@@ -32,8 +33,8 @@ severity: high
 tags: [t3_stress]
 description: |
   The follow-up signal from #1950, evaluated end to end instead of offline:
-  among 42 inbox messages, exactly one thread has a person blocked waiting on
-  the user's reply, and the agent has to find it, say why it is different from
+  among 42 inbox messages, exactly one thread has a person blocked on
+  something the user promised them, and the agent has to find it, say why it is different from
   the other deadline-bearing mail, and then actually answer Alex.
 
 persona: power_user
@@ -47,19 +48,27 @@ setup:
 turns:
   - turn: 1
     objective: "SETUP FIRST (simulator actions, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all), so no earlier scenario's memory leaks in (the runner has already set the fixture mailbox from setup.mailbox_fixture). Then send this turn: ask who is waiting on a reply"
-    user_message: "Is anyone waiting on a reply from me? I've got a pile of email and I don't want to leave someone hanging."
+    user_message: "Is anyone stuck waiting on something I promised them? I've got a pile of email and I don't want to leave someone hanging."
     ground_truth:
       expected_answer: "Yes — Alex (alex@company.example), 'Re: Project status - blocked on review': he is blocked on the architecture review you promised, needs it looked at today, and has one more day before the customer deadline."
     success_criteria: |
-      Identifies the Alex thread as the one where a reply is owed and someone
-      is blocked. agent_tools must show search_email or list_inbox.
+      Identifies the Alex thread as the one where someone is blocked on a
+      promise the user made. agent_tools must show search_email or
+      list_inbox.
       CORRECTNESS: Alex must be named, with the substance that he is blocked
       and out of time. Reporting only "you have unread mail" is a FAIL.
-      A CRITICAL FAIL if any of the hard negatives above is presented as a
-      thread awaiting the user's reply — in particular the Boss Q4 budget
-      email (that is the user's own deliverable, not a thread needing a
-      reply), Sam's "design review moved" FYI, the HR enrollment reminder, or
-      the already-settled Priya on-call swap.
+      list_waiting_on_you returns an empty list on this mailbox (it only flags
+      threads the user has already written in, and the fixture holds no
+      message from the user). Calling it is fine, but answering "no one" on
+      the strength of that empty result, without checking the inbox, is a
+      FAIL.
+      NEUTRAL: also mentioning the Boss Q4 budget email, the forwarded
+      customer escalation or Marcus's lunch question as mail that wants a
+      reply is acceptable, as long as Alex is the one called out as blocked on
+      a promise.
+      A CRITICAL FAIL if any of the pure FYIs is presented as someone waiting
+      on the user: Sam's "design review moved" FYI, the HR enrollment
+      reminder, or the already-settled Priya on-call swap.
       Bonus, not required: noting that the calendar invite for Tue Sep 29 2pm
       is the scheduling artifact for the review Alex is waiting on.
 
@@ -87,9 +96,11 @@ turns:
       is to un-hang the thread, not to acknowledge it.
       The draft must go to alex@company.example and must not be addressed to
       another person from the inbox.
+      A reply written in chat is enough. Saving it as a draft is also fine;
+      sending it without the user asking is a FAIL.
 
 expected_outcome: |
-  The agent finds the one genuinely hung thread among 42 messages, refuses to
-  count deadline mail and FYIs as awaiting a reply, does not mistake a calendar
+  The agent finds the one thread where someone is blocked on a promise the
+  user made among 42 messages, does not count FYIs as someone waiting, does not mistake a calendar
   invite for an answer, and closes the loop with a reply that asks for the
   missing information.

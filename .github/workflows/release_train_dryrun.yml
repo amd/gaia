@@ -275,7 +275,7 @@ jobs:
       !cancelled() &&
       needs.plan.result == 'success' &&
       needs.plan.outputs.build == 'true'
-    uses: ./.github/workflows/build_flagship_sidecar.yml
+    uses: ./.github/workflows/build_gaiapy.yml
 
   flagship-npm-tests:
     name: Flagship npm tests

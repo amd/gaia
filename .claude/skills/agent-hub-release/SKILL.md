@@ -56,7 +56,7 @@ inside the publish.
 | `hub/agents/gaia/npm/binaries.lock.json` | two lanes (sidecar + terminal-hub) → artifact + **sha256** + size + `baseUrl` |
 | `hub/agents/gaia/npm/{README,SPEC,SKILL,CHANGELOG,SCORECARD}.md` | integrator docs, kept in sync per CLAUDE.md |
 | `.github/workflows/release_agent_gaia.yml` | the tag-triggered release |
-| `.github/workflows/build_flagship_sidecar.yml` | the per-platform freeze matrix, shared with `publish.yml` |
+| `.github/workflows/build_gaiapy.yml` | the per-platform freeze matrix, shared with `publish.yml` |
 
 Notes:
 - **Manifest validation:** validate `gaia-agent.yaml` with `gaia agent test
@@ -175,7 +175,7 @@ release:
 
 - `.github/workflows/release_agent_gaia.yml` — the release workflow (its header
   comments document the whole contract).
-- `.github/workflows/build_flagship_sidecar.yml` — the freeze matrix.
+- `.github/workflows/build_gaiapy.yml` — the freeze matrix.
 - `hub/agents/gaia/python/gaia-agent.yaml` — manifest.
 - `hub/agents/gaia/npm/{package.json,binaries.lock.json,SPEC.md}` — launcher
   package and the lock schema (SPEC §2).

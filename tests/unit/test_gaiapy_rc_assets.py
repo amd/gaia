@@ -112,7 +112,7 @@ def _jobs(name):
 def test_an_rc_cannot_be_approved_or_released_without_its_flagship():
     jobs = _jobs("publish.yml")
     flagship = jobs["rc-flagship"]
-    assert flagship["uses"] == "./.github/workflows/build_flagship_sidecar.yml"
+    assert flagship["uses"] == "./.github/workflows/build_gaiapy.yml"
     assert "is_rc == 'true'" in flagship["if"]
     for name in ("approve-publish", "github-release"):
         assert "rc-flagship" in jobs[name]["needs"]
@@ -173,9 +173,9 @@ def test_every_rc_core_build_waits_for_and_gets_the_flagship():
 def test_flagship_releases_freeze_through_the_same_workflow():
     assert (
         _jobs("release_agent_gaia.yml")["freeze"]["uses"]
-        == "./.github/workflows/build_flagship_sidecar.yml"
+        == "./.github/workflows/build_gaiapy.yml"
     )
-    freeze = _jobs("build_flagship_sidecar.yml")["freeze"]
+    freeze = _jobs("build_gaiapy.yml")["freeze"]
     runs = "\n".join(s.get("run", "") for s in freeze["steps"])
     assert re.search(r"freeze\.py\"? --onefile", runs)
     assert "smoke_test.py" in runs

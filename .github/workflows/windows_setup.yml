@@ -31,7 +31,7 @@
 # gaia-agent against the committed digest; stub stands gaia-cli in for it on
 # PRs, where that digest is a placeholder. Nothing stub-built is published.
 # A release candidate passes `artifact`: the gaia-agent its own run froze
-# (build_flagship_sidecar.yml), because the committed pin is the last
+# (build_gaiapy.yml), because the committed pin is the last
 # published flagship, not one built from the candidate's commit.
 #
 # Reads the `tui-binaries` artifact the caller's tui_installers.yml run uploaded,

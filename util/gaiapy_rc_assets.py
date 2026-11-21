@@ -5,7 +5,7 @@
 
 The Agent Hub has no pre-release channel, so a core release candidate cannot
 publish its flagship there. Instead publish.yml freezes the flagship from the
-RC's commit (build_flagship_sidecar.yml) and this script turns those artifacts
+RC's commit (build_gaiapy.yml) and this script turns those artifacts
 into pre-release assets, plus ``gaia-agent-release.json``, the one file an RC
 core reads to install them (``gaia.hub.prerelease``). Keep the two in step.
 

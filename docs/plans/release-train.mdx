@@ -60,7 +60,7 @@ flowchart LR
 | `amd-gaia` wheel + sdist (PyPI) | `publish.yml` | same |
 | `@amd-gaia/agent-ui` (npm) | `publish.yml` | same |
 | `@amd-gaia/agent` (npm), `@amd-gaia/gaia` shim | `release_agent_gaia.yml`, own tag, `latest` only | train, RCs on `next` |
-| Flagship sidecar (4 platforms) | built twice: `rc-flagship` and the agent release | once (`build_flagship_sidecar.yml`) |
+| Flagship sidecar (4 platforms) | built twice: `rc-flagship` and the agent release | once (`build_gaiapy.yml`) |
 | TUI binaries (6) | built 3 times (`publish.yml:649`, `rc-tui-binaries`, `release_components.yml:309`), with two naming schemes (`gaia-darwin-amd64` vs `gaia-darwin-x64`) | once, one naming scheme |
 | TUI installers (.pkg/.deb/.rpm) + combined Windows setup | R2 only on a final; the setup is on GitHub only for an RC | both, in both places |
 | Agent UI installers + `latest*.yml` | `build-installers.yml` | same |

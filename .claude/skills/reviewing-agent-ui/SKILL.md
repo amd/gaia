@@ -84,7 +84,7 @@ controls either, so capture the desktop or ask the person to confirm them.
 To test a build without touching the user's install:
 
 1. Download the `windows-installer` and `gaia-wheel` artifacts from the release branch's
-   `build-installers.yml` run, and `gaia-agent-win32-x64` from `build_flagship_sidecar.yml`.
+   `build-installers.yml` run, and `gaia-agent-win32-x64` from `build_gaiapy.yml`.
 2. Unpack the installer into a scratch folder, and point `USERPROFILE`, `HOME`, `APPDATA`
    and `LOCALAPPDATA` at an empty profile.
 3. Set `GAIA_LOCAL_WHEEL` to the wheel and launch `gaia-desktop.exe --remote-debugging-port=9333`.
