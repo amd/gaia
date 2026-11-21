@@ -2755,6 +2755,7 @@ const messages: Messages = {
     'settings.connectors.notRevoked': 'قُطع الاتصال محليًا، لكن المزوّد لم يؤكد الإلغاء ({reason}). قد يظل ظاهرًا كمتصل في أذونات التطبيقات بحسابك.',
     'settings.connectors.localOnly': 'قُطع الاتصال محليًا. {reason}',
     'settings.connectors.noRevokeApi': 'قُطع الاتصال محليًا. لا يوفر هذا المزوّد واجهة لإلغاء الوصول عن بُعد — أزل GAIA من صفحة التطبيقات المتصلة بحسابك لإلغائه بالكامل.',
+    'settings.connectors.nothingStored': 'لم يُخزَّن أي شيء لهذا الموصل، لذا لم يكن هناك ما يمكن قطع اتصاله أو إلغاء الوصول إليه.',
     'settings.connectors.setupRequired': 'يتطلب إعدادًا',
     'settings.connectors.paused': 'متوقف مؤقتًا',
     'settings.connectors.turnedOn': 'مُفعَّل',
