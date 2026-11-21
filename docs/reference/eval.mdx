@@ -674,13 +674,15 @@ for both harnesses, and reports it as a compliance finding.
 
 ### SWE-bench suite
 
-Nothing of SWE-bench is committed here either. `--suite swebench` is built when
-the run starts:
+Only the split's 500 instance ids are committed
+(`src/gaia/eval/bench/swebench_verified_ids.json`), so a seeded sample is drawn
+without the network. `--suite swebench` is built when the run starts:
 
 - Each instance named by `--instances` (the pilot when it is omitted) is read
   from the Hugging Face dataset `SWE-bench/SWE-bench_Verified` — the `datasets`
-  package when it is installed, the datasets-server REST API otherwise — and
-  cached as `<work root>/swebench/<instance_id>.json`. The judge and the grader
+  package when it is installed, the datasets-server REST API otherwise, where a
+  5xx or dropped connection is retried three times, each retry printed, before
+  the run fails — and cached as `<work root>/swebench/<instance_id>.json`. The judge and the grader
   read the same cache. The cache holds the gold patch, so the fence denies it
   along with the rest of the work root.
 - The agent gets the repository at `base_commit`, built as the TheRock checkout
