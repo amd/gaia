@@ -1739,6 +1739,12 @@ _ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
 # Every field the loop reads off a decoded reply. A JSON object carrying none
 # of them is the model's data, not a protocol envelope.
 _PROTOCOL_KEYS = frozenset(_ENVELOPE_KEYS) | {"answer", "tool_calls", "needs_plan"}
+#: Times the model is told its plan is malformed before the turn ends.
+_MAX_PLAN_CORRECTIONS = 2
+_PLAN_FORMAT_FAILURE_ANSWER = (
+    "I had trouble formatting my plan. Could you rephrase or break the request "
+    "into smaller pieces?"
+)
 # "Index my reports folder", "please re-index ~/docs": the verb opens a clause
 # and takes a path or a folder/file object, so "index.html" or "S&P 500 index"
 # never count.
@@ -7804,7 +7810,16 @@ Do NOT wrap conversational replies in JSON.
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """Decode a reply and reject tool arguments that cannot be executed."""
         parsed = self._decode_llm_response(response)
-        calls = parsed.get("tool_calls") or (
+        raw_calls = parsed.get("tool_calls")
+        if raw_calls and not (
+            isinstance(raw_calls, list)
+            and all(isinstance(c, dict) and "tool_args" in c for c in raw_calls)
+        ):
+            raise ValueError(
+                "Malformed tool_calls: expected a list of calls, each with a "
+                f"name and tool_args, got {type(raw_calls).__name__}."
+            )
+        calls = raw_calls or (
             [{"name": parsed["tool"], "tool_args": parsed.get("tool_args", {})}]
             if parsed.get("tool")
             else []
@@ -7820,9 +7835,27 @@ Do NOT wrap conversational replies in JSON.
     def _decode_llm_response(self, response: str) -> Dict[str, Any]:
         """Decode a reply; a JSON object with no protocol field is the answer."""
         parsed = self._decode_llm_response_fields(response)
-        if isinstance(parsed, dict) and not _PROTOCOL_KEYS.intersection(parsed):
+        if isinstance(parsed, dict) and (
+            not _PROTOCOL_KEYS.intersection(parsed) or self._is_data_not_a_plan(parsed)
+        ):
             return {"thought": "", "goal": "", "answer": (response or "").strip()}
         return parsed
+
+    def _is_data_not_a_plan(self, parsed: Dict[str, Any]) -> bool:
+        """Whether *parsed* only looks like a plan: nothing in it can be run.
+
+        Its ``plan`` is not a list and its ``tool``, if any, names no tool this
+        agent has, so the object is the data the user asked for.
+        """
+        if "plan" not in parsed or isinstance(parsed["plan"], list):
+            return False
+        if parsed.get("tool_calls") or parsed.get("needs_plan"):
+            return False
+        answer = parsed.get("answer")
+        if isinstance(answer, str) and answer.strip():
+            return False
+        tool = parsed.get("tool")
+        return not (isinstance(tool, str) and tool in self._tools_registry)
 
     def _decode_llm_response_fields(self, response: str) -> Dict[str, Any]:
         """
@@ -13573,6 +13606,9 @@ Do NOT wrap conversational replies in JSON.
         error_count = 0
         # Malformed replies get their own budget: failed tool calls are ordinary work.
         parse_failures = 0
+        plan_corrections = 0
+        # Every request to the model, so no reply stream outruns the step budget.
+        model_calls = 0
         markup_retries = 0
         tool_call_history = []  # Recent tool calls, for loop detection
         loop_window = max(
@@ -13734,7 +13770,11 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Input prompt: {prompt[:200]}...")
 
         # Process the query in steps, allowing for multiple tool usages
-        while steps_taken < steps_limit and final_answer is None:
+        while (
+            steps_taken < steps_limit
+            and model_calls < steps_limit
+            and final_answer is None
+        ):
             # Cooperative cancellation: if a consumer (e.g. the Agent UI's
             # stream-timeout/disconnect cleanup) signalled cancel, stop here so
             # the producer thread is torn down rather than left running. Checked
@@ -14220,6 +14260,7 @@ Do NOT wrap conversational replies in JSON.
                 while True:
                     try:
                         self._before_model_call(messages)
+                        model_calls += 1
                         response_stream = self.chat.send_messages_stream(
                             messages=self._with_session_context(messages),
                             system_prompt=self.system_prompt,
@@ -14484,6 +14525,7 @@ Do NOT wrap conversational replies in JSON.
                 while True:
                     try:
                         self._before_model_call(messages)
+                        model_calls += 1
                         chat_response = self.chat.send_messages(
                             messages=self._with_session_context(messages),
                             system_prompt=self.system_prompt,
@@ -14839,6 +14881,9 @@ Do NOT wrap conversational replies in JSON.
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
+                if model_calls >= steps_limit:
+                    # The plan request is a model call; the budget has none left.
+                    break
                 # Prepare a special prompt that specifically requests a plan
                 deferred_tool = parsed.get("deferred_tool", None)
                 deferred_args = parsed.get("deferred_tool_args", {})
@@ -14891,6 +14936,7 @@ Do NOT wrap conversational replies in JSON.
                     messages.append({"role": "user", "content": plan_prompt})
 
                     # Use AgentSDK for streaming plan response
+                    model_calls += 1
                     stream_gen = self.chat.send_messages_stream(
                         messages=self._with_session_context(messages),
                         system_prompt=self.system_prompt,
@@ -14937,6 +14983,7 @@ Do NOT wrap conversational replies in JSON.
                     messages.append({"role": "user", "content": plan_prompt})
 
                     # Use AgentSDK for non-streaming plan response
+                    model_calls += 1
                     chat_response = self.chat.send_messages(
                         messages=self._with_session_context(messages),
                         system_prompt=self.system_prompt,
@@ -15064,6 +15111,10 @@ Do NOT wrap conversational replies in JSON.
                         f"Invalid plan format: expected list, got {type(parsed['plan']).__name__}. "
                         f"Plan content: {parsed['plan']}"
                     )
+                    plan_corrections += 1
+                    if plan_corrections > _MAX_PLAN_CORRECTIONS:
+                        final_answer = _PLAN_FORMAT_FAILURE_ANSWER
+                        break
                     # The "continue" below asks the LLM to correct itself —
                     # not a fatal top-level failure.
                     self.console.print_error(
@@ -15103,6 +15154,10 @@ Do NOT wrap conversational replies in JSON.
 
                 if invalid_steps:
                     logger.error(f"Invalid plan steps found: {invalid_steps}")
+                    plan_corrections += 1
+                    if plan_corrections > _MAX_PLAN_CORRECTIONS:
+                        final_answer = _PLAN_FORMAT_FAILURE_ANSWER
+                        break
                     # The "continue" below asks the LLM to correct itself —
                     # not a fatal top-level failure.
                     self.console.print_error(

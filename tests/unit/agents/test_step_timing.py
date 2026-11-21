@@ -764,7 +764,7 @@ def test_a_step_that_records_itself_is_not_recorded_again(_clean_registry):
     assert [r["step"] for r in _stats_records(result)] == [1]
 
 
-_REJECTED_PLAN = json.dumps({"thought": "plan", "plan": "not a list"})
+_REJECTED_PLAN = json.dumps({"thought": "plan", "plan": [{"description": "no tool"}]})
 
 
 def test_an_early_exit_on_the_last_step_counts_in_the_step_cap_footer(
