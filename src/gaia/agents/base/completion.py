@@ -273,9 +273,6 @@ def _drop_refused_quotes(text: str) -> str:
 
 
 _DESTINATION = re.compile(r"\b(?:to|into|in|at|as)\s+|\s*(?:→|->|=>)\s*", re.I)
-# Where an answer puts a save, as opposed to where it says content sits.
-_SAVED_TO = re.compile(r"\b(?:to|into|as)\s+|\s*(?:→|->|=>)\s*", re.I)
-_PLACE = re.compile(r"\b(?:in|at)\s+", re.I)
 # A path named as where content comes from: "the items from minutes.txt".
 _SOURCE = re.compile(r"\b(?:from|of|using|based on)\s+", re.I)
 # A target named without a path: "in minutes.txt as a markdown file".
@@ -539,6 +536,44 @@ def _source_paths(text: str) -> set[str]:
     }
 
 
+# "covering the errors in app.log", "found in app.log": a path the answer
+# cites as where content sits, not where it saved anything.
+_CITED_NOUN = re.compile(
+    r"\b(?P<intro>with|covering|about|regarding|describing|summari[sz]ing|"
+    r"explaining|following)\s+"
+    r"(?P<noun>(?:(?!(?:and|or|but|then|to|into|as|in|at)\b)[\w'-]+\s+){1,6}?)"
+    r"(?:in|inside|within)\s+",
+    re.I,
+)
+_CITED_PLACE = re.compile(
+    r"\b(?:found|seen|listed|logged|reported|recorded|mentioned|described|"
+    r"shown|noted|flagged|raised|contained|present|appearing|occurring)\s+"
+    r"(?:in|inside|within)\s+",
+    re.I,
+)
+# "with the fix in config.py" may claim the edit itself: never a citation.
+_EDIT_NOUN = re.compile(
+    r"\b(?:fix|fixe[sd]|change[sd]?|edit(?:s|ed)?|patch(?:es|ed)?|update[sd]?|"
+    r"correct(?:ed|ions?)|modifi(?:ed|cations?)|rewrit(?:e|ten)|new|added)\b",
+    re.I,
+)
+
+
+def _cited_paths(sentence: str) -> set[str]:
+    """Paths *sentence* names once, and only as where its content sits."""
+    named = [
+        path for match in _TARGET.finditer(sentence) if (path := _path_token(match))
+    ]
+    cited = []
+    for match in _CITED_NOUN.finditer(sentence):
+        if match["intro"].lower() == "with" and _EDIT_NOUN.search(match["noun"]):
+            continue
+        cited += _scan_paths(sentence[match.end() :], immediate=True)
+    for match in _CITED_PLACE.finditer(sentence):
+        cited += _scan_paths(sentence[match.end() :], immediate=True)
+    return {path for path in cited if named.count(path) == 1}
+
+
 def _instructions(query: str):
     """(verb, text after it) for each non-negated storage instruction."""
     asked = _FENCES.sub("", instruction_part(query))
@@ -598,67 +633,6 @@ def named_outputs(query: str) -> list[str]:
     for verb, tail in _instructions(query):
         if verb == "write":
             paths.extend(_scan_paths(tail, True, True))
-    return list(dict.fromkeys(paths))
-
-
-_EDIT_VERB = re.compile(
-    r"\b(fix|edit|update|modify|patch|change|refactor|rewrite|correct|repair|amend)\b",
-    re.I,
-)
-# "a fix", "the change": the word names a thing, not an instruction.
-_EDIT_NOUN = re.compile(
-    r"\b(?:a|an|the|any|this|that|some|my|your|our|its|their|each|every|no|"
-    r"proposed|possible|suggested|quick)\s+$",
-    re.I,
-)
-_EDITED = re.compile(
-    r"\b(?:fixed|fixing|edited|editing|updated|updating|modified|modifying|"
-    r"patched|patching|changed|changing|refactored|refactoring|rewritten|"
-    r"rewriting|corrected|correcting|repaired|repairing|amended|amending)\b",
-    re.I,
-)
-# The next instruction, or a source the edit only draws on, ends its object.
-_EDIT_OBJECT_END = re.compile(
-    r",?\s*\b(?:and|then|but)\s+(?:also\s+|then\s+)?(?=(?:save|write|export|"
-    r"store|put|copy|extract|create|make|generate|summari[sz]e|read|triage|check|"
-    r"analy[sz]e|tell|report|send|email|show|list|run|compare|explain|look|find|"
-    r"search|open|review|describe|note|log|record)\b(?![./\\]))|,\s*(?=(?:save|"
-    r"write|export|store|create|make|generate|summari[sz]e|then)\b(?![./\\]))|"
-    r"\b(?:from|using|based on|according to|per|with|via)\b",
-    re.I,
-)
-_CLAUSE_BREAK = re.compile(r",|\b(?:and|then|but)\b", re.I)
-_PRONOUN_OBJECT = re.compile(r"^\s*(?:it|them|this|that|both|these|those)\b", re.I)
-_PLACE_BEFORE = re.compile(
-    r"^\s*(?:in|inside|within)\s+([^,]+?)\s*,?\s*(?:please\s+)?$", re.I
-)
-
-
-def edit_targets(query: str) -> list[str]:
-    """Files the request asks to change in place ("fix the bug in config.py")."""
-    asked = _FENCES.sub("", instruction_part(query))
-    paths = []
-    for sentence in re.split(r"(?<=[.!?])\s+|\n|;", asked):
-        for verb in _EDIT_VERB.finditer(sentence):
-            before = sentence[: verb.start()]
-            if _EDIT_NOUN.search(before) or _NOT_REQUEST.search(before):
-                continue
-            tail = sentence[verb.end() :]
-            end = _EDIT_OBJECT_END.search(tail)
-            found = mentioned_paths(tail[: end.start()] if end else tail)
-            # "In config.py, fix the bug".
-            place = _PLACE_BEFORE.match(before)
-            if place:
-                found += _scan_paths(place.group(1), immediate=True)
-            # "config.py is broken, fix it".
-            if not found and _PRONOUN_OBJECT.match(tail):
-                found = mentioned_paths(before)
-            paths.extend(found)
-        # "The bug in config.py needs fixing".
-        for edited in _EDITED.finditer(sentence):
-            before = sentence[: edited.start()]
-            if not _NOT_REQUEST.search(before):
-                paths.extend(mentioned_paths(_CLAUSE_BREAK.split(before)[-1]))
     return list(dict.fromkeys(paths))
 
 
@@ -815,10 +789,6 @@ class CompletionEvidence:
         # Wider than ``requested``: every file the request asks to produce.
         self.outputs = named_outputs(self.query)
         self.instructed = save_instructed(self.query)
-        # Files the request names but never asks to produce or change: what it reads.
-        self.inputs = {
-            self.request_key(path) for path in mentioned_paths(self.query)
-        } - {self.request_key(path) for path in self.outputs + edit_targets(self.query)}
         # The paths the request names and their folders: where a bare output
         # ("also make tables.xlsx") lands.
         self.named_folders = list(
@@ -1387,6 +1357,26 @@ class CompletionEvidence:
                 ):
                     self._written_by_executor(path)
 
+    def _wrote(self, path: str) -> bool:
+        """Whether this turn wrote *path* (a bare name: any file so named)."""
+        key = self.request_key(path)
+        name = os.path.normcase(path) if ntpath.basename(path) == path else None
+
+        def hit() -> bool:
+            return any(
+                item.written
+                and not (self.scratch and _inside(found, self.scratch))
+                and (
+                    found == key
+                    or (name and os.path.normcase(os.path.basename(found)) == name)
+                )
+                for found, item in self.files.items()
+            )
+
+        if not hit():
+            self._find_executor_writes(key)
+        return hit()
+
     def _find_bare_outputs(self, bare: set[str]) -> None:
         """Look for a script-written bare output in the folders the turn named.
 
@@ -1525,25 +1515,17 @@ class CompletionEvidence:
             paths = [path for path in named if not self._is_backup(path)]
             if named and not paths:
                 continue
-            # "Saved report.json with the errors in app.log": the log it read.
-            placed = set(destination_paths(sentence, _PLACE)) - set(
-                destination_paths(sentence, _SAVED_TO)
-            )
-            read_only = {
-                p for p in paths if p in placed and self.request_key(p) in self.inputs
-            }
-            if read_only:
-                # Only when the sentence names another file as the save:
-                # "I wrote the fix in app.log" still claims app.log.
-                paths = (
-                    [p for p in paths if p not in read_only]
-                    or [
-                        p
-                        for p in _scan_paths(sentence, immediate=False)
-                        if p not in read_only
-                    ]
-                    or paths
-                )
+            # "Saved report.json with the errors in app.log": the log it read,
+            # but only beside a save this run really made.
+            cited = _cited_paths(sentence) & set(paths)
+            if cited:
+                saved = [
+                    path
+                    for path in mentioned_paths(sentence)
+                    if path not in cited and self._wrote(path)
+                ]
+                if saved:
+                    paths = [p for p in paths if p not in cited] or saved
             if not checkable and not _FIRST_PERSON.search(sentence):
                 if soft is not None:
                     soft.extend(
