@@ -43,7 +43,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from gaia.hub.catalog import Fetcher, get_hub_base_url
 from gaia.logger import get_logger
@@ -668,20 +668,6 @@ def remove_skill(name: str, *, manager: Optional[SkillManager] = None) -> Remove
     )
 
 
-def installed_provenance(manager: Optional[SkillManager] = None) -> dict[str, Any]:
-    """``{name: lock-entry-dict}`` for every skill the lock tracks.
-
-    Feeds ``gaia skill list --json`` and the (future) ``/api/skills`` router, so
-    both read provenance from the lock rather than re-deriving it. Each entry
-    carries its own ``source`` — ``hub`` for an install, ``local`` for a skill
-    ``gaia skill lock --relock`` started tracking — so a caller that only wants
-    hub provenance filters on it rather than assuming it.
-    """
-    resolver = manager if manager is not None else SkillManager()
-    lock = SkillLock.load(resolver.user_root)
-    return {name: entry.to_dict() for name, entry in lock.entries.items()}
-
-
 __all__ = [
     "Confirmer",
     "InstallResult",
@@ -689,7 +675,6 @@ __all__ = [
     "SkillBundleMismatchError",
     "SkillInstallError",
     "install_skill",
-    "installed_provenance",
     "parse_skill_ref",
     "remove_skill",
 ]
