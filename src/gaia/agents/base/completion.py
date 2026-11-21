@@ -1472,11 +1472,17 @@ class CompletionEvidence:
                 p for p in paths if p in placed and self.request_key(p) in self.inputs
             }
             if read_only:
-                paths = [p for p in paths if p not in read_only] or [
-                    p
-                    for p in _scan_paths(sentence, immediate=False)
-                    if p not in read_only
-                ]
+                # Only when the sentence names another file as the save:
+                # "I wrote the fix in app.log" still claims app.log.
+                paths = (
+                    [p for p in paths if p not in read_only]
+                    or [
+                        p
+                        for p in _scan_paths(sentence, immediate=False)
+                        if p not in read_only
+                    ]
+                    or paths
+                )
             if not checkable and not _FIRST_PERSON.search(sentence):
                 if soft is not None:
                     soft.extend(

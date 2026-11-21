@@ -2099,3 +2099,23 @@ def test_a_save_into_a_file_the_request_never_named_is_still_a_claim(tmp_path):
     ledger = _triaged(tmp_path)
     found = " ".join(gaps(ledger, "I saved a copy in notes.md."))
     assert "notes.md" in found
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I wrote the fix in app.log.",
+        "I saved the fix in app.log.",
+        "I saved the corrected lines at app.log.",
+    ],
+)
+def test_a_claimed_save_in_a_named_input_alone_is_still_a_claim(tmp_path, answer):
+    assert "app.log" in " ".join(gaps(_triaged(tmp_path), answer))
+
+
+def test_a_claimed_save_in_a_named_input_is_owed_beside_the_missing_output(tmp_path):
+    (tmp_path / "app.log").write_text("ERROR boom\n")
+    ledger = CompletionEvidence(_TRIAGE, str(tmp_path))
+    found = " ".join(gaps(ledger, "I wrote the fix in app.log."))
+    assert "app.log" in found
+    assert "report.json" in found
