@@ -12,6 +12,7 @@ covers every link to it. Classification only: no link is created here, and
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -265,7 +266,17 @@ def test_a_read_outside_the_allowed_folders_points_to_the_readers_not_python(lay
 
 
 @pytest.mark.parametrize(
-    "command", ["python convert_units.py 72 --from f", "py tools/report.py"]
+    "command",
+    [
+        "python convert_units.py 72 --from f",
+        # Only Windows Python ships the py launcher.
+        pytest.param(
+            "py tools/report.py",
+            marks=pytest.mark.skipif(
+                shutil.which("py") is None, reason="no py launcher on PATH"
+            ),
+        ),
+    ],
 )
 def test_a_python_script_refusal_points_to_execute_python_file(layout, command):
     agent = _agent(layout)

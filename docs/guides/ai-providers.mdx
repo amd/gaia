@@ -83,8 +83,10 @@ models, not an unused local chat model.
 `gaia init` picks the local chat model from the same rule: **Qwen3.6 35B
 A3B** on any PC whose GPU has ~27 GB for models (its 23.3 GB of weights and
 vision projector plus the context cache at its smallest, 64K window — a 64 GB+
-Strix Halo or a 32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** everywhere
-else, including CPU-only PCs. Qwen3.6 must also fit the memory free when setup
+Strix Halo or a 32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** on PCs with 24 GB of RAM or more and
+GPUs with 10–24 GB, **Qwen3.5 4B** on an 8 GB GPU, and **Qwen3.5 2B** on PCs
+with 16 GB of RAM or less, CPU-only PCs included. Where the model shares the
+PC's RAM, GAIA keeps the larger of 10 GB and a quarter of the RAM for other apps. Qwen3.6 must also fit the memory free when setup
 runs (about 26 GB at its smallest window): on a 48 GB Mac with other apps holding
 memory, setup picks Gemma and says how much Qwen3.6 needs and how much is free.
 GAIA keeps that pick; to use Qwen3.6 later, close those apps and choose it in **Settings → Agent & model**. GAIA runs Qwen3.6 with thinking on, so each step
@@ -228,8 +230,8 @@ model sends its full size again.
 
 | PC | Memory for models | Window | KV cache |
 |----|-------------------|--------|----------|
-| Strix Halo 128 GB (96 GB carve-out) | ~112 GB | 262,144 | 5.4 GB |
-| Strix Halo 64 GB | ~48–56 GB | 262,144 | 5.4 GB |
+| Strix Halo 128 GB (96 GB carve-out) | ~96 GB (32 GB kept for other apps) | 262,144 | 5.4 GB |
+| Strix Halo 64 GB | ~48 GB (16 GB kept for other apps) | 262,144 | 5.4 GB |
 | 32 GB GPU | 32 GB | 90,112 | 1.8 GB |
 | 24 GB GPU | 24 GB | Qwen3.6 not picked; Gemma at 65,536 | — |
 

@@ -926,6 +926,8 @@ class TestSkipChatModel(unittest.TestCase):
             mock_client = MagicMock()
             mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.ensure_model_downloaded.return_value = True
+            # A cold cache: a downloaded Gemma would be kept instead.
+            mock_client.check_model_available.return_value = False
             mock_client_class.return_value = mock_client
 
             result = cmd._download_models()

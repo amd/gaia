@@ -652,6 +652,15 @@ _FACT_AFTER = re.compile(
 _ONLY_A_POINTER = re.compile(r"^(?:it|this|that|them)\b\W*$", re.IGNORECASE)
 
 
+def _facts_in(part: str):
+    """Each "remember X" in *part* outside text the user pasted, first first."""
+    pos = 0
+    while (m := _FACT_AFTER.search(part, pos)) is not None:
+        if not _is_material(part, m.start()):
+            yield m
+        pos = m.start() + 1
+
+
 def fact_to_keep(request: str) -> str:
     """The fact in *request* the user asked to remember, in their words, or "".
 
@@ -660,8 +669,14 @@ def fact_to_keep(request: str) -> str:
     text = (request or "").strip()
     if not asks_to_keep_in_memory(text):
         return ""
-    after = _FACT_AFTER.search(text)
+    # The user's own paragraphs only, and never a quote they pasted.
+    after = next(
+        (m for part in _own_words(text) for m in _facts_in(part)),
+        None,
+    )
     fact = after.group(1).strip() if after else ""
+    # The fact is its own sentence; what follows is the rest of the request.
+    fact = re.split(r"(?<=[.!?])\s+", fact, maxsplit=1)[0]
     if not re.search(r"\w", fact) or _ONLY_A_POINTER.match(fact):
         start = _STORAGE_REQUEST.search(text)
         before = text[: start.start()].strip() if start else ""
@@ -717,6 +732,16 @@ def _own_words(text: str) -> List[str]:
 
 
 _SENTENCE_END = re.compile(r"[.?!\n]|$")
+#: A negation before the verb withholds the request: "I don't want you to remember".
+_HELD_BACK = re.compile(
+    r"\b(?:don'?t|do\s+not|doesn'?t|never|no\s+need|not|shouldn'?t|won'?t)\b",
+    re.IGNORECASE,
+)
+
+
+def _clause_before(part: str, start: int) -> str:
+    """The words of *part*'s clause that come before *start*."""
+    return re.split(r"[.?!,;\n]", part[:start])[-1]
 
 
 def _is_material(part: str, start: int) -> bool:
@@ -742,6 +767,7 @@ def asks_to_keep_in_memory(text: str) -> bool:
                 and verb.start() < request.end()
                 and not _is_material(part, request.start())
                 and not _NOT_A_FACT.match(part, verb.end())
+                and not _HELD_BACK.search(_clause_before(part, verb.start()))
                 # "Can you remember my dog's name?" asks; "…remember that I…?" tells.
                 and (
                     part[end.start() : end.end()] != "?"

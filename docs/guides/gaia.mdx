@@ -35,7 +35,7 @@ GAIA is the agent a new user meets first. One agent handles the everyday work yo
 | | |
 |---|---|
 | Local model server | Lemonade **2026.44.1** or newer, running |
-| Model | `Gemma-4-E4B-it-GGUF` (downloaded) |
+| Model | The chat model `gaia init` picks for this PC (downloaded) |
 | RAM | 8 GB minimum |
 | Platforms | Windows x64, Linux x64, macOS Apple Silicon |
 
@@ -139,9 +139,9 @@ How long a command may run depends on what it is — a test run gets 15 minutes,
 
 ### Smaller models
 
-On Gemma 4 E4B, on the GPU or the NPU, the agent leaves out four features that failed GAIA's agent evals on that model: the SQL scratchpad (`create_table` through `drop_table`), email, image generation, and finding, installing or removing skills (`search_skill_hub`, `install_skill`, `remove_skill`). That is 19 fewer tool descriptions for the model to read on every step. The skills built on them (`data-explore`, `image-gen`, `inbox-triage`) are left out of the skill list too, and so are `send-email`, which needs the email tools, and `calendar`, which has not been evaluated on that model. Asked for one of these features, Gemma says it can't do it; if it tries to load one of those skills anyway, the load is refused with a message that it needs a larger model.
+On a compact model (Gemma 4 E4B on the GPU or the NPU, and Qwen3.5 4B or 2B), the agent leaves out four features that failed GAIA's agent evals on Gemma: the SQL scratchpad (`create_table` through `drop_table`), email, image generation, and finding, installing or removing skills (`search_skill_hub`, `install_skill`, `remove_skill`). That is 19 fewer tool descriptions for the model to read on every step. The skills built on them (`data-explore`, `image-gen`, `inbox-triage`) are left out of the skill list too, and so are `send-email`, which needs the email tools, and `calendar`, which has not been evaluated on that model. Asked for one of these features, the model says it can't do it; if it tries to load one of those skills anyway, the load is refused with a message that it needs a larger model.
 
-`analyze_data_file` still answers questions about CSV and Excel files, and installed skills still load. For the full set, pick a larger model in the model list; switching mid-chat gives the tools back, and switching to Gemma takes them away again. `GAIA_FEATURE_TIER=full` gives Gemma every tool anyway, and `GAIA_FEATURE_TIER=compact` gives any model the smaller set.
+`analyze_data_file` still answers questions about CSV and Excel files, and installed skills still load. For the full set, pick a larger model in the model list; switching mid-chat gives the tools back, and switching to a compact model takes them away again. `GAIA_FEATURE_TIER=full` gives a compact model every tool anyway, and `GAIA_FEATURE_TIER=compact` gives any model the smaller set.
 
 ### Setting up a CLI a skill needs
 

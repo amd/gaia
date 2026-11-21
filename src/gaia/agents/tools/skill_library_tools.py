@@ -103,14 +103,25 @@ _SKILL_AT_PATH = re.compile(
     re.IGNORECASE,
 )
 _DONT = re.compile(r"\b(?:don'?t|do\s+not|never|not\s+yet)\b", re.IGNORECASE)
+#: Before the match in its sentence: a colon or open quote (pasted text) or "how".
+_NOT_ASKED = re.compile(r"[:\"`“]|(?:^|\s)'|\bhow\b", re.IGNORECASE)
 
 
 def uncaptured_skill_path(request: str, tools_called: Set[str]) -> str:
     """The folder the user asked to add as a skill when capture_skill never ran, or ""."""
     if "capture_skill" in tools_called:
         return ""
-    text = request or ""
-    match = _SKILL_AT_PATH.search(text)
+    from gaia.agents.base.memory import _own_words
+
+    match, text = None, ""
+    for part in _own_words(request or ""):
+        for found in _SKILL_AT_PATH.finditer(part):
+            # Pasted text or a how-to question names a path; it asks for nothing.
+            if not _NOT_ASKED.search(re.split(r"[.?!\n]", part[: found.start()])[-1]):
+                match, text = found, part
+                break
+        if match:
+            break
     if not match:
         return ""
     # A "don't" near the request may hold it back; stay quiet rather than guess.
