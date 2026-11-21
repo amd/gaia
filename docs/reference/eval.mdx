@@ -346,7 +346,7 @@ every image as blank.
 |---|---|
 | Retrieval recall@1/3/5/10/20, MRR | A retrieved chunk is a hit when it covers at least half of the labelled evidence quote, or, for evidence labelled by page alone (the scanned-PDF hard case), lies on that page. Chunks are mapped back to the extracted text after whitespace normalization, and to pages via the `[Page N]` markers. |
 | Document recall@5 | Whether the right document appears in the top 5, regardless of the passage. |
-| Two retrieval pipelines | `sdk` is `RAGSDK` dense search (what `RAGSDK.query` gives the model). `agent` is `query_documents` as the chat agents run it, with search-key expansion, keyword boost and the adaptive chunk cutoff; it is scored on the list it actually returns (`R@returned`). |
+| Two retrieval pipelines | `sdk` is `RAGSDK` dense search (what `RAGSDK.query` gives the model). `agent` is `query_documents` as the chat agents run it, with search-key expansion, dense and keyword rankings merged by reciprocal rank fusion, and the adaptive chunk cutoff; it is scored on the list it actually returns (`R@returned`). |
 | Answer accuracy | `RAGSDK.query` end to end with the default model. Numeric answers match within 1% (unit scale such as millions/billions, and percent/fraction, are accepted). Short answers must appear in the reply. Free-form answers are graded by the Claude judge only with `--judge`; without it they are counted as unscored, never guessed. |
 | Retrieval vs generation miss | Each wrong answer is a *retrieval miss* (the evidence never reached the model) or a *generation miss* (it did, and the answer was still wrong). |
 | Scale | The 10 most-questioned repo documents plus Wikipedia distractors at 10, 100 and 1,000 documents: indexing time, chunks/s, peak RSS, vector and cache size, query latency p50/p95 for both pipelines, and recall as distractors are added. |
@@ -360,6 +360,10 @@ every image as blank.
 
 Narrow a run with `--datasets`, `--retrieval-only`, `--no-scale`, `--scale-tiers 10,100,1000,5000`,
 `--no-hard-cases` or `--xquad-languages`.
+
+A question whose evidence quote is not in the text as GAIA extracts it is listed under
+**Label errors** in the report and left unscored; the run carries on with the other
+questions, then exits non-zero.
 
 ### Hard cases
 
