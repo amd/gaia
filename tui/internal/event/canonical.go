@@ -45,6 +45,7 @@ const (
 type CanonicalStatusEvent struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
+	Level   string `json:"level,omitempty"` // "warning" is kept as a chat notice.
 	// ModelID is the model actually resolved for chat (e.g. "claude-sonnet-5"
 	// or "Gemma-4-E4B-it-GGUF") — empty means this is a plain status line, not
 	// a model banner.

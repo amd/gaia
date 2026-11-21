@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import threading
 import time
+from queue import Empty, SimpleQueue
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from gaia.logger import get_logger
@@ -77,6 +78,36 @@ class SessionCapacityError(RuntimeError):
     """
 
 
+def _skill_reload_reason(exc: Exception) -> str:
+    # Do not put an exception's text on the chat wire. It can contain local
+    # paths or arbitrary output from loading the skill.
+    from gaia.skills.errors import (
+        SkillNotFoundError,
+        SkillPermissionError,
+        SkillUnavailableError,
+    )
+
+    if isinstance(exc, SkillNotFoundError):
+        return "its files could not be found"
+    if isinstance(exc, SkillUnavailableError):
+        return "the current model does not offer the tools it needs"
+    if isinstance(exc, (SkillPermissionError, PermissionError)):
+        return "the current settings do not permit it to load"
+    return "it failed to load with the current settings"
+
+
+def pop_skill_reload_warning(agent: Any) -> Optional[Dict[str, str]]:
+    """Take one notice for the wire, once a turn can actually send it."""
+    warnings = getattr(agent, "_skill_reload_warnings", None)
+    if warnings is None:
+        return None
+    try:
+        message = warnings.get_nowait()
+    except Empty:
+        return None
+    return {"type": "status", "level": "warning", "message": message}
+
+
 def _carry_session_state(old: Any, new: Any, session_id: str) -> None:
     """Give a rebuilt agent what its chat set on the old one.
 
@@ -117,6 +148,7 @@ def _carry_session_state(old: Any, new: Any, session_id: str) -> None:
     old_dir = getattr(getattr(old, "config", None), "working_directory", None)
     if old_dir is not None and getattr(new, "config", None) is not None:
         new.config.working_directory = old_dir
+    failures = []
     for name in list(getattr(old, "loaded_skills", None) or {}):
         try:
             new.load_skill(name)
@@ -128,6 +160,10 @@ def _carry_session_state(old: Any, new: Any, session_id: str) -> None:
                 name,
                 exc,
             )
+            failures.append(
+                f"Skill '{name}' was not restored after settings changed: "
+                f"{_skill_reload_reason(exc)}. Reload it if needed."
+            )
     # After the loads above, so they cannot overwrite what the session recorded.
     for records in ("_autoloaded_skills", "_unloaded_skills"):
         if getattr(old, records, None) is not None:
@@ -136,6 +172,17 @@ def _carry_session_state(old: Any, new: Any, session_id: str) -> None:
         new._autoload_granted = {
             name: list(programs) for name, programs in old._autoload_granted.items()
         }
+    # Carry pending notices through another rebuild, including when the request
+    # that rebuilt the agent was cancelled before its stream could start. The
+    # HTTP worker can release the session while its stream is still draining;
+    # keeping the same queue makes taking a notice atomic across both turns.
+    warnings = getattr(old, "_skill_reload_warnings", None)
+    if warnings is not None or failures:
+        if warnings is None:
+            warnings = SimpleQueue()
+        for message in failures:
+            warnings.put(message)
+        new._skill_reload_warnings = warnings
 
 
 class _AgentSession:

@@ -1919,6 +1919,8 @@ def run_turn(
     permission slate and no way to answer — the safe default, not a convenient
     one: no grant is ever inherited by accident.
     """
+    from gaiapy.session_registry import pop_skill_reload_warning
+
     from gaia.agents.base.history import SessionHistory
     from gaia.ui.sse_handler import SSEOutputHandler
 
@@ -1965,6 +1967,11 @@ def run_turn(
     worker.start()
 
     try:
+        while not handler.cancelled.is_set():
+            warning = pop_skill_reload_warning(agent)
+            if warning is None:
+                break
+            _write(warning, out)
         terminated = False
         terminal_event = None
         # The answer as it went out on the wire. Captured here because this is

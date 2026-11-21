@@ -59,6 +59,7 @@ from gaiapy.session_registry import (
     PROVIDER_LOCAL,
     SessionCapacityError,
     close_agent,
+    pop_skill_reload_warning,
 )
 from gaiapy.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -2204,6 +2205,13 @@ async def query(request: QueryRequest):
         terminated = False
         last_write = time.monotonic()
         try:
+            # A rebuild can finish before a cancelled request has a stream.
+            # Keep its notice pending for the next live turn in that session.
+            while session is not None and not run.cancel_event.is_set():
+                warning = pop_skill_reload_warning(agent)
+                if warning is None:
+                    break
+                yield _emit(warning)
             while True:
                 try:
                     event = handler.event_queue.get_nowait()
