@@ -58,7 +58,7 @@ def test_missing_truststore_warns_on_stderr_and_keeps_default(
     message = captured.err
     assert "system certificate store" in message
     assert "CERTIFICATE_VERIFY_FAILED" in message
-    assert "pip install --upgrade 'truststore>=0.10.0'" in message
+    assert "pip install --upgrade 'truststore>=0.10.3'" in message
     assert fresh_tls._injected is False
 
 

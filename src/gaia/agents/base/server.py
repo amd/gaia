@@ -3,7 +3,7 @@
 """Framework-provided generic server — the 5-interface standard for agents.
 
 Every Agent Hub package should be runnable through the same five interface
-modes (the gaia-bash PR #985 pattern): an interactive **TUI**, a one-shot
+modes: an interactive **TUI**, a one-shot
 **CLI** (``--prompt``), a **pipe** mode (stdin → stdout), an OpenAI-compatible
 **REST API server** (``--api``), and an **MCP stdio server** (``--mcp``).
 

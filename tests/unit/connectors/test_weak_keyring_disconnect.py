@@ -299,17 +299,23 @@ def test_an_unknown_account_is_still_named_as_unknown(
 
 def _outcome(result):
     return {
-        k: result[k] for k in ("revoke_supported", "revoked_remotely", "revoke_error")
+        k: result[k]
+        for k in (
+            "revoke_supported",
+            "revoked_remotely",
+            "nothing_stored",
+            "revoke_error",
+        )
     }
 
 
 def _nothing_to_revoke(provider):
-    """What a secure keyring reports for a slot with no token: Google has no
-    grant left to revoke; Microsoft has no revoke endpoint at all."""
-    supported = provider == "google"
+    """What a disconnect reports for a slot with no token: there was nothing
+    stored, so no provider revoke happened, whatever endpoint it has."""
     return {
-        "revoke_supported": supported,
-        "revoked_remotely": supported,
+        "revoke_supported": provider == "google",
+        "revoked_remotely": False,
+        "nothing_stored": True,
         "revoke_error": None,
     }
 
@@ -474,6 +480,7 @@ def test_a_strong_keyring_still_revokes_at_the_provider(monkeypatch):
         return {
             "revoke_supported": True,
             "revoked_remotely": True,
+            "nothing_stored": False,
             "revoke_error": None,
         }
 
@@ -531,12 +538,6 @@ def test_the_cli_tells_the_user_where_to_revoke(
     assert "provider access revoked" not in out
 
 
-_NO_REVOKE_API = (
-    "locally. This provider has no API to revoke access remotely — remove GAIA "
-    "from your account's connected-apps page if you want to fully revoke it."
-)
-
-
 @pytest.mark.parametrize("provider", PROVIDERS)
 @pytest.mark.parametrize("kind", ["weak", "uninspectable", "secure"])
 def test_the_cli_line_for_nothing_stored_matches_every_keyring(
@@ -562,10 +563,10 @@ def test_the_cli_line_for_nothing_stored_matches_every_keyring(
     assert _handle_disconnect(args) == 0
 
     out = capsys.readouterr().out
-    if provider == "google":
-        assert out == "Disconnected google (provider access revoked).\n"
-    else:
-        assert out == f"Disconnected {provider} {_NO_REVOKE_API}\n"
+    assert (
+        out
+        == f"Nothing stored for {provider}; there was nothing to disconnect or revoke.\n"
+    )
 
 
 def test_the_static_revoke_map_matches_each_provider_class():
@@ -621,11 +622,11 @@ def test_the_ui_route_reports_the_local_only_outcome(
     assert "https://myaccount.google.com/permissions" in payload["revoke_error"]
 
 
-@pytest.mark.parametrize("provider", ["microsoft", "microsoft_work"])
-def test_the_ui_route_says_microsoft_has_no_revoke_api_with_nothing_stored(
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_the_ui_route_says_nothing_is_stored_for_every_provider(
     provider, refused, monkeypatch, no_provider_call
 ):
-    """The Agent UI shows its no-revoke-API notice for exactly this payload."""
+    """The Agent UI shows its nothing-stored notice for exactly this payload."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -646,6 +647,7 @@ def test_the_ui_route_says_microsoft_has_no_revoke_api_with_nothing_stored(
     assert resp.status_code == 204, resp.text
     (name, payload), *_ = events
     assert name == "connector.disconnected"
-    assert payload["revoke_supported"] is False
+    assert payload["revoke_supported"] is (provider == "google")
     assert payload["revoked_remotely"] is False
+    assert payload["nothing_stored"] is True
     assert payload["revoke_error"] is None
