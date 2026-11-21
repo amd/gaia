@@ -1,8 +1,12 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { describe, expect, it } from 'vitest';
-import { isResearchMessage, isSkillCommand, withResearchCommand } from '../research';
+import { beforeEach, describe, expect, it } from 'vitest';
+import {
+    forgetInstalledSkills, isResearchMessage, isSkillCommand, needsInstalledSkills, rememberInstalledSkills, withResearchCommand,
+} from '../research';
+
+beforeEach(() => forgetInstalledSkills());
 
 describe('research mode', () => {
     it('recognises a leading /research command only', () => {
@@ -35,10 +39,31 @@ describe('research mode', () => {
         expect(withResearchCommand('/docx.txt notes', true, skills)).toBe('/research /docx.txt notes');
         expect(withResearchCommand('plain question', true, skills)).toBe('/research plain question');
         expect(withResearchCommand('/docx\nthe memo', true, skills)).toBe('/docx\nthe memo');
-        for (const text of ['/DOCX memo', '/docx-pro memo', '/docx/notes', 'see /docx memo']) {
+        for (const text of ['/docx-pro memo','/docx/notes', 'see /docx memo']) {
             expect(withResearchCommand(text, true, skills)).toBe(`/research ${text}`);
         }
         expect(withResearchCommand('/docx memo', false, skills)).toBe('/docx memo');
         expect(isSkillCommand('/docx memo', new Set())).toBe(false);
+    });
+
+    it('runs a skill typed in any case, sent in the lowercase the agent reads', () => {
+        const skills = new Set(['docx', 'research-report']);
+        expect(withResearchCommand('/Docx draft a memo', true, skills)).toBe('/docx draft a memo');
+        expect(withResearchCommand('/DOCX', true, skills)).toBe('/docx');
+        expect(withResearchCommand('/DOCX\nThe Memo', true, skills)).toBe('/docx\nThe Memo');
+        expect(withResearchCommand('/Docs draft a memo', true, skills)).toBe('/research /Docs draft a memo');
+        rememberInstalledSkills(['Docx']);
+        expect(withResearchCommand('/docx memo', true)).toBe('/docx memo');
+    });
+
+    it('asks for the skill list only when a /name message cannot be judged without it', () => {
+        expect(needsInstalledSkills('/docx draft a memo', true)).toBe(true);
+        expect(needsInstalledSkills('/Docx', true)).toBe(true);
+        expect(needsInstalledSkills('/docx draft a memo', false)).toBe(false);
+        expect(needsInstalledSkills('plain question', true)).toBe(false);
+        expect(needsInstalledSkills('/tmp/notes.txt', true)).toBe(false);
+        expect(needsInstalledSkills('/research jwst', true)).toBe(false);
+        rememberInstalledSkills([]);
+        expect(needsInstalledSkills('/docx draft a memo', true)).toBe(false);
     });
 });
