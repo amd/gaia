@@ -1934,7 +1934,7 @@ class TestEdgeCases:
             cursor = store._conn.execute("SELECT version FROM schema_version")
             row = cursor.fetchone()
             assert row is not None
-            assert row[0] == 8
+            assert row[0] == 9
 
 
 # ===========================================================================
@@ -4029,7 +4029,7 @@ class TestSchemaV2Migration:
             )
             row = cursor.fetchone()
         assert row is not None
-        assert row[0] == 8
+        assert row[0] == 9
 
 
 # ===========================================================================
@@ -5124,7 +5124,7 @@ class TestProceduresMigration:
         store = MemoryStore(db_path=db)
         store.close()
 
-        assert _schema_version(db) == 8
+        assert _schema_version(db) == 9
         assert "procedures" in _table_names(db)
         assert "skill_deltas" in _table_names(db)
         assert "synthesis_marks" in _table_names(db)
@@ -5172,7 +5172,7 @@ class TestProceduresMigration:
         # Reopen — triggers the v2→v3 migration.
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 8
+            assert _schema_version(db) == 9
             assert "procedures" in _table_names(db)
 
             con = sqlite3.connect(str(db))
@@ -5216,7 +5216,7 @@ class TestProceduresMigration:
 
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 8
+            assert _schema_version(db) == 9
             row = store2.get_tool_history("write_file")[0]
             assert (
                 row["executed"] is False
@@ -5242,7 +5242,7 @@ class TestProceduresMigration:
 
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 8
+            assert _schema_version(db) == 9
             assert "procedures" in _table_names(db)
             # The v1→v2 ALTERs are re-applied idempotently; the legacy row survives.
             rows = store2.get_by_category("fact")

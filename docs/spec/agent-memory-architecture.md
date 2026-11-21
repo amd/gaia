@@ -142,7 +142,9 @@ CREATE TABLE knowledge (
     -- Vector embedding
     embedding   BLOB,                -- float32 vector (user.embeddinggemma-300m-GGUF, 768-dim). NULL = not yet embedded.
     -- Fact lineage (Zep-inspired)
-    superseded_by TEXT               -- ID of newer knowledge item that replaced this one. NULL = current/active.
+    superseded_by TEXT,              -- ID of newer knowledge item that replaced this one. NULL = current/active.
+    -- Fact group (v9)
+    fact_id     TEXT                 -- Shared by rows that state one fact; forgotten and flagged together. NULL = on its own.
 );
 
 CREATE INDEX idx_knowledge_due ON knowledge(due_at)
@@ -404,7 +406,16 @@ The `meta` table records the embedder that produced the stored vectors (`MemoryS
 
 `store()` looks for an entry with >80% word overlap (Szymkiewicz-Simpson coefficient) in the same category + context + entity, then merges only a true duplicate: one fact's words, in order and ignoring filler like "the", "is" and "my", must start the other's. A restatement or a refinement ("... is Elena" -> "... is Elena Petrova") updates the existing entry, keeps the fuller wording and the max confidence, and updates `updated_at`. A swapped, inserted or reordered word ("mother" -> "mother-in-law", "18" -> "19", "is" -> "is not") is a different fact and gets its own entry, so dedup never overwrites one fact with another. Context scoping means "deploy process" in `work` won't collide with `personal`. The overlap ignores the same filler, so "I am allergic to mango" and "User is allergic to mango" are one fact. Entity scoping treats no tag, a bare label (`user`, `health`), a `user:` tag and a tag that names the user (`person:user`, `person:me`) as the user, one subject; any other `type:name` tag (`person:Sam`, `app:slack`, `project:x`) is its own subject and matches only itself. So `remember` saving a fact with a tag and extraction saving it without one leave one entry, and a sensitive entry stays sensitive.
 
-A sensitive fact has one row per context, and no copy of it is stored unflagged. A write that repeats a sensitive entry merges into it whatever its category; in another context it is stored sensitive. Saving a fact as sensitive takes over the unflagged copies in its context, keeping the fullest wording among them, and flags the copies in others. A rewording too loose to merge (it holds 75% of the sensitive entry's content words, such as "User has a mango allergy") keeps its own row and takes the flag; a one-word fact ("I have diabetes") flags only a short restatement, not every entry that mentions the word. Forgetting an entry also forgets its copies: the same words bar filler and bracketed asides, or, when either is sensitive, a looser rewording that does not negate it.
+A sensitive fact is one fact group, and no row of it is stored unflagged. Rows that state one fact share `knowledge.fact_id` (schema v9), so forgetting a row or changing its `sensitive` flag reaches the group without comparing wording again.
+
+**Identity is the fact's distinctive words, not its sentence shape.** Common verbs, time and frequency words, amounts and words for family are set aside; what is left (the drug, the condition, the figure) identifies the fact. A row states a sensitive fact when it holds all of those words and its exact figures, or half the words plus the figures, or when one wording starts the other. "I take magnesium every morning" shares only the frame with "Takes 20mg of fluoxetine every morning" and is never touched. Entity tags and sources don't separate rows, since extraction tags the user's own facts `medication:fluoxetine`; only a `person:` tag naming someone else does.
+
+- **One check, at the write.** `store()`, `update()`, `seed_bulk()`, `replace_by_source()` and the v9 migration all end in `_settle_sensitive_locked`: a plain row that states a sensitive fact is flagged and joins its group, and a row saved or marked sensitive does the same to the rows that already state it. A row already in one fact's group stays there, so a row stating two facts never merges them. An edit that no longer states the fact leaves the group.
+- **Close is hidden, not grouped.** A row that denies the fact, involves a relative the fact doesn't, may be about something else ("a report on diabetes research" next to "I have diabetes"), talks about the word rather than stating the fact ("Fluoxetine is spelled with an x": spelling, pronunciation, a definition, research) or says only part of a sensitive row is flagged but kept out of the group: hidden from the prompt, listed and forgotten on its own. Hiding by mistake can be undone; forgetting by mistake cannot.
+- **The turn.** `remember` and `update_memory` record the sensitive rows they save or flag. The turn's extraction checks each proposed memory against those rows, and against any flagged since the turn was said: one that adds nothing is not stored, a copy is stored sensitive, and one that shares a distinctive word or figure with the row is stored sensitive on its own.
+- **Its own text.** A memory whose text carries a note that it is sensitive ("(private health info, marked sensitive)", "Confidential.", "(do not share)") is stored sensitive, whoever writes it. A memory that only uses the word ("sensitive teeth", "confidential computing", "do not share my screen") is not one: the note must be a clause of its own that says nothing else.
+
+Forgetting an entry forgets its group and its copies. The Memory page says how many rows went, and its Undo restores every one of them for a plain fact.
 
 ### Fact Conflict & Consolidation
 
@@ -1299,6 +1310,8 @@ Some knowledge is private -- email addresses, API tokens, health information, fi
 | Dashboard | Normal display | Badge, content blurred until clicked |
 
 The LLM can still access sensitive data via `recall()` -- it just won't be broadcast in the session context at the start of the first user message, where it could leak into logs or debugging output.
+
+The flag belongs to the fact, not the row: setting or clearing it on one row does the same to every row of its fact group (see [Dedup](#dedup)), except that a row whose text carries a note that it is sensitive stays flagged ("sensitive skin" is not such a note, so clearing it sticks), and `remember` reads any `sensitive` value other than a plain no as yes. The Memory page offers no Undo after forgetting a sensitive fact: only its word stems are kept, so it could come back only from the browser's copy, as a new row.
 
 The one exception is a **filterless** `recall()`. That is the browse an unprompted greeting makes, and on a cloud-backed session everything it returns is sent to the provider, so it holds sensitive rows back. Any filter -- a `query`, a `category`, an `entity`, a time bound -- returns them as before (#3673).
 

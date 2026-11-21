@@ -113,8 +113,28 @@ export function editKnowledge(id: string, body: KnowledgeUpdateBody) {
     return memFetch<KnowledgeSaveResult>('PUT', `/memory/knowledge/${encodeURIComponent(id)}`, body);
 }
 
+export interface KnowledgeDeleteResult {
+    status: string;
+    knowledge_id?: string;
+    /** Every row erased, when copies of the fact went with it. */
+    knowledge_ids?: string[];
+    /** One of the erased rows was sensitive. */
+    sensitive?: boolean;
+    /** The other rows erased, to restore on Undo; absent when any was sensitive. */
+    copies?: ForgottenCopy[];
+}
+
+export interface ForgottenCopy {
+    content: string;
+    category: string;
+    domain?: string | null;
+    context?: string | null;
+    entity?: string | null;
+    due_at?: string | null;
+}
+
 export function deleteKnowledge(id: string) {
-    return memFetch<any>('DELETE', `/memory/knowledge/${encodeURIComponent(id)}`);
+    return memFetch<KnowledgeDeleteResult>('DELETE', `/memory/knowledge/${encodeURIComponent(id)}`);
 }
 
 // ── Entities & Contexts ─────────────────────────────────────────────────────

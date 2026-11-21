@@ -502,6 +502,10 @@ def edit_knowledge(knowledge_id: str, body: KnowledgeUpdate) -> Dict:
     return result
 
 
+#: What the page sends back to re-create a forgotten row.
+_RESTORABLE_FIELDS = ("content", "category", "domain", "context", "entity", "due_at")
+
+
 @router.delete("/api/memory/knowledge/{knowledge_id}")
 def delete_knowledge(knowledge_id: str) -> Dict:
     """Delete an entry; one about the user is also recorded as forgotten.
@@ -513,8 +517,16 @@ def delete_knowledge(knowledge_id: str) -> Dict:
     item = store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
+    sensitive = bool(item.get("sensitive"))
+    copies: List[Dict[str, Any]] = []
     if is_about_user(item):
         # Copies of the same fact go too, or the deleted fact is still recalled.
+        copies = [
+            row
+            for kid in store.copies_of(knowledge_id)
+            if (row := store.get_item(kid)) is not None
+        ]
+        sensitive = sensitive or any(row.get("sensitive") for row in copies)
         deleted = store.forget_with_copies(knowledge_id, allow_privileged=True)
     elif store.delete(knowledge_id, allow_privileged=True):
         deleted = [knowledge_id]
@@ -522,9 +534,22 @@ def delete_knowledge(knowledge_id: str) -> Dict:
         deleted = []
     if not deleted:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    result: Dict[str, Any] = {"status": "deleted", "knowledge_id": knowledge_id}
+    # "sensitive" covers the copies too; the page offers no undo when set.
+    result: Dict[str, Any] = {
+        "status": "deleted",
+        "knowledge_id": knowledge_id,
+        "sensitive": sensitive,
+    }
     if len(deleted) > 1:
         result["knowledge_ids"] = deleted
+        if not sensitive:
+            # What Undo needs to put every row back; never a sensitive row's text.
+            gone = set(deleted)
+            result["copies"] = [
+                {key: row.get(key) for key in _RESTORABLE_FIELDS}
+                for row in copies
+                if row["id"] in gone
+            ]
     return result
 
 
