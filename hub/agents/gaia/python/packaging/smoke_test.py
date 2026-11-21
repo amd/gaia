@@ -553,6 +553,31 @@ def check_tokenizer(binary: Path) -> bool:
     return True
 
 
+#: The package's old name imports inside the binary and is the same module.
+OLD_NAME_SCRIPT = """import sys
+import gaia_agent.tool_bundles as old
+import gaiapy.tool_bundles as new
+print("OLD_NAME", old is new)
+sys.exit(0 if old is new else 6)
+"""
+
+
+def check_old_name(binary: Path) -> bool:
+    """A script or skill that imports ``gaia_agent`` gets ``gaiapy``'s modules."""
+    with tempfile.TemporaryDirectory(prefix="gaia-smoke-oldname-") as tmp:
+        result = _run_script(binary, Path(tmp), OLD_NAME_SCRIPT)
+    log(f"old name: {result.stdout.strip()[-300:]}")
+    if result.returncode != 0:
+        log(
+            "FAIL: gaia_agent, the package's old name, does not import in the "
+            "binary, so a skill that imports it fails only in the installed app. "
+            f"stderr: {result.stderr[-1500:]!r}"
+        )
+        return False
+    log("old name check PASS -- gaia_agent resolves to gaiapy in the binary")
+    return True
+
+
 #: Prints how many CA certificates a script's default SSL context loaded.
 TLS_TRUST_SCRIPT = """import ssl, sys
 count = ssl.create_default_context().cert_store_stats()["x509_ca"]
@@ -648,7 +673,9 @@ def main(argv=None) -> int:
     results["tokenizer"] = check_tokenizer(binary)
     log("checking the OpenBLAS thread cap")
     results["blas_threads"] = check_blas_threads(binary)
-    expected = 9
+    log("checking the package's old name")
+    results["old_name"] = check_old_name(binary)
+    expected = 10
     if sys.platform.startswith("linux"):
         log("checking a script's TLS trust store")
         results["tls_trust"] = check_tls_trust(binary)

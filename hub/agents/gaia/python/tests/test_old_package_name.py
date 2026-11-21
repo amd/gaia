@@ -68,3 +68,20 @@ def test_both_command_names_start_the_same_program():
     )
     assert 'gaiapy = "gaiapy.entry:main"' in pyproject
     assert 'gaia-agent = "gaiapy.entry:main"' in pyproject
+
+
+def test_the_frozen_binary_carries_the_old_name():
+    """A skill's tools.py loaded by the frozen sidecar may import gaia_agent."""
+    from pathlib import Path
+
+    freeze_py = Path(__file__).resolve().parents[1] / "packaging" / "freeze.py"
+    spec = importlib.util.spec_from_file_location("gaia_freeze_alias", freeze_py)
+    freeze = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(freeze)
+
+    assert "gaiapy" in freeze.COLLECT_SUBMODULES
+    assert "gaia_agent" in freeze.HIDDEN_IMPORTS
+    assert not freeze.is_excluded("gaia_agent")
+    assert not any(
+        m == "gaia_agent" or m.startswith("gaia_agent.") for m in freeze.EXCLUDES
+    )
