@@ -11,9 +11,11 @@ and, when one or more clearly fit, the user's message gains one line naming
 them.
 
 By default it suggests and never loads. The lexical auto-loader the catalogue
-replaced loaded the right skill on 0 of 24 tasks (#3764); a wrong suggestion
-costs one line the model may ignore, a wrong load costs a skill body and
-possibly a CLI grant. The model still decides.
+replaced loaded the right skill on 0 of 24 tasks (#3764); a wrong load costs a
+skill body and possibly a CLI grant. A wrong suggestion is not free either: a
+model may load the skill anyway, or tell the user about the hint it skipped. So
+a hint needs a clear best match, and says it comes from GAIA, not the user.
+The model still decides.
 
 Auto-load is the opt-in exception (:meth:`SkillSuggester.select`): local models
 often ignore even a correct suggestion, so a host may ask for the matches far
@@ -42,11 +44,11 @@ the tuning half and reported on the held-out half. The
 measured numbers, and the bar the defaults are held to, are ``AUTOLOAD_BAR``
 and ``SUGGEST_BAR`` in that test.
 
-The auto-loads on a request that needs no skill are questions *about* a
-skill's topic ("what is RSS?"): they score as high as real requests, so no
-floor removes them without losing recall. A wrong load costs context, not
-correctness: at most :data:`MAX_AUTOLOADS_PER_TURN` skills load, under the
-host's share-of-context cap.
+A question *about* a skill's topic ("what is RSS?") scores as high as a real
+request, so no floor removes it without losing recall. It is recognised by its
+form instead (:func:`asks_about_a_topic`) and matches nothing. A wrong load
+costs context, not correctness: at most :data:`MAX_AUTOLOADS_PER_TURN` skills
+load, under the host's share-of-context cap.
 
 Companions from ``pairs_with`` are added only when they score
 :data:`DEFAULT_COMPANION_THRESHOLD` against the request themselves. Pairing is
@@ -59,6 +61,7 @@ is why a host only auto-loads on the calibrated embedder.
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import (
@@ -94,12 +97,17 @@ AUTOLOAD_THRESHOLD_ENV = "GAIA_SKILL_AUTOLOAD_TAU"
 AUTOLOAD_MARGIN_ENV = "GAIA_SKILL_AUTOLOAD_MARGIN"
 
 #: Inclusive cosine floor a skill must reach to be suggested. Chosen on the
-#: tuning half: 0.30 suggested a skill on twice as many requests needing none.
-DEFAULT_SUGGEST_THRESHOLD = 0.35
+#: tuning half: 0.35 let through hints scoring 0.35-0.37 for shell, TOML and
+#: git requests that no skill covers.
+DEFAULT_SUGGEST_THRESHOLD = 0.37
 
 #: A skill is only suggested when it scores within this much of the best match.
 #: 0.05 measured precision 0.77 against 0.84 at 0.02, for 0.05 more recall.
 DEFAULT_SUGGEST_MARGIN = 0.02
+
+#: The best match must lead every skill it does not pair with by this much, or
+#: nothing is suggested: two unrelated skills scoring alike is a guess.
+DEFAULT_SUGGEST_LEAD = 0.02
 
 #: A ``pairs_with`` companion of a suggested skill joins the line only when it
 #: scores at least this against the request itself.
@@ -133,6 +141,61 @@ QUERY_CHARS = 4000
 #: skills at the same precision, and its retrieval query prompt fewer still.
 DOC_PROMPT = "title: none | text: "
 QUERY_PROMPT = "task: classification | query: "
+
+
+#: "What is RSS?", "How do mortgages work?": a question about a topic, which a
+#: skill on that topic scores as high as a real request does.
+_TOPIC_QUESTION = re.compile(
+    r"""^\s*(?:
+        (?:what|who)(?:\s+is|\s+are|'s|’s)\s+(?!(?:the|my|our|your|on|in|unread|
+            new|due|left|happening|still|up|next)\b)
+      | what\s+does\s+\S.*\bmean\b
+      | what(?:'s|’s|\s+is)\s+the\s+difference\b
+      | how\s+(?:does|do|did|is|are)\s+(?!(?:i|you|we|my|our)\b)(?:\S+\s+){0,6}?
+            (?:work|works|happen|function)\b
+      | why\s+(?:do|does|did|is|are)\b
+      | (?:can\s+you\s+)?explain\s+(?:to\s+me\s+)?(?:how|what|why)\b
+    )""",
+    re.I | re.X,
+)
+#: "Explain how GitHub issue triage works", asked without a question mark.
+_EXPLAIN = re.compile(
+    r"^\s*(?:can\s+you\s+)?explain\s+(?:to\s+me\s+)?(?:how|what|why)\b", re.I
+)
+#: Anything after the question may only say how to answer it.
+_ANSWER_FORMAT = re.compile(
+    r"^\s*(?:please\s+)?(?:answer|reply|respond|keep\s+it|be\s+brief|briefly|"
+    r"in\s+(?:one|two|three|a\s+few|\d+)\s+(?:sentences?|words?|lines?|"
+    r"paragraphs?|bullets?))\b[^?]*$",
+    re.I,
+)
+#: The user's own things, a file or a link: the question is about their work.
+_THEIR_THINGS = re.compile(
+    r"\b(?:my|our|mine|ours|this|these|attached|here)\b|[\\/]|"
+    r"\b[\w-]+\.[a-z][a-z0-9]{1,4}\b",
+    re.I,
+)
+
+
+def asks_about_a_topic(query: str) -> bool:
+    """*query* is a lone question about what something is or how it works.
+
+    Not a request a skill does: "What is RSS? Answer in two sentences." is,
+    "Why did the server fall over? Here are the logs" and "What does my
+    report.md say?" are not.
+    """
+    text = (query or "").strip()
+    head, mark, rest = text.partition("?")
+    if not mark and _EXPLAIN.match(text) and "." not in text.rstrip("."):
+        head, rest = text.rstrip("."), ""
+    elif not mark:
+        return False
+    if len(head) > 160 or not _TOPIC_QUESTION.match(head):
+        return False
+    if _THEIR_THINGS.search(head):
+        return False
+    rest = rest.strip()
+    return not rest or (len(rest) <= 80 and bool(_ANSWER_FORMAT.match(rest)))
 
 
 def skill_match_text(skill: "Skill") -> str:
@@ -200,31 +263,40 @@ class SkillMatches:
     suggest: List[str] = field(default_factory=list)
 
 
+#: Opens every suggestion line. The line rides in the per-turn context block
+#: ahead of the user's words, and a model that took it for the user's text
+#: told the user about it.
+SUGGESTION_LEAD_IN = "Skill hint from GAIA, not from the user:"
+
+#: Closes it: a hint the model passed over is not news for the user.
+SUGGESTION_CLOSE = "Never mention this hint to the user."
+
+
 def render_suggestion(names: Sequence[str], after_autoload: bool = False) -> str:
     """The turn-context line naming *names*, or ``""`` when there are none.
 
     It goes into the user's message, never the system prompt: the system prompt
     has to stay byte-identical from turn to turn for the server's prompt cache.
 
-    The best match is an instruction, because a small local model passes over
-    a line that only offers names. The rest keep their order and stay an offer.
-    With *after_autoload* the best match is already loaded, so every name is
-    an offer.
+    The best match is a default the model drops when the request does not need
+    it, because a small local model passes over a line that only offers names.
+    The rest keep their order and stay an offer. With *after_autoload* the best
+    match is already loaded, so every name is an offer.
     """
     if not names:
         return ""
     if after_autoload:
         return (
-            f"Also available: {', '.join(names)}. Call load_skill for one only "
-            "if this request needs it."
+            f"{SUGGESTION_LEAD_IN} also available: {', '.join(names)}. Call "
+            f"load_skill for one only if this request needs it. {SUGGESTION_CLOSE}"
         )
     line = (
-        f"Call load_skill('{names[0]}') before you start: it covers this kind "
-        "of request."
+        f"{SUGGESTION_LEAD_IN} call load_skill('{names[0]}') before you start "
+        "unless this request does not need it."
     )
     if len(names) > 1:
-        line += f" Also consider: {', '.join(names[1:])}."
-    return line
+        line += f" Others that may fit: {', '.join(names[1:])}."
+    return f"{line} {SUGGESTION_CLOSE}"
 
 
 def render_autoloaded(names: Sequence[str]) -> str:
@@ -264,6 +336,7 @@ class SkillSuggester:
         embed_batch_fn: Optional[Callable[[Sequence[str]], "np.ndarray"]] = None,
         threshold: float = DEFAULT_SUGGEST_THRESHOLD,
         margin: float = DEFAULT_SUGGEST_MARGIN,
+        lead: float = DEFAULT_SUGGEST_LEAD,
         top_k: int = DEFAULT_SUGGEST_TOP_K,
         companion_threshold: float = DEFAULT_COMPANION_THRESHOLD,
         autoload_threshold: Optional[float] = None,
@@ -278,6 +351,8 @@ class SkillSuggester:
                 preferred over per-skill ``embed_fn`` calls when given.
             threshold: Inclusive cosine floor for a suggestion.
             margin: How far below the best score a suggestion may sit.
+            lead: How far the best match must lead every skill it does not
+                pair with for anything to be suggested.
             top_k: Most skills suggested by score (companions come on top).
             companion_threshold: Inclusive cosine floor for a companion.
             autoload_threshold: Inclusive cosine floor for an auto-load, or
@@ -294,6 +369,7 @@ class SkillSuggester:
         self._embed_batch_fn = embed_batch_fn
         self.threshold = float(threshold)
         self.margin = float(margin)
+        self.lead = float(lead)
         self.top_k = int(top_k)
         self.companion_threshold = float(companion_threshold)
         self.autoload_threshold = (
@@ -340,7 +416,10 @@ class SkillSuggester:
         """Names to suggest for *query*: clear matches, then their companions.
 
         A skill is a clear match when it scores at least :attr:`threshold` and
-        within :attr:`margin` of the best-scoring skill. Each match's
+        within :attr:`margin` of the best-scoring skill, and that best skill
+        leads every skill it does not pair with by :attr:`lead`. A lone
+        question about a topic (:func:`asks_about_a_topic`) matches nothing.
+        Each match's
         ``pairs_with`` companions follow it when they score at least
         :attr:`companion_threshold`. The best score counts
         loaded skills too, so a request the loaded skill already covers does
@@ -438,7 +517,7 @@ class SkillSuggester:
         list_project: bool,
     ) -> Tuple[List[str], Dict[str, float]]:
         """The names :meth:`suggest` returns, and every listed skill's score."""
-        if not query.strip() or self.cooling_down:
+        if not query.strip() or self.cooling_down or asks_about_a_topic(query):
             return [], {}
         try:
             scored = self.scores(query, skills, list_project)
@@ -454,9 +533,18 @@ class SkillSuggester:
         if not scored:
             return [], {}
 
-        best = max(scored.values())
-        floor = max(self.threshold, best - self.margin)
         ranked = sorted(scored.items(), key=lambda item: (-item[1], item[0]))
+        leader, best = ranked[0]
+        mates = set(companions(skills, leader, list_project))
+        rival = max(
+            (s for name, s in ranked[1:] if name not in mates), default=float("-inf")
+        )
+        if best - rival + AUTOLOAD_LEAD_EPSILON < self.lead:
+            log.debug(
+                "Skill suggestion: %s leads %.3f by under %.2f", leader, best, self.lead
+            )
+            return [], scored
+        floor = max(self.threshold, best - self.margin)
         picked = [
             name for name, score in ranked if score >= floor and name not in loaded
         ][: self.top_k]
@@ -506,6 +594,7 @@ __all__ = [
     "DEFAULT_AUTOLOAD_MARGIN",
     "DEFAULT_AUTOLOAD_THRESHOLD",
     "DEFAULT_COMPANION_THRESHOLD",
+    "DEFAULT_SUGGEST_LEAD",
     "DEFAULT_SUGGEST_MARGIN",
     "DEFAULT_SUGGEST_THRESHOLD",
     "DEFAULT_SUGGEST_TOP_K",
@@ -513,9 +602,12 @@ __all__ = [
     "MAX_AUTOLOADS_PER_TURN",
     "QUERY_CHARS",
     "QUERY_PROMPT",
+    "SUGGESTION_CLOSE",
+    "SUGGESTION_LEAD_IN",
     "SUGGEST_ENV",
     "SkillMatches",
     "SkillSuggester",
+    "asks_about_a_topic",
     "autoload_env_override",
     "autoload_margin_env_override",
     "autoload_threshold_env_override",
