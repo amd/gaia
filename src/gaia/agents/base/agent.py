@@ -13744,6 +13744,470 @@ Do NOT wrap conversational replies in JSON.
         )
         return False
 
+    def _call_model(self, turn: _TurnState) -> Optional[str]:
+        """Ask the model for this step's reply, streamed or not, and record it on the turn.
+
+        Returns "break" or "continue" when the step loop must do that, else None.
+        """
+        if self.streaming:
+            # Streaming mode - raw response will be streamed
+            # (SilentConsole will suppress this, AgentConsole will show it)
+
+            # Add prompt to conversation if debug is enabled
+            if self.debug_prompts:
+                turn.conversation.append(
+                    {"role": "system", "content": {"prompt": turn.prompt}}
+                )
+                # Print the prompt if show_prompts is enabled
+                if self.show_prompts:
+                    self.console.print_prompt(
+                        turn.prompt, f"Prompt (Step {turn.steps_taken})"
+                    )
+
+            # Get streaming response. Same context-overflow retry-on-trim
+            # behaviour as the non-streaming branch below — needed because
+            # multi-step ReAct loops accumulate tool results in `messages`.
+            _retried_after_trim_stream = False
+            _model_step_retries = 0
+            turn.full_response = ""
+            self._announce_model_call(after_tools=bool(turn.tool_call_history))
+            while True:
+                try:
+                    self._before_model_call(turn.messages)
+                    response_stream = self.chat.send_messages_stream(
+                        messages=self._with_session_context(turn.messages),
+                        system_prompt=self.system_prompt,
+                        tools=self._openai_tools,
+                        max_tokens=self._max_output_tokens(),
+                        **self._conversation_request_kwargs(),
+                        **self._reasoning_request_kwargs(),
+                    )
+
+                    # Process the streaming response chunks as they arrive
+                    turn.full_response = ""
+                    for turn.chunk_response in response_stream:
+                        # Cooperative cancel: the Agent UI's Stop sets
+                        # console.cancelled. Observe it per token so a
+                        # single-shot RAG/chat answer (no step boundaries)
+                        # halts promptly and the upstream Lemonade stream is
+                        # closed (GeneratorExit cascades to the llm_client
+                        # generator, which shuts the HTTP socket).
+                        if self._console_cancelled():
+                            turn.cancelled_by_console = True
+                            try:
+                                response_stream.close()
+                            except Exception:  # noqa: BLE001 - best-effort teardown
+                                logger.debug(
+                                    "Failed to close Lemonade stream on cancel",
+                                    exc_info=True,
+                                )
+                            break
+                        if turn.chunk_response.is_complete:
+                            turn.response_stats = turn.chunk_response.stats
+                            self._open_step_stats = turn.response_stats
+                            turn.response_finish_reason = getattr(
+                                turn.chunk_response, "finish_reason", None
+                            )
+                            turn.response_reasoning = _response_reasoning(
+                                turn.chunk_response
+                            )
+                            # Non-empty complete chunk = tool_calls sentinel from
+                            # native tool-calling path (no streaming for tool calls)
+                            if turn.chunk_response.text:
+                                turn.full_response = turn.chunk_response.text
+                        else:
+                            self.console.print_streaming_text(turn.chunk_response.text)
+                            turn.full_response += turn.chunk_response.text
+
+                    if turn.cancelled_by_console:
+                        break
+
+                    self.console.print_streaming_text("", end_of_stream=True)
+                    turn.response = turn.full_response
+                    self._turn_model_retries[
+                        "request_retries"
+                    ] += self._last_request_retries()
+                    break
+                except LemonadeStreamCutOffError as e:
+                    # A fragment is never the reply: ask for the whole one again.
+                    self.console.print_streaming_text("", end_of_stream=True)
+                    turn.stream_cut_offs += 1
+                    self.error_history.append(
+                        {
+                            "step": turn.steps_taken,
+                            "error": str(e),
+                            "type": STREAM_CUT_OFF_ERROR,
+                        }
+                    )
+                    if turn.stream_cut_offs > _MAX_STREAM_CUT_OFF_RETRIES:
+                        logger.warning(
+                            "[WORKFLOW] Reply stream cut off %d times this "
+                            "turn; stopping (step %d/%d)",
+                            turn.stream_cut_offs,
+                            turn.steps_taken,
+                            turn.steps_limit,
+                        )
+                        if isinstance(e, LemonadeReplyStalledError):
+                            # A stall is a failed model call, not just a fragment.
+                            turn.model_call_failed = True
+                            self._turn_model_retries["failed"] = True
+                            turn.final_answer = self._model_call_failed_answer(
+                                e,
+                                e.user_message,
+                                turn.steps_taken,
+                                turn.conversation,
+                            )
+                            turn.loop_break_answer_unprinted = True
+                        else:
+                            turn.final_answer = e.user_message
+                        break
+                    logger.warning(
+                        "[WORKFLOW] Reply stream ended before the model "
+                        "finished; requesting it again (%d/%d)",
+                        turn.stream_cut_offs,
+                        _MAX_STREAM_CUT_OFF_RETRIES,
+                    )
+                    if turn.full_response:
+                        self._restart_answer()
+                    continue
+                except ConnectionError as e:
+                    # A transient endpoint failure the client already
+                    # retried: wait, then ask again with the conversation
+                    # intact, instead of ending a run that was going fine.
+                    outcome, unreachable = self._model_failure_outcome(
+                        e,
+                        _model_step_retries,
+                        turn.steps_taken,
+                        turn.conversation,
+                        partial_output=bool(turn.full_response),
+                    )
+                    if outcome == "retry":
+                        _model_step_retries += 1
+                        continue
+                    if outcome == "cancelled":
+                        turn.cancelled_by_console = True
+                        break
+                    if outcome == "unreachable":
+                        turn.final_answer = unreachable
+                        turn.loop_break_answer_unprinted = True
+                        break
+                    error_msg = f"LLM Server Connection Failed (streaming): {str(e)}"
+                    logger.error(error_msg)
+                    self.console.print_error(error_msg)
+                    turn.model_call_failed = True
+                    self.error_history.append(
+                        {
+                            "step": turn.steps_taken,
+                            "error": error_msg,
+                            "type": "llm_connection_error",
+                        }
+                    )
+                    self._turn_model_retries["failed"] = True
+                    turn.final_answer = (
+                        f"I'm having trouble reaching the language model right now. "
+                        f"Please make sure Lemonade Server is running.\n\n"
+                        f"*Technical details: {str(e)}*"
+                    )
+                    break
+                except LeaseWaitCancelled:
+                    # Stopped while queued for the model: not an LLM error.
+                    turn.cancelled_by_console = True
+                    break
+                except Exception as e:
+                    if stopped_by_user(e):
+                        logger.info("Streaming stopped by the user: %s", e)
+                    else:
+                        logger.error(f"Unexpected error during streaming: {e}")
+                    err_text = str(e).lower()
+                    is_ctx_overflow = is_context_overflow_error(err_text)
+                    # Same rule as the non-streaming branch: only the probe
+                    # decides a bad load, never the window in the error.
+                    is_wrong_ctx_loaded = (
+                        is_ctx_overflow and self._is_loaded_ctx_too_small()
+                    )
+                    if is_wrong_ctx_loaded:
+                        self.error_history.append(
+                            {
+                                "step": turn.steps_taken,
+                                "error": str(e),
+                                "type": "llm_wrong_ctx_loaded_reraise",
+                            }
+                        )
+                        logger.warning(
+                            "Wrong ctx_size loaded (streaming) — re-raising"
+                            " so chat helper can reload model: %s",
+                            e,
+                        )
+                        raise
+                    if is_ctx_overflow and not _retried_after_trim_stream:
+                        _retried_after_trim_stream = True
+                        if self._retry_after_overflow_shrink(
+                            turn.messages, e, turn.steps_taken
+                        ):
+                            continue
+
+                    # A transient endpoint failure the client already
+                    # retried: wait, then ask again with the conversation
+                    # intact, instead of ending a run that was going fine.
+                    outcome, unreachable = self._model_failure_outcome(
+                        e,
+                        _model_step_retries,
+                        turn.steps_taken,
+                        turn.conversation,
+                        partial_output=bool(turn.full_response),
+                    )
+                    if outcome == "retry":
+                        _model_step_retries += 1
+                        continue
+                    if outcome == "cancelled":
+                        turn.cancelled_by_console = True
+                        break
+                    if outcome == "unreachable":
+                        turn.final_answer = unreachable
+                        turn.loop_break_answer_unprinted = True
+                        break
+
+                    turn.model_call_failed = True
+                    self.error_history.append(
+                        {
+                            "step": turn.steps_taken,
+                            "error": str(e),
+                            "type": "llm_streaming_error",
+                        }
+                    )
+                    self._turn_model_retries["failed"] = True
+                    if is_ctx_overflow:
+                        # Name the actual constraint and a next step
+                        # -- "re-ask with just the essentials" told
+                        # the user nothing about WHAT was too big or HOW to
+                        # shrink it, so every retry looked identical.
+                        turn.final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
+                        turn.loop_break_answer_unprinted = True
+                    else:
+                        # Streaming is the TUI's path; it must surface the
+                        # same typed messages the non-streaming path does.
+                        refusal = self._cloud_account_refusal(e)
+                        if refusal is not None:
+                            # Already printed as the turn's error.
+                            self.console.print_error(refusal)
+                            turn.account_refused = True
+                            turn.final_answer = refusal
+                        else:
+                            turn.final_answer = self._model_call_failed_answer(
+                                e,
+                                self._extract_lemonade_user_message(e),
+                                turn.steps_taken,
+                                turn.conversation,
+                            )
+                            turn.loop_break_answer_unprinted = True
+                    break
+            if turn.final_answer is not None or turn.cancelled_by_console:
+                return "break"
+        else:
+            # Use progress indicator for non-streaming mode
+            self.console.start_progress(self._progress_label())
+
+            # Debug logging before LLM call
+            if self.debug:
+
+                print(f"\n[DEBUG] About to call LLM with {len(turn.messages)} messages")
+                print(
+                    f"[DEBUG] Last message role: {turn.messages[-1]['role'] if turn.messages else 'No messages'}"
+                )
+                if turn.messages and len(turn.messages[-1].get("content", "")) < 500:
+                    print(
+                        f"[DEBUG] Last message content: {turn.messages[-1]['content']}"
+                    )
+                else:
+                    print(
+                        f"[DEBUG] Last message content length: {len(turn.messages[-1].get('content', ''))}"
+                    )
+                print(f"[DEBUG] Execution state: {self.execution_state}")
+                if self.execution_state == "PLANNING":
+                    print("[DEBUG] Current step: Planning (no active plan yet)")
+                else:
+                    print(
+                        f"[DEBUG] Current step: {self.current_step}/{self.total_plan_steps}"
+                    )
+
+            # Get complete response from AgentSDK. On context overflow
+            # mid-loop (the cumulative messages array got too long during
+            # this turn — common after several search_file/index calls),
+            # trim the oldest tool-result messages and retry ONCE before
+            # giving up. Keeps the conversation salvageable instead of
+            # failing the whole turn.
+            _retried_after_trim = False
+            _model_step_retries = 0
+            while True:
+                try:
+                    self._before_model_call(turn.messages)
+                    turn.chat_response = self.chat.send_messages(
+                        messages=self._with_session_context(turn.messages),
+                        system_prompt=self.system_prompt,
+                        tools=self._openai_tools,
+                        max_tokens=self._max_output_tokens(),
+                        **self._conversation_request_kwargs(),
+                        **self._reasoning_request_kwargs(),
+                    )
+                    turn.response = turn.chat_response.text
+                    turn.response_stats = turn.chat_response.stats
+                    self._open_step_stats = turn.response_stats
+                    turn.response_finish_reason = getattr(
+                        turn.chat_response, "finish_reason", None
+                    )
+                    turn.response_reasoning = _response_reasoning(turn.chat_response)
+                    self._turn_model_retries[
+                        "request_retries"
+                    ] += self._last_request_retries()
+                    break  # success → exit retry loop
+                except ConnectionError as e:
+                    self.console.stop_progress()
+                    # A transient endpoint failure the client already
+                    # retried: wait, then ask again with the conversation
+                    # intact, instead of ending a run that was going fine.
+                    outcome, unreachable = self._model_failure_outcome(
+                        e, _model_step_retries, turn.steps_taken, turn.conversation
+                    )
+                    if outcome == "retry":
+                        _model_step_retries += 1
+                        continue
+                    if outcome == "cancelled":
+                        turn.cancelled_by_console = True
+                        break
+                    if outcome == "unreachable":
+                        turn.final_answer = unreachable
+                        turn.loop_break_answer_unprinted = True
+                        break
+                    error_msg = f"LLM Server Connection Failed: {str(e)}"
+                    logger.error(error_msg)
+                    self.console.print_error(error_msg)
+                    turn.model_call_failed = True
+                    self.error_history.append(
+                        {
+                            "step": turn.steps_taken,
+                            "error": error_msg,
+                            "type": "llm_connection_error",
+                        }
+                    )
+                    self._turn_model_retries["failed"] = True
+                    turn.final_answer = (
+                        f"I'm having trouble reaching the language model right now. "
+                        f"Please make sure Lemonade Server is running.\n\n"
+                        f"*Technical details: {str(e)}*"
+                    )
+                    break
+                except LeaseWaitCancelled:
+                    # Stopped while queued for the model: not an LLM error.
+                    self.console.stop_progress()
+                    turn.cancelled_by_console = True
+                    break
+                except Exception as e:
+                    self.console.stop_progress()
+                    if self.debug:
+                        print(f"[DEBUG] Error calling LLM: {e}")
+                    if stopped_by_user(e):
+                        logger.info("LLM call stopped by the user: %s", e)
+                    else:
+                        logger.error(f"Unexpected error calling LLM: {e}")
+
+                    # Did we hit a context-overflow mid-loop? Classify by
+                    # structure-then-text since typed exceptions get
+                    # wrapped by AgentSDK and the backend's error shape
+                    # varies (llama.cpp vs. FastFlowLM).
+                    err_text = str(e).lower()
+                    is_ctx_overflow = is_context_overflow_error(err_text)
+                    # Only the loaded-vs-requested probe decides a bad
+                    # load: the window named in the error is equally valid
+                    # for a deliberately small pin.
+                    is_wrong_ctx_loaded = (
+                        is_ctx_overflow and self._is_loaded_ctx_too_small()
+                    )
+                    if is_wrong_ctx_loaded:
+                        self.error_history.append(
+                            {
+                                "step": turn.steps_taken,
+                                "error": str(e),
+                                "type": "llm_wrong_ctx_loaded_reraise",
+                            }
+                        )
+                        logger.warning(
+                            "Wrong ctx_size loaded — re-raising so chat "
+                            "helper can reload model: %s",
+                            e,
+                        )
+                        raise
+                    if is_ctx_overflow and not _retried_after_trim:
+                        _retried_after_trim = True
+                        if self._retry_after_overflow_shrink(
+                            turn.messages, e, turn.steps_taken
+                        ):
+                            continue  # retry with smaller payload
+
+                    # A transient endpoint failure the client already
+                    # retried: wait, then ask again with the conversation
+                    # intact, instead of ending a run that was going fine.
+                    outcome, unreachable = self._model_failure_outcome(
+                        e, _model_step_retries, turn.steps_taken, turn.conversation
+                    )
+                    if outcome == "retry":
+                        _model_step_retries += 1
+                        continue
+                    if outcome == "cancelled":
+                        turn.cancelled_by_console = True
+                        break
+                    if outcome == "unreachable":
+                        turn.final_answer = unreachable
+                        turn.loop_break_answer_unprinted = True
+                        break
+
+                    # Either context-overflow after trim, or unrelated.
+                    # Give up gracefully.
+                    turn.model_call_failed = True
+                    self.error_history.append(
+                        {
+                            "step": turn.steps_taken,
+                            "error": str(e),
+                            "type": "llm_error",
+                        }
+                    )
+                    self._turn_model_retries["failed"] = True
+                    if is_ctx_overflow:
+                        # Name the actual constraint and a next step
+                        # -- "re-ask with just the essentials" told
+                        # the user nothing about WHAT was too big or HOW to
+                        # shrink it, so every retry looked identical.
+                        turn.final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
+                        turn.loop_break_answer_unprinted = True
+                    else:
+                        # If we have a typed Lemonade error in the
+                        # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``),
+                        # surface its actionable
+                        # ``user_message`` verbatim instead of wrapping it
+                        # with the generic "try again in a moment" copy —
+                        # that wrapper actively misleads users on
+                        # non-retryable failures.
+                        refusal = self._cloud_account_refusal(e)
+                        if refusal is not None:
+                            # Already printed as the turn's error.
+                            self.console.print_error(refusal)
+                            turn.account_refused = True
+                            turn.final_answer = refusal
+                        else:
+                            turn.final_answer = self._model_call_failed_answer(
+                                e,
+                                self._extract_lemonade_user_message(e),
+                                turn.steps_taken,
+                                turn.conversation,
+                            )
+                            turn.loop_break_answer_unprinted = True
+                    break
+            if turn.final_answer is not None or turn.cancelled_by_console:
+                return "break"
+
+            # Stop the progress indicator
+            self.console.stop_progress()
+        return None
+
     def _process_query_impl(
         self,
         user_input: str,
@@ -14530,474 +14994,9 @@ Do NOT wrap conversational replies in JSON.
             turn.response_finish_reason = None
             turn.response_reasoning = None
 
-            if self.streaming:
-                # Streaming mode - raw response will be streamed
-                # (SilentConsole will suppress this, AgentConsole will show it)
-
-                # Add prompt to conversation if debug is enabled
-                if self.debug_prompts:
-                    turn.conversation.append(
-                        {"role": "system", "content": {"prompt": turn.prompt}}
-                    )
-                    # Print the prompt if show_prompts is enabled
-                    if self.show_prompts:
-                        self.console.print_prompt(
-                            turn.prompt, f"Prompt (Step {turn.steps_taken})"
-                        )
-
-                # Get streaming response. Same context-overflow retry-on-trim
-                # behaviour as the non-streaming branch below — needed because
-                # multi-step ReAct loops accumulate tool results in `messages`.
-                _retried_after_trim_stream = False
-                _model_step_retries = 0
-                turn.full_response = ""
-                self._announce_model_call(after_tools=bool(turn.tool_call_history))
-                while True:
-                    try:
-                        self._before_model_call(turn.messages)
-                        response_stream = self.chat.send_messages_stream(
-                            messages=self._with_session_context(turn.messages),
-                            system_prompt=self.system_prompt,
-                            tools=self._openai_tools,
-                            max_tokens=self._max_output_tokens(),
-                            **self._conversation_request_kwargs(),
-                            **self._reasoning_request_kwargs(),
-                        )
-
-                        # Process the streaming response chunks as they arrive
-                        turn.full_response = ""
-                        for turn.chunk_response in response_stream:
-                            # Cooperative cancel: the Agent UI's Stop sets
-                            # console.cancelled. Observe it per token so a
-                            # single-shot RAG/chat answer (no step boundaries)
-                            # halts promptly and the upstream Lemonade stream is
-                            # closed (GeneratorExit cascades to the llm_client
-                            # generator, which shuts the HTTP socket).
-                            if self._console_cancelled():
-                                turn.cancelled_by_console = True
-                                try:
-                                    response_stream.close()
-                                except Exception:  # noqa: BLE001 - best-effort teardown
-                                    logger.debug(
-                                        "Failed to close Lemonade stream on cancel",
-                                        exc_info=True,
-                                    )
-                                break
-                            if turn.chunk_response.is_complete:
-                                turn.response_stats = turn.chunk_response.stats
-                                self._open_step_stats = turn.response_stats
-                                turn.response_finish_reason = getattr(
-                                    turn.chunk_response, "finish_reason", None
-                                )
-                                turn.response_reasoning = _response_reasoning(
-                                    turn.chunk_response
-                                )
-                                # Non-empty complete chunk = tool_calls sentinel from
-                                # native tool-calling path (no streaming for tool calls)
-                                if turn.chunk_response.text:
-                                    turn.full_response = turn.chunk_response.text
-                            else:
-                                self.console.print_streaming_text(
-                                    turn.chunk_response.text
-                                )
-                                turn.full_response += turn.chunk_response.text
-
-                        if turn.cancelled_by_console:
-                            break
-
-                        self.console.print_streaming_text("", end_of_stream=True)
-                        turn.response = turn.full_response
-                        self._turn_model_retries[
-                            "request_retries"
-                        ] += self._last_request_retries()
-                        break
-                    except LemonadeStreamCutOffError as e:
-                        # A fragment is never the reply: ask for the whole one again.
-                        self.console.print_streaming_text("", end_of_stream=True)
-                        turn.stream_cut_offs += 1
-                        self.error_history.append(
-                            {
-                                "step": turn.steps_taken,
-                                "error": str(e),
-                                "type": STREAM_CUT_OFF_ERROR,
-                            }
-                        )
-                        if turn.stream_cut_offs > _MAX_STREAM_CUT_OFF_RETRIES:
-                            logger.warning(
-                                "[WORKFLOW] Reply stream cut off %d times this "
-                                "turn; stopping (step %d/%d)",
-                                turn.stream_cut_offs,
-                                turn.steps_taken,
-                                turn.steps_limit,
-                            )
-                            if isinstance(e, LemonadeReplyStalledError):
-                                # A stall is a failed model call, not just a fragment.
-                                turn.model_call_failed = True
-                                self._turn_model_retries["failed"] = True
-                                turn.final_answer = self._model_call_failed_answer(
-                                    e,
-                                    e.user_message,
-                                    turn.steps_taken,
-                                    turn.conversation,
-                                )
-                                turn.loop_break_answer_unprinted = True
-                            else:
-                                turn.final_answer = e.user_message
-                            break
-                        logger.warning(
-                            "[WORKFLOW] Reply stream ended before the model "
-                            "finished; requesting it again (%d/%d)",
-                            turn.stream_cut_offs,
-                            _MAX_STREAM_CUT_OFF_RETRIES,
-                        )
-                        if turn.full_response:
-                            self._restart_answer()
-                        continue
-                    except ConnectionError as e:
-                        # A transient endpoint failure the client already
-                        # retried: wait, then ask again with the conversation
-                        # intact, instead of ending a run that was going fine.
-                        outcome, unreachable = self._model_failure_outcome(
-                            e,
-                            _model_step_retries,
-                            turn.steps_taken,
-                            turn.conversation,
-                            partial_output=bool(turn.full_response),
-                        )
-                        if outcome == "retry":
-                            _model_step_retries += 1
-                            continue
-                        if outcome == "cancelled":
-                            turn.cancelled_by_console = True
-                            break
-                        if outcome == "unreachable":
-                            turn.final_answer = unreachable
-                            turn.loop_break_answer_unprinted = True
-                            break
-                        error_msg = (
-                            f"LLM Server Connection Failed (streaming): {str(e)}"
-                        )
-                        logger.error(error_msg)
-                        self.console.print_error(error_msg)
-                        turn.model_call_failed = True
-                        self.error_history.append(
-                            {
-                                "step": turn.steps_taken,
-                                "error": error_msg,
-                                "type": "llm_connection_error",
-                            }
-                        )
-                        self._turn_model_retries["failed"] = True
-                        turn.final_answer = (
-                            f"I'm having trouble reaching the language model right now. "
-                            f"Please make sure Lemonade Server is running.\n\n"
-                            f"*Technical details: {str(e)}*"
-                        )
-                        break
-                    except LeaseWaitCancelled:
-                        # Stopped while queued for the model: not an LLM error.
-                        turn.cancelled_by_console = True
-                        break
-                    except Exception as e:
-                        if stopped_by_user(e):
-                            logger.info("Streaming stopped by the user: %s", e)
-                        else:
-                            logger.error(f"Unexpected error during streaming: {e}")
-                        err_text = str(e).lower()
-                        is_ctx_overflow = is_context_overflow_error(err_text)
-                        # Same rule as the non-streaming branch: only the probe
-                        # decides a bad load, never the window in the error.
-                        is_wrong_ctx_loaded = (
-                            is_ctx_overflow and self._is_loaded_ctx_too_small()
-                        )
-                        if is_wrong_ctx_loaded:
-                            self.error_history.append(
-                                {
-                                    "step": turn.steps_taken,
-                                    "error": str(e),
-                                    "type": "llm_wrong_ctx_loaded_reraise",
-                                }
-                            )
-                            logger.warning(
-                                "Wrong ctx_size loaded (streaming) — re-raising"
-                                " so chat helper can reload model: %s",
-                                e,
-                            )
-                            raise
-                        if is_ctx_overflow and not _retried_after_trim_stream:
-                            _retried_after_trim_stream = True
-                            if self._retry_after_overflow_shrink(
-                                turn.messages, e, turn.steps_taken
-                            ):
-                                continue
-
-                        # A transient endpoint failure the client already
-                        # retried: wait, then ask again with the conversation
-                        # intact, instead of ending a run that was going fine.
-                        outcome, unreachable = self._model_failure_outcome(
-                            e,
-                            _model_step_retries,
-                            turn.steps_taken,
-                            turn.conversation,
-                            partial_output=bool(turn.full_response),
-                        )
-                        if outcome == "retry":
-                            _model_step_retries += 1
-                            continue
-                        if outcome == "cancelled":
-                            turn.cancelled_by_console = True
-                            break
-                        if outcome == "unreachable":
-                            turn.final_answer = unreachable
-                            turn.loop_break_answer_unprinted = True
-                            break
-
-                        turn.model_call_failed = True
-                        self.error_history.append(
-                            {
-                                "step": turn.steps_taken,
-                                "error": str(e),
-                                "type": "llm_streaming_error",
-                            }
-                        )
-                        self._turn_model_retries["failed"] = True
-                        if is_ctx_overflow:
-                            # Name the actual constraint and a next step
-                            # -- "re-ask with just the essentials" told
-                            # the user nothing about WHAT was too big or HOW to
-                            # shrink it, so every retry looked identical.
-                            turn.final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
-                            turn.loop_break_answer_unprinted = True
-                        else:
-                            # Streaming is the TUI's path; it must surface the
-                            # same typed messages the non-streaming path does.
-                            refusal = self._cloud_account_refusal(e)
-                            if refusal is not None:
-                                # Already printed as the turn's error.
-                                self.console.print_error(refusal)
-                                turn.account_refused = True
-                                turn.final_answer = refusal
-                            else:
-                                turn.final_answer = self._model_call_failed_answer(
-                                    e,
-                                    self._extract_lemonade_user_message(e),
-                                    turn.steps_taken,
-                                    turn.conversation,
-                                )
-                                turn.loop_break_answer_unprinted = True
-                        break
-                if turn.final_answer is not None or turn.cancelled_by_console:
-                    break
-            else:
-                # Use progress indicator for non-streaming mode
-                self.console.start_progress(self._progress_label())
-
-                # Debug logging before LLM call
-                if self.debug:
-
-                    print(
-                        f"\n[DEBUG] About to call LLM with {len(turn.messages)} messages"
-                    )
-                    print(
-                        f"[DEBUG] Last message role: {turn.messages[-1]['role'] if turn.messages else 'No messages'}"
-                    )
-                    if (
-                        turn.messages
-                        and len(turn.messages[-1].get("content", "")) < 500
-                    ):
-                        print(
-                            f"[DEBUG] Last message content: {turn.messages[-1]['content']}"
-                        )
-                    else:
-                        print(
-                            f"[DEBUG] Last message content length: {len(turn.messages[-1].get('content', ''))}"
-                        )
-                    print(f"[DEBUG] Execution state: {self.execution_state}")
-                    if self.execution_state == "PLANNING":
-                        print("[DEBUG] Current step: Planning (no active plan yet)")
-                    else:
-                        print(
-                            f"[DEBUG] Current step: {self.current_step}/{self.total_plan_steps}"
-                        )
-
-                # Get complete response from AgentSDK. On context overflow
-                # mid-loop (the cumulative messages array got too long during
-                # this turn — common after several search_file/index calls),
-                # trim the oldest tool-result messages and retry ONCE before
-                # giving up. Keeps the conversation salvageable instead of
-                # failing the whole turn.
-                _retried_after_trim = False
-                _model_step_retries = 0
-                while True:
-                    try:
-                        self._before_model_call(turn.messages)
-                        turn.chat_response = self.chat.send_messages(
-                            messages=self._with_session_context(turn.messages),
-                            system_prompt=self.system_prompt,
-                            tools=self._openai_tools,
-                            max_tokens=self._max_output_tokens(),
-                            **self._conversation_request_kwargs(),
-                            **self._reasoning_request_kwargs(),
-                        )
-                        turn.response = turn.chat_response.text
-                        turn.response_stats = turn.chat_response.stats
-                        self._open_step_stats = turn.response_stats
-                        turn.response_finish_reason = getattr(
-                            turn.chat_response, "finish_reason", None
-                        )
-                        turn.response_reasoning = _response_reasoning(
-                            turn.chat_response
-                        )
-                        self._turn_model_retries[
-                            "request_retries"
-                        ] += self._last_request_retries()
-                        break  # success → exit retry loop
-                    except ConnectionError as e:
-                        self.console.stop_progress()
-                        # A transient endpoint failure the client already
-                        # retried: wait, then ask again with the conversation
-                        # intact, instead of ending a run that was going fine.
-                        outcome, unreachable = self._model_failure_outcome(
-                            e, _model_step_retries, turn.steps_taken, turn.conversation
-                        )
-                        if outcome == "retry":
-                            _model_step_retries += 1
-                            continue
-                        if outcome == "cancelled":
-                            turn.cancelled_by_console = True
-                            break
-                        if outcome == "unreachable":
-                            turn.final_answer = unreachable
-                            turn.loop_break_answer_unprinted = True
-                            break
-                        error_msg = f"LLM Server Connection Failed: {str(e)}"
-                        logger.error(error_msg)
-                        self.console.print_error(error_msg)
-                        turn.model_call_failed = True
-                        self.error_history.append(
-                            {
-                                "step": turn.steps_taken,
-                                "error": error_msg,
-                                "type": "llm_connection_error",
-                            }
-                        )
-                        self._turn_model_retries["failed"] = True
-                        turn.final_answer = (
-                            f"I'm having trouble reaching the language model right now. "
-                            f"Please make sure Lemonade Server is running.\n\n"
-                            f"*Technical details: {str(e)}*"
-                        )
-                        break
-                    except LeaseWaitCancelled:
-                        # Stopped while queued for the model: not an LLM error.
-                        self.console.stop_progress()
-                        turn.cancelled_by_console = True
-                        break
-                    except Exception as e:
-                        self.console.stop_progress()
-                        if self.debug:
-                            print(f"[DEBUG] Error calling LLM: {e}")
-                        if stopped_by_user(e):
-                            logger.info("LLM call stopped by the user: %s", e)
-                        else:
-                            logger.error(f"Unexpected error calling LLM: {e}")
-
-                        # Did we hit a context-overflow mid-loop? Classify by
-                        # structure-then-text since typed exceptions get
-                        # wrapped by AgentSDK and the backend's error shape
-                        # varies (llama.cpp vs. FastFlowLM).
-                        err_text = str(e).lower()
-                        is_ctx_overflow = is_context_overflow_error(err_text)
-                        # Only the loaded-vs-requested probe decides a bad
-                        # load: the window named in the error is equally valid
-                        # for a deliberately small pin.
-                        is_wrong_ctx_loaded = (
-                            is_ctx_overflow and self._is_loaded_ctx_too_small()
-                        )
-                        if is_wrong_ctx_loaded:
-                            self.error_history.append(
-                                {
-                                    "step": turn.steps_taken,
-                                    "error": str(e),
-                                    "type": "llm_wrong_ctx_loaded_reraise",
-                                }
-                            )
-                            logger.warning(
-                                "Wrong ctx_size loaded — re-raising so chat "
-                                "helper can reload model: %s",
-                                e,
-                            )
-                            raise
-                        if is_ctx_overflow and not _retried_after_trim:
-                            _retried_after_trim = True
-                            if self._retry_after_overflow_shrink(
-                                turn.messages, e, turn.steps_taken
-                            ):
-                                continue  # retry with smaller payload
-
-                        # A transient endpoint failure the client already
-                        # retried: wait, then ask again with the conversation
-                        # intact, instead of ending a run that was going fine.
-                        outcome, unreachable = self._model_failure_outcome(
-                            e, _model_step_retries, turn.steps_taken, turn.conversation
-                        )
-                        if outcome == "retry":
-                            _model_step_retries += 1
-                            continue
-                        if outcome == "cancelled":
-                            turn.cancelled_by_console = True
-                            break
-                        if outcome == "unreachable":
-                            turn.final_answer = unreachable
-                            turn.loop_break_answer_unprinted = True
-                            break
-
-                        # Either context-overflow after trim, or unrelated.
-                        # Give up gracefully.
-                        turn.model_call_failed = True
-                        self.error_history.append(
-                            {
-                                "step": turn.steps_taken,
-                                "error": str(e),
-                                "type": "llm_error",
-                            }
-                        )
-                        self._turn_model_retries["failed"] = True
-                        if is_ctx_overflow:
-                            # Name the actual constraint and a next step
-                            # -- "re-ask with just the essentials" told
-                            # the user nothing about WHAT was too big or HOW to
-                            # shrink it, so every retry looked identical.
-                            turn.final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
-                            turn.loop_break_answer_unprinted = True
-                        else:
-                            # If we have a typed Lemonade error in the
-                            # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``),
-                            # surface its actionable
-                            # ``user_message`` verbatim instead of wrapping it
-                            # with the generic "try again in a moment" copy —
-                            # that wrapper actively misleads users on
-                            # non-retryable failures.
-                            refusal = self._cloud_account_refusal(e)
-                            if refusal is not None:
-                                # Already printed as the turn's error.
-                                self.console.print_error(refusal)
-                                turn.account_refused = True
-                                turn.final_answer = refusal
-                            else:
-                                turn.final_answer = self._model_call_failed_answer(
-                                    e,
-                                    self._extract_lemonade_user_message(e),
-                                    turn.steps_taken,
-                                    turn.conversation,
-                                )
-                                turn.loop_break_answer_unprinted = True
-                        break
-                if turn.final_answer is not None or turn.cancelled_by_console:
-                    break
-
-                # Stop the progress indicator
-                self.console.stop_progress()
+            step_exit = self._call_model(turn)
+            if step_exit == "break":
+                break
 
             # Reasoning is kept as reasoning: never parsed, never the answer.
             turn.response, turn.inline_reasoning = _split_reasoning(turn.response)
