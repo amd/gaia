@@ -43,9 +43,10 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from eval_gaia_home import env_for, write_default_model  # noqa: E402
+from eval_gaia_home import env_for  # noqa: E402
 from eval_lane_matrix import REPO_ROOT, lane_env  # noqa: E402
 
 LANES_FILE = REPO_ROOT / "eval" / "ci_lanes.json"
@@ -305,6 +306,13 @@ def main() -> int:
         "category's GAIA home). Default: what a fresh home resolves, as in CI.",
     )
     parser.add_argument(
+        "--agent-program",
+        choices=("gaiapy", "gaiacpp"),
+        help="Which program is the flagship (written as flagship_agent in each "
+        "category's GAIA home). gaiacpp runs behind the daemon and is found "
+        "through GAIA_GAIACPP_PATH. Default: what a fresh home resolves, as in CI.",
+    )
+    parser.add_argument(
         "--scenario",
         action="append",
         default=[],
@@ -353,8 +361,10 @@ def main() -> int:
         failed = []
         for category in categories:
             cat_env = {**env, **category_home(homes / category, staged_home)}
-            if args.agent_model:
-                write_agent_model(Path(cat_env["GAIA_HOME"]), args.agent_model)
+            if args.agent_model or args.agent_program:
+                write_agent_model(
+                    Path(cat_env["GAIA_HOME"]), args.agent_model, args.agent_program
+                )
             code = _run_category(category, cat_env, p, args)
             if code != 0:
                 failed.append(category)
@@ -376,7 +386,9 @@ def scenarios_by_category(categories: list[str], wanted: list[str]) -> dict:
     ids = [i.strip() for value in wanted for i in value.split(",") if i.strip()]
     found = {c: [] for c in categories}
     for category in categories:
-        for path in sorted((REPO_ROOT / "eval" / "scenarios" / category).glob("*.yaml")):
+        for path in sorted(
+            (REPO_ROOT / "eval" / "scenarios" / category).glob("*.yaml")
+        ):
             sid = yaml.safe_load(path.read_text(encoding="utf-8")).get("id")
             if sid in ids:
                 found[category].append(sid)
@@ -402,9 +414,16 @@ def category_home(cat_home: Path, staged_home: Path) -> dict[str, str]:
     return env_for(cat_home)
 
 
-def write_agent_model(cat_home: Path, model: str) -> None:
-    """Make *model* the agent's model in *cat_home*, as `gaia config set` would."""
-    write_default_model(cat_home, model)
+def write_agent_model(
+    cat_home: Path, model: Optional[str], program: Optional[str] = None
+) -> None:
+    """Make *model* and *program* the agent's in *cat_home*, as `gaia config set` would."""
+    config = {}
+    if model:
+        config["default_model"] = model
+    if program:
+        config["flagship_agent"] = program
+    (Path(cat_home) / "config.json").write_text(json.dumps(config), encoding="utf-8")
 
 
 def _without_judge(env: dict) -> dict:
@@ -482,7 +501,11 @@ def _run_category(category: str, env: dict, p: dict, args) -> int:
                     ),
                     *(
                         ["--scenario", ",".join(ids)]
-                        if (ids := getattr(args, "scenarios_by_category", {}).get(category))
+                        if (
+                            ids := getattr(args, "scenarios_by_category", {}).get(
+                                category
+                            )
+                        )
                         else []
                     ),
                     *p["extra_args"],

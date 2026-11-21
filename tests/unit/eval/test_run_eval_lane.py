@@ -263,3 +263,27 @@ def test_scenarios_are_routed_to_the_category_that_holds_them():
 def test_a_scenario_outside_the_selected_categories_fails_loudly():
     with pytest.raises(SystemExit, match="not in the selected categories"):
         run_eval_lane.scenarios_by_category(["gaia_skills_tasks"], ["select_none_fits"])
+
+
+def test_agent_program_is_the_flagship_the_backend_resolves(tmp_path):
+    import subprocess
+
+    env = run_eval_lane.category_home(tmp_path / "gaia_core", tmp_path / "_staged")
+    run_eval_lane.write_agent_model(tmp_path / "gaia_core", None, "gaiacpp")
+
+    chosen = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from gaia.daemon.sidecars.fetch import chosen_flagship as c;print(c())",
+        ],
+        env={
+            **{k: v for k, v in os.environ.items() if k != "GAIA_CONFIG_FILE"},
+            **env,
+            "PYTHONPATH": str(REPO_ROOT / "src"),
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert chosen == "gaiacpp"
