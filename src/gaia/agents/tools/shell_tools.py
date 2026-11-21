@@ -8110,7 +8110,14 @@ class ShellToolsMixin:
                     "has_errors": True,
                 }
                 if never_approvable:
-                    return {**refusal, "tier": TIER_REFUSE, "hint": REFUSED_HINT}
+                    return {
+                        **refusal,
+                        # GAIA's own rule: the apps show it as blocked, not failed.
+                        "status": "denied",
+                        "denied_by": "policy",
+                        "tier": TIER_REFUSE,
+                        "hint": REFUSED_HINT,
+                    }
                 return _confirm_once(refusal, _policy_note(policy, policy_parts))
             # Only the missing grant is in the way, and a grant is only
             # pre-approval: the user at the prompt can approve it instead.

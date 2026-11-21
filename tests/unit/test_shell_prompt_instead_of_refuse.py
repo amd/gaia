@@ -897,7 +897,8 @@ def test_the_remaining_hard_refusals_never_prompt(repo, command):
     result, events = _drive(agent, handler, _shell(command, repo))
 
     assert _prompts(events) == [], f"{command!r} reached the prompt"
-    assert result["status"] == "error"
+    # A policy no is "denied" by GAIA, never a user's no.
+    assert result["status"] == "error" or result.get("denied_by") == "policy"
     assert result["executed"] is False
     assert result.get("tier", TIER_REFUSE) == TIER_REFUSE
     assert _staged(repo) == {"tracked.txt"}
