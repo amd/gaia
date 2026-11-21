@@ -75,6 +75,22 @@
     margin-top: 10px;
     color: var(--text-muted);
     font-size: 13px;
+    animation: fadeIn var(--duration-slow) var(--ease);
+}
+
+/* The start screen arrives in reading order: greeting, then the box, then the
+   rest. Short and close by, so it reads as settling, not as a show. */
+.new-chat-inner > * {
+    /* backwards, not both: a held end state keeps a stacking context, and the
+       composer's popovers would open under the sections that follow it. */
+    animation: newChatRise var(--duration-slow) var(--ease) backwards;
+}
+.new-chat-inner > :nth-child(2) { animation-delay: var(--stagger); }
+.new-chat-inner > :nth-child(n + 3) { animation-delay: calc(var(--stagger) * 2); }
+
+@keyframes newChatRise {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
 }
 
 .new-chat-greeting {

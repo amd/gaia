@@ -75,7 +75,8 @@ type SetupGate =
 const LEMONADE_FAIL_THRESHOLD = 3;
 /** A backend that has answered no status request for this long is treated as gone. */
 const BACKEND_SILENT_LOST_MS = 5 * 60_000;
-const RESTORE_NOTICE_MS = 6000;
+/** Outlasts the restore toast's own fade-out (`.app-restore-toast` hold + exit). */
+const RESTORE_NOTICE_MS = 4000;
 /** How long a refused setup check counts as "still starting"; about twice the desktop app's own startup limit. */
 const BACKEND_START_WAIT_MS = 60_000;
 
@@ -932,15 +933,17 @@ function App() {
                 {/* Model downloads, here when the sidebar that usually shows them is closed or collapsed. */}
                 {(!sidebarOpen || sidebarCollapsed) && <DownloadChip placement="main" />}
                 {flagshipMissing && <FlagshipAgentNotice onInstalled={loadAgents} noBuild={noAgentBuild} />}
-                {restoreNotice && (
-                    <div className={`app-notice${restoreNotice.ok ? '' : ' is-warning'}`} role="status">
+                {/* A restore that worked is passing news: a toast, so the page doesn't shift twice. */}
+                {restoreNotice?.ok && (
+                    <div className="toast app-restore-toast" role="status">{t('model.restore.done')}</div>
+                )}
+                {restoreNotice && !restoreNotice.ok && (
+                    <div className="app-notice is-warning" role="status">
                         <span>{restoreNotice.message}</span>
-                        {!restoreNotice.ok && (
-                            <button type="button" className="link-btn" onClick={() => { dismissRestoreNotice(); openSettings('model'); }}>
-                                Pick a model
-                            </button>
-                        )}
-                        <button type="button" className="app-notice-close" onClick={dismissRestoreNotice} aria-label="Dismiss">
+                        <button type="button" className="link-btn" onClick={() => { dismissRestoreNotice(); openSettings('model'); }}>
+                            {t('model.restore.pick')}
+                        </button>
+                        <button type="button" className="app-notice-close" onClick={dismissRestoreNotice} aria-label={t('banner.dismiss')}>
                             <X size={14} />
                         </button>
                     </div>
