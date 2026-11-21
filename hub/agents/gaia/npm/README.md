@@ -292,6 +292,12 @@ carry phase `model_restart`, also when it stopped under a tool's own model
 calls (a long document extraction, say), which report each page with phase
 `reading` ("Reading page 4 of 12…").
 
+**A checked answer replaces the first one.** When GAIA checks its answer at the
+end of a turn and writes it again, a `status` with `retracts_answer: true`
+(phase `answer_check`) comes before the new text or the check's next tool
+call: drop the `token` text since the last tool call, so the turn shows one
+answer. A check that keeps the answer sends no retraction.
+
 **Showing how full the model's window is?** From contract 2.21 the `final`
 event carries `context`: the window size, the tokens the next call will take,
 and what takes them (prompt, tools, documents, history). Older binaries leave

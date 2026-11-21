@@ -14,6 +14,13 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   beside `gaia-agent`. A core that imports `gaiapy` needs this flagship or newer:
   with an older one installed, `gaia chat` relays through the daemon and setup
   reports the flagship as not installed, until `gaia init` upgrades it.
+
+- **A turn whose answer is checked and rewritten shows one answer.** When the
+  end-of-turn check made the agent read a file and answer again, the client
+  kept both answers. A `status` with phase `answer_check` and
+  `retracts_answer: true` now comes before the rewritten answer, so the client
+  drops the first one, as it already does for `answer_restart`.
+
 - **A conversation can't read another conversation's documents.** Every
   document dragged into any chat sat in GAIA's documents folder, which every
   chat may use, so a chat could list and read the others'. Those copies now

@@ -220,7 +220,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 
 | `type` | Payload | UI effect |
 |---|---|---|
-| `status` | `{message, level?, phase?, words?, chars?, queue?, retracts_answer?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label. `level: "warning"` means the agent is warning the user (for example, configured MCP servers were dropped): show it as a warning, not only as the live line. `retracts_answer: true` (phase `answer_restart`) means the reply was cut off and the step starts over: drop the `token` text since the last `tool_call` and show `message` in its place |
+| `status` | `{message, level?, phase?, words?, chars?, queue?, retracts_answer?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label. `level: "warning"` means the agent is warning the user (for example, configured MCP servers were dropped): show it as a warning, not only as the live line. `retracts_answer: true` (phase `answer_restart`) means the reply was cut off and the step starts over: drop the `token` text since the last `tool_call` and show `message` in its place. With phase `answer_check` it means the end-of-turn check is rewriting the answer: drop that text the same way, so the turn shows one answer |
 | `token` | `{delta}` | stream assistant text |
 | `reasoning` | `{delta, retracts_answer?}` | stream the model's reasoning, apart from the answer. Sent only when the request asked for it (`reasoning: true`, contract ≥ 2.22); pieces keep their own spacing, so a client joins them as they come. `retracts_answer: true` means the `token` text since the last `tool_call` was this reasoning (a model whose template opened the block sends only `</think>`): drop it from the answer shown so far |
 | `tool_call` | `{tool, args}` | "using tool" card |
@@ -250,7 +250,7 @@ indistinguishable from a dead one.
     "words":   { "type": "integer" },  // with phase "reasoning"
     "chars":   { "type": "integer" },  // with phase "tool_call"
     "queue":   { "type": "object" },   // with phase "model_queue", §4.4
-    "retracts_answer": { "type": "boolean" }  // with phase "answer_restart", §4.4
+    "retracts_answer": { "type": "boolean" }  // with phase "answer_restart" or "answer_check", §4.4
   } }
 
 // token
@@ -468,6 +468,7 @@ is on the wire. It is sent when the phase actually starts, never on a timer, and
 | `model_restart` | GAIA's own Lemonade Server stopped under a model call, the answer's or one a tool makes itself: sent while the step waits to retry and again while the daemon starts it (`message` "The model server stopped. GAIA is restarting it…"), or before the daemon starts a server that was never running ("Starting the model server…") | — |
 | `model_retry` | a model call failed for another reason (the model service was busy, timed out, stopped sending, or the connection dropped) and is retried: once per retry, `message` naming the trouble, the wait and the attempt ("The model service is busy — retrying in 8s (2/4)") | — |
 | `answer_restart` | a reply was cut off part-way (the model server stopped or the connection dropped) and the step starts over; carries `retracts_answer: true` | — |
+| `answer_check` | the end-of-turn check is rewriting the answer already streamed; sent before the new text or the check's next tool call, and carries `retracts_answer: true`. A check that keeps the answer sends none | — |
 | `model_queue` | the turn is queued for the model behind another request, then every ~2 s while it waits, then once when it gets the model | `queue` (below) |
 | `helpers` | a `delegate_task` call is running and one of its helpers has just ended: once per helper, `message` counting those ended and those that failed ("2 of 4 helpers done", "3 of 4 helpers done, 1 failed"). It belongs on the running tool's own row, not on a separate status line, and is not ended by the rule below: it lasts until that tool's `tool_result` | — |
 
