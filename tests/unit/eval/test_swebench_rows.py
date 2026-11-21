@@ -151,10 +151,11 @@ def test_a_dropped_connection_or_timeout_is_retried(server):
     server["replies"] = [
         requests.ConnectionError("reset"),
         requests.Timeout("slow"),
+        requests.exceptions.ChunkedEncodingError("reset mid-body"),
         _Resp(page=PAGE),
     ]
     assert swebench.rows_page("d/x", "test", 0) == PAGE
-    assert len(server["sleeps"]) == 2
+    assert len(server["sleeps"]) == 3
 
 
 def test_a_certificate_failure_is_not_retried(server):

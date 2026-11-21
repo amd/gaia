@@ -77,7 +77,7 @@ jobs:
           python-version: '3.12'
           # `datasets` reads SWE-bench from the Hub's files rather than the
           # datasets-server, which 5xx's often enough to fail whole runs.
-          install-package: '-e .[dev,eval,rag] datasets'
+          install-package: '-e .[dev,eval,rag] datasets~=5.2'
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade

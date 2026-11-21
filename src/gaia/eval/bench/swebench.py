@@ -168,7 +168,14 @@ def _transient(exc: Exception) -> bool:
         return exc.response is not None and exc.response.status_code >= 500
     if isinstance(exc, requests.exceptions.SSLError):
         return False
-    return isinstance(exc, (requests.ConnectionError, requests.Timeout))
+    return isinstance(
+        exc,
+        (
+            requests.ConnectionError,
+            requests.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        ),
+    )
 
 
 def rows_page(
@@ -215,17 +222,14 @@ def rows_page(
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-def _fetch_with_rest(ids: Optional[Sequence[str]]) -> Dict[str, Dict[str, Any]]:
-    """Page through the split on the datasets-server; stop once every id is seen.
-
-    ``None`` reads every row.
-    """
+def _fetch_with_rest(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+    """Page through the split on the datasets-server; stop once every id is seen."""
     import requests  # pylint: disable=import-outside-toplevel
 
-    wanted = None if ids is None else set(ids)
+    wanted = set(ids)
     found: Dict[str, Dict[str, Any]] = {}
     offset = 0
-    while wanted is None or wanted - set(found):
+    while wanted - set(found):
         try:
             page = rows_page(DATASET, SPLIT, offset)
         except (requests.RequestException, ValueError) as exc:
@@ -237,7 +241,7 @@ def _fetch_with_rest(ids: Optional[Sequence[str]]) -> Dict[str, Dict[str, Any]]:
             ) from exc
         rows = [entry["row"] for entry in page.get("rows") or []]
         for row in rows:
-            if wanted is None or row.get("instance_id") in wanted:
+            if row.get("instance_id") in wanted:
                 found[row["instance_id"]] = row
         offset += len(rows)
         if not rows or offset >= int(page.get("num_rows_total") or 0):
