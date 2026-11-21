@@ -2094,6 +2094,44 @@ def _unsafe_directory_grant_reason(directory: Path) -> str:
     return ""
 
 
+#: Overrides the folder a chat with no folder of its own works in.
+WORKING_DIR_ENV = "GAIA_WORKING_DIR"
+
+
+class WorkingDirEnvError(ValueError):
+    """``GAIA_WORKING_DIR`` names a folder GAIA can't work in."""
+
+
+def env_working_dir() -> Optional[Path]:
+    """The folder ``GAIA_WORKING_DIR`` names, or ``None`` when it is unset.
+
+    Raises:
+        WorkingDirEnvError: When it is not a folder, or is too broad to grant.
+    """
+    raw = os.environ.get(WORKING_DIR_ENV, "").strip()
+    if not raw:
+        return None
+    path = Path(os.path.expanduser(raw)).resolve()
+    if not path.is_dir():
+        raise WorkingDirEnvError(
+            f"{WORKING_DIR_ENV}={raw!r} is not a folder on this PC. Point it (or "
+            "--working-dir) at an existing folder, or unset it to use the folder "
+            "GAIA was started in."
+        )
+    reason = _unsafe_directory_grant_reason(path)
+    if reason:
+        raise WorkingDirEnvError(
+            f"{WORKING_DIR_ENV}={raw!r} can't be GAIA's working folder: {reason}. "
+            "Pick a narrower folder, such as a project folder."
+        )
+    return path
+
+
+def default_working_dir() -> Path:
+    """The folder a chat with no folder of its own works in, before safety checks."""
+    return env_working_dir() or Path.cwd().resolve()
+
+
 def _session_working_directory(folders: Optional[list] = None) -> str:
     """The folder the chat's chip shows, used for bare relative paths.
 
@@ -2102,7 +2140,7 @@ def _session_working_directory(folders: Optional[list] = None) -> str:
     """
     if folders:
         return str(Path(folders[0]).expanduser().resolve())
-    cwd = Path.cwd().resolve()
+    cwd = default_working_dir()
     if _unsafe_directory_grant_reason(cwd):
         return str(_managed_documents_dir())
     return str(cwd)
@@ -2121,7 +2159,8 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
     somewhere to *write* — a bounded, GAIA-owned folder the Agent UI already
     surfaces, rather than whichever of the user's folders a document came from.
 
-    Falls back to the current working directory only when nothing is attached,
+    Falls back to the default working folder (``GAIA_WORKING_DIR``, else the
+    current working directory) only when nothing is attached,
     and refuses even that when the CWD is a root, ``$HOME``, or overlaps a
     protected directory — a scope that broad is not a scope. When
     ``GAIA_ALLOWED_PATHS`` shares nothing with that fallback, the folders it
@@ -2146,7 +2185,7 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
         allowed.add(managed)
         return sorted(allowed)
 
-    cwd = Path.cwd().resolve()
+    cwd = default_working_dir()
     reason = _unsafe_directory_grant_reason(cwd)
     fallback = [managed] if reason else sorted({managed, str(cwd)})
     env_scope = _env_scope_for_fallback(fallback)
@@ -6062,8 +6101,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
         await _cleanup_stream()
-        if isinstance(e, AwakeClockError):
-            # It names its fix (restart GAIA); a resend would fail the same way.
+        if isinstance(e, (AwakeClockError, WorkingDirEnvError)):
+            # Each names its fix; a resend would fail the same way.
             error_msg = str(e)
         else:
             error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."

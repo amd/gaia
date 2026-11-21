@@ -970,7 +970,15 @@ def _enable_backend_fault_log(log):
     )
 
 
-def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist=None):
+_WORKING_DIR_HELP = (
+    "Folder a new Agent UI chat works in (sets GAIA_WORKING_DIR; default: the "
+    "folder GAIA is started in). Each chat can still pick its own."
+)
+
+
+def _launch_agent_ui(
+    port=4200, base_url=None, log=None, debug=False, webui_dist=None, working_dir=None
+):
     """Launch the Agent UI server (FastAPI + uvicorn).
 
     Reused by top-level --ui, gaia chat --ui, and the interactive menu.
@@ -989,6 +997,8 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             start_model_server_owner,
         )
 
+        if working_dir:
+            os.environ["GAIA_WORKING_DIR"] = working_dir
         # Forward --base-url to the UI server via environment variable
         if base_url:
             os.environ["LEMONADE_BASE_URL"] = base_url
@@ -1249,6 +1259,7 @@ def build_parser():
         default=None,
         help="Path to pre-built Agent UI frontend dist directory (used with --ui)",
     )
+    parser.add_argument("--working-dir", default=None, help=_WORKING_DIR_HELP)
     parser.add_argument(
         "--cli",
         action="store_true",
@@ -1611,6 +1622,7 @@ def build_parser():
         default=None,
         help="Path to pre-built Agent UI frontend dist directory (used with --ui)",
     )
+    chat_parser.add_argument("--working-dir", default=None, help=_WORKING_DIR_HELP)
     talk_parser = subparsers.add_parser(
         "talk",
         help="Start voice conversation with Gaia",
@@ -5076,6 +5088,7 @@ def main():
                 log=log,
                 debug=getattr(args, "debug", False),
                 webui_dist=getattr(args, "ui_dist", None),
+                working_dir=getattr(args, "working_dir", None),
             )
             return
 
@@ -5091,6 +5104,7 @@ def main():
             log=log,
             debug=getattr(args, "debug", False),
             webui_dist=getattr(args, "ui_dist", None),
+            working_dir=getattr(args, "working_dir", None),
         )
         return
 
@@ -5169,6 +5183,7 @@ def main():
             log=log,
             debug=getattr(args, "debug", False),
             webui_dist=getattr(args, "ui_dist", None),
+            working_dir=getattr(args, "working_dir", None),
         )
         return
 

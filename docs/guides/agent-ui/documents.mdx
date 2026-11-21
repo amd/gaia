@@ -85,6 +85,11 @@ The agent searches your common folders first, then offers a deep search across a
   opens your computer's own folder picker; in a browser GAIA shows its own,
   where hidden folders (names starting with a dot) stay out of the list until
   you tick **Show hidden**.
+- **A chat with no folder of its own** works in `GAIA_WORKING_DIR` (or
+  `gaia chat --ui --working-dir <path>`), else the folder GAIA started in,
+  unless that is your home folder. A missing folder, a drive root, the home
+  folder or a protected folder in `GAIA_WORKING_DIR` stops GAIA at startup with
+  a message saying what to change.
 
 In a chat, the folder chip beside the model names the folder GAIA works in; click it to see and manage the chat's folders in the session panel.
 

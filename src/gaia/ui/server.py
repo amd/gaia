@@ -52,7 +52,13 @@ from ._chat_helpers import _attach_chat_stream  # noqa: F401
 from ._chat_helpers import _get_chat_response  # noqa: F401
 from ._chat_helpers import _index_document  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
-from ._chat_helpers import _ui_cloud_provider, writing_tool_registry
+from ._chat_helpers import (
+    WORKING_DIR_ENV,
+    WorkingDirEnvError,
+    _ui_cloud_provider,
+    env_working_dir,
+    writing_tool_registry,
+)
 from .agent_loop import agent_loop
 
 # pylint: enable=unused-import
@@ -527,8 +533,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     Returns:
         Configured FastAPI application.
     """
-    # A bad GAIA_ALLOWED_PATHS stops startup, not the first chat.
+    # A bad GAIA_ALLOWED_PATHS or GAIA_WORKING_DIR stops startup, not the first chat.
     env_allowed_paths()
+    env_working_dir()
 
     # Initialize database early so lifespan can access it
     db = ChatDatabase(db_path)
@@ -1275,16 +1282,26 @@ def main():
         default=None,
         help="Path to pre-built Agent UI frontend dist directory",
     )
+    parser.add_argument(
+        "--working-dir",
+        default=None,
+        help=(
+            f"Folder a new chat works in (sets {WORKING_DIR_ENV}; default: the "
+            "folder the server is started in)"
+        ),
+    )
     args = parser.parse_args()
+    if args.working_dir:
+        os.environ[WORKING_DIR_ENV] = args.working_dir
 
     log_level = "debug" if args.debug else "info"
     print(f"Starting GAIA Agent UI server on http://{args.host}:{args.port}")
     try:
         server_app = create_app(webui_dist=args.ui_dist)
-    except (UnsafeGaiaHomeError, AllowedPathsEnvError) as exc:
-        # A misconfigured GAIA_HOME or GAIA_ALLOWED_PATHS is the user's to fix,
-        # so print the remedy rather than a traceback. 64 is EX_USAGE, as gaia
-        # uninstall uses.
+    except (UnsafeGaiaHomeError, AllowedPathsEnvError, WorkingDirEnvError) as exc:
+        # A misconfigured GAIA_HOME, GAIA_ALLOWED_PATHS or GAIA_WORKING_DIR is
+        # the user's to fix, so print the remedy rather than a traceback. 64 is
+        # EX_USAGE, as gaia uninstall uses.
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(64) from exc
     if not lemonade_is_remote():

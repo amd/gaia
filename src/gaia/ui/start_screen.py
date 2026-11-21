@@ -12,7 +12,6 @@ when installed, only sharpens it.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.logger import get_logger
@@ -138,8 +137,13 @@ def working_folder(choosable: bool) -> Dict[str, Any]:
     """
     from gaia.ui import _chat_helpers as chat
 
-    cwd = Path.cwd().resolve()
-    if chat._unsafe_directory_grant_reason(cwd):
+    try:
+        cwd = chat.default_working_dir()
+    except chat.WorkingDirEnvError as e:
+        # GAIA_WORKING_DIR went bad after startup; a turn names the fix.
+        logger.warning("Showing the GAIA folder as the working folder: %s", e)
+        cwd = None
+    if cwd is None or chat._unsafe_directory_grant_reason(cwd):
         folder, own = chat._managed_documents_dir(), True
     else:
         folder, own = cwd, False

@@ -16,6 +16,7 @@ from gaia.security import AllowedPathsEnvError
 from .. import session_capabilities
 from .. import session_environment as env
 from .. import session_outputs
+from .._chat_helpers import WorkingDirEnvError
 from ..database import ChatDatabase
 from ..dependencies import get_db
 
@@ -33,13 +34,14 @@ class InternetRequest(BaseModel):
 
 
 async def _describe(db: ChatDatabase, session: dict) -> dict:
-    """The panel's view of *session*; a bad ``GAIA_ALLOWED_PATHS`` is a 500 naming it.
+    """The panel's view of *session*; a bad ``GAIA_ALLOWED_PATHS`` or
+    ``GAIA_WORKING_DIR`` is a 500 naming it.
 
     An empty list would read as "this chat can open nothing" with no reason.
     """
     try:
         return await asyncio.to_thread(env.describe, db, session)
-    except AllowedPathsEnvError as e:
+    except (AllowedPathsEnvError, WorkingDirEnvError) as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
