@@ -73,6 +73,81 @@ def test_default_is_internet_on_and_the_computed_scope(client, session_id):
     assert "gaia_documents" in sources
 
 
+def test_a_library_copy_is_listed_under_the_documents_own_name(
+    client, session_id, tmp_path
+):
+    # #7224: the copy's file name carries an internal id prefix.
+    copy = tmp_path / "6bebd6da81b2_outside.md"
+    copy.write_text("gate code", encoding="utf-8")
+    db = client.app.state.db
+    doc = db.add_document(
+        filename="outside.md",
+        filepath=str(copy),
+        file_hash="h-outside",
+        file_size=9,
+        chunk_count=1,
+        file_mtime=copy.stat().st_mtime,
+    )
+    db.attach_document(session_id, doc["id"])
+
+    body = client.get(f"/api/sessions/{session_id}/environment").json()
+
+    entry = next(f for f in body["folders"] if f["path"] == str(copy))
+    assert entry["source"] == "document"
+    assert entry["name"] == "outside.md"
+    others = [f for f in body["folders"] if f["path"] != str(copy)]
+    assert others and all(f["name"] is None for f in others)
+
+
+def test_files_are_listed_in_the_order_of_the_names_shown(client, session_id, tmp_path):
+    db = client.app.state.db
+    for prefix, name in (("0aaa", "zebra.md"), ("ffff", "apple.md")):
+        copy = tmp_path / f"{prefix}_{name}"
+        copy.write_text(name, encoding="utf-8")
+        doc = db.add_document(
+            filename=name,
+            filepath=str(copy),
+            file_hash=f"h-{name}",
+            file_size=len(name),
+            chunk_count=1,
+            file_mtime=copy.stat().st_mtime,
+        )
+        db.attach_document(session_id, doc["id"])
+
+    body = client.get(f"/api/sessions/{session_id}/environment").json()
+
+    names = [f["name"] for f in body["folders"] if f["name"]]
+    assert names == ["apple.md", "zebra.md"]
+
+
+def test_a_document_name_survives_another_path_spelling_and_a_blank_name_is_null(
+    client, session_id, tmp_path
+):
+    (tmp_path / "sub").mkdir()
+    named = tmp_path / "1111_report.md"
+    blank = tmp_path / "2222_blank.md"
+    for path, name, stored in (
+        (named, "report.md", str(tmp_path / "sub" / ".." / named.name)),
+        (blank, "", str(blank)),
+    ):
+        path.write_text(name or "x", encoding="utf-8")
+        doc = client.app.state.db.add_document(
+            filename=name,
+            filepath=stored,
+            file_hash=f"h-{path.name}",
+            file_size=1,
+            chunk_count=1,
+            file_mtime=path.stat().st_mtime,
+        )
+        client.app.state.db.attach_document(session_id, doc["id"])
+
+    body = client.get(f"/api/sessions/{session_id}/environment").json()
+
+    by_base = {Path(f["path"]).name: f for f in body["folders"]}
+    assert by_base[named.name]["name"] == "report.md"
+    assert by_base[blank.name]["name"] is None
+
+
 def test_add_then_remove_folder_persists(client, session_id, folder):
     added = client.post(
         f"/api/sessions/{session_id}/environment/folders", json={"path": str(folder)}
@@ -159,6 +234,31 @@ def test_unsafe_or_missing_folders_are_refused(client, session_id, tmp_path, bad
     assert resp.json()["detail"]
 
 
+@pytest.mark.parametrize("bad", ["not-a-folder", "home", "root"])
+def test_the_folder_check_gives_the_reason_adding_it_would(
+    client, session_id, tmp_path, bad
+):
+    """#7996: the desktop folder dialog asks before it adds the chip."""
+    path = {
+        "not-a-folder": str(tmp_path / "missing"),
+        "home": str(Path.home()),
+        "root": Path.home().anchor,
+    }[bad]
+    check = client.post("/api/environment/folders/check", json={"path": path})
+    add = client.post(
+        f"/api/sessions/{session_id}/environment/folders", json={"path": path}
+    )
+    assert check.status_code == 200
+    assert check.json() == {"refusal": add.json()["detail"]}
+
+
+def test_the_folder_check_takes_a_narrow_folder(client, tmp_path):
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    resp = client.post("/api/environment/folders/check", json={"path": str(outside)})
+    assert resp.json() == {"refusal": None}
+
+
 def test_a_folder_inside_a_removed_one_is_refused(client, session_id, folder):
     inner = folder / "inner"
     inner.mkdir()
@@ -185,6 +285,13 @@ def test_adding_a_removed_folder_back_releases_it(
     )
 
 
+def _accept_unprofiled_sidecar(monkeypatch):
+    """Let a session name an agent the registry doesn't know, whatever ran first."""
+    from gaia.ui.routers import sessions as sessions_router
+
+    monkeypatch.setattr(sessions_router, "_agent_type_unknown", lambda *_a: False)
+
+
 def test_unknown_session_is_404(client):
     assert client.get("/api/sessions/nope/environment").status_code == 404
 
@@ -192,9 +299,12 @@ def test_unknown_session_is_404(client):
 def test_a_relayed_agent_is_reported_unenforced_and_changes_are_refused(
     client, folder, monkeypatch
 ):
-    # The email sidecar runs as its own process and keeps its own network rules.
+    # A sidecar with no relay profile keeps its own file and network rules.
+    _accept_unprofiled_sidecar(monkeypatch)
     monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
-    session_id = client.post("/api/sessions", json={"agent_type": "email"}).json()["id"]
+    session_id = client.post(
+        "/api/sessions", json={"agent_type": "other-sidecar"}
+    ).json()["id"]
     body = client.get(f"/api/sessions/{session_id}/environment").json()
     assert body["enforced"] is False
     assert body["internet_enforced"] is False
@@ -220,7 +330,7 @@ def test_a_relayed_agent_is_reported_unenforced_and_changes_are_refused(
 @pytest.fixture
 def relayed_gaia(monkeypatch):
     """The flagship runs as a daemon sidecar, as on an installed GAIA."""
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
     agent = SimpleNamespace(api_version="2.21", asked=[])
@@ -357,8 +467,8 @@ def test_a_relayed_agent_too_old_for_folders_cannot_start_with_one(
 def test_a_relayed_agent_that_cannot_start_refuses_the_folder_and_says_why(
     client, folder, relayed_gaia, monkeypatch
 ):
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.daemon.sidecars.errors import SidecarError
+    from gaia.ui.sidecar import daemon_client
 
     def fail(_agent_id):
         raise SidecarError("sidecar crashed")
@@ -372,9 +482,13 @@ def test_a_relayed_agent_that_cannot_start_refuses_the_folder_and_says_why(
     assert _chat_count(client) == 0
 
 
-def test_the_email_agent_cannot_start_with_a_folder(client, folder, relayed_gaia):
+def test_an_unprofiled_sidecar_cannot_start_with_a_folder(
+    client, folder, relayed_gaia, monkeypatch
+):
+    _accept_unprofiled_sidecar(monkeypatch)
     refused = client.post(
-        "/api/sessions", json={"agent_type": "email", "folders": [str(folder)]}
+        "/api/sessions",
+        json={"agent_type": "other-sidecar", "folders": [str(folder)]},
     )
     assert refused.status_code == 400
     assert "runs as its own process" in refused.text
@@ -449,3 +563,54 @@ def test_a_failed_rollback_keeps_the_original_500_and_logs_both(
     assert "Check server logs" in failed.json()["detail"]
     assert "database is locked" in caplog.text
     assert "disk full" in caplog.text
+
+
+class _DecisionProxy:
+    agent_id = "gaia"
+
+    def tool_decision(self, run_id, decision, confirm_id):
+        return {"run_id": run_id, "decision": decision, "delivered": True}
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_a_path_allowed_at_a_relayed_prompt_is_listed(
+    client, gaia_session_id, relayed_gaia, tmp_path, approved
+):
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    target = tmp_path / "words.txt"
+    target.write_text("A\na\n")
+    handler = SSEOutputHandler()
+    handler.active_relay_proxy = _DecisionProxy()
+    handler.active_relay_run_id = "r1"
+    prompt = {
+        "type": "needs_confirmation",
+        "action": "allow_path_access",
+        "confirm_id": "c-path",
+        "args": {"path": str(target), "kind": "file"},
+    }
+    relay._dispatch_one(handler, prompt, GAIA_PROFILE, True)
+    helpers._active_sse_handlers[gaia_session_id] = handler
+    try:
+        answered = client.post(
+            "/api/chat/confirm-tool",
+            json={
+                "session_id": gaia_session_id,
+                "approved": approved,
+                "confirm_id": "c-path",
+            },
+        )
+    finally:
+        helpers._active_sse_handlers.pop(gaia_session_id, None)
+    assert answered.status_code == 200, answered.text
+
+    body = client.get(f"/api/sessions/{gaia_session_id}/environment").json()
+    listed = {f["path"]: f for f in body["folders"]}
+    if approved:
+        assert listed[str(target)]["source"] == "approved"
+        assert listed[str(target)]["kind"] == "file"
+    else:
+        assert str(target) not in listed

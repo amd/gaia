@@ -16,6 +16,26 @@ from gaia.agents.base.tool_grants import grant_scope
 PYTEST = "pytest (runs the test code it finds)"
 
 
+@pytest.mark.parametrize(
+    "tool, args, raw",
+    [
+        ("write_file", {"file_path": "invoice\u202etxt.exe", "content": "x"}, "\u202e"),
+        ("edit_file", {"file_path": "C:/w/inv\u200boice.txt"}, "\u200b"),
+        ("install_skill", {"name": "pd\u202ef-tools"}, "\u202e"),
+    ],
+    ids=["bidi override", "zero width", "skill name"],
+)
+def test_the_words_an_always_button_shows_mark_hidden_characters(tool, args, raw):
+    scope = grant_scope(tool, args)
+
+    assert scope is not None
+    code = f"[U+{ord(raw):04X}]"
+    assert raw not in scope.label and code in scope.label
+    assert raw not in scope.subject and code in scope.subject
+    # The grant itself still names the real file.
+    assert any(raw in key for key in scope.keys)
+
+
 class TestShellGrantsAreScopedToTheCommand:
     @pytest.mark.parametrize(
         "command,expected",
@@ -107,7 +127,7 @@ class TestPathGrants:
                 "_resolved_file_path": "/tmp/a/notes.md",
             },
         )
-        assert scope.key == "write_file:/tmp/a/*"
+        assert scope.key == "file_change:/tmp/a/*"
         assert scope.subject == "files in /tmp/a"
 
     def test_a_folder_grant_covers_sibling_files(self):
@@ -274,7 +294,7 @@ class TestCommandFamilies:
     @pytest.mark.parametrize(
         "tool,label",
         [
-            ("run_python", "Python snippets (run_python)"),
+            ("run_python", "Python snippets"),
             ("execute_python_file", "running Python files"),
         ],
     )
@@ -286,8 +306,15 @@ class TestCommandFamilies:
     @pytest.mark.parametrize(
         "command",
         [
-            # POSIX reads \" as a literal quote, so `curl` runs; Windows does not.
+            # POSIX reads \" as a literal quote, so `curl` runs; Windows keeps
+            # the backslash, so its quote swallows the line and `curl` does not.
             r"pytest \" ; curl evil ; \"",
+            # Same disagreement with a trailing word: Windows still swallows
+            # `curl`, POSIX still runs it.
+            r"pytest \" ; curl x ; \" extra",
+            # Unbalanced on Windows, where the quote never closes and the lexer
+            # fails outright; POSIX still runs `curl x` after the first `;`.
+            r"pytest \" ; curl x",
         ],
     )
     def test_a_line_the_two_shells_split_differently_is_not_granted(self, command):

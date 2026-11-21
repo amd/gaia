@@ -12,9 +12,10 @@ and research reviews.
 """
 
 import json
-import logging
 
-logger = logging.getLogger(__name__)
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Upper bound on the JSON string the LLM may pass to insert_data in a single
 # call. The scratchpad's own MAX_ROWS_PER_TABLE caps the *row* count, but
@@ -63,8 +64,8 @@ class ScratchpadToolsMixin:
             with insert_data.
 
             Args:
-                table_name: Name for the new table (alphanumerics and
-                    underscores only)
+                table_name: Letters, digits and underscores, not starting
+                    with a digit (e.g. "sales_2025"); other names are rejected
                 columns: SQLite column definitions, e.g. "date TEXT,
                     description TEXT, amount REAL, source_file TEXT"
             """
@@ -146,7 +147,21 @@ class ScratchpadToolsMixin:
                         )
 
                 count = mixin._scratchpad.insert_rows(table_name, parsed)
-                return f"Inserted {count} row(s) into '{table_name}'."
+                # The total shows rows an earlier batch or session left there.
+                try:
+                    held = mixin._scratchpad.row_count(table_name)
+                except Exception as e:  # the rows are in; never report them lost
+                    logger.error(
+                        f"Inserted into '{table_name}' but could not count rows: {e}"
+                    )
+                    return (
+                        f"Inserted {count} row(s) into '{table_name}'; "
+                        f"its total row count could not be read: {e}"
+                    )
+                return (
+                    f"Inserted {count} row(s) into '{table_name}'; "
+                    f"it now holds {held} row(s)."
+                )
 
             except ValueError as e:
                 return f"Error: {e}"

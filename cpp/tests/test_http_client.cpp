@@ -10,7 +10,9 @@
 #error "gaia/http_client.h must not include cpp-httplib (it is a PRIVATE dependency)"
 #endif
 
+#include <chrono>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -115,6 +117,94 @@ TEST(HttpClientTest, SetBaseUrlRetargetsSubsequentRequests) {
 
     EXPECT_EQ(http.baseUrl(), server.baseUrl());
     EXPECT_EQ(http.get("/test/echo", {{"X-Gaia-Test", "retargeted"}}).body, "retargeted");
+}
+
+// ---------------------------------------------------------------------------
+// Connection reuse
+// ---------------------------------------------------------------------------
+
+TEST(HttpClientTest, RequestsToOneServerShareOneConnection) {
+    bench::MockLlmServer server;
+    HttpClient http(server.baseUrl());
+
+    const std::string first = http.get("/test/peer").body;
+    ASSERT_FALSE(first.empty());
+
+    // Five requests in all: the mock server closes a connection after five.
+    EXPECT_EQ(http.post("/test/peer", "{}").body, first);
+    EXPECT_EQ(http.postMultipart("/test/peer", {{"field", "value", "", ""}}).body, first);
+    std::string streamed;
+    http.postStreaming("/test/peer", "{}", [&](const char* data, std::size_t len) {
+        streamed.append(data, len);
+        return true;
+    });
+    EXPECT_EQ(streamed, first);
+    EXPECT_EQ(http.get(server.baseUrl() + "/test/peer").body, first);
+}
+
+TEST(HttpClientTest, ReconnectsAfterTheServerClosesTheConnection) {
+    bench::MockLlmServer server;
+    HttpClient http(server.baseUrl());
+
+    const std::string closed = http.get("/test/peer-close").body;
+    const std::string next   = http.get("/test/peer").body;
+
+    EXPECT_FALSE(next.empty());
+    EXPECT_NE(next, closed);
+    EXPECT_EQ(http.get("/test/peer").body, next);
+}
+
+TEST(HttpClientTest, ReopensAConnectionLeftIdleTooLong) {
+    bench::MockLlmServer server;
+    HttpClientConfig cfg;
+    cfg.baseUrl          = server.baseUrl();
+    cfg.keepAliveIdleSec = 1;
+    HttpClient http(cfg);
+
+    const std::string first = http.get("/test/peer").body;
+    EXPECT_EQ(http.get("/test/peer").body, first);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+
+    const std::string later = http.get("/test/peer").body;
+    EXPECT_FALSE(later.empty());
+    EXPECT_NE(later, first);
+}
+
+TEST(HttpClientTest, ReconnectsAfterAStreamIsStoppedEarly) {
+    bench::MockLlmServer server;
+    HttpClient http(server.baseUrl());
+
+    http.postStreaming("/test/peer", "{}", [](const char*, std::size_t) { return false; });
+
+    EXPECT_FALSE(http.get("/test/peer").body.empty());
+}
+
+TEST(HttpClientTest, SeparateServersGetSeparateConnections) {
+    bench::MockLlmServer a;
+    bench::MockLlmServer b;
+    HttpClient http(a.baseUrl());
+
+    const std::string onA = http.get("/test/peer").body;
+    EXPECT_EQ(http.get(b.baseUrl() + "/test/echo", {{"X-Gaia-Test", "b"}}).body, "b");
+    EXPECT_EQ(http.get("/test/peer").body, onA);
+}
+
+TEST(HttpClientTest, RequestDoesNotWaitForABusyConnection) {
+    bench::MockLlmServer server;
+    HttpClient http(server.baseUrl());
+    const std::string kept = http.get("/test/peer").body;
+
+    std::thread slow([&] { http.get("/test/slow"); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    const auto start = std::chrono::steady_clock::now();
+    const std::string other = http.get("/test/peer").body;
+    const auto waited = std::chrono::steady_clock::now() - start;
+    slow.join();
+
+    EXPECT_NE(other, kept);
+    EXPECT_LT(waited, std::chrono::milliseconds(1500));
+    EXPECT_EQ(http.get("/test/peer").body, kept);
 }
 
 // ---------------------------------------------------------------------------
@@ -468,9 +558,69 @@ TEST(LemonadeErrorDecodeTest, StreamingSseErrorEventSurfacesContextRemedy) {
     EXPECT_NE(msg.find("Server context window too small"), std::string::npos) << msg;
     EXPECT_NE(msg.find("prompt is 40000 tokens"), std::string::npos) << msg;
     EXPECT_NE(msg.find("n_ctx=16384"), std::string::npos) << msg;
-    EXPECT_NE(msg.find("start-lemonade.ps1 -CtxSize"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("GAIA_CONTEXT_SIZE"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("at least 65536"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("restart the agent"), std::string::npos) << msg;
     EXPECT_EQ(msg.find("LEMONADE_CTX_SIZE"), std::string::npos) << msg;
     EXPECT_EQ(msg.find("lemonade-server serve"), std::string::npos) << msg;
+    EXPECT_EQ(msg.find("start-lemonade.ps1"), std::string::npos) << msg;
+    // OS-neutral: no cmd-only `set X=Y`, and no `--save-options`, which the
+    // agent's own load at its configured window would override.
+    EXPECT_EQ(msg.find("set GAIA_CONTEXT_SIZE="), std::string::npos) << msg;
+    EXPECT_EQ(msg.find("--save-options"), std::string::npos) << msg;
+}
+
+namespace {
+
+std::string ctxOverflowRemedy(const json& inner) {
+    const json details = {{"response", {{"error", inner}}}};
+    const json body = {{"error", {{"message", "llama-server error"}, {"details", details}}}};
+    bench::MockLlmServer server;
+    server.enableSseStreaming(true);
+    server.pushSseStream("data: " + body.dump() + "\n\ndata: [DONE]\n\n");
+    LemonadeClient client(server.baseUrl());
+    return streamError(client);
+}
+
+const char* kOverflowMessage = "request exceeds the available context size";
+
+} // namespace
+
+TEST(LemonadeErrorDecodeTest, ContextRemedyWindowExceedsPromptLargerThan64K) {
+    const std::string msg = ctxOverflowRemedy(
+        {{"message", kOverflowMessage}, {"n_ctx", 65536}, {"n_prompt_tokens", 100000}});
+    EXPECT_NE(msg.find("at least 131072"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, ContextRemedyWindowIsStrictlyAbovePowerOfTwoPrompt) {
+    const std::string msg = ctxOverflowRemedy(
+        {{"message", kOverflowMessage}, {"n_ctx", 32768}, {"n_prompt_tokens", 65536}});
+    EXPECT_NE(msg.find("at least 131072"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, ContextRemedyWindowIsAboveCurrentWindow) {
+    // A server reporting a prompt below n_ctx must still be told to grow.
+    const std::string msg = ctxOverflowRemedy(
+        {{"message", kOverflowMessage}, {"n_ctx", 16384}, {"n_prompt_tokens", 100}});
+    EXPECT_NE(msg.find("at least 32768"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, ContextRemedyWithoutTokenCountsSuggestsNoNumber) {
+    const std::string msg = ctxOverflowRemedy({{"message", kOverflowMessage}});
+    EXPECT_NE(msg.find("a larger window"), std::string::npos) << msg;
+    EXPECT_EQ(msg.find("at least"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("GAIA_CONTEXT_SIZE"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, ContextRemedyNearIntMaxDoesNotOverflow) {
+    const std::string msg = ctxOverflowRemedy(
+        {{"message", kOverflowMessage}, {"n_ctx", 16384}, {"n_prompt_tokens", 2147483647}});
+    EXPECT_NE(msg.find("at least 2147483648"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, OtherErrorsCarryNoContextRemedy) {
+    const std::string msg = ctxOverflowRemedy({{"message", "model not found"}, {"n_ctx", 16384}});
+    EXPECT_EQ(msg, "model not found");
 }
 
 TEST(LemonadeErrorDecodeTest, StreamingUnterminatedErrorEventIsNotLost) {
@@ -606,4 +756,102 @@ TEST(LemonadeErrorDecodeTest, NonStreamingNonJsonBodyIsReturnedVerbatim) {
     LemonadeClient client(server.baseUrl());
 
     EXPECT_EQ(client.chatCompletions(kChatRequest), "not json at all");
+}
+
+TEST(HttpClientTest, ACancelCheckEndsARequestStillWaitingForItsReply) {
+    bench::MockLlmServer server;
+    std::atomic<bool> stop{false};
+    HttpClientConfig cfg;
+    cfg.baseUrl     = server.baseUrl();
+    cfg.cancelCheck = [&stop] { return stop.load(); };
+    HttpClient http(cfg);
+
+    std::thread later([&stop] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        stop = true;
+    });
+    const auto t0 = std::chrono::steady_clock::now();
+    try {
+        http.get("/test/slow");  // answers after 2 s
+        ADD_FAILURE() << "expected the request to be cancelled";
+    } catch (const HttpError& e) {
+        EXPECT_NE(std::string(e.what()).find("cancelled"), std::string::npos) << e.what();
+    }
+    const auto waited = std::chrono::steady_clock::now() - t0;
+    later.join();
+    EXPECT_LT(waited, std::chrono::milliseconds(1500));
+
+    stop = false;
+    EXPECT_TRUE(http.get("/api/v1/health").ok()) << "the client must work again after a cancel";
+}
+
+TEST(HttpClientTest, AResponseSizeLimitStopsTheDownload) {
+    bench::MockLlmServer server;
+    HttpClientConfig cfg;
+    cfg.baseUrl          = server.baseUrl();
+    cfg.maxResponseBytes = 1000;
+    HttpClient http(cfg);
+
+    HttpResponse capped = http.get("/test/big");
+    EXPECT_EQ(capped.status, 200);
+    EXPECT_EQ(capped.body.size(), 1000u);
+    EXPECT_EQ(capped.body, std::string(1000, 'x'));
+
+    HttpResponse next = http.get("/api/v1/health");
+    EXPECT_TRUE(next.ok()) << "the connection must be usable after a download was cut short";
+    EXPECT_FALSE(next.body.empty());
+    EXPECT_NE(next.body[0], 'x') << "left-over bytes of the big body were read as this reply";
+}
+
+TEST(HttpClientTest, AnErrorPageOverTheSizeLimitIsStillAnError) {
+    bench::MockLlmServer server;
+    HttpClientConfig cfg;
+    cfg.baseUrl          = server.baseUrl();
+    cfg.maxResponseBytes = 1000;
+    HttpClient http(cfg);
+    try {
+        http.get("/test/big-error");
+        ADD_FAILURE() << "a cut-short 500 page came back as content";
+    } catch (const HttpError& e) {
+        EXPECT_EQ(e.status(), 500);
+    }
+    EXPECT_TRUE(http.get("/api/v1/health").ok()) << "the connection must be usable afterwards";
+}
+
+TEST(HttpClientTest, ACancelCheckEndsARequestThatCannotBeInterrupted) {
+    // An address that answers nothing: the connect attempt just waits, with no open socket to close.
+    std::atomic<bool> stop{false};
+    HttpClientConfig cfg;
+    cfg.baseUrl           = "http://10.255.255.1:81";
+    cfg.connectTimeoutSec = 8;
+    cfg.cancelCheck       = [&stop] { return stop.load(); };
+    HttpClient http(cfg);
+
+    std::thread later([&stop] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        stop = true;
+    });
+    const auto t0 = std::chrono::steady_clock::now();
+    std::string failure;
+    try {
+        http.get("/x");
+    } catch (const HttpError& e) {
+        failure = e.what();
+    }
+    const auto waited = std::chrono::steady_clock::now() - t0;
+    later.join();
+    if (failure.find("cancelled") == std::string::npos) {
+        GTEST_SKIP() << "this network refuses the address at once, so nothing waited: " << failure;
+    }
+    EXPECT_LT(waited, std::chrono::milliseconds(2000)) << "the caller waited for a request it had cancelled";
+}
+
+TEST(HttpClientTest, AHostNameCanBePinnedToAnAddress) {
+    bench::MockLlmServer server;
+    const std::string port = server.baseUrl().substr(server.baseUrl().rfind(':'));
+    HttpClientConfig cfg;
+    cfg.baseUrl       = "http://pinned.invalid" + port;  // a name no resolver answers
+    cfg.hostAddresses = {{"pinned.invalid", "127.0.0.1"}};
+    HttpClient http(cfg);
+    EXPECT_TRUE(http.get("/api/v1/health").ok());
 }

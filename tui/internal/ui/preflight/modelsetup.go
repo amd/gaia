@@ -81,6 +81,16 @@ func (m Model) updateSetup(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case modelsetup.FinishedMsg:
 		m.setup = nil
+		if msg.ChatModel != "" {
+			if _, err := WriteLastModel("local", msg.ChatModel); err != nil {
+				m.note = "Could not save the selected chat model: " + err.Error()
+			}
+			if local, ok := m.r.(localRunner); ok {
+				local.opts.Model = msg.ChatModel
+				local.opts.ChatProvider = "local"
+				m.r = local
+			}
+		}
 		// The ready summary was the review, so a passing re-check hands off
 		// without holding for another enter.
 		m.fixApplied = false

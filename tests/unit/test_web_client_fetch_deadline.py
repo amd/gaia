@@ -12,6 +12,7 @@ Driven against a real local HTTP server that sends a byte every 50 ms.
 
 from __future__ import annotations
 
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +26,25 @@ from gaia.web.client import FetchDeadlineExceeded, WebClient
 pytestmark = pytest.mark.allow_network
 
 TRICKLE_INTERVAL = 0.05
+
+
+class _RedirectHandler(BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        pass
+
+    def do_GET(self):  # noqa: N802 - http.server naming
+        if self.path == "/redirect":
+            self.send_response(302)
+            self.send_header(
+                "Location", f"http://localhost:{self.server.target_port}/fast"
+            )
+            self.end_headers()
+            return
+        self.send_response(200)
+        body = b"<html>redirected</html>"
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -143,7 +163,40 @@ def test_a_caller_timeout_is_capped_by_the_deadline(server):
 
 
 def test_a_fast_fetch_is_unaffected(server):
-    response = _client(fetch_deadline=1).get(server + "/fast")
+    # Roomy, so a busy runner cannot turn this into a race with the timer.
+    response = _client(fetch_deadline=60).get(server + "/fast")
+    assert response.text == "<html>ok</html>"
+
+
+def test_cross_host_redirect_rate_limit_does_not_consume_fetch_deadline(
+    server, monkeypatch
+):
+    """A long pacing interval between redirect hops is outside the fetch clock."""
+    monkeypatch.setenv("GAIA_WEB_ALLOWED_HOSTS", "127.0.0.1,localhost")
+    redirect = ThreadingHTTPServer(("127.0.0.1", 0), _RedirectHandler)
+    redirect.target_port = int(server.rsplit(":", 1)[1])
+    # The target server listens on IPv4; make localhost resolve to that
+    # address for this test without weakening the client's SSRF checks.
+    original_getaddrinfo = socket.getaddrinfo
+
+    def loopback_localhost(host, port, *args, **kwargs):
+        if host == "localhost":
+            return original_getaddrinfo("127.0.0.1", port, *args, **kwargs)
+        return original_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", loopback_localhost)
+    redirect.daemon_threads = True
+    threading.Thread(target=redirect.serve_forever, daemon=True).start()
+    client = WebClient(timeout=10, rate_limit=1.5, fetch_deadline=1)
+    # Seed the redirect target as just visited so its hop really waits ~1.5s.
+    client._domain_last_request["localhost"] = time.monotonic()
+    started = time.monotonic()
+    try:
+        response = client.get(f"http://127.0.0.1:{redirect.server_address[1]}/redirect")
+    finally:
+        redirect.shutdown()
+        redirect.server_close()
+    assert time.monotonic() - started >= 1.4
     assert response.text == "<html>ok</html>"
 
 
@@ -365,12 +418,33 @@ def test_a_read_failing_just_before_the_deadline_counts_as_the_deadline():
         assert not client_mod._is_deadline_failure(error, deadline)
 
 
-def test_the_rate_limit_wait_is_not_charged_to_the_deadline(server):
-    """The wait between two fetches to one host is GAIA's own pacing."""
-    client = WebClient(timeout=10, rate_limit=1.5, fetch_deadline=1)
+def test_the_rate_limit_wait_is_not_charged_to_the_deadline(server, monkeypatch):
+    """The wait between two fetches to one host is GAIA's own pacing.
+
+    The client's clock is faked so the wait is an hour that takes no real time:
+    charged to the 60 s deadline it would fail the fetch every time.
+    """
+    from types import SimpleNamespace
+
+    from gaia.web import client as client_mod
+
+    skipped = []
+
+    def fake_sleep(seconds):
+        skipped.append(seconds)
+
+    def fake_monotonic():
+        return time.monotonic() + sum(skipped)
+
+    monkeypatch.setattr(
+        client_mod, "time", SimpleNamespace(monotonic=fake_monotonic, sleep=fake_sleep)
+    )
+    client = WebClient(timeout=10, rate_limit=3600, fetch_deadline=60)
     client.get(server + "/fast")
-    response = client.get(server + "/fast")  # waits ~1.5 s first
+    before = len(skipped)
+    response = client.get(server + "/fast")
     assert response.text == "<html>ok</html>"
+    assert len(skipped) == before + 1 and skipped[-1] > 3500, skipped
 
 
 @pytest.fixture
@@ -430,7 +504,7 @@ def socks5_relay(monkeypatch):
 
 def test_fetches_through_a_socks_proxy_still_work(server, socks5_relay):
     proxy, hits = socks5_relay
-    response = _client(fetch_deadline=5).get(
+    response = _client(fetch_deadline=60).get(
         server + "/fast", proxies={"http": proxy, "https": proxy}
     )
     assert response.text == "<html>ok</html>"

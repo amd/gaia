@@ -7,49 +7,36 @@
 Simple LLM App using the existing LLMClient wrapper to call Lemonade localhost backend.
 """
 
-import argparse
-import sys
 from typing import Iterable, Iterator, Optional, Union
 
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import no_thinking_kwargs, resolve_default_chat_model
+from gaia.llm.reasoning import ReasoningStreamFilter
 from gaia.logger import get_logger
-
-_THINK_OPEN = "<think>"
-_THINK_CLOSE = "</think>"
 
 
 class _ReasoningFilter:
-    """Yield streamed text with ``<think>...</think>`` reasoning left out.
+    """Yield streamed text with the reply's leading ``<think>`` block left out.
 
-    The Lemonade provider wraps a cloud model's reasoning in these tags as whole
-    chunks; this command prints only the answer. ``saw_reasoning`` records
-    whether any was dropped.
+    Only a block the reply opens with is reasoning; a tag the answer mentions
+    is prose and is printed. ``saw_reasoning`` records whether any was dropped.
     """
 
     def __init__(self) -> None:
-        self.saw_reasoning = False
+        self._answer = ReasoningStreamFilter()
+
+    @property
+    def saw_reasoning(self) -> bool:
+        return self._answer.saw_reasoning
 
     def __call__(self, chunks: Iterable[str]) -> Iterator[str]:
-        in_think = False
         for chunk in chunks:
-            while chunk:
-                if in_think:
-                    end = chunk.find(_THINK_CLOSE)
-                    if end < 0:
-                        break
-                    chunk = chunk[end + len(_THINK_CLOSE) :]
-                    in_think = False
-                else:
-                    start = chunk.find(_THINK_OPEN)
-                    if start < 0:
-                        yield chunk
-                        break
-                    if start:
-                        yield chunk[:start]
-                    chunk = chunk[start + len(_THINK_OPEN) :]
-                    in_think = True
-                    self.saw_reasoning = True
+            shown = self._answer.feed(chunk)
+            if shown:
+                yield shown
+        shown = self._answer.flush()
+        if shown:
+            yield shown
 
 
 def _without_reasoning(chunks: Iterable[str]) -> Iterator[str]:
@@ -175,75 +162,3 @@ def main(
         console.print(f"[bold cyan]🤖 gaia:[/bold cyan] {response}")
         console.print()
         return response
-
-
-def cli_main():
-    """Command line interface."""
-    parser = argparse.ArgumentParser(description="Simple LLM App")
-
-    parser.add_argument("query", help="Query to send to the LLM")
-    parser.add_argument("--model", help="Model name to use")
-    parser.add_argument(
-        "--max-tokens", type=int, default=512, help="Max tokens (default: 512)"
-    )
-    parser.add_argument("--system-prompt", help="System prompt")
-    parser.add_argument("--stream", action="store_true", help="Stream response")
-    parser.add_argument("--stats", action="store_true", help="Show stats")
-    parser.add_argument(
-        "--base-url",
-        help="Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var)",
-    )
-    parser.add_argument(
-        "--logging-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Logging level",
-    )
-
-    args = parser.parse_args()
-
-    # Setup logging; explicit now that gaia.logger has no import side effect.
-    import logging
-
-    from gaia.logger import configure
-
-    log_manager = configure()
-    log_manager.set_level("gaia", getattr(logging, args.logging_level))
-
-    try:
-        app = LlmApp(system_prompt=args.system_prompt, base_url=args.base_url)
-
-        response = app.query(
-            prompt=args.query,
-            model=args.model,
-            max_tokens=args.max_tokens,
-            stream=args.stream,
-        )
-
-        if args.stream:
-            # Already printed during streaming
-            pass
-        else:
-            print(f"\n{'='*50}")
-            print("LLM Response:")
-            print("=" * 50)
-            print(response)
-            print("=" * 50)
-
-        if args.stats:
-            stats = app.get_stats()
-            if stats:
-                print(f"\n{'='*50}")
-                print("Performance Statistics:")
-                print("=" * 50)
-                for key, value in stats.items():
-                    print(f"{key}: {value}")
-                print("=" * 50)
-
-    except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    cli_main()

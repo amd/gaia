@@ -1,6 +1,7 @@
 """Indexing a document must not change the system prompt (it would re-read it all)."""
 
 import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -64,6 +65,35 @@ def test_a_document_still_indexing_is_not_listed_as_indexed():
         assert job.done.wait(30)
         assert agent.get_memory_dynamic_context() == (
             "[Indexed documents: b.txt (/docs/b.txt), big.pdf (/docs/big.pdf)]"
+        )
+
+
+def test_a_document_that_failed_in_the_background_is_named_as_failed():
+    release = threading.Event()
+    rag = _rag({"/docs/b.txt"})
+
+    def index_document(path, progress_callback=None, wait_callback=None):
+        assert release.wait(30)
+        raise ConnectionError("embedder unreachable")
+
+    rag.index_document.side_effect = index_document
+    with chat_agent_build_context("full", rag_indexed_files=[]) as agent:
+        agent._memory_store = None
+        agent.rag = rag
+        try:
+            result, job = rag_tools._index_within_budget(rag, "/docs/big.pdf", 0)
+            assert result is None
+        finally:
+            release.set()
+        assert job.done.wait(30)
+        deadline = time.monotonic() + 30
+        while not rag_tools.documents_failed_indexing(rag):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert agent.get_memory_dynamic_context() == (
+            "[Indexed documents: b.txt (/docs/b.txt)]\n"
+            "[Indexing failed in the background, tell the user: "
+            "big.pdf: ConnectionError: embedder unreachable]"
         )
 
 

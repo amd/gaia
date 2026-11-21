@@ -24,21 +24,22 @@ from fastapi import HTTPException
 import gaia.ui._chat_helpers as chat_helpers_module
 from gaia.agents.base.agent import Agent
 from gaia.agents.registry import AgentRegistry
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.hub.installer import register_installed_sidecars
+from gaia.security import PathValidator
 from gaia.ui import followups
 from gaia.ui import permissions as session_permissions
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import daemon_client as daemon_client_module
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
-from gaia.ui.email_sidecar.profiles import (
-    EMAIL_PROFILE,
+from gaia.ui.models import ChatRequest
+from gaia.ui.routers import chat as chat_router
+from gaia.ui.sidecar import daemon_client as daemon_client_module
+from gaia.ui.sidecar.profiles import (
+    _NO_PROFILE,
     GAIA_PROFILE,
     followups_supported,
 )
-from gaia.ui.email_sidecar.proxy import SidecarProxy
-from gaia.ui.models import ChatRequest
-from gaia.ui.routers import chat as chat_router
+from gaia.ui.sidecar.proxy import SidecarProxy
 
 pytestmark = pytest.mark.allow_network
 
@@ -51,8 +52,8 @@ def test_only_a_flagship_at_2_15_takes_followups(version, expected):
     assert followups_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_never_takes_followups():
-    assert followups_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_never_takes_followups():
+    assert followups_supported(_NO_PROFILE, "9.9") is False
 
 
 # ── Proxy: the request the sidecar receives ────────────────────────────────
@@ -206,6 +207,10 @@ class _FollowUpAgent:
         self.conversation_history = []
         self._cancel_event = None
         self._followup_queue = None
+        # The sidecar syncs attached documents against these every turn.
+        self.indexed_files: set = set()
+        self.rag = None
+        self.path_validator = PathValidator([])
 
     def process_query(self, query, max_steps=None):
         deadline = time.monotonic() + 10
@@ -243,7 +248,7 @@ def live_gaia_sidecar(monkeypatch):
         lambda: {
             "base_url": "http://lemonade.invalid/api/v1",
             "reachable": True,
-            "version": "99.0.0",
+            "version": "9999.0.0",
             "present": True,
             "ctx_size": None,
             "model_id": "m",

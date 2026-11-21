@@ -54,6 +54,7 @@ def rag(tmp_path: Path) -> RAGSDK:
     """
     config = RAGConfig(
         cache_dir=str(tmp_path / ".gaia"),
+        allowed_paths=[str(tmp_path)],
         show_stats=False,
         use_local_llm=False,
     )

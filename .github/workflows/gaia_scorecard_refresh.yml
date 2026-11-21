@@ -7,7 +7,7 @@
 # honest?": re-run the REAL judged eval over every gaia_* category on the
 # self-hosted Lemonade runner, regenerate hub/agents/gaia/npm/SCORECARD.md via
 # the gen_scorecard adapter, then either commit a refreshed card or reject a
-# regressed/sub-bar one. Mirrors email_scorecard_refresh.yml's guards:
+# regressed/sub-bar one. Guards:
 #
 #   - NO auto-commit on main (workflow_dispatch has no branches: restriction;
 #     a careless dispatch against main would otherwise push straight to it).
@@ -252,11 +252,7 @@ jobs:
           node-version: '22'
 
       - name: Install Claude Code CLI (the eval's scenario driver)
-        run: |
-          npm install -g @anthropic-ai/claude-code
-          if ($LASTEXITCODE -ne 0) { throw "Claude Code CLI install failed" }
-          claude --version
-          if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
+        uses: ./.github/actions/install-claude-cli
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
@@ -286,7 +282,7 @@ jobs:
           $embedCode = $LASTEXITCODE
           $embedOut | ForEach-Object { Write-Host "$_" }
           if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] embeddings OK \(dim=')) {
-            Write-Host "::error::The embedder cannot serve embeddings on this runner (memory-on eval needs it). See the recovery notes in test_eval_agent_gemma_consolidation.yml."
+            Write-Host "::error::The embedder cannot serve embeddings on this runner (memory-on eval needs it). See the recovery notes in eval_flagship.yml."
             exit 1
           }
 

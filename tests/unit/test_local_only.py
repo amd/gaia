@@ -363,6 +363,35 @@ def test_image_variation_checks_the_requested_model(
         client.create_image_variation(source, model="fireworks.glm-5p3-flash")
 
 
+def test_image_edit_and_upscale_check_the_requested_model(
+    local_only_on, client, no_network, tmp_path
+):
+    source = tmp_path / "source.png"
+    source.write_bytes(b"png")
+
+    with pytest.raises(CloudDisabledError, match="fireworks.glm-5p3-flash"):
+        client.edit_image(source, "change it", model="fireworks.glm-5p3-flash")
+    with pytest.raises(CloudDisabledError, match="fireworks.glm-5p3-flash"):
+        client.upscale_image(source, model="fireworks.glm-5p3-flash")
+
+
+@pytest.mark.parametrize("model", ["fireworks.glm-5p3-flash", "amd.gpt-oss-120b"])
+def test_rerank_refuses_a_cloud_model(local_only_on, client, no_network, model):
+    with pytest.raises(CloudDisabledError):
+        client.rerank("q", ["a", "b"], model)
+
+
+def test_rerank_with_a_local_model_reaches_the_method_body(
+    local_only_on, client, no_network, monkeypatch
+):
+    def send(self, *args, **kwargs):
+        raise _BodyEntered
+
+    monkeypatch.setattr(LemonadeClient, "_send_request", send)
+    with pytest.raises(_BodyEntered):
+        client.rerank("q", ["a", "b"], LOCAL)
+
+
 @pytest.fixture
 def lease_entered(monkeypatch):
     def lease(self, model, request_timeout=None):
@@ -453,7 +482,7 @@ MODEL_MANAGEMENT = {
     "download_agent_models",
 }
 INFERENCE = re.compile(
-    r"/(chat/)?completions|/responses|/embeddings|/images/generations|"
+    r"/(chat/)?completions|/responses|/embeddings|/rerank|/images/generations|"
     r"/audio/|OpenAI\("
 )
 

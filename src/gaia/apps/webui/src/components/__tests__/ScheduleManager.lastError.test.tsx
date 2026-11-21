@@ -9,12 +9,14 @@ import { useScheduleStore } from '../../stores/scheduleStore';
 import type { Schedule } from '../../types';
 
 vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 const base: Schedule = {
     id: 's1',
     name: 'news',
     interval_seconds: 3600,
     description: 'Every hour',
+    description_parts: { kind: 'every', count: 1, unit: 'hour', days: null, time: null, start_hour: null, end_hour: null },
     prompt: 'summarise the news',
     status: 'active',
     created_at: null,

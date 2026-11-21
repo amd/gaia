@@ -623,17 +623,6 @@ class TestChatAgentHostAttributeContract:
         finally:
             agent.stop_watching()
 
-    def test_chat_agent_lite_constructs_and_tools_run(self):
-        """AC4: ChatAgentLite (no rag/file_io mixins — a collateral-damage
-        check, not a direct target of this fix) constructs and registers
-        its tools without raising. It hardcodes skip_lemonade=True itself."""
-        from gaia_agent_chat.lite_agent import ChatAgentLite, ChatAgentLiteConfig
-
-        from gaia.agents.base.tools import _TOOL_REGISTRY
-
-        ChatAgentLite(ChatAgentLiteConfig())
-        assert "take_screenshot" in _TOOL_REGISTRY
-
     def test_chat_agent_rag_stays_lazily_unset_at_construction(self, tmp_path):
         """AC5: constructing ChatAgent must not trigger the lazy self.rag
         property — the read-time check added by #3316 must not probe

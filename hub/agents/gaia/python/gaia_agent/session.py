@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Session management for Chat Agent with path validation and history.
+Session management for Chat Agent: transcripts and indexed documents.
 """
 
 import json
@@ -44,16 +44,6 @@ def default_session_dir() -> Path:
 
 
 @dataclass
-class PathPermission:
-    """Track permission for a path."""
-
-    path: str
-    allowed: bool
-    timestamp: str
-    recursive: bool = False
-
-
-@dataclass
 class ChatSession:
     """Chat session with history and indexed documents."""
 
@@ -63,32 +53,22 @@ class ChatSession:
     indexed_documents: List[str]
     watched_directories: List[str]
     chat_history: List[Dict[str, str]]
-    path_permissions: Dict[str, PathPermission]
     metadata: Dict[str, Any]
 
     def to_dict(self) -> Dict:
         """Convert session to dictionary."""
-        data = asdict(self)
-        # Convert PathPermission objects to dicts
-        data["path_permissions"] = {
-            path: asdict(perm) for path, perm in self.path_permissions.items()
-        }
-        return data
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Dict) -> "ChatSession":
         """Create session from dictionary."""
-        # Convert path_permissions dicts back to PathPermission objects
-        if "path_permissions" in data:
-            data["path_permissions"] = {
-                path: PathPermission(**perm_dict)
-                for path, perm_dict in data["path_permissions"].items()
-            }
+        # Sessions saved by older releases still carry this unused key.
+        data = {k: v for k, v in data.items() if k != "path_permissions"}
         return cls(**data)
 
 
 class SessionManager:
-    """Manage chat sessions with path validation and persistence."""
+    """Manage chat session persistence."""
 
     def __init__(self, session_dir: Optional[str] = None, auto_cleanup: bool = True):
         """
@@ -104,11 +84,6 @@ class SessionManager:
         )
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
-        # Cache directory for path permissions
-        self.permissions_file = self.session_dir / "path_permissions.json"
-        self.path_permissions: Dict[str, PathPermission] = {}
-        self._load_permissions()
-
         # Automatic session cleanup to prevent accumulation
         if auto_cleanup:
             try:
@@ -121,182 +96,6 @@ class SessionManager:
                     )
             except Exception as e:
                 logger.warning(f"Auto-cleanup failed: {e}")
-
-    def _load_permissions(self):
-        """Load cached path permissions."""
-        if self.permissions_file.exists():
-            try:
-                with open(self.permissions_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.path_permissions = {
-                        path: PathPermission(**perm_dict)
-                        for path, perm_dict in data.items()
-                    }
-                logger.info(
-                    f"Loaded {len(self.path_permissions)} cached path permissions"
-                )
-            except Exception as e:
-                logger.error(f"Error loading path permissions: {e}")
-                self.path_permissions = {}
-
-    def _save_permissions(self):
-        """Save path permissions to cache."""
-        try:
-            data = {path: asdict(perm) for path, perm in self.path_permissions.items()}
-            with open(self.permissions_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            logger.debug(f"Saved {len(self.path_permissions)} path permissions")
-        except Exception as e:
-            logger.error(f"Error saving path permissions: {e}")
-
-    def validate_path(
-        self, path: str, operation: str = "access", prompt_user: bool = True
-    ) -> bool:
-        """
-        Validate if path access is allowed with user confirmation.
-
-        Args:
-            path: Path to validate
-            operation: Operation type ('read', 'write', 'index', 'watch')
-            prompt_user: If True, prompt user for confirmation if not cached
-
-        Returns:
-            True if access is allowed, False otherwise
-        """
-        try:
-            # Resolve to absolute path
-            resolved_path = str(Path(path).resolve())
-
-            # Check cache first
-            if resolved_path in self.path_permissions:
-                perm = self.path_permissions[resolved_path]
-                logger.debug(
-                    f"Using cached permission for {resolved_path}: {perm.allowed}"
-                )
-                return perm.allowed
-
-            # If not cached and prompting disabled, deny by default
-            if not prompt_user:
-                logger.warning(
-                    f"Path not in cache and prompting disabled: {resolved_path}"
-                )
-                return False
-
-            # Prompt user for confirmation
-            print(f"\n{'='*60}")
-            print("Path Access Request")
-            print(f"{'='*60}")
-            print(f"Path: {resolved_path}")
-            print(f"Operation: {operation}")
-            print(f"{'='*60}")
-
-            response = (
-                input("Allow access to this path? (yes/no/always): ").strip().lower()
-            )
-
-            if response in ["yes", "y", "always", "a"]:
-                allowed = True
-                # Cache the decision
-                self.path_permissions[resolved_path] = PathPermission(
-                    path=resolved_path,
-                    allowed=True,
-                    timestamp=datetime.now().isoformat(),
-                    recursive=False,
-                )
-                self._save_permissions()
-                print("✅ Access granted and cached for future use")
-            else:
-                allowed = False
-                # Cache denial as well
-                self.path_permissions[resolved_path] = PathPermission(
-                    path=resolved_path,
-                    allowed=False,
-                    timestamp=datetime.now().isoformat(),
-                    recursive=False,
-                )
-                self._save_permissions()
-                print("❌ Access denied and cached")
-
-            return allowed
-
-        except Exception as e:
-            logger.error(f"Error validating path {path}: {e}")
-            return False
-
-    def validate_directory(
-        self, directory: str, operation: str = "watch", prompt_user: bool = True
-    ) -> bool:
-        """
-        Validate directory access with recursive option.
-
-        Args:
-            directory: Directory path to validate
-            operation: Operation type
-            prompt_user: If True, prompt user for confirmation
-
-        Returns:
-            True if access is allowed
-        """
-        try:
-            resolved_dir = str(Path(directory).resolve())
-
-            # Check if this directory or any parent has cached permission
-            for cached_path, perm in self.path_permissions.items():
-                try:
-                    if perm.recursive and Path(resolved_dir).is_relative_to(
-                        cached_path
-                    ):
-                        logger.debug(f"Using recursive permission from {cached_path}")
-                        return perm.allowed
-                except (ValueError, TypeError):
-                    continue
-
-            # Check exact match
-            if resolved_dir in self.path_permissions:
-                return self.path_permissions[resolved_dir].allowed
-
-            # Prompt user
-            if not prompt_user:
-                return False
-
-            print(f"\n{'='*60}")
-            print("Directory Access Request")
-            print(f"{'='*60}")
-            print(f"Directory: {resolved_dir}")
-            print(f"Operation: {operation}")
-            print(f"{'='*60}")
-
-            response = (
-                input("Allow access? (yes/no/always/recursive): ").strip().lower()
-            )
-
-            if response in ["yes", "y", "always", "a", "recursive", "r"]:
-                recursive = response in ["recursive", "r"]
-                self.path_permissions[resolved_dir] = PathPermission(
-                    path=resolved_dir,
-                    allowed=True,
-                    timestamp=datetime.now().isoformat(),
-                    recursive=recursive,
-                )
-                self._save_permissions()
-                print(
-                    f"✅ Access granted ({'recursive' if recursive else 'single directory'})"
-                )
-                return True
-            else:
-                self.path_permissions[resolved_dir] = PathPermission(
-                    path=resolved_dir,
-                    allowed=False,
-                    timestamp=datetime.now().isoformat(),
-                    recursive=False,
-                )
-                self._save_permissions()
-                print("❌ Access denied")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error validating directory {directory}: {e}")
-            return False
 
     def _session_path(self, session_id: str) -> Path:
         """Return the file for ``session_id``, rejecting ids that could escape the dir."""
@@ -331,7 +130,6 @@ class SessionManager:
             indexed_documents=[],
             watched_directories=[],
             chat_history=[],
-            path_permissions=dict(self.path_permissions),  # Copy current permissions
             metadata={},
         )
 
@@ -559,9 +357,3 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Error during session cleanup: {e}")
             return {"error": str(e), "total_deleted": 0, "remaining_sessions": 0}  # type: ignore[dict-item]
-
-    def clear_path_permissions(self):
-        """Clear all cached path permissions."""
-        self.path_permissions.clear()
-        self._save_permissions()
-        logger.info("Cleared all path permissions")

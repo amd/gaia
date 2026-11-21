@@ -18,6 +18,8 @@ from gaia.skills.errors import SkillPermissionError, SkillValidationError
 from gaia.skills.permissions import parse_permissions
 from tests.unit.skills_helpers import make_key
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 # ---------------------------------------------------------------------------
 # SemVer ranges
 # ---------------------------------------------------------------------------
@@ -705,6 +707,73 @@ def test_private_key_is_written_owner_only(tmp_path):
     assert mode == 0o600
 
 
+def test_private_key_is_created_owner_only_not_chmod_after(tmp_path, monkeypatch):
+    """The key file is born 0600; a chmod afterwards leaves it readable first."""
+    import os
+    import stat
+
+    from gaia.skills import signing
+
+    real_open = os.open
+    created = []
+
+    def recording_open(path, flags, mode=0o777, *args, **kwargs):
+        if str(path).endswith("publisher.key"):
+            created.append((flags, mode))
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(signing.os, "open", recording_open)
+    root = tmp_path / "skills"
+    signing.generate_key(root)
+    signing.generate_key(root, force=True)
+
+    assert len(created) == 2
+    for flags, mode in created:
+        assert flags & os.O_CREAT and flags & os.O_EXCL
+        assert mode == stat.S_IRUSR | stat.S_IWUSR
+
+
+def test_forced_keygen_replaces_a_world_readable_key_with_an_owner_only_one(
+    tmp_path,
+):
+    import os
+    import stat
+    import sys
+
+    from gaia.skills.signing import generate_key, keys_dir, load_key
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX permission bits are not meaningful on Windows")
+    root = tmp_path / "skills"
+    generate_key(root)
+    private = keys_dir(root) / "publisher.key"
+    os.chmod(private, 0o644)
+
+    second = generate_key(root, force=True)
+
+    assert stat.S_IMODE(os.stat(private).st_mode) == 0o600
+    assert load_key(root).key_id == second.key_id
+
+
+def test_keygen_refuses_loudly_when_the_key_file_cannot_be_created(
+    tmp_path, monkeypatch
+):
+    import os
+
+    from gaia.skills import signing
+
+    real_open = os.open
+
+    def failing_open(path, flags, *args, **kwargs):
+        if str(path).endswith("publisher.key"):
+            raise FileExistsError(17, "File exists", str(path))
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(signing.os, "open", failing_open)
+    with pytest.raises(signing.SkillSignatureError, match="gaia skill keygen"):
+        signing.generate_key(tmp_path / "skills")
+
+
 def test_load_key_names_keygen_when_missing(tmp_path):
     from gaia.skills.signing import SkillSignatureError, load_key
 
@@ -900,7 +969,7 @@ def _word_search_hub(tmp_path):
 
     hub = fake_hub(tmp_path)
     skills = {
-        "document-brief": "Brief a long document in one page",
+        "document-brief": "Brief a long document or file in one page",
         "inbox-triage": "Triage an email inbox and draft replies",
         "rss-digest": "Summarize new posts from feeds",
         "summarize": "Summarize a document, meeting transcript, or email",
@@ -937,7 +1006,11 @@ def test_search_matches_any_word_of_a_multi_word_query(tmp_path):
     """The whole phrase never appears verbatim, but each word does somewhere."""
     search = _word_search_hub(tmp_path)
 
-    assert search("summarize documents") == ["rss-digest", "summarize"]
+    assert search("summarize documents") == [
+        "summarize",
+        "document-brief",
+        "rss-digest",
+    ]
     assert search("meeting notes") == ["transcribe-meeting", "summarize"]
     assert search("email triage") == ["inbox-triage", "summarize"]
 
@@ -954,6 +1027,24 @@ def test_search_ranks_by_distinct_words_matched(tmp_path):
     ]
     # A repeated word counts once, so it cannot outrank a two-word match.
     assert search("brief brief brief document") == ["document-brief", "summarize"]
+
+
+def test_search_uses_conservative_word_stems_after_exact_match(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    assert search("summarization") == ["rss-digest", "summarize"]
+    assert search("summarizing") == ["rss-digest", "summarize"]
+    assert search("summaries") == ["rss-digest", "summarize"]
+
+
+def test_search_stems_plural_e_words_and_still_rejects_short_words(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    assert search("files") == ["document-brief"]
+    assert search("notes") == ["transcribe-meeting"]
+    assert search("pages") == ["document-brief"]
+    assert search("pdf") == []
+    assert search("pr") == []
 
 
 def test_search_ties_keep_catalog_order(tmp_path):
@@ -982,7 +1073,7 @@ def test_search_with_no_matching_word_is_empty(tmp_path):
     search = _word_search_hub(tmp_path)
 
     assert search("kubernetes helm chart") == []
-    assert search("summarization") == []  # substring per word, no stemming
+    assert search("summarization") == ["rss-digest", "summarize"]
     assert search("!!! ??? ...") == []
 
 

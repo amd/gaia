@@ -148,16 +148,14 @@ class TestCalculateCost:
         assert cost["input_cost"] == pytest.approx(100 / 1_000_000 * 3.0, abs=1e-6)
         assert cost["output_cost"] == pytest.approx(50 / 1_000_000 * 15.0, abs=1e-6)
 
-    def test_unknown_model_uses_default(self, monkeypatch):
+    def test_unknown_model_is_refused_before_any_call(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
         monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
         from gaia.eval.claude import ClaudeClient
 
-        c = ClaudeClient(model="claude-future-9000")
-        cost = c.calculate_cost(1_000_000, 1_000_000)
-        # Default pricing matches Sonnet: $3/$15
-        assert cost["total_cost"] == pytest.approx(18.0, abs=1e-4)
+        with pytest.raises(ValueError, match="claude-future-9000"):
+            ClaudeClient(model="claude-future-9000")
 
 
 # ---------------------------------------------------------------------------
@@ -256,8 +254,7 @@ class TestCountTokens:
 # The judge's own sampling must be pinnable via a `temperature` constructor
 # kwarg, forwarded to every `messages.create` call site *only* when set —
 # leaving it unset must reproduce today's behavior exactly (no `temperature`
-# kwarg at all), since a non-judge caller (pdf_document_generator.py) relies
-# on the API default for fixture-generation diversity.
+# kwarg at all), so non-judge callers keep the API default.
 # ---------------------------------------------------------------------------
 
 
@@ -441,62 +438,6 @@ class TestAnalyzeFileWithUsageBinaryTemperature:
         client.analyze_file_with_usage(str(pdf_file), "summarize")
         kwargs = client.client.messages.create.call_args.kwargs
         assert "temperature" not in kwargs
-
-
-# ---------------------------------------------------------------------------
-# Judge factories send no sampling params
-#
-# The judge model rejects `temperature` with a 400, which fails every judged
-# eval at its first API call. The factories pinned temperature=0.0 until that
-# parameter was removed from the model; these tests keep the pin from coming
-# back. Determinism is now a property of the judge prompt, not the request.
-# ---------------------------------------------------------------------------
-
-
-class TestJudgeFactoryTemperature:
-    @pytest.fixture(autouse=True)
-    def _sdk_transport(self, monkeypatch):
-        """Pin the SDK transport, whatever the machine's own credentials are.
-
-        The factories route through ``gaia.eval.judge_client``, which reads the
-        environment to choose a transport. Setting the key selects the SDK path
-        these tests spy on; clearing the token stops a developer's subscription
-        credential from silently sending them down the CLI path instead.
-        """
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
-        # A CLI login comes before the key, so take the CLI off PATH.
-        monkeypatch.setattr("gaia.eval.claude_credential.shutil.which", lambda _: None)
-
-    def test_action_item_quality_sends_no_temperature(self, monkeypatch):
-        spy = MagicMock()
-        monkeypatch.setattr("gaia.eval.claude.ClaudeClient", spy)
-
-        from gaia.eval.action_item_quality import make_claude_judge
-
-        make_claude_judge(model="claude-sonnet-4-6")
-
-        spy.assert_called_once_with(model="claude-sonnet-4-6")
-
-    def test_briefing_quality_sends_no_temperature(self, monkeypatch):
-        spy = MagicMock()
-        monkeypatch.setattr("gaia.eval.claude.ClaudeClient", spy)
-
-        from gaia.eval.briefing_quality import make_claude_judge
-
-        make_claude_judge(model="claude-sonnet-4-6")
-
-        spy.assert_called_once_with(model="claude-sonnet-4-6")
-
-    def test_draft_quality_sends_no_temperature(self, monkeypatch):
-        spy = MagicMock()
-        monkeypatch.setattr("gaia.eval.claude.ClaudeClient", spy)
-
-        from gaia.eval.draft_quality import make_claude_judge
-
-        make_claude_judge(model="claude-sonnet-4-6")
-
-        spy.assert_called_once_with(model="claude-sonnet-4-6")
 
 
 # ---------------------------------------------------------------------------

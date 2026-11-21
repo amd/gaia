@@ -37,6 +37,7 @@ from typing import Callable, Dict, List, Optional
 import numpy as np
 import yaml
 
+from gaia.llm.reasoning import strip_reasoning
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -54,6 +55,9 @@ MIN_OCCURRENCES: int = 3
 
 #: A cluster must be at least this successful (success_count / attempt_count).
 MIN_SUCCESS_RATE: float = 0.80
+
+#: Outcomes a procedure must record after it is learned before it can be retired.
+MIN_OUTCOMES_TO_RETIRE: int = 3
 
 #: Cosine threshold on goal embeddings, for clustering (and, in Phase 2, recall).
 SIMILARITY_TAU: float = 0.82
@@ -180,12 +184,15 @@ class DistilledProcedure:
         body: the full Markdown procedure, including a ``## Edge cases`` section.
         tools_required: registry tool names the procedure consumes (recipe
             contract; maps to ``metadata.gaia.tools_required``).
+        skill_id: the ``procedures`` row a recalled procedure came from; None
+            for a freshly distilled one.
     """
 
     name: str
     when_to_use: str
     body: str
     tools_required: List[str] = field(default_factory=list)
+    skill_id: Optional[str] = field(default=None, compare=False)
 
     @classmethod
     def parse(cls, intermediate_md: str) -> Optional["DistilledProcedure"]:
@@ -345,8 +352,9 @@ class ReconcileResult:
     """Outcome of ``reconcile_and_store`` for one distilled candidate.
 
     Attributes:
-        action: ``"add"`` (new row), ``"update"`` (new row + old superseded), or
-            ``"noop"`` (existing row already dominates).
+        action: ``"add"`` (new row), ``"update"`` (new row + old superseded),
+            ``"noop"`` (existing row already dominates), or ``"erased"`` (all
+            memory was erased after the pass began, so nothing was written).
         skill_id: The stored procedure id for ``add`` / ``update``; None on noop.
         superseded_id: The id superseded by an ``update``, else None.
     """
@@ -447,12 +455,17 @@ def extract_sequences(
     return store.iter_sessions(since=since, min_steps=min_steps)
 
 
+class GoalEmbedRejected(ValueError):
+    """The embedder refused one goal's text; other goals can still be embedded."""
+
+
 def cluster_by_goal(
     sequences: List[Dict],
     embed_fn: Callable[[str], np.ndarray],
     similarity_tau: float = SIMILARITY_TAU,
     min_occurrences: int = MIN_OCCURRENCES,
     min_success_rate: float = MIN_SUCCESS_RATE,
+    on_rejected: Optional[Callable[[Dict, GoalEmbedRejected], None]] = None,
 ) -> List[GoalCluster]:
     """CLUSTER — group sessions whose goals embed within ``similarity_tau``.
 
@@ -472,7 +485,9 @@ def cluster_by_goal(
     aggregate success rate are returned.
 
     Fail-loud: ``embed_fn`` failures propagate (re-raise) — synthesis cannot
-    proceed without embeddings.
+    proceed without embeddings.  The one exception is ``GoalEmbedRejected``
+    when ``on_rejected`` is given: that session is handed to it and left out,
+    so one unembeddable goal cannot block every other session.
 
     Args:
         sequences: Per-session dicts from ``extract_sequences``.
@@ -480,11 +495,14 @@ def cluster_by_goal(
         similarity_tau: Cosine threshold for two goals to share a cluster.
         min_occurrences: Minimum sessions for a cluster to qualify.
         min_success_rate: Minimum aggregate success rate for a cluster to qualify.
+        on_rejected: Called with each session whose goal ``embed_fn`` refused
+            with ``GoalEmbedRejected``.  None re-raises it.
 
     Returns:
         Qualifying ``GoalCluster`` objects.
     """
     embedded: List[tuple] = []
+    rejected: Dict[str, GoalEmbedRejected] = {}
     # Memoize by goal text within the pass: identical goals embed to the identical
     # vector, so the same recurring task (the procedural case — one goal succeeding
     # many times) costs one embedder round-trip instead of one per session. Bounds
@@ -499,9 +517,18 @@ def cluster_by_goal(
             )
             continue
         vec = embed_cache.get(goal)
-        if vec is None:
-            vec = np.asarray(embed_fn(goal), dtype=np.float32)  # failure RE-RAISES
-            embed_cache[goal] = vec
+        if vec is None and goal not in rejected:
+            try:
+                vec = np.asarray(embed_fn(goal), dtype=np.float32)
+            except GoalEmbedRejected as e:
+                if on_rejected is None:
+                    raise
+                rejected[goal] = e
+            else:
+                embed_cache[goal] = vec
+        if goal in rejected:
+            on_rejected(session, rejected[goal])
+            continue
         embedded.append((session, vec))
 
     # Deterministic, content-derived seed order (goal text, then session id) so
@@ -574,7 +601,7 @@ def distill_cluster(
     )
 
     raw_text = response.text if hasattr(response, "text") else str(response)
-    raw_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+    raw_text = strip_reasoning(raw_text)
     if raw_text.startswith("```"):
         raw_text = re.sub(r"^```(?:[a-zA-Z]+)?\s*", "", raw_text)
         raw_text = re.sub(r"\s*```$", "", raw_text).strip()
@@ -692,12 +719,25 @@ def _lineage_record(prior: Dict, cluster: GoalCluster) -> _LineageRecord:
     )
 
 
+def _outcomes_since_learned(prior: Dict) -> Dict[str, int]:
+    """The prior row's post-adoption outcomes, for its successor to keep counting."""
+    provenance = prior.get("provenance")
+    if not isinstance(provenance, dict):
+        return {}
+    return {
+        key: int(provenance[key])
+        for key in ("outcomes", "outcome_successes", "unscored_outcomes")
+        if provenance.get(key) is not None
+    }
+
+
 def reconcile_and_store(
     candidate: DistilledProcedure,
     cluster: GoalCluster,
     store,
     embedding: Optional[bytes] = None,
     similarity_tau: float = SIMILARITY_TAU,
+    erase_count: Optional[int] = None,
 ) -> ReconcileResult:
     """RECONCILE/STORE — persist a distilled candidate as ADD / UPDATE / NOOP.
 
@@ -735,13 +775,20 @@ def reconcile_and_store(
             used as the match vector (previously persist-only).
         similarity_tau: Cosine threshold for treating a stored procedure as the
             same goal; defaults to the clustering ``SIMILARITY_TAU``.
+        erase_count: ``MemoryStore.erase_count()`` when the pass began; an
+            erase since then drops the write (action ``"erased"``).
 
     Returns:
         A ``ReconcileResult`` describing the action taken.
     """
     prior = _nearest_enabled_procedure(store, embedding, similarity_tau)
 
-    def _insert(sessions: List[str], successes: int, attempts: int) -> str:
+    def _insert(
+        sessions: List[str],
+        successes: int,
+        attempts: int,
+        carried: Optional[Dict] = None,
+    ) -> Optional[str]:
         return store.put_skill(
             name=candidate.name,
             when_to_use=candidate.when_to_use,
@@ -750,14 +797,21 @@ def reconcile_and_store(
             tool_sequence=cluster.tool_sequence(),
             success_count=successes,
             attempt_count=attempts,
-            provenance={"source": "synthesized", "from_sessions": sessions},
+            provenance={
+                "source": "synthesized",
+                "from_sessions": sessions,
+                **(carried or {}),
+            },
             embedding=embedding,
+            erase_count=erase_count,
         )
 
     if prior is None:
         new_id = _insert(
             cluster.from_sessions, cluster.success_count, cluster.attempt_count
         )
+        if new_id is None:
+            return ReconcileResult(action="erased")
         logger.info(
             "[skill_synthesis] ADD procedure %s name=%s", new_id, candidate.name
         )
@@ -766,8 +820,13 @@ def reconcile_and_store(
     lineage = _lineage_record(prior, cluster)
     if lineage.success_count > int(prior.get("success_count") or 0):
         new_id = _insert(
-            lineage.from_sessions, lineage.success_count, lineage.attempt_count
+            lineage.from_sessions,
+            lineage.success_count,
+            lineage.attempt_count,
+            carried=_outcomes_since_learned(prior),
         )
+        if new_id is None:
+            return ReconcileResult(action="erased")
         store.supersede_skill(prior["id"], new_id)
         logger.info(
             "[skill_synthesis] UPDATE procedure %s supersedes %s "

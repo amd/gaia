@@ -162,6 +162,38 @@ class TestCreateTable:
         assert "database is locked" in result
 
 
+class TestInvalidTableNameWithRealService:
+    """An invalid name reaches the model as an error naming the rule."""
+
+    @pytest.fixture
+    def tools(self, tmp_path):
+        from gaia.scratchpad.service import ScratchpadService
+
+        agent, tools = _create_mixin_and_tools()
+        agent._scratchpad = ScratchpadService(db_path=str(tmp_path / "s.db"))
+        yield tools
+        agent._scratchpad.close_db()
+
+    def test_docstring_states_naming_rule(self, tools):
+        assert "Letters, digits and underscores" in tools["create_table"].__doc__
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda t: t["create_table"]("sales-2025", "amount REAL"),
+            lambda t: t["insert_data"]("sales-2025", '[{"amount": 1}]'),
+            lambda t: t["drop_table"]("sales-2025"),
+        ],
+        ids=["create_table", "insert_data", "drop_table"],
+    )
+    def test_invalid_name_returns_actionable_error(self, tools, call):
+        result = call(tools)
+        assert "Error" in result
+        assert "Invalid table name 'sales-2025'" in result
+        assert "[A-Za-z_][A-Za-z0-9_]*" in result
+        assert "'sales_2025'" in result
+
+
 # ===== insert_data Tests =====
 
 
@@ -196,6 +228,23 @@ class TestInsertData:
         result = self.tools["insert_data"]("inventory", data)
         assert "Inserted 1 row(s) into 'inventory'" in result
         self.agent._scratchpad.insert_rows.assert_called_once_with("inventory", data)
+
+    def test_result_states_the_rows_the_table_now_holds(self):
+        """Rows a batch or an earlier session left show up in the total."""
+        self.agent._scratchpad.insert_rows.return_value = 2
+        self.agent._scratchpad.row_count.return_value = 14
+        result = self.tools["insert_data"]("sales", [{"a": 1}, {"a": 2}])
+        assert result == "Inserted 2 row(s) into 'sales'; it now holds 14 row(s)."
+        self.agent._scratchpad.row_count.assert_called_once_with("sales")
+
+    def test_a_failed_count_still_reports_the_insert(self):
+        """The rows are written; a retry would add them twice."""
+        self.agent._scratchpad.insert_rows.return_value = 2
+        self.agent._scratchpad.row_count.side_effect = RuntimeError("db locked")
+        result = self.tools["insert_data"]("sales", [{"a": 1}, {"a": 2}])
+        assert result.startswith("Inserted 2 row(s) into 'sales'")
+        assert "could not be read: db locked" in result
+        assert "Error" not in result
 
     def test_invalid_json_string(self):
         """insert_data returns error for malformed JSON string."""

@@ -46,6 +46,9 @@ from gaia.eval.claude_outage import (
 from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
 from gaia.eval.config import DEFAULT_AGENT_TYPE
 from gaia.eval.eval_lock import exclusive_eval
+from gaia.eval.fixture_env import fixture_fingerprint
+from gaia.eval.fixture_env import from_env as fixture_env_from_env
+from gaia.eval.fixture_env import localize
 from gaia.eval.process_tree import kill_tree as _kill_tree
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
@@ -62,6 +65,27 @@ MCP_CONFIG = EVAL_DIR / "mcp-config.json"
 AGENT_UI_MCP_SERVER = "gaia-agent-ui"
 MANIFEST = CORPUS_DIR / "manifest.json"
 REAL_WORLD_CORPUS_DIR = CORPUS_DIR / "real_world"
+
+
+def eval_checkout_error() -> Optional[str]:
+    """Say why eval can't run when the repo's ``eval/`` assets are absent.
+
+    Scenarios, corpus and MCP config ship only in a source checkout, never in
+    the wheel, so an installed package resolves them into site-packages.
+    """
+    if SCENARIOS_DIR.is_dir():
+        return None
+    return (
+        "gaia eval agent needs a GAIA source checkout, but no scenarios "
+        f"directory exists at {SCENARIOS_DIR}. The scenarios, corpus and MCP "
+        "config live in the repository's eval/ directory and are not part of "
+        "the installed package.\n"
+        "  Clone the repo and install it in editable mode, then run from it:\n"
+        "    git clone https://github.com/amd/gaia && cd gaia\n"
+        '    uv pip install -e ".[eval,ui]" -e hub/agents/gaia/python\n'
+        "  See https://amd-gaia.ai/docs/guides/eval#prerequisites"
+    )
+
 
 # ── MCP interpreter resolution ────────────────────────────────────────────
 #
@@ -639,6 +663,20 @@ def validate_scenario(path: Path, data: dict) -> None:
     if approve_error:
         errors.append(approve_error)
 
+    skills_absent_error = _skills_absent_error(
+        (data.get("setup") or {}).get("skills_absent")
+    )
+    if skills_absent_error:
+        errors.append(skills_absent_error)
+
+    memory_clear = (data.get("setup") or {}).get("memory_clear")
+    if memory_clear is not None and not isinstance(memory_clear, bool):
+        errors.append(
+            f"setup.memory_clear must be true or false, got {memory_clear!r}. The "
+            "runner clears memory before every memory and gaia_* scenario; set "
+            "false only for one that reads memory an earlier scenario left behind."
+        )
+
     declined = (data.get("setup") or {}).get("decline_commands")
     if declined is not None and (
         not isinstance(declined, list)
@@ -740,6 +778,15 @@ def _documents_exist(scenario_data: dict) -> bool:
 # would read as the agent's fault.
 REQUIRES_ASR_TAG = "requires_asr"
 REQUIRES_VLM_TAG = "requires_vlm"
+REQUIRES_SD_TAG = "requires_sd"
+REQUIRES_MUSIC_TAG = "requires_music"
+SD_MODEL = "SDXL-Turbo"
+MUSIC_MODEL = "ACE-Step-Music"
+
+# Tags pinning a scenario to the agent model's feature tier
+# (gaia/agents/base/model_features.py): a skill one tier withholds is scored
+# for use on the other and for an honest refusal on this one.
+REQUIRES_TIER_TAGS = {"requires_full_tier": "full", "requires_compact_tier": "compact"}
 
 
 def _required_models(scenario_data: dict) -> list:
@@ -747,9 +794,37 @@ def _required_models(scenario_data: dict) -> list:
     from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL
     from gaia.vlm.mixin import DEFAULT_VLM_MODEL
 
-    by_tag = {REQUIRES_ASR_TAG: DEFAULT_ASR_MODEL, REQUIRES_VLM_TAG: DEFAULT_VLM_MODEL}
+    by_tag = {
+        REQUIRES_ASR_TAG: DEFAULT_ASR_MODEL,
+        REQUIRES_VLM_TAG: DEFAULT_VLM_MODEL,
+        REQUIRES_SD_TAG: SD_MODEL,
+        REQUIRES_MUSIC_TAG: MUSIC_MODEL,
+    }
     tags = set(scenario_data.get("tags") or [])
     return [(tag, model) for tag, model in by_tag.items() if tag in tags]
+
+
+def _agent_tier(agent_model) -> str:
+    """The feature tier of the model the agent runs (the pinned one, else the default)."""
+    from gaia.agents.base.model_features import TIERS, features_for_model
+    from gaia.llm.lemonade_client import resolve_default_chat_model
+
+    features = features_for_model(agent_model or resolve_default_chat_model())
+    return next(name for name, tier in TIERS.items() if tier == features)
+
+
+def _tier_mismatch(scenario_data: dict, agent_model) -> list:
+    """Why the agent model's feature tier rules the scenario out; empty means it doesn't."""
+    tags = set(scenario_data.get("tags") or [])
+    wanted = [(t, tier) for t, tier in REQUIRES_TIER_TAGS.items() if t in tags]
+    if not wanted:
+        return []
+    actual = _agent_tier(agent_model)
+    return [
+        f"the agent model has the {actual!r} feature tier (tag {tag})"
+        for tag, tier in wanted
+        if tier != actual
+    ]
 
 
 def _missing_requirements(scenario_data: dict, downloaded_models: set) -> list:
@@ -776,7 +851,7 @@ def _downloaded_lemonade_models() -> set:
         catalog = client.list_models()
     except Exception as e:
         raise RuntimeError(
-            f"Scenarios tagged {REQUIRES_ASR_TAG}/{REQUIRES_VLM_TAG} need Lemonade's "
+            "Scenarios with a model requires_* tag need Lemonade's "
             f"model list to decide whether they can run, but GET "
             f"{client.base_url}/models failed: {e}. Start Lemonade "
             "(`gaia daemon start`) or set LEMONADE_BASE_URL to a running server."
@@ -1714,13 +1789,11 @@ def preflight_check(backend_url, scenarios=None):
         except (ValueError, RuntimeError) as e:
             errors.append(str(e))
 
-    # Memory-category preflight — required only when memory scenarios are queued.
-    # Memory scenarios call memory_clear(scope=all) to reset state between turns;
-    # that endpoint is gated by GAIA_MEMORY_ADMIN=1 on the backend process.
-    # Without this, every memory scenario would silently inherit state from the
-    # previous run and produce flaky pass/fail results.
+    # The per-scenario memory reset goes through an endpoint gated by
+    # GAIA_MEMORY_ADMIN=1; without it every scenario would inherit the last
+    # one's facts.
     has_memory_scenarios = scenarios is not None and any(
-        (sd or {}).get("category") == "memory" for _path, sd in scenarios
+        _scenario_clears_memory(sd) for _path, sd in scenarios
     )
     # Long-term memory defaults OFF in the Agent UI. With it off, every
     # `remember` returns "skipped" and the scenario scores memory being off.
@@ -1797,6 +1870,91 @@ def _apply_mailbox_fixture(backend_url: str, scenario_data: dict) -> Optional[st
     return None
 
 
+def _skills_absent_error(names) -> Optional[str]:
+    """Why ``setup.skills_absent`` is malformed, or ``None`` when it is usable."""
+    from gaia.skills.errors import SkillValidationError
+    from gaia.skills.naming import validated_skill_name
+
+    if names is None:
+        return None
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        return (
+            "setup.skills_absent must be a list of skill names the runner removes "
+            "before the scenario starts, e.g. ['unit-convert']"
+        )
+    for name in names:
+        try:
+            validated_skill_name(name, source="setup.skills_absent")
+        except SkillValidationError as e:
+            return str(e)
+    return None
+
+
+def _reaches_real_home(path: Path, real_home: Path) -> bool:
+    """True if *path* is, or sits inside, *real_home* through any alias.
+
+    Path equality misses links and second spellings (a junction, a UNC admin
+    share), so each existing ancestor is also compared by file identity.
+    A path that cannot be checked counts as reaching the real home.
+    """
+    target = path.resolve()
+    real = real_home.resolve()
+    if target == real or real in target.parents:
+        return True
+    if not real.exists():
+        return False
+    for candidate in (target, *target.parents):
+        try:
+            if candidate.exists() and os.path.samefile(candidate, real):
+                return True
+        except OSError:
+            return True
+    return False
+
+
+def _apply_skills_absent(scenario_data: dict) -> Optional[str]:
+    """Remove the scenario's ``setup.skills_absent`` skills from the eval home.
+
+    Scenarios in one category share a GAIA home, so a skill an earlier scenario
+    (or an earlier attempt) installed would otherwise still be there. Runs before
+    every attempt, including a re-run after an account switch. Refuses the
+    machine's real ``~/.gaia``. Returns ``None`` on success, or an error string.
+    """
+    from gaia.home import default_gaia_home, gaia_home
+    from gaia.skills.errors import SkillError, SkillNotFoundError
+    from gaia.skills.install import remove_skill
+    from gaia.skills.manager import SkillManager
+
+    names = (scenario_data.get("setup") or {}).get("skills_absent")
+    if names is None:
+        return None
+    malformed = _skills_absent_error(names)
+    if malformed:
+        return malformed
+    home = gaia_home()
+    skills_root = home / "skills"
+    if _reaches_real_home(home, default_gaia_home()) or _reaches_real_home(
+        skills_root, default_gaia_home()
+    ):
+        return (
+            f"setup.skills_absent deletes installed skills, but the eval home's "
+            f"skills ({skills_root}) lead into the real home "
+            f"({default_gaia_home()}). Run the category under an eval home, e.g. "
+            "`python util/run_eval_lane.py --category "
+            f"{scenario_data.get('category', '<category>')}`."
+        )
+    manager = SkillManager(user_skills_root=skills_root)
+    for name in names:
+        try:
+            removed = remove_skill(name, manager=manager)
+        except SkillNotFoundError:
+            continue
+        except SkillError as e:
+            return f"setup.skills_absent could not remove '{name}' from {home}: {e}"
+        logger.info("Removed leftover skill '%s' from %s", name, removed.path)
+    return None
+
+
 def _probe_eval_mailbox(backend_url: str) -> Optional[str]:
     """Verify the backend serves the gaia_email fixture mailbox.
 
@@ -1856,6 +2014,67 @@ def _scenario_needs_memory(scenario_data: Optional[dict]) -> bool:
         return True
     setup = scenario_data.get("setup") or {}
     return "memory_clear" in setup or "memory_seed" in setup
+
+
+def _scenario_clears_memory(scenario_data: Optional[dict]) -> bool:
+    """True when the runner wipes long-term memory before this scenario.
+
+    Every scenario that runs against a live memory store starts from an empty
+    one, so a fact an earlier scenario stored cannot answer for this one.
+    ``setup.memory_clear: false`` opts out, for a scenario that deliberately
+    reads what an earlier scenario left behind.
+    """
+    scenario_data = scenario_data or {}
+    if (scenario_data.get("setup") or {}).get("memory_clear") is False:
+        return False
+    category = str(scenario_data.get("category") or "")
+    return _scenario_needs_memory(scenario_data) or category.startswith("gaia_")
+
+
+def _reset_memory(backend_url: str, scenario_data: dict) -> Optional[str]:
+    """Clear the backend's whole memory store before a scenario that needs it.
+
+    Done by the runner, not the simulator, so a skipped tool call cannot let
+    one scenario's facts leak into the next. Returns ``None`` on success, or
+    an error string.
+    """
+    import urllib.error
+    import urllib.request
+
+    if not _scenario_clears_memory(scenario_data):
+        return None
+    url = f"{backend_url}/api/memory/admin/clear"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps({"scope": "all"}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            body = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return (
+                f"could not clear memory before the scenario: {url} returned 403. "
+                "Restart the Agent UI backend with GAIA_MEMORY_ADMIN=1, or set "
+                "setup.memory_clear: false if the scenario must keep earlier memory."
+            )
+        return f"could not clear memory before the scenario: HTTP {e.code} from {url}: {e.reason}"
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+        return (
+            f"could not clear memory before the scenario via {url}: {e}. "
+            "Is the Agent UI backend running?"
+        )
+    except json.JSONDecodeError as e:
+        return f"memory clear at {url} returned a non-JSON response: {e}"
+    if (
+        not isinstance(body, dict)
+        or body.get("scope") != "all"
+        or not isinstance(body.get("cleared"), dict)
+    ):
+        return f"memory clear at {url} did not confirm a full wipe: {body!r}"
+    return None
 
 
 def _probe_memory_enabled(backend_url: str) -> Optional[str]:
@@ -2084,6 +2303,8 @@ def run_scripted_scenario(
     and answers no questions, then is cleared so it never leaks into the next
     scenario.
     """
+    # A local run stages fixtures under its own folder and port (fixture_env).
+    scenario_data = localize(scenario_data, *fixture_env_from_env())
     kwargs.setdefault("scenario_backend", ScenarioBackend(backend_url, scenario_data))
     declined = _decline_commands(scenario_data)
     if not declined:
@@ -2206,15 +2427,19 @@ def run_scenario_subprocess(
     while the driver runs and cleans the backend up after it.
     """
     scenario_id = scenario_data["id"]
-    mailbox_error = _apply_mailbox_fixture(backend_url, scenario_data)
-    if mailbox_error:
-        print(f"[SETUP_ERROR] {scenario_id}: {mailbox_error}", flush=True)
+    setup_error = (
+        _apply_mailbox_fixture(backend_url, scenario_data)
+        or _apply_skills_absent(scenario_data)
+        or _reset_memory(backend_url, scenario_data)
+    )
+    if setup_error:
+        print(f"[SETUP_ERROR] {scenario_id}: {setup_error}", flush=True)
         return {
             "scenario_id": scenario_id,
             "status": "SETUP_ERROR",
             "overall_score": None,
             "turns": [],
-            "error": mailbox_error,
+            "error": setup_error,
             "elapsed_s": 0.0,
             "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
         }
@@ -2883,6 +3108,63 @@ def _write_fix_history(run_dir, fix_history) -> None:
 BASELINE_META = "meta.json"
 
 
+def fixture_provenance() -> dict:
+    """Which fixtures a run measured and where it served them from.
+
+    Raises:
+        ValueError: ``GAIA_EVAL_ROOT`` or ``GAIA_EVAL_FIXTURE_PORT`` is malformed.
+    """
+    root, port = fixture_env_from_env()
+    return {
+        "fingerprint": fixture_fingerprint(REPO_ROOT),
+        "root": str(root) if root is not None else "~/gaia-eval",
+        "port": port if port is not None else 8765,
+    }
+
+
+def lemonade_provenance() -> dict:
+    """The Lemonade build the agent ran on, as its ``/health`` reports it."""
+    from gaia.llm.lemonade_client import LemonadeClient, lemonade_server_version
+
+    client = LemonadeClient(verbose=False, keep_alive=True)
+    return {
+        "base_url": client.base_url,
+        # None when /health does not answer or names no version; compare says so.
+        "version": lemonade_server_version(client),
+    }
+
+
+def measurement_warnings(baseline: dict, current: dict) -> list:
+    """Why two scorecards with the same scenarios may not have measured alike.
+
+    Different fixtures or a different Lemonade build can move a score with no
+    change to the agent, so ``--compare`` prints these before and after its
+    verdict. A side that predates the field contributes nothing.
+    """
+    warnings = []
+    configs = [(c.get("config") or {}) for c in (baseline, current)]
+    prints = [(c.get("fixtures") or {}).get("fingerprint") or {} for c in configs]
+    if prints[0].get("combined") and prints[1].get("combined"):
+        for part, label in (
+            ("fixtures", "tests/fixtures/gaia"),
+            ("scenarios", "eval/scenarios"),
+        ):
+            if prints[0].get(part) != prints[1].get(part):
+                warnings.append(
+                    f"{label} differs between the runs (fingerprint "
+                    f"{str(prints[0].get(part))[:12]} vs "
+                    f"{str(prints[1].get(part))[:12]}), so a flip may come from "
+                    "the fixtures, not the agent"
+                )
+    builds = [(c.get("lemonade") or {}).get("version") for c in configs]
+    if all(c.get("lemonade") for c in configs) and builds[0] != builds[1]:
+        warnings.append(
+            f"the runs used different Lemonade builds ({builds[0] or 'unknown'} "
+            f"vs {builds[1] or 'unknown'})"
+        )
+    return warnings
+
+
 class ScorecardMismatchError(ValueError):
     """Two scorecards measured different things, so diffing them means nothing."""
 
@@ -2974,19 +3256,22 @@ def _summary_over(results):
     return build_scorecard("subset", results, {})["summary"]
 
 
-def compare_scorecards(baseline_path, current_path):
+def compare_scorecards(baseline_path, current_path, require_same_setup=False):
     """Compare two scorecard.json files and print a regression/improvement report.
 
     Args:
         baseline_path: Path to the baseline scorecard.json (str or Path)
         current_path:  Path to the current/new scorecard.json (str or Path)
+        require_same_setup: Refuse, instead of warn, when the fixtures or the
+            Lemonade build differ (:func:`measurement_warnings`).
 
     Returns:
         dict with keys: improved, regressed, unchanged, only_in_baseline, only_in_current
 
     Raises:
         ScorecardMismatchError: the two were measured with a different agent
-            model or eval model (see :func:`check_comparable`).
+            model or eval model (see :func:`check_comparable`), or with
+            *require_same_setup*, on different fixtures or Lemonade builds.
     """
     baseline_path = Path(baseline_path)
     current_path = Path(current_path)
@@ -3001,6 +3286,16 @@ def compare_scorecards(baseline_path, current_path):
 
     check_comparable(baseline_path, baseline, current)
     set_warnings = scenario_set_warnings(baseline, current)
+    setup_warnings = measurement_warnings(baseline, current)
+    if require_same_setup and setup_warnings:
+        raise ScorecardMismatchError(
+            f"Not comparable with the baseline ({baseline_path}): "
+            + "; ".join(setup_warnings)
+            + ". Re-run on the baseline's fixtures and Lemonade build, or drop "
+            "--require-same-fixtures to diff anyway with these flagged."
+        )
+    for warning in setup_warnings:
+        print(f"[WARN] Different setup: {warning}.", file=sys.stderr)
 
     # Build per-scenario maps
     def scenario_map(sc):
@@ -3262,6 +3557,8 @@ def compare_scorecards(baseline_path, current_path):
     print(f"\n{'='*70}")
     for warning in set_warnings:
         print(f"[WARN] Different questions: {warning}.")
+    for warning in setup_warnings:
+        print(f"[WARN] Different setup: {warning}.")
     if partial:
         # The run stopped part-way; its NOT_RUN scenarios are excluded above,
         # so whatever follows describes only the part that ran.
@@ -3308,6 +3605,7 @@ def compare_scorecards(baseline_path, current_path):
         "not_run": not_run,
         "incomplete": partial or None,
         "scenario_set_warnings": set_warnings,
+        "measurement_warnings": setup_warnings,
     }
 
 
@@ -3410,6 +3708,11 @@ class AgentEvalRunner:
             result = run_audit()
             print(json.dumps(result, indent=2))
             return result
+
+        checkout_error = eval_checkout_error()
+        if checkout_error:
+            print(f"[ERROR] {checkout_error}", file=sys.stderr)
+            sys.exit(1)
 
         if fix_mode and resume_dir is None:
             require_clean_tree_for_fix()
@@ -3550,7 +3853,9 @@ class AgentEvalRunner:
                 )
                 continue
 
-            missing = _missing_requirements(scenario_data, downloaded_models)
+            missing = _missing_requirements(
+                scenario_data, downloaded_models
+            ) + _tier_mismatch(scenario_data, self.agent_model)
             if missing:
                 self._record_skip(
                     scenario_data,
@@ -3913,6 +4218,8 @@ class AgentEvalRunner:
             config["scenario_filter"] = list(requested_ids)
         provenance = scenario_provenance(scenarios)
         config["scenario_provenance"] = provenance
+        config["fixtures"] = fixture_provenance()
+        config["lemonade"] = lemonade_provenance()
         if provenance["overridden_builtins"]:
             print(
                 f"[WARN] {len(provenance['overridden_builtins'])} built-in "
@@ -4099,8 +4406,8 @@ def generate_corpus():
 
     The corpus is committed ground truth — the manifest's facts were written
     from these exact files — so nothing here rewrites it. Lists the documents,
-    then raises ``RuntimeError`` when the manifest is absent or names a file
-    that is not on disk.
+    then raises ``RuntimeError`` when the manifest is absent, names a file
+    that is not on disk, or a corpus file on disk is missing from it.
     """
     print("[CORPUS] Validating corpus against manifest.json...")
 
@@ -4148,6 +4455,28 @@ def generate_corpus():
             "the manifest entry if the document was renamed."
         )
     print("[CORPUS] All manifest files present on disk [OK]")
+
+    # And the other way around: a document added to disk without a manifest
+    # entry would score against facts that do not exist for it.
+    undeclared = []
+    for base, entries in ((docs_dir, doc_list), (adv_dir, adv_list)):
+        declared = {doc.get("filename") for doc in entries}
+        if base.exists():
+            for f in sorted(base.iterdir()):
+                if (
+                    f.is_file()
+                    and not f.name.startswith(".")
+                    and f.name not in declared
+                ):
+                    undeclared.append(str(f.relative_to(CORPUS_DIR)))
+
+    if undeclared:
+        raise RuntimeError(
+            f"{len(undeclared)} file(s) in {CORPUS_DIR} are not named in "
+            f"{MANIFEST}: {', '.join(undeclared)}. Add a manifest entry for "
+            "them, or remove the files if they were left behind."
+        )
+    print("[CORPUS] All corpus files declared in the manifest [OK]")
     print(f"\n[CORPUS] Done. Corpus at: {CORPUS_DIR}")
 
 

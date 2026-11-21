@@ -71,10 +71,12 @@ import sqlite3
 import sys
 import threading
 import traceback
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia_agent import __version__ as agent_version
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
+from gaia_agent.session_index import IndexedOut, SessionIndex, guarded, open_index
 
 from gaia.agents.base.readiness import (
     probe_model_present,
@@ -167,6 +169,48 @@ class _ClearHistory:
     """Queue sentinel: the turn loop (which owns the agent) performs the clear."""
 
 
+def _reset_hybrid_route(agent: Any) -> None:
+    """A cleared conversation forgets hybrid's sticky escalation too."""
+    reset = getattr(agent, "reset_hybrid_route", None)
+    if callable(reset):
+        reset()
+
+
+def _forget_conversation_grants(agent: Any, state: Optional["PermissionState"]) -> None:
+    """A cleared conversation forgets its "always" answers, as a new session would.
+
+    Runs before the history is cleared, so a failure here never leaves a
+    "cleared" chat still holding its grants.
+    """
+    if state is not None:
+        state.forget_grants()
+    reset = getattr(getattr(agent, "console", None), "reset_tool_approvals", None)
+    if callable(reset):
+        reset()
+
+
+def _forget_web_calls(agent: Any) -> None:
+    """Pages read before a clear no longer back a research citation."""
+    web_calls = getattr(agent, "_web_calls", None)
+    if web_calls is not None:
+        web_calls.clear()
+
+
+def _clear_from_host(
+    agent: Any, state: Optional["PermissionState"], index: Any
+) -> None:
+    """Perform a host ``clear_history``: the turn loop's half of the sentinel."""
+    _forget_conversation_grants(agent, state)
+    history = getattr(agent, "conversation_history", None)
+    if history is not None:
+        history.clear()
+    _forget_web_calls(agent)
+    _reset_hybrid_route(agent)
+    if index is not None:
+        guarded(index, index.cleared)
+    logger.info("conversation history cleared by host /clear")
+
+
 #: ``cancel`` stops the running turn but not the process, so loaded skills,
 #: "always" grants, history and full access all survive it.
 CONTROL_CANCEL = "cancel"
@@ -240,10 +284,10 @@ class PermissionState:
         Two attributes, because they are two different grants that happen to be
         turned on together. ``auto_approve_gated_tools`` skips the confirmation
         prompt; ``full_access`` additionally lifts the shell guardrails — the
-        operator block, the read-only binary policy and the rate limit (#3373,
-        #3374). An unattended harness that only pre-approves prompts sets the
-        first and must not inherit the second, which is what
-        ``lifts_shell_gates=False`` buys the HTTP transport. ``grants_paths``
+        operator block, the command policy, the path checks and the rate limit
+        (#3373, #3374). An unattended harness that only pre-approves prompts
+        sets the first and must not inherit the second, which is what
+        ``lifts_shell_gates=False`` buys it. ``grants_paths``
         lets an out-of-scope path through without a prompt, but only on a run
         a person is watching (``answers_confirmations``).
         """
@@ -346,6 +390,25 @@ class PermissionState:
             ", ".join(scope.label for scope in removed),
         )
         return len(removed)
+
+    def forget_grants(self) -> int:
+        """Drop every "always" answer, the running turn's included.
+
+        Unlike :meth:`revoke`, which keeps a family another answer still
+        grants, this empties every holder outright: a cleared conversation
+        keeps none. Returns how many answers were dropped.
+        """
+        with self._lock:
+            count = len(self._live_scopes())
+            self._grants.clear()
+            self._scopes.clear()
+            if self._handler is not None:
+                self._handler.reset_tool_approvals()
+        if count:
+            audit.warning(
+                "Cleared conversation: dropped %d always-allow grant(s)", count
+            )
+        return count
 
     def _live_scopes(self) -> Dict[str, Any]:
         """The session's answers plus the running turn's. Caller holds the lock."""
@@ -511,6 +574,20 @@ def is_model_command(query: str) -> bool:
     )
 
 
+#: Prefix that dispatches a stdin line to ``run_skills_command``.
+SKILLS_COMMAND_PREFIX = "/skills"
+#: Last word of ``/skills add <link> confirm`` — the user saw the warning.
+SKILLS_CONFIRM_WORD = "confirm"
+
+
+def is_skills_command(query: str) -> bool:
+    """Whether *query* is ``/skills`` or ``/skills <args>``, not a real question."""
+    stripped = query.strip()
+    return stripped == SKILLS_COMMAND_PREFIX or stripped.startswith(
+        SKILLS_COMMAND_PREFIX + " "
+    )
+
+
 def _model_display_name(model_id: str, is_claude: bool) -> str:
     """Friendly header name for *model_id* — falls back to the raw id."""
     if is_claude:
@@ -535,22 +612,47 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
     chat = agent.chat
     is_claude = bool(chat.config.use_claude)
     model_id = chat.effective_model
-    cloud_provider = cloud_model_provider(model_id) if not is_claude else None
+    lookup = getattr(getattr(chat, "llm_client", None), "cloud_model_provider", None)
+    location = resolve_inference_location(
+        model_id,
+        use_claude=is_claude,
+        cloud_provider_lookup=lookup if callable(lookup) else None,
+    )
     event = {
         "type": "status",
         "message": "",
         "model_id": model_id,
         "model_display": _model_display_name(model_id, is_claude),
-        "model_backend": "claude" if is_claude else cloud_provider or "lemonade",
-        "model_remote": is_claude or bool(cloud_provider),
+        "model_backend": location.provider,
+        "model_remote": location.remote,
         # The header shows these, not an install record that may name another build.
         "agent_version": agent_version,
         "gaia_version": gaia_version,
+        "skills": _skill_commands(agent),
     }
     # Reported even on the Claude path: embeddings (RAG, memory) still run on
     # Lemonade, so "chat is remote" does not mean Lemonade being down is fine.
     event.update(_lemonade_health(_status_lemonade_url(agent)))
     return event
+
+
+def _skill_commands(agent: Any) -> List[Dict[str, str]]:
+    """Installed skills, for the TUI's ``/`` list: typing ``/<name>`` runs one.
+
+    Empty for an agent without the skill library: it cannot run them.
+    """
+    if not callable(getattr(agent, "activate_skill", None)):
+        return []
+    skills = agent.skill_manager.discover()
+    return [
+        {"name": name, "description": skills[name].description or ""}
+        for name in sorted(skills)
+    ]
+
+
+def _skills_event(agent: Any) -> Dict[str, Any]:
+    """A status line carrying only the skill list, after it may have changed."""
+    return {"type": "status", "message": "", "skills": _skill_commands(agent)}
 
 
 def _status_lemonade_url(agent: Any) -> Optional[str]:
@@ -626,8 +728,11 @@ def _is_chat_target(entry: Dict[str, Any]) -> bool:
     return "chat" in labels or not (_NON_CHAT_LABELS & labels)
 
 
-def _lemonade_models(base_url: Optional[str]) -> List[str]:
+def _lemonade_models(base_url: Optional[str]) -> Dict[str, Dict[str, Any]]:
     """Downloaded local and discovered Fireworks/AMD chat models Lemonade serves.
+
+    Maps each id, in sorted order, to its catalog entry, so a switch can hand
+    the entry to the new client instead of reading the catalog a second time.
 
     Goes through ``LemonadeClient`` (the one Lemonade HTTP client the rest of
     the codebase uses) rather than a bespoke ``requests`` call, so base_url
@@ -648,16 +753,15 @@ def _lemonade_models(base_url: Optional[str]) -> List[str]:
             f"Lemonade Server is not reachable at {client.base_url} ({exc}). "
             f"{start_advice()}"
         ) from exc
-    return sorted(
-        {
-            m["id"]
-            for m in catalog.get("data", [])
-            if m.get("id")
-            and (m.get("downloaded") or cloud_model_provider(m["id"], m))
-            and cloud_model_provider(m["id"], m) in {None, "fireworks", "amd"}
-            and _is_chat_target(m)
-        }
-    )
+    switchable = {
+        m["id"]: m
+        for m in catalog.get("data", [])
+        if m.get("id")
+        and (m.get("downloaded") or cloud_model_provider(m["id"], m))
+        and cloud_model_provider(m["id"], m) in {None, "fireworks", "amd"}
+        and _is_chat_target(m)
+    }
+    return {model_id: switchable[model_id] for model_id in sorted(switchable)}
 
 
 #: Snapshot of everything a switch mutates, for an all-or-nothing apply.
@@ -679,10 +783,59 @@ def _snapshot_switch_state(agent: Any) -> _SwitchState:
         "cfg_claude_model": (
             getattr(cfg, "claude_model", None) if cfg is not None else None
         ),
+        "resend_reasoning": getattr(agent, "resend_reasoning_across_requests", None),
         "model_features": getattr(agent, "model_features", None),
         "instance_tools": _copy_or_none(getattr(agent, "_instance_tools", None)),
         "withheld_tools": _copy_or_none(getattr(agent, "_withheld_tool_entries", None)),
+        "tool_overrides": _copy_or_none(getattr(agent, "_tool_overrides", None)),
+        "followers": _snapshot_followers(agent),
     }
+
+
+#: What ``follow_model_switch`` and ``apply_context_eviction`` move with the model.
+_FOLLOWER_ATTRS = (
+    "vlm_model",
+    "vlm_client",
+    "context_eviction_enabled",
+    "_context_evictor",
+)
+
+
+def _rag_model_holders(agent: Any) -> list:
+    """The objects that name the model documents are summarized with."""
+    state = vars(agent)
+    holders = [state.get("_rag_config")]
+    holders.append(getattr(getattr(state.get("_rag"), "chat", None), "config", None))
+    return [h for h in holders if hasattr(h, "model")]
+
+
+def _snapshot_followers(agent: Any) -> Dict[str, Any]:
+    state = {name: vars(agent)[name] for name in _FOLLOWER_ATTRS if name in vars(agent)}
+    rag_kwargs = vars(agent).get("_rag_config_kwargs")
+    if isinstance(rag_kwargs, dict):
+        state["rag_model"] = rag_kwargs.get("model")
+        state["rag_vlm_models"] = [
+            (h, h.vlm_model)
+            for h in _rag_model_holders(agent)
+            if hasattr(h, "vlm_model")
+        ]
+    return state
+
+
+def _restore_followers(agent: Any, state: Dict[str, Any]) -> None:
+    state = dict(state)
+    rag_vlm_models = state.pop("rag_vlm_models", [])
+    has_rag = "rag_model" in state
+    rag_model = state.pop("rag_model", None)
+    for name, value in state.items():
+        setattr(agent, name, value)
+    if not has_rag:
+        return
+    agent._rag_config_kwargs["model"] = rag_model
+    for holder in _rag_model_holders(agent):
+        holder.model = rag_model
+    for holder, vlm_model in rag_vlm_models:
+        holder.vlm_model = vlm_model
 
 
 def _copy_or_none(mapping: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -702,12 +855,20 @@ def _restore_switch_state(agent: Any, snapshot: _SwitchState) -> None:
         cfg.use_claude = snapshot["cfg_use_claude"]
         cfg.model_id = snapshot["cfg_model_id"]
         cfg.claude_model = snapshot["cfg_claude_model"]
+    if snapshot["resend_reasoning"] is not None:
+        agent.resend_reasoning_across_requests = snapshot["resend_reasoning"]
     if snapshot["model_features"] is not None:
         agent.model_features = snapshot["model_features"]
     if snapshot["instance_tools"] is not None:
         agent._instance_tools = snapshot["instance_tools"]
     if snapshot["withheld_tools"] is not None:
         agent._withheld_tool_entries = snapshot["withheld_tools"]
+    if snapshot["tool_overrides"] is not None:
+        agent._tool_overrides = snapshot["tool_overrides"]
+    elif "_tool_overrides" in vars(agent):
+        # The switch created it; the old model had none.
+        del agent._tool_overrides
+    _restore_followers(agent, snapshot["followers"])
 
 
 def _apply_switch(
@@ -744,9 +905,32 @@ def _apply_switch(
                 cfg.model_id = model_id
             if claude_model is not None:
                 cfg.claude_model = claude_model
+        # Earlier turns' reasoning belongs to the old model: it can't hit the new
+        # model's cache, and some reasoner APIs reject it in input.
+        if (
+            getattr(agent, "resend_reasoning_across_requests", False)
+            and agent.model_id != snapshot["model_id"]
+        ):
+            agent.resend_reasoning_across_requests = False
         # The new model may be offered more features than the old one, or fewer.
         if hasattr(agent, "apply_model_features"):
             agent.apply_model_features(agent.model_id)
+        # A chat started on a model with no reasoning-effort setting has no tool for it.
+        if hasattr(agent, "register_reasoning_effort_tools") and (
+            "set_reasoning_effort"
+            not in (getattr(agent, "_instance_tools", None) or {})
+        ):
+            agent.register_reasoning_effort_tools()
+        # getattr: tests build agents without running Agent.__init__.
+        if getattr(agent, "_context_eviction_mode", None) is not None:
+            lookup = getattr(new_client, "cloud_model_provider", None)
+            agent.apply_context_eviction(
+                agent.model_id,
+                cloud=use_claude or bool(callable(lookup) and lookup(agent.model_id)),
+            )
+        # Image reading and document summaries were set up for the old model.
+        if hasattr(agent, "follow_model_switch"):
+            agent.follow_model_switch()
         # Gemma-family prompts carry an embedded-JSON tool-call envelope
         # Claude doesn't need (it speaks native tool_calls) — the cached
         # system prompt must be recomposed under the new backend or the next
@@ -859,7 +1043,7 @@ def _wait_for_gaia_lemonade(
 
 def _reachable_lemonade_models(
     agent: Any, target: str, on_status: Optional[Callable[[str], None]]
-) -> Tuple[Optional[str], List[str]]:
+) -> Tuple[Optional[str], Dict[str, Dict[str, Any]]]:
     """``(base_url, models)`` from the server the live client talks to.
 
     GAIA's own server is briefly unreachable while the daemon restarts it, so
@@ -903,20 +1087,13 @@ def _apply_local_switch(
             model=target,
             base_url=base_url,
             system_prompt=chat.config.system_prompt,
+            # The switch message and the rebuilt prompt name the provider from it.
+            model_metadata=[available[target]],
         )
-        # Warm the catalog metadata now, before this client answers anything.
-        # cloud_model_provider() only recognises a runtime-discovered provider
-        # (an id outside the fireworks./amd. prefixes) once list_models() has
-        # read it — and both the switch message below and the system prompt
-        # _apply_switch is about to rebuild call it on this same client
-        # (#4365).
-        refresh = getattr(new_client, "refresh_model_catalog", None)
-        if callable(refresh):
-            refresh()
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # Reachability was already confirmed above — this covers whatever else
-        # LemonadeClient's constructor (or the catalog warm-up) could still
-        # reject. Nothing on agent/chat has moved yet.
+        # LemonadeClient's constructor could still reject. Nothing on
+        # agent/chat has moved yet.
         raise RuntimeError(f"{type(exc).__name__}: {exc}") from exc
 
     _apply_switch(
@@ -961,7 +1138,40 @@ def switch_model(
 
     *on_status* receives a plain-language line while the switch waits for
     GAIA's model server to come back after a restart.
+
+    A session started on ``hybrid`` (see :mod:`gaia.llm.hybrid`) stops routing
+    here: the user picked *target* by name. *target* ``hybrid`` starts routing,
+    on the cheap model until the next turn's route says otherwise.
     """
+    from gaia.llm.hybrid import (
+        HYBRID_MODEL_ID,
+        HybridRouter,
+        check_local_only,
+        is_hybrid_model,
+    )
+
+    if is_hybrid_model(target):
+        if not hasattr(agent, "reset_hybrid_route"):
+            raise RuntimeError(
+                "hybrid routing runs only in the GAIA agent. Pick a concrete "
+                "model with /model <id>, or switch to the GAIA agent first."
+            )
+        router = HybridRouter()
+        check_local_only(router.settings)
+        switch_concrete_model(agent, router.settings.cheap_model, on_status)
+        agent.hybrid_router = router
+        agent.last_route = None
+        return HYBRID_MODEL_ID
+    display = switch_concrete_model(agent, target, on_status)
+    if getattr(agent, "hybrid_router", None) is not None:
+        agent.hybrid_router = None
+    return display
+
+
+def switch_concrete_model(
+    agent: Any, target: str, on_status: Optional[Callable[[str], None]] = None
+) -> str:
+    """:func:`switch_model` to a model by name, leaving hybrid routing as it is."""
     from gaia.llm.lemonade_client import cloud_model_provider
     from gaia.llm.local_only import SETTINGS_HINT, cloud_blocked
 
@@ -1027,6 +1237,145 @@ def _format_model_list(agent: Any) -> str:
     return "\n".join(lines)
 
 
+def _skills_usage() -> str:
+    return (
+        "`/skills` lists installed skills. `/skills add <link>` shows what a skill "
+        "or skills library holds — a GitHub repo or folder, `owner/repo`, a "
+        "skills.sh page, or an https .zip — then `/skills add <link> confirm` adds "
+        "it. Add `--allow-code` to also add skills that ship scripts."
+    )
+
+
+def _format_link_preview(preview: Any, allow_code: bool) -> list:
+    """Markdown lines for each skill behind a link: what it is, may do, and the audit."""
+    lines = [f"**Skills at {preview.source}** ({len(preview.skills)}):"]
+    for s in preview.skills:
+        if s.error:
+            lines.append(f"- ✗ `{s.name}` — {s.error}")
+        else:
+            notes = []
+            if s.has_code:
+                notes.append("ships code" + ("" if allow_code else ", skipped"))
+            if s.installed:
+                notes.append("will update" if s.update else "installed from elsewhere")
+            if s.verdict == "REVIEW":
+                notes.append("audit: review")
+            suffix = f" ({', '.join(notes)})" if notes else ""
+            lines.append(f"- `{s.name}`{suffix} — {s.description}")
+        if s.permissions:
+            lines.append("  - Can:")
+            lines.extend(f"    - {g['text']} (`{g['grant']}`)" for g in s.permissions)
+        elif s.permissions_unreadable:
+            lines.append("  - Can: unknown (permissions could not be read)")
+        else:
+            lines.append(
+                "  - Can: nothing beyond GAIA's own tools (no permissions declared)"
+            )
+        lines.extend(f"  - Audit: {f}" for f in s.findings)
+    return lines
+
+
+def run_skills_command(agent: Any, query: str, out) -> None:
+    """Handle ``/skills`` — list, preview, or add skills from a link.
+
+    Guarantees exactly one terminal event, same contract as ``run_turn``.
+    """
+    from gaia.skills.errors import SkillError
+    from gaia.skills.link import (
+        APP_LOCAL_COPY_REMEDY,
+        SECURITY_WARNING,
+        SkillLinkChangedError,
+        SkillLinkNotFoundError,
+        add_from_link,
+        preview_link,
+    )
+
+    args = query.strip()[len(SKILLS_COMMAND_PREFIX) :].split()
+    if not args:
+        skills = sorted(agent.skill_manager.reload())
+        _write(_skills_event(agent), out)
+        listing = ", ".join(f"`{n}`" for n in skills) or "none"
+        _write(
+            {
+                "type": "final",
+                "answer": f"**Installed skills ({len(skills)}):** {listing}\n\n"
+                + _skills_usage(),
+            },
+            out,
+        )
+        return
+    if args[0] != "add" or len(args) < 2:
+        _write({"type": "error", "detail": _skills_usage()}, out)
+        return
+
+    allow_code = "--allow-code" in args
+    rest = [a for a in args[1:] if a != "--allow-code"]
+    confirmed = bool(rest) and rest[-1] == SKILLS_CONFIRM_WORD
+    if confirmed:
+        rest = rest[:-1]
+    if len(rest) != 1:
+        _write({"type": "error", "detail": _skills_usage()}, out)
+        return
+    link = rest[0]
+
+    _write({"type": "status", "status": "working", "message": f"Reading {link}…"}, out)
+    pins = getattr(agent, "_skill_link_pins", None)
+    if pins is None:
+        pins = agent._skill_link_pins = {}
+    pin = pins.get(link)
+    try:
+        if not confirmed or not pin:
+            preview = preview_link(link, manager=agent.skill_manager)
+            # The confirm turn installs exactly this version, or nothing.
+            pins[link] = preview.pin
+            lines = []
+            if confirmed:
+                lines.append(
+                    "**Nothing was added yet.** Review what this link holds first, "
+                    "then confirm again.\n"
+                )
+            lines.extend(_format_link_preview(preview, allow_code))
+            flag = " --allow-code" if allow_code else ""
+            lines.append(f"\n⚠️ {SECURITY_WARNING}")
+            lines.append(
+                f"\nTo add them, send `/skills add {link}{flag} {SKILLS_CONFIRM_WORD}`."
+            )
+            _write({"type": "final", "answer": "\n".join(lines)}, out)
+            return
+
+        result = add_from_link(
+            link,
+            allow_code=allow_code,
+            pin=pin,
+            manager=agent.skill_manager,
+        )
+    except SkillError as exc:
+        if isinstance(exc, SkillLinkChangedError):
+            # A stale pin can never match again; the next confirm previews anew.
+            pins.pop(link, None)
+        logger.warning("/skills add %s failed: %s", link, exc)
+        detail = str(exc)
+        if isinstance(exc, SkillLinkNotFoundError):
+            detail = f"{detail} {APP_LOCAL_COPY_REMEDY}"
+        _write({"type": "error", "detail": detail}, out)
+        return
+    # One preview covers one add; a later add of the same link previews again.
+    pins.pop(link, None)
+
+    agent.skill_manager.reload()
+    # The skill catalog sits in the cached prompt head; recompose so this
+    # session can see what was just added.
+    agent.rebuild_system_prompt()
+    _write(_skills_event(agent), out)
+    lines = [f"Added {len(result.added)} skill(s) from {link}."]
+    if result.added:
+        lines.append(", ".join(f"`{a['name']}`" for a in result.added))
+    if result.failed:
+        lines.append(f"\nNot added ({len(result.failed)}):")
+        lines.extend(f"- `{name}` — {why}" for name, why in result.failed.items())
+    _write({"type": "final", "answer": "\n".join(lines)}, out)
+
+
 def run_model_command(agent: Any, query: str, out) -> None:
     """Handle ``/model`` and ``/model <id>`` — never reaches ``agent.process_query``.
 
@@ -1058,6 +1407,18 @@ def run_model_command(agent: Any, query: str, out) -> None:
 
     logger.info("switched model to %s (%s)", arg, display)
     _write(_model_state_event(agent), out)
+    router = getattr(agent, "hybrid_router", None)
+    if router is not None:
+        settings = router.settings
+        _write(
+            {
+                "type": "final",
+                "answer": f"Switched to **hybrid**: each turn runs on "
+                f"`{settings.cheap_model}` or `{settings.strong_model}`.",
+            },
+            out,
+        )
+        return
     # Pass the live client's classifier, as the system prompt does — the id
     # prefix knows only two providers, so a runtime-discovered one would be
     # called local here while the prompt calls it cloud.
@@ -1138,6 +1499,44 @@ def _write_if_wire_alive(event: Dict[str, Any], out) -> bool:
         return False
 
 
+def follow_settings(agent: Any, config_kwargs: Dict[str, Any]) -> Any:
+    """The agent to run the next turn on: a new one when Settings changed since.
+
+    Its model server and MCP tools are fixed as it is built. The new agent
+    runs the model this session is on, keeps its transcript, and gets what
+    the session set on the old one.
+    """
+    changed = getattr(agent, "built_settings_changed", None)
+    if not callable(changed) or changed() is not True:
+        return agent
+    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaia_agent.session_registry import _carry_session_state, close_agent
+
+    kwargs = {
+        k: v
+        for k, v in config_kwargs.items()
+        if k not in ("model_id", "claude_model", "use_claude")
+    }
+    if getattr(agent, "hybrid_router", None) is not None:
+        # model_id is the turn's routed model; the session runs on hybrid.
+        from gaia.llm.hybrid import HYBRID_MODEL_ID
+
+        kwargs["model_id"] = HYBRID_MODEL_ID
+    elif getattr(agent, "_use_claude", False):
+        kwargs["use_claude"] = True
+        kwargs["claude_model"] = agent.model_id
+    elif agent.model_id:
+        kwargs["model_id"] = agent.model_id
+    new = GaiaAgent(config=GaiaAgentConfig(**kwargs))
+    history = agent.conversation_history
+    _carry_session_state(agent, new, "terminal")
+    new.conversation_history = history
+    agent.conversation_history = []
+    close_agent(agent)
+    logger.info("rebuilt the agent for settings changed since it was built")
+    return new
+
+
 def _drain_memory(agent) -> None:
     """Let the last turns' memory extraction finish before ``os._exit`` drops it.
 
@@ -1196,7 +1595,11 @@ def _with_note(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """*messages* ending with :data:`INTERRUPTED_NOTE`, in the last reply when
     there is one, so roles still alternate."""
     last = messages[-1] if messages else None
-    if last and last.get("role") == "assistant" and isinstance(last.get("content"), str):
+    if (
+        last
+        and last.get("role") == "assistant"
+        and isinstance(last.get("content"), str)
+    ):
         text = last["content"].strip()
         noted = f"{text}\n\n{INTERRUPTED_NOTE}" if text else INTERRUPTED_NOTE
         return [*messages[:-1], {**last, "content": noted}]
@@ -1367,38 +1770,63 @@ def _configure_logging(real_stdout, *, dev: bool) -> "Path":
     return Path(path)
 
 
+def model_server_failure(exc: BaseException) -> Optional[Any]:
+    """The classified model-server failure behind *exc*, or None when unrelated.
+
+    An Anthropic outage also says "connection refused"/"max retries"; blaming
+    the model server would point the user at the wrong backend.
+    """
+    from gaia.llm.providers.lemonade import classify_lemonade_exception
+
+    text = f"{type(exc).__name__}: {exc}".lower()
+    if "anthropic" in text or type(exc).__module__.startswith("anthropic"):
+        return None
+    return classify_lemonade_exception(exc)
+
+
+def model_server_message(typed: Any, surface: str = "tui") -> str:
+    """*typed*'s user message; a lost server GAIA doesn't run is its owner's to start.
+
+    The daemon restarts GAIA's own server. For the other, a terminal gets this
+    machine's start instruction; the Agent UI never names a command.
+    """
+    from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
+    from gaia.llm.providers.lemonade import (
+        LemonadeNetworkError,
+        LemonadeServerUnreachableError,
+    )
+    from gaia.llm.surface_hints import APP_OTHER_SERVER_START_HINT
+
+    if not isinstance(typed, LemonadeNetworkError) or gaia_runs_lemonade():
+        return typed.user_message
+    app = surface == "agent_ui"
+    if isinstance(typed, LemonadeServerUnreachableError):
+        # That one already says to start the server.
+        if app:
+            return typed.user_message
+        return f"{typed.user_message} {describe_start_hint().instruction}"
+    hint = (
+        f"{APP_OTHER_SERVER_START_HINT}." if app else describe_start_hint().instruction
+    )
+    # Also a running server whose request failed, so sending again comes first.
+    return (
+        "The model server didn't answer. It may be loading or briefly busy, "
+        "so send your message again. If it keeps failing, it may have "
+        f"stopped. {hint}"
+    )
+
+
 def _terminal_error(exc: BaseException) -> Dict[str, Any]:
     """Actionable copy for a run-killing exception.
 
-    Lemonade being unreachable is the common failure and its raw urllib3 repr
-    tells a user nothing, so it gets named copy with the fix. Anything else is
-    surfaced verbatim — a generic 'something went wrong' would hide the one
-    detail that makes a bug reportable.
+    A model-server failure gets its classified wording, which names the fix.
+    Anything else is surfaced verbatim — a generic 'something went wrong' would
+    hide the one detail that makes a bug reportable.
     """
-    text = f"{type(exc).__name__}: {exc}"
-    lowered = text.lower()
-    # An Anthropic outage also says "connection refused"/"max retries" — the
-    # Lemonade remediation would point at the wrong backend, so skip it.
-    is_anthropic = "anthropic" in lowered or type(exc).__module__.startswith(
-        "anthropic"
-    )
-    if not is_anthropic and any(
-        s in lowered
-        for s in (
-            "connection refused",
-            "max retries",
-            "failed to establish",
-            "newconnectionerror",
-        )
-    ):
-        return {
-            "type": "error",
-            "detail": (
-                f"Local Lemonade Server is not reachable. {start_advice()} "
-                f"(underlying error: {text})"
-            ),
-        }
-    return {"type": "error", "detail": text}
+    typed = model_server_failure(exc)
+    if typed is not None:
+        return {"type": "error", "detail": model_server_message(typed)}
+    return {"type": "error", "detail": f"{type(exc).__name__}: {exc}"}
 
 
 def _memory_dump_event(agent: Any) -> Dict[str, Any]:
@@ -1418,8 +1846,24 @@ def _memory_dump_event(agent: Any) -> Dict[str, Any]:
     return {"type": "final", "answer": json.dumps(payload)}
 
 
-def _usage_from_result(value: Any) -> Dict[str, Any]:
-    """Token counts for a turn that ended without printing its answer.
+def _tool_count_from_result(value: Dict[str, Any], *, fallback: int = 0) -> int:
+    """Count executed tool calls on a result whose answer was not printed."""
+    explicit = value.get("tools_used")
+    if isinstance(explicit, int) and not isinstance(explicit, bool):
+        return max(explicit, 0)
+    # Not model_messages: it carries earlier turns' tool results too.
+    messages = value.get("conversation")
+    if isinstance(messages, list):
+        return sum(
+            1 for msg in messages if isinstance(msg, dict) and msg.get("role") == "tool"
+        )
+    if isinstance(fallback, int) and not isinstance(fallback, bool) and fallback > 0:
+        return fallback
+    return 0
+
+
+def _usage_from_result(value: Any, *, tool_count: int = 0) -> Dict[str, Any]:
+    """Turn counts for a turn that ended without printing its answer.
 
     Error exits (and a step limit whose summary could not be written) return
     the answer instead of printing it, so no ``answer`` event carried the usage
@@ -1427,6 +1871,12 @@ def _usage_from_result(value: Any) -> Dict[str, Any]:
     rule as the printed path: a count that is absent or zero is left out.
     """
     if not isinstance(value, dict):
+        if (
+            isinstance(tool_count, int)
+            and not isinstance(tool_count, bool)
+            and tool_count > 0
+        ):
+            return {"tools_used": tool_count}
         return {}
     usage: Dict[str, Any] = {}
     for src, dst in (
@@ -1440,6 +1890,9 @@ def _usage_from_result(value: Any) -> Dict[str, Any]:
     cached = value.get("cached_tokens")
     if "input_tokens" in usage and isinstance(cached, int) and cached >= 0:
         usage["cached_tokens"] = cached
+    tools_used = _tool_count_from_result(value, fallback=tool_count)
+    if tools_used > 0:
+        usage["tools_used"] = tools_used
     return usage
 
 
@@ -1488,8 +1941,16 @@ def run_turn(
     agent.console = handler
     if state is not None:
         state.attach(handler)
-    translator = CanonicalTranslator(run_id=None, agent_id=AGENT_ID, debug=dev)
+    translator = CanonicalTranslator(
+        run_id=None,
+        agent_id=AGENT_ID,
+        debug=dev,
+    )
     result: Dict[str, Any] = {}
+    # Skills added or removed since the catalogue was built, e.g. in the Agent UI.
+    follow_skills = getattr(agent, "follow_installed_skills", None)
+    if callable(follow_skills):
+        follow_skills()
 
     def _run() -> None:
         try:
@@ -1582,6 +2043,7 @@ def run_turn(
                     logger.exception("Failed to preserve turn history")
                     _write(_terminal_error(exc), out)
                     return
+                _write_context(agent, out)
             _write(terminal_event, out)
             return
         if "error" in result:
@@ -1614,8 +2076,9 @@ def run_turn(
             logger.exception("Failed to preserve turn history")
             _write(_terminal_error(exc), out)
             return
+        _write_context(agent, out)
         final: Dict[str, Any] = {"type": "final", "answer": answer}
-        usage = _usage_from_result(value)
+        usage = _usage_from_result(value, tool_count=getattr(handler, "_tool_count", 0))
         if usage:
             final["usage"] = usage
         _write(final, out)
@@ -1649,6 +2112,7 @@ def _end_turn(handler: Any, state: Optional[PermissionState]) -> None:
 
 CLEAR_CONVERSATION_QUERY = "\x00gaia:clear_conversation\x00"
 
+
 #: Sent by the host before the chat opens, so the first question does not pay
 #: for loading the model and reading the system prompt. Answered with a `final`
 #: whose answer is WARMED_UP, or WARM_UP_SKIPPED for a remote model, where
@@ -1667,6 +2131,26 @@ def _history_cut_event(cut: Any) -> Dict[str, Any]:
     }
 
 
+def _write_context(agent: Any, out) -> None:
+    """Send ``context_usage`` for the next message, once a turn is recorded.
+
+    The same event, from the same measurement, the HTTP server streams
+    (contract 2.28), so a long file the turn read moves the meter and
+    ``at_risk`` names the turns the next ones will push out of view.
+    """
+    from gaia.agents.base.history import SessionHistory, context_usage
+
+    history = getattr(agent, "conversation_history", None)
+    if not isinstance(history, SessionHistory):
+        return
+    try:
+        usage = context_usage(agent, history.turns(agent))
+    except Exception as exc:  # noqa: BLE001 - a meter must never fail the turn
+        logger.warning("context measurement after the turn failed: %s", exc)
+        return
+    _write({"type": "context_usage", **usage}, out)
+
+
 def run_warm_up(agent: Any, out) -> None:
     """Do the first turn's one-time work now, reporting each step as a status.
 
@@ -1682,13 +2166,30 @@ def run_warm_up(agent: Any, out) -> None:
             progress=lambda message: _write({"type": "status", "message": message}, out)
         )
     except Exception as exc:  # noqa: BLE001 - reported to the user, not hidden
-        logger.warning("Warm-up failed: %s", exc, exc_info=True)
-        event = _terminal_error(exc)
-        event["detail"] = (
-            "Could not get the model ready ahead of time — chat still works, but "
-            f"the first answer will take longer. {event['detail']}"
+        from gaia.llm.providers.lemonade import (
+            LemonadeEngineStartError,
+            LemonadeServerUnreachableError,
         )
-        _write(event, out)
+
+        logger.warning("Warm-up failed: %s", exc, exc_info=True)
+        typed = model_server_failure(exc)
+        # A chat turn's advice ("resend the query") does not fit a warm-up.
+        if isinstance(
+            typed, (LemonadeEngineStartError, LemonadeServerUnreachableError)
+        ):
+            reason = typed.user_message
+        else:
+            reason = f"{type(exc).__name__}: {exc}"
+        _write(
+            {
+                "type": "error",
+                "detail": (
+                    "Could not get the model ready ahead of time — chat still "
+                    f"works, but the first answer will take longer. {reason}"
+                ),
+            },
+            out,
+        )
         return
     logger.info("Warm-up finished in %ss", result.get("seconds"))
     _write({"type": "final", "answer": WARMED_UP}, out)
@@ -1700,12 +2201,14 @@ def dispatch_query(
     out,
     dev: bool = False,
     state: Optional[PermissionState] = None,
+    index: Optional[SessionIndex] = None,
 ) -> None:
     """Route one line off the query queue: a sentinel, or a real turn.
 
     Sentinels short-circuit before run_turn/process_query — they never reach
     the LLM and are never recorded as chat turns (see _record_turn's docstring
-    on why a turn's own answer is what gets kept).
+    on why a turn's own answer is what gets kept). Only a real turn moves the
+    session *index*.
     """
     setup = getattr(agent, "_engineering_setup", None)
     if isinstance(setup, dict):
@@ -1722,7 +2225,18 @@ def dispatch_query(
             _write({"type": "status", "message": message}, out)
             agent._engineering_reported_setup_status = setup_status
     if query == CLEAR_CONVERSATION_QUERY:
+        _forget_conversation_grants(agent, state)
         agent.conversation_history.clear()
+        # Facts seen in the cleared chat must not ground the next one's numbers.
+        if hasattr(agent, "clear_seen_sources"):
+            agent.clear_seen_sources()
+        _forget_web_calls(agent)
+        _reset_hybrid_route(agent)
+        loader = getattr(agent, "tool_loader", None)
+        if loader is not None:
+            loader.reset_session()
+        if index is not None:
+            guarded(index, index.cleared, out)
         _write({"type": "final", "answer": "conversation_cleared"}, out)
         return
     if query == MEMORY_DUMP_QUERY:
@@ -1734,6 +2248,12 @@ def dispatch_query(
     if is_model_command(query):
         run_model_command(agent, query, out)
         return
+    if is_skills_command(query):
+        run_skills_command(agent, query, out)
+        return
+    if index is not None:
+        guarded(index, lambda: index.turn_started(query), out)
+        out = IndexedOut(out, index)
     run_turn(agent, query, out, dev=dev, state=state)
 
 
@@ -1765,6 +2285,13 @@ def build_parser() -> "argparse.ArgumentParser":
         "--history-file",
         default=os.environ.get("GAIA_HISTORY_FILE"),
         help="Session transcript SQLite path; reuse the path to resume tool history.",
+    )
+    parser.add_argument(
+        "--session-kind",
+        default=os.environ.get("GAIA_SESSION_KIND"),
+        help="Keep a listing of this session beside --history-file so a host "
+        "can show and reopen it: 'chat' for an interactive session, or "
+        "another word (e.g. 'eval', 'scheduled') that hosts hide by default.",
     )
     parser.add_argument(
         "--use-claude",
@@ -1800,10 +2327,9 @@ def build_parser() -> "argparse.ArgumentParser":
         dest="full_access",
         action="store_true",
         help="Start with the permission gates OFF: every gated tool runs "
-        "without asking, the shell-only operators (>, >>, <, &, `, $(), "
-        "newline) parse and run, the "
-        "read-only binary policy is replaced by the developer set (node, npm, "
-        "make, cmake, go, cargo, sed, awk, curl, python, pytest, gh, git) and "
+        "without asking, the shell runs any program with any shell syntax, "
+        "Python code runs unchecked, paths outside the allowed folders are "
+        "open and "
         "the shell rate limit is lifted. This is arbitrary code execution. Off "
         "unless passed, and the host can toggle it at any time over the "
         "control channel. Every shell command run this way is audit-logged.",
@@ -1877,6 +2403,7 @@ def main(argv: Optional[list] = None) -> int:
         )
         agent.conversation_history = SessionHistory(history_path)
         logger.info("Session transcript: %s", history_path)
+        index = open_index(history_path, args.session_kind)
     except Exception as exc:
         print(traceback.format_exc(), file=sys.stderr)
         _write_if_wire_alive(_terminal_error(exc), out)
@@ -1913,24 +2440,25 @@ def main(argv: Optional[list] = None) -> int:
         if query is None:  # stdin closed
             break
         if isinstance(query, _ClearHistory):
-            history = getattr(agent, "conversation_history", None)
-            if history is not None:
-                history.clear()
-            logger.info("conversation history cleared by host /clear")
+            _clear_from_host(agent, state, index)
             continue
         try:
-            dispatch_query(agent, query, out, dev=args.dev, state=state)
+            agent = follow_settings(agent, config_kwargs)
+            dispatch_query(agent, query, out, dev=args.dev, state=state, index=index)
         except BrokenPipeError:
             # The wire is the parent. It being gone is not a turn to report.
             logger.warning("stdout closed mid-turn — ending the run loop")
             break
         except Exception as exc:  # never let one bad turn kill the process
             logger.exception("stdio turn crashed outside the run loop")
-            if not _write_if_wire_alive(_terminal_error(exc), out):
+            wire = IndexedOut(out, index) if index is not None else out
+            if not _write_if_wire_alive(_terminal_error(exc), wire):
                 break
 
     # stdin closed: the parent is done with us.
     _drain_memory(agent)
+    if index is not None:
+        guarded(index, index.closed)
     _exit_cleanly(out)
 
 

@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/ignore.h>
 
@@ -82,7 +83,7 @@ protected:
     fs::path root_;
 
     void SetUp() override {
-        root_ = fs::temp_directory_path() / "gaia_ignore_test";
+        root_ = fs::temp_directory_path() / testsupport::perProcess("gaia_ignore_test");
         std::error_code ec;
         fs::remove_all(root_, ec);
         fs::create_directories(root_);
@@ -182,8 +183,45 @@ TEST_F(GitignoreTest, ForDirectoryOutsideRepoUsesOnlyItsOwnFile) {
     EXPECT_FALSE(matcher.isIgnored((root_ / "loose" / "public.txt").string(), false));
 }
 
+TEST_F(GitignoreTest, ForDirectoryIgnoredByItsRepositoryStillSearchesIt) {
+    fs::create_directories(root_ / "repo" / ".git");
+    fs::create_directories(root_ / "repo" / "build" / "proj" / "src");
+    {
+        std::ofstream f(root_ / "repo" / ".gitignore");
+        f << "build/\n*.py\n";
+    }
+    {
+        std::ofstream f(root_ / "repo" / "build" / "proj" / ".gitignore");
+        f << "generated/\n";
+    }
+
+    const fs::path proj = root_ / "repo" / "build" / "proj";
+    auto matcher = GitignoreMatcher::forDirectory(proj.string());
+    EXPECT_FALSE(matcher.isIgnored((proj / "src").string(), true));
+    EXPECT_FALSE(matcher.isIgnored((proj / "src" / "net.py").string(), false))
+        << "the repository's rules go with its decision to ignore the folder";
+    EXPECT_TRUE(matcher.isIgnored((proj / "generated").string(), true)) << "the folder's own file still applies";
+}
+
 TEST_F(GitignoreTest, PathsOutsideBaseDirAreNeverIgnored) {
     auto matcher = withRules("*.log\n");
     EXPECT_FALSE(matcher.isIgnored((fs::temp_directory_path() / "elsewhere.log").string(),
                                    false));
+}
+
+TEST(GlobMatchTest, AHugeRunOfStarsNeitherOverflowsNorChangesMeaning) {
+    const std::string stars(200000, '*');
+    EXPECT_TRUE(globMatch(stars + ".cpp", "main.cpp", nameMode()));
+    EXPECT_FALSE(globMatch(stars + ".cpp", "main.h", nameMode()));
+    EXPECT_TRUE(globMatch("src/" + stars + ".cpp", "src/a/b/main.cpp", pathMode()));
+    EXPECT_FALSE(globMatch("src/" + stars + ".cpp", "lib/main.cpp", pathMode()));
+    // An escaped star is a literal and is left alone.
+    EXPECT_TRUE(globMatch("a\\**", "a*bc", nameMode()));
+    EXPECT_FALSE(globMatch("a\\**", "abc", nameMode()));
+
+    GitignoreMatcher matcher;
+    matcher.addRules(stars + "\n*.log\n", fs::temp_directory_path().string());
+    EXPECT_FALSE(matcher.isIgnored((fs::temp_directory_path() / "keep.txt").string(), false))
+        << "an overlong rule is skipped";
+    EXPECT_TRUE(matcher.isIgnored((fs::temp_directory_path() / "build.log").string(), false));
 }

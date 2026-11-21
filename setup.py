@@ -12,16 +12,12 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
         raise ValueError("Unable to find version string in version.py")
     gaia_version = version_match.group(1)
 
-tkml_version = "5.0.4"
-
 # Standalone AMD agent wheels ('gaia-agent-<id>'), read statically by
 # util/list_agent_packages.py for build_agent_package.yml and
 # util/publish_agents_to_hub.py. Deliberately NOT an extras_require entry: the
 # wheels are not on PyPI, and an 'amd-gaia[agents]' extra naming them made pip
 # silently downgrade amd-gaia to the newest release without the extra (#2240).
 AGENT_WHEEL_PACKAGES = [
-    "gaia-agent-email",
-    "gaia-agent-chat",
     "gaia-agent-gaia",
 ]
 
@@ -39,6 +35,7 @@ setup(
         "gaia.llm",
         "gaia.llm.providers",
         "gaia.audio",
+        "gaia.automations",
         "gaia.chat",
         "gaia.schedule",
         "gaia.daemon",
@@ -47,7 +44,7 @@ setup(
         "gaia.daemon.sidecars",
         "gaia.ui",
         "gaia.ui.routers",
-        "gaia.ui.email_sidecar",
+        "gaia.ui.sidecar",
         "gaia.sidecar",
         "gaia.database",
         "gaia.talk",
@@ -71,9 +68,8 @@ setup(
         "gaia.agents",
         "gaia.agents.base",
         "gaia.agents.tools",
+        "gaia.agents.tools._calendar",
         "gaia.agents.tools._email",
-        "gaia.agents.code_index",
-        "gaia.agents.code_index.tools",
         "gaia.governance",
         "gaia.factory",
         "gaia.factory.harvest",
@@ -88,6 +84,7 @@ setup(
         "gaia.apps.webui",
         "gaia.messaging",
         "gaia.messaging.slack",
+        "gaia.messaging.discord",
         "gaia.connectors",
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
@@ -96,14 +93,6 @@ setup(
     ],
     package_data={
         "gaia.eval.memory": ["scenarios/*.yaml"],
-        "gaia.eval": [
-            "webapp/*.json",
-            "webapp/*.js",
-            "webapp/*.md",
-            "webapp/public/*.html",
-            "webapp/public/*.css",
-            "webapp/public/*.js",
-        ],
         # Browser-mode Agent UI bundle. Recursive globs in package_data are
         # unreliable across setuptools versions, so we list shallow patterns
         # here and back them up with `recursive-include` in MANIFEST.in. The
@@ -141,13 +130,17 @@ setup(
         # get_connection_with_tls_context but has no such hook, so the SNI
         # would silently revert to the pinned IP.
         "requests>=2.32.3",
+        # gaia.utils.text_decoding detects Windows-1256 / Shift-JIS / GBK text
+        # files with it, for the file tools, the Agent UI preview and RAG.
+        "charset-normalizer>=3.0",
         # <1.0: openai checks any imported httpx for httpx.Timeout, which the
         # 1.0 pre-releases removed, so `pip install --pre` broke every chat turn.
         "httpx>=0.27.0,<1.0",
+        "idna>=3.0",
         # HTTPS trusts the OS certificate store (gaia.tls), so a corporate
         # TLS-inspecting proxy's root works as it does for pip. 0.10 also
         # honours CA files loaded on top (certifi), so nothing stops verifying.
-        "truststore>=0.10.0",
+        "truststore>=0.10.3",
         "beautifulsoup4",
         # watchdog 7.0.0 starves Windows change delivery while a neighbouring
         # file is written continuously; stay on the known-good 6.x line until
@@ -165,6 +158,9 @@ setup(
         "tomli>=2.0.0; python_version < '3.11'",
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
         "keyring>=24.0.0,<26.0.0",
+        # The Discord bridge is set up from the TUI and Agent UI, whose installs
+        # never add extras; it needs only aiohttp (already core) and audioop-lts on 3.13+.
+        "discord.py>=2.7,<3",
         "tavily-python>=0.5.0",
         # Gateway Claude models (amd.Claude-*) call the gateway's Anthropic
         # route through this SDK, so a base install can pick one. 0.49 is the
@@ -228,7 +224,7 @@ setup(
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
             "pypdfium2>=5.0.0,<6",
-            "pypdf>=6.20.0",
+            "pypdf>=6.21.0",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
             "openpyxl>=3.1.0",
@@ -243,6 +239,11 @@ setup(
         # sys.executable is the .exe rather than an interpreter.
         "diarize": [
             "sherpa-onnx>=1.13,<3",
+        ],
+        # Fetches videos from links. Installed on first use in a source install;
+        # a frozen build has to bundle it, as with diarize above.
+        "media-url": [
+            "yt-dlp>=2025.1.1",
         ],
         "mcp": [
             # Supports mcp 2.x: its public MCPServer API replaced
@@ -262,11 +263,9 @@ setup(
         "dev": [
             "pytest",
             "pytest-cov",
-            "pytest-benchmark",
             "pytest-mock",
             "pytest-asyncio",
             "pytest-xdist",
-            "pytest-rerunfailures",
             "pyfakefs",
             "matplotlib",
             "black",
@@ -291,14 +290,11 @@ setup(
             # Tokenizer proxy for the tool-prompt cost harness (#1448,
             # gaia.eval.tool_cost) so the budget test can count tokens.
             "tiktoken>=0.7.0,<1.0.0",
-            # OpenAPI response-body validation against the committed spec
-            # (tests/test_email_openapi_conformance.py, #1897).
-            "jsonschema>=4.0.0,<5.0.0",
         ],
         "eval": [
             "bs4",
             "numpy>=2.0,<2.3.0",
-            "pypdf>=6.20.0",
+            "pypdf>=6.21.0",
             "reportlab",
             # Tool-prompt cost measurement (#1448): tiktoken cl100k_base proxy.
             "tiktoken>=0.7.0,<1.0.0",
@@ -315,6 +311,12 @@ setup(
             # tracked in #372; #382 stages the packaging dependency first.
             "websockets",
         ],
+        # The scheduler's Windows notification sink (`--sink notification`).
+        # Without it the sink shows a message box that waits for a click.
+        # No win32 marker: `gaia init` refuses a platform marker on an extra.
+        "notify": [
+            "plyer>=2.1.0,<3",
+        ],
         "youtube": [
             "llama-index-readers-youtube-transcript",
         ],
@@ -325,7 +327,7 @@ setup(
             # PDF rendering and image extraction (PDFium; Apache-2.0/BSD-3).
             # PyMuPDF is AGPL-3.0 and must not come back.
             "pypdfium2>=5.0.0,<6",
-            "pypdf>=6.20.0",
+            "pypdf>=6.21.0",
             # Reading AND writing the common office formats. The read half is
             # what RAG needs; the write half is what the document skills need,
             # and this is the extra `gaia init --profile chat` installs. Without
@@ -377,7 +379,6 @@ setup(
     entry_points={
         "console_scripts": [
             "gaia = gaia.cli:main",
-            "gaia-cli = gaia.cli:main",
             "gaia-mcp = gaia.mcp.mcp_bridge:main",
         ]
     },

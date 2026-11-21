@@ -3,12 +3,21 @@
 
 // Endpoint tests against real SQLite: the SQL, the joins and the response shape the pages rely on.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleApi } from "../src/api";
 import { insertMany, writeAtomic } from "../src/collector";
 import { memoryD1 } from "./d1";
 
 const DAY = 86_400_000;
+// Freeze the clock the API reads too, so a run near midnight UTC can't split "today" between test and code.
+const NOW = new Date("2026-06-15T12:00:00.000Z");
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 const iso = (daysAgo: number) => new Date(Date.now() - daysAgo * DAY).toISOString();
 const day = (daysAgo: number) => iso(daysAgo).slice(0, 10);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -51,6 +60,49 @@ describe("/api/downloads", () => {
     expect(d.releases).toEqual([expect.objectContaining({ tag: "v1.0.0", install: 130, meta: 900, byOs: { Windows: 130 } })]);
     expect(d.daily).toEqual([expect.objectContaining({ day: day(1), install: 30, meta: 400 })]);
     expect(d.firstSnapshotDay).toBe(day(2));
+  });
+
+  it("gives the newest final release's installs per day, from zero on the day it shipped", async () => {
+    const db = memoryD1();
+    await put(db, "releases", ["tag", "published_at", "prerelease", "html_url"], [
+      ["v1.0.0", iso(30), 0, "u"],
+      ["v1.1.0", iso(2), 0, "u"],
+      ["v1.2.0-rc1", iso(1), 1, "u"],
+    ]);
+    await put(db, "asset_snapshots", ["day", "tag", "asset", "downloads"], [
+      [day(3), "v1.0.0", "gaia-windows-setup.exe", 100],
+      [day(2), "v1.0.0", "gaia-windows-setup.exe", 110],
+      [day(2), "v1.1.0", "gaia-windows-setup.exe", 40],
+      [day(1), "v1.0.0", "gaia-windows-setup.exe", 111],
+      [day(1), "v1.1.0", "gaia-windows-setup.exe", 70],
+      [day(1), "v1.1.0", "latest.yml", 900],
+      [day(1), "v1.2.0-rc1", "gaia-windows-setup.exe", 5],
+    ]);
+    const d = await get(db, "/api/downloads", "range=30");
+    expect(d.latestDaily).toEqual({ tag: "v1.1.0", daily: [{ day: day(2), install: 40 }, { day: day(1), install: 30 }] });
+  });
+
+  it("treats a day the release is missing from as a gap, not as zero downloads", async () => {
+    const db = memoryD1();
+    await put(db, "releases", ["tag", "published_at", "prerelease", "html_url"], [
+      ["v1.0.0", iso(30), 0, "u"],
+      ["v1.1.0", iso(5), 0, "u"],
+    ]);
+    await put(db, "asset_snapshots", ["day", "tag", "asset", "downloads"], [
+      [day(4), "v1.1.0", "gaia-windows-setup.exe", 100],
+      [day(3), "v1.1.0", "gaia-windows-setup.exe", 150],
+      [day(2), "v1.0.0", "gaia-windows-setup.exe", 500],
+      [day(1), "v1.1.0", "gaia-windows-setup.exe", 170],
+    ]);
+    const d = await get(db, "/api/downloads", "range=30");
+    expect(d.latestDaily.daily).toEqual([{ day: day(3), install: 50 }]);
+  });
+
+  it("has no per-day figures before any final release", async () => {
+    const db = memoryD1();
+    await put(db, "releases", ["tag", "published_at", "prerelease", "html_url"], [["v1.0.0-rc1", iso(2), 1, "u"]]);
+    await put(db, "asset_snapshots", ["day", "tag", "asset", "downloads"], [[day(1), "v1.0.0-rc1", "gaia-windows-setup.exe", 3]]);
+    expect((await get(db, "/api/downloads", "range=30")).latestDaily).toBeNull();
   });
 });
 

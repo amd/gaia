@@ -341,6 +341,20 @@ describe("GitHub releases as the default feed", () => {
     });
   });
 
+  test("a macOS release that attaches its zip is offered and listed in the picker", async () => {
+    await onPlatform("darwin", "arm64", async () => {
+      const mod = start("0.25.0");
+      serveReleases([release("v0.25.2"), release("v0.25.1", { installer: false })]);
+
+      await mod.checkForUpdates();
+      const listed = await mod.listReleases();
+
+      expect(feedTag()).toBe("v0.25.2");
+      expect(checkSpy).toHaveBeenCalled();
+      expect(listed.map((r) => r.tag)).toEqual(["v0.25.2"]);
+    });
+  });
+
   test.each([
     ["the manifest", { manifest: false }],
     ["the installer", { installer: false }],

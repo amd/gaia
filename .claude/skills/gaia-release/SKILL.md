@@ -61,7 +61,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 - **Plain language first, in every artifact** — the release notes, PR body, Discord post, and your own between-phase status updates all follow [CLAUDE.md → How You Communicate](../../../CLAUDE.md#how-you-communicate): lead with what a user can now do, layer version numbers, SHAs, and pipeline mechanics underneath. Say each point once — don't restate a highlight in the changelog and again in the announcement.
 - **No Claude attribution anywhere** — not in PR titles, PR bodies, commit messages (no `Co-Authored-By: Claude ...` trailer), release notes, code comments, or the Discord announcement.
 - **No silent fallbacks** — if a validator fails, a step times out, or a workflow run isn't found, stop with an actionable error. Do not retry blindly. Do not "proceed anyway."
-- **Release notes are bulleted, plain, and short** — see *Notes format* in Phase 1. Every entry is one bullet, never a prose block; no narrative overview paragraph; no emoji; a hard word budget that is checked, not eyeballed. Sections in order: `## Breaking Changes` (only if any), `## What's New`, `## Bug Fixes`, `## Known Issues` (only if any), `## Contributors`, `## Full Changelog`. Patch releases do **not** include a `pip install` block.
+- **Release notes are bulleted, plain, and short** — see *Notes format* in Phase 1. Every entry is one bullet, never a prose block; no narrative overview paragraph; no emoji; a hard word budget that is checked, not eyeballed. Sections in order: `## Summary`, `## Breaking Changes` (only if any), `## What's New`, `## Bug Fixes`, `## Known Issues` (only if any), `## Contributors`, `## Full Changelog`. Patch releases do **not** include a `pip install` block.
 - **Match the previous release PR body shape exactly** — read the most recent merged `Release vX.Y.Z` PR (e.g. `gh pr list --repo amd/gaia --state merged --search "Release v in:title" --limit 3`). Open with `# GAIA vX.Y.Z Release Notes` (no MDX frontmatter in the PR body), end with a `Release checklist` section. Style drift here costs review cycles.
 - **The `version.py` bump and its notes land in the same commit.** `docs.yml` and `tests/unit/test_docs_json_release.py` both resolve `docs/releases/v<version>.mdx` and the `docs.json` navbar label from the *declared* `__version__`, so bumping ahead of the notes (the old `0.17.3` → "bump to 0.17.4 for development" pattern) turns every later docs and unit run red, not just the release PR. Never bump on its own.
 - **Bulletproof commits only** — every change made by this skill must satisfy the four criteria in CLAUDE.md (validated, critiqued, scope-clean, no half-finished work) before being committed.
@@ -113,8 +113,11 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
    # GAIA v<version> Release Notes
 
-   <Optional single sentence naming what this release is about. Drop it entirely if
-   the bullets already say it — that is the common case. Never a paragraph.>
+   ## Summary
+
+   - <highest-impact user-visible outcome, in plain words>
+   - <the next one; 3–5 bullets in all>
+   - <N> contributors merged <M> PRs since v<previous>.
 
    ## Breaking Changes
 
@@ -143,6 +146,17 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
    Full Changelog: [v<previous>...v<version>](https://github.com/amd/gaia/compare/v<previous>...v<version>)
    ```
+
+   **`## Summary` comes first — high signal, low noise.** 3–5 short bullets, each one
+   user-visible outcome of *this* release in plain words: no implementation detail, no
+   PR/issue numbers or file names, no sub-bullets. Then one stats bullet: the line
+   `python util/release_stats.py v<previous> HEAD --bullet` prints (each person counted
+   once; re-run it against the tag commit before tagging). Release-window figures only: no
+   stars, downloads, or growth, and no eval data (scores, cost, token or time figures, task
+   counts or traces). The notes are public.
+
+   > - Ask about a PDF longer than 100 pages and get a complete answer.
+   > - 42 contributors merged 310 PRs since v0.25.4.
 
    Omit `## Breaking Changes` and `## Known Issues` when empty — no "None" placeholder. Drop
    the `---` rules between sections; the headings already separate them.
@@ -179,13 +193,14 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    - **Bullets, not paragraphs.** Every entry is one bullet: a bold clause naming what the
      user can now do, then at most one sentence, then the PR links. No `###` prose blocks
      inside `What's New`.
-   - **Say it once.** A highlight appears in the bullet list or in the opening sentence,
-     never both. The frontmatter `description` is not a third copy.
+   - **Say it once.** `## Summary` names an outcome in a few words; its `What's New` or
+     `Bug Fixes` bullet carries the detail and links. The frontmatter `description` is not
+     a third copy.
    - **Factual, not promotional.** State the capability and stop. Banned: emoji, "we're
      excited to announce", "finally", "blazing(-fast)", "game-changer", "seamless",
      "powerful", "unlock", "Here's the good stuff", "makes X effortless", "no more
      crashes", invented benchmarks.
-   - **Order by what users run.** Agents and commands first (`gaia hub`, `gaia email`, …);
+   - **Order by what users run.** Agents and commands first (`gaia-tui`, `gaia slack`, …);
      SDK, CI, and refactor work last, or omitted when it has no user-visible effect.
    - **Word budget — a cap, not a target.** **≤ 350 words** for a patch, **≤ 600** for a
      minor/major, measured from the top down to the first of `## Bug Fixes` / `## Known
@@ -198,14 +213,14 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    **Example — one highlight:**
 
    > **Bad** (prose block, promotional, three sentences where one works):
-   > ### Triage your inbox from the terminal — `gaia email`
-   > Point GAIA at your inbox and it sorts the noise from what needs you: drafts
-   > replies to routine mail, flags what's urgent, leaves the rest. Runs locally, so
-   > your mail never leaves your machine. Try it: `gaia email`.
+   > ### Talk to GAIA from Slack — `gaia slack`
+   > Bring GAIA into your workspace and it answers right where your team already
+   > talks. No more switching apps to ask a question — just message it and the
+   > answer appears in Slack. Try it: `gaia slack setup`.
 
    > **Good** (one bullet, plain, factual):
-   > - **Triage your inbox from the terminal** — `gaia email` sorts mail, drafts replies to
-   >   routine messages, and flags what needs you. Runs locally. (PR [#1234](https://github.com/amd/gaia/pull/1234))
+   > - **Talk to GAIA from Slack** — `gaia slack setup` connects a workspace so you can
+   >   message GAIA from Slack. (PR [#1234](https://github.com/amd/gaia/pull/1234))
 
 4. **Add the release page to [docs/docs.json](../../../docs/docs.json):** add `releases/v<version>` to the Releases tab. Step 5 stamps the navbar label.
 
@@ -219,11 +234,11 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    - the Agent UI's `package.json` and lockfile (formerly `bump-ui-version.mjs`);
    - the Terminal UI's hub manifest `version` (`hub/components/terminal-hub/gaia-agent.yaml`). Its six raw binaries publish to the Agent Hub R2 catalog because the flagship's `binaries.lock.json` pins them there, and `release_components.yml` gates the tag against the manifest. R2 paths are immutable, so a mismatch **fails the release** by design. `hub/components/agent-ui/` is no longer published and needs no bump;
    - the `docs.json` navbar label, `v<version> · Lemonade <LEMONADE_VERSION>`. It can lag `LEMONADE_VERSION`, because Lemonade bumps land outside release PRs;
-   - the flagship and chat agents' `amd-gaia>=` floors and `min_gaia_version`, and the minimum core the flagship's npm `README.md` and `SKILL.md` quote.
+   - the flagship agent's `amd-gaia>=` floor and `min_gaia_version`, and the minimum core the flagship's npm `README.md` and `SKILL.md` quote.
 
    Two consequences of the floors moving. The flagship's next `npm/CHANGELOG.md` entry must quote the new minimum (``Python CLI <version>+ on `PATH` ``): `test_npm_doc_min_version.py` reads the first such line, and the stamp never edits a past entry. And the floors live in files the flagship binary is frozen from, so a final needs a flagship release cut from this commit (Phase 3, step 4).
 
-   It leaves the flagship and chat agents' own versions alone: they follow their own sources until they join core's (#5172). Two `HELD` lines, the chat agent's `__init__.py` and the flagship npm lockfile's root version, are known drift held for the same reason. They print but don't fail.
+   It leaves the flagship agent's own version alone: it follows its own source until it joins core's (#5172).
 
 6. **Bump the Terminal UI's `min_gaia_version` by hand** to `<version>`. It is not stamped. It needs
    daemon host API v1.1, which no release before this one ships — so the release it
@@ -256,7 +271,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    after the notes passed the Python validator (see the escaping rule in step 3). Its error is
    misleading: an unparseable `.mdx` surfaces as `"releases/v<version>" is referenced in the
    docs.json navigation but the file does not exist` — the file exists, it just never parsed.
-   Pre-existing parse errors under `docs/plans/` and `docs/superpowers/` are reported but
+   Pre-existing parse errors under `docs/plans/` are reported but
    non-fatal; leave them alone.
 
 ### Gate 1 — show the user the draft
@@ -364,7 +379,7 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    ```
    If it fails, release the flagship in this order. Skipping step 2 deadlocks: `release_agent_gaia.yml` refuses to run until the Terminal UI (`terminal-hub`) version the lock pins is on the hub, and it normally publishes only on the final tag, which this gate blocks.
    1. Bump the flagship in a PR: edit `__version__` in `hub/agents/gaia/python/gaia_agent/__init__.py`, run `python util/release_versions.py --stamp`, add a `hub/agents/gaia/npm/CHANGELOG.md` entry. (`hub/agents/gaia/python/packaging/stamp_version.py` writes the same flagship fields and still works; `release_agent_gaia.yml` runs its `--check`.)
-   2. **Publish the Terminal UI (`terminal-hub`) first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its Windows-setup leg fails because there is no GitHub release or new flagship yet, and its installer-attach job finds no GitHub release, warns, and attaches nothing; neither publishes anything. **Publish terminal-hub** going green is what this step needs. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
+   2. **Publish the Terminal UI (`terminal-hub`) first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its Windows-setup leg is skipped because there is no GitHub release yet, and its installer-attach job finds no GitHub release, warns, and attaches nothing; neither publishes anything. **Publish terminal-hub** going green is what this step needs. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
    3. Tag `agent-pkg-gaia-v<flagship-version>` on the merged commit and approve `release_agent_gaia.yml`.
    4. Merge the PR the release opens once it publishes: its `pin-lock` job commits the regenerated `binaries.lock.json` (real hashes) to branch `flagship-lock/v<flagship-version>` and opens `chore(release): pin flagship agent <version>'s published hashes`. It is a bot PR, so CI only runs when the merge queue picks it up. Never hand-edit the hashes; if the PR is missing, re-run that release run's `pin-lock` job, which never opens a second PR and does nothing when main already matches. Then re-run Phase 3 on the merged commit. Code the binary is frozen from must not change between the agent tag and the core tag.
 
@@ -378,6 +393,17 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    ```
    **AppImage smoke jobs (`appimage-distro-matrix`, `appimage-userns-restricted`) are the most flaky** — `appimage-userns-restricted` has a 300s `state: ready` poll (raised from 90s to cover a first-run model download). On real failure, **stop** and fix root cause; on transient flake (timeout-only, no logic error), `gh run rerun $RUN_ID --failed` is acceptable.
 
+6. **Check the last RC's findings are fixed or deferred.** rc4 shipped rc3's bugs because their fix PRs (#6544–#6547, #6554) were still open when it was tagged. An open fix PR is not a fix. Skip the second query for `-rc1`.
+   ```bash
+   MS=$(gh api repos/amd/gaia/milestones --jq '.[] | select(.title | test("^v<version>( |$)")) | .title')
+   gh issue list --repo amd/gaia --milestone "$MS" --state open --limit 200
+   PREV=$(git tag --list 'v<version>-rc*' --sort=-v:refname | head -n 1)
+   # Bugs filed since the last RC without a milestone (#6540, #6551 slipped through this way)
+   gh issue list --repo amd/gaia --state open --label bug --limit 200 \
+     --search "no:milestone created:>=$(git log -1 --format=%cs "$PREV")"
+   ```
+   Each one is merged and closed, or moved to a later milestone with a comment giving the reason. Release-test findings carry the milestone because the testing skill's issue template files them with it.
+
 ### Gate 3 — green run on the merged commit
 
 Required before continuing:
@@ -385,6 +411,7 @@ Required before continuing:
 - `__version__` matches the target.
 - `validate_release_notes.py` passes.
 - For a final, `check_flagship_release.py` passes.
+- No open issue in the release milestone, and no unmilestoned bug since the last RC, unless deferred with a reason.
 - Build Installers run on the merged commit is **green** (not yellow, not "mostly green except smoke tests").
 
 Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the **merged SHA** (`$MERGED_SHA`). Ask: **"Pre-tag verification green on `<sha>` (release PR #N). Push tag `v<version>`?"** — the SHA and PR number being in the question text means Phase 4 can re-derive them even if the user resumes in a fresh shell.
@@ -403,8 +430,8 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 | Installers (Windows setup, `.pkg`, `.deb`/`.rpm`) | built and attached by `publish.yml`, around the flagship the lock pins; no approval beyond `approve-publish` | built and attached by `publish.yml`, around the RC's own flagship |
 | `release_components.yml` | publishes only the terminal's raw binaries to the Agent Hub (R2), where the flagship lock pins them, behind the `agent-publish` approval; attaches nothing on a tag | does not run — the catalog has no pre-release channel |
 | Website | stable downloads | a collapsed "Try the release candidate" entry, hidden once the final ships |
-| Flagship agent (`gaia-agent`) | the hub's, from `release_agent_gaia.yml` | frozen from the RC's commit by `rc-flagship`, attached to the pre-release; the RC core installs it from there and never from the hub |
-| `release` branch, release-notes bot | run | skipped |
+| Flagship agent (`gaia-agent`) | the hub's, from `release_agent_gaia.yml` | frozen from the RC's commit by `rc-flagship`, attached to the pre-release; the RC core installs it from there and never from the hub. Inside the run, before the pre-release exists, every frozen core's real-engine check installs it from the run's artifacts (`build_core.yml` `flagship: artifact`, `GAIA_RC_FLAGSHIP_URL`), so the desktop installers wait for `rc-flagship` |
+| `release` branch, post-release notes check (`claude.yml` `release-notes`) | run | skipped |
 | Release notes | `docs/releases/v<version>.mdx` | the same file — no RC-specific notes |
 
 `version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. Every tag, RC or final, carries the terminal's `.pkg` (arm64 + x64) and `.deb`/`.rpm` with `gaia-installers-SHA256SUMS.txt` — for an RC named `gaia-X.Y.Z-rc.N-darwin-<arch>.pkg`, `gaia_X.Y.Z-rc.N_amd64.deb` and `gaia-X.Y.Z-rc.N.x86_64.rpm`: `publish.yml`'s `tui-installers` builds them (around the RC's own flagship, or for a final the one the lock pins), `approve-publish` refuses to publish unless every leg installed cleanly, and `github-release-installers` attaches them. Inside, an RC's `.deb`/`.rpm` say `X.Y.Z~rc.N`, so the final upgrades over them (`installer/tui/linux/README.md`). Every tag also carries the one-step Windows setup (`gaia-<npm version>-win-x64-setup.exe`, built by `publish.yml`'s `windows-setup` around that run's own desktop app build — never published to R2), the desktop app installers, the raw terminal binaries, and the wheel/sdist. A failed setup turns the run red via `windows-setup-missing`: a final publishes nothing until it passes, and an RC ships without it and says so in its notes. `release-assets-complete` then reads the published release and fails the run, naming each file, if a promised installer is not on it (`util/check_release_assets.py`). `release_components.yml` no longer attaches anything on a tag, so a green publish run is what proves a complete release. None of the installer jobs takes an environment, so a final's installers never wait on `release_components.yml`'s `agent-publish` approval.
@@ -425,7 +452,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    git push origin v<version>-rc1
    ```
 
-3. **Monitor exactly as in Phase 5, minus the approval:** an RC publishes as soon as its builds and `ci-green` pass. Tagging `-rc(N+1)` does not cancel `-rcN`; if `-rcN` is still building, it stops itself right before publishing (red, "superseded by"), so only the newest RC reaches `next`. `redeploy-website` asks the website to rebuild so the RC entry appears (it does the same for a final).
+3. **Monitor exactly as in Phase 5, minus the approval:** an RC publishes as soon as its builds pass; `ci-green` only reports CI on an RC (warnings, never a block). Tagging `-rc(N+1)` does not cancel `-rcN`; if `-rcN` is still building, it stops itself right before publishing (red, "superseded by"), so only the newest RC reaches `next`. `redeploy-website` asks the website to rebuild so the RC entry appears (it does the same for a final).
 
 4. **Personal test pass** on a machine that does not already have the release installed (CLAUDE.md: test from the user's real initial state):
    ```bash
@@ -481,7 +508,16 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
 
    The flow is: `validate → build (build-pypi + build-npm + build-desktop-installers + tui-installers → windows-setup) + ci-green → approve-publish (manual gate for a final; none for an RC) → publish (publish-pypi + publish-npm) → post-publish-smoke → github-release (attaches the Windows setup) → github-release-installers (the .pkg/.deb/.rpm) → release-assets-complete + redeploy-website`. The installer jobs run for a final too and take no environment, so `approve-publish` is the final's only approval in this run. Surface the run URL.
 
-   `ci-green` requires a passing run of `lint.yml`, `test_unit.yml` and `test_gaia_cli_linux.yml` on the tagged commit (`util/check_release_ci.py`). Most main commits have none (the next merge cancels their runs), so it dispatches the missing ones against the tag and waits up to ~80 min alongside the builds. A red one stops the release before anything publishes.
+   `ci-green` (`util/check_release_ci.py`) checks CI on the tagged commit. What it does depends on the tag, and that file is the only list:
+
+   | | Blocks publishing | Reported only (job summary + warning) |
+   |---|---|---|
+   | **RC** `vX.Y.Z-rcN` (`RC_REPORTED`) | nothing — tests never hold a candidate | `lint.yml`; the Linux and import-floor jobs of `test_unit.yml`; its macOS, Windows and offline-integration jobs; `test_gaia_cli_linux.yml`; `release_train_dryrun.yml`; the Windows and Linux jobs of `test_npu_agent_chat.yml` |
+   | **Final** `vX.Y.Z` (`FINAL_REQUIRED`, `FINAL_ADVISORY`) | every job of `lint.yml`, `test_unit.yml` (from a dispatched or nightly run only: push and merge-queue runs select tests, so the gate dispatches one), `test_gaia_cli_linux.yml`; the Windows job of `test_npu_agent_chat.yml` (an agent turn on the NPU); plus `release_train_dryrun.yml` | the Linux job of `test_npu_agent_chat.yml`, read once with no dispatch or wait, until the Linux Strix Halo runners lock enough memory for the NPU model (#6764) |
+
+   On an RC the gate reads each check once, with no dispatch and no wait, writes each one's state (passed / failed / still running / no run on this commit) to the job summary with a `::warning::` for each that is not green, and exits 0; `approve-publish` does not need `ci-green` on an RC either. What still holds an RC is its own build and the smoke tests of those artifacts (`build-pypi`, `build-npm`, `build-desktop-installers` with its installer smoke jobs, `rc-flagship`, `tui-installers-complete`). The two source-tree test runs inside the build (`build-npm`'s backend pytest and the installers' custom-agent MCP harness) run on finals only. Evals never gate (`eval_flagship.yml` reports separately).
+
+   On a final, most main commits have no runs of their own (the next merge cancels them), so a required check with none is dispatched once against the tag and waited for, up to ~80 min alongside the builds. The gate never starts a dry run: before tagging a final, run it on the candidate's commit (`gh workflow run release_train_dryrun.yml --repo amd/gaia --ref v<version>-rcN -f rc_tag=v<version>-rcN`) and let it pass, or the final fails and prints the command. An RC's warnings are the final's blockers, except the Linux NPU row, so fix them before tagging the final.
 
 ---
 
@@ -526,6 +562,8 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
    gh release view v<version> --repo amd/gaia
    ```
    Required artifacts: `.whl`, `.tar.gz`, `.deb`, `.AppImage`, `.dmg`, `.exe`, and the `latest*.yml` files for the Electron auto-updater. If any are missing, the corresponding build job didn't run or didn't upload — investigate.
+
+   **Then bring the Full Changelog up to the tag.** The notes are written before the tag, so they cannot list the notes commit itself or anything merged after it. `claude.yml`'s `release-notes` job runs once the final publishes and only reads: it fails, and files one issue keyed `release-notes/v<version>`, when `docs/releases/v<version>.mdx` is missing at the tag or the published body's `**N commits**` (or its listed lines) disagrees with `git log <previous-final>..v<version>`. It never writes notes, bumps `version.py`, pushes, or edits the release. To clear it: regenerate the list against the tag with the Phase 1 recipe, merge that in a PR, run `gh release edit v<version> --repo amd/gaia --notes-file <body>` with the corrected body, and re-run the job; a green run closes the issue.
 
 3. **Draft the Discord announcement.** Read the just-shipped release notes (`docs/releases/v<version>.mdx`) to populate the highlight list — reuse the `What's New` bullets near-verbatim plus any Bug Fix worth surfacing. Same *Notes format* rules apply: bullets, plain, factual, no emoji.
 

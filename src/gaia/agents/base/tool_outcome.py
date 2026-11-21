@@ -43,6 +43,22 @@ def tool_result_dict(result: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+def reports_findings(data: Dict[str, Any]) -> bool:
+    """Whether *data* is a check that ran and reports on what it checked.
+
+    A check tool names its own outcome (``"status": "errors_found"``) and sets
+    ``ok`` to false for the file it looked at. The call itself worked: its
+    findings are the result, for the model to act on, not a tool error.
+    """
+    status = data.get("status")
+    return (
+        isinstance(status, str)
+        and bool(status.strip())
+        and status not in FAILED_STATUSES
+        and not data.get("error")
+    )
+
+
 def tool_result_failed(
     result: Any, failed_statuses: Tuple[str, ...] = ERROR_STATUSES
 ) -> bool:
@@ -50,7 +66,9 @@ def tool_result_failed(
 
     A non-zero ``return_code`` counts unless the tool marked it
     ``expected_exit`` (grep's exit 1 is "no match"). A bare ``error`` counts
-    only when nothing in the result claims success.
+    only when nothing in the result claims success. ``ok: false`` beside a
+    status the tool named itself is a check's verdict, not a failed call
+    (:func:`reports_findings`).
     """
     data = tool_result_dict(result)
     if data is None:
@@ -59,7 +77,7 @@ def tool_result_failed(
     if (
         status in failed_statuses
         or data.get("success") is False
-        or data.get("ok") is False
+        or (data.get("ok") is False and not reports_findings(data))
         or data.get("has_errors") is True
     ):
         return True

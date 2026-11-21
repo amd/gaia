@@ -98,3 +98,92 @@
         opacity: 0.6;
     }
 }
+
+/* ── Arrivals: what appears when something opens or switches ─────────
+ * Each has one job: show where a thing came from, or that the view
+ * changed. Short and settling, never travelling far. */
+
+/* A menu rises out of the button that opened it, so the eye stays there. */
+.popover {
+    --popover-from: 4px;
+    animation: popoverIn var(--duration) var(--ease);
+}
+.popover-above {
+    --popover-from: 4px;
+    transform-origin: bottom center;
+}
+.popover-below {
+    --popover-from: -4px;
+    transform-origin: top center;
+}
+
+@keyframes popoverIn {
+    from { opacity: 0; transform: translateY(var(--popover-from)) scale(0.98); }
+    to { opacity: 1; transform: none; }
+}
+
+/* Another chat, page or Settings tab: a short fade says "somewhere else"
+   without moving the content the reader is about to read. */
+.task-view,
+.memory-dashboard-page,
+.settings-pane {
+    animation: fadeIn var(--duration) var(--ease);
+}
+
+/* A section opens by growing to its height, so what it reveals isn't a jump.
+   Browsers without ::details-content just open it as before. */
+:root {
+    interpolate-size: allow-keywords;
+}
+details::details-content {
+    block-size: 0;
+    /* In a flex disclosure its automatic minimum is its full height: open at once. */
+    min-block-size: 0;
+    overflow: clip;
+    overflow-clip-margin: 4px;
+    transition:
+        block-size var(--duration-slow) var(--ease),
+        content-visibility var(--duration-slow) var(--ease) allow-discrete;
+}
+details[open]::details-content {
+    block-size: auto;
+}
+
+/* Side panel sections are added and removed rather than folded: fade in. */
+.sp-section-body,
+.side-rail-section-body {
+    animation: fadeIn var(--duration) var(--ease);
+}
+
+/* Session panel: a section, row or chip that turns up after the panel has
+   settled opens to its height and fades in, with a brief wash of the accent
+   so the eye finds what is new. What was there on open does not move. */
+.sp-appear {
+    interpolate-size: allow-keywords;
+    animation:
+        spAppear var(--duration-slow) var(--ease),
+        spAppearWash var(--duration-wash) var(--ease-in-out);
+}
+
+.sp-focus-item.sp-appear { animation: spChipIn var(--duration-spring) var(--ease); }
+
+@keyframes spAppear {
+    from { height: 0; opacity: 0; transform: translateY(-6px); overflow: clip; }
+    99% { overflow: clip; }
+}
+
+@keyframes spAppearWash {
+    from { background-color: color-mix(in srgb, var(--accent) 14%, transparent); }
+    to { background-color: transparent; }
+}
+
+@keyframes spChipIn {
+    0% { opacity: 0; transform: scale(0.8); }
+    60% { opacity: 1; transform: scale(1.05); }
+    100% { opacity: 1; transform: scale(1); }
+}
+
+/* The panel's plan ticks a step over the way the transcript's checklist does: while it runs, not each time a finished one is shown. */
+.sp-plan.is-live .plan-icon-done {
+    animation: planTick var(--duration-slow) var(--ease);
+}

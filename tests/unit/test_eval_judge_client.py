@@ -663,10 +663,10 @@ def test_usage_with_zero_tokens_does_not_divide_by_zero(monkeypatch, fake_claude
     assert out["cost"] == {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0}
 
 
-def test_unknown_model_prices_with_the_default_row(monkeypatch, fake_claude_bin):
+def test_unpriced_model_is_refused_before_any_call(monkeypatch, fake_claude_bin):
     _run_with_usage(monkeypatch, {"input_tokens": 100, "output_tokens": 100}, cost=1)
-    out = ClaudeCliClient(model="not-a-real-model").get_completion_with_usage("go")
-    assert out["cost"]["total_cost"] == 1
+    with pytest.raises(ValueError, match="not-a-real-model"):
+        ClaudeCliClient(model="not-a-real-model")
 
 
 def test_missing_usage_block_is_an_error_not_zero(monkeypatch, fake_claude_bin):

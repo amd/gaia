@@ -14,9 +14,8 @@ the transport layer:
   runner it needs no environment variable when the CLI is logged in.
 
 Both yield an object exposing ``get_completion(prompt)`` that returns a list of
-content blocks with a ``.text`` attribute, so the three judge factories
-(``draft_quality`` / ``action_item_quality`` / ``briefing_quality``) consume
-either without caring which is in play.
+content blocks with a ``.text`` attribute, so a judge consumes either
+without caring which is in play.
 
 Which one is used follows :mod:`gaia.eval.claude_credential`: the subscription
 first, then ``ANTHROPIC_API_KEY`` from the environment, then from a ``.env``.
@@ -44,7 +43,7 @@ from gaia.eval.claude_credential import (  # noqa: F401  # pylint: disable=unuse
     resolve_claude_credential,
 )
 from gaia.eval.claude_usage import TOKEN_FIELDS, usage_from_cli
-from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL, claude_pricing
 from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 
@@ -107,6 +106,7 @@ class ClaudeCliClient:
                 "selected."
             )
         self.model = model or DEFAULT_CLAUDE_MODEL
+        claude_pricing(self.model)
         self.timeout = timeout
         # An empty cwd is what keeps the repo's CLAUDE.md out of the judge's
         # context. Cleanup errors are ignored because Windows can still hold a
@@ -247,7 +247,7 @@ class ClaudeCliClient:
 
 def _split_cost(model: str, input_tokens: int, output_tokens: int, total: float):
     """``total`` split into input and output in proportion to their list price."""
-    pricing = MODEL_PRICING.get(model, MODEL_PRICING["default"])
+    pricing = claude_pricing(model)
     weight_in = input_tokens * pricing["input_per_mtok"]
     weight_out = output_tokens * pricing["output_per_mtok"]
     weight = weight_in + weight_out

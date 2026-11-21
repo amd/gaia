@@ -4,11 +4,13 @@
 Tool registry and decorator for agent tools.
 """
 
+import contextvars
 import inspect
 import re
 import types
 import typing
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from contextlib import contextmanager
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional
 
 # Set up logging via the project logger; importing this module must not
 # reconfigure the root logger.
@@ -31,11 +33,79 @@ _TOOL_REGISTRY: dict[str, dict] = {}
 _SUPPORTED_TOOL_KWARGS = (
     "atomic",
     "display_label",
+    "draft_argument",
     "timeout",
     "timeout_arg",
     "preflight",
+    "dedup_key",
+    "model_view",
     "registry",
+    "override",
 )
+
+# Names registered so far in the agent tool build under way, or None outside one.
+_BUILD_NAMES: contextvars.ContextVar[Optional[set[str]]] = contextvars.ContextVar(
+    "gaia_tool_build_names", default=None
+)
+
+
+class DuplicateToolError(ValueError):
+    """Two different functions tried to register one tool name."""
+
+
+@contextmanager
+def tool_build() -> Iterator[None]:
+    """Scope one agent's tool registration, so a name collision inside it raises.
+
+    The global registry outlives any one agent: a tool left by an earlier
+    agent's build is replaced, not a collision.
+    """
+    token = _BUILD_NAMES.set(set())
+    try:
+        yield
+    finally:
+        _BUILD_NAMES.reset(token)
+
+
+def _tool_source(f: Callable) -> str:
+    f = inspect.unwrap(f)
+    return f"{getattr(f, '__module__', '?')}.{getattr(f, '__qualname__', repr(f))}"
+
+
+def _tool_location(f: Callable) -> str:
+    code = getattr(inspect.unwrap(f), "__code__", None)
+    if code is None:
+        return _tool_source(f)
+    return f"{_tool_source(f)} ({code.co_filename}:{code.co_firstlineno})"
+
+
+def _same_tool(a: Callable, b: Callable) -> bool:
+    """True for one ``def``, however many closures a registrar has made of it."""
+    code_a = getattr(inspect.unwrap(a), "__code__", None)
+    code_b = getattr(inspect.unwrap(b), "__code__", None)
+    if code_a is not None and code_b is not None:
+        return code_a is code_b
+    return _tool_source(a) == _tool_source(b)
+
+
+def _check_name_free(
+    tool_name: str, f: Callable, destination: Mapping[str, Any], instance_local: bool
+) -> None:
+    """Raise when *tool_name* already belongs to a different tool in this tool set."""
+    existing = destination.get(tool_name)
+    existing_function = existing.get("function") if existing else None
+    if existing_function is None or _same_tool(existing_function, f):
+        return
+    build = _BUILD_NAMES.get()
+    if not instance_local and (build is None or tool_name not in build):
+        return
+    raise DuplicateToolError(
+        f"Tool name {tool_name!r} is already registered by "
+        f"{_tool_location(existing_function)}, and {_tool_location(f)} would "
+        "silently replace it. Rename one of them, or mark the one that should "
+        "win with @tool(override=True)."
+    )
+
 
 # Every model call re-sends the schema of every offered tool, so this text is
 # billed on each step of each turn. Enforced by `python util/lint.py
@@ -230,15 +300,48 @@ def _schema_description(docstring: Optional[str]) -> str:
     return "\n".join(kept).strip()
 
 
+def validate_dedup_key(
+    tool_name: str, dedup_key: Any, param_names: typing.Iterable[str]
+) -> tuple[str, ...]:
+    """Check a tool's ``dedup_key`` and return it as a tuple of argument names.
+
+    Raises:
+        TypeError: ``dedup_key`` is not a non-empty list of strings.
+        ValueError: It names an argument the tool does not take.
+    """
+    if (
+        not isinstance(dedup_key, (list, tuple))
+        or not dedup_key
+        or not all(isinstance(name, str) for name in dedup_key)
+    ):
+        raise TypeError(
+            f"dedup_key for tool {tool_name!r} must be a non-empty list of "
+            f"argument names, got {dedup_key!r}."
+        )
+    params = list(param_names)
+    unknown = [name for name in dedup_key if name not in params]
+    if unknown:
+        raise ValueError(
+            f"dedup_key for tool {tool_name!r} names unknown argument(s) "
+            f"{', '.join(map(repr, unknown))}. Parameters: "
+            f"{', '.join(params) or 'none'}."
+        )
+    return tuple(dedup_key)
+
+
 def tool(
     func: Callable | None = None,
     *,
     atomic: bool = False,
     display_label: str | None = None,
+    draft_argument: str | None = None,
     timeout: float | None = None,
     timeout_arg: str | None = None,
     preflight: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]] | None = None,
+    dedup_key: list[str] | tuple[str, ...] | None = None,
+    model_view: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
     registry: dict[str, dict] | None = None,
+    override: bool = False,
     **unexpected_kwargs: object,
 ) -> Callable:
     """
@@ -251,6 +354,8 @@ def tool(
         func: Function to register as a tool (when used as @tool)
         atomic: If True, marks this tool as atomic (can execute without multi-step planning)
         display_label: Optional user-facing label for UI progress strips
+        draft_argument: Name of a text parameter the UI may show as a live
+            draft while the model is still writing the call (a deck's Markdown).
         timeout: Per-tool execution limit in seconds. Overrides the global
             ``GAIA_AGENT_TOOL_TIMEOUT`` default in ``Agent._execute_tool``. Set
             this on tools that legitimately run long (e.g. image generation that
@@ -264,10 +369,21 @@ def tool(
             prompt; returns the refusal the call has already earned, or
             ``None``. The tool body must enforce the same rule itself, since
             state can change while a prompt waits.
+        dedup_key: Names of the arguments the repeat-call guard compares.
+            Calls that agree on these count as repeats even when other
+            arguments (e.g. a free-text ``reason``) differ. ``None`` (the
+            default) compares every argument.
+        model_view: Given the tool's dict result, returns the copy the model
+            reads. For leaving out what the model already knows (its own
+            arguments echoed back, empty fields); the full result still goes
+            to the UI, the checks and the saved conversation.
 
         registry: An explicit instance-local destination. When omitted, register
             globally for existing callers. Passing an empty mapping is honored;
             no entry is ever written to the global registry in this mode.
+        override: Replace a different tool already registered under this name
+            in the same tool set. Without it that raises ``DuplicateToolError``;
+            re-registering the same function is always allowed.
 
     Returns:
         The original function or decorator, unchanged
@@ -281,15 +397,30 @@ def tool(
                 f"@tool(...) got unexpected keyword argument {unexpected_name!r} "
                 f"for tool {f.__name__!r}. Accepted: {accepted}."
             )
+        if not isinstance(override, bool):
+            raise TypeError(
+                f"@tool(override=...) must be True or False for tool "
+                f"{f.__name__!r}, got {override!r}."
+            )
 
         # Extract function name and signature for the tool registry
         tool_name = f.__name__
         sig = inspect.signature(f)
+        if draft_argument is not None and draft_argument not in sig.parameters:
+            raise TypeError(
+                f"@tool(draft_argument={draft_argument!r}) names no parameter of "
+                f"tool {tool_name!r}. Parameters: {', '.join(sig.parameters) or 'none'}."
+            )
         if timeout_arg is not None and timeout_arg not in sig.parameters:
             raise TypeError(
                 f"@tool(timeout_arg={timeout_arg!r}) names no parameter of tool "
                 f"{tool_name!r}. Parameters: {', '.join(sig.parameters) or 'none'}."
             )
+        dedup = (
+            None
+            if dedup_key is None
+            else validate_dedup_key(tool_name, dedup_key, sig.parameters)
+        )
         arg_descriptions = _parse_arg_descriptions(f.__doc__)
         hints = _resolve_hints(f)
         params = {}
@@ -316,6 +447,11 @@ def tool(
 
         # Register the tool with atomic metadata
         destination = _TOOL_REGISTRY if registry is None else registry
+        if not override:
+            _check_name_free(tool_name, f, destination, registry is not None)
+        build = _BUILD_NAMES.get()
+        if build is not None and registry is None:
+            build.add(tool_name)
         destination[tool_name] = {
             "name": tool_name,
             "description": _schema_description(f.__doc__),
@@ -323,9 +459,12 @@ def tool(
             "function": f,
             "atomic": atomic,
             "display_label": display_label,
+            "draft_argument": draft_argument,
             "timeout": timeout,
             "timeout_arg": timeout_arg,
             "preflight": preflight,
+            "dedup_key": dedup,
+            "model_view": model_view,
         }
 
         # Return the function unchanged
@@ -404,6 +543,71 @@ def tool_call_progress_message(tool: Optional[str], chars: int) -> str:
         f"Preparing {tool}" if tool else "Preparing a tool call"
     )
     return f"{label} — {chars:,} characters so far"
+
+
+_JSON_ESCAPES = {
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+}
+
+
+def partial_json_string(arguments: str, key: str) -> Optional[str]:
+    """The text of string field *key* in JSON *arguments* still being written.
+
+    Returns what has arrived so far (``None`` before the field starts), stopping
+    at the closing quote or at an escape cut off mid-way.
+    """
+    m = re.search(r'"' + re.escape(key) + r'"\s*:\s*"', arguments)
+    if m is None:
+        return None
+    out: List[str] = []
+    i, n = m.end(), len(arguments)
+    while i < n:
+        ch = arguments[i]
+        if ch == '"':
+            break
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        if i + 1 >= n:
+            break
+        esc = arguments[i + 1]
+        if esc == "u":
+            code = arguments[i + 2 : i + 6]
+            if len(code) < 4:
+                break
+            try:
+                unit = int(code, 16)
+            except ValueError:
+                break
+            i += 6
+            if 0xD800 <= unit <= 0xDBFF:
+                # Half of a pair: alone it cannot be encoded as UTF-8.
+                low = arguments[i + 2 : i + 6]
+                if arguments[i : i + 2] != "\\u" or len(low) < 4:
+                    break
+                try:
+                    low_unit = int(low, 16)
+                except ValueError:
+                    break
+                if not 0xDC00 <= low_unit <= 0xDFFF:
+                    break
+                unit = 0x10000 + ((unit - 0xD800) << 10) + (low_unit - 0xDC00)
+                i += 6
+            elif 0xDC00 <= unit <= 0xDFFF:
+                break
+            out.append(chr(unit))
+            continue
+        out.append(_JSON_ESCAPES.get(esc, esc))
+        i += 2
+    return "".join(out)
 
 
 def get_tool_metadata(tool_name: str):

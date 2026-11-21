@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
 import type { GpuMemoryStatus } from '../../../types';
 import { GpuMemoryPanel, gpuGbAtSetting } from '../GpuMemoryPanel';
+import { useModelStore } from '../../../stores/modelStore';
 import { gpuStatus } from './fixtures';
 import coldStrixHalo from './coldStrixHalo.json';
 
@@ -43,9 +44,9 @@ beforeEach(() => {
 describe('GPU memory: what a bigger share unlocks', () => {
     it('shows the split, the target and the model it unlocks, preselecting the smallest that does', () => {
         render(<Harness initial={gpuStatus()} />);
-        expect(screen.getByText(/This PC shares 128\.0 GB between the CPU and the GPU\. The GPU has 32\.0 GB now\./)).toBeInTheDocument();
+        expect(screen.getByText(/This PC shares 128\.0 GB between the processor \(CPU\) and graphics \(GPU\)\. The GPU has 32\.0 GB now\./)).toBeInTheDocument();
         expect(screen.getByRole('img', { name: 'Memory split after the change: CPU 64.0 GB, GPU 64.0 GB (now 32.0 GB)' })).toBeInTheDocument();
-        expect(screen.getByRole('radio', { name: 'GPU 64.0 GB' })).toHaveAttribute('aria-checked', 'true');
+        expect(screen.getByRole('radio', { name: 'GPU 64.0 GB Recommended' })).toHaveAttribute('aria-checked', 'true');
         expect(screen.getByText('With 64.0 GB for the GPU, Qwen3.6-35B-A3B fits.')).toBeInTheDocument();
         expect(screen.getByText(/GAIA keeps at least 16\.0 GB for Linux and your apps\. Changing it needs administrator permission and a restart\./)).toBeInTheDocument();
     });
@@ -53,10 +54,99 @@ describe('GPU memory: what a bigger share unlocks', () => {
     it('names at most two unlocked models, and moves between sizes with the arrow keys', () => {
         render(<Harness initial={gpuStatus()} />);
         const group = screen.getByRole('radiogroup', { name: 'GPU memory' });
+        screen.getByRole('radio', { name: 'GPU 64.0 GB Recommended' }).focus();
         fireEvent.keyDown(group, { key: 'ArrowRight' });
         expect(screen.getByRole('radio', { name: 'GPU 96.0 GB' })).toHaveAttribute('aria-checked', 'true');
         expect(screen.getByRole('radio', { name: 'GPU 96.0 GB' })).toHaveFocus();
         expect(screen.getByText('With 96.0 GB for the GPU, Qwen3.6-35B-A3B and gpt-oss 120B fit.')).toBeInTheDocument();
+    });
+
+    it('marks the recommended size and the most GAIA allows, and warns what Max leaves the CPU', () => {
+        const status = gpuStatus({ setting: { name: 'GPU memory limit (GTT)', current_gb: 32, min_gb: 4, max_gb: 96 } });
+        render(<Harness initial={status} />);
+        expect(screen.getByRole('radio', { name: 'GPU 96.0 GB Max' })).toBeInTheDocument();
+        expect(screen.queryByRole('note')).toBeNull();
+        fireEvent.click(screen.getByRole('radio', { name: 'GPU 96.0 GB Max' }));
+        expect(screen.getByRole('note')).toHaveTextContent('Max leaves 32.0 GB for Linux and your apps. Big apps');
+    });
+
+    it('recommends keeping the split when the default model already fits', () => {
+        const status = gpuStatus({
+            recommended_setting_gb: null,
+            models: [{ id: 'Qwen3.6-35B-A3B-GGUF', size_gb: 23.3, need_gb: 27, default: true, fits_now: true, fits_at_setting_gb: null }],
+        });
+        render(<Harness initial={status} />);
+        expect(screen.getByText('Recommended: keep the current split. Qwen3.6-35B-A3B already fits, so more GPU memory is optional.')).toBeInTheDocument();
+        expect(screen.queryByText('Recommended', { selector: '.gpu-tag' })).toBeNull();
+    });
+
+    it.each([
+        ['chosen in this setup', true, false],
+        ['already in use', false, true],
+    ])('recommends no split for a local model when chat runs in the cloud (%s)', (_how, chosen, inUse) => {
+        useModelStore.setState({ active: inUse ? { provider: 'fireworks', model: 'fireworks.glm', label: 'GLM', remote: true } as never : null });
+        const fits = [{ id: 'Qwen3.6-35B-A3B-GGUF', size_gb: 23.3, need_gb: 27, default: true, fits_now: true, fits_at_setting_gb: null }];
+        const { unmount } = render(<GpuMemoryPanel status={gpuStatus({ recommended_setting_gb: null, models: fits })} onStatus={vi.fn()} mode="setup" names={NAMES} cloud={chosen} />);
+        expect(screen.queryByText(/Recommended: keep the current split/)).toBeNull();
+        unmount();
+
+        render(<GpuMemoryPanel status={gpuStatus()} onStatus={vi.fn()} mode="setup" names={NAMES} cloud={chosen} />);
+        expect(screen.queryByText('Recommended', { selector: '.gpu-tag' })).toBeNull();
+        // Nothing is picked for the user; the split stays as it is until they choose.
+        expect(screen.getByRole('radio', { name: /^Keep/ })).toHaveAttribute('aria-checked', 'true');
+        useModelStore.setState({ active: null });
+    });
+
+    it('picks keeping the current share when that is the advice, with Keep as is the main way on', () => {
+        const onSkip = vi.fn();
+        const status = gpuStatus({
+            recommended_setting_gb: null,
+            models: [{ id: 'Qwen3.6-35B-A3B-GGUF', size_gb: 23.3, need_gb: 27, default: true, fits_now: true, fits_at_setting_gb: null }],
+        });
+        render(<Harness initial={status} onSkip={onSkip} />);
+        expect(screen.getByRole('radio', { name: 'Keep 32.0 GB (current)' })).toHaveAttribute('aria-checked', 'true');
+        // Nothing sells a change nobody asked for.
+        expect(screen.queryByText(/With .* for the GPU/)).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Show me how' })).toBeNull();
+        const keep = screen.getByRole('button', { name: 'Keep as is' });
+        expect(keep).toHaveClass('btn-primary');
+        fireEvent.click(keep);
+        expect(onSkip).toHaveBeenCalled();
+        // Picking a size brings the ways to change it back.
+        fireEvent.click(screen.getByRole('radio', { name: 'GPU 64.0 GB' }));
+        expect(screen.queryByRole('button', { name: 'Keep as is' })).toBeNull();
+    });
+
+    it('still preselects the recommended size when a change is the advice, with keeping offered first', () => {
+        render(<Harness initial={gpuStatus()} />);
+        const radios = screen.getAllByRole('radio');
+        expect(radios[0]).toHaveAccessibleName('Keep 32.0 GB (current)');
+        expect(radios[0]).toHaveAttribute('aria-checked', 'false');
+        expect(screen.getByRole('radio', { name: 'GPU 64.0 GB Recommended' })).toHaveAttribute('aria-checked', 'true');
+    });
+
+    it('reaches Keep with the arrow keys, wrapping both ways, and the main button follows', () => {
+        render(<Harness initial={gpuStatus({ recommended_setting_gb: 48 })} onSkip={vi.fn()} />);
+        const group = screen.getByRole('radiogroup', { name: 'GPU memory' });
+        const keep = screen.getByRole('radio', { name: 'Keep 32.0 GB (current)' });
+        screen.getByRole('radio', { name: 'GPU 48.0 GB Recommended' }).focus();
+        fireEvent.keyDown(group, { key: 'ArrowLeft' });
+        expect(keep).toHaveAttribute('aria-checked', 'true');
+        expect(keep).toHaveFocus();
+        expect(screen.getByRole('button', { name: 'Keep as is' })).toBeInTheDocument();
+        fireEvent.keyDown(group, { key: 'ArrowLeft' });
+        expect(screen.getByRole('radio', { name: 'GPU 96.0 GB' })).toHaveAttribute('aria-checked', 'true');
+        fireEvent.keyDown(group, { key: 'ArrowRight' });
+        expect(keep).toHaveAttribute('aria-checked', 'true');
+        fireEvent.keyDown(group, { key: 'ArrowRight' });
+        expect(screen.getByRole('radio', { name: 'GPU 48.0 GB Recommended' })).toHaveAttribute('aria-checked', 'true');
+        expect(screen.queryByRole('button', { name: 'Keep as is' })).toBeNull();
+    });
+
+    it('offers no Keep when the current share is unknown', () => {
+        render(<Harness initial={gpuStatus({ gpu_gb: undefined, recommended_setting_gb: null })} />);
+        expect(screen.queryByRole('radio', { name: /Keep/ })).toBeNull();
+        expect(screen.getAllByRole('radio')[0]).toHaveAttribute('aria-checked', 'true');
     });
 
     it('lets setup skip the step', () => {
@@ -251,7 +341,7 @@ describe('GPU memory: the value to enter', () => {
     it('names the target as the GPU share and leaves the value to enter to the steps', async () => {
         mocked.getGpuMemory.mockResolvedValue(windows({ guided_steps: ['Open AMD Software.', 'Set Variable Graphics Memory to 45 GB.'] }));
         render(<Harness initial={windows()} />);
-        expect(screen.getByRole('radio', { name: 'GPU 59.0 GB' })).toBeInTheDocument();
+        expect(screen.getByRole('radio', { name: /^GPU 59.0 GB/ })).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Show me how' }));
         expect(await screen.findByText('Set Variable Graphics Memory to 45 GB.')).toBeInTheDocument();
         expect(screen.getByText('To give the GPU 59.0 GB:')).toBeInTheDocument();
@@ -282,7 +372,7 @@ describe('GPU memory: the real backend payload', () => {
         const status = real();
         mocked.getGpuMemory.mockResolvedValue(at64());
         render(<Harness initial={status} />);
-        fireEvent.click(screen.getByRole('radio', { name: 'GPU 64.5 GB' }));
+        fireEvent.click(screen.getByRole('radio', { name: /^GPU 64\.5 GB/ }));
         fireEvent.click(screen.getByRole('button', { name: 'Show me how' }));
         expect(mocked.getGpuMemory).toHaveBeenCalledWith(64);
         expect(await screen.findByText('To give the GPU 64.5 GB:')).toBeInTheDocument();

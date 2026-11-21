@@ -28,7 +28,11 @@ from gaia.sidecar.caller_auth import (  # noqa: F401  (re-exported)
 from gaia.sidecar.caller_auth import (
     install_openapi_security as _install_openapi_security,
 )
-from gaia.sidecar.caller_auth import is_exempt_path, reset, token_ok
+from gaia.sidecar.caller_auth import (  # noqa: F401  (re-exported)
+    is_exempt_path,
+    reset,
+    token_ok,
+)
 
 # Preferred channel: the spawning parent writes the token to a 0600, owner-only
 # file and passes its PATH — the secret never sits in the environment. MUST

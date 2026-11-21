@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from gaia.ui.routers import system as system_mod
 from gaia.ui.server import create_app
 
-_LOADED = {"model_loaded": "Gemma-4-E4B-it-GGUF"}
+_LOADED = {"all_models_loaded": [{"model_name": "Gemma-4-E4B-it-GGUF", "type": "llm"}]}
 
 
 class _Resp:
@@ -154,6 +154,17 @@ def test_disk_failure_is_reported(status_with, monkeypatch):
     body = status_with({"/health": _LOADED, "/models": {"data": []}}).json()
 
     assert any("free disk space" in w for w in body["probe_warnings"])
+
+
+@pytest.mark.allow_network
+def test_free_disk_space_is_decimal_gb_like_setup(status_with, monkeypatch):
+    from collections import namedtuple
+
+    usage = namedtuple("usage", "total used free")(10**12, 2 * 10**11, 8 * 10**11)
+    monkeypatch.setattr("gaia.ui.server.shutil.disk_usage", lambda _path: usage)
+    body = status_with({"/health": _LOADED, "/models": {"data": []}}).json()
+
+    assert body["disk_space_gb"] == 800.0
 
 
 def test_repeated_probe_failure_logs_warning_once(caplog):

@@ -92,13 +92,10 @@ jobs:
           fi
 
           # Guard 2: don't bump to a release missing an asset GAIA downloads (a release can
-          # exist before all assets finish uploading). Covers the five installers AND the
-          # four embeddable archives, whose SHA-256 pins the bump has to refresh — catching a
+          # exist before all assets finish uploading). Covers the two MSIs (the Windows
+          # uninstall downloads them) AND the four embeddable archives, whose SHA-256 pins the bump has to refresh — catching a
           # partial upload here is free, whereas discovering it inside the Claude step is not.
           for required in lemonade.msi lemonade-server-minimal.msi \
-                          "lemonade-server_${target}-debian13_amd64.deb" \
-                          "lemonade-server_${target}-debian13_arm64.deb" \
-                          "Lemonade-${target}-Darwin.pkg" \
                           "lemonade-embeddable-${target}-windows-x64.zip" \
                           "lemonade-embeddable-${target}-ubuntu-x64.tar.gz" \
                           "lemonade-embeddable-${target}-ubuntu-arm64.tar.gz" \
@@ -177,7 +174,7 @@ jobs:
 
       - name: Prepare Lemonade bump commit
         if: steps.detect.outputs.should_bump == 'true'
-        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
         with:
           # Prefer subscription OAuth, fall back to API key — same wiring as claude.yml.
           anthropic_api_key: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -224,9 +221,9 @@ jobs:
                to
                  `LEMONADE_VERSION = "${{ steps.detect.outputs.target_version }}"`
                This constant is the single source of truth — CI and the installer derive the
-               download URLs from it. Do NOT touch the per-profile `min_lemonade_version`
-               floors in src/gaia/installer/init_command.py (those are deliberately
-               conservative minimums, not "latest").
+               download URLs from it. Do NOT touch `LEMONADE_MIN_VERSION` in the same
+               file (the oldest version GAIA runs against, raised deliberately, not
+               "latest").
             3. Refresh the embeddable SHA-256 pins. `gaia lemonade embedded install`
                verifies its download against the digests in
                `EMBEDDABLE_SHA256` (src/gaia/llm/lemonade_embedded.py), keyed by asset
@@ -247,26 +244,26 @@ jobs:
                branch and stop.
 
                Then refresh `INSTALLER_SHA256` (src/gaia/installer/lemonade_installer.py)
-               the same way. `gaia install --lemonade` verifies the installer against it.
+               the same way. `gaia uninstall --purge-lemonade` verifies the MSI it downloads against it.
                Its keys are `v<version>/<asset name>`, because the MSI names carry no
                version, and its values are bare hex. First MOVE its two outgoing
                `v${{ steps.detect.outputs.current_version }}/lemonade.msi` and
                `v${{ steps.detect.outputs.current_version }}/lemonade-server-minimal.msi`
                entries, unchanged, to the end of `LEGACY_MSI_SHA256` in the same file
                (uninstalling that version downloads its MSI; never delete or edit a
-               legacy entry). Then rewrite `INSTALLER_SHA256` to exactly these five
+               legacy entry). Then rewrite `INSTALLER_SHA256` to exactly these two
                keys, with the digests this prints:
                  ```
                  gh api repos/lemonade-sdk/lemonade/releases/tags/v${{ steps.detect.outputs.target_version }} \
-                   --jq '.assets[] | select(.name == "lemonade.msi" or .name == "lemonade-server-minimal.msi" or (.name|test("^lemonade-server_.*-debian13_(amd64|arm64)[.]deb$")) or (.name|test("^Lemonade-.*-Darwin[.]pkg$"))) | "v${{ steps.detect.outputs.target_version }}/\(.name) \(.digest | sub("^sha256:";""))"'
+                   --jq '.assets[] | select(.name == "lemonade.msi" or .name == "lemonade-server-minimal.msi") | "v${{ steps.detect.outputs.target_version }}/\(.name) \(.digest | sub("^sha256:";""))"'
                  ```
-               The same stop rule applies if any of the five has no digest. You do not
+               The same stop rule applies if either has no digest. You do not
                need to check the values yourself: before opening the PR, the job runs
                tests/integration/test_lemonade_embeddable_assets.py on your commit, which
                compares every pin against the release API and fails on any mismatch.
 
                Then update `tests/fixtures/lemonade/release_tags.txt`, which lists every
-               supported release, oldest first. Find every stable release newer than
+               release GAIA can remove, oldest first. Find every stable release newer than
                `v${{ steps.detect.outputs.current_version }}`, up to and including the
                target:
                  ```
@@ -477,7 +474,8 @@ jobs:
           set -euo pipefail
           python -m pytest -v --tb=short \
             tests/unit/test_lemonade_download_urls.py::TestEveryReleaseIsPinned \
-            tests/integration/test_lemonade_embeddable_assets.py
+            tests/integration/test_lemonade_embeddable_assets.py \
+            tests/integration/test_lemonade_linux_abi.py
           python util/check_doc_versions.py
 
       - name: Open the bump PR

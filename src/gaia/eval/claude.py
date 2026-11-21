@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 
 import base64
-import json
 import logging
 import os
 from pathlib import Path
@@ -20,7 +19,7 @@ except ImportError:
 
 from gaia.env import load_env
 from gaia.eval.claude_credential import announce, api_key_credential
-from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL, claude_pricing
 from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 
@@ -123,6 +122,7 @@ class ClaudeClient:
             timeout=300.0,  # 5 minute timeout for large documents
         )
         self.model = model
+        self._pricing = claude_pricing(model)
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.temperature = temperature
@@ -155,8 +155,7 @@ class ClaudeClient:
         Returns:
             dict: Cost breakdown with input_cost, output_cost, and total_cost
         """
-        # Get pricing for the current model, fallback to default if not found
-        pricing = MODEL_PRICING.get(self.model, MODEL_PRICING["default"])
+        pricing = self._pricing
 
         # Calculate costs (convert tokens to millions)
         input_cost = (input_tokens / 1_000_000) * pricing["input_per_mtok"]
@@ -575,48 +574,3 @@ class ClaudeClient:
         except Exception as e:
             self.log.error(f"Error counting tokens: {e}")
             raise
-
-
-# Example usage
-if __name__ == "__main__":
-    client = ClaudeClient()
-
-    # Test file analysis with Blender introduction document
-    file_path = "./data/html/blender/introduction.html"
-    prompt = (
-        "Given this document, generate a set of short queries a user "
-        "may ask about the document and produce a set of ground truth "
-        "answers to be used in validating a RAG system. Include a "
-        "summary of the document in the queries. Return a json "
-        "formatted list of query-response pairs formatted as follows:"
-        "{'source': 'path/to/document', 'summary': 'summarized document', "
-        "'qa_pairs': [{'query': 'query1', 'response': 'response1'}, "
-        "{'query': 'query2', 'response': 'response2'}, ...]}"
-    )
-
-    analysis = client.analyze_file(
-        file_path, prompt, save_text=True, output_dir="./output/claude"
-    )
-    print(client.count_file_tokens(file_path, prompt))
-
-    # Prepare enhanced output with metadata
-    from datetime import datetime
-
-    output_data = {
-        "metadata": {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "model": client.model,
-            "source_file": file_path,
-            "prompt": prompt,
-            "token_count": client.count_file_tokens(file_path, prompt),
-        },
-        "analysis": json.loads(analysis),  # Parse JSON string into dictionary
-    }
-
-    # Save analysis to JSON file
-    output_dir = "./output/claude"
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = f"{output_dir}/{Path(file_path).stem}.out.json"
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output_data, f, indent=2)
-    print(f"Analysis saved to: {output_path}")

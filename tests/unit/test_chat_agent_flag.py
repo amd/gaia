@@ -295,12 +295,15 @@ class TestFlagshipPathUnchanged:
         monkeypatch.setattr(cli, "_run_registered_agent", lambda *a: called.append(a))
         monkeypatch.setattr(cli, "_registry_with_agent", lambda *a: called.append(a))
         monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
+        relayed = []
+        monkeypatch.setattr(cli, "_gaia_chat_relay", lambda kw: relayed.append(kw) or 0)
         kwargs = {"no_lemonade_check": True, "query": "hi"}
         if agent:
             kwargs["agent"] = agent
-        with pytest.raises(RuntimeError, match="GAIA agent is not installed"):
-            asyncio.run(cli.async_main("chat", **kwargs))
+        asyncio.run(cli.async_main("chat", **kwargs))
+        # Without the flagship in-process, chat goes to its binary, not the registry.
         assert called == []
+        assert [kw["query"] for kw in relayed] == ["hi"]
 
     def test_gaia_with_flagship_flags_is_not_rejected(self):
         import argparse

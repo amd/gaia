@@ -3,20 +3,27 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, FileText, X } from 'lucide-react';
+import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
 import { FolderChip } from './FolderChip';
 import { ModelChip } from './ModelChip';
 import { NpuBackdrop } from './NpuBackdrop';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
+import { ResearchChip } from './ResearchChip';
+import { TryChips } from './TryChips';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
-import { useChatStore } from '../stores/chatStore';
+import { isStarting } from '../services/statusPoll';
+import { researchOn, useChatStore } from '../stores/chatStore';
+import { withResearchCommand } from '../utils/research';
 import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
 import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { log } from '../utils/logger';
+import { requestErrorText } from '../utils/requestErrors';
+import { FlagshipMissing } from '../utils/newTask';
 import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
 import type { StartScreen } from '../types';
@@ -25,6 +32,7 @@ import { useSavedDraft } from '../hooks/useSavedDraft';
 import { NEW_CHAT_DRAFT_KEY } from '../utils/savedDraft';
 import { ref, type MessageKey } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
+import { visibleName } from './CalendarApproval';
 
 interface NewChatProps {
     /**
@@ -36,6 +44,10 @@ interface NewChatProps {
     initialText?: string;
     /** Changes each time New chat is chosen, so the box takes focus even when already shown. */
     focusRequest?: number;
+    /** The flagship isn't installed: the top notice offers it, and a refused send points there while it shows. */
+    agentMissing?: boolean;
+    /** The box opens holding a first message the missing agent refused elsewhere (Personalize, setup, files). */
+    agentRefused?: boolean;
 }
 
 /** How often the start screen is asked for again while the assistant is unavailable. */
@@ -87,12 +99,16 @@ function attachWholeLibrary() {
         .map((d) => d.id));
 }
 
+/** Attached documents shown before the rest fold behind "+N more". */
+export const DOCS_SHOWN = 5;
+
 /**
  * A chat searches only the documents attached to it: show what this one will
  * get, and offer the rest of the library.
  */
 function LibraryDocuments() {
     const t = useT();
+    const [expanded, setExpanded] = useState(false);
     const documents = useChatStore((s) => s.documents);
     const draftIds = useChatStore((s) => s.draftDocumentIds);
     const removeDraftDocument = useChatStore((s) => s.removeDraftDocument);
@@ -101,25 +117,42 @@ function LibraryDocuments() {
     const offered = documents.filter((d) => d.indexing_status === 'complete' && !draftIds.includes(d.id));
     if (!attached.length && !offered.length) return null;
     const n = offered.length;
+    const hidden = attached.length - DOCS_SHOWN;
+    const shown = expanded || hidden <= 0 ? attached : attached.slice(0, DOCS_SHOWN);
     return (
         <div className="new-chat-docs">
             {attached.length > 0 && (
-                <ul className="new-chat-doc-list" aria-label={t('newChat.docs.forChat')}>
-                    {attached.map((d) => (
+                <ul
+                    id="new-chat-doc-list"
+                    className={`new-chat-doc-list${expanded ? ' is-expanded' : ''}`}
+                    aria-label={t('newChat.docs.forChat')}
+                >
+                    {shown.map((d) => (
                         <li key={d.id} className="new-chat-doc">
                             <FileText size={12} aria-hidden="true" />
-                            <span dir="auto">{d.filename}</span>
+                            <span dir="ltr">{visibleName(d.filename)}</span>
                             <button
                                 type="button"
                                 className="new-chat-doc-remove"
                                 onClick={() => removeDraftDocument(d.id)}
-                                aria-label={t('newChat.docs.dontAttach', { name: d.filename })}
+                                aria-label={t('newChat.docs.dontAttach', { name: visibleName(d.filename) })}
                             >
                                 <X size={12} aria-hidden="true" />
                             </button>
                         </li>
                     ))}
                 </ul>
+            )}
+            {hidden > 0 && (
+                <button
+                    type="button"
+                    className="link-btn new-chat-doc-toggle"
+                    aria-expanded={expanded}
+                    aria-controls="new-chat-doc-list"
+                    onClick={() => setExpanded((v) => !v)}
+                >
+                    {expanded ? t('newChat.docs.fewer') : t('newChat.docs.hidden', { n: hidden })}
+                </button>
             )}
             {n > 0 && (
                 <p className="new-chat-note">
@@ -160,15 +193,17 @@ function SetupFailed({ error }: { error: string }) {
 }
 
 /** An empty chat: a greeting and the composer over the NPU backdrop. Created on the first message. */
-export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatProps) {
+export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissing = false, agentRefused: heldRefused = false }: NewChatProps) {
     const t = useT();
-    const starting = useChatStore((s) => s.systemStatus?.init_state === 'initializing');
+    const researchMode = useChatStore((s) => researchOn(s, null));
+    const starting = useChatStore((s) => isStarting(s.systemStatus));
     const download = useChatStore((s) => s.systemStatus?.download_progress ?? null);
     // Moot once chats run in the cloud or a local model has loaded after all.
     const setupError = useChatStore((s) => (s.systemStatus?.model_loaded ? null : s.systemStatus?.setup_error ?? null));
     const remote = useModelStore((s) => !!s.active?.remote);
     const [text, setText] = useSavedDraft(NEW_CHAT_DRAFT_KEY, initialText);
     const [error, setError] = useState<string | null>(null);
+    const [agentRefused, setAgentRefused] = useState(heldRefused);
     const [sending, setSending] = useState(false);
     const [start, setStart] = useState<StartScreen | null>(null);
     const [startError, setStartError] = useState<string | null>(null);
@@ -191,7 +226,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
             })
             .catch((err) => {
                 log.api.warn('New-chat start screen unavailable', err);
-                if (live.current) setStartError(err instanceof Error ? err.message : String(err));
+                if (live.current) setStartError(requestErrorText(err));
             });
     }, []);
 
@@ -228,6 +263,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         sendingRef.current = true;
         setSending(true);
         setError(null);
+        setAgentRefused(false);
         // Cleared now, so anything typed while the chat is created is a new message.
         setText('');
         try {
@@ -246,21 +282,33 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
             // Nothing was sent, so every message goes back in the box.
             const held = heldRef.current.splice(0);
             setText([draft || message, ...held].join('\n\n'));
-            setError(err instanceof Error ? err.message : String(err));
+            if (err instanceof FlagshipMissing) setAgentRefused(true);
+            else setError(requestErrorText(err));
         } finally {
             sendingRef.current = false;
             setSending(false);
         }
     }, [attachments, onSend]);
 
-    const submit = useCallback(() => send(attachments.compose(text.trim()), text.trim()), [attachments, send, text]);
+    const submit = useCallback(
+        () => send(attachments.compose(withResearchCommand(text.trim(), researchOn(useChatStore.getState(), null))), text.trim()),
+        [attachments, send, text],
+    );
 
     useEffect(() => {
         if (focusRequest) inputRef.current?.focus();
     }, [focusRequest]);
 
-    // Typing drops the composer to the bottom, where the chat will continue.
-    const docked = text.length > 0 || sending;
+    // A prompt put in the box (Try in a new chat) is added to, so typing starts after it.
+    useEffect(() => {
+        const el = inputRef.current;
+        if (!initialText || !el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+    }, [initialText]);
+
+    // Sending, not typing, drops the composer to the bottom: the box never moves under the cursor.
+    const docked = sending;
     const innerTop = useRef<{ top: number; docked: boolean } | null>(null);
     useLayoutEffect(() => {
         const el = innerRef.current;
@@ -279,6 +327,15 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         );
     });
 
+    const lastExample = useRef('');
+    const fillPrompt = useCallback((prompt: string) => {
+        const prev = lastExample.current;
+        const draft = (prev && text.endsWith(prev) ? text.slice(0, -prev.length) : text).trimEnd();
+        lastExample.current = prompt;
+        setText(draft ? `${draft}\n\n${prompt}` : prompt);
+        inputRef.current?.focus();
+    }, [text, setText]);
+
     const downloading = download?.state === 'starting' || download?.state === 'downloading';
     const activity = sending ? 'sending' : downloading ? 'download' : starting || warming !== null ? 'loading' : 'idle';
     const folder = start?.working_folder;
@@ -293,6 +350,9 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                 contentRef={innerRef}
                 composerRef={composerRef}
             />
+            <div className="new-chat-actions">
+                <BrowserPaneToggle />
+            </div>
             <div className="new-chat-inner" ref={innerRef}>
                 <h1 className="new-chat-greeting" aria-hidden={docked}>{greeting(new Date(), t)}</h1>
                 {setupError && !remote && <SetupFailed error={setupError} />}
@@ -305,7 +365,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                         disabledReason={starting ? t('composer.starting') : null}
                         autoFocus
                         inputRef={inputRef}
-                        leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /></>}
+                        placeholder={researchMode ? t('composer.researchPlaceholder') : undefined}
+                        leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /><ResearchChip sessionId={null} disabled={sending} compact /></>}
                         rightControls={<ModelChip />}
                     />
                 </div>
@@ -317,6 +378,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming, t)}</p>
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
+                {agentRefused && agentMissing && <p className="new-chat-error" role="alert">{t('agentNotice.sendRefused')}</p>}
+                <TryChips onPick={fillPrompt} disabled={starting || sending} />
                 {startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>

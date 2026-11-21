@@ -21,12 +21,12 @@ import (
 // sit here looking asserted-as-real.
 func TestTheLocalAIRemedyNamesACommandThisMachineHas(t *testing.T) {
 	rows := map[string]*fakeTransport{
-		"not reachable":         newFake().with("GET /v1/email/init", 503, initUnreachable),
-		"model list unreadable": newFake().with("GET /v1/email/init", 503, initModelListUnreadable),
+		"not reachable":         newFake().with("GET /v1/gaia/init", 503, initUnreachable),
+		"model list unreadable": newFake().with("GET /v1/gaia/init", 503, initModelListUnreadable),
 	}
 	for name, f := range rows {
 		t.Run(name, func(t *testing.T) {
-			rep := Check(context.Background(), f, EmailConfig())
+			rep := Check(context.Background(), f, testConfig())
 			row, ok := rep.Find(KeyLemonade)
 			if !ok || row.State != StateFailed {
 				t.Fatalf("expected a failed Local AI row:\n%s", rep)
@@ -47,7 +47,7 @@ func TestTheLocalAIRemedyNamesACommandThisMachineHas(t *testing.T) {
 // The same property through the ladder, which the chat view shares — a mid-run
 // Lemonade outage must not print a command the gate would not.
 func TestTheLadderNamesACommandThisMachineHas(t *testing.T) {
-	l := Ladder{AgentID: "email"}
+	l := Ladder{AgentID: "gaia"}
 	for name, d := range map[string]Diagnosis{
 		"not reachable": l.Text("check the local AI",
 			"Local Lemonade Server is not reachable at http://localhost:13305/api/v1"),
@@ -193,16 +193,6 @@ func TestEveryPlatformGetsALauncherThatExistsThere(t *testing.T) {
 			wantHint:  "Applications folder",
 		},
 		{
-			name:      "a legacy machine still gets the legacy CLI",
-			probe:     fakeHostFor("linux", []string{"lemonade-server"}, nil, nil),
-			wantStart: "lemonade-server serve --ctx-size 65536",
-		},
-		{
-			name:      "the pip/CI variant counts as legacy too",
-			probe:     fakeHostFor("linux", []string{"lemonade-server-dev"}, nil, nil),
-			wantStart: "lemonade-server-dev serve --ctx-size 65536",
-		},
-		{
 			name: "an explicit override is run verbatim, never rerouted",
 			probe: fakeHostFor("linux", []string{"systemctl"},
 				[]string{"/usr/bin/lemonade", "/usr/lib/systemd/user/lemond.service",
@@ -235,11 +225,11 @@ func TestEveryPlatformGetsALauncherThatExistsThere(t *testing.T) {
 	}
 }
 
-// An override that names the LEGACY cli must not be silently rerouted to
-// systemctl just because the machine also has the modern package — the whole
-// point of the variable is "run this one".
+// An override must not be silently rerouted to systemctl just because the
+// machine also has the package — the whole point of the variable is "run this
+// one".
 func TestAnOverrideBeatsTheModernPackageOnTheSameMachine(t *testing.T) {
-	probe := fakeHostFor("linux", []string{"lemonade-server", "systemctl"},
+	probe := fakeHostFor("linux", []string{"systemctl"},
 		[]string{"/usr/bin/lemonade", "/usr/bin/lemond",
 			"/usr/lib/systemd/user/lemond.service", "/opt/lemonade/bin/lemond"},
 		map[string]string{serverPathEnv: "/opt/lemonade/bin/lemond"})
@@ -524,7 +514,7 @@ func TestMacOSPrefersWhatWasActuallyVerifiedToWork(t *testing.T) {
 // Modern Lemonade reads no context-size variable at launch (#3320): the string
 // is absent from the shipped server, and upstream only names it in a test that
 // asserts it is NOT in the CLI help. A command that sets it changes nothing
-// while telling the user it did. Only the legacy CLI takes the window, as a flag.
+// while telling the user it did.
 func TestAStartCommandNamesNoDeadContextVariable(t *testing.T) {
 	cases := map[string]hostProbe{
 		"macOS binary":  fakeHostFor("darwin", nil, []string{"/usr/local/bin/lemond"}, nil),
@@ -554,15 +544,6 @@ func TestAStartCommandNamesNoDeadContextVariable(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestTheLegacyCLIStillCarriesTheWindowAsAFlag(t *testing.T) {
-	l := resolveLemonadeWith(fakeHostFor("linux", []string{"lemonade-server"}, nil, nil))
-	for what, s := range map[string]string{"start": l.Start, "restart": l.Restart} {
-		if !strings.Contains(s, "--ctx-size 65536") {
-			t.Errorf("%s = %q, want the legacy --ctx-size flag", what, s)
-		}
 	}
 }
 

@@ -21,9 +21,9 @@ from gaia.security import PathValidator
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui import sse_handler as sse_handler_module
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar.relay import _dispatch_one
 from gaia.ui.models import ChatRequest
 from gaia.ui.run_manager import RunManager
+from gaia.ui.sidecar.relay import _dispatch_one
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 
@@ -50,11 +50,7 @@ def file_tools(tmp_path):
 
 
 def _wire(handler):
-    translator = CanonicalTranslator(
-        run_id=None,
-        agent_id="probe",
-        render_tool_map=SSEOutputHandler._RENDER_TOOL_TO_LANG,
-    )
+    translator = CanonicalTranslator(run_id=None, agent_id="probe")
     out = []
     while True:
         try:

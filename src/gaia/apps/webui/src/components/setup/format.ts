@@ -13,6 +13,21 @@ export function formatSize(gb: number): string {
     return `${gb.toFixed(1)} GB`;
 }
 
+/** Lemonade's "GB" of installed memory are binary (GiB); setup shows decimal GB throughout. */
+const GB_PER_GIB = 1024 ** 3 / GB;
+
+/**
+ * Installed memory, from Lemonade's report ("128.00 GB", in GiB) in decimal GB like the
+ * GPU memory pane. The OS figure is the fallback: on a PC that sets memory aside for its
+ * GPU, it is the smaller amount the OS can use.
+ */
+export function totalMemory(reported: string | null | undefined, ramGb: number | null | undefined): string | null {
+    const gib = reported ? Number.parseFloat(reported) : Number.NaN;
+    if (Number.isFinite(gib) && reported?.trim().toUpperCase().endsWith('GB')) return formatSize(gib * GB_PER_GIB);
+    if (reported) return reported;
+    return ramGb != null ? formatSize(ramGb) : null;
+}
+
 /**
  * A memory-fit number from the plan: a model's need or this PC's memory for
  * models. The plan reports both in decimal GB, like the GPU memory pane, so

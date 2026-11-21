@@ -14,7 +14,7 @@ talking to — and every wrong guess costs a full round trip to learn something
 one orientation pass establishes once.
 
 The [GAIA agent](/guides/gaia) now runs that pass at the start of every task and
-puts the result in its system prompt.
+puts the result in the session context at the start of the first user message.
 
 ## What it contains
 
@@ -113,7 +113,15 @@ Resolution order:
 
 1. `project_root` on `GaiaAgentConfig`
 2. the `GAIA_PROJECT_ROOT` environment variable
-3. the working directory, or the nearest repository above it — searching upward until the home directory or the filesystem root, whichever comes first
+3. the session's working directory, or the nearest repository above it — searching upward until the home directory or the filesystem root, whichever comes first
+
+The session's working directory is the folder the client said it was started
+in — the terminal app sends its start folder with every request (`/query`'s
+`working_directory`) — and otherwise the agent process's own working directory.
+The daemon starts the agent in its own folder, so without the client's folder
+the map would describe the daemon's folder, not your project. Sending the start
+folder changes only where relative paths and the map resolve; it does not change
+which folders the agent may read.
 
 A working directory anywhere inside **GAIA's own source tree** is rejected — in
 dev mode the agent sidecar is launched from its package directory inside the
@@ -147,7 +155,7 @@ spends about half again as many input tokens.
 
 | `project_context` | What the model gets |
 |-------------------|---------------------|
-| `auto` (default) | Claude served by Anthropic (`--use-claude`, the gateway's `amd.Claude-*`, `anthropic/claude-*` or Bedrock's `us.anthropic.claude-*`) gets everything below. A local model merely named after Claude, such as `user.Claude-3.7-Sonnet-Reasoning-Gemma3-12B-GGUF`, does not. Every other model, including any GAIA does not recognise, gets none of it: its prompt is the same as in a folder with no `CLAUDE.md`, `AGENTS.md` or `.claude/skills` |
+| `auto` (default) | Claude served by Anthropic (`--use-claude`, the gateway's `amd.Claude-*`, `anthropic/claude-*` or Bedrock's `us.anthropic.claude-*`) gets everything below, once you trust the folder (see [Trusting a folder](#trusting-a-folder)). A local model merely named after Claude, such as `user.Claude-3.7-Sonnet-Reasoning-Gemma3-12B-GGUF`, does not. Every other model, including any GAIA does not recognise, gets none of it: its prompt is the same as in a folder with no `CLAUDE.md`, `AGENTS.md` or `.claude/skills` |
 | `full` | Every model gets everything below |
 | `off` | No model gets any of it |
 
@@ -208,6 +216,42 @@ commands and paths a change documents; fix root causes rather than the reported 
 the tests that cover the change; and check the deliverable against the task's
 and project's rules before finishing. It is general practice, not any one
 repository's rules, and is left out in fast mode.
+
+### Trusting a folder
+
+A cloned repository can carry its own `CLAUDE.md`, `AGENTS.md` and
+`.claude/skills`, so under `auto` GAIA asks once per folder before putting them
+in a prompt, as Claude Code does. The question names the files it would read.
+The terminal UI, the Agent UI and `gaia chat` show it the first time a session
+with a Claude model starts in that folder; the answer is kept in
+`~/.gaia/project_trust.json`, beside `config.json`, and applies to every later
+session there.
+
+- **Trust:** the folder behaves as before.
+- **Don't trust:** the folder is treated as `off`: its files stay out of the
+  prompt, and GAIA does not ask again.
+- **Nobody to ask** (`gaia -p`, a pipe, a script): an unanswered folder is not
+  loaded and nothing waits. A one-line note on stderr names the folder; run
+  `gaia project trust add` there once to load it in later runs. `--full-access`, and
+  Full access in the apps, count as trusting every folder without asking.
+- **`project_context full`** is your own choice, so it never asks, and
+  **`off`** never loads. Only `auto` consults the saved answers.
+
+The answer belongs to the folder, not to what is in it. GAIA saves it under the
+folder's path, with links resolved, and not against the files themselves, so a
+`git pull` that adds or changes a `CLAUDE.md`, an `AGENTS.md` or a skill brings
+no new question: a trusted folder loads the new files from its next session on,
+and a declined one stays off. Working in a subfolder of a repository uses the
+repository's answer. A moved or renamed folder, or a second clone, is a new path,
+so GAIA asks about it again.
+
+A folder with none of these files is never asked about until one appears.
+
+Use `gaia project trust` (or `gaia trust`) to inspect and manage saved answers:
+
+- **List answers:** `gaia project trust list` (or `--json` for scripts) shows every saved folder, its decision and timestamp, and flags folders no longer on disk.
+- **Trust or decline ahead of time:** `gaia project trust add [folder]` or `gaia project trust decline [folder]` records an answer in advance (defaulting to the enclosing repository), allowing headless runs (`gaia -p`) to load trusted guidance without `--full-access`. Only you can trust a folder: the agent cannot run these commands, and a `trusted` answer it tries to save is refused.
+- **Forget answers:** `gaia project trust forget [folder]` clears an entry so GAIA asks again next time. Use `--missing` to prune deleted folders, or `--all` (`-y` to skip confirmation) to clear the entire store.
 
 ## Caching
 

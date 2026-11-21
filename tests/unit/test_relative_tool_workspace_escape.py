@@ -383,7 +383,7 @@ def test_download_save_to_cannot_escape_the_chat_folder(remaining):
 
     for folder in _FOLDER_ESCAPES + [str(outside)] + _windows_folder_escapes(outside):
         result = download("https://example.test/f", save_to=folder)
-        assert result.startswith("Error"), (folder, result)
+        assert result["executed"] is False, (folder, result)
     assert written == []
     assert not (outside / "got.txt").exists()
 

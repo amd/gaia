@@ -84,24 +84,20 @@ class _PlayingTTS:
         status_callback(False)
 
 
-def _speak_in_background(client, text, method="speak_text"):
-    client.llm_client.is_generating.return_value = False
-    client.llm_client.generate.return_value = [text]
-    client.llm_client.get_performance_stats.return_value = None
-    runner = threading.Thread(target=lambda: _run(getattr(client, method)(text)))
+def _speak_in_background(client, text):
+    runner = threading.Thread(target=lambda: _run(client.speak_text(text)))
     runner.start()
     return runner
 
 
-@pytest.mark.parametrize("method", ["speak_text", "process_voice_input"])
-def test_mic_is_paused_for_the_whole_utterance_and_resumes_after(method):
+def test_mic_is_paused_for_the_whole_utterance_and_resumes_after():
     client = _client(enable_tts=True)
     mic = _Mic()
     client.whisper_asr = mic
     tts = _PlayingTTS(mic)
     client.tts = tts
 
-    runner = _speak_in_background(client, "hello there", method)
+    runner = _speak_in_background(client, "hello there")
     try:
         assert tts.sampled_enough.wait(10), "playback never got going"
         assert runner.is_alive(), "speak_text returned while audio was still playing"
@@ -120,7 +116,7 @@ def test_mic_is_paused_for_the_whole_utterance_and_resumes_after(method):
     assert client.is_speaking is False
 
 
-def test_voice_processor_does_not_resume_on_early_status_callback():
+def test_an_early_status_callback_does_not_resume_the_mic():
     client = _client(enable_tts=True)
     mic = _Mic()
     client.whisper_asr = mic
@@ -138,7 +134,7 @@ def test_voice_processor_does_not_resume_on_early_status_callback():
 
     tts = EarlyStatusTTS(mic)
     client.tts = tts
-    runner = _speak_in_background(client, "hello", "process_voice_input")
+    runner = _speak_in_background(client, "hello")
     try:
         assert callback_sent.wait(2)
         assert mic.is_paused
@@ -150,20 +146,14 @@ def test_voice_processor_does_not_resume_on_early_status_callback():
     assert mic.resumes == 1
 
 
-@pytest.mark.parametrize("method", ["speak_text", "process_voice_input"])
 @pytest.mark.parametrize("error_cls, paused", [(OSError, False), (TimeoutError, True)])
-def test_playback_failure_propagates_and_timeout_keeps_mic_muted(
-    method, error_cls, paused
-):
+def test_playback_failure_propagates_and_timeout_keeps_mic_muted(error_cls, paused):
     client = _client(enable_tts=True)
     client.whisper_asr = _Mic()
-    client.llm_client.is_generating.return_value = False
-    client.llm_client.generate.return_value = ["hello"]
-    client.llm_client.get_performance_stats.return_value = None
     client.tts = MagicMock()
     client.tts.generate_speech_streaming.side_effect = error_cls("output stalled")
     with pytest.raises(RuntimeError, match="output stalled"):
-        _run(getattr(client, method)("hello"))
+        _run(client.speak_text("hello"))
     assert client.whisper_asr.is_paused is paused
 
 

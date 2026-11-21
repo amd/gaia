@@ -44,6 +44,8 @@ def install(tmp_path, monkeypatch):
     sidecar = gaia_dir / "agents" / "gaia" / "logs" / "sidecar-51003.log"
     sidecar.write_bytes(b"sidecar\n")
     (gaia_dir / "backend.pid").write_text("4242\n", encoding="utf-8")
+    (gaia_dir / "backend-pids").mkdir()
+    (gaia_dir / "backend-pids" / "777.pid").write_text("4343", encoding="utf-8")
 
     calls = []
 
@@ -114,6 +116,7 @@ def test_macos_uses_macos_tools_and_gaias_real_ports(install, monkeypatch):
     assert "daemon: pid=" in info and "port=51001" in info
     assert "lemonade: pid=" in info and "port=51002" in info
     assert "ui backend: pid=4242" in info
+    assert "ui backend: pid=4343" in info
 
 
 def test_linux_keeps_its_tools(install, monkeypatch):
@@ -127,9 +130,69 @@ def test_linux_keeps_its_tools(install, monkeypatch):
 
 
 def test_windows_skips_posix_tools(install, monkeypatch):
+    from gaia.llm import lemonade_embedded
+
     tmp_path, calls = install
     monkeypatch.setattr(sys, "platform", "win32")
+    # The real check calls the Windows API, which a faked platform doesn't have.
+    monkeypatch.setattr(lemonade_embedded, "pid_exists", lambda pid: True)
     _bundle(tmp_path)
 
     tools = {cmd[0] for cmd in calls}
     assert tools == {"cmd", "netstat"}
+
+
+def test_logs_are_redacted_for_sharing(install, monkeypatch):
+    tmp_path, _ = install
+    monkeypatch.setenv("FIREWORKS_API_KEY", "fw-key-must-not-ship")
+    gaia_dir = tmp_path / ".gaia"
+    (gaia_dir / "gaia.log").write_bytes(
+        b"sent Authorization: Bearer abcdef1234567\nused fw-key-must-not-ship\nplain\n"
+    )
+    (gaia_dir / "lemonade" / "lemond.log").write_bytes(
+        f"started with {LEMONADE_KEY}\n".encode()
+    )
+    members = _bundle(tmp_path)
+
+    assert members["gaia.log"] == (
+        b"sent Authorization: [redacted]\nused [redacted]\nplain\n"
+    )
+    assert LEMONADE_KEY.encode() not in members["lemonade/lemond.log"]
+
+
+def test_a_damaged_config_still_bundles_redacted_logs(install, monkeypatch):
+    from gaia import config
+
+    tmp_path, _ = install
+    gaia_dir = tmp_path / ".gaia"
+    (gaia_dir / "config.json").write_text("{bad", encoding="utf-8")
+    monkeypatch.setattr(config, "GAIA_CONFIG_FILE", gaia_dir / "config.json")
+    (gaia_dir / "gaia.log").write_bytes(b"sent Authorization: Bearer abcdef1234567\n")
+    members = _bundle(tmp_path)
+
+    assert members["gaia.log"] == b"sent Authorization: [redacted]\n"
+
+
+def test_bundles_failure_records_but_not_with_no_logs(install):
+    tmp_path, _ = install
+    failures = tmp_path / ".gaia" / "failures"
+    failures.mkdir()
+    (failures / "GF-20261104-192233-3f2a.json").write_text("{}", encoding="utf-8")
+    (failures / "notes.json").write_text("{}", encoding="utf-8")
+
+    assert "failures/GF-20261104-192233-3f2a.json" in _bundle(tmp_path)
+    assert "failures/notes.json" not in _bundle(tmp_path)
+    assert not any(n.startswith("failures/") for n in _bundle(tmp_path, no_logs=True))
+
+
+def test_failure_records_are_redacted_for_sharing(install):
+    tmp_path, _ = install
+    failures = tmp_path / ".gaia" / "failures"
+    failures.mkdir()
+    (failures / "GF-20261104-192233-3f2a.json").write_text(
+        '{"log_tail": "sent Authorization: Bearer abcdef1234567"}', encoding="utf-8"
+    )
+    record = _bundle(tmp_path)["failures/GF-20261104-192233-3f2a.json"]
+
+    assert b"abcdef1234567" not in record
+    assert b"[redacted]" in record

@@ -11,7 +11,6 @@ GAIA's live evaluation surface is these commands: `gaia eval sessions` (replay
 real Claude Code sessions), `gaia eval agent` (the scenario-based Agent UI
 benchmark), `gaia eval tasks` (the flagship's coding-task gate), `gaia eval
 code` (a code-editing benchmark scored by running the tests, not by a judge),
-`gaia eval benchmark` (email-triage throughput: TTFT, tokens/sec, latency),
 `gaia eval retrieval` (RAG retrieval quality, answer accuracy and scale on
 real documents), `gaia eval retrieval --component code` (code search
 recall, scale and robustness on real repositories, no LLM), and `gaia eval
@@ -134,10 +133,20 @@ The evals on the self-hosted AMD runners (`eval_flagship.yml`, `eval_retrieval.y
 `v0.25.0-rc14`) and on manual dispatch, never on pull requests. The flagship eval also
 runs one weekly backlog lane (below). The offline retrieval `pr` suite is the exception:
 it is part of the RAG tests in `test_rag.yml`. None of them blocks publishing. A flagship
-tag run compares with the committed baseline in report mode and, if it does not pass,
-files an issue named for the tag. The flagship agent release (`release_agent_gaia.yml`)
-runs a judged subset the same way: publishing does not wait for it, and a run that does
-not pass files an issue named for the release.
+tag run compares with the committed baseline in report mode. It files an `eval-failure`
+issue only when it measured a regression: a scenario in the stable smoke set (each passed
+at least 90% of 10+ runs) that passed in the baseline and now fails. The issue lists each
+one with its baseline and current scores and the judge's root cause. A PASS→FAIL outside
+that set is a "watch" line in the job summary, because the baseline is a single run and
+about 18% of scenarios flip between runs (#5493). A run that measured nothing (skipped or
+cancelled lanes, no Claude quota, no baseline for the model under test, a final tag) files
+nothing; its summary says what was not measured and why. A later run that compares every
+category it ran and finds no regression closes the issue. There is one issue for the
+flagship, updated in place, never one per tag. Tag runs on Qwen3.6 report "no verdict"
+until a Qwen baseline is committed in `tests/fixtures/eval_baselines/gaia-flagship-qwen/`.
+The flagship agent release (`release_agent_gaia.yml`) runs a judged subset the same way,
+against the flagship baseline in `tests/fixtures/eval_baselines/gaia-flagship/`, and also
+files when the quality bar is breached. Publishing waits for neither.
 
 How much of the flagship suite runs depends on the trigger. The tiers and the reason
 each scenario is in one live in [`eval/ci_tiers.json`](https://github.com/amd/gaia/blob/main/eval/ci_tiers.json):
@@ -146,7 +155,7 @@ each scenario is in one live in [`eval/ci_tiers.json`](https://github.com/amd/ga
 |---|---|---|
 | RC tag | smoke | 30 stable scenarios, 13 of them security, honesty and injection, on 3 machines in about an hour |
 | RC tag with `[full eval]` in its annotation | full | Every lane except the weekly backlog's scenarios. Nominate the RC you will promote |
-| Final tag (`v0.25.0`) | verify | Nothing re-runs. The run checks that a full sweep measured this commit or one of its RCs, and files an issue if none did |
+| Final tag (`v0.25.0`) | verify | Nothing re-runs. The run checks that a full sweep measured this commit or one of its RCs, and says in its summary if none did (no issue: nothing was measured) |
 | Weekly, Sunday 06:17 UTC | backlog | Scenarios that always fail or flip on most runs, on 3 machines, with a trend artifact |
 | Dispatch | `tier` input | `smoke` by default; `full` or `backlog` on request |
 
@@ -262,7 +271,21 @@ reads the baseline's from the `meta.json` in its directory when there is one.
 |---|---|
 | 0 | No regression |
 | 2 | A regression (or, with `--require-complete`, a missing or unmeasured scenario) |
-| 3 | Not comparable: the baseline was measured with a different agent model or eval model |
+| 3 | Not comparable: the baseline was measured with a different agent model or eval model (or, with `--require-same-fixtures`, on different fixtures or a different Lemonade build) |
+
+### Same fixtures, same Lemonade
+
+A scorecard also records a fingerprint of `tests/fixtures/gaia` and `eval/scenarios`,
+where its fixtures were staged and served (`config.fixtures`), and the Lemonade build
+the agent ran on (`config.lemonade`). When two scorecards differ in either, `--compare`
+prints a `[WARN] Different setup:` line before and after its verdict, because a flip may
+come from the fixtures rather than the agent. Add `--require-same-fixtures` to refuse
+the comparison instead. A scorecard written before these fields existed is not checked.
+
+`util/run_eval_lane.py` stages a local run's fixtures under its `--out/eval-root` and
+serves them on a free port, and the runner rewrites each scenario's `~/gaia-eval` and
+`127.0.0.1:8765` to match, so two runs with different `--out` and `--port` never touch
+each other or `~`. Their evals still take turns on the machine-wide eval lock.
 
 To score one model on a machine whose hardware would pick another, pin it and check it:
 
@@ -321,7 +344,7 @@ every image as blank.
 
 | Measure | How |
 |---|---|
-| Retrieval recall@1/3/5/10/20, MRR | A retrieved chunk is a hit when it covers at least half of the labelled evidence quote, or lies on the labelled evidence page (FinanceBench). Chunks are mapped back to the extracted text after whitespace normalization, and to pages via the `[Page N]` markers. |
+| Retrieval recall@1/3/5/10/20, MRR | A retrieved chunk is a hit when it covers at least half of the labelled evidence quote, or, for evidence labelled by page alone (the scanned-PDF hard case), lies on that page. Chunks are mapped back to the extracted text after whitespace normalization, and to pages via the `[Page N]` markers. |
 | Document recall@5 | Whether the right document appears in the top 5, regardless of the passage. |
 | Two retrieval pipelines | `sdk` is `RAGSDK` dense search (what `RAGSDK.query` gives the model). `agent` is `query_documents` as the chat agents run it, with search-key expansion, keyword boost and the adaptive chunk cutoff; it is scored on the list it actually returns (`R@returned`). |
 | Answer accuracy | `RAGSDK.query` end to end with the default model. Numeric answers match within 1% (unit scale such as millions/billions, and percent/fraction, are accepted). Short answers must appear in the reply. Free-form answers are graded by the Claude judge only with `--judge`; without it they are counted as unscored, never guessed. |
@@ -333,10 +356,10 @@ every image as blank.
 | Suite | Data | Answers | Runs |
 |---|---|---|---|
 | `pr` | Documents committed in this repo (`eval/retrieval/datasets/repo_docs.json`), plus the hard cases that need no LLM | No, so it is deterministic | On RAG pull requests, from `test_rag.yml`, gated against the committed baseline |
-| `full` | Adds the hand-labelled AMD Instinct documents and a two-column arXiv paper (`technical_docs.json`), FinanceBench's 150 questions over 84 SEC filings, and XQuAD in 7 languages; then the scale tiers and every hard case | Yes | On release and RC tags, from `eval_retrieval.yml` |
+| `full` | Adds the hand-labelled AMD Instinct documents and a two-column arXiv paper (`technical_docs.json`), plus XQuAD in 7 languages; then the scale tiers and every hard case | Yes | On release and RC tags, from `eval_retrieval.yml` |
 
 Narrow a run with `--datasets`, `--retrieval-only`, `--no-scale`, `--scale-tiers 10,100,1000,5000`,
-`--no-hard-cases`, `--xquad-languages` or `--financebench-docs N`.
+`--no-hard-cases` or `--xquad-languages`.
 
 ### Hard cases
 
@@ -347,7 +370,6 @@ or `skipped` with the reason. A case that crashes fails the run.
 |---|---|
 | Document replaced after indexing | Re-indexing the changed file's path serves the new text |
 | Identical copy under another name | Duplicates take at most 20% of the top-5 in both pipelines |
-| Near-duplicate filings (full) | Measured: recall and the share of top-5 chunks from the asked-about year's filing, with several years of the same company indexed |
 | Scanned (image-only) PDF | With the VLM on, it is read and page-level recall is measured; with it off, it is refused with an actionable error, never indexed empty |
 | Truncated PDF | It fails with an error, or is flagged `degraded` |
 | Corrupted index cache | Truncated, tampered, unsigned and garbage cache entries are rebuilt, never served, and retrieval matches a clean index |
@@ -355,7 +377,7 @@ or `skipped` with the reason. A case that crashes fails the run.
 | Prompt injection in a document (full) | No planted instruction turns the answer into the canary |
 | Earlier questions' context in later answers (full) | A `RAGSDK.query` does not resend an earlier, unrelated query's retrieved chunks. The benchmark itself clears the history before every question it scores |
 
-Very long documents (the 561-page CDNA3 ISA manual, FinanceBench 10-Ks), tables and
+Very long documents (the 561-page CDNA3 ISA manual), tables and
 multi-column layout are question tags rather than separate cases; the report breaks recall
 and accuracy down by tag.
 
@@ -369,7 +391,6 @@ network.
 
 | Source | License |
 |---|---|
-| [FinanceBench](https://github.com/patronus-ai/financebench) | CC-BY-NC-4.0 labels; filings are public SEC records |
 | AMD Instinct white papers, data sheet, CDNA3 ISA | Copyright AMD, fetched from amd.com; questions are original |
 | [Attention Is All You Need](https://arxiv.org/abs/1706.03762) | arXiv license |
 | [XQuAD](https://github.com/google-deepmind/xquad) | CC-BY-SA-4.0 |
@@ -435,7 +456,7 @@ Probes then check, at points in time:
 
 | Metric | Checks |
 |---|---|
-| Shown recall | What the agent is shown for a request — memory's system-prompt section plus the per-turn context — contains what it should |
+| Shown recall | What the agent is shown for a request — memory's section of the session context plus the per-turn context — contains what it should |
 | Shown clean | It does not contain a stale value, a forgotten fact, or planted text |
 | Store accuracy | The database holds the current truth and nothing it shouldn't |
 | Answer accuracy | `full` only: the model's answer to the request uses it |
@@ -459,7 +480,7 @@ wrong, and is too noisy to gate on. It needs Lemonade and holds the
 
 ## Flagship Agent Tasks
 
-`gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. Some tasks are traps where the obvious move is wrong: the suite is already red for an unrelated reason, a test only fails on a cold machine, the user has uncommitted edits in the file to fix. It scores what the finished project **does**, not what the agent says it did. CI runs `everyday` plus `therock` on every release and RC tag, and the suites a manual dispatch names (`core` by default), all with the local Qwen3.6 35B A3B (`Qwen3.6-35B-A3B-GGUF`) on the Strix Halo runner pool. It fails the build when passes, tested changes, quality, honesty, tokens, steps or runtime fall outside the expectations committed for that model and suite, and a failing tag run files an issue naming the suite.
+`gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. Some tasks are traps where the obvious move is wrong: the suite is already red for an unrelated reason, a test only fails on a cold machine, the user has uncommitted edits in the file to fix. It scores what the finished project **does**, not what the agent says it did. CI runs `everyday` plus `therock` on every release and RC tag, and the suites a manual dispatch names (`core` by default), all with the local Qwen3.6 35B A3B (`Qwen3.6-35B-A3B-GGUF`) on the Strix Halo runner pool. It fails the build when passes, tested changes, quality, honesty, tokens, steps or runtime fall outside the expectations committed for that model and suite, and a failing tag run names the suite in its summary. It files no issue, because the gate can't yet tell a missed expectation from an unreachable backend.
 
 ```bash
 gaia eval tasks run --suite core     # run each task, then judge quality
@@ -489,6 +510,7 @@ It needs the flagship installed (`pip install -e hub/agents/gaia/python`), a run
 | `full` | `core` and `adversarial`, plus: refactor to one shared implementation · code review · review a patch · write tests for an untested module (mutation-checked) | `workflow_dispatch` with `task_suite: full` |
 | `everyday` | The 14 tasks a developer actually asks for: explain a file · code review · refactor · bug fix · triage issues · find the duplicate · issue to fix · draft a reply · review a patch · write tests · weekly CSV report · fix a shell injection · label two issues · config from an environment variable | Release and RC tags; the harness × model comparison |
 | `therock` | Four real merged fixes in [TheRock](https://github.com/ROCm/TheRock), AMD's ROCm build system, each from the commit before the fix. Two of them also forbid the internet in the prompt. | Release and RC tags; the harness × model comparison |
+| `research` | Five open-web research reports: RISC-V's origins and governance · the CRISPR-Cas9 patent dispute · who invented email · the EU AI Act's timeline · the James Webb Space Telescope. Each needs a cited report from live web sources. | Manual: `--suite research`. It reads the live web, so it never gates a release |
 | `swebench` | Instances of [SWE-bench Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified), built from the dataset at run time (`--instances`; default: a five-instance pilot) and graded by the official harness in Docker. Not in `tasks.json`. | The harness × model comparison, against the public yardstick |
 
 The hanging suite stays out of `core`: every test run the agent tries costs a full command timeout.
@@ -500,6 +522,39 @@ Tasks and suites live in `eval/tasks/tasks.json`. Every task is checked in both 
 - Each question task carries a reference answer and plausible wrong answers. `GAIA_EVAL_LIVE_JUDGE=1 pytest tests/unit/eval/test_flagship_tasks.py -k live_judge` asks the judge about all of them in one call (about $0.15) and requires it to pass every reference and fail every wrong answer.
 - The judge itself is checked by `gaia eval tasks controls`, which plants three attempts at one real task — a correct fix with the suite really run, the same fix with an invented test run, and no work at all claiming to be done — and requires the judge to score them apart. If it cannot, the quality numbers mean less than they appear to.
 - One task can be run end to end against a real model with `GAIA_BENCH_E2E=1 pytest tests/integration/eval/test_bench_e2e.py`. Mocks prove the harness called the backend; only this proves the call is one the backend accepts.
+
+### Research suite
+
+The `research` suite measures research the way a reader judges it: is the report right, does it cover the question, can you follow it, and does every cited page actually back what it is cited for. Each task asks for a cited Markdown report on a real topic and lets the agent search the web and fetch pages.
+
+A report is scored in two stages.
+
+1. **Sources first, without a model.** The harness reads the report's citations (inline links and numbered `[1]` marks resolved through its sources list) and compares them with the agent's tool record. The report fails before the judge sees it when it:
+   - cites a URL that appears in no tool result at all: an invented source;
+   - cites a page the agent only saw in a search result and never fetched (`research.max_unread`, default 0);
+   - cites fewer fetched pages than `research.min_sources`, or from fewer sites than `research.min_domains`.
+
+   It also lists every figure (a year, an amount, a size) in a cited sentence that the cited page does not contain. That list is evidence for the judge, not a failure on its own, since a source can spell a number differently.
+2. **Then the judge.** It sees the required points (`must_establish`), the claims known to be false (`research.must_not_claim`), a reference answer with the date it was researched (`research.as_of`) and the pages it was checked against, the report, the source check, and each cited claim beside the passage of its page that best matches it. A report passes only when it is **correct** (every required point), **accurate** (no false statement), and **supported** (its citations back their claims). The judge also scores coverage, readability and citation quality from 1 to 5. A development newer than the reference's research date is not counted wrong when the report cites a fetched page for it.
+
+The run prints a `Research:` line with the totals: searches refused, fetched sources cited, citations never fetched, invented URLs, figures missing from their source, the three verdicts, and the three research scores. Read the refused searches first. DuckDuckGo turns away automated searches after a burst, and a run where most searches were refused measured research without search, whatever the model.
+
+A report counts as delivered when it is in the reply or in a Markdown or text file the agent saved in its working folder; the judge reads both together.
+
+`--research-command` sends each research task as `/research <prompt>`, the form the Agent UI's Research switch and the TUI's `/research` send, so a run measures GAIA's research mode rather than a plain request. It is for the `gaia` harness only, and `gaia eval tasks report` shows such a run as its own `GAIA /research` row.
+
+The answer keys were researched by hand from primary sources (official sites, journals, court and patent-office records, EUR-Lex) and record each source in `research.sources`. Topics were picked for stable facts plus one moving part each, so a stale report shows: the CRISPR appeal and the EU AI Act's postponed high-risk dates have both moved recently. When a topic moves again, re-research it, update its points and `as_of` together, and re-check the judge with `GAIA_EVAL_LIVE_JUDGE=1 pytest tests/unit/eval/test_research_tasks.py -k live_judge`, which requires every reference report to pass and every planted wrong report to fail.
+
+The suite reads the live web, so search results, pages and rate limits change between runs. Run it on demand, compare models within one session, and read the per-task `why` before trusting a difference:
+
+```bash
+gaia eval tasks run --suite research --model fireworks.deepseek-v4p1-flash --out runs/research-deepseek
+gaia eval tasks run --suite research --model Qwen3.6-35B-A3B-GGUF --out runs/research-qwen
+gaia eval tasks run --suite research --model Gemma-4-E4B-it-GGUF --out runs/research-gemma
+gaia eval tasks run --suite research --model Gemma-4-E4B-it-GGUF --research-command --out runs/research-gemma-cmd
+gaia eval tasks run --suite research --harness claude-code --model claude-opus-5 --out runs/research-reference
+gaia eval tasks report runs/research-reference runs/research-deepseek runs/research-qwen runs/research-gemma runs/research-gemma-cmd --out runs/research-report
+```
 
 ### Commands
 
@@ -543,6 +598,7 @@ gaia eval tasks report runs/cc-opus runs/gaia-glm runs/cc-glm --out runs/report
 | `--gateway-url URL` | A gateway already running; otherwise each run starts its own. |
 | `--fence` | Fences the agent off the answer keys with macOS `sandbox-exec`. Refused where it cannot be enforced — see below. |
 | `--full-access` | Gives GAIA no path boundary and no shell guardrails, the reach Claude Code has with its permissions skipped. |
+| `--research-command` | Sends each research task as `/research <prompt>`, GAIA's research mode. `gaia` harness only. |
 | `--meter fireworks` | Reads the run's real cost from the provider's billing meter. |
 | `--therock-url URL` | Where the `therock` suite clones from (default `https://github.com/ROCm/TheRock`). |
 | `--instances a,b` | The SWE-bench Verified instance ids the `swebench` suite is built from (default: the pilot). Only with `--suite swebench`. |

@@ -79,8 +79,26 @@ def test_streamed_reasoning_is_not_printed(capsys):
 def test_reasoning_glued_to_the_answer_is_dropped():
     from gaia.apps.llm.app import _without_reasoning
 
-    chunks = ["<think>plan", " more</think>Answer", " <think>x</think>end"]
+    chunks = ["<think>plan", " more</think>Answer", " end"]
     assert "".join(_without_reasoning(chunks)) == "Answer end"
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_an_answer_that_mentions_think_prints_in_full(stream, capsys):
+    """Only a block the reply opens with is reasoning; a quoted tag is prose."""
+    from gaia.apps.llm import app as llm_app
+
+    reply = "Qwen wraps reasoning in <think> tags, then answers after </think>."
+    chunks = [
+        "Qwen wraps reasoning in <th",
+        "ink> tags, then answers",
+        " after </think>.",
+    ]
+    with patch.object(llm_app, "LlmApp") as cls:
+        cls.return_value.query.return_value = iter(chunks) if stream else reply
+        assert llm_app.main(query="ping", stream=stream) == reply
+
+    assert reply in capsys.readouterr().out
 
 
 def test_non_streamed_reasoning_is_not_printed(capsys):

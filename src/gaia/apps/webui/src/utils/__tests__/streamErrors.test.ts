@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from 'vitest';
-import { ApiError, StreamTimeoutError } from '../../services/api';
-import { classifyChatError } from '../streamErrors';
+import { ApiError, StreamDroppedError, StreamTimeoutError } from '../../services/api';
+import { classifyChatError, mayStillFinish } from '../streamErrors';
 import { translator } from '../../i18n/useT';
 
 const kind = (err: Error) => classifyChatError(err).kind;
@@ -64,9 +64,26 @@ describe('classifyChatError (#599)', () => {
         expect(text).toContain('انقطع الاتصال');
     });
 
+    it('says GAIA stopped, and offers a retry, when the last reconnect could not reach it (#6588)', () => {
+        const err = new StreamDroppedError(new TypeError('Failed to fetch'), true);
+        const { kind: k, text } = classifyChatError(err);
+        expect(k).toBe('stream');
+        expect(text).toContain('GAIA stopped before it finished this answer');
+        expect(text).not.toContain('may still finish');
+        expect(mayStillFinish(err)).toBe(false);
+        expect(classifyChatError(err, translator('ar')).text).toContain('توقّف GAIA');
+    });
+
+    it('keeps "may still finish" when GAIA answered the reconnect (#6588)', () => {
+        const err = new StreamDroppedError(new TypeError('network error'));
+        expect(classifyChatError(err).text).toContain('The answer may still finish');
+        expect(mayStillFinish(err)).toBe(true);
+        expect(classifyChatError(err, translator('ar')).text).toContain('قد تكتمل الإجابة');
+    });
+
     it('every kind tells the user what to do next', () => {
         for (const message of ['context size exceeded', 'Lemonade down', 'Failed to fetch', 'timed out', 'boom']) {
-            expect(classifyChatError(new Error(message)).text).toMatch(/try again|ask again|Settings → Model|Start a new chat/i);
+            expect(classifyChatError(new Error(message)).text).toMatch(/try again|ask again|Settings → Agent & model|Start a new chat/i);
         }
     });
 });

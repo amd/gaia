@@ -79,7 +79,8 @@ def _catalog_description(description: str) -> str:
     return text[:CATALOG_DESCRIPTION_CHARS].rstrip() + "…"
 
 
-def _listed(skill: "Skill", list_project: bool = False) -> bool:
+def listed(skill: "Skill", list_project: bool = False) -> bool:
+    """False for ``.claude/skills`` imports never offered; *list_project* lists the project's own."""
     if skill.root == ROOT_CLAUDE_IMPORT:
         return False
     return list_project or skill.root != ROOT_CLAUDE_PROJECT
@@ -103,7 +104,7 @@ def companions(
     found: List[str] = []
     for other in skill.gaia.pairs_with:
         target = skills.get(other)
-        if target is None or not _listed(target, list_project):
+        if target is None or not listed(target, list_project):
             log.debug(
                 "Skill '%s' pairs with '%s', which is not installed; ignoring.",
                 name,
@@ -116,7 +117,7 @@ def companions(
         sorted(
             other.name
             for other in skills.values()
-            if _listed(other, list_project)
+            if listed(other, list_project)
             and name in other.gaia.pairs_with
             and other.name != name
             and other.name not in found
@@ -154,7 +155,7 @@ def render_catalog(skills: Dict[str, "Skill"], list_project: bool = False) -> st
     lines = [
         _catalog_line(skills, skill, list_project)
         for skill in sorted(skills.values(), key=lambda s: s.name)
-        if _listed(skill, list_project)
+        if listed(skill, list_project)
     ]
     if not lines:
         return ""
@@ -183,6 +184,7 @@ __all__ = [
     "GROUNDING_RULE",
     "catalog_env_override",
     "companions",
+    "listed",
     "render_catalog",
     "skills_granting",
 ]

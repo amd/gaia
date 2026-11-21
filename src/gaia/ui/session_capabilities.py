@@ -35,7 +35,10 @@ class CapabilitiesError(RuntimeError):
 
 
 def describe(session: Dict[str, Any]) -> Dict[str, Any]:
-    """``{"session_id", "agent_type", "tools"}`` for *session*'s agent.
+    """``{"session_id", "agent_type", "tools", "skills"}`` for *session*'s agent.
+
+    ``skills`` is ``[{"name", "how"}]`` from an in-process agent, and ``None``
+    for a relayed one, which does not report them.
 
     Blocking (a relayed agent is reached through the daemon); call it off the
     event loop.
@@ -51,19 +54,27 @@ def describe(session: Dict[str, Any]) -> Dict[str, Any]:
     session_id = session["id"]
     agent_type = session.get("agent_type") or "chat"
     agent = cached_session_agent_of(session_id, agent_type)
+    skills = None
     if agent is not None:
         tools = agent.describe_tools()
+        skills = agent.describe_skills()
     elif relayed(session):
         tools = _from_sidecar(session_id, agent_type)
     else:
         raise CapabilitiesError(409, NOT_RUNNING)
-    return {"session_id": session_id, "agent_type": agent_type, "tools": tools}
+    return {
+        "session_id": session_id,
+        "agent_type": agent_type,
+        "tools": tools,
+        "skills": skills,
+    }
 
 
 def _from_sidecar(session_id: str, agent_type: str) -> List[Dict[str, str]]:
-    from .email_sidecar import daemon_client
-    from .email_sidecar.errors import SidecarError, SidecarHTTPError
-    from .email_sidecar.profiles import profile_for, tools_supported
+    from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
+
+    from .sidecar import daemon_client
+    from .sidecar.profiles import profile_for, tools_supported
 
     profile = profile_for(agent_type)
     if profile is None or profile.min_tools_api_version is None:

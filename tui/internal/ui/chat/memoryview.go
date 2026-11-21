@@ -60,7 +60,7 @@ func (m ChatModel) startMemoryFetch() (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, Message{
 			Role: RoleError,
 			Content: "/memory is not available over this session's connection. " +
-				"Run `gaia-tui status` to see how this agent is connected.",
+				"Run `gaia-cli status` to see how this agent is connected.",
 		})
 		m.updateViewport()
 		return m, nil
@@ -249,7 +249,7 @@ func renderMemorySummary(dump client.MemoryDump, width int) []string {
 	detail := []string{
 		formatMemoryCounts(dump.Stats.ByCategory),
 		formatMemoryContextCounts(dump.Contexts),
-		fmt.Sprintf("%d entities · avg confidence %.2f", dump.Stats.EntityCount, dump.Stats.AvgConfidence),
+		formatMemoryEntityLine(dump.Stats),
 	}
 	for _, d := range detail {
 		if d == "" || d == "—" {
@@ -267,6 +267,14 @@ func renderMemorySummary(dump client.MemoryDump, width int) []string {
 		lines = append(lines, memoryFlagStyle.Render(memoryGutter(width)+truncateToWidth(note, memoryWrapWidth(width))))
 	}
 	return lines
+}
+
+func formatMemoryEntityLine(stats client.MemoryStats) string {
+	line := fmt.Sprintf("%d entities", stats.EntityCount)
+	if stats.AvgConfidence != nil {
+		line += fmt.Sprintf(" · avg confidence %.2f", *stats.AvgConfidence)
+	}
+	return line
 }
 
 func renderMemorySection(group memoryCategoryGroup, totalForCategory, width int) []string {
@@ -387,7 +395,9 @@ func formatMemoryMeta(item client.MemoryItem) string {
 	if item.Context != "" && item.Context != "global" {
 		meta = append(meta, item.Context)
 	}
-	meta = append(meta, fmt.Sprintf("confidence %.2f", item.Confidence))
+	if item.Confidence != nil {
+		meta = append(meta, fmt.Sprintf("confidence %.2f", *item.Confidence))
+	}
 	if u := formatMemoryTimestamp(item.UpdatedAt); u != "" {
 		meta = append(meta, u)
 	}
@@ -529,10 +539,15 @@ func formatMemoryContextCounts(contexts []client.MemoryContext) string {
 	return strings.Join(parts, " · ")
 }
 
-// formatMemoryTimestamp trims an ISO 8601 timestamp
-// ("2026-08-13T14:22:05.123456-07:00") to "2026-08-13 14:22" — enough to
-// judge how stale an entry is without the noise of seconds/timezone offset.
+// formatMemoryTimestamp renders an RFC 3339 timestamp in the local zone as
+// "2026-08-13 14:22". Agents differ in which zone they stamp (gaiacpp writes
+// UTC "Z", the Python agent local time with an offset), so the offset must be
+// honoured, not sliced off. A value with no offset carries no zone to convert
+// from and is shown as stored.
 func formatMemoryTimestamp(ts string) string {
+	if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+		return t.Local().Format("2006-01-02 15:04")
+	}
 	if len(ts) < 16 {
 		return ts
 	}

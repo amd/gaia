@@ -326,14 +326,17 @@ class RunManager:
         """Request cancellation of an active run (explicit Stop button).
 
         Sets the handler's cancelled flag; the producer observes it at its
-        next step boundary and tears down. Returns False if no run is
-        active for the session.
+        next step boundary and tears down. An email-relay turn parked in a
+        socket read can't see the flag, so its response is closed too, as
+        ``POST /api/chat/cancel`` does. Returns False if no run is active
+        for the session.
         """
         run = self._runs.get(session_id)
         if run is None:
             return False
         if run.handler is not None:
             run.handler.cancelled.set()
+            run.handler.close_active_relay_response()
         else:
             from gaia.ui.turn_queue import turn_queue
 

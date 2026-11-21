@@ -12,9 +12,13 @@ type InstallState =
 
 /**
  * Shown when the backend has no GAIA agent (a fresh GAIA_HOME): every new chat
- * would be refused, so say why and offer the install instead.
+ * would be refused, so say why and offer the install instead. With *noBuild*
+ * there is nothing to install on this PC, so it says that and offers nothing.
  */
-export function FlagshipAgentNotice({ onInstalled }: { onInstalled: () => void | Promise<void> }) {
+export function FlagshipAgentNotice({ onInstalled, noBuild = false }: {
+    onInstalled: () => void | Promise<void>;
+    noBuild?: boolean;
+}) {
     const t = useT();
     const [state, setState] = useState<InstallState>({ kind: 'idle' });
     const cancelled = useRef(false);
@@ -34,6 +38,14 @@ export function FlagshipAgentNotice({ onInstalled }: { onInstalled: () => void |
             if (!cancelled.current) setState({ kind: 'failed', error: err instanceof Error ? err.message : String(err) });
         }
     }, [onInstalled]);
+
+    if (noBuild) {
+        return (
+            <div className="app-notice is-warning" role="status">
+                <span>{t('agentNotice.noBuild')}</span>
+            </div>
+        );
+    }
 
     return (
         <div className="app-notice is-warning" role="status">

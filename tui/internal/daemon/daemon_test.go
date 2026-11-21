@@ -360,7 +360,7 @@ func TestEnsureAgentRejectsMinorBelowAgentsFloor(t *testing.T) {
 		t.Fatalf("Attach on v1.0 should pass the MAJOR gate: %v", err)
 	}
 	// … but every agents route would 404, so EnsureAgent must refuse.
-	_, err := testClient(t, nil).EnsureAgent(context.Background(), "email")
+	_, err := testClient(t, nil).EnsureAgent(context.Background(), "gaia")
 	var ve *VersionError
 	if !asError(err, &ve) {
 		t.Fatalf("expected *VersionError, got %#v (%v)", err, err)
@@ -368,7 +368,7 @@ func TestEnsureAgentRejectsMinorBelowAgentsFloor(t *testing.T) {
 	if !strings.Contains(err.Error(), "v1.1") {
 		t.Errorf("error must name the required floor: %v", err)
 	}
-	if f.sawPath("POST " + APIPrefix + "/agents/email/ensure") {
+	if f.sawPath("POST " + APIPrefix + "/agents/gaia/ensure") {
 		t.Error("the ensure call must not be attempted below the agents floor")
 	}
 }
@@ -487,9 +487,9 @@ func TestDoFailsWhenTokenDidNotRotate(t *testing.T) {
 func TestEnsureAgentNeverReturnsTheSidecarToken(t *testing.T) {
 	f := newFakeDaemon(t)
 	f.writeInstance(nil)
-	t.Setenv("GAIA_EMAIL_AGENT_MODE", "")
+	t.Setenv("GAIA_GAIA_AGENT_MODE", "")
 
-	inst, err := testClient(t, nil).EnsureAgent(context.Background(), "email")
+	inst, err := testClient(t, nil).EnsureAgent(context.Background(), "gaia")
 	if err != nil {
 		t.Fatalf("EnsureAgent: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestEnsureAgentNeverReturnsTheSidecarToken(t *testing.T) {
 	if strings.Contains(inst.String(), sidecarSecret) {
 		t.Error("the sidecar bearer leaked into the instance")
 	}
-	if !f.sawPath("POST " + APIPrefix + "/agents/email/ensure") {
+	if !f.sawPath("POST " + APIPrefix + "/agents/gaia/ensure") {
 		t.Error("ensure was never called")
 	}
 	var body map[string]string
@@ -520,9 +520,9 @@ func TestEnsureAgentNeverReturnsTheSidecarToken(t *testing.T) {
 func TestEnsureAgentOmitsModeWithoutAPreference(t *testing.T) {
 	f := newFakeDaemon(t)
 	f.writeInstance(nil)
-	t.Setenv("GAIA_EMAIL_AGENT_MODE", "")
+	t.Setenv("GAIA_GAIA_AGENT_MODE", "")
 
-	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "email"); err != nil {
+	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "gaia"); err != nil {
 		t.Fatalf("EnsureAgent: %v", err)
 	}
 
@@ -536,9 +536,9 @@ func TestEnsureAgentOmitsModeWithoutAPreference(t *testing.T) {
 func TestEnsureAgentSendsAnExplicitUserMode(t *testing.T) {
 	f := newFakeDaemon(t)
 	f.writeInstance(nil)
-	t.Setenv("GAIA_EMAIL_AGENT_MODE", "user")
+	t.Setenv("GAIA_GAIA_AGENT_MODE", "user")
 
-	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "email"); err != nil {
+	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "gaia"); err != nil {
 		t.Fatalf("EnsureAgent: %v", err)
 	}
 
@@ -555,12 +555,12 @@ func TestEnsureAgentSendsAnExplicitUserMode(t *testing.T) {
 }
 
 func TestCallerModeReportsWhetherThePreferenceIsExplicit(t *testing.T) {
-	t.Setenv("GAIA_EMAIL_AGENT_MODE", "")
-	if mode, explicit := CallerMode("email"); explicit {
+	t.Setenv("GAIA_GAIA_AGENT_MODE", "")
+	if mode, explicit := CallerMode("gaia"); explicit {
 		t.Fatalf("an unset variable is no preference, got %q explicit=%v", mode, explicit)
 	}
-	t.Setenv("GAIA_EMAIL_AGENT_MODE", "dev")
-	if mode, explicit := CallerMode("email"); !explicit || mode != "dev" {
+	t.Setenv("GAIA_GAIA_AGENT_MODE", "dev")
+	if mode, explicit := CallerMode("gaia"); !explicit || mode != "dev" {
 		t.Fatalf("CallerMode = %q, %v; want dev, true", mode, explicit)
 	}
 	// An agent with no mode variable at all can never express a preference.
@@ -570,11 +570,11 @@ func TestCallerModeReportsWhetherThePreferenceIsExplicit(t *testing.T) {
 }
 
 func TestEnsureAgentSendsCallerDevCheckout(t *testing.T) {
-	t.Setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+	t.Setenv("GAIA_GAIA_AGENT_MODE", "dev")
 	f := newFakeDaemon(t)
 	f.writeInstance(nil)
 
-	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "email"); err != nil {
+	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "gaia"); err != nil {
 		t.Fatalf("EnsureAgent: %v", err)
 	}
 
@@ -591,7 +591,7 @@ func TestEnsureAgentSendsCallerDevCheckout(t *testing.T) {
 	}
 	want := filepath.Join(
 		filepath.Clean(filepath.FromSlash(strings.TrimSpace(string(root)))),
-		"hub", "agents", "email", "python",
+		"hub", "agents", "gaia", "python",
 	)
 	if body["dev_src_dir"] != want {
 		t.Fatalf("ensure request dev_src_dir = %q, want %q", body["dev_src_dir"], want)
@@ -603,14 +603,14 @@ func TestEnsureAgentSurfacesDaemonRefusal(t *testing.T) {
 	f.writeInstance(nil)
 	f.mu.Lock()
 	f.ensureStatus = http.StatusServiceUnavailable
-	f.ensureDetail = "agent 'email' is not installed; run `gaia hub install email`"
+	f.ensureDetail = "agent 'gaia' is not installed; run `gaia hub install gaia`"
 	f.mu.Unlock()
 
-	_, err := testClient(t, nil).EnsureAgent(context.Background(), "email")
+	_, err := testClient(t, nil).EnsureAgent(context.Background(), "gaia")
 	if err == nil {
 		t.Fatal("expected an error when the daemon refuses to ensure")
 	}
-	if !strings.Contains(err.Error(), "gaia hub install email") {
+	if !strings.Contains(err.Error(), "gaia hub install gaia") {
 		t.Errorf("the daemon's actionable detail must be surfaced verbatim: %v", err)
 	}
 }
@@ -1008,7 +1008,7 @@ func TestRelayed401BlamesTheSidecarNotTheDaemon(t *testing.T) {
 	f.mu.Unlock()
 
 	_, _, err = c.Do(context.Background(), inst, Request{
-		Method: http.MethodPost, Path: "/v1/email/query",
+		Method: http.MethodPost, Path: "/v1/gaia/query",
 	})
 	if err == nil {
 		t.Fatal("expected an error")
@@ -1083,7 +1083,7 @@ func TestGaiaDaemonStartMissingCLIRemediation(t *testing.T) {
 	for _, want := range []string{
 		"https://amd-gaia.ai/install.sh",
 		"https://amd-gaia.ai/install.ps1",
-		"pip install amd-gaia",
+		"https://amd-gaia.ai/#install",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("remediation is missing %q:\n%s", want, msg)
@@ -1176,7 +1176,7 @@ func TestGaiaDaemonStartInstalledButUnresolvable(t *testing.T) {
 		}
 		// A way back to a working install, and the PATH tip for the user whose
 		// binary is merely in another shell. Both, because we cannot tell which.
-		for _, want := range []string{"curl -fsSL", "pip install amd-gaia", "PATH"} {
+		for _, want := range []string{"curl -fsSL", "https://amd-gaia.ai/#install", "PATH"} {
 			if !strings.Contains(msg, want) {
 				t.Errorf("message must offer a way forward containing %q:\n%s", want, msg)
 			}
@@ -1226,7 +1226,7 @@ func TestVersionErrorNamesBothVersions(t *testing.T) {
 
 			// The version is a property of the installed core, so a restart
 			// relaunches the same one. Telling the user to restart loops forever.
-			if !strings.Contains(msg, "pip install --upgrade amd-gaia") {
+			if !strings.Contains(msg, "https://amd-gaia.ai/#install") {
 				t.Errorf("message does not name the upgrade that clears this:\n%s", msg)
 			}
 			if !strings.Contains(msg, "brings the same one back") {

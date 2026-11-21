@@ -2,7 +2,7 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-File I/O tools mixin for code agents.
+File I/O tools mixin.
 
 This module provides a mixin class with file I/O operations that can be
 inherited by agents that need file manipulation capabilities.
@@ -10,6 +10,7 @@ inherited by agents that need file manipulation capabilities.
 
 import ast
 import difflib
+import json
 import os
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -19,22 +20,36 @@ from gaia.agents.base.file_snapshots import before_change
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.document_text import (
+    HTML_PAGES,
+    DocumentTooLong,
     cached_document_text,
     document_type,
     index_only_error,
     read_budget,
     read_document,
+    read_html_text,
     text_page_notes,
+    too_long_error,
     with_small_limit_warning,
 )
 from gaia.agents.tools.edit_impact import edit_impact
 from gaia.agents.tools.file_edit import (
+    after_excerpt,
     apply_unique_replacement,
     file_read_record,
+    masked_secret_refusal,
     read_first_preflight,
     stamp_of,
+    turn_of,
 )
-from gaia.agents.tools.path_access import missing_file_error, readable_entry
+from gaia.agents.tools.file_outline import outline_entries, render_outline
+from gaia.agents.tools.path_access import (
+    locked_file_error,
+    missing_file_error,
+    read_permission_error,
+    read_refusal,
+    readable_entry,
+)
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
 from gaia.agents.tools.workspace_paths import (
     _project_target_for,
@@ -269,9 +284,12 @@ TAIL_LINES = 50
 def _line_window(
     lines: list, start_line: Optional[int], end_line: Optional[int], max_chars: int
 ) -> Dict[str, Any]:
-    """Lines *start_line*..*end_line* (1-based, inclusive), numbered like ``cat -n``."""
+    """Lines *start_line*..*end_line* (1-based, inclusive), numbered like ``cat -n``.
+
+    A *start_line* of 0 is the first line: counting from 0 is an easy slip.
+    """
     total = len(lines)
-    start = 1 if start_line is None else start_line
+    start = 1 if not start_line else start_line
     if start < 1:
         return {"error": "start_line is 1-based: the first line is 1."}
     if total == 0:
@@ -316,6 +334,63 @@ def _line_window(
     return window
 
 
+def _written_this_turn(host: Any, file_path: str) -> bool:
+    """True when this turn wrote *file_path*: a read of it is a read-back."""
+    evidence = getattr(host, "_completion_evidence", None)
+    files = getattr(evidence, "files", None) or {}
+    if not files:
+        return False
+    item = files.get(evidence.key(file_path))
+    return item is not None and bool(item.written)
+
+
+def _outlined_if_oversized(host: Any, result: Dict[str, Any]) -> Optional[Dict]:
+    """A whole-file read too large for one tool result, as an outline plus its head.
+
+    ``None`` when the result fits the host's tool-result cap, the host has no
+    cap, or not even the first line fits; the caller's result stands then.
+    """
+    budget = getattr(host, "_truncation_budget", None)
+    if not callable(budget):
+        return None
+    threshold, target = budget()
+    if len(json.dumps(result, ensure_ascii=False, default=str)) <= threshold:
+        return None
+    # A file this turn wrote keeps the archived form: its pages prove a read-back.
+    if _written_this_turn(host, result["file_path"]):
+        return None
+    content = result["content"]
+    lines = content.splitlines()
+    outline = render_outline(
+        outline_entries(content, str(result.get("file_type") or "")), target // 3
+    )
+    base = {k: v for k, v in result.items() if k not in ("content", "symbols")}
+    room = target - len(json.dumps(base, ensure_ascii=False)) - len(outline) - 600
+    while room >= 200:
+        window = _line_window(lines, 1, None, room)
+        end = window["end_line"]
+        shown = {
+            **base,
+            "outline": outline,
+            **{k: v for k, v in window.items() if k != "note"},
+            "note": (
+                f"Too large for one result ({len(content):,} chars, {len(lines)} "
+                f"lines): this is lines 1-{end}"
+                + (
+                    " and an outline of the whole file with line numbers"
+                    if outline
+                    else ""
+                )
+                + ". Read the part you need with start_line/end_line (up to "
+                f"{MAX_READ_LINES} lines per call); search_file_content finds a name."
+            ),
+        }
+        if len(json.dumps(shown, ensure_ascii=False, default=str)) <= target:
+            return shown
+        room //= 2
+    return None
+
+
 _PATH_VALIDATOR_HINT = "Set self.path_validator = <PathValidator instance>."
 _PATH_VALIDATOR_DOC_ANCHOR = "docs/spec/file-io-tools-mixin.mdx#host-agent-contract"
 
@@ -351,7 +426,7 @@ def _missing_path_validator_write_error(host: Any) -> Dict[str, Any]:
 
 
 class FileIOToolsMixin:
-    """Mixin class providing file I/O tools for code agents.
+    """Mixin class providing file I/O tools.
 
     This class provides a collection of file I/O operations as tools that can be
     registered and used by agents. It includes reading, writing, editing, searching,
@@ -411,7 +486,7 @@ class FileIOToolsMixin:
             "==== READING DOCUMENTS ====\n"
             "To review, compare, reconcile, audit or summarise a few documents, "
             "read each one in full with read_file instead of indexing it — it "
-            "returns the text of .docx, .pdf and .xlsx files, in parts when long "
+            "returns the text of .docx, .pdf, .xlsx and .pptx files, in parts when long "
             "(continue at next_offset until it is null). Retrieved snippets miss "
             "what no query asked for, such as a date that differs between two "
             "documents. For these tasks this replaces the index-then-query "
@@ -425,19 +500,23 @@ class FileIOToolsMixin:
         def target_of(args: Dict[str, Any]) -> Path:
             return _project_target_for(self, args)
 
-        @tool
+        # read_file, write_file and edit_file replace FileSearchToolsMixin's
+        # (and FileSystemToolsMixin's read_file) when both are composed.
+        @tool(override=True)
         def read_file(
             file_path: str,
             offset: int = 0,
             limit: Optional[int] = None,
             start_line: Optional[int] = None,
             end_line: Optional[int] = None,
+            raw: bool = False,
         ) -> Dict[str, Any]:
             """Read any file, analyzed by type.
 
             - Python (.py): syntax validation + functions/classes
-            - Word (.docx), PDF and Excel (.xlsx): extracted text, in parts when
-              long; continue at next_offset until it is null
+            - Word (.docx), PDF, Excel (.xlsx), PowerPoint (.pptx): extracted
+              text, in parts when long; continue at next_offset until it is null
+            - HTML: the page's text, without markup
             - Other text files: raw content
 
             Read the part you need with start_line/end_line, e.g. the line a
@@ -446,9 +525,10 @@ class FileIOToolsMixin:
             Args:
                 file_path: Path to the file to read
                 offset: Zero-based character offset for a bounded text page.
-                limit: Page size in characters, not lines (1..8000 for text files); omitted preserves full analysis. For lines use start_line/end_line.
+                limit: Page size in characters (1..8000 for text files); omitted preserves full analysis. With start_line: how many lines.
                 start_line: First line to return (1-based); the result is line-numbered.
                 end_line: Last line to return, inclusive (at most 400 lines per read).
+                raw: True returns an HTML file's markup instead of its text.
 
             Returns:
                 Dictionary with file content and type-specific metadata
@@ -460,14 +540,17 @@ class FileIOToolsMixin:
                 # a private key safe to read into the conversation.
                 is_allowed, reason = path_validator.validate_read(file_path)
                 if not is_allowed:
-                    return {**NOT_EXECUTED, "status": "error", "error": reason}
+                    return read_refusal(reason)
 
                 if not os.path.exists(file_path):
                     return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
+                locked = locked_file_error(file_path)
+                if locked:
+                    return locked
 
-                unreadable = index_only_error(file_path)
+                unreadable = index_only_error(file_path, self)
                 if unreadable:
                     return unreadable
                 is_document = document_type(file_path) is not None
@@ -476,12 +559,26 @@ class FileIOToolsMixin:
                 seen = stamp_of(file_path)
 
                 if start_line is not None or end_line is not None:
-                    if offset or limit is not None:
+                    if offset:
                         return {
                             "status": "error",
-                            "error": "Use offset/limit (characters) or "
-                            "start_line/end_line (lines), not both.",
+                            "error": "offset counts characters and "
+                            "start_line/end_line count lines: use one or the "
+                            "other. To read lines, drop offset.",
                         }
+                    if limit is not None and end_line is None:
+                        # Beside a start line, a limit is a number of lines.
+                        if isinstance(limit, bool) or not isinstance(limit, int):
+                            return {
+                                "status": "error",
+                                "error": "limit must be a whole number of lines.",
+                            }
+                        if limit < 1:
+                            return {
+                                "status": "error",
+                                "error": "limit must be 1 or more lines.",
+                            }
+                        end_line = max(start_line or 1, 1) + limit - 1
                     try:
                         if is_document:
                             text = cached_document_text(self, file_path)[0]
@@ -493,6 +590,8 @@ class FileIOToolsMixin:
                             "status": "error",
                             "error": f"{file_path} is binary: it has no lines to read.",
                         }
+                    except DocumentTooLong as e:
+                        return too_long_error(self, file_path, e)
                     except (ImportError, ValueError) as e:
                         return {"status": "error", "error": str(e)}
                     page = _line_window(lines, start_line, end_line, read_budget(self))
@@ -504,6 +603,18 @@ class FileIOToolsMixin:
                 if is_document:
                     return with_small_limit_warning(
                         read_document(self, file_path, offset, limit), limit
+                    )
+
+                # The text is what a reader wants from a page; its markup is
+                # several times the size. A file this turn wrote reads back as
+                # written, and edits need the markup: neither is recorded here.
+                if (
+                    os.path.splitext(file_path)[1].lower() in HTML_PAGES
+                    and not raw
+                    and not _written_this_turn(self, file_path)
+                ):
+                    return with_small_limit_warning(
+                        read_html_text(self, file_path, offset, limit), limit
                     )
 
                 if offset or limit is not None:
@@ -607,8 +718,13 @@ class FileIOToolsMixin:
                 else:
                     result["file_type"] = ext[1:] if ext else "text"
 
-                return result
+                return _outlined_if_oversized(self, result) or result
 
+            except PermissionError as e:
+                return read_permission_error(file_path) or {
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
@@ -669,7 +785,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path, "overwriting")
+                refusal = reads.refusal(
+                    file_path, "overwriting"
+                ) or masked_secret_refusal(file_path, {"content": content})
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -744,12 +862,13 @@ class FileIOToolsMixin:
 
             old_content must match exactly one location. Zero or several matches
             are errors that carry the file's current content, so a retry does not
-            need a separate read.
+            need a separate read. Repeating an edit already applied this turn
+            is refused.
 
             Args:
                 file_path: Path to the file to edit
                 old_content: Content to find and replace; must be unique in the file
-                new_content: New content to insert
+                new_content: Text that replaces old_content only, not the whole file
                 backup: Whether to create a backup
                 dry_run: Whether to only simulate the edit
 
@@ -806,7 +925,16 @@ class FileIOToolsMixin:
                     return _directory_path_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path)
+                refusal = (
+                    reads.refusal(file_path)
+                    or reads.repeat_refusal(
+                        file_path, old_content, new_content, turn_of(self)
+                    )
+                    or masked_secret_refusal(
+                        file_path,
+                        {"old_content": old_content, "new_content": new_content},
+                    )
+                )
                 if refusal is not None:
                     return refusal
 
@@ -864,6 +992,7 @@ class FileIOToolsMixin:
                 with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(modified_content)
                 reads.note(file_path)
+                reads.note_edit(file_path, old_content, new_content, turn_of(self))
 
                 # Audit successful edit
                 detail = (
@@ -1005,6 +1134,10 @@ class FileIOToolsMixin:
                 new_content: New content to compare
                 context_lines: Number of context lines in diff
 
+            Both sides are compared with LF line endings, so a change that
+            only converts CRLF to LF (or back) reports ``has_changes: False``
+            even though writing ``new_content`` would change the file's bytes.
+
             Returns:
                 Dictionary with diff information
             """
@@ -1016,12 +1149,16 @@ class FileIOToolsMixin:
                 if not is_allowed:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
-                # Read original content
+                # Read original content. A diff is a preview, not a write round
+                # trip, so both sides are compared with LF endings: otherwise a
+                # CRLF file diffed against the model's LF text shows every line
+                # as changed.
                 if os.path.exists(file_path):
-                    with open(file_path, "r", encoding="utf-8", newline="") as f:
+                    with open(file_path, "r", encoding="utf-8") as f:
                         original_content = f.read()
                 else:
                     original_content = ""
+                new_content = new_content.replace("\r\n", "\n")
 
                 # Generate unified diff
                 diff = list(
@@ -1096,7 +1233,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path, "overwriting")
+                refusal = reads.refusal(
+                    file_path, "overwriting"
+                ) or masked_secret_refusal(file_path, {"content": content})
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -1156,7 +1295,10 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, target_of, "overwriting"))
+        @tool(
+            preflight=read_first_preflight(self, target_of, "overwriting"),
+            override=True,
+        )
         def write_file(
             file_path: str,
             content: str,
@@ -1199,7 +1341,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(path, "overwriting")
+                refusal = reads.refusal(path, "overwriting") or masked_secret_refusal(
+                    path, {"content": content}
+                )
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -1279,7 +1423,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, target_of))
+        @tool(preflight=read_first_preflight(self, target_of), override=True)
         def edit_file(
             file_path: str,
             old_content: str,
@@ -1293,12 +1437,14 @@ class FileIOToolsMixin:
             Requires a prior read_file. edit_python_file refuses a
             syntax-breaking edit. old_content must match exactly one
             location; zero or several matches return the current content,
-            so a retry needs no re-read.
+            so a retry needs no re-read. Repeating an edit already applied
+            this turn is refused.
 
             Args:
                 file_path: Path to the file to edit.
                 old_content: Exact text to replace; must be unique in the file.
-                new_content: Text to put in its place.
+                new_content: Only the text that replaces old_content, never
+                    the whole file; for that, use write_file.
                 project_dir: Project root for resolving a relative file_path.
             """
             try:
@@ -1348,7 +1494,15 @@ class FileIOToolsMixin:
                     return missing_file_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(path)
+                refusal = (
+                    reads.refusal(path)
+                    or reads.repeat_refusal(
+                        path, old_content, new_content, turn_of(self)
+                    )
+                    or masked_secret_refusal(
+                        path, {"old_content": old_content, "new_content": new_content}
+                    )
+                )
                 if refusal is not None:
                     return refusal
 
@@ -1385,6 +1539,7 @@ class FileIOToolsMixin:
                 # Write updated content
                 _write_exact(path, updated_content)
                 reads.note(path)
+                reads.note_edit(path, old_content, new_content, turn_of(self))
 
                 console = getattr(self, "console", None)
                 if diff.strip():
@@ -1428,6 +1583,7 @@ class FileIOToolsMixin:
                         if (syntax_error := _python_syntax_error(path, updated_content))
                         else {}
                     ),
+                    **after_excerpt(current_content, updated_content),
                     "diff": diff,
                 }
                 if backup_path:
@@ -1546,7 +1702,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(gaia_path, "overwriting")
+                refusal = reads.refusal(
+                    gaia_path, "overwriting"
+                ) or masked_secret_refusal(gaia_path, {"content": content})
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -1666,7 +1824,9 @@ class FileIOToolsMixin:
                     return _directory_path_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path)
+                refusal = reads.refusal(file_path) or masked_secret_refusal(
+                    file_path, {"new_implementation": new_implementation}
+                )
                 if refusal is not None:
                     path_validator.audit_write(
                         "edit",

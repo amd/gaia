@@ -45,7 +45,7 @@ TAG_PREFIX = "agent-pkg-gaia-v"
 REQUIRED_PLATFORMS = ("win32-x64", "darwin-arm64", "linux-x64")
 
 # What the flagship freeze bundles. Tests, eval data and the web frontend are
-# not in it; bundled skill prompts (*.md) and gaia.apps.llm are, so they stay.
+# not in it; bundled skill prompts (*.md) are, so they stay.
 FROZEN_INPUTS = (
     "src/gaia",
     ":(exclude)src/gaia/apps/webui",

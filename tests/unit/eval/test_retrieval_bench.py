@@ -218,7 +218,7 @@ def test_a_chunk_hits_when_it_covers_half_the_quote_or_the_labelled_page():
 
 def test_every_manifest_file_is_pinned_and_checksummed():
     manifest = sources.load_manifest()
-    assert set(manifest) == {"financebench", "amd", "arxiv", "xquad", "wikipedia"}
+    assert set(manifest) == {"amd", "arxiv", "xquad", "wikipedia"}
     for name, spec in manifest.items():
         assert spec["license"], name
         for rel, entry in spec["files"].items():
@@ -517,6 +517,49 @@ def test_cli_rejects_a_suite_or_flag_of_the_other_component(argv, message):
     with pytest.raises(SystemExit) as exc:
         cli._check_retrieval_args(args)  # pylint: disable=protected-access
     assert message in str(exc.value)
+
+
+def test_financebench_is_gone_from_the_suite_and_the_cli():
+    assert "financebench" not in runner.SUITES["full"].datasets
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["eval", "retrieval", "--financebench-docs", "3"])
+
+
+def test_an_unknown_dataset_is_refused_before_anything_runs(tmp_path):
+    with pytest.raises(ValueError) as exc:
+        runner.check_datasets(["repo_docs", "financebench"])
+    message = str(exc.value)
+    assert "financebench" in message and "repo_docs, technical_docs, xquad" in message
+    out = tmp_path / "out"
+    opts = runner.RunOptions(
+        suite=runner.SUITES["pr"], out_dir=out, datasets=["financebench"]
+    )
+    with pytest.raises(ValueError, match="Unknown retrieval dataset"):
+        runner.run(opts)
+    assert not out.exists()
+
+
+def test_cli_names_the_valid_datasets_for_an_unknown_one(monkeypatch):
+    root = sources.repo_root()
+    monkeypatch.setattr(sources, "_repo_root", None)
+    monkeypatch.setattr(runner, "run", lambda opts: pytest.fail("the run started"))
+    args = cli.build_parser().parse_args(
+        [
+            "eval",
+            "retrieval",
+            "--suite",
+            "full",
+            "--datasets",
+            "financebench,xquad",
+            "--repo-root",
+            str(root),
+        ]
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli._handle_eval_retrieval(args)  # pylint: disable=protected-access
+    message = str(exc.value)
+    assert message.startswith("gaia eval retrieval: Unknown retrieval dataset(s): ")
+    assert "financebench" in message and "repo_docs, technical_docs, xquad" in message
 
 
 def test_cli_code_component_keeps_its_own_tolerance():

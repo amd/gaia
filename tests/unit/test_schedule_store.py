@@ -13,6 +13,9 @@ All tests use ``tmp_path`` — no real ``~/.gaia/schedules.toml`` is touched.
 
 from __future__ import annotations
 
+import os
+import threading
+
 import pytest
 
 from gaia.schedule import TomlScheduleStore as ReexportedTomlStore
@@ -269,6 +272,43 @@ class TestTomlScheduleStore:
         leftovers = [p for p in tmp_path.iterdir() if p.suffix != ".lock"]
         assert leftovers == [store.path]
 
+    @pytest.mark.skipif(
+        os.name != "nt", reason="Windows refuses a rename onto an open file"
+    )
+    def test_save_waits_out_a_reader_that_has_the_file_open(
+        self, tmp_path, monkeypatch
+    ):
+        """The daemon's reload tick reads the store unlocked while a run saves."""
+        store = _store(tmp_path)
+        store.add(_make_schedule("before"))
+        refused = threading.Event()
+        real_replace = os.replace
+
+        def replace(src, dst):
+            try:
+                return real_replace(src, dst)
+            except PermissionError:
+                refused.set()
+                raise
+
+        monkeypatch.setattr(os, "replace", replace)
+        errors = []
+
+        def save():
+            try:
+                store.save({"after": _make_schedule("after")})
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        with open(store.path, "rb"):
+            writer = threading.Thread(target=save)
+            writer.start()
+            assert refused.wait(30), "Windows let the rename past an open reader"
+        writer.join(30)
+        assert not writer.is_alive()
+        assert errors == []
+        assert set(store.load()) == {"after"}
+
 
 # ===========================================================================
 # 4. TomlScheduleStore.mark_run
@@ -330,3 +370,32 @@ class TestScheduleStoreProtocol:
 
     def test_reexport_is_concrete_store(self):
         assert ReexportedTomlStore is TomlScheduleStore
+
+
+def test_reads_never_fail_while_another_thread_saves(tmp_path):
+    """Readers skip the store lock; a save's rename must never fail them."""
+    store = TomlScheduleStore(tmp_path / "schedules.toml")
+    store.add(Schedule(name="x", cron="0 9 * * *", prompt="hi"))
+    stop = threading.Event()
+    writer_errors = []
+
+    def keep_saving():
+        flip = False
+        while not stop.is_set():
+            flip = not flip
+            try:
+                store.set_enabled("x", flip)
+            except Exception as e:  # pylint: disable=broad-except
+                writer_errors.append(e)
+                return
+
+    writer = threading.Thread(target=keep_saving)
+    writer.start()
+    try:
+        for _ in range(1500):
+            assert set(store.load()) == {"x"}
+            assert store.get("x").prompt == "hi"
+    finally:
+        stop.set()
+        writer.join()
+    assert writer_errors == []

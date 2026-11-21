@@ -227,11 +227,14 @@ def test_installer_saved_recipe_uses_same_override(
     model = "Gemma-4-E4B-it-GGUF"
     client = MagicMock()
     client.check_model_loaded.return_value = False
-    client.list_models.return_value = {
-        "data": [{"id": model, "recipe_options": {"ctx_size": window}}]
+    client.health_check.return_value = {
+        "all_models_loaded": [
+            {"model_name": model, "type": "llm", "recipe_options": {"ctx_size": window}}
+        ]
     }
     command = InitCommand(profile="chat")
     command._test_model_inference(client, model)
+    assert command._ctx_verified == window
     assert client.load_model.call_args.kwargs["ctx_size"] == window
     assert client.load_model.call_args.kwargs["save_options"] is True
 

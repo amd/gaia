@@ -3,7 +3,7 @@
 
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { enMessages } from '../locales/en';
 import { LOCALES, getLocale, localeOptionLabel, ref, stripIsolates, translate, type MessageKey } from '../registry';
 import { PALETTES } from '../../utils/palette';
@@ -27,7 +27,9 @@ describe('locale registry', () => {
         for (const key of EN_KEYS as MessageKey[]) {
             expect(locale.messages[key].trim(), key).not.toBe('');
             // A dropped or misspelled {param} would render raw or throw at runtime.
-            expect(placeholders(locale.messages[key]), key).toEqual(placeholders(enMessages[key]));
+            // A plural form for one exact number may leave {n} out ("دقيقتين", two minutes).
+            const own = (text: string) => placeholders(text).filter((p) => p !== 'n' || !/\.(zero|one|two)$/.test(key));
+            expect(own(locale.messages[key]), key).toEqual(own(enMessages[key]));
         }
     });
 
@@ -77,10 +79,10 @@ describe('translate', () => {
     });
 
     it('resolves a message param in each language, without nested brackets', () => {
-        expect(ar('tool.failed', { label: ref('tool.semantic_search.active') }))
-            .toBe('تعذّر: البحث في المستندات (Searching documents failed)');
-        expect(translate('en', 'tool.failed', { label: ref('tool.semantic_search.active') }))
-            .toBe('Searching documents failed');
+        expect(ar('tool.failed', { label: ref('tool.query_documents.active') }))
+            .toBe('تعذّر: الاستعلام في المستندات (Querying documents failed)');
+        expect(translate('en', 'tool.failed', { label: ref('tool.query_documents.active') }))
+            .toBe('Querying documents failed');
     });
 
     it('fails loudly when a param is missing', () => {
@@ -121,6 +123,22 @@ describe('useT and the language setting', () => {
         act(() => useChatStore.getState().setLocale('ar'));
         expect(localStorage.getItem('gaia-chat-locale')).toBe('ar');
         expect(readLocale()).toBe('ar');
+    });
+
+    it("starts a first run in the PC's own language when GAIA has it, else English", () => {
+        const languages = vi.spyOn(navigator, 'languages', 'get');
+        try {
+            languages.mockReturnValue(['ar-SA', 'en-US']);
+            expect(readLocale()).toBe('ar');
+            languages.mockReturnValue(['fr-FR', 'de-DE']);
+            expect(readLocale()).toBe('en');
+            // A saved choice always wins over the PC's.
+            localStorage.setItem('gaia-chat-locale', 'en');
+            languages.mockReturnValue(['ar-SA']);
+            expect(readLocale()).toBe('en');
+        } finally {
+            languages.mockRestore();
+        }
     });
 
     it('reads a saved code that is no longer registered as English', () => {

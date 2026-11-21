@@ -1,9 +1,12 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { useState } from 'react';
+import { useT } from '../../i18n/useT';
 import { UnsupportedCard } from './UnsupportedCard';
 import { isOptionalString } from './primitiveShared';
 import { resolveMediaSrc } from './mediaSrc';
+import { visibleName } from '../CalendarApproval';
 
 /** Audio GAIA generated, played from `/api/media/audio/<name>` only. */
 interface AudioPayload {
@@ -11,6 +14,10 @@ interface AudioPayload {
     caption?: string;
     path?: string;
     duration_seconds?: number;
+    /** Where the user's own copy went; shown as text, never opened from here. */
+    saved_to?: string;
+    /** The listening script a dictation was read from. */
+    script_path?: string;
 }
 
 function isAudioPayload(value: unknown): value is AudioPayload {
@@ -21,6 +28,8 @@ function isAudioPayload(value: unknown): value is AudioPayload {
         resolveMediaSrc('audio', v.src) !== null &&
         isOptionalString(v.caption) &&
         isOptionalString(v.path) &&
+        isOptionalString(v.saved_to) &&
+        isOptionalString(v.script_path) &&
         (v.duration_seconds === undefined ||
             (typeof v.duration_seconds === 'number' &&
                 Number.isFinite(v.duration_seconds) &&
@@ -36,6 +45,8 @@ export function formatDuration(seconds: number): string {
 }
 
 export function AudioCard({ data }: { data: unknown }) {
+    const t = useT();
+    const [unplayable, setUnplayable] = useState(false);
     if (!isAudioPayload(data)) {
         return <UnsupportedCard variant="invalid" render="audio" data={data} />;
     }
@@ -44,14 +55,25 @@ export function AudioCard({ data }: { data: unknown }) {
     const fileName = data.path ? data.path.split(/[\\/]/).pop() : undefined;
     return (
         <figure className="render-audio">
-            <audio className="render-audio__player" controls preload="metadata" src={src} />
+            <audio className="render-audio__player" controls preload="metadata" src={src} onError={() => setUnplayable(true)} />
             <figcaption className="render-audio__caption">
+                {unplayable && <span className="render-audio__error" role="alert">{t('media.audioUnplayable')}</span>}
                 {data.caption && <span className="render-audio__text">{data.caption}</span>}
                 {(fileName || data.duration_seconds !== undefined) && (
                     <span className="render-audio__meta">
-                        {fileName}
+                        {fileName && visibleName(fileName)}
                         {fileName && data.duration_seconds !== undefined && ' · '}
                         {data.duration_seconds !== undefined && <bdi dir="ltr">{formatDuration(data.duration_seconds)}</bdi>}
+                    </span>
+                )}
+                {data.saved_to && (
+                    <span className="render-audio__where">
+                        {t('media.savedTo')} <bdi dir="ltr">{data.saved_to}</bdi>
+                    </span>
+                )}
+                {data.script_path && (
+                    <span className="render-audio__where">
+                        {t('media.listeningScript')} <bdi dir="ltr">{data.script_path}</bdi>
                     </span>
                 )}
             </figcaption>

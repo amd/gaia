@@ -16,12 +16,15 @@ import {
 
 const SEARCH_ABOVE = 6;
 
-/** "Chat", "Vision", "Documents": what a model is for, in fixed words. */
+/** "Chat", "Images", "Speech": what a model is for, in fixed words. */
 function purposeChips(e: SetupCatalogEntry, t: Translate): string[] {
     const chips: string[] = [];
     if (e.chat_choice && !isEmbedding(e)) chips.push(t('setup.models.purpose.chat'));
     if (isVision(e)) chips.push(t('setup.models.purpose.vision'));
     if (isEmbedding(e)) chips.push(t('setup.models.purpose.documents'));
+    if (e.roles.includes('speech')) chips.push(t('setup.models.purpose.speech'));
+    if (e.roles.includes('voice')) chips.push(t('setup.models.purpose.voice'));
+    if (e.roles.includes('image_creation')) chips.push(t('setup.models.purpose.imageCreation'));
     return chips;
 }
 
@@ -29,6 +32,9 @@ function purposeChips(e: SetupCatalogEntry, t: Translate): string[] {
 function purposeLine(e: SetupCatalogEntry, t: Say): string {
     if (isEmbedding(e)) return t('setup.models.line.documents');
     if (isVision(e)) return t('setup.models.line.vision');
+    if (e.roles.includes('speech')) return t('setup.models.line.speech');
+    if (e.roles.includes('voice')) return t('setup.models.line.voice');
+    if (e.roles.includes('image_creation')) return t('setup.models.line.imageCreation');
     return t('setup.models.line.chat');
 }
 
@@ -46,16 +52,20 @@ function fitLine(e: SetupCatalogEntry, t: Say): string | null {
     return t('setup.models.fit.ok', { need: formatFitGb(e.need_gb), have: formatFitGb(e.capacity_gb) });
 }
 
+/** Why a model doesn't fit: its real reason, never "too big" for one no backend here runs. */
 export function tooBigText(e: SetupCatalogEntry, t: Translate): string {
+    if (e.fit_code === 'npu') return t('setup.models.warn.npu');
+    if (e.fit_code === 'backend') return t('setup.models.warn.backend');
     return e.need_gb != null && e.capacity_gb != null
         ? t('setup.models.warn.tooBig', { need: formatFitGb(e.need_gb), have: formatFitGb(e.capacity_gb) })
-        : t('setup.models.warn.tooBigNoNumbers', { reason: e.fit_reason ?? '' });
+        : t('setup.models.warn.tooBigNoNumbers');
 }
 
 /** The caveat under an unticked model that turns a feature off. In Settings an
  *  unticked model on disk stays there, so it says that instead of "add it later". */
-function skipCaveat(e: SetupCatalogEntry, t: Translate, place: 'setup' | 'settings'): string | null {
+function skipCaveat(e: SetupCatalogEntry, t: Translate, place: 'setup' | 'settings', imagesCovered: boolean): string | null {
     if (!isVision(e) && !isEmbedding(e)) return null;
+    if (isVision(e) && !e.downloaded && imagesCovered) return null;
     if (place === 'settings') {
         if (e.downloaded) return t('settings.models.warn.kept', { name: e.name });
         return t(isVision(e) ? 'settings.models.warn.vision' : 'settings.models.warn.documents', { name: e.name });
@@ -73,13 +83,15 @@ interface RowProps {
     /** Extra controls at the row's end, e.g. Remove in Settings. */
     actions?: ReactNode;
     place: 'setup' | 'settings';
+    /** Another image-reading model is ticked or on this PC. */
+    imagesCovered: boolean;
 }
 
-function ModelRow({ entry: e, ticked, onToggle, disabled, progress, actions, place }: RowProps) {
+function ModelRow({ entry: e, ticked, onToggle, disabled, progress, actions, place, imagesCovered }: RowProps) {
     const t = useT();
     const id = useId();
     const big = e.fits === false;
-    const caveat = !ticked ? skipCaveat(e, t, place) : null;
+    const caveat = !ticked ? skipCaveat(e, t, place, imagesCovered) : null;
     const downloading = progress?.state === 'downloading' && progress.bytes_total > 0;
     const warning = big ? tooBigText(e, t) : caveat;
     const describedBy = [`${id}-status`, `${id}-note`, warning ? `${id}-warn` : null].filter(Boolean).join(' ');
@@ -161,7 +173,7 @@ export function SelectionSummary({ plan, selection }: SummaryProps) {
                     <bdi className="mc-stat-value">{downloadGb == null ? t('setup.summary.sizeUnknown') : formatSize(round1(shownDownload))}</bdi>
                 </span>
                 <span className="mc-stat">
-                    <span className="mc-stat-label"><HardDrive size={12} aria-hidden="true" /> {drive ? t('setup.summary.freeOn', { drive }) : t('setup.summary.free')}</span>
+                    <span className="mc-stat-label"><HardDrive size={12} aria-hidden="true" /> {drive ? <>{t('setup.summary.freeOn')} <bdi dir="ltr" className="mc-stat-path">{drive}</bdi></> : t('setup.summary.free')}</span>
                     <bdi className="mc-stat-value">{freeGb == null ? t('setup.summary.freeUnknown') : formatSize(freeGb)}</bdi>
                 </span>
                 {afterGb != null && !short && (
@@ -250,6 +262,7 @@ export function ModelChecklist({ plan, selection, onToggle, onDefaultChat, label
             progress={progress?.[e.id]}
             actions={rowActions?.(e)}
             place={place}
+            imagesCovered={catalog.some((o) => o.id !== e.id && isVision(o) && (selection.ticked.has(o.id) || o.downloaded === true))}
         />
     );
 
@@ -319,7 +332,7 @@ export function ModelChecklist({ plan, selection, onToggle, onDefaultChat, label
                         disabled={disabled || candidates.length === 0}
                         onChange={(ev) => onDefaultChat(ev.target.value)}
                     >
-                        {candidates.length === 0 && <option value="">{t('setup.models.noChat')}</option>}
+                        {candidates.length === 0 && <option value="">{t.bare('setup.models.noChat')}</option>}
                         {candidates.map((e) => (
                             <option key={e.id} value={e.id}>
                                 {e.name}{isNpu(e) ? ` (${t('setup.models.npu')})` : ''}

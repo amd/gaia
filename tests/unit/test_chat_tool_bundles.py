@@ -5,8 +5,8 @@
 ``DOC_CORE_TOOLS`` ∪ all ``DOC_BUNDLES`` members must equal the live doc-profile
 tool registry **exactly**, in both directions:
 
-* a registry tool not covered by CORE or a bundle would silently ship
-  unselected — the loader would never surface it;
+* a registry tool not covered by CORE or a bundle shipped without anyone
+  deciding whether every session should pay for it;
 * a CORE/bundle name not in the registry is dead config (or a typo) that
   ``ToolLoader.validate_registry`` will reject at runtime.
 
@@ -43,8 +43,8 @@ def _bundle_union() -> set[str]:
 
 
 def test_core_and_bundles_cover_doc_registry_exactly():
-    # Loader-on skeleton so the CORE-only load_tools meta-tool (#1450) is
-    # registered — the doc registry must balance against CORE∪bundles with it.
+    # Loader-on skeleton so the CORE-only search_tools meta-tool is registered —
+    # the doc registry must balance against CORE∪bundles with it.
     agent = build_doc_agent_skeleton(
         profile="doc", deterministic=True, dynamic_tools=True
     )
@@ -58,23 +58,22 @@ def test_core_and_bundles_cover_doc_registry_exactly():
         f"doc-profile tools not covered by CORE or any bundle: {uncovered}. "
         "Add each to a bundle (or CORE) in "
         "hub/agents/gaia/python/gaia_agent/tool_bundles.py "
-        "— an uncovered tool would never be surfaced by the loader."
+        "— every registered tool must be accounted for."
     )
     assert not dangling, (
         f"CORE/bundle names absent from the doc registry: {dangling}. "
         "Remove them or fix the name — validate_registry rejects these at runtime."
     )
-    # The escape hatch is present in both CORE and the live registry (#1450).
-    assert "load_tools" in DOC_CORE_TOOLS
-    assert "load_tools" in registry
+    assert "search_tools" in DOC_CORE_TOOLS
+    assert "search_tools" in registry
 
 
 def test_core_is_subset_of_bundle_union():
-    """Every CORE tool is in a bundle too, except the CORE-only load_tools (#1450)."""
+    """Every CORE tool is in a bundle too, except the CORE-only search_tools."""
     bundle_members: set[str] = set()
     for bundle in DOC_BUNDLES:
         bundle_members |= set(bundle.members)
-    assert DOC_CORE_TOOLS - bundle_members == {"load_tools", "read_tool_output"}
+    assert DOC_CORE_TOOLS - bundle_members == {"search_tools", "read_tool_output"}
 
 
 def test_bundles_have_unique_names():

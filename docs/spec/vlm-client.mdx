@@ -35,7 +35,7 @@ VLMClient provides Vision-Language Model capabilities for extracting text from i
 
 1. **Model Management**
    - Load VLM model (Gemma-4-E4B-it-GGUF)
-   - Missing-model guidance via Settings → Model or `gaia download --agent vlm`
+   - Missing-model guidance via Settings → Agent & model or `gaia download --agent vlm`
    - Model availability checking
    - Every request re-checks the model is loaded at its required context size
 
@@ -200,7 +200,8 @@ class VLMClient:
 
         Default Prompt:
             "You are an OCR system. Extract ALL visible text from this image
-            exactly as it appears. Preserve formatting, convert tables to
+            exactly as it appears, in its original language and script, never
+            translated or transliterated. Preserve formatting, convert tables to
             markdown, describe charts as [CHART: ...]. Do NOT add placeholders
             or generate content."
 
@@ -328,6 +329,9 @@ def extract_from_image(
 
 Instructions:
 1. Extract EVERY word you see - don't skip or paraphrase
+   - Keep the text in its original language and script. Do NOT translate or
+     transliterate it: Arabic stays Arabic, Chinese stays Chinese. Keep digits
+     as written (٢٠٢٤ stays ٢٠٢٤, 2024 stays 2024).
 2. Preserve exact formatting (headings, bold, bullets, tables)
 3. If it's a table, format as markdown table
 4. If it's a chart, describe what you see: [CHART: ...]
@@ -435,7 +439,7 @@ self.client = LemonadeClient(model=vlm_model, host=host, port=port)
 
 ### Unit Tests
 
-**File:** `tests/llm/test_vlm_client.py`
+The block below is an illustrative example, not a file in the repo. The real tests are under `tests/unit/`, for example `tests/unit/test_vlm_extraction_failures.py`.
 
 ```python
 import pytest

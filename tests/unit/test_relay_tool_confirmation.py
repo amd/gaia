@@ -23,16 +23,16 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
-from gaia.ui.email_sidecar.profiles import (
-    EMAIL_PROFILE,
+from gaia.ui.routers.chat import router as chat_router
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import (
+    _NO_PROFILE,
     GAIA_PROFILE,
     confirmations_supported,
 )
-from gaia.ui.routers.chat import router as chat_router
 from gaia.ui.sse_handler import SSEOutputHandler
 
 pytestmark = pytest.mark.allow_network
@@ -88,9 +88,9 @@ def test_only_a_flagship_that_has_tool_decision_is_answerable(version, expected)
     assert confirmations_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_confirmations_stay_informational():
-    """Email's /query ends the run on a confirmation; there is nothing to answer."""
-    assert confirmations_supported(EMAIL_PROFILE, "2.99") is False
+def test_a_profile_without_the_floor_keeps_confirmations_informational():
+    """Without the floor a confirmation ends the run; there is nothing to answer."""
+    assert confirmations_supported(_NO_PROFILE, "2.99") is False
 
 
 # ── Relay event mapping ────────────────────────────────────────────────────
@@ -103,6 +103,8 @@ class TestRelayMapsAnswerableConfirmation:
 
         assert terminal is False, "the sidecar run is parked, not over"
         [event] = _drain(handler)
+        assert event.pop("timeout_seconds") == 600
+        assert event.pop("expires_at") > 0
         assert event == {
             "type": "permission_request",
             "tool": "write_file",
@@ -285,6 +287,9 @@ class _GatedAgent:
         pass
 
 
+_SIDECAR_TOKEN = "test-sidecar-token"
+
+
 @pytest.fixture
 def live_gaia_sidecar(monkeypatch):
     """The real flagship ``/v1/gaia`` app on a real port, with a gated agent."""
@@ -299,7 +304,8 @@ def live_gaia_sidecar(monkeypatch):
 
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
-    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    # Full access over HTTP needs caller auth, as the shipped sidecar has.
+    monkeypatch.setenv(caller_auth.TOKEN_ENV_VAR, _SIDECAR_TOKEN)
     agents: list = []
 
     def build(**kw):
@@ -341,10 +347,10 @@ def live_gaia_sidecar(monkeypatch):
 
 
 def _relay_in_background(base_url):
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     handler = SSEOutputHandler()
-    proxy = SidecarProxy(base_url, agent_id="gaia")
+    proxy = SidecarProxy(base_url, agent_id="gaia", auth_token=_SIDECAR_TOKEN)
     thread = threading.Thread(
         target=relay.relay_query,
         args=(handler, proxy),
@@ -411,7 +417,7 @@ def test_an_unanswered_prompt_is_denied_and_a_late_answer_reaches_nothing(
 
 
 class _GatedShellAgent(_GatedAgent):
-    """Asks for a shell call only a person may approve, once Full access is on."""
+    """Asks for a call only a person may approve, once Full access is on."""
 
     def process_query(self, query, max_steps=None):
         from gaia.agents.base.call_risk import NEEDS_PERSON_ARG
@@ -432,9 +438,10 @@ class _GatedShellAgent(_GatedAgent):
 def test_full_access_relays_a_gated_shell_prompt_to_the_ui(
     live_gaia_sidecar, monkeypatch, approved
 ):
-    """Full access pre-approves on the sidecar, yet a gated shell call reaches
-    the Agent UI's prompt and runs only on its answer."""
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    """Full access pre-approves on the sidecar, yet a call marked for a person
+    (as an email send or a calendar change is) reaches the Agent UI's prompt
+    and runs only on its answer."""
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     base_url, agents = live_gaia_sidecar
     from gaia_agent import server as server_mod
@@ -448,7 +455,7 @@ def test_full_access_relays_a_gated_shell_prompt_to_the_ui(
     monkeypatch.setattr(sr, "build_session_agent", build)
 
     handler = SSEOutputHandler()
-    proxy = SidecarProxy(base_url, agent_id="gaia")
+    proxy = SidecarProxy(base_url, agent_id="gaia", auth_token=_SIDECAR_TOKEN)
     thread = threading.Thread(
         target=relay.relay_query,
         args=(handler, proxy),
@@ -476,14 +483,14 @@ def test_full_access_relays_a_gated_shell_prompt_to_the_ui(
 
     assert not thread.is_alive()
     agent = agents[-1]
-    assert agent.console.full_access is False  # the shell gates stayed on
+    assert agent.console.full_access is True  # the same full access as stdio
     assert agent.approved is approved
     assert _answers(handler)[-1]["content"] == f"approved={approved}"
 
 
 def test_a_decision_without_a_confirm_id_is_never_sent():
     """The sidecar would resolve whichever prompt is live; refuse instead."""
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     with pytest.raises(SidecarError, match="confirm_id"):
         SidecarProxy("http://127.0.0.1:9", agent_id="gaia").tool_decision(

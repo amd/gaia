@@ -1,28 +1,36 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { lazy, Suspense, useEffect, useRef } from 'react';
-import { Loader2, X } from 'lucide-react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, type KeyboardEvent } from 'react';
+import { ChevronLeft, Loader2, X } from 'lucide-react';
 import { useChatStore, type SettingsSection } from '../../stores/chatStore';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useDialogFocus } from '../../hooks/useDialogFocus';
 import { GeneralSettings } from './GeneralSettings';
 import { ModelSettings } from './ModelSettings';
+import { ImageSettings } from './ImageSettings';
 import { PermissionsSettings } from './PermissionsSettings';
 import { SkillsSettings } from './SkillsSettings';
 import { MemorySettings } from './MemorySettings';
 import { PrivacySettings } from './PrivacySettings';
 import { NotificationSettings } from './NotificationSettings';
+import { ReadAloudSettings } from './ReadAloudSettings';
 import '../SettingsModal.css';
 import './SettingsDialog.css';
 import { useT } from '../../i18n/useT';
+import { SetupSettings } from './SetupSettings';
+import { AboutSettings } from './AboutSettings';
+import { ErrorBoundary } from '../ErrorBoundary';
 
-// The two heaviest panes load on first open.
+// The heaviest panes, and ones most people never open, load on first open.
 const ConnectorsPane = lazy(() => import('./ConnectorsPane').then((m) => ({ default: m.ConnectorsPane })));
+const MessagingPane = lazy(() => import('./MessagingSettings').then((m) => ({ default: m.MessagingSettings })));
+const AutomationsPane = lazy(() => import('./AutomationsSettings').then((m) => ({ default: m.AutomationsSettings })));
 const AdvancedPane = lazy(() => import('./AdvancedSettings').then((m) => ({ default: m.AdvancedSettings })));
 
 const SECTIONS: SettingsSection[] = [
-    'general', 'model', 'permissions', 'skills', 'connectors', 'memory', 'notifications', 'privacy', 'advanced',
+    'general', 'setup', 'model', 'images', 'permissions', 'skills', 'connectors', 'messaging', 'automations', 'memory', 'notifications', 'voice', 'privacy', 'advanced', 'about',
 ];
 
 /** One settings window with a section list on the left. */
@@ -31,45 +39,108 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     const section = useChatStore((s) => s.settingsSection);
     const open = useChatStore((s) => s.openSettings);
     const close = useChatStore((s) => s.closeSettings);
+    const jump = useChatStore((s) => s.settingsJump);
     const panel = useRef<HTMLDivElement>(null);
-    const returnFocus = useRef<Element | null>(null);
+    const scroller = useRef<HTMLDivElement>(null);
 
     const isOpen = section !== null;
     useEscapeToClose(isOpen, close);
     useFocusTrap(panel, isOpen);
-    useEffect(() => {
-        if (!isOpen) return;
-        returnFocus.current = document.activeElement;
-        return () => {
-            (returnFocus.current as HTMLElement | null)?.focus?.();
-        };
-    }, [isOpen, close]);
+    // Focus starts on the active section's nav item and returns on close.
+    useDialogFocus(panel, isOpen, () =>
+        panel.current?.querySelector<HTMLElement>('.settings-nav-item.is-active'),
+    );
 
-    // Focus moves into the dialog once, when it opens.
+    // One scroller serves every tab, so a new tab would open at the last one's offset.
+    useLayoutEffect(() => {
+        if (scroller.current) scroller.current.scrollTop = 0;
+    }, [section]);
+
+    // Panes load their data first, so wait for the setting to appear before landing on it.
     useEffect(() => {
-        if (isOpen) panel.current?.querySelector<HTMLElement>('.settings-nav-item.is-active')?.focus();
-    }, [isOpen]);
+        const root = scroller.current;
+        if (!jump || jump.section !== section || !root) return;
+        // The ring leaves the tab that was left, even when the setting never shows up.
+        panel.current?.querySelector<HTMLElement>(`[data-section="${section}"]`)?.focus();
+        let unflash: ReturnType<typeof setTimeout> | undefined;
+        let box: HTMLElement | null = null;
+        const align = () => box?.scrollIntoView({ block: 'start' });
+        // Rows above the setting keep loading after it appears, so hold it in place until the user takes over.
+        const settle = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(align);
+        const release = () => settle?.disconnect();
+        const TAKES_OVER = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
+        const land = (): boolean => {
+            const hit = root.querySelector<HTMLElement>(jump.target);
+            // A switch stays disabled until its pane has read its value, and can't take focus before.
+            if (!hit || (hit as HTMLInputElement).disabled) return false;
+            for (let d = hit.closest('details'); d; d = d.parentElement?.closest('details') ?? null) d.open = true;
+            box = hit.closest<HTMLElement>('.model-in-use-field, .settings-field, details, .settings-card') ?? hit;
+            box.classList.add('settings-target-hit');
+            align();
+            const focusTo = hit instanceof HTMLDetailsElement ? hit.querySelector('summary') : hit.closest('summary') ?? hit;
+            if (focusTo) {
+                if (!focusTo.matches('summary, button, input, select, textarea, a[href], [tabindex]')) focusTo.tabIndex = -1;
+                focusTo.focus({ preventScroll: true });
+            }
+            const pane = hit.closest('.settings-pane');
+            if (pane) settle?.observe(pane);
+            unflash = setTimeout(() => box?.classList.remove('settings-target-hit'), 1600);
+            return true;
+        };
+        const watch = new MutationObserver(() => { if (land()) watch.disconnect(); });
+        if (!land()) watch.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
+        TAKES_OVER.forEach((type) => root.addEventListener(type, release, { passive: true }));
+        // Stops waiting for a setting that never shows up; a landed one stays held until the user moves.
+        const giveUp = setTimeout(() => watch.disconnect(), 5000);
+        return () => {
+            watch.disconnect();
+            release();
+            TAKES_OVER.forEach((type) => root.removeEventListener(type, release));
+            clearTimeout(giveUp);
+            clearTimeout(unflash);
+        };
+    }, [jump, section]);
 
     if (!section) return null;
+    const backTo = jump && jump.section === section ? jump.from : undefined;
+
+    const moveInNav = (e: KeyboardEvent<HTMLElement>) => {
+        const at = SECTIONS.indexOf(section);
+        const to = e.key === 'ArrowDown' ? (at + 1) % SECTIONS.length
+            : e.key === 'ArrowUp' ? (at - 1 + SECTIONS.length) % SECTIONS.length
+                : e.key === 'Home' ? 0
+                    : e.key === 'End' ? SECTIONS.length - 1
+                        : null;
+        if (to === null) return;
+        e.preventDefault();
+        open(SECTIONS[to]);
+        panel.current?.querySelector<HTMLElement>(`[data-section="${SECTIONS[to]}"]`)?.focus();
+    };
 
     const pane = (() => {
         switch (section) {
             case 'general': return <GeneralSettings />;
+            case 'setup': return <SetupSettings />;
             case 'model': return <ModelSettings />;
+            case 'images': return <ImageSettings />;
             case 'permissions': return <PermissionsSettings />;
             case 'skills': return <SkillsSettings onUseSkill={(name) => { close(); onUseSkill(name); }} />;
             case 'connectors': return <ConnectorsPane />;
+            case 'messaging': return <MessagingPane />;
+            case 'automations': return <AutomationsPane />;
             case 'memory': return <MemorySettings />;
             case 'notifications': return <NotificationSettings />;
+            case 'voice': return <ReadAloudSettings />;
             case 'privacy': return <PrivacySettings />;
             case 'advanced': return <AdvancedPane />;
+            case 'about': return <AboutSettings />;
         }
     })();
 
     return (
         <div className="settings-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
             <div ref={panel} className="settings-dialog" role="dialog" aria-modal="true" aria-label={t('settings.title')}>
-                <nav className="settings-nav" aria-label={t('settings.sections')}>
+                <nav className="settings-nav" aria-label={t('settings.sections')} onKeyDown={moveInNav}>
                     <h1 className="settings-nav-title">{t('settings.title')}</h1>
                     {SECTIONS.map((id) => (
                         <button
@@ -78,6 +149,8 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
                             data-section={id}
                             className={`settings-nav-item${section === id ? ' is-active' : ''}`}
                             aria-current={section === id ? 'page' : undefined}
+                            // One Tab stop for the whole list; the arrow keys move within it.
+                            tabIndex={section === id ? 0 : -1}
                             // The focus ring follows the selection instead of staying on the tab focused at open.
                             onClick={(e) => { e.currentTarget.focus(); open(id); }}
                         >
@@ -89,10 +162,27 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
                     <button type="button" className="settings-close" onClick={close} aria-label={t('settings.close')}>
                         <X size={18} />
                     </button>
-                    <div className="settings-scroll">
-                        <Suspense fallback={<p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}>
-                            {pane}
-                        </Suspense>
+                    {/* Outside the scroller: a sticky tab title must not cover the way back. */}
+                    {backTo && (
+                        <button
+                            type="button"
+                            className="settings-back"
+                            onClick={() => {
+                                open(backTo);
+                                panel.current?.querySelector<HTMLElement>(`[data-section="${backTo}"]`)?.focus();
+                            }}
+                        >
+                            <ChevronLeft size={14} aria-hidden="true" />
+                            {t.compose((say) => say('settings.backTo', { section: say(`settings.section.${backTo}`) }))}
+                        </button>
+                    )}
+                    <div ref={scroller} className="settings-scroll">
+                        {/* Keyed so a crashed section clears when another is picked. */}
+                        <ErrorBoundary key={section} area={`settings.${section}`}>
+                            <Suspense fallback={<p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}>
+                                {pane}
+                            </Suspense>
+                        </ErrorBoundary>
                     </div>
                 </div>
             </div>

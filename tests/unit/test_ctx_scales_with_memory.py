@@ -37,6 +37,7 @@ from gaia.llm.model_fit import (
     largest_context,
     required_memory_gb,
 )
+from gaia.version import LEMONADE_VERSION
 
 SCALED_ID = "Test-35B-A3B-GGUF"
 SCALED = ModelRequirement(
@@ -284,8 +285,11 @@ def test_idle_server_is_seeded_at_the_default_models_own_window(mock_cls, npu_pr
     client.base_url = BASE
     client.get_model_max_context_window.return_value = None
     client.get_status.side_effect = [
-        LemonadeStatus(running=True, context_size=0, loaded_models=[]),
         LemonadeStatus(
+            version=LEMONADE_VERSION, running=True, context_size=0, loaded_models=[]
+        ),
+        LemonadeStatus(
+            version=LEMONADE_VERSION,
             running=True,
             context_size=GPU_CTX_SIZE,
             loaded_models=[{"id": DEFAULT_MODEL_NAME}],

@@ -129,25 +129,26 @@ def test_interactive_chat_runs_the_flagship(chat_agent_stubs, drain):
     )
 
 
-def test_missing_flagship_fails_loudly_and_never_runs_chat_agent(
-    chat_agent_stubs, drain, monkeypatch, capsys
+def test_missing_flagship_relays_and_never_runs_chat_agent(
+    chat_agent_stubs, drain, monkeypatch
 ):
-    """No fallback: without the flagship wheel `gaia chat` exits 1 naming the
-    wheel to install, and never quietly runs the base ChatAgent instead."""
-    from gaia.cli import _launch_interactive_cli
+    """Without the flagship in this process, `gaia chat` talks to the agent's
+    own binary through the daemon, and never quietly runs the base ChatAgent."""
+    import gaia.cli as cli
 
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)  # import fails
     chat_module = types.ModuleType("gaia_agent.chat_agent")
     chat_module.ChatAgent = MagicMock()
     chat_module.ChatAgentConfig = MagicMock()
     monkeypatch.setitem(sys.modules, "gaia_agent.chat_agent", chat_module)
+    relay = MagicMock(return_value=1)
+    monkeypatch.setattr(cli, "_gaia_chat_relay", relay)
 
     with pytest.raises(SystemExit) as exc:
-        _launch_interactive_cli()
+        cli._launch_interactive_cli()
 
     assert exc.value.code == 1
-    out = capsys.readouterr().out
-    assert "The GAIA agent is not installed" in out and "gaia-agent-gaia" in out
+    relay.assert_called_once_with({})
     chat_module.ChatAgent.assert_not_called()
     chat_agent_stubs.app.interactive_mode.assert_not_called()
 

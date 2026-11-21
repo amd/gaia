@@ -78,13 +78,13 @@ def _sent_refresh_token(request) -> str:
 
 
 def _lock_path() -> Path:
-    # Path.home() is a per-test tmp dir (tests/unit/connectors/conftest.py).
-    return Path.home() / ".gaia" / "connectors" / "google.refresh.lock"
+    # The refresh of the one stored account waits on that account's lock.
+    return _refresh_lock.account_lock_path("google", "default")
 
 
 @pytest.fixture
 def other_process():
-    """A separate OS process holding the google refresh lock."""
+    """A separate OS process holding the google account's refresh lock."""
     src = Path(tokens.__file__).resolve().parents[2]
     holder = subprocess.Popen(
         [sys.executable, "-c", _HOLDER, str(_lock_path())],
@@ -354,6 +354,9 @@ async def test_a_forward_while_waiting_does_not_clear_the_new_connection(
 
     # The forward itself, as if it ran just before the other process let go.
     monkeypatch.setattr(api_mod, "held_sync", lambda _provider: nullcontext())
+    monkeypatch.setattr(
+        api_mod, "held_account_sync", lambda _provider, _slot: nullcontext()
+    )
     api_mod.import_forwarded_connection(
         provider="google",
         client_id="forwarded.apps.googleusercontent.com",
@@ -390,14 +393,14 @@ async def test_the_slot_and_file_lock_waits_share_one_budget(
 
     # Assert the file-lock wait's budget, not wall time: a loaded runner
     # stretches elapsed time past any ceiling that separates the two.
-    real_held = _refresh_lock.held
+    real_held = _refresh_lock.held_account
     granted = []
 
-    def spy_held(provider_id, timeout=None):
+    def spy_held(provider_id, slot, timeout=None):
         granted.append(timeout)
-        return real_held(provider_id, timeout=timeout)
+        return real_held(provider_id, slot, timeout=timeout)
 
-    monkeypatch.setattr(_refresh_lock, "held", spy_held)
+    monkeypatch.setattr(_refresh_lock, "held_account", spy_held)
 
     peer = asyncio.create_task(peer_finishes_after(0.6))
     with pytest.raises(ConnectorsError, match="has been busy"):

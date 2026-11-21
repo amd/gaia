@@ -605,8 +605,9 @@ class TestDownloadFileToolScreensBeforeWriting:
             result = tools["download_file"]("https://evil.example/x", save_to=tmpdir)
 
         assert callable(captured["screen"])
-        assert "Error" in result
-        assert "blocked by security policy" in result
+        assert result["executed"] is False
+        assert result["status"] == "error"
+        assert "blocked by security policy" in result["error"]
 
     def test_allowed_filename_passes_the_screen(self):
         """An ordinary filename is not blocked."""
@@ -1485,6 +1486,25 @@ class TestDuckDuckGoFailuresAreNotEmptyResults:
         with self._respond(status, page):
             with pytest.raises(RuntimeError, match=f"HTTP {status}"):
                 self.client.search_duckduckgo("test query")
+
+    @pytest.mark.parametrize(
+        "status, hint",
+        [
+            (500, "may be down"),
+            (502, "may be down"),
+            (404, "rejected the request"),
+            (204, "Try again later"),
+            (302, "Try again later"),
+        ],
+    )
+    def test_an_error_status_carries_its_code_and_a_next_step(self, status, hint):
+        from gaia.web.client import SearchStatusError
+
+        with self._respond(status, "<html></html>"):
+            with pytest.raises(SearchStatusError) as excinfo:
+                self.client.search_duckduckgo("test query")
+        assert excinfo.value.status == status
+        assert hint in str(excinfo.value)
 
     def test_a_200_with_no_results_is_a_genuine_empty_answer(self):
         with self._respond(200):

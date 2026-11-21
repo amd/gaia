@@ -115,11 +115,32 @@ describe('service worker build stamp', () => {
         expect(() => renderServiceWorker("const CACHE_NAME = 'gaia-assets-v1';", 'abc')).toThrow(BUILD_ID_PLACEHOLDER);
     });
 
-    it('gives a new id whenever an emitted file name changes, regardless of order', () => {
-        const a = buildIdFor(['index.html', 'assets/index-AAAA.js']);
-        expect(buildIdFor(['assets/index-AAAA.js', 'index.html'])).toBe(a);
-        expect(buildIdFor(['index.html', 'assets/index-BBBB.js'])).not.toBe(a);
-        expect(a).toMatch(/^[0-9a-f]{16}$/);
+    const build = (version: string, code = 'run()') => ({
+        'index.html': '<script src="./assets/index-' + (version === '1.2.0' ? 'AAAAAAAA' : 'BBBBBBBB') + '.js"></script>',
+        [`assets/index-${version === '1.2.0' ? 'AAAAAAAA' : 'BBBBBBBB'}.js`]: `${code};log("GAIA v${version}")`,
+        'assets/logo-CCCCCCCC.png': new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xff]),
+    });
+
+    it('differs between an RC and its final build only by the version', () => {
+        const rc = buildIdFor(build('1.2.0rc3'), '1.2.0rc3');
+        const final = buildIdFor(build('1.2.0'), '1.2.0');
+        expect(rc).toMatch(/^1\.2\.0rc3-[0-9a-f]{16}$/);
+        expect(rc.replace('1.2.0rc3', '1.2.0')).toBe(final);
+    });
+
+    it('gives a new id for a new release even when no code changed', () => {
+        expect(buildIdFor(build('1.2.0'), '1.2.0')).not.toBe(buildIdFor(build('1.2.0'), '1.2.1'));
+    });
+
+    it('gives a new id for a code change at the same version, regardless of file order', () => {
+        const files = build('1.2.0');
+        const reversed = Object.fromEntries(Object.entries(files).reverse());
+        expect(buildIdFor(reversed, '1.2.0')).toBe(buildIdFor(files, '1.2.0'));
+        expect(buildIdFor(build('1.2.0', 'run(2)'), '1.2.0')).not.toBe(buildIdFor(files, '1.2.0'));
+    });
+
+    it('refuses a version that cannot sit in a quoted cache name', () => {
+        expect(() => buildIdFor({}, "1.0'; evil()")).toThrow(/version/);
     });
 });
 

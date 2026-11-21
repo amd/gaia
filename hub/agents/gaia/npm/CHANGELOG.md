@@ -6,15 +6,933 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
+Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
+
+- **A conversation can't read another conversation's documents.** Every
+  document dragged into any chat sat in GAIA's documents folder, which every
+  chat may use, so a chat could list and read the others'. Those copies now
+  live in GAIA's chat data, where the file tools open only the files sent in
+  the conversation's `documents` or `allowed_paths`, and only to read; no
+  folder grant, approval or full access opens the rest. (Under full access the
+  shell and Python tools still run unchecked.) A file taken off a conversation
+  is refused with "attach it to this chat again" instead of advice to re-add a
+  folder under Environment.
+
+- **Editing a config, data or skill file after the tests marks "tests pass"
+  stale again.** Since 0.3.6 a requested `settings.yaml`, `app.json`,
+  `schema.sql`, `Dockerfile` or similar file, or a `SKILL.md` or prompt file,
+  could be edited after the test run and the agent still reported the old pass.
+  Now only docs and requested reports (prose, text, tables, documents, images)
+  leave the run standing; anything under a `skills` or `prompts` folder counts
+  as a change.
+- **A slow script that times out is offered more time again.** A data or build
+  script killed at its timeout was told to run the linter on the changed files.
+  It now gets the background-run and longer-timeout options back; test and lint
+  runs are still scoped to the changed files.
+- **`read_tool_output` with a `to_entry` past the last part returns what is
+  there** instead of an error.
+- **Ask for research with `/research`.** A query that starts with `/research`
+  loads the `research-report` skill for the turn and asks for a report that
+  cites, for every claim, a page the agent fetched, with a check for newer
+  developments and a Sources list. The Agent UI's Research switch and the TUI's
+  `/research` send this form. Typing the skill's own `/research-report` is the
+  same research turn. A profile without web tools refuses it by name.
+- **Research citations are checked before the answer is final.** A cited link
+  the agent never fetched, or one that matches no search result or page (a
+  retyped link), goes back to the model once to fetch or drop; any left is
+  listed under the report.
+- **`research-report` 1.1.0.** The whole cited report now goes in the reply
+  (not only in a saved file), encyclopedias lead to primary sources instead of
+  standing in for them, long pages are read with `find`, anything that can
+  change gets a search for newer developments, and a refused web search is
+  stated in the report.
+
+- **Skills fit the model's context window.** On a 64K local model, two or
+  three loaded skills and their tools took each request from ~23K to ~40K
+  tokens and the model followed its instructions less well. Loaded skill
+  bodies now share 5% of the window (1,000 to 6,000 tokens: ~3,300 at 64K,
+  6,000 at 120K and up), and auto-load uses the same budget. Over that, the
+  skill loaded most recently or most relevant to the request is shown in full
+  and the rest as one line each, with how to bring one back. A summarized
+  skill keeps all its tools, so only the text shrinks. On a 64K window or
+  smaller, at most one skill auto-loads per turn; large windows keep two.
+- **Clearing a conversation forgets its "always" answers.** `/clear` in the
+  terminal UI, `clear_history` from a host, and `/reset` in `gaia chat` used to
+  keep them, so a command approved "always" in the cleared chat still ran
+  unasked in the next one. Now the same command asks again. Other sessions keep
+  their answers, and full access and loaded skills are unchanged.
+- **Resuming a conversation forgets the current one's "always" answers.**
+  `/resume` in `gaia chat` kept them, so a command approved "always" in one
+  conversation ran unasked in the one resumed after it. The resumed
+  conversation now starts with none. A resume that fails (unknown or unreadable
+  session) leaves the current conversation and its answers as they were.
+- **Code that names a credential folder or reads a credential file is refused before it runs.**
+  `run_python`, `execute_python_file` (the script and its arguments) and a shell
+  line that hands code to an interpreter could open `.env` or files inside
+  `~/.ssh` after one approval, though the file tools refuse them outright. Such
+  code is now refused before the prompt, whatever "always" was granted, and the
+  prompt for a code tool says GAIA checks the code's text, not what it does when
+  it runs. A credential file is refused only when the
+  code reads it; code that writes or only names one runs. `execute_python_file`
+  pointed at a credential file itself, or at a
+  path no approval can grant, is refused the same way: no `needs_confirmation`
+  is sent for it and the file is never read into one.
+
+- **An "always allow" label can no longer read reversed.** `always_scope` and
+  `always_label` name a file or skill the model chose, and a name holding a
+  right-to-left override or a zero-width character was sent raw, so a button
+  built from it showed `invoice<U+202E>txt.exe` as a name ending in `exe.txt`.
+  Both now carry such a character as `[U+XXXX]`. The grant still covers the
+  real file.
+- **The terminal UI can show the plan and how full the context is.** Over
+  stdio, a planned turn's `status` now carries the plan and its current step,
+  and every recorded turn is followed by the `context_usage` event the HTTP
+  server already streams, measured for the next message.
+- **Generated music and sound effects can be saved into a folder of the
+  user's.** `generate_music` and `generate_sound_effect` take `save_to`, an
+  absolute folder or a new `.wav` path, and write a copy there as
+  `saved_to`; the original stays in GAIA's audio folder as `audio_path`, so
+  the chat still plays it. Relative paths, missing folders, existing files and
+  places the write policy forbids are refused before anything is generated.
+  The track is listed under the session panel's Outputs, and the work log
+  reads "Composing 30 s of music" or "Generating a 3 s sound effect".
+
+- **The sidecar no longer crashes on a busy Windows PC.** It died with an access
+  violation in Python's `_wmi` module when a WMI query timed out. It now reads
+  OS and CPU facts without WMI.
+- **Full access runs any command.** It used to refuse a program outside a
+  short developer list (`pip`, `where`, `rmdir`, `gaia`, a program given by its
+  full path), a package install outside a virtual environment, a path outside
+  the allowed folders, a credential file and `gaia skill`, and one refused
+  delete then blocked later Python for the rest of the request. Now
+  `run_shell_command` and `run_python` run what they are given: any program,
+  `rm` included, any shell syntax (loops, conditions, several lines), any
+  folder. `POST /v1/gaia/sessions/{id}/bypass` gives an HTTP session the same
+  full access, so an Agent UI chat's Full access no longer asks before a gated
+  shell command; a sidecar started without a caller-auth token refuses to turn
+  it on (`403`). A call you declined stays declined, and calendar changes and
+  outgoing mail still wait for you. The other modes are unchanged.
+- **Every chat on a PC embeds with one embedder, the GPU one.** The embedder
+  was chosen per session, so a chat on the other device could clear all of
+  memory's vectors. It is now one per PC, on an NPU PC too: FastFlowLM's NPU
+  embedder (`embed-gemma-300m-FLM`) ranked text no better than chance on
+  FastFlowLM 1.0.7, so `gaia init --profile npu` downloads the GPU embedder
+  instead. A choice saved in Settings › Memory reaches open sessions on their
+  next turn, keeping the conversation and loaded skills.
+- **`gaia -p --time-limit` uses the time it is given.** One slow step made the
+  agent stop with minutes left, so a found answer often never reached the
+  requested file. It now stops two typical steps short of the limit, is always
+  warned first, and its closing step may run one last tool call, so a final
+  write lands. Every model call is capped to what the time left allows, and a
+  call still running past the limit is abandoned with the result still
+  reported. Qwen's `<function=…>` tool-call text now runs as a call instead of
+  being shown as the answer. The agent is told the time used at 25% and 50%,
+  its last tool call may run for half of the time left instead of being
+  refused, and the 70% warning no longer invites it to rewrite a finished file
+  or put caveats inside one. The time kept back is never more than a quarter
+  of the limit, so one long early step no longer ends the turn near its
+  halfway point, and the answer after a time-limit stop is a short summary (at
+  most 2,048 tokens) that names files instead of repeating them.
+- **`gaia -p` can download a local model that is not on disk yet**, then
+  answer with it, instead of refusing the run. It asks first, on stderr, with
+  the model and its size (`Download it now? [y/N]`); only `y` or `yes`
+  downloads. Where nobody can answer (a script, a piped prompt, redirected
+  stderr) nothing is downloaded and the run exits 1 naming `--yes` (`-y`),
+  which agrees in advance. The progress goes to stderr: a bar with percent and
+  downloaded/total size on a terminal, one plain line every 10% in a pipe or
+  log file. stdout still carries only the answer. Ctrl+C at the question or
+  during the download exits 130; a failed download exits 1 with the reason.
+- **The agent can turn a document into audio.** Ask it to dictate a PDF, Word,
+  Excel, text or Markdown file ("turn this PDF into audio", "read report.pdf to
+  me") and the new `dictate_document` tool records it with the local Kokoro
+  voice into an MP3 (or WAV), with a player in the Agent UI and the audio card in
+  the terminal app. It reads the document exactly as written, or rewrites tables,
+  charts, footnotes, web addresses and reference codes into spoken sentences;
+  `form="auto"` picks, and the result says which and why. A rewrite is saved next
+  to the audio as `<name>.script.md`, and every number in it is checked against
+  the document first: a rewrite that states a figure the document does not is
+  asked for once more and then refused, never recorded. Long documents record piece by piece with
+  progress shown, one dictation covers about two hours of audio (120,000
+  characters), `pages="3-10"` picks PDF pages, and a longer document is refused
+  with the page range that fits. A scanned PDF without a text layer is refused.
+  English voices only; it never downloads the voice model mid-chat. A new bundled
+  skill, `dictation`, tells the agent when to ask and how to report; the
+  registered tool count goes from 105 to 106 and the tools gain a `speech` bundle
+  (`text_to_speech`, `dictate_document`) that `text_to_speech` moved into from
+  `desktop`.
+- **`text_to_speech` keeps a playable copy and can write MP3.** The audio now
+  always stays in GAIA's audio folder, so a player appears in the Agent UI even
+  when you save to your own folder, and `output_path` may end in `.mp3` as well
+  as `.wav`.
+### Changed
+
+- **A file a skill's tool saves counts as saved.** A deck or report written by
+  a skill tool existed on disk, yet the turn ended "incomplete" with "No
+  successful write to `deck.pptx` is recorded for this turn", because the
+  completion check only knew the built-in write tools. A write made through
+  `gaia.skills.context` (`check_write`, `open_write`) is now on the same
+  record once the file has really changed, and so is a file whose path a
+  tool's result reports and that changed during the call.
+- **A built file gets one short self-check, not a second pass over the
+  work.** On long local-model tasks a requirement the request stated was
+  dropped (a tab, a chart, a length limit), an implausible result went out
+  unquestioned, or a duplicate input row reached a total. A turn that built a
+  document or data file is now asked once, in a few lines, to mark each
+  stated requirement met or not and to answer three plausibility questions;
+  figures are checked against sources only in prose that quotes them. With
+  nothing wrong it costs one short model step and the answer is unchanged.
+  Slide counts, named tabs, word limits, empty files and wrong extensions are
+  checked in code and raised only when wrong. The check shrinks or is skipped
+  when a time limit is nearly used up, never ends a finished turn
+  "incomplete", logs each firing (`[check:self]`), and is turned off with
+  `GAIA_AGENT_SELF_CHECK=0`.
+- **Finished work is no longer reported as unfinished or unsourced.** A turn
+  whose file exists ends `success`; a file not read back after its last
+  change is a "Not checked:" line in the answer, listed in
+  `completion_caveats`. A skill's check tool that opened the file has read it
+  back, and so has a full read followed only by in-place edits. A check tool
+  that returns findings (`"status": "errors_found"`, `"ok": false`) is a
+  successful call, not a tool error. Figures in a file a script or tool built
+  are no longer listed as "figures I found no source for" unless a call typed
+  them.
+- **A loaded skill's tools stay on the tool list, and `load_skill` says
+  which ones.** A skill loaded by a skill set, or by any agent that picks
+  its own tools each turn, could name tools the model was never sent. Every
+  loaded skill's tools are now listed each turn, whether or not its
+  instructions are showing. The `load_skill` result lists the tools now
+  callable (`tools_available`) and names any that are turned off
+  (`unavailable_tools`) instead of reporting plain success, and the log
+  records tools added mid-turn (`TOOL_LOADER ... "event": "admit"`).
+- **Declining one tool call no longer ends the task.** A declined call told the
+  model not to get the same result "another way" and to stop, so one refused
+  script closed every other route to the work. The no now covers that action
+  only: the same command, script, host or change to the same file is still
+  stopped whichever tool carries it, and the model is told to carry on by
+  other means and say what it could not do. A declined command covers what it
+  named (`pip install pandas`, not every `pip install`), and a file a declined
+  Python script would only have created is no longer off limits.
+- **Office files are checked before they are handed over.** The bundled
+  `office-docs` skill ships two tools that never write the file.
+  `verify_workbook` recalculates a copy of an .xlsx (with LibreOffice when
+  installed) and names every cell with `#REF!`, `#VALUE!`, `#DIV/0!`,
+  `#NAME?`, a circular reference, a SUM/SUMIFS over text, or a criterion that
+  matches no row. A workbook with errors returns `status: errors_found`, and
+  one with typed totals and no formulas returns `no_formulas`. Without
+  LibreOffice nothing is computed: findings that depend on a value are
+  warnings, and the result tells the agent to compute the figures it reports
+  with pandas and to say the formulas were not recalculated. `verify_document`
+  confirms a .docx or .pptx is a real Word or PowerPoint file and counts its
+  headings, tables, pictures, slides and charts. Text saved under a .docx name
+  is an error that says how to build a real one. The skill also teaches real
+  headings and tables in Word files and native charts.
+- **The skill suggestion now tells the model which skill to load.** Local models
+  ignored the old "skills that may fit this request" line: over 56 tasks one
+  called `load_skill` on 3. The line now reads "Call load_skill('pdf') before
+  you start: it covers this kind of request. Also consider: office-docs." It is
+  still one line in the user's message, with the skills in the same order.
+- **A skill that clearly fits the request can load before the turn (opt-in).**
+  With `GAIA_SKILL_AUTOLOAD=1` or `skill_autoload=True`, the best match loads
+  first when it scores at least 0.40 and is 0.03 ahead of every skill it does
+  not pair with. The request then opens with "Loaded report-from-sources
+  because it matches this request". Weaker matches are suggested as before.
+  - Skills that pair with the best match no longer block it. A paired skill
+    loads with it only when it scores 0.40 and is 0.03 ahead of every
+    remaining skill itself; otherwise the request names it as "Also
+    available". Two skills per turn at most.
+  - Only trusted skills load this way: ones that ship with the agent, and hub
+    installs at the `community` tier or above. A captured skill, your own
+    skill and anything from a `.claude` folder stay suggestions.
+  - A skill that grants a command-line program stays a suggestion in Ask mode.
+    Under full access it loads, with a warning naming the program. Switch full
+    access off and the skill is unloaded at the next turn.
+  - The skill bodies in the prompt, plus the new one, must fit in the
+    model's skill body budget (5% of its context window, 1,000 to 6,000
+    tokens).
+  - A skill unloaded earlier in the session is not auto-loaded again.
+  - `GAIA_SKILL_AUTOLOAD_TAU` and `GAIA_SKILL_AUTOLOAD_MARGIN` (or
+    `skill_autoload_threshold` and `skill_autoload_margin`) set the 0.40 and
+    0.03.
+  - If you turn it on where it cannot run (catalogue or suggestions off, fast
+    mode, memory off, or an embedder other than `embeddinggemma-300m`), one
+    warning says it is inactive and why.
+
+  Off by default. On the held-out half of the labelled requests, 0.40 and
+  0.03 measured precision 0.93 and recall 0.59.
+- **Start a message with `/` and a skill's name to run that skill**, as in
+  Claude Code: `/pdf turn notes.md into a report`. The agent loads the skill
+  with the same checks as `load_skill` and follows it for the rest of the line.
+  A name that is not an installed skill is sent unchanged. Over stdio, the
+  model-state ping and `/skills` now carry the installed skills (`skills`), so
+  the terminal UI can list them when you type `/`.
+- **A command or snippet that starts a never-ending server is refused before it
+  runs.** `run_shell_command`, `run_python` and `execute_python_file` used to
+  wait on it until the turn timed out; they now return an error that says so and
+  how to serve the folder instead. Code that only writes a server to a file still
+  runs. Each live-browser result now starts with where it ran, such as
+  `(headless browser)`.
+- **A chat in GAIA desktop can drive the browser pane beside it.** A new bundled
+  skill, `browser-pane`, adds nine tools that take a picture of the page, read
+  its console and network logs, press keys, answer page boxes, change screen
+  size, switch tabs, run several steps at once, run a short script on a
+  localhost page, and start a project's dev server on 127.0.0.1
+  (`browser-pane/dev_server`). The skill is offered only in a chat open in GAIA
+  desktop with the pane, and its tools join the list only once it loads, so the
+  registered tool count stays 105. `browser-pane/browser_eval` asks every time
+  and shows the whole script; the others ask before a site not yet approved, a
+  control that may not be undoable, or starting a server. Full access does not
+  skip the script or a new server: a person still approves them, and a run with
+  nobody to ask refuses them.
+
+### Fixed
+
+- A model added with `gaia model add` downloads by its id alone. A pull that
+  did not stream progress sent no registration, so Lemonade answered "not
+  registered with Lemonade Server"; it now sends the added model's checkpoint,
+  recipe, vision projector and labels, as the streamed pull did.
+- A model's size is no longer guessed from part of its name when GAIA has it
+  on record: a 27B model added at 18.6 GB was reported as 5.0 GB, because
+  "27B" was read as "7B".
+- A reply that goes quiet partway through is requested again, up to twice,
+  instead of ending the turn; the work done so far is kept either way.
+- A file a script wrote and the agent then showed whole with `cat` counts as
+  read back. Before, the answer still carried "has not been read back
+  completely" and the turn was marked unfinished. The Windows ways of showing
+  a file count too: `type`, `more`, and `Get-Content` or `gc`, on their own or
+  inside `powershell -Command "..."`.
+- A cloud model that spends a whole reply reasoning and returns nothing is
+  asked for its lowest reasoning level on the next request, so the turn moves
+  on; after a second such reply in one turn, that level holds for the rest of
+  the turn. A turn now ends on its third cut-off reply in a row, not its third
+  overall.
+- In a `gaia -p` run the agent is told nobody can answer questions, so it
+  settles an open choice itself and says what it assumed instead of ending on
+  an offer to change it later.
+- `run_python` runs a saved script by `path` (with optional `args`), so a
+  script is written once, fixed with `edit_file` and run again instead of
+  being typed out for every run. The call is checked and approved exactly as
+  `execute_python_file` is. Every Python result now says the interpreter is
+  new for that call, a `NameError` adds that each call starts fresh, and a
+  failed run says how to fix and re-run it without sending the code again.
+- `read_file` reads more without a detour. A .pptx comes back as slide text
+  with speaker notes. A workbook too long to read in full comes back as each
+  sheet's size and first rows, with how to read a range, instead of an error.
+  An .html file comes back as its text (`raw=true` for the markup).
+  `start_line` with `limit` reads that many lines, and a `start_line` of 0 is
+  the first line. When a loaded skill has a tool for the file's type, the
+  result names it before `index_document`.
+- A Python that `run_shell_command` starts reads and prints UTF-8, as
+  `run_python` already did, unless the command or the environment sets an
+  encoding itself.
+- `run_python` no longer drops long output without saying so. Output past
+  8,000 characters used to be cut silently, so a scan's later hits never
+  reached the agent. It now gets the start and end, is told how much was left
+  out, and can read the rest, as it already could for a script run from a file.
+
+## [0.3.6]
+
+Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+
+- **A terminal UI chat follows Settings too.** Its one long-lived agent now
+  rebuilds before a message when the model server or an MCP connector changed,
+  keeping its transcript and what the session set, as Agent UI chats do.
+- **Skills added or removed reach open chats.** The skill list in an agent's
+  prompt came from a cached scan, so a skill added in Settings › Skills was
+  missing from chats already open, and a removed one stayed listed. Each turn
+  now checks the skill folders and rebuilds the list only when they changed,
+  in the Agent UI and the terminal UI.
+- **A model server chosen in Settings reaches open chats.** A session's model
+  client kept the Lemonade Server it was built on, so after switching between
+  GAIA's own and yours an open chat kept asking the old one, or waited for
+  GAIA's stopped server to come back. A session now rebuilds its agent on its
+  next turn when the chosen server changed, keeping the conversation.
+- **An MCP connector changed in Settings reaches open chats.** A session's
+  agent registered its MCP tools once, so a connector turned off stayed
+  callable and one turned on never appeared until GAIA restarted. A session now
+  rebuilds its agent on its next turn when the server list or activations
+  changed, keeping the conversation and loaded skills. The flagship also checks
+  activation as `installed:gaia` however it is built, as Settings shows it, and
+  offers only the MCP tools it registered itself, not those another session
+  left in the process.
+- **Deleting a conversation can stop its MCP servers (contract 2.30).**
+  `DELETE /v1/gaia/sessions/{session_id}` ends a session and closes its agent,
+  which stops the servers it started. Until now a session's servers ran until it
+  idled out, up to 4 hours, so a host that deleted chats kept every chat's
+  servers running. An unknown session is a `404`; one running a turn is a `409`.
+- **Closing an agent stops the MCP servers it started.** Each server is a
+  process tree (`uvx`, `uv`, the server), and it used to outlive the agent:
+  an agent built for one request left its servers running for good.
+- **The agent stops when the GAIA daemon that started it is killed.** It used
+  to keep running, holding memory and a port, until the next daemon started.
+  It now notices within seconds and shuts down normally.
+- **The Agent UI no longer calls a model server GAIA doesn't run "not
+  installed".** When that server stopped answering, a run's `error` ended with
+  this machine's start instruction, which on a PC with no Lemonade of its own
+  read "Lemonade Server is not installed. Run `gaia init`". The `error` now says
+  the model server didn't answer: send the message again, and if it keeps
+  failing the server is its owner's to start. For a `/query` with `surface:
+  "agent_ui"` it names no command; the TUI and other callers still get this
+  machine's start instruction.
+- **A session switched to another model behaves like one started on it.** A
+  `/query` naming a different `model` swaps the session's client in place. The
+  swap now also moves what was chosen for the first model: image reading (off
+  on an NPU model, on again after a switch to a GPU one), the model documents
+  are summarized with, context eviction, and the `set_reasoning_effort` tool
+  for a model that grades reasoning. A failed switch still leaves the session
+  exactly as it was.
+- **`provider: "lemonade"` with no `model` uses the configured default.** A
+  session moved back from Claude went to Gemma 4 E4B even when `default_model`
+  named another model.
+- **A model name the server doesn't list fails with a plain reason.** A
+  `/query` for a model id outside the model server's catalog answered 500 with
+  the raw preload error and a restart command. It now answers 503 saying there
+  is no model by that name to download, with the caller's own way to pick
+  another. For `surface: "agent_ui"`, a start failure's detail no longer names
+  a terminal command.
+- **Cancel says how many attached documents were left unloaded.**
+  `POST /v1/gaia/query/{run_id}/cancel` now returns `documents_left` when it
+  stops the loading of the turn's attached documents, including for a cancel
+  that lands just after the run ended. A host that closes the stream on Stop
+  never read the loading step's "Stopped: N documents were not loaded" result,
+  so its user was told nothing. The field is `null` when nothing was left.
+
+- **No "I haven't confirmed this works" line under an answer that already
+  reports the failure.** An answer such as "No, the suite fails: 1 failed",
+  which claims no success, no longer ends with "… 1 of 2 pytest runs didn't
+  pass". A failed lint or build, a blocked check or an unchecked change
+  still gets the line, and `verification` still records every failure.
+- **More attached documents than one conversation searches.** A conversation
+  searches at most 100 documents or 10,000 passages at once. With more in
+  `documents`, the agent loads up to that limit instead of loading every one
+  and pushing earlier ones out, says in the `index_documents` step how many it left unloaded and
+  which limit it reached (the document count, or the passages a few long
+  documents fill), and never calls one of those "not attached": asking about
+  one by name loads it.
+
+- **A reply that is only the model's reasoning no longer ends the turn as
+  done.** A model writing JSON tool calls sometimes replied with just a
+  `thought`: a fenced one was taken as the final answer, and after a bare one
+  the agent asked again with nothing new, up to the step limit. The agent now asks once for a tool call or an
+  answer, and a second such reply in a row ends the turn as incomplete.
+- **`GAIA_AGENT_PLAN_RECAP=0` shortens what a finished plan sends back.** For a
+  model that writes tool calls as JSON text, a finished plan was followed by the
+  whole request and plan again, which every later call re-sent. With the switch
+  off it is one line saying how many plan steps ran and how many steps are
+  left. On by default, so nothing changes unless you set it.
+- **Writing the report after the tests no longer counts as an untested
+  change.** A task that ran its tests and then wrote its summary file, or a
+  changelog entry, was told its passing tests "ran before the last change" and
+  re-ran them for nothing. Prose docs (`.md`, `.rst`, a `README` or
+  `CHANGELOG`, files under `docs/`) and the output file the request asked for
+  no longer make an earlier run stale, unless they sit in a test or data
+  folder or inside a package. Every other write still does.
+- **Large files and outputs are read in fewer, larger pieces.** Reading a file
+  too large for one result returned small archived parts the agent fetched one
+  per call. It now returns the file's first lines and a line-numbered outline
+  of its definitions or headings, so the agent reads the part it needs by line
+  range. `read_tool_output` takes `to_entry` to return a run of parts in one
+  call, up to the same size limit as any tool result.
+- **A command killed at its timeout keeps what it printed, and the agent scopes
+  the retry.** A Python lint or test run that timed out came back with no
+  output at all, and the hint suggested running it again with a longer
+  timeout. Commands and `run_python` scripts now run unbuffered, so the partial
+  output survives the kill, and a timed-out lint or test command's hint names
+  the files the turn changed and says to check just those instead of the whole
+  repository.
+- **The agent knows an MCP server it set up didn't start.** The notice the
+  user sees about MCP servers that couldn't start, couldn't load or went over
+  the tool limit now also reaches the model each turn, so asked about one it
+  says it is set up but unavailable rather than that nothing by that name
+  exists. A corrupt `mcp_servers.json` is described in plain words.
+- **A detached document is no longer searched.** A file an earlier turn sent in
+  `documents` and this turn leaves out (the user detached it, or deleted it from
+  the library) is dropped from the session's index, so answers stop quoting it.
+  An empty `documents` list drops them all.
+- **A detached document can no longer be read either.** The agent dropped it
+  from the index but kept its permission to read the file, so asking about it
+  by name indexed it again from disk. The permission now goes with it, and a
+  copy kept in GAIA's own documents folder is refused until it is attached
+  again. A folder the caller granted still covers the files inside it.
+- **A turn the output limit keeps cutting off says what to do next.** It told
+  the user to "retry with a higher output-token limit (max_tokens)", a setting
+  the apps don't have, dropped what the turn had done, and sent no token counts,
+  so its cost read "Not reported". It now names the tools it ran and its last
+  findings, suggests asking for the work in smaller parts, and carries the
+  turn's token counts.
+- **`hybrid` runs each turn on a cheap or a strong model.** A session on the
+  `hybrid` model id (`gaia gateway use hybrid` or `gaia -p --model hybrid`) asks a cheap classifier about each request and runs
+  the whole turn on `amd.DeepSeek-V4.1-Flash` when it is routine and low-stakes,
+  else on `amd.Claude-Opus-5-5`. A failed classification goes strong for that
+  turn only, a session the classifier sent strong stays strong, and an
+  unavailable model fails the turn instead of running the other one, naming the
+  `hybrid_*` setting that chose it.
+  `gaia -p` JSON records the decision as `route`, and so does `/query`'s
+  `final` (contract 2.29), so a host bills and labels the turn by the model
+  that ran it. A classifier that keeps
+  failing is reported with its fix (a notice on every turn after 3 in a row),
+  one that rejects JSON mode is asked in plain text, and `/clear` starts the
+  next turn unescalated.
+- **A run stopped for an approval nobody can give reads as not done.** Its
+  `final` now carries `failed: true` and the `usage` spent before the stop, so
+  `gaia -p` reports `is_error: true` with real step and token counts instead of
+  a free, zero-step success. A stopped turn's result now carries
+  the tokens it spent too.
+
+- **Scratch folders no longer pile up in the temp folder.** A `gaia-scratch-…`
+  folder was removed only when its agent was closed, so a sidecar that was
+  killed or exited left it behind (one PC held about 2,900). The agent now
+  removes the scratch folders it holds when its process exits normally, and
+  the next agent to start clears any no agent has used for a day, including
+  ones a killed process left.
+
+- **Files a Python run writes are UTF-8.** `run_python` and
+  `execute_python_file` wrote a bare `open(path, "w")` in the Windows locale
+  codec, so a degree sign landed as the cp1252 byte `0xB0`. Scripts now run in
+  UTF-8 mode, in the packaged binary too.
+
+- **The terminal UI's executable is `gaia-cli`, not `gaia-tui`.** It is the same
+  rename a full GAIA install makes. The package writes the binary as
+  `gaia-cli[.exe]` in its cache; `npx @amd-gaia/gaia` starts it as before. A
+  `gaia-tui` left in an older cache folder is unused.
+
+- **A new chat starts faster on hybrid models.** Memory, loaded skills, the
+  project map or working directory, and the session's folders and scratch
+  directory now go in the session context at the start of the first user
+  message instead of the system prompt. The system prompt and tool list stay
+  identical across new chats, so a model like Qwen3.6 no longer re-reads the
+  whole prompt before its first reply.
+
+- **The context meter fills during a long turn (contract 2.28).** A request
+  that sends `turns` is now streamed a `context_usage` event before the answer,
+  the same one an in-process turn streams at turn start, so a composer no
+  longer shows a blank meter until `final`. The turn's record and its
+  measurement are sealed as the agent prints the answer, so a run still
+  storing memory past the old 15 s wait no longer drops them, and a
+  measurement that cannot finish carries `context_error` instead of nothing.
+
+- **`/init` says a missing model once.** On a PC with no Lemonade client, the
+  `hint` read "The model X is not downloaded. X is not downloaded, and no
+  Lemonade client CLI was found …, then re-check." It is now the one sentence.
+
+- **Add skills from a pasted link (`/skills`).** On the stdio transport,
+  `/skills add <link>` lists the skills in a GitHub repository or folder, a
+  skills.sh page or an https `.zip`, with what each one is allowed to do (its
+  declared permissions, in plain words), its audit result, and a security
+  warning; `/skills add <link> confirm` adds exactly the version that was shown,
+  at the `experimental` tier. A `confirm` with no preview earlier in the session
+  shows the preview instead of adding anything, and a link that changed since
+  its preview is refused.
+  Skills that ship code need `--allow-code`. Bare `/skills` lists what is
+  installed.
+- **The terminal UI can reopen a past session.** Over stdio, `--session-kind`
+  (with `--history-file`) keeps a listing beside the session's transcript:
+  its title, whether it is running, waiting on a permission prompt, done or
+  failed, and each finished turn in readable form. `/sessions` and
+  `gaia-cli --resume` list and reopen sessions from it. Nothing changes for the
+  HTTP surface, or for a launch without the flag.
+- **One MCP server with a bad repeat-call declaration no longer takes the
+  others down.** An MCP server tool can name the arguments the repeat-call
+  guard compares, in its `_meta` under `ai.amd-gaia/dedup_key`. A server whose
+  declaration is invalid is refused on its own: it is disconnected, its tools
+  are neither registered nor counted toward `mcp_tool_limit`, the "MCP servers
+  that could not start" notice names it with the error, and the other servers
+  still load.
+- **The model is told when older turns are out of its view.** A long chat showed
+  "Older messages are now out of the model's view" while the model answered
+  that something from those turns was never mentioned. The oldest turn it still
+  reads now opens with a one-sentence note that earlier turns exist and are no
+  longer shown.
+
+- **`final.context` counts what the next turn really carries.** With `turns`,
+  the measurement split a text-tool model's recorded tool results into turns
+  of their own and counted this turn as its question and answer only, so a
+  large file read could push history past its budget while `turns_hidden`
+  stayed 0. It now measures whole turns, this turn's tool results included.
+- **Dropped MCP servers are shown as a warning, including ones that fail to
+  start.** The notice that configured MCP servers were left out reached the
+  Agent UI as a plain progress line, so it never appeared in the window, and a
+  server whose command failed to start was not reported at all. A `status`
+  event that warns the user now carries `level: "warning"`, and a server that
+  could not start is named with its error and where it is set up: Settings >
+  Connectors for a connector, the `mcp_servers.json` file for one added by hand.
+- **The default step limit is now 1000, up from 150.** Long multi-part tasks
+  reached 150 steps and were cut off before their last part. The limit is now
+  only a backstop for a turn that never finishes; the repeated-call and
+  repeated-failure guards still end a stuck turn early. An omitted `/query`
+  `max_steps` runs up to 1000 steps. Pass `max_steps`, or set
+  `GAIA_AGENT_MAX_STEPS`, to choose a lower limit.
+
+- **Follow-up turns after a tool call stay cached on Qwen3.6.** The agent
+  dropped its earlier reasoning when the next message arrived, while the model's
+  chat template had shown it. So every turn after a tool call re-read the whole
+  previous tool turn, including any file it had read. The flagship now sends
+  that reasoning back. On a measured six-turn session, tokens re-read after the
+  first turn fell 60%. The model now also sees its earlier reasoning. After a
+  `/model` switch the agent stops sending it, so a new model never receives
+  another model's reasoning.
+
+- **The agent reserves about 0.3 GB of memory instead of about 5 GB.** The
+  OpenBLAS that numpy and FAISS bundle reserved memory for every CPU thread when
+  it loaded, so a dozen GAIA processes could run a 32-thread Windows PC out of
+  memory. Each process now gives it 2 threads unless `OPENBLAS_NUM_THREADS`,
+  `GOTO_NUM_THREADS` or `OMP_NUM_THREADS` is set. Search speed is unchanged.
+
+- **The terminal header recognizes cloud models with custom IDs.** After a
+  `/model` switch, the status uses the live client’s catalog provider, matching
+  the switch notice instead of reporting a custom-prefixed cloud model as local.
+
+- **A turn that ends in an error still reports the tools it ran.** When a turn
+  stopped on an error without printing an answer, its `usage` block left out
+  `tools_used`, so `gaia -p` without `--verbose` recorded 0 tool calls for it.
+  The count now comes from that turn's own tool results.
+
+### Added
+
+- **The agent can draft, reply, forward and send mail.** A new bundled skill,
+  `send-email`, works on Gmail and Outlook through the mailbox the reading tools
+  use. The agent loads it when asked to send, reply to, forward or draft an
+  email, and its eight tools (`send-email/list_drafts`, `send-email/create_draft`,
+  `send-email/update_draft`, `send-email/discard_draft`, `send-email/send_draft`,
+  `send-email/send_now`, `send-email/reply_to_message`,
+  `send-email/forward_message`) join the tool list only then, so the registered
+  tool count stays 105 and a turn that only reads mail doesn't carry them. Gemma 4
+  E4B can't load it, as it isn't offered email. Each send shows the
+  account it goes out from, then the recipients, subject and body exactly as
+  they will go out, and needs a yes. If the connected mailbox changes while the
+  prompt waits, nothing is sent. A decline or timeout sends nothing, and a
+  failed send is reported, never retried:
+  `sent: false` means it didn't go, and `sent: "unknown"` means it may have, so
+  check Sent. A forward carries text only, and names the attachments it leaves out.
+  In the terminal, a long email must be scrolled to its end before `y` works.
+  Disguised subjects, addresses and display names are refused before the prompt.
+  Full access doesn't skip this: the prompt still appears where a person can
+  answer, and the send is refused where nobody can. Saving a new draft doesn't
+  ask, because nothing leaves the mailbox. Changing or deleting a saved draft
+  does, because it may be one the user wrote.
+- **New Google connections ask for `gmail.readonly` and `gmail.compose`, never
+  `gmail.modify`, and Microsoft for `Mail.ReadWrite` and `Mail.Send`.** A Google
+  connection made before this release holds only `gmail.readonly`: it keeps
+  reading, but drafting or sending on it returns an error naming `gmail.compose`
+  and saying to reconnect in Settings -> Connectors. A host app forwarding a
+  connection for `installed:gaia` now needs `gmail.readonly` and `gmail.compose`
+  in its consent.
 
 ### Changed
 
+- **The prompt to run a Python file shows the file.** `execute_python_file`
+  asked with only a path, so a script the agent had just written to its
+  scratch folder was approved unread. `needs_confirmation` now carries
+  `prompt_context.script`: `{ text, hidden_lines }` with up to 400 lines (48,000
+  characters) of the file as it was when the prompt was built, or
+  `{ unreadable }` (`missing`, `not_text`, `too_large`, `unreadable`) when there
+  is nothing to show. `summary` shows the first lines under the path and, when
+  it leaves lines out, the file's full path to read them at. If the
+  file differs from what the prompt showed when the run starts, the run is refused and the agent
+  asks again with the new content. `args` still holds exactly the model's
+  arguments.
+
+- **The standalone email agent is gone; mail is this agent's job.**
+  `@amd-gaia/agent-email` and `gaia-agent-email` are removed, along with
+  `gaia email`. This agent reads Gmail or Outlook through its eight read-only
+  mail tools and the `inbox-triage` skill, and drafts and sends through the
+  `send-email` skill, with the Google or Microsoft connector. Organizing,
+  undo, briefings and autonomous runs went with the old agent. See the Email
+  section in the README.
+  On upgrade GAIA removes the old agent's install folder when it is provably
+  that install, clears its leftover connector state, and names any
+  scheduled email that will no longer be sent. The old agent's data stays in
+  `~/.gaia/email/`. Installing the `email` agent id is refused.
+- **Generated images and audio arrive as a `media` card.** A successful
+  `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
+  result now carries `render: "media"` with the saved file's absolute path, type,
+  size and model, so a client can show and open it without reading a path out of
+  the answer. Only an existing local image or audio file becomes a card; anything
+  else stays a plain tool result.
+- **The "not confirmed" line on an answer is now documented.** An answer that
+  ends with `I haven't confirmed this works — …` is the agent saying a check
+  failed, was blocked, or never ran after a change. README, SPEC and SKILL say
+  when it appears and that it is part of `final.answer`.
+- **The first reply reads far less, and the prompt cache stays warm.**
+  A session now starts on the 26 most-used tools in short form and moves to every
+  tool at most once, with the full list kept ready so a first task starts as fast
+  as a first "hello". `search_tools` replaces `load_tools` and also finds
+  installed skills. It is on by default; `gaia config set dynamic_tools false` or
+  `GAIA_DYNAMIC_TOOLS=0` turns it off, and the Agent UI toggle under Settings now
+  reaches this agent. The toggle is now kept in `~/.gaia/config.json`, so a
+  choice made under the old Beta toggle, which only reached the `doc` profile,
+  is not carried over. `GAIA_DYNAMIC_TOOLS_TAU` and `GAIA_DYNAMIC_TOOLS_MAX` no
+  longer do anything. Chat models now load with three llama.cpp slots.
+- **A spent per-turn limit is no longer saved as a lesson.** Running out of
+  the mail-reading budget used to store that refusal under "Problems seen
+  before", so every later chat started with it in its prompt. It, and the new
+  `search_tools` cap, are now marked as not run, like a permission refusal, and
+  memory skips them.
+- **The integration guide says the web tools reach the internet.** Web search
+  and page fetch send their queries and URLs off the machine even with a local
+  model; the guide now says so next to the cloud-provider caveat.
+- **The package description and integration guide no longer say nothing leaves the
+  machine.** Local inference is still the default; both now say a cloud provider
+  receives the conversation when you pick one.
+- **A Python snippet that fails on a missing library says how to retry with
+  the standard library, and teaches the next chat what worked instead.** The
+  Python tools list only the libraries this install can import.
+- **Recipes, workouts, how-tos, checklists and trip plans show as cards, and
+  tip and loan questions get a calculator.** Two bundled skills ship the tools:
+  `guides` (`guides/show_recipe`, `guides/show_workout`, `guides/show_how_to`,
+  `guides/show_checklist`, `guides/show_itinerary`) sends the answer as a
+  `guide` card, and `calculators` (`calculators/show_tip_calculator`,
+  `calculators/show_loan_calculator`) sends only the starting numbers as a
+  `calculator` card that does the math as the person edits it. The agent loads
+  the skill when a request matches, so the tools join the tool list only then
+  and the registered tool count stays 105.
+- **Every card tool's `tool_result.render` reaches HTTP and stdio clients.**
+  The sidecar's `/query` stream and the stdio transport set `render` only for
+  the media tools, so any other card tool's result arrived as plain data. Both
+  now carry the card type of every tool whose result is a valid card (`guide` or
+  `calculator` for the tools above), and a result without a card payload never
+  names one. A client that has no renderer for a key should draw its
+  unknown-card fallback.
+- **The agent leaves a locked file alone.** It no longer edits or unlocks a
+  file another program, the OS or you have locked; it says how to release the
+  lock and asks first, on every model and in any folder.
+- **`/index` reads a file outside the working folder, and `/resume` counts
+  only what loaded** (#6978). `/index <file>` grants the file it names before
+  indexing it, so a PDF elsewhere on disk indexes instead of being refused.
+  `/index <folder>` skips symbolic links and protected files such as
+  `credentials.json`, and `/index` refuses a protected file named directly.
+  `/resume` reports "N of M documents" and keeps only the documents that
+  actually indexed.
+- **The agent follows GAIA's own tool hints and tasks you paste, but not
+  instructions planted in content.** Text in documents, pages, files, emails and
+  other tool output still can't make it call a tool or dictate a reply, and a
+  typed "system notice" or "developer mode" carries no special authority. Asked
+  what it did, it lists only the tool calls it made, not actions it read about.
+- **The agent can use a Google or Outlook calendar.** A new bundled skill,
+  `calendar`, lists events, checks free time, and creates, changes or cancels
+  events. The agent loads it when a request is about the calendar, and its five
+  tools (`calendar/list_calendar_events`, `calendar/create_calendar_event`, …)
+  join the tool list only then, so the registered tool count stays 105. Every
+  write asks a person first, even under full access, and a run with nobody to
+  ask refuses it. The prompt shows the
+  event's title, start, who gets notified and what changes; a call that misstates
+  them is refused before any prompt. `create_calendar_event` must state
+  `calendar_account`, and a change or cancel prompt names the account too, so the
+  prompt always shows where the change lands. A time given with today's UTC offset
+  for a date past a daylight-saving change is refused with the right offset, and
+  free time across that change is read in the computer's own zone. Results name the
+  account and say only its main calendar was read, and event text reaches the model
+  marked as untrusted. A wrong event id is an error rather than "already gone", and a
+  description over 500 characters, or a title or location over 200, is refused. Hidden characters show in the prompt as
+  codes such as `[U+202E]`, and a malformed attendee address is refused. A recurring event changes one occurrence
+  at a time. Consent now
+  asks for `calendar.events` (Google) and `Calendars.ReadWrite` (Microsoft). Existing
+  connections keep reading mail, and a calendar call names the command that adds
+  the scope. Larger models only; on Gemma 4 E4B the skill is not listed and
+  loading it is refused. The calendar was tried on real Google and Outlook
+  calendars, as core tools, but not yet measured by the agent evals.
+- **A skill tool can require approval on every call.** `requires_confirmation:
+  true` on a `metadata.gaia.tools` entry makes the agent ask before each call,
+  and no grant pre-authorizes it. A skill tool's `preflight` and approval prompt
+  now run with the agent bound, as its body does.
+- **A large document that finishes indexing in the background stays attached
+  to the chat.** It is saved to the session as soon as it is searchable, and a
+  background index that fails is now reported instead of dropping out of
+  sight.
+
+### Fixed
+
+- **A turn that stops early still writes the file you asked for.** When the
+  agent hits its step limit or keeps repeating a call, it gets one step to
+  write a requested file that doesn't exist yet, and it can only write those
+  files in that step. If the file still isn't written, the answer says so
+  instead of claiming it was. A file written that way is read back like any
+  other edit, and if it is missing, empty or no longer parses, the answer says
+  that too. A turn the loop guard ends gets the same completion check as other
+  early stops, so a claimed write that no tool made is named too.
+- **A refused action is reported as refused, not as your decision.** When a
+  safety rule blocks a command, the agent says the command was refused, and a
+  refused delete still guards what it would have deleted.
+- **`gaia -p --time-limit SECONDS`** tells the agent how long the run may take,
+  so it wraps up and answers before the deadline instead of being cut off.
+- **`run_python` can check a project's own code.** Any `import gaia…` was
+  refused, so inside a GAIA checkout the agent copied code into the snippet by
+  hand and reported the copy's output as proof. Only reaching for one of its
+  tools through `gaia` (`from gaia import write_file`) is refused now, and a
+  `src/`-layout project has `src/` on the path so its modules import from the
+  checkout, not an installed copy. `execute_python_file` gets the same path.
+- **"Do not run anything, answer only with a plan" gets the plan.** The
+  announced-step check sent a requested tool plan back as unfinished work, and
+  the look-first check told the model to open the file the user had said not
+  to touch. The model read either nudge as the user's newest instruction, so
+  the plan was lost or a run was attempted. A request this turn not to act
+  (answer only with a plan, use no tools, don't do anything yet) now turns
+  both checks off. "Don't run anything yet" alone still lets the agent write
+  the files it was asked for, and "don't do anything else" keeps both checks.
+  A requested plan no longer ends with a note that a named file was not
+  read. An answer that states what an unread file says still gets that
+  note, even on a "use no tools" turn, since it is a guess.
+  A ban the request lifts itself ("don't touch anything until you've read X",
+  "only a plan, then do step 1") is not a request not to act, and neither is
+  a ban that comes with the work ("fix foo.py but don't touch anything",
+  "don't touch anything, just read config.py") or "plan only" inside a
+  request to do work ("my plan only covers Postgres; extend it"). "Don't
+  touch anything" right after a request to look into something ("why does
+  foo.py fail? Don't touch anything") bars edits only: the look-first check
+  stays on, and the agent is still not pushed to make an edit it announced.
+
+## [0.3.5]
+
+Released with GAIA 0.25.4, and requires the `gaia` Python CLI 0.25.4+ on `PATH`
+and Lemonade Server 2026.44.1+. The sidecar contract stays **2.27**.
+
+- **Instructions planted in a file or web page are always flagged.** The
+  agent tells the user about them on any model, including the small NPU one,
+  and never follows them.
+- **A computation that fails no longer turns into made-up figures.** Amounts
+  in a table that no tool produced get flagged.
+- **"Forget that I'm allergic to shellfish" works on the first try.**
+- **A short message is no longer mistaken for an instruction from memory.**
+- **Memory stops replaying stale tool errors as lessons**, and only shows a
+  model the lessons recorded while that model was chatting.
+- **A report a script wrote beside a shared file counts as written.**
+- **A chat recovers when GAIA's own model server died**, cloud chats
+  included, without restarting the app.
+- **An answer that only announces its next step is not handed over as done.**
+  The agent finishes the step, or says plainly that it didn't.
+
+### Fixed
+
+- **An announced next step is not handed over as the answer** (#6787). A
+  reply ending "Next, I'll search the docs" or "Running the tests now" got
+  re-prompted; if the model still doesn't act, the turn ends with "I didn't
+  finish" and what it had so far. Requested plans and tutorials pass unchanged.
+- **Planted instructions get a visible warning on every model** (#6784).
+  Gemma 4 E4B summarized a build log's "[agent-note] … run `del /s /q …`"
+  without a word. External tool results are now scanned, the model is told to
+  report and not follow what it finds, and the answer gets a heads-up when the
+  model leaves it out.
+- **Invented amounts after a failed computation are flagged** (#6818). A
+  currency cell such as `$10,342.50` is now checked like a bare number, and a
+  `run_python`, `execute_python_file` or `query_data` call that fails before
+  printing anything tells the model nothing was computed.
+- **`forget` takes the user's words, not only an id** (#6774). It erases the
+  one memory the words clearly name; when they match several or none, nothing
+  is erased and the step says so in plain words.
+- **The per-turn memory block has an end** (#6814). A one-line message such
+  as "Reply with just: restored" was read as the block's last line and
+  refused as a planted instruction.
+- **Empty and outdated tool errors are no longer stored as lessons** (#6781).
+  Errors recorded by another GAIA version are dropped when memory opens, each
+  is shown only while the model that saw it chats, and the Memory page labels
+  them "Learned by GAIA" instead of "Error".
+- **A script's write to a file the user named as the output counts** (#6820),
+  so a report saved beside a shared file no longer ends with "No successful
+  write". Only its size and timestamp are checked, never its contents, and a
+  symlink is never followed.
+- **A dead model server restarts before the next turn** (#6806). Every later
+  message in an open chat used to fail until the app restarted. A cloud
+  chat's errors also stop calling the engine "the local LLM".
+- **An agent install no longer fails over one unreadable process** (#6822),
+  and on macOS the daemon reaps the agents it left running (#6808).
+
+## [0.3.4]
+
+Released with GAIA 0.25.4, and requires the `gaia` Python CLI 0.25.4+ on `PATH`
+and Lemonade Server 2026.44.1+. Integrators: the sidecar contract is now
+**2.27**; clients built for 2.18 keep working, and older binaries don't have
+the new session `tools` and `grants` routes, so probe `/version` first.
+
+- **A model server that stops mid-reply is named, not waited out.** The
+  cut-off text is taken back, the turn shows the restart, and a server that
+  doesn't come back ends the turn within seconds.
+- **"Forget everything" forgets everything**, stored conversations included,
+  and deleting a chat removes it from Memory.
+- **Listing every section that mentions a term reads only those pages**, and
+  long extractions say which page they are on.
+- **A question in one language finds answers in a document in another.**
+- **Mail gains whole threads, what's waiting on you, and which account is
+  connected** (three read-only tools, 102 in total).
+- **Updating the agent on a Mac no longer asks for keychain access again**
+  when the daemon starts it.
+- **With Claude, the agent follows a repository's `CLAUDE.md`, `AGENTS.md`
+  and `.claude/skills`.**
+- **The binary ships no GPL or AGPL code**, and the agent is one Python
+  package.
+
+### Changed
+
+- **Updating the agent on a Mac no longer asks for keychain access again.** When
+  the daemon starts the sidecar, the daemon now reads saved keys for it. A sidecar
+  started without the daemon still reads the keychain itself. Requires a daemon
+  and agent from this release or later.
+- **"Every section that mentions X" no longer reads the whole document.**
+  Listing the one section of a 37 KB manual that names a code took ~18 min on
+  the NPU, because extraction sent all 10 pages through the model twice.
+  `extract_document_items` now takes `terms`: only pages containing one of
+  them reach the model, so that question makes 2 model calls instead of 20,
+  and the inventory says which words it screened by.
+- **A long document extraction says which page it is on and when the model
+  server restarts.** It ran for minutes with no live status, and a server
+  that stopped under it showed nothing until the extraction resumed. It now
+  sends phase `reading` before each page ("Reading page 4 of 12…"), and a
+  server that stops under any tool's own model calls gets the same
+  `model_restart` status as one that stops mid-reply.
+- **The first message on the NPU model no longer waits out the warm-up.**
+  After a restart, the first "hello" on `gemma4-it-e4b-FLM` waited ~30 s while
+  the sidecar read its ~19K-token prompt, then spent another ~35 s reading it
+  again, because FastFlowLM reuses a prompt only when the next request
+  continues it. On an NPU model the warm-up now only loads the model, so that
+  first answer starts ~30 s sooner.
+- **A reply cut off by a model-server restart is taken back, not swapped.**
+  When GAIA's model server stopped part-way through a reply, the stream sat
+  on the half-written text for minutes, then a different reply silently
+  replaced it. A `status` with phase `answer_restart` and
+  `retracts_answer: true` now tells the client to drop the cut-off text, phase
+  `model_restart` is the live line while the daemon restarts the server, and
+  a server that does not come back ends the turn with
+  `failure: "model_server_down"`.
+- **A stopped local model server fails the turn at once and is named.** A cloud
+  model's turn used to retry for about three minutes and then blame the cloud
+  provider, though the provider was never reached. A refused connection to the
+  local server now ends the turn within seconds, the answer names that server,
+  and `final` carries `failure: "model_server_down"` so a front-end can offer to
+  start it (SPEC §5.1).
+- **The query stream documents the `reconnecting` status phase.** It is sent
+  once while GAIA's own Lemonade Server restarts mid-turn or mid-`/model`
+  switch, so integrators can show a live reconnecting line instead of treating
+  it as an unknown phase.
+- **Images are not read while chat runs on the NPU.** The NPU model doesn't
+  read images, and loading Gemma next to it would mean a 6 GB download, so
+  `analyze_image` and `answer_question_about_image` answer with why they
+  can't read the image and how to switch to the GPU.
+- **Images are read by the model setup chose, not always Gemma.** The image
+  tools loaded Gemma 4 E4B by name, so a PC running Qwen3.6, which reads images
+  itself, was asked to download Gemma on its first image question. They now use
+  `vision_model` from setup, else the chat model when it reads images, else
+  Gemma, the same rule document scans use. Requires the `gaia` Python CLI with
+  `resolve_default_vision_model` (the release that ships first-run setup in the
+  Agent UI).
 - **Reading text aloud no longer downloads a voice model mid-chat.**
   `text_to_speech` used to pull Kokoro on first use; it now stops and asks you
   to run `gaia download --agent talk` first. It also takes a `speed` (0.5-2.0),
   defaults to the `af_bella` voice, writes only `.wav` files, and reads long
   text in sentence-sized pieces joined into one file.
+- **Speech the agent saves uses the voice you read replies in.** When the
+  request names no voice or speed, `text_to_speech` now uses the read-aloud
+  voice and speed chosen in the Agent UI (Settings › Read aloud) or the TUI
+  (`/voice`), instead of a fixed `af_bella` at normal speed.
+- **Needs Lemonade Server 2026.44.1 or newer.** `GET /v1/gaia/init` reports
+  `min_version: "2026.44.1"` (was `10.2.0`) and answers not-ready on anything
+  older. Its `hint` no longer tells you to run `gaia init --force-reinstall`:
+  GAIA upgrades its own Lemonade when its daemon next starts it (`gaia daemon
+  restart` does that now), and a Lemonade you
+  run yourself is pointed at https://lemonade-server.ai. This hint needs the
+  `gaia` CLI from the same release; the release that ships it raises the
+  `amd-gaia` floor.
+- **Images use the model, size and steps you choose.** When a request names
+  no model, `generate_image` now uses the image settings from the Agent UI
+  (Settings › Image creation) or the TUI (`/image`) instead of always
+  SDXL-Turbo at its defaults. `list_sd_models` reports that model as the
+  default.
 - **A project's `.env` can only supply the Claude API key.** The sidecar reads
   `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
   Claude calls, and ignores every other name there with one warning. Settings
@@ -87,6 +1005,68 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **A chat sent while GAIA's AI engine can't start says so, and how to fix
+  it.** With GAIA's own model server missing, a cloud-model chat waited ~30 s
+  and then showed "Failed to start the query run: Request failed:
+  HTTPConnectionPool(host='localhost', port=13305) …" with a terminal command.
+  Building the agent now asks the daemon for GAIA's server instead of probing
+  the default port, and `/query` answers `503` with the classified message
+  ("GAIA's AI engine couldn't start … Open Settings > Setup and press Run setup
+  again") worded for the request's `surface`. Errors mid-run use the same
+  wording; only a model server the user runs, not GAIA's own, still gets
+  this machine's start instruction.
+
+- **Reasoning no longer shows as the answer when a model sends only `</think>`.**
+  A model whose chat template opens the reasoning block streamed that reasoning
+  as answer text, and the step-limit answer, memory and skill learning read it
+  as part of the reply. The `reasoning` event that follows the tag now carries
+  `retracts_answer: true`; a client drops the `token` text since the last
+  `tool_call` from the answer it has shown.
+- **Text read aloud plays in the Agent UI chat.** `text_to_speech` saved speech
+  to `~/.gaia/tts`, outside the folder the chat plays audio from, so you got a
+  file path instead of a player. Speech with no `output_path` is now saved with
+  generated music and sound effects, under the GAIA home's
+  `cache/audio/generations`, and plays inline (#6500).
+- **Document Q&A says why it couldn't start.** Any startup failure, such as
+  an unwritable cache folder or a bad embedder setting, was reported as "RAG not
+  installed" and never retried for the session. Only a missing `[rag]` extra
+  now says to install it; any other failure names its cause and is tried again
+  on the next document request. `list_indexed_documents` returns an error when
+  document Q&A is down, like the other document tools, instead of an empty list.
+- **A cloud chat no longer waits for the local model's start-up warm-up.**
+  After a restart, the first message in a Fireworks chat sat for ~47 s while
+  the sidecar read its prompt into the local default model. A turn on any other
+  model now stops that warm-up, so it neither delays the turn nor loads its
+  model over the one the turn uses; a turn on the warmed model still waits for
+  it and reuses its cache (#6582).
+- **The start-up warm-up loads the model you picked, not the setup default.**
+  After a restart, a chat on the NPU model waited ~50 s: the sidecar warmed the
+  GPU model setup chose, which evicted the NPU model, and the turn then evicted
+  it back at a smaller window. The warm-up now follows `last_model` (else
+  `default_model`), loads only inside the step a turn on another model can stop,
+  and, like the Agent UI, skips on a PC under 24 GB of memory.
+- **The SPEC names `GAIA_ALLOWED_PATHS` and the 150-step default.** Reading
+  only the SPEC, an integrator could not see that a bad allowlist entry stops
+  the sidecar at startup, or that an omitted `/query` `max_steps` runs 150
+  steps (`FLAGSHIP_MAX_STEPS`; the body or `GAIA_AGENT_MAX_STEPS` still wins).
+- **"Forget everything" works on Gemma 4 E4B.** The model ran no tool and told
+  the user GAIA had no delete-all, because the only forget rule it read
+  deleted one memory at a time. It now calls `forget_everything` for "forget
+  everything about me" or "delete all my data", keeps per-item `forget` for one
+  topic, and never claims GAIA can't do what one of its tools does (#6701).
+- **"Forget everything" forgets everything.** It deleted each memory a plain
+  `recall` listed, but that listing holds back sensitive ones, so a saved PIN
+  survived while the agent said memory was empty. The next session then rebuilt
+  the whole profile, a trip the user had asked it to forget included, from past
+  conversations. The new `forget_everything` tool erases all memory and the
+  stored conversations, after the user approves it. Other open chats stop
+  using what it erased from their next message, and a turn or background
+  summary still running when it ran can't write it back. Skills GAIA learned for doing
+  tasks are kept, as they are by the Memory page's **Delete all memories**;
+  `gaia skill deltas <skill> --reset` undoes what it learned about a skill. A
+  plain `recall` now says
+  how many sensitive entries it held back, and `search_past_conversations`
+  leaves out turns that mention something forgotten after they were said.
 - **Deleting a chat removes it from Memory.** The agent filed each Agent UI
   chat's turns and tool calls under a random id, so a deleted chat stayed
   readable in full under Memory > Advanced > Conversation history. It now

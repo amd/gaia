@@ -233,6 +233,116 @@ def set_policy(value: str) -> NetworkPolicy:
     return policy
 
 
+def apply_policy(value: str) -> Dict[str, Any]:
+    """Write the network policy and apply its Local only cleanup everywhere.
+
+    The CLI and Agent UI both use this path so enabling Local only cannot leave
+    a saved cloud model or a cloud key that an inference path may reuse. Cleanup
+    warnings are returned for the caller to display; they never undo the policy
+    write or get silently swallowed.
+    """
+    from gaia.config import GaiaConfigError
+
+    stored = set_policy(value)
+    result: Dict[str, Any] = {
+        "policy": stored,
+        "cleared": [],
+        "dropped": [],
+        "users_url": None,
+        "warnings": [],
+        "notices": [],
+    }
+    if stored is not NetworkPolicy.LOCAL_AI_ONLY:
+        return result
+
+    try:
+        result["cleared"] = clear_saved_cloud_models()
+    except SavedModelsNotCheckedError as e:
+        result["cleared"] = e.cleared
+        result["notices"].append(
+            {
+                "code": "saved_models_not_checked",
+                "severity": "warning",
+                "reason": str(e),
+                "cause": "model_server_down" if e.server_down else None,
+                "models": e.models,
+            }
+        )
+        result["warnings"].append(f"Saved models were not checked: {e}")
+    except GaiaConfigError as e:
+        result["notices"].append(
+            {
+                "code": "saved_models_not_checked",
+                "severity": "warning",
+                "reason": str(e),
+            }
+        )
+        result["warnings"].append(f"Saved models were not checked: {e}")
+
+    from gaia.llm.cloud_keys import CloudKeyError, drop_runtime_keys, users_lemonade_url
+
+    try:
+        result["users_url"] = users_lemonade_url()
+        if result["users_url"]:
+            result["notices"].append(
+                {
+                    "code": "users_server_keeps_keys",
+                    "severity": "info",
+                    "url": result["users_url"],
+                }
+            )
+        else:
+            result["dropped"] = drop_runtime_keys()
+    except CloudKeyError as e:
+        result["notices"].append(
+            {
+                "code": "runtime_keys_not_dropped",
+                "severity": "warning",
+                "reason": str(e),
+            }
+        )
+        result["warnings"].append(
+            f"Lemonade still holds any cloud key GAIA gave it ({e}); restart Lemonade to drop it."
+        )
+    return result
+
+
+class SavedModelsNotCheckedError(RuntimeError):
+    """Lemonade's catalog couldn't say whether a saved dotted id is a cloud model.
+
+    ``cleared`` lists the ids that were cleared anyway, because they are cloud
+    models without asking Lemonade. ``models`` lists the ids left unchecked, and
+    ``server_down`` says the catalog read failed because nothing answered.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        cleared: List[Tuple[str, str]],
+        models: Optional[List[str]] = None,
+        server_down: bool = False,
+    ):
+        super().__init__(message)
+        self.cleared = cleared
+        self.models = list(models or [])
+        self.server_down = server_down
+
+
+def _server_not_answering(error: BaseException) -> bool:
+    """True when *error* comes from a connection that failed or timed out."""
+    import requests
+
+    from gaia.llm.lemonade_choice import _causes
+
+    return any(
+        isinstance(
+            cause,
+            (requests.exceptions.ConnectionError, requests.exceptions.Timeout),
+        )
+        for cause in _causes(error)
+    )
+
+
 #: config.json keys that can hold a model id GAIA runs or restores.
 SAVED_MODEL_KEYS = ("default_model", "last_model")
 
@@ -245,29 +355,118 @@ def clear_saved_cloud_models() -> List[Tuple[str, str]]:
 
     Raises:
         GaiaConfigError: config.json exists but can't be read or written.
+        SavedModelsNotCheckedError: a saved id needs Lemonade's catalog to
+            classify and the catalog couldn't be read. Ids that are cloud
+            without asking are still cleared and saved first.
     """
     from gaia.config import GaiaConfig
-    from gaia.llm.lemonade_client import cloud_model_provider
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        cloud_model_provider,
+        find_model_requirement,
+        is_cloud_model,
+        may_be_cloud_model,
+    )
 
     cfg = GaiaConfig.load()
     cleared = []
+    ambiguous = []
+
+    # Known cloud ids go first, so a stopped Lemonade can't keep them saved.
     for key in SAVED_MODEL_KEYS:
         model = (getattr(cfg, key) or "").strip()
         is_claude = model.lower().startswith("claude") or (
             key == "last_model" and (cfg.last_provider or "").lower() == "claude"
         )
-        if model and (cloud_model_provider(model) or is_claude):
+        if not model:
+            continue
+        if cloud_model_provider(model) or is_cloud_model(model) or is_claude:
             setattr(cfg, key, None)
             cleared.append((key, model))
-    if any(key == "last_model" for key, _ in cleared):
-        cfg.last_provider = None
-    if cleared:
-        cfg.save()
+        elif may_be_cloud_model(model) and find_model_requirement(model) is None:
+            ambiguous.append((key, model))
+
+    def save() -> None:
+        if any(key == "last_model" for key, _ in cleared):
+            cfg.last_provider = None
+        if cleared:
+            cfg.save()
+
+    if ambiguous:
+        # A CLI policy switch runs in a fresh process that hasn't read the catalog.
+        client = LemonadeClient(verbose=False)
+        try:
+            for key, model in ambiguous:
+                if client._is_cloud_model(model):
+                    setattr(cfg, key, None)
+                    cleared.append((key, model))
+        except LemonadeClientError as e:
+            save()
+            models = list(
+                dict.fromkeys(m for k, m in ambiguous if (k, m) not in cleared)
+            )
+            unchecked = ", ".join(models)
+            log.warning(
+                "Local only: couldn't check whether %s is a cloud model: %s",
+                unchecked,
+                e,
+                exc_info=True,
+            )
+            down = _server_not_answering(e)
+            many = len(models) > 1
+            what = "are cloud models" if many else "is a cloud model"
+            kept = "they are" if many else "it is"
+            if down:
+                message = (
+                    f"couldn't check whether {unchecked} {what} because the "
+                    f"model server isn't answering, so {kept} still saved. Turn "
+                    "Local only on again once the model server is back to check "
+                    + ("them" if many else "it")
+                )
+            else:
+                message = (
+                    f"couldn't check whether {unchecked} {what}, so {kept} "
+                    f"still saved: {e}"
+                )
+            raise SavedModelsNotCheckedError(
+                message, list(cleared), models=models, server_down=down
+            ) from e
+
+    save()
     return cleared
 
 
 def is_local_recipe(recipe: Optional[str]) -> bool:
     return bool(recipe) and recipe in LOCAL_RECIPES
+
+
+def recipes_confirm_local(recipes: List[Optional[str]]) -> bool:
+    """True when *recipes* is non-empty and every one runs on this machine."""
+    return bool(recipes) and all(is_local_recipe(r) for r in recipes)
+
+
+def blocked_reason(recipes: List[Optional[str]]) -> str:
+    """Why Local only refuses a model whose catalog *recipes* don't confirm it runs here.
+
+    Callers only use this when *recipes* fails the allowlist, so every branch
+    names a real reason instead of pointing at the privacy setting.
+    """
+    remote = [r for r in recipes if not is_local_recipe(r)]
+    if not recipes:
+        return "Lemonade's catalog doesn't list it"
+    if len(set(recipes)) > 1:
+        return (
+            f"its name matches several catalog entries ({', '.join(map(str, recipes))}) "
+            "and not all of them are local models"
+        )
+    if remote[0] is None:
+        return "Lemonade's catalog lists it without saying where it runs"
+    if remote[0] == "cloud":
+        return "it is a cloud model"
+    if str(remote[0]).startswith("collection."):
+        return f"it is a '{remote[0]}' model, which can forward requests to the cloud"
+    return f"its recipe '{remote[0]}' isn't one GAIA knows is a local model"
 
 
 def assert_model_permitted(
@@ -295,27 +494,11 @@ def assert_model_permitted(
             f"confirm that '{model}' isn't a cloud model ({e}). Start Lemonade and "
             f"retry. {SETTINGS_HINT}"
         ) from e
-    if recipes and all(is_local_recipe(r) for r in recipes):
+    if recipes_confirm_local(recipes):
         return
-    remote = [r for r in recipes if not is_local_recipe(r)]
-    if not recipes:
-        why = "Lemonade's catalog doesn't list it"
-    elif len(set(recipes)) > 1:
-        why = (
-            f"its name matches several catalog entries ({', '.join(map(str, recipes))}) "
-            "and not all of them are local models"
-        )
-    elif remote[0] is None:
-        why = "Lemonade's catalog lists it without saying where it runs"
-    elif remote[0] == "cloud":
-        why = "it is a cloud model"
-    elif str(remote[0]).startswith("collection."):
-        why = f"it is a '{remote[0]}' model, which can forward requests to the cloud"
-    else:
-        why = f"its recipe '{remote[0]}' isn't one GAIA knows is a local model"
     raise CloudDisabledError(
-        f"Local only is on, so '{model}' was blocked: {why}. Pick a local "
-        f"model. {SETTINGS_HINT}"
+        f"Local only is on, so '{model}' was blocked: {blocked_reason(recipes)}. "
+        f"Pick a local model. {SETTINGS_HINT}"
     )
 
 

@@ -319,3 +319,63 @@ def test_run_query_trace_captures_stream_with_no_terminal_event(monkeypatch, tmp
     assert doc["terminal_type"] is None
     # The CLI-synthesized terminal error is recorded alongside the real events.
     assert [e["type"] for e in doc["events"]] == ["tool_call", "error"]
+
+
+def test_a_final_answer_marked_failed_is_a_failed_run():
+    """The agent reports a failed model call as a final answer marked failed;
+    a script must not read that as success."""
+    import io
+
+    from gaia.daemon.agent_query import ConsoleRenderer
+
+    renderer = ConsoleRenderer(out=io.StringIO(), err=io.StringIO())
+    renderer.render(
+        {"type": "final", "answer": "Couldn't reach the LLM.", "failed": True}
+    )
+    assert renderer.final_failed is True
+    renderer.render({"type": "final", "answer": "pong"})
+    assert renderer.final_failed is False
+
+
+def test_run_query_returns_the_finals_usage_and_model_messages(monkeypatch):
+    import json
+
+    from gaia.daemon.agent_query import run_query
+
+    usage = {"steps": 2, "tools_used": 1, "tokens": 9, "input_tokens": 300}
+    messages = [{"role": "tool", "name": "read_file", "content": "x"}]
+    _stub_ensure(monkeypatch)
+    captured: dict = {}
+    _stub_stream_post(
+        monkeypatch,
+        captured,
+        frames=[
+            json.dumps(
+                {
+                    "type": "final",
+                    "answer": "ok",
+                    "usage": usage,
+                    "model_messages": messages,
+                }
+            )
+        ],
+    )
+
+    outcome = run_query("gaia", "hi", turns=[])
+
+    assert captured["json"]["turns"] == []
+    assert outcome.usage == usage
+    assert outcome.model_messages == messages
+
+
+def test_run_query_omits_turns_when_none(monkeypatch):
+    from gaia.daemon.agent_query import run_query
+
+    _stub_ensure(monkeypatch)
+    captured: dict = {}
+    _stub_stream_post(monkeypatch, captured)
+
+    outcome = run_query("gaia", "hi")
+
+    assert "turns" not in captured["json"]
+    assert outcome.usage is None and outcome.model_messages is None

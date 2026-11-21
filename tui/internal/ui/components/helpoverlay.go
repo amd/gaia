@@ -287,21 +287,21 @@ const chatHelpText = `  GAIA Chat
   Esc twice   Give up waiting on the cancel
   Ctrl+C      Quit
 
-  Commands    /help /clear /full-access /slack /setup
-              /memory /model /provider /gateway /agents
-              /models /gpu
-  /cost       Session spend · /cost help for rates
+  Commands    /help /clear /full-access /slack /discord
+              /setup /memory /models /provider /gateway
+              /agents /model /gpu /image /read-aloud
+              /voice /connectors /sessions /agent
+  /cost       Spend · /cost help rates · /context fill
   /update     New GAIA release? · /update now
   /           Browse commands on an empty line: ↑/↓ or
               click to pick, Enter to run, Esc to close
 
   Scroll        ↑ / ↓ line · PgUp/PgDn page
-  Home / End    Top / bottom, if the composer is
-                empty — otherwise cursor keys
+  Home / End    Top / bottom when the composer's empty
   Mouse wheel   Scrolls
   Click         Picks a palette row or question
                 option · Ctrl+T to click links too
-  Ctrl+O        Each step in full, or folded
+  Ctrl+O  Fold · Ctrl+F open file · Ctrl+G reveal
 
   Copy and paste
   ──────────────────

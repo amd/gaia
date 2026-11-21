@@ -58,7 +58,9 @@
 .flow-steps-text {
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     min-width: 0;
 }
 .flow-steps-done { color: var(--text-muted); flex-shrink: 0; }
@@ -88,6 +90,19 @@
 .flow-warning > svg {
     flex-shrink: 0;
     color: var(--accent-yellow);
+}
+
+.flow-done {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.flow-done > svg {
+    flex-shrink: 0;
+    color: var(--accent-green);
 }
 
 .flow-live-line {
@@ -130,9 +145,8 @@
     color: var(--text-primary);
 }
 
+/* Opened reasoning grows with the chat; a nested scroll box inside a scrolling page is hard to read. */
 .flow-thought-hacker {
-    max-height: 200px;
-    overflow-y: auto;
     margin-top: 4px;
     padding: 6px 8px;
     font-size: 13px;
@@ -141,48 +155,24 @@
     line-height: 1.6;
     word-break: break-word;
     white-space: pre-wrap;
+    /* Each line of reasoning takes its own direction, whatever the app's language. */
+    unicode-bidi: plaintext;
+    text-align: start;
     border-radius: var(--radius-xs);
     background: var(--bg-recessed);
     border: 1px solid var(--border-recessed);
 }
 
-.flow-thought-hacker::-webkit-scrollbar {
-    width: 4px;
-}
-.flow-thought-hacker::-webkit-scrollbar-track {
-    background: transparent;
-}
-.flow-thought-hacker::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--accent) 20%, transparent);
-    border-radius: 0;
-}
-
-.flow-thought-cursor {
-    display: inline-block;
-    width: 0.55em;
-    height: 1.1em;
-    background: var(--accent);
-    vertical-align: text-bottom;
-    margin-inline-start: 1px;
-    animation: cursorBlink var(--duration-blink) var(--ease-step) infinite;
-}
-
-/* Live reasoning shows its last lines, fading out at the top, until opened. */
-.flow-thought-hacker.peek {
-    max-height: 4.8em;
-    overflow: hidden;
-    margin-block: 2px 0;
-    margin-inline: 20px 0;
-    padding: 0;
-    font-size: 12.5px;
+/* A call the model reasoned before; the reasoning opens with the call's detail. */
+.flow-tool-thought-mark {
+    display: inline-flex;
+    margin-inline-end: 6px;
     color: var(--text-muted);
-    background: none;
-    border: none;
-    -webkit-mask-image: linear-gradient(to bottom, transparent, currentColor 45%);
-    mask-image: linear-gradient(to bottom, transparent, currentColor 45%);
 }
-
-/* @keyframes cursorBlink is defined globally in index.css */
+.flow-tool-thought {
+    display: flex;
+    flex-direction: column;
+}
 
 /* .thinking-dots styles are defined globally in index.css */
 
@@ -271,7 +261,9 @@
 .flow-tool-label {
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     color: var(--text-secondary);
     font-size: 13px;
     min-width: 0;
@@ -284,7 +276,7 @@
 .flow-tool-count {
     flex-shrink: 0;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     padding: 0 6px;
     border-radius: 999px;
     background: var(--bg-hover);
@@ -296,8 +288,24 @@
     color: var(--danger);
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
+    /* Takes only what the label leaves, so the page's site name is never the part that gets cut. */
+    flex: 1 1 0;
+    min-width: 12ch;
+}
+
+/* A step that needs a model offers it right under the row. */
+.flow-tool-offer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-block: 2px 6px;
+    margin-inline-start: 20px;
+    font-size: 13px;
+    color: var(--text-secondary);
 }
 
 .flow-tool-raw {
@@ -431,23 +439,9 @@
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-secondary);
     margin-bottom: 4px;
-}
-
-/* Collapsible toggle variant — resets button defaults */
-.flow-plan-toggle {
-    width: 100%;
-    background: none;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    text-align: start;
-    margin-bottom: 0;
-}
-.flow-plan-toggle:hover {
-    opacity: 0.8;
 }
 
 .flow-plan-count {
@@ -478,7 +472,9 @@
 .flow-plan-text {
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     min-width: 0;
 }
 .flow-plan-item.running .flow-plan-text {
@@ -510,8 +506,14 @@
     border-radius: var(--radius-xs);
     background: color-mix(in srgb, var(--danger) 4%, transparent);
     border: 1px solid color-mix(in srgb, var(--danger) 15%, transparent);
-    font-size: 12px;
-    font-family: var(--font-mono);
+    font-size: 13px;
+    font-family: var(--font-sans);
+    color: var(--text-secondary);
+}
+
+.flow-error > svg {
+    flex-shrink: 0;
+    margin-top: 2px;
     color: var(--danger);
 }
 
@@ -549,7 +551,7 @@
     gap: 6px;
     color: var(--accent-yellow);
     font-size: 12px;
-    font-weight: 700;
+    font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.7px;
 }
@@ -609,7 +611,7 @@
 .detail-section-label {
     display: block;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-mono);
     text-transform: uppercase;
     letter-spacing: 0.8px;
@@ -648,7 +650,7 @@
 .arg-key {
     font-family: var(--font-mono);
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-muted);
     flex-shrink: 0;
     min-width: 60px;
@@ -775,11 +777,13 @@
 .chunk-source {
     font-family: var(--font-mono);
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     max-width: 200px;
 }
 
@@ -840,7 +844,9 @@
     font-style: italic;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 
 .chunk-content {
@@ -908,7 +914,7 @@
 
 .cmd-header-title {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-code);
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -919,7 +925,9 @@
     color: var(--text-code-dim);
     max-width: 200px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -936,7 +944,7 @@
 
 .cmd-exit-code {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--code-danger);
     padding: 0 4px;
     border-radius: 2px;
@@ -976,7 +984,7 @@
 
 .cmd-prompt {
     color: var(--code-accent);
-    font-weight: 700;
+    font-weight: 500;
     flex-shrink: 0;
     user-select: none;
 }
@@ -1054,11 +1062,6 @@
     .flow-steps.live .flow-error,
     .flow-steps.live .flow-policy-alert {
         animation: none;
-    }
-
-    .flow-thought-cursor {
-        animation: none;
-        opacity: 1;
     }
 
     .flow-tool-left > svg,

@@ -28,12 +28,52 @@ Example:
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from gaia.agents.tools.path_access import read_access_error
+from gaia.agents.tools.connect_card import AGENT_UI, agent_surface
+from gaia.agents.tools.path_access import image_file_error, read_access_error
+from gaia.llm.vlm_client import VisionModelMissingError
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
 DEFAULT_VLM_MODEL = "Gemma-4-E4B-it-GGUF"
+
+#: Put on a call that found no vision model, so the model stops instead of reading the pixels with code.
+VISION_MISSING_HINT = (
+    "Reading images needs the vision model, which isn't downloaded. Do not try "
+    "to read the image another way (code, a script, the file's bytes). Tell the "
+    "user GAIA needs the vision model to see images and how to download it, as "
+    "the error says, then stop."
+)
+
+
+#: The same in the Agent UI, which shows a download button under the step:
+#: the answer points at it rather than at a model file or another app.
+VISION_MISSING_IN_APP_ERROR = (
+    "GAIA's vision model isn't downloaded, so it can't read images yet."
+)
+VISION_MISSING_IN_APP_HINT = (
+    "Reading images needs the vision model, which isn't downloaded. Do not try "
+    "to read the image another way (code, a script, the file's bytes). GAIA is "
+    "showing the user a 'Get the vision model' button under this step. Tell "
+    "the user in a sentence or two that GAIA needs its vision model to see "
+    "images, that the button downloads it, and to ask again afterwards. Do not "
+    "name a model file, a size, a settings path or another app. Then stop."
+)
+
+
+def _vision_model_missing(
+    error: VisionModelMissingError, path: Path, surface: Optional[str] = None
+) -> Dict[str, Any]:
+    """The tool result for an image no vision model can read yet; the UI offers the download."""
+    in_app = surface == AGENT_UI
+    return {
+        "status": "error",
+        "error": VISION_MISSING_IN_APP_ERROR if in_app else str(error),
+        "image_path": str(path),
+        "needs_model": "vision",
+        "hint": VISION_MISSING_IN_APP_HINT if in_app else VISION_MISSING_HINT,
+    }
+
 
 # Subject-specific asks (text, faces, objects) go to answer_question_about_image.
 _FOCUS_PROMPTS = {
@@ -44,20 +84,6 @@ _FOCUS_PROMPTS = {
     "all": "Provide a detailed description of this image including composition, colors, mood, style, and interesting elements.",
 }
 IMAGE_ANALYSIS_FOCUSES = frozenset(_FOCUS_PROMPTS)
-
-
-def _image_file_error(path: Path, image_path: str) -> Optional[Dict[str, Any]]:
-    """Tool error when *path* is not an existing file, or None when it is."""
-    if path.is_file():
-        return None
-    if path.is_dir():
-        return {
-            "status": "error",
-            "error": f"Not an image file: {image_path} is a directory",
-        }
-    if path.exists():
-        return {"status": "error", "error": f"Not an image file: {image_path}"}
-    return {"status": "error", "error": f"Image not found: {image_path}"}
 
 
 class VLMToolsMixin:
@@ -79,7 +105,7 @@ class VLMToolsMixin:
 
     def init_vlm(
         self,
-        model: str = DEFAULT_VLM_MODEL,
+        model: Optional[str] = DEFAULT_VLM_MODEL,
         base_url: Optional[str] = None,
     ) -> None:
         """
@@ -89,7 +115,8 @@ class VLMToolsMixin:
         No need to call register_vlm_tools() separately.
 
         Args:
-            model: VLM model to use for image analysis
+            model: VLM model to use for image analysis; None when reading
+                images is off (chat on the NPU), so the tools say so
             base_url: Lemonade Server base URL (default: LEMONADE_BASE_URL,
                 else GAIA's own Lemonade)
 
@@ -99,7 +126,10 @@ class VLMToolsMixin:
         from gaia.llm.vlm_client import VLMClient
 
         self.vlm_model = model
-        self.vlm_client = VLMClient(vlm_model=model, base_url=base_url)
+        self.vlm_base_url = base_url
+        self.vlm_client = (
+            None if model is None else VLMClient(vlm_model=model, base_url=base_url)
+        )
 
         logger.debug(f"VLM tools initialized: model={model}")
 
@@ -138,6 +168,39 @@ class VLMToolsMixin:
         # Tools are automatically registered by the @tool decorator above
         # No need to call register_tool() - it doesn't exist anyway
 
+    def _vision_off(self, image_path: str) -> Optional[Dict[str, Any]]:
+        """The tools' answer while reading images is off; None when it is on."""
+        # init_vlm(model=None) turned reading off; a host that never ran it isn't off.
+        if "vlm_model" not in vars(self) or self.vlm_model is not None:
+            return None
+        from gaia.llm.lemonade_client import vision_off_reason
+
+        return {
+            "status": "error",
+            "error": vision_off_reason(getattr(self, "vlm_base_url", None)),
+            "image_path": image_path,
+        }
+
+    def _image_reader(self) -> Any:
+        """The client that reads the next image: one for a tested vision model
+        that is already loaded, so the read doesn't unload it, else ``vlm_client``.
+        """
+        from gaia.llm.lemonade_client import resident_vision_model
+        from gaia.llm.vlm_client import VLMClient
+
+        configured = self.vlm_client
+        resident = resident_vision_model(configured.vlm_model, client=configured.client)
+        if resident == configured.vlm_model:
+            return configured
+        logger.info(
+            "Reading the image with %s, which is already loaded, instead of %s: "
+            "loading %s would unload it.",
+            resident,
+            configured.vlm_model,
+            configured.vlm_model,
+        )
+        return VLMClient(vlm_model=resident, base_url=configured.base_url)
+
     def _analyze_image(self, image_path: str, focus: str = "all") -> Dict[str, Any]:
         """
         Analyze an image with VLM and provide detailed description.
@@ -162,11 +225,14 @@ class VLMToolsMixin:
                 ),
             }
 
+        off = self._vision_off(image_path)
+        if off:
+            return off
         path = Path(image_path)
         denied = read_access_error(self, path)
         if denied:
             return denied
-        not_a_file = _image_file_error(path, image_path)
+        not_a_file = image_file_error(path, image_path)
         if not_a_file:
             return not_a_file
 
@@ -177,16 +243,19 @@ class VLMToolsMixin:
             image_bytes = path.read_bytes()
 
             # VLMClient.extract_from_image expects bytes and returns markdown string
-            description = self.vlm_client.extract_from_image(image_bytes, prompt=prompt)
+            reader = self._image_reader()
+            description = reader.extract_from_image(image_bytes, prompt=prompt)
 
             return {
                 "status": "success",
                 "image_path": str(path),
                 "focus": focus,
                 "description": description,
-                "model": self.vlm_model,
+                "model": reader.vlm_model,
             }
 
+        except VisionModelMissingError as e:
+            return _vision_model_missing(e, path, agent_surface(self))
         except Exception as e:
             logger.error(f"Image analysis failed: {e}", exc_info=True)
             return {
@@ -208,11 +277,14 @@ class VLMToolsMixin:
         Returns:
             Dict with status, question, answer, and metadata
         """
+        off = self._vision_off(image_path)
+        if off:
+            return off
         path = Path(image_path)
         denied = read_access_error(self, path)
         if denied:
             return denied
-        not_a_file = _image_file_error(path, image_path)
+        not_a_file = image_file_error(path, image_path)
         if not_a_file:
             return not_a_file
 
@@ -221,16 +293,19 @@ class VLMToolsMixin:
             image_bytes = path.read_bytes()
 
             prompt = f"Answer this question about the image: {question}"
-            answer = self.vlm_client.extract_from_image(image_bytes, prompt=prompt)
+            reader = self._image_reader()
+            answer = reader.extract_from_image(image_bytes, prompt=prompt)
 
             return {
                 "status": "success",
                 "image_path": str(path),
                 "question": question,
                 "answer": answer,
-                "model": self.vlm_model,
+                "model": reader.vlm_model,
             }
 
+        except VisionModelMissingError as e:
+            return _vision_model_missing(e, path, agent_surface(self))
         except Exception as e:
             logger.error(f"Question answering failed: {e}", exc_info=True)
             return {
@@ -275,17 +350,3 @@ on user needs."""
                 return self.get_vlm_system_prompt()
         """
         return self.get_base_vlm_guidelines()
-
-    def cleanup_vlm(self) -> None:
-        """
-        Cleanup VLM resources.
-
-        Call this when done with VLM operations to free resources.
-        """
-        if hasattr(self, "vlm_client") and self.vlm_client:
-            try:
-                if hasattr(self.vlm_client, "cleanup"):
-                    self.vlm_client.cleanup()
-                logger.debug("VLM client cleaned up")
-            except Exception as e:
-                logger.warning(f"VLM cleanup warning: {e}")

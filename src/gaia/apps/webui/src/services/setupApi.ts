@@ -3,8 +3,9 @@
 
 /** First-run setup (`/api/setup/*`, the same `gaia init` the TUI runs) and the GPU memory split (`/api/gpu-memory`). */
 
-import type { SetupCheck, SetupRunStatus, SetupPlan, StartScreen, PreflightReport, SetupConfirm, GpuMemoryStatus } from '../types';
-import { ApiError, apiFetch } from './api';
+import type { SetupCheck, SetupRunStatus, SetupPlan, StartScreen, PreflightReport, SetupConfirm, GpuMemoryStatus, ModelNeed, ModelNeedJob } from '../types';
+import { ApiError, UI_HEADER, apiFetch } from './api';
+import { getApiBase } from '../utils/apiBase';
 
 /** The confirmation a setup choice's 409 asks for, or null for any other error. */
 export function setupConfirmFrom(err: unknown): SetupConfirm | null {
@@ -36,6 +37,8 @@ export interface SetupRunOptions {
     extraModels?: string[];
     /** Only start the model server, so models are chosen against it. */
     serverOnly?: boolean;
+    /** Replace GAIA's older embedded Lemonade without downloading models again. */
+    upgradeEmbedded?: boolean;
 }
 
 /** `gaiaLemonade` sets up, and saves, GAIA's own Lemonade Server instead of the user's. */
@@ -47,6 +50,7 @@ export async function startSetup(skipChatModel: boolean, gaiaLemonade = false, o
         keep_trying: !!options.keepTrying,
         extra_models: options.extraModels ?? [],
         server_only: !!options.serverOnly,
+        upgrade_embedded: !!options.upgradeEmbedded,
     });
 }
 
@@ -55,9 +59,18 @@ export async function cancelSetup(modelId?: string): Promise<{ cancelled: boolea
     return apiFetch('POST', '/setup/cancel', modelId ? { model_id: modelId } : undefined);
 }
 
+/**
+ * `skipChatModel` says where chat runs for the plan these return. Unset, the
+ * server decides from the chat model in use: none is planned while it is a cloud
+ * model. The setup screen passes false, for what a local setup downloads.
+ */
+function planQuery(skipChatModel?: boolean): string {
+    return skipChatModel === undefined ? '' : `?skip_chat_model=${skipChatModel}`;
+}
+
 /** Skip one of setup's models, or take it back; returns the new plan. */
-export async function skipSetupModel(modelId: string, skipped: boolean): Promise<SetupPlan> {
-    return apiFetch('POST', '/setup/models/skip', { model_id: modelId, skipped });
+export async function skipSetupModel(modelId: string, skipped: boolean, skipChatModel?: boolean): Promise<SetupPlan> {
+    return apiFetch('POST', `/setup/models/skip${planQuery(skipChatModel)}`, { model_id: modelId, skipped });
 }
 
 /** Download one model now (retry, resume, or one skipped at setup); follow it with getSetupStatus. */
@@ -82,13 +95,37 @@ export async function getSetupStatus(): Promise<SetupRunStatus> {
 }
 
 /** The Lemonade, chat model and download setup will use. Loads nothing. */
-export async function getSetupPlan(): Promise<SetupPlan> {
-    return apiFetch('GET', '/setup/plan');
+export async function getSetupPlan(skipChatModel?: boolean): Promise<SetupPlan> {
+    return apiFetch('GET', `/setup/plan${planQuery(skipChatModel)}`);
 }
 
 /** Pick setup's chat model before it starts; returns the new plan. A 409 `no_fit` asks to confirm. */
-export async function chooseSetupChatModel(modelId: string, acknowledgeNoFit = false): Promise<SetupPlan> {
-    return apiFetch('POST', '/setup/chat-model', { model_id: modelId, acknowledge_no_fit: acknowledgeNoFit });
+export async function chooseSetupChatModel(modelId: string, acknowledgeNoFit = false, skipChatModel?: boolean): Promise<SetupPlan> {
+    return apiFetch('POST', `/setup/chat-model${planQuery(skipChatModel)}`, { model_id: modelId, acknowledge_no_fit: acknowledgeNoFit });
+}
+
+/** Read the NPU's setup afresh, after the user fixed something; returns the new plan. */
+export async function recheckSetupNpu(): Promise<SetupPlan> {
+    return apiFetch('POST', '/setup/npu/recheck');
+}
+
+/**
+ * Raise the locked-memory limit the NPU needs, behind the desktop's administrator
+ * prompt (Linux). It applies after a restart. A refused prompt is a 409 whose
+ * detail `code` is `cancelled` or `timeout`.
+ */
+export async function fixSetupNpuMemlock(): Promise<SetupPlan> {
+    return apiFetch('POST', '/setup/npu/memlock-fix');
+}
+
+/** Pick the model that reads images, or null for GAIA's choice; returns the new plan. */
+export async function chooseSetupVisionModel(modelId: string | null, skipChatModel?: boolean): Promise<SetupPlan> {
+    return apiFetch('POST', `/setup/vision-model${planQuery(skipChatModel)}`, { model_id: modelId });
+}
+
+/** Whether a job needs a model that isn't on this PC, and which. */
+export async function getModelNeed(job: ModelNeedJob): Promise<ModelNeed> {
+    return apiFetch('GET', `/setup/needs/${job}`);
 }
 
 // -- GPU memory split (integrated GPUs) -------------------------------------------
@@ -121,4 +158,23 @@ export async function dismissGpuMemoryPending(): Promise<GpuMemoryStatus> {
 /** A new chat's task cards and working folder. */
 export async function getStartScreen(): Promise<StartScreen> {
     return apiFetch('GET', '/onboarding/start');
+}
+
+/** A troubleshooting report: setup's record, GAIA's logs and a system snapshot, logs redacted. */
+export interface SetupReport {
+    name: string;
+    /** Where the backend kept it, beside GAIA's logs. */
+    path: string;
+    size_bytes: number;
+}
+
+export async function createSetupReport(): Promise<SetupReport> {
+    return apiFetch('POST', '/setup/report');
+}
+
+/** The report's bytes, to hand to the browser's save. */
+export async function fetchSetupReport(name: string): Promise<Blob> {
+    const res = await fetch(`${getApiBase()}/setup/report/${encodeURIComponent(name)}`, { headers: UI_HEADER });
+    if (!res.ok) throw new ApiError(`Couldn't read the report (HTTP ${res.status}).`, res.status, await res.text().catch(() => ''), null);
+    return res.blob();
 }

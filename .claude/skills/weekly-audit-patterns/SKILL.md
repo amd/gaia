@@ -34,7 +34,9 @@ invariants a future editor will otherwise break.
 `days since 1970-01-01 mod len(ROTATION)` in `scripts/audit/audit_rotation.py`. Each audit
 therefore runs every third night. Keyed on the epoch day so it never resets at a month or
 year end. **Adding an audit = append it to `ROTATION`** and give it a `rotation_night`
-input plus the `run-name` the others use. None of the audits may carry its own `schedule:`
+input plus the `run-name` the others use: `scripts/audit/audit_dispatch.py` confirms
+the dispatch by finding that run-name, so an audit without it fails every night and files a
+"not confirmed" issue. None of the audits may carry its own `schedule:`
 (a contract test fails if one does): three audits every night spent the subscription's
 **weekly** cap mid-week (both daily audits failed 5 of 10 nights in October 2026).
 
@@ -102,7 +104,7 @@ prompt, and the synthesis picks up its `findings-<dim>.json` automatically.
 Published agents are the shop window — the prompt makes every lens double-check them and
 **bump any gap up one severity** (never 🟡; a default-path break is 🔴). Detect them by a
 `release_agent_<id>.yml`, a shipped `SCORECARD.md`, or a released `version:` in
-`gaia-agent.yaml` — currently the **email agent** and the **gaia flagship agent**. The bar: in-sync high-quality
+`gaia-agent.yaml` — currently the **gaia flagship agent**. The bar: in-sync high-quality
 README/SPEC.md/SKILL.md/CHANGELOG.md (+ any contract spec) with a **real** eval `SCORECARD.md`
 (gated by `gaia.eval.scorecard_gate`, never hand-authored) linked from the README; bulletproof
 runtime code (no stubs/silent-fallbacks); solid #1655-grade tests. When a new agent publishes,
@@ -120,12 +122,11 @@ finding under the dimension it **declares** — it never re-buckets.
 
 ## Only 🔴/🟠 get an issue — 🟡 lives in the job summary
 
-Only high/medium defects are filed (and thus get one-click `bug`→auto-fix promotion). 🟡
+Only high/medium defects are filed (and thus can reach auto-fix). 🟡
 (low) findings appear in the run's job-summary report and nowhere else — this caps tracker
 churn; the first deep run filed 19 issues, ~13 of them low-value coverage nits. Each
-finding carries an `auto_fixable` boolean, and the issue body says whether applying `bug`
-will let auto-fix land it (locatable/small) or whether it needs a human (a test suite, a
-refactor) — so maintainers don't promote something auto-fix can't handle.
+finding carries an `auto_fixable` boolean, and the issue body says whether it goes to
+auto-fix (locatable/small) or needs a human (a test suite, a refactor).
 
 ## Findings are filtered in SYNTHESIS, never in the lenses
 
@@ -254,12 +255,19 @@ re-add a security dimension here or route a security finding into a public issue
 
 ## Promotion: `bug` label → existing auto-fix job
 
-Filed issues are opened **without** any auto-fix trigger label. A maintainer promotes
-one to a PR by applying the **`bug`** label; the existing `auto-fix` job in
-`claude.yml` (gated on `label.name == 'bug'` **and** `contains(labels,'bug')`) then
-creates the branch + PR. There is **no PR-creation code in this workflow** — humans
-gate every code change. A `documentation`/`tests` label alone does NOT trigger auto-fix;
-route promotions through `bug` unless you deliberately widen the auto-fix `if`.
+Synthesis files issues **without** `bug`. A deterministic step after it,
+`scripts/audit/promote_autofix.py`, takes each new issue whose body says
+`**Auto-fixable:** yes`, adds **`bug`**, and dispatches the `auto-fix` job in `claude.yml`,
+which creates the branch + PR. **The dispatch is load-bearing:** the audits run on
+GITHUB_TOKEN, whose events start no workflows, so the label alone fires nothing. While
+promotion was a manual step, 0 of 367 audit issues reached auto-fix.
+
+Three limits are deliberate. **At most 5 issues a run**, 🔴 first, because a fix can take 100
+Opus turns from the pool whose weekly limit forced the rotation; the rest are named in the
+job summary, and adding `bug` by hand still starts auto-fix. **Only new issues**, never the
+backlog, so one run cannot start dozens of fixes. **No PR-creation code in the audits, and
+no merging:** a human still reviews every PR. A `documentation`/`tests` label alone does
+NOT trigger auto-fix; route promotions through `bug`.
 
 ## Cost & safety invariants
 

@@ -86,10 +86,29 @@ the cycle.
   someone else's agent id.
 - **Version immutability (per filename).** A published artifact is never
   overwritten: re-uploading the same `agents/<id>/<version>/<filename>` is
-  rejected with `409`, enforced by an object-level `head()` check. A version's
+  rejected with `409`. The record of "published" is the per-agent manifest, not
+  the R2 object, so a `409` means the catalog lists that artifact. A version's
   artifact set is **append-only per distinct filename** — see *Multi-platform
   releases* below. A `409` on an artifact that already matches is the idempotent
   re-run signal a release job treats as "already published".
+- **All-or-nothing publish.** The per-agent (or per-skill) manifest write is the
+  commit point; every object is stored before it. A publish that fails earlier
+  leaves objects no manifest lists, the catalog never shows them, and a retry
+  overwrites them and commits. A retry that hits `409` re-derives `index.json`,
+  so a publish that failed after its manifest committed still reaches the index.
+- **Race-safe catalog writes.** Manifests and `index.json` are written with an
+  R2 etag precondition (`onlyIf`). A writer that loses a race re-reads and
+  re-applies its change, up to 5 attempts, then fails with
+  `503 catalog_conflict`. This covers `POST /reindex` too, so running it during
+  a release can't drop the release's entry.
+- **Racing uploads of one filename fail loudly.** Two publishes of the same
+  filename write the same R2 key, so the loser's bytes can replace the winner's
+  after the winner committed. When the loser's checksum differs from the one
+  the catalog lists, it gets `409 concurrent_publish_conflict` instead of
+  `version_exists`, so a release job can't report it as already published.
+  A re-run stays red too: when the filename is already listed, the stored
+  object's R2 sha256 is compared with the listed one before `version_exists`,
+  and the release publisher checks the downloaded bytes against the catalog.
 - **Multi-platform releases.** A single `<id>@<version>` may hold more than one
   artifact — one per platform for a native binary (e.g. the frozen email agent
   ships four binaries under `email@0.1.0`). The first publish of a version

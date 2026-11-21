@@ -387,7 +387,8 @@ class BenchIndex:
         """RAGSDK.query end to end; returns text, the context chunk indices, latency.
 
         ``keep_history`` leaves RAGSDK's chat history in place; by default it is
-        cleared so one question's retrieved context cannot leak into the next.
+        cleared so each scored question starts from the same state. ``query``
+        itself neither reads nor writes that history.
         """
         self._cold()
         if not keep_history:

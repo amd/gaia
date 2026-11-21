@@ -387,6 +387,70 @@ def test_unreadable_partials_warn_instead_of_refusing(capsys, tmp_path, store):
     client.ensure_model_downloaded.assert_called_once()
 
 
+def _deny(monkeypatch, denied, method):
+    """Make *method* on Path raise EACCES for *denied*, as Linux does for a
+    store another user owns (#6856)."""
+    from pathlib import Path
+
+    real = getattr(Path, method)
+
+    def guarded(self, *args, **kwargs):
+        if self == denied:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, method, guarded)
+
+
+def test_a_store_this_user_cannot_read_has_unknown_sizes(monkeypatch, tmp_path, caplog):
+    _deny(monkeypatch, tmp_path, "is_dir")
+    found = bytes_already_on_disk(_client(), ["Qwen3.6-35B-A3B-GGUF"], str(tmp_path))
+    assert found == {"Qwen3.6-35B-A3B-GGUF": None}
+    assert "Cannot read Lemonade's model store" in caplog.text
+
+
+def test_a_model_folder_this_user_cannot_read_has_an_unknown_size(
+    monkeypatch, tmp_path, caplog
+):
+    snapshots = _interrupted_pull(tmp_path, done_gb=1.0, partial_gb=11.0).parent
+    _deny(monkeypatch, snapshots, "iterdir")
+    found = bytes_already_on_disk(
+        _client(), ["Qwen3.6-35B-A3B-GGUF", "Gemma-4-E4B-it-GGUF"], str(tmp_path)
+    )
+    assert found == {"Qwen3.6-35B-A3B-GGUF": None, "Gemma-4-E4B-it-GGUF": 0}
+    assert str(snapshots) in caplog.text
+
+
+def test_setup_lists_models_when_the_store_is_unreadable(monkeypatch, tmp_path):
+    from gaia.ui import setup_plan
+
+    _deny(monkeypatch, tmp_path, "is_dir")
+    catalog = setup_plan._catalog(
+        _client(),
+        "minimal",
+        "Qwen3.6-35B-A3B-GGUF",
+        ["Qwen3.6-35B-A3B-GGUF"],
+        None,
+        None,
+        str(tmp_path),
+        [],
+        [],
+    )
+    qwen = next(e for e in catalog if e["id"] == "Qwen3.6-35B-A3B-GGUF")
+    assert qwen["size_gb"] == 21.7 and qwen["partial"] is False
+
+
+def test_free_space_is_unknown_under_a_folder_this_user_cannot_read(
+    monkeypatch, tmp_path, caplog
+):
+    from gaia.installer import model_choice
+
+    locked = tmp_path / "lemonade"
+    _deny(monkeypatch, locked / "hub", "exists")
+    assert model_choice._free_gb_at(locked / "hub") is None
+    assert "Could not read free space" in caplog.text
+
+
 def test_registry_size_stands_in_when_the_catalog_has_none(capsys, tmp_path):
     client = _client(store=tmp_path)
     client.list_models.return_value = {
@@ -439,3 +503,31 @@ def test_the_lemonade_download_bar_marks_its_line_open(capsys):
     cmd.events.emit("done", ok=True)
     out = capsys.readouterr().out
     assert '\n{"event": "done", "ok": true}\n' in out
+
+
+def test_one_failed_model_does_not_abandon_the_rest(capsys):
+    """A download that raises marks that model failed; init still tries the rest."""
+    client = _client()
+    pull = client.ensure_model_downloaded.side_effect
+
+    def mixed(model_id, on_progress=None, **kwargs):
+        if model_id == MODELS[0]:
+            on_progress({"event": "error", "error": "No space left on device"})
+            raise LemonadeClientError(f"Failed to download model '{model_id}'")
+        if model_id == MODELS[1]:
+            raise LemonadeClientError(f"Download of '{model_id}' did not finish")
+        return pull(model_id, on_progress=on_progress, **kwargs)
+
+    client.ensure_model_downloaded.side_effect = mixed
+    cmd = InitCommand(profile="minimal", yes=True, progress_json=True)
+    assert not _download(cmd, client)
+    out = capsys.readouterr().out
+    events = _json_lines(out)
+
+    tried = [c.args[0] for c in client.ensure_model_downloaded.call_args_list]
+    assert tried == MODELS
+    errors = [e for e in events if e["event"] == "error"]
+    assert [e["model"] for e in errors] == MODELS[:2]
+    assert [e["model"] for e in events if e["event"] == "model_done"] == MODELS[2:]
+    assert events[-1] == {"event": "done", "ok": False}
+    assert "Error downloading models" not in out

@@ -12,21 +12,12 @@ mcp_servers.json instead), plus mcp-tavily, mcp-slack (#1002), and mcp-discord
 
   * KEPT_IDS — exactly these ids must remain in
     ``connectors.catalog.mcp_servers`` (the 3 carried over from the legacy
-    catalog, plus the net-new ids). For each carried-over id, field-by-field
-    equivalence against the legacy ``mcp.py:_CATALOG`` row of the same name is
-    asserted as a guard against silent drift during the migration.
-  * DELETED_IDS — these 18 ids must NOT be present. Regression guard against
+    catalog, plus the net-new ids).
+  * DELETED_IDS — these 16 ids must NOT be present. Regression guard against
     accidentally re-introducing untested catalog tiles.
-
-When ``src/gaia/ui/routers/mcp.py:_CATALOG`` is finally deleted (also part of
-this PR), the field-equivalence half of this test stops running (the legacy
-fixture is gone) but the kept-set/deleted-set membership half stays as the
-permanent regression guard.
 """
 
 from __future__ import annotations
-
-import pytest
 
 from gaia.connectors.registry import REGISTRY
 
@@ -45,6 +36,9 @@ KEPT_IDS = frozenset(
         # Added in #1003: pinned mcp-discord, covered by
         # test_discord_mcp_connector.py.
         "mcp-discord",
+        # Launch-checked by tests/integration/test_mcp_catalog_launch.py.
+        "mcp-notion",
+        "mcp-brave-search",
     }
 )
 
@@ -58,14 +52,12 @@ DELETED_IDS = frozenset(
         # Removed in #976: untested / redundant entries.
         "mcp-playwright",
         "mcp-desktop-commander",
-        "mcp-brave-search",
         "mcp-postgres",
         "mcp-context7",
         "mcp-gmail",
         "mcp-google-calendar",
         "mcp-outlook",
         "mcp-spotify",
-        "mcp-notion",
         "mcp-linear",
         "mcp-jira",
         "mcp-stripe",
@@ -82,20 +74,6 @@ def _mcp_specs():
     import gaia.connectors.catalog.mcp_servers  # noqa: F401
 
     return {s.id: s for s in REGISTRY.all() if s.type == "mcp_server"}
-
-
-def _legacy_catalog_by_name():
-    """
-    Legacy ``_CATALOG`` from ``src/gaia/ui/routers/mcp.py`` keyed by name.
-    Returns an empty dict once the legacy catalog is deleted from the source —
-    in that case the field-equivalence assertions are skipped (the kept-set /
-    deleted-set membership assertions still run).
-    """
-    try:
-        from gaia.ui.routers.mcp import _CATALOG  # type: ignore[attr-defined]
-    except ImportError:
-        return {}
-    return {entry["name"]: entry for entry in _CATALOG}
 
 
 def test_kept_ids_present_in_catalog():
@@ -133,48 +111,3 @@ def test_mcp_id_naming_convention():
             f"Connector id {spec_id!r} violates the mcp- prefix convention "
             "for type=mcp_server entries."
         )
-
-
-@pytest.mark.parametrize("spec_id", sorted(KEPT_IDS))
-def test_kept_spec_matches_legacy_fields(spec_id):
-    """
-    Field-by-field equivalence against legacy ``_CATALOG``.
-    Skips automatically once the legacy catalog is deleted (post-#976 migration
-    completes). This is a one-shot guard for the migration commit.
-    """
-    legacy_by_name = _legacy_catalog_by_name()
-    if not legacy_by_name:
-        pytest.skip("legacy _CATALOG already removed; field-equivalence step done")
-
-    legacy_name = spec_id[len("mcp-") :]  # "mcp-github" → "github"
-    legacy = legacy_by_name.get(legacy_name)
-    assert legacy is not None, (
-        f"Kept id {spec_id!r} has no legacy counterpart with name={legacy_name!r}; "
-        "either the kept set is wrong or the legacy catalog drifted."
-    )
-
-    spec = _mcp_specs()[spec_id]
-
-    assert spec.display_name == legacy["display_name"], (
-        f"display_name drift for {spec_id}: "
-        f"new={spec.display_name!r} legacy={legacy['display_name']!r}"
-    )
-    assert spec.mcp_command == legacy["command"], (
-        f"command drift for {spec_id}: "
-        f"new={spec.mcp_command!r} legacy={legacy['command']!r}"
-    )
-    assert tuple(spec.mcp_args) == tuple(legacy["args"]), (
-        f"args drift for {spec_id}: "
-        f"new={tuple(spec.mcp_args)!r} legacy={tuple(legacy['args'])!r}"
-    )
-    assert set(spec.mcp_env_keys) == set(legacy["env"].keys()), (
-        f"env keys drift for {spec_id}: "
-        f"new={set(spec.mcp_env_keys)} legacy={set(legacy['env'].keys())}"
-    )
-
-    expected_config_keys = set(legacy.get("requires_config") or [])
-    actual_config_keys = {field.key for field in spec.config_schema}
-    assert actual_config_keys == expected_config_keys, (
-        f"config_schema key set drift for {spec_id}: "
-        f"new={actual_config_keys} legacy={expected_config_keys}"
-    )

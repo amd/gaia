@@ -275,6 +275,8 @@ def test_handler_scope_is_unchanged(handler):
         "contents": "read",
         "issues": "write",
         "pull-requests": "write",
+        # Read-only: CI run logs an issue cites, public on this repo anyway.
+        "actions": "read",
     }
     assert handler["with"]["allowed_non_write_users"] == "*"
 

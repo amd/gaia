@@ -3,8 +3,8 @@
 """Thin-client driver: run an agent's ``/query`` loop through the daemon relay
 and render the canonical SSE event stream to the console (V2-8, #2152).
 
-This is the CLI's data plane. ``gaia email "<q>"`` (and, later, ``gaia api`` /
-other front-doors) ensure the daemon + sidecar, then stream
+This is the CLI's data plane. ``gaia chat``, ``gaia -p`` and other front-doors
+ensure the daemon + sidecar, then stream
 ``POST /v1/<agent>/query`` through the daemon relay (``ANY /v1/<agent>/*``,
 #2150), presenting ONLY the daemon client token — the sidecar's port and bearer
 never leave the daemon. The seven canonical event types (spec #2015/#2016) —
@@ -44,7 +44,7 @@ logger = get_logger(__name__)
 TERMINAL_TYPES = frozenset({"final", "error"})
 
 #: Connect fast (a dead daemon should fail quickly); read generously — a single
-#: upstream chunk spans a whole agent-loop step (matches the relay's READ_TIMEOUT).
+#: upstream chunk spans a whole agent-loop step (matches the relay's read timeout).
 _CONNECT_TIMEOUT = 10.0
 # Historical floor retained for callers that inspect this module; run_query()
 # resolves the effective value at request time with agent_read_timeout().
@@ -62,13 +62,19 @@ class QueryOutcome:
     final_answer: Optional[str] = None
     error_detail: Optional[str] = None
     trace_path: Optional[str] = None  # set when run_query(trace=True)
+    # The final answer reports a failed run (the model call failed), not an answer.
+    failed: bool = False
+    # The final's ``usage`` (steps, tools_used, tokens, input/cached tokens).
+    usage: Optional[Dict[str, Any]] = None
+    # The turn's model messages; the agent sends them only when ``turns`` was sent.
+    model_messages: Optional[List[Dict[str, Any]]] = None
 
 
 class ConsoleRenderer:
     """Render canonical SSE events to the console.
 
     The agent's answer (streamed ``token`` deltas and the terminal ``final``)
-    goes to **stdout** so ``gaia email -q`` stays pipe-friendly — its stdout is
+    goes to **stdout** so ``gaia -p`` stays pipe-friendly — its stdout is
     the answer, matching the retired in-process path. Progress (``status`` /
     ``tool_call`` / ``tool_result`` / ``needs_confirmation``) and errors go to
     **stderr** so they never pollute a captured answer. ``--verbose`` widens the
@@ -83,6 +89,9 @@ class ConsoleRenderer:
         # ``final`` does not reprint the full answer on top of the live tokens.
         self._answer_streamed = False
         self.final_answer: Optional[str] = None
+        self.final_failed = False
+        self.final_usage: Optional[Dict[str, Any]] = None
+        self.final_model_messages: Optional[List[Dict[str, Any]]] = None
         self.error_detail: Optional[str] = None
 
     # -- dispatch ----------------------------------------------------------
@@ -136,6 +145,9 @@ class ConsoleRenderer:
     def _on_final(self, event: Dict[str, Any]) -> None:
         answer = str(event.get("answer", "") or "")
         self.final_answer = answer
+        self.final_failed = bool(event.get("failed"))
+        self.final_usage = event.get("usage")
+        self.final_model_messages = event.get("model_messages")
         if self._answer_streamed:
             # Tokens already printed the answer live — just end the line cleanly.
             if answer:
@@ -327,6 +339,9 @@ def run_query(
     renderer: Optional[ConsoleRenderer] = None,
     verbose: bool = False,
     trace: bool = False,
+    working_directory: Optional[str] = None,
+    allowed_paths: Optional[List[str]] = None,
+    turns: Optional[List[List[Dict[str, Any]]]] = None,
 ) -> QueryOutcome:
     """Ensure the daemon + *agent_id* sidecar, stream ``POST /v1/<agent>/query``
     through the relay, and render the canonical SSE events.
@@ -344,6 +359,12 @@ def run_query(
     as ``QueryOutcome.trace_path``) — the relay-path equivalent of the in-process
     agent's ``--trace``, which has no agent object here to introspect. A run cut
     short by Ctrl-C or a dead sidecar still writes what it saw.
+
+    ``working_directory`` and ``allowed_paths`` give the agent the caller's
+    folder, as an in-process agent run from it would have; omitted, likewise.
+
+    ``turns`` is the earlier turns as the model saw them; sent, even as ``[]``,
+    it makes the ``final`` carry this turn's ``model_messages``. Omitted, likewise.
 
     The CLI presents ONLY the daemon client token; it never learns the sidecar's
     port or bearer. Returns a :class:`QueryOutcome` whose ``exit_code`` is 0 on a
@@ -370,6 +391,12 @@ def run_query(
         payload["max_steps"] = max_steps
     if session_id:
         payload["session_id"] = session_id
+    if working_directory:
+        payload["working_directory"] = working_directory
+    if allowed_paths:
+        payload["allowed_paths"] = list(allowed_paths)
+    if turns is not None:
+        payload["turns"] = list(turns)
 
     url = f"{inst.base_url}/v1/{agent_id}/query"
     headers = {
@@ -401,7 +428,7 @@ def run_query(
             if response.status_code != 200:
                 raise DaemonError(
                     f"the daemon relay refused the '{agent_id}' query "
-                    f"(HTTP {response.status_code}): {client._error_detail(response)} "
+                    f"(HTTP {response.status_code}): {client.error_detail(response)} "
                     f"Check `gaia daemon status` and the daemon log at "
                     f"{paths.log_path()}."
                 )
@@ -442,12 +469,16 @@ def run_query(
             trace_path=_trace(terminal_type=None),
         )
 
+    failed = terminal_type == "final" and renderer.final_failed
     return QueryOutcome(
-        exit_code=0 if terminal_type == "final" else 1,
+        exit_code=0 if terminal_type == "final" and not failed else 1,
         terminal_type=terminal_type,
+        failed=failed,
         final_answer=renderer.final_answer,
         error_detail=renderer.error_detail,
         trace_path=_trace(terminal_type=terminal_type),
+        usage=renderer.final_usage,
+        model_messages=renderer.final_model_messages,
     )
 
 

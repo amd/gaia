@@ -6,7 +6,19 @@ import json
 import logging
 import re
 import time
-from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Tuple, Union
+from pathlib import Path
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from gaia.llm.local_only import CloudDisabledError
 from gaia.utils import perf_trace
@@ -17,20 +29,36 @@ from ..lemonade_client import (
     CONTEXT_OVERFLOW_PHRASES,
     CONVERSATION_SLOT,
     DEFAULT_MODEL_NAME,
+    FULL_TOOLS_SLOT,
     KV_CACHE_SHARED_PHRASES,
+    OUTPUT_CORRUPTED_MESSAGE,
+    CloudContextOverflowError,
     CloudModelUnavailableError,
+    CloudProviderDisconnectedError,
+    GaiaLemonadeStartError,
     LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
+    LemonadeServerDownError,
+    ModelOutputCorruptedError,
     active_profile_ctx_size,
+    cloud_model_provider,
     is_tool_calling_model,
+    lemonade_log_hint,
     local_sampling_defaults,
     requested_thinking,
     resolve_ctx_size,
     runs_on_npu,
 )
 from ..lemonade_launcher import describe_client_hint
-from ..surface_hints import TUI_MODEL_SWITCH_HINT, TUI_PROVIDER_AUTH_HINT
+from ..retry import StreamStalledError
+from ..surface_hints import (
+    APP_WEDGED_SERVER_HINT,
+    TUI_MODEL_SWITCH_HINT,
+    TUI_PROVIDER_AUTH_HINT,
+    TUI_PROVIDER_SETTINGS,
+    TUI_SETUP_HINT,
+)
 
 if TYPE_CHECKING:
     from gaia.audio.lemonade_asr import Transcript
@@ -73,9 +101,16 @@ READ_TIMEOUT_RE = re.compile(r"read timed out|readtimeouterror", re.IGNORECASE)
 
 
 def _reasoning_tokens(usage: dict) -> Optional[int]:
-    """Reasoning tokens from an OpenAI-shape ``usage``, when reported."""
-    for key in ("completion_tokens_details", "output_tokens_details"):
-        details = usage.get(key)
+    """Reasoning tokens from an OpenAI-shape ``usage``, when reported.
+
+    Nested under ``*_details`` (OpenAI, Fireworks), or top-level as the AMD
+    gateway streams it for DeepSeek.
+    """
+    for details in (
+        usage.get("completion_tokens_details"),
+        usage.get("output_tokens_details"),
+        usage,
+    ):
         if isinstance(details, dict):
             value = details.get("reasoning_tokens")
             if isinstance(value, int) and not isinstance(value, bool):
@@ -83,10 +118,25 @@ def _reasoning_tokens(usage: dict) -> Optional[int]:
     return None
 
 
+_THINK_TAG_RE = re.compile(r"<(/?)think>", re.IGNORECASE)
+
+
+def _defang_think_tags(text: str) -> str:
+    """*text* with ``<think>`` / ``</think>`` broken up.
+
+    Streamed reasoning is wrapped in those tags for the agent to split off. A
+    tag inside the reasoning itself would end the block early and leak the rest
+    (a tool-call-shaped line included) into the parsed answer.
+    """
+    return _THINK_TAG_RE.sub(r"< \1think>", text)
+
+
 #: Seconds between progress reports while a tool call's arguments stream in.
 TOOL_CALL_PROGRESS_INTERVAL_S = 3.0
 #: Argument characters before a tool call is long enough to report on.
 TOOL_CALL_PROGRESS_MIN_CHARS = 1500
+#: Seconds between live drafts of a tool call's arguments.
+TOOL_CALL_DRAFT_INTERVAL_S = 0.25
 #: Seconds between word counts while the model reasons.
 REASONING_PROGRESS_INTERVAL_S = 1.0
 
@@ -236,6 +286,125 @@ class LemonadeNetworkError(LemonadeError):
     )
 
 
+class LemonadeModelUnavailableError(LemonadeError):
+    """The chat model can't run on this PC until something on the PC changes.
+
+    Sending the message again fails the same way, so the message says what
+    to fix rather than to try again.
+    """
+
+    retryable = False
+
+
+class LemonadeServerUnreachableError(LemonadeNetworkError):
+    """Nothing accepts a connection at the Lemonade address.
+
+    Unlike its parent, which also covers a dropped request to a running
+    server, this is the server being down: a resend fails the same way until
+    it is started, and a cloud model behind it was never reached.
+    """
+
+    retryable = False
+    user_message = (
+        "The local model server isn't answering. Start the model server, then "
+        "send the message again."
+    )
+
+    def __init__(
+        self,
+        user_message: Optional[str] = None,
+        endpoint: Optional[str] = None,
+    ):
+        self.endpoint = endpoint
+        super().__init__(user_message=user_message)
+
+
+class LemonadeEngineStartError(LemonadeError):
+    """GAIA's own model server is down and the daemon could not start it.
+
+    Not :class:`LemonadeNetworkError`: the daemon's reason often quotes
+    refused connections, but resending repeats the same failed start.
+    """
+
+    retryable = False
+    headline = "GAIA's AI engine couldn't start"
+
+    def __init__(
+        self,
+        reason: Optional[str] = None,
+        log_file: Optional[Path] = None,
+        payload: Optional[dict] = None,
+    ):
+        if log_file is None:
+            from gaia.daemon.paths import log_path
+
+            log_file = log_path()
+        self.reason = (reason or "").strip().rstrip(".") or None
+        self.log_file = log_file
+        #: What to do; :data:`TUI_SETUP_HINT` stays verbatim for ``surface_wording``.
+        self.advice = (
+            "Sending the message again won't help until it is repaired. "
+            f"{TUI_SETUP_HINT} Details are in the daemon log at {log_file}"
+        )
+        detail = f": {self.reason}" if self.reason else ""
+        super().__init__(
+            user_message=f"{self.headline}{detail}. {self.advice}", payload=payload
+        )
+
+
+#: :class:`~gaia.llm.lemonade_client.GaiaLemonadeStartError`'s wording, once a
+#: wrapper flattened it. Other daemon failures share only its first clause.
+_ENGINE_START_RE = re.compile(
+    r"could not start gaia's lemonade server: "
+    r"the daemon could not start lemonade server: (?P<reason>.+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+#: How a failed turn names this cause to a front-end, which offers the fix.
+MODEL_SERVER_DOWN = "model_server_down"
+
+#: How these messages name the local server.
+_LOCAL_SERVER_RE = re.compile(r"\bthe local (?:LLM|model)(?: server)?\b", re.IGNORECASE)
+
+
+def wording_for_model(message: str, model_id: Optional[str]) -> str:
+    """*message* as a chat on *model_id* should read it.
+
+    A cloud chat still goes through a Lemonade on this side, so a failure
+    there is real, but "the local LLM" would tell the user their model runs
+    here. The server is named as GAIA's only when GAIA runs it.
+    """
+    if not message or cloud_model_provider(model_id) is None:
+        return message
+    if not _user_chose_the_server():
+        return _LOCAL_SERVER_RE.sub("GAIA's AI engine", message)
+    return _LOCAL_SERVER_RE.sub(
+        lambda m: (
+            "Your model server" if m.group()[0].isupper() else "your model server"
+        ),
+        message,
+    )
+
+
+def _user_chose_the_server() -> bool:
+    """True when the model server is the user's own, not one GAIA runs."""
+    from ..lemonade_choice import LemonadeChoiceError
+    from ..lemonade_client import configured_lemonade_url
+
+    try:
+        return configured_lemonade_url() is not None
+    except LemonadeChoiceError:
+        # "Use the one I have" saved without an address: still not GAIA's.
+        return True
+
+
+#: The wording of :class:`LemonadeServerDownError`, once a wrapper flattened it.
+_SERVER_DOWN_RE = re.compile(
+    r"the (?:local )?model server(?: at (\S+))? isn't answering[^\n]*",
+    re.IGNORECASE,
+)
+
+
 class LemonadeUpstreamTimeoutError(LemonadeError):
     """Lemonade Server is reachable but its upstream model call timed out.
 
@@ -266,13 +435,8 @@ class LemonadeUpstreamTimeoutError(LemonadeError):
         "  • Wait 30s and resend the same query — KV cache will be primed.\n"
         # Never name a launch command here: `lemonade-server serve` was dropped
         # in 10.7 and the surviving forms differ per machine (CLAUDE.md).
-        # `gaia kill` rather than `gaia daemon restart`: the daemon reaps only a
-        # server it started itself, so a restart is a no-op against a wedged one
-        # the user launched from the tray. Clearing the port works either way,
-        # and GAIA starts a fresh supervised server on the next request.
-        "  • Clear the wedged server:  gaia kill  (GAIA restarts it on the next query)\n"
-        "  • Reduce retrieved RAG chunks:  gaia chat --max-chunks 2 ...\n"
-        "  • Close other GPU/NPU-heavy apps competing for the device."
+        "  • Close other GPU/NPU-heavy apps competing for the device.\n"
+        f"  • {APP_WEDGED_SERVER_HINT}"
     )
 
 
@@ -291,6 +455,31 @@ class LemonadeStreamCutOffError(LemonadeError):
     )
 
 
+class LemonadeReplyStalledError(LemonadeStreamCutOffError):
+    """A streamed reply went quiet partway through: a fragment, like any cut-off."""
+
+
+def _stalls_as_cut_offs(stream):
+    """Yield *stream*, turning a stall after the reply began into a cut-off."""
+    try:
+        yield from stream
+    except LemonadeClientError as e:
+        stall = e.__cause__
+        if isinstance(stall, StreamStalledError) and not stall.before_output:
+            raise LemonadeReplyStalledError(str(e)) from e
+        raise
+
+
+class LemonadeOutputCorruptedError(LemonadeError):
+    """The reply turned into noise and was stopped before it was shown.
+
+    Not retried automatically: the client unloaded the model, and the user
+    decides whether to send the message again.
+    """
+
+    user_message = OUTPUT_CORRUPTED_MESSAGE
+
+
 class LemonadeModelNotFoundError(LemonadeError):
     """The requested model is not installed on this Lemonade Server (HTTP 404).
 
@@ -303,7 +492,7 @@ class LemonadeModelNotFoundError(LemonadeError):
     retryable = False
     user_message = (
         "The model this agent needs isn't installed on the local LLM server. "
-        "Run `gaia init` to set up a profile, then try again."
+        f"{TUI_SETUP_HINT}"
     )
 
     def __init__(
@@ -317,8 +506,36 @@ class LemonadeModelNotFoundError(LemonadeError):
             pull = describe_client_hint("pull", model_id).instruction.rstrip(".")
             message = (
                 f"The model this agent needs (`{model_id}`) isn't installed on "
-                f"the local LLM server. {pull}. Or run `gaia init` "
-                "to set up a profile, then try again."
+                f"the local LLM server. {pull}. Or: {TUI_SETUP_HINT}"
+            )
+        super().__init__(user_message=message, payload=payload)
+
+
+class LemonadeUnknownModelError(LemonadeError):
+    """The model server lists no model by this name, so there is nothing to download.
+
+    A typed or stale model id: a download never starts, so neither a resend nor
+    setup helps. The fix is another model.
+    """
+
+    retryable = False
+    user_message = (
+        "The model server doesn't list this model, so it can't be downloaded. "
+        f"{TUI_MODEL_SWITCH_HINT}"
+    )
+
+    def __init__(
+        self,
+        model_id: Optional[str] = None,
+        payload: Optional[dict] = None,
+    ):
+        self.model_id = model_id
+        message = None
+        if model_id:
+            message = (
+                f"There is no model called `{model_id}` to download: the model "
+                "server doesn't list it. Check the name for a typo. "
+                f"{TUI_MODEL_SWITCH_HINT}"
             )
         super().__init__(user_message=message, payload=payload)
 
@@ -364,6 +581,19 @@ class LemonadeCloudModelUnavailableError(LemonadeError):
         )
 
 
+class LemonadeCloudDisconnectedError(LemonadeError):
+    """GAIA's model server restarted, lost the cloud provider, and GAIA could
+    not reconnect it. The message names the fix; a resend fails the same way."""
+
+    retryable = False
+    user_message = (
+        "GAIA's AI engine lost its cloud provider connection (it may have "
+        "restarted). "
+        f"Reconnect the provider {TUI_PROVIDER_SETTINGS}, then send your message "
+        "again."
+    )
+
+
 class LemonadeAuthRejectedError(LemonadeError):
     """The key was rejected (HTTP 401/403) by the cloud provider or Lemonade.
 
@@ -383,6 +613,278 @@ class LemonadeLocalOnlyError(LemonadeError):
     user_message = "Local only is on, so GAIA won't use a cloud AI model."
 
 
+#: Lemonade error codes meaning the model could not be loaded (Lemonade's API
+#: docs, "Errors" tables). The cause persists, so a resend fails the same way.
+MODEL_LOAD_ERROR_CODES = frozenset(
+    {
+        "model_load_error",
+        "model_load_refused",
+        "model_not_supported",
+        "slots_pinned_error",
+        "router_residency_conflict",
+    }
+)
+
+_URL_RE = re.compile(r"https?://[^\s'\"<>()\[\]]+")
+# Lemonade appends its NPU driver page to every FLM validation failure; for a
+# memlock failure the driver is fine and the fix is GAIA's locked-memory step.
+_MEMLOCK_RE = re.compile(r"\bmemlock\b", re.IGNORECASE)
+NPU_MEMLOCK_GUIDE_URL = "https://amd-gaia.ai/docs/guides/npu#the-locked-memory-limit"
+_LOAD_PREFIX_RE = re.compile(
+    r"^failed to load(?: model)? ['\"`]?([^'\"`:\s]+)['\"`]?(?: on \S+)?\s*:\s*",
+    re.IGNORECASE,
+)
+_QUOTED_MODEL_RE = re.compile(r"\bmodel ['\"`]([^'\"`]+)['\"`]", re.IGNORECASE)
+_WRAPPER_MODEL_RE = re.compile(
+    r"failed to load(?: model)? ['\"`]?([^'\"`:\s]+)['\"`]?", re.IGNORECASE
+)
+_UNKNOWN_MODEL_RE = re.compile(
+    r"model name must include the [`'\"]?user[`'\"]? namespace", re.IGNORECASE
+)
+_ERROR_ENVELOPE_RE = re.compile(r"\{\s*['\"]error['\"]\s*:")
+_HTTP_STATUS_RE = re.compile(r"(?:status|error code:?)\s*\(?(\d{3})\b", re.IGNORECASE)
+
+
+def _plain_reason(message: str, limit: int = 240) -> Tuple[Optional[str], List[str]]:
+    """Lemonade's error message as one plain sentence, plus the links in it.
+
+    Keeps the first line only (what follows is a trace or a log dump), moves
+    links out of the sentence, and folds inner sentence breaks so the agent's
+    cause/advice split keeps the reason in one piece.
+    """
+    urls = [u.rstrip(".,;:") for u in _URL_RE.findall(message or "")]
+    first = next((ln.strip() for ln in (message or "").splitlines() if ln.strip()), "")
+    reason = _URL_RE.sub("", first)
+    reason = re.sub(r"\.\s+(?=[A-Z])", "; ", reason)
+    reason = re.sub(r"\s+", " ", reason).strip(" .;:-")
+    if len(reason) > limit:
+        reason = reason[: limit - 1].rstrip() + "…"
+    return reason or None, urls
+
+
+class LemonadeModelLoadError(LemonadeError):
+    """Lemonade has the model but could not load it (``model_load_error`` and kin).
+
+    The NPU driver, memory or the model itself is at fault, so sending the
+    message again fails the same way — except a backend that crashed at start,
+    which is intermittent. Lemonade's own reason is carried.
+    """
+
+    retryable = False
+    user_message = f"The model couldn't load. {TUI_MODEL_SWITCH_HINT}"
+
+    def __init__(
+        self,
+        model_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        help_url: Optional[str] = None,
+        log_hint: Optional[str] = None,
+        payload: Optional[dict] = None,
+        crashed_at_start: bool = False,
+        fix_hint: Optional[str] = None,
+    ):
+        self.model_id = model_id
+        self.reason = reason
+        self.help_url = help_url
+        # The backend process crashing at start is intermittent on some iGPUs.
+        self.retryable = crashed_at_start
+        name = f"The model `{model_id}`" if model_id else "The model"
+        parts = [
+            (
+                f"{name} couldn't load: {reason}."
+                if reason
+                else f"{name} couldn't load, and Lemonade gave no reason."
+            ),
+            (
+                "Its backend sometimes fails to start; send the message again."
+                if crashed_at_start
+                else "Sending the message again will fail the same way until "
+                "that is fixed."
+            ),
+        ]
+        if fix_hint:
+            parts.append(fix_hint)
+        elif help_url:
+            parts.append(f"Lemonade's help for this error: {help_url}.")
+        parts.append(TUI_MODEL_SWITCH_HINT)
+        if log_hint:
+            parts.append(log_hint)
+        super().__init__(user_message=" ".join(parts), payload=payload)
+
+
+class LemonadeServerError(LemonadeError):
+    """Lemonade answered with an HTTP 5xx that names no lasting cause.
+
+    The server is reachable, so this is never "couldn't reach the local LLM";
+    nothing says the cause persists, so sending it again may work.
+    """
+
+    retryable = True
+    user_message = (
+        "The local LLM server answered with an error. Send the message again."
+    )
+
+    def __init__(
+        self,
+        status: Optional[int] = None,
+        detail: Optional[str] = None,
+        log_hint: Optional[str] = None,
+        payload: Optional[dict] = None,
+    ):
+        self.status = status
+        code = f" (HTTP {status})" if status else ""
+        said = f": {detail}" if detail else ""
+        message = (
+            f"The local LLM server answered with an error{code}{said}. "
+            "Send the message again."
+        )
+        if log_hint:
+            message = f"{message} {log_hint}"
+        super().__init__(user_message=message, payload=payload)
+
+
+def _balanced_braces(text: str, start: int) -> Optional[str]:
+    """The ``{...}`` starting at *start*, honouring quoted strings."""
+    depth = 0
+    quote = None
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def _embedded_error(text: str) -> Optional[dict]:
+    """The ``error`` object of a Lemonade envelope quoted inside *text*.
+
+    ``requests`` paths quote the body as JSON; the OpenAI SDK quotes it as a
+    Python dict repr (``Error code: 500 - {'error': {...}}``).
+    """
+    import ast
+
+    for match in _ERROR_ENVELOPE_RE.finditer(text):
+        start = match.start()
+        try:
+            payload, _end = json.JSONDecoder().raw_decode(text, start)
+        except ValueError:
+            chunk = _balanced_braces(text, start)
+            if chunk is None:
+                continue
+            try:
+                payload = ast.literal_eval(chunk)
+            except (ValueError, SyntaxError, MemoryError, RecursionError):
+                continue
+        if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+            return payload["error"]
+    return None
+
+
+def lemonade_error_envelope(
+    exc: BaseException,
+) -> Optional[Tuple[Optional[int], dict]]:
+    """``(http_status, error_object)`` of the Lemonade error behind *exc*.
+
+    Reads the OpenAI SDK's parsed ``body`` when the cause chain has one, else
+    the envelope quoted in an exception's text. None when there is none.
+    """
+    cur: Optional[BaseException] = exc
+    seen: set = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        body = getattr(cur, "body", None)
+        if isinstance(body, dict):
+            err = body.get("error", body)
+            # Newer SDKs hand over the bare error object, sometimes with only a message.
+            if isinstance(err, dict) and (
+                err.get("code") or err.get("type") or err.get("message")
+            ):
+                status = getattr(cur, "status_code", None)
+                return (status if isinstance(status, int) else None), err
+        text = str(cur)
+        err = _embedded_error(text)
+        if err is not None:
+            status_match = _HTTP_STATUS_RE.search(text)
+            return (int(status_match.group(1)) if status_match else None), err
+        cur = cur.__cause__ or cur.__context__
+    return None
+
+
+def _envelope_codes(err: dict) -> List[Tuple[str, dict]]:
+    """``(code_or_type, owning_object)`` pairs of an envelope and its nested error."""
+    found = []
+    details = err.get("details")
+    response = details.get("response") if isinstance(details, dict) else None
+    nested = response.get("error") if isinstance(response, dict) else None
+    for obj in (err, nested):
+        if not isinstance(obj, dict):
+            continue
+        for key in ("code", "type"):
+            value = obj.get(key)
+            if isinstance(value, str) and value:
+                found.append((value.lower(), obj))
+    return found
+
+
+def _model_load_error(
+    err: dict,
+    context: str = "",
+    model: Optional[str] = None,
+    payload: Optional[dict] = None,
+) -> Optional[LemonadeModelLoadError]:
+    """A :class:`LemonadeModelLoadError` when *err* is one of Lemonade's load codes."""
+    owner = next(
+        (obj for code, obj in _envelope_codes(err) if code in MODEL_LOAD_ERROR_CODES),
+        None,
+    )
+    if owner is None:
+        return None
+    message = str(owner.get("message") or err.get("message") or "")
+    first = next((ln.strip() for ln in message.splitlines() if ln.strip()), "")
+    named = _LOAD_PREFIX_RE.match(first)
+    if named:
+        model = model or named.group(1)
+        message = message.replace(first, first[named.end() :], 1)
+    else:
+        quoted = _QUOTED_MODEL_RE.search(first)
+        if quoted:
+            model = model or quoted.group(1)
+    if not model:
+        wrapper = _WRAPPER_MODEL_RE.search(context)
+        model = wrapper.group(1) if wrapper else None
+    reason, urls = _plain_reason(message)
+    memlock = bool(_MEMLOCK_RE.search(message))
+    return LemonadeModelLoadError(
+        model_id=model,
+        reason=reason,
+        help_url=None if memlock else (urls[0] if urls else None),
+        fix_hint=(
+            "The NPU needs a higher locked-memory limit; GAIA's NPU guide shows "
+            f"how to raise it: {NPU_MEMLOCK_GUIDE_URL}."
+            if memlock
+            else None
+        ),
+        log_hint=lemonade_log_hint(),
+        payload=payload,
+        crashed_at_start=bool(
+            re.search(r"llama[-_]server failed to start", message, re.IGNORECASE)
+        ),
+    )
+
+
 def _classify_lemonade_response(
     response: dict, model: Optional[str] = None
 ) -> Tuple[Optional[LemonadeError], bool]:
@@ -397,6 +899,10 @@ def _classify_lemonade_response(
     err = response.get("error")
     if not isinstance(err, dict):
         return None, False
+
+    load_error = _model_load_error(err, model=model, payload=response)
+    if load_error is not None:
+        return load_error, True
 
     # Lemonade may nest the upstream llama-server error inside
     # ``details.response.error`` for ``backend_error`` envelopes.
@@ -431,8 +937,7 @@ def _classify_lemonade_response(
         # profile's window, not a flat 64K: on NPU a correct load is 32K,
         # so a flat GPU threshold makes every real overflow look
         # retryable (#2884). NOTE (#1892): a client running under an
-        # exact ctx pin (LemonadeClient.ctx_size_override, e.g. the email
-        # eval's 16K envelope — see gaia_agent_email.context_budget)
+        # exact ctx pin (LemonadeClient.ctx_size_override)
         # legitimately sits below this threshold; the retryable hint is
         # wrong there, but the pinned eval path never consumes it.
         n_ctx_reported = 0
@@ -503,10 +1008,21 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         seen.add(id(cur))
         if isinstance(cur, LemonadeError):
             return cur
+        if isinstance(cur, GaiaLemonadeStartError):
+            return LemonadeEngineStartError(cur.reason, cur.log_file)
+        if isinstance(cur, LemonadeServerDownError):
+            return LemonadeServerUnreachableError(str(cur), cur.endpoint)
         if isinstance(cur, LemonadeAuthError):
             return LemonadeAuthRejectedError(user_message=str(cur))
+        if isinstance(cur, ModelOutputCorruptedError):
+            return LemonadeOutputCorruptedError()
+        if isinstance(cur, CloudProviderDisconnectedError):
+            return LemonadeCloudDisconnectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
             return LemonadeCloudModelUnavailableError(cur.model_id, cur.provider)
+        if isinstance(cur, CloudContextOverflowError):
+            # A hosted model has no wrong-size load to fix: never reloadable.
+            return LemonadeContextOverflowError()
         if isinstance(cur, CloudDisabledError):
             return LemonadeLocalOnlyError(user_message=str(cur))
         chain_text.append(str(cur))
@@ -541,6 +1057,24 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     )
     if rejected:
         return LemonadeAuthRejectedError(user_message=rejected.group(0).strip())
+    # Lemonade's refusal to pull a name outside its catalog, enveloped or not.
+    if _UNKNOWN_MODEL_RE.search(raw):
+        m = re.search(r"Received:\s*([^\s'\"`]+)", raw) or _QUOTED_MODEL_RE.search(raw)
+        return LemonadeUnknownModelError(model_id=m.group(1) if m else None)
+    # Lemonade's own error code beats any wording or status below.
+    envelope = lemonade_error_envelope(exc)
+    if envelope is not None:
+        load_error = _model_load_error(envelope[1], context=raw)
+        if load_error is not None:
+            return load_error
+    engine_start = _ENGINE_START_RE.search(raw)
+    if engine_start:
+        return LemonadeEngineStartError(engine_start.group("reason"))
+    down = _SERVER_DOWN_RE.search(raw)
+    if down:
+        return LemonadeServerUnreachableError(down.group(0).strip(), down.group(1))
+    if OUTPUT_CORRUPTED_MESSAGE.lower() in text:
+        return LemonadeOutputCorruptedError()
     if "no model loaded" in text or "model_not_loaded" in text:
         return LemonadeModelNotLoadedError()
     # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the
@@ -578,25 +1112,32 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     is_unreachable = bool(CONNECTION_FAILURE_RE.search(text)) and not (
         READ_TIMEOUT_RE.search(text)
     )
-    # Lemonade HTTP 5xx — typical when llama-server is mid-swap between models
-    # or hit an internal recovery state. Treat them as the network-flavour
-    # transient so the chat layer's reload-and-retry path gets a chance.
-    is_backend_5xx = bool(
-        re.search(r"failed with status 5\d\d", text)
-        or "internal server error" in text
-        or "service unavailable" in text
-        or "bad gateway" in text
-        or "gateway timeout" in text
-    )
     if is_timeout and not is_unreachable:
         return LemonadeUpstreamTimeoutError()
-    if (
-        "network_error" in text
-        or "curl error" in text
-        or is_unreachable
-        or is_backend_5xx
-    ):
+    if "network_error" in text or "curl error" in text or is_unreachable:
         return LemonadeNetworkError()
+    # An HTTP 5xx means the server answered, so it is never "couldn't reach".
+    status = envelope[0] if envelope is not None else None
+    if status is None:
+        status_match = re.search(
+            r"(?:failed with status|\(status|error code:?)\s*(5\d\d)\b", text
+        )
+        status = int(status_match.group(1)) if status_match else None
+    if (status is not None and 500 <= status < 600) or any(
+        phrase in text
+        for phrase in (
+            "internal server error",
+            "service unavailable",
+            "bad gateway",
+            "gateway timeout",
+        )
+    ):
+        detail = None
+        if envelope is not None:
+            detail, _urls = _plain_reason(str(envelope[1].get("message") or ""), 200)
+        return LemonadeServerError(
+            status=status, detail=detail, log_hint=lemonade_log_hint()
+        )
     return None
 
 
@@ -609,6 +1150,10 @@ class LemonadeProvider(LLMClient):
     #: Called as (tool_name, argument_chars) while a long tool call streams:
     #: its arguments arrive as silent deltas, minutes of nothing to show.
     tool_call_progress: Optional[Callable[[str, int], None]] = None
+
+    #: Called as (tool_name, arguments_so_far) while a tool call streams, so a
+    #: client can show what is being written before the call is complete.
+    tool_call_draft: Optional[Callable[[str, str], None]] = None
 
     #: Called with the reasoning word count so far while a thinking model
     #: reasons. Its text is held back a line at a time, so a one-paragraph
@@ -623,8 +1168,11 @@ class LemonadeProvider(LLMClient):
         port: Optional[int] = None,
         system_prompt: Optional[str] = None,
         api_key: Optional[str] = None,
+        model_metadata: Optional[Iterable[Dict[str, Any]]] = None,
         **kwargs,
     ):
+        """*model_metadata*: ``/models`` entries the caller already read, so
+        ``cloud_model_provider`` knows them without another catalog request."""
         # Build kwargs for LemonadeClient, only including non-None values
         backend_kwargs = {}
         if model is not None:
@@ -640,6 +1188,8 @@ class LemonadeProvider(LLMClient):
         backend_kwargs.update(kwargs)
 
         self._backend = LemonadeClient(**backend_kwargs)
+        if model_metadata is not None:
+            self._backend.remember_model_metadata(model_metadata)
         self._model = model
         self._last_model = model
         self._system_prompt = system_prompt
@@ -662,9 +1212,10 @@ class LemonadeProvider(LLMClient):
 
         Goes through the backend, which carries the catalog metadata, so a
         provider discovered at runtime is recognised as well as the two whose
-        id prefixes are known up front. Answers ``None`` for a runtime-
-        discovered provider until ``refresh_model_catalog`` (or any call that
-        reads ``list_models``) has populated that metadata at least once.
+        id prefixes are known up front. Names a runtime-discovered provider
+        only once this client holds its catalog entry (``model_metadata`` at
+        construction, or any call that reads ``list_models``); before that, a
+        model another client discovered counts as cloud under its id prefix.
         """
         return self._backend.cloud_model_provider(
             model or self._last_model or self._model or DEFAULT_MODEL_NAME
@@ -679,6 +1230,10 @@ class LemonadeProvider(LLMClient):
         """Whether this client is aimed at GAIA's own server (see ``LemonadeClient``)."""
         return self._backend.follows_gaia_lemonade
 
+    def gaia_lemonade_stopped(self) -> bool:
+        """Whether GAIA's own server stopped answering (see ``LemonadeClient``)."""
+        return self._backend.gaia_lemonade_stopped()
+
     def wait_for_gaia_lemonade(
         self,
         model: Optional[str] = None,
@@ -687,18 +1242,6 @@ class LemonadeProvider(LLMClient):
     ) -> bool:
         """Wait for GAIA's own server to answer again (see ``LemonadeClient``)."""
         return self._backend.wait_for_gaia_lemonade(model, on_status=on_status)
-
-    def refresh_model_catalog(self, show_all: bool = True) -> None:
-        """Read the Lemonade catalog once so ``cloud_model_provider`` can
-        recognise a runtime-discovered provider right away.
-
-        A freshly constructed client has no catalog metadata yet —
-        ``cloud_model_provider`` only reads what ``list_models`` has cached —
-        so anything composed from it immediately after construction (a
-        switch message, a rebuilt system prompt) would call a runtime-
-        discovered cloud model local (#4365).
-        """
-        self._backend.list_models(show_all=show_all)
 
     def generate(
         self,
@@ -749,6 +1292,10 @@ class LemonadeProvider(LLMClient):
         # runaway, so they get the client's standard 0.7.
         if not self._backend.cloud_model_provider(effective_model):
             wanted = kwargs.get("id_slot")
+            if wanted == FULL_TOOLS_SLOT:
+                # An evicted model reports one slot; the turn would then re-read
+                # on the wrong slot, and again on the right one.
+                self._backend._ensure_model_loaded(effective_model)
             if wanted not in (None, CONVERSATION_SLOT) and wanted >= (
                 self._backend.slot_count(effective_model)
             ):
@@ -864,11 +1411,17 @@ class LemonadeProvider(LLMClient):
             )
 
         content = message.get("content") or ""
-        if not content and finish_reason == "stop" and reasoning:
+        if (
+            not content
+            and finish_reason == "stop"
+            and reasoning
+            and not self._backend.cloud_model_provider(effective_model)
+        ):
             # Some llama.cpp builds route a completed answer into
             # ``reasoning_content``. A reply cut off by the token limit
             # (``finish_reason="length"``) is left empty on purpose — that text
-            # is an unfinished thought, not an answer.
+            # is an unfinished thought, not an answer. A cloud provider's
+            # reasoning is never the answer: parsed, it could run a tool.
             logger.warning(
                 "Lemonade returned empty 'content' with finish_reason=stop; "
                 "treating 'reasoning_content' as the answer (model=%s)",
@@ -899,6 +1452,14 @@ class LemonadeProvider(LLMClient):
     def generate_image(self, prompt: str, **kwargs) -> dict:
         """Generate an image; see :meth:`LemonadeClient.generate_image`."""
         return self._backend.generate_image(prompt, **kwargs)
+
+    def edit_image(self, image_path: str, prompt: str, **kwargs) -> dict:
+        """Edit an image through the provider interface."""
+        return self._backend.edit_image(image_path, prompt, **kwargs)
+
+    def upscale_image(self, image_path: str, **kwargs) -> dict:
+        """Upscale an image through the provider interface."""
+        return self._backend.upscale_image(image_path, **kwargs)
 
     def transcribe_audio(
         self, audio_path: str, model: Optional[str] = None, **kwargs
@@ -994,6 +1555,12 @@ class LemonadeProvider(LLMClient):
     def unload_model(self, model_name: Optional[str] = None) -> None:
         self._backend.unload_model(model_name)
 
+    def ensure_model_loaded(self, model_name: str) -> None:
+        """Load *model_name* as a request's own pre-flight would (same window,
+        same lease), or do nothing when it is already resident."""
+        # pylint: disable=protected-access
+        self._backend._ensure_model_loaded(model_name)
+
     def _extract_text(self, response: dict) -> str:
         return response["choices"][0]["text"]
 
@@ -1009,6 +1576,7 @@ class LemonadeProvider(LLMClient):
         thought = ""  # reasoning held back until a line is whole (see below)
         tool_calls: dict[int, dict] = {}
         next_progress = time.perf_counter()
+        next_draft = next_progress
         next_reasoning_progress: Optional[float] = None
         finish_reason = ""
         usage_seen = False
@@ -1018,11 +1586,11 @@ class LemonadeProvider(LLMClient):
 
         def close_thinking():
             nonlocal in_thinking, thought
-            out = (thought + "</think>") if thought else "</think>"
+            out = _defang_think_tags(thought) + "</think>"
             in_thinking, thought = False, ""
             return out
 
-        for chunk in response:
+        for chunk in _stalls_as_cut_offs(response):
             # The usage chunk arrives last and carries no choices. It is the
             # only token accounting a streamed turn gets — see the
             # stream_options request in lemonade_client.
@@ -1041,6 +1609,16 @@ class LemonadeProvider(LLMClient):
                 ):
                     self._last_ttft_seconds = time.perf_counter() - request_started
                 _accumulate_tool_calls(tool_calls, delta.get("tool_calls"))
+                # tool_calls stays empty when a frame holds only non-dict fragments.
+                if (
+                    delta.get("tool_calls")
+                    and tool_calls
+                    and self.tool_call_draft is not None
+                    and time.perf_counter() >= next_draft
+                ):
+                    latest = tool_calls[max(tool_calls)]["function"]
+                    self.tool_call_draft(latest["name"], latest["arguments"])
+                    next_draft = time.perf_counter() + TOOL_CALL_DRAFT_INTERVAL_S
                 if (
                     delta.get("tool_calls")
                     and self.tool_call_progress is not None
@@ -1055,6 +1633,37 @@ class LemonadeProvider(LLMClient):
                         next_progress = (
                             time.perf_counter() + TOOL_CALL_PROGRESS_INTERVAL_S
                         )
+                # Thinking models (e.g. Qwen3.5) stream reasoning in a
+                # separate field. Wrap in <think> tags so the UI can display it
+                # in a collapsible section. Read before content: a
+                # non-streaming reply arrives as one delta carrying both.
+                reasoning = delta.get("reasoning_content")
+                if reasoning:
+                    reasoning_seen.append(reasoning)
+                    now = time.perf_counter()
+                    if next_reasoning_progress is None:
+                        next_reasoning_progress = now + REASONING_PROGRESS_INTERVAL_S
+                    elif (
+                        self.reasoning_progress is not None
+                        and now >= next_reasoning_progress
+                    ):
+                        self.reasoning_progress(len("".join(reasoning_seen).split()))
+                        next_reasoning_progress = now + REASONING_PROGRESS_INTERVAL_S
+                    if not in_thinking:
+                        yield "<think>"
+                        in_thinking = True
+                    # Released a line at a time, never a token at a time:
+                    # every surface renders a thought as ONE replaced line,
+                    # so per-token reasoning blanks the sentence before it
+                    # and the status line reads as ". / just / `." churn.
+                    # A tag has no newline, so no cut can split one. Only the
+                    # new piece is searched: a long line stays linear.
+                    cut = reasoning.rfind("\n")
+                    if cut >= 0:
+                        yield _defang_think_tags(thought + reasoning[: cut + 1])
+                        thought = reasoning[cut + 1 :]
+                    else:
+                        thought += reasoning
                 content = delta.get("content")
                 if (
                     tool_calls
@@ -1072,53 +1681,19 @@ class LemonadeProvider(LLMClient):
                         yield close_thinking()
                     text_seen.append(content)
                     yield content
-                else:
-                    # Thinking models (e.g. Qwen3.5) stream reasoning in a
-                    # separate field. Wrap in <think> tags so the UI can
-                    # display it in a collapsible section.
-                    reasoning = delta.get("reasoning_content")
-                    if reasoning:
-                        reasoning_seen.append(reasoning)
-                        now = time.perf_counter()
-                        if next_reasoning_progress is None:
-                            next_reasoning_progress = (
-                                now + REASONING_PROGRESS_INTERVAL_S
-                            )
-                        elif (
-                            self.reasoning_progress is not None
-                            and now >= next_reasoning_progress
-                        ):
-                            self.reasoning_progress(
-                                len("".join(reasoning_seen).split())
-                            )
-                            next_reasoning_progress = (
-                                now + REASONING_PROGRESS_INTERVAL_S
-                            )
-                        if not in_thinking:
-                            yield "<think>"
-                            in_thinking = True
-                        # Released a line at a time, never a token at a time:
-                        # every surface renders a thought as ONE replaced line,
-                        # so per-token reasoning blanks the sentence before it
-                        # and the status line reads as ". / just / `." churn.
-                        thought += reasoning
-                        cut = thought.rfind("\n")
-                        if cut >= 0:
-                            yield thought[: cut + 1]
-                            thought = thought[cut + 1 :]
-                    elif "text" in choice:
-                        text = choice["text"]
-                        if text:
-                            if in_thinking:
-                                yield close_thinking()
-                            text_seen.append(text)
-                            yield text
+                elif not reasoning and "text" in choice:
+                    text = choice["text"]
+                    if text:
+                        if in_thinking:
+                            yield close_thinking()
+                        text_seen.append(text)
+                        yield text
         if ran_past_call:
             logger.warning(
                 "%s kept writing after its tool call; stopped the stream there",
                 self._last_model,
             )
-            # Closing the stream stops the server generating the rest.
+            # On the NPU, the client reads out the rest: cutting FastFlowLM off restarts it.
             close = getattr(response, "close", None)
             if close is not None:
                 close()

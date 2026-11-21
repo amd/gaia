@@ -4,14 +4,13 @@
 
 #800 framed the collision as ``scratchpad.query_data`` vs ``memory.recall``.
 Scratchpad tools never enter the ChatAgent ``doc`` profile (they are gated to the
-``data``/``full`` profiles), and the loader is wired only to ``doc`` — so the
-literal pair is structurally impossible in the loaded profile. The doc-profile
-analog the loader actually arbitrates is ``analyze_data_file`` (the structured-
-data tool, a *conditional* ``data``-bundle member) vs ``recall`` (always-on
-CORE).
+``data``/``full`` profiles), so the literal pair is structurally impossible in
+that profile. The doc-profile analog the loader actually arbitrates is
+``analyze_data_file`` (the structured-data tool, outside CORE) vs ``recall``
+(always-on CORE).
 
 These tests pin that resolution against the **real** ``DOC_CORE_TOOLS`` /
-``DOC_BUNDLES`` config and the production threshold/cap, using the deterministic
+``DOC_BUNDLES`` config and the production threshold, using the deterministic
 one-hot embedder pattern from ``test_tool_loader_selection.py`` (each tool doc
 embeds to a distinct axis; a query embeds to a coordinate vector, so
 ``dot(query, tool)`` recovers exactly the assigned score). No Lemonade backend,
@@ -23,11 +22,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from gaia.agents.base.tool_loader import (
-    DEFAULT_MAX_TOOLS,
-    DEFAULT_THRESHOLD,
-    ToolLoader,
-)
+from gaia.agents.base.tool_loader import DEFAULT_THRESHOLD, ToolLoader
 
 # DOC_BUNDLES ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
@@ -92,63 +87,60 @@ def _doc_loader(query_scores: dict[str, dict[str, float]]) -> tuple[ToolLoader, 
     """A fresh loader over the real doc CORE/bundles + a deterministic embedder."""
     tools = _all_doc_tools()
     embed = _make_embed_fn(tools, query_scores)
-    loader = ToolLoader(
-        DOC_CORE_TOOLS,
-        DOC_BUNDLES,
-        embed,
-        threshold=DEFAULT_THRESHOLD,
-        max_tools=DEFAULT_MAX_TOOLS,
-    )
+    loader = ToolLoader(DOC_CORE_TOOLS, DOC_BUNDLES, embed, threshold=DEFAULT_THRESHOLD)
     return loader, _registry(tools)
+
+
+def _core_in_registry_order() -> list[str]:
+    return [name for name in _all_doc_tools() if name in DOC_CORE_TOOLS]
 
 
 # ── config pin: the decision that resolves the collision ───────────────────
 
 
 def test_data_tool_is_conditional_and_recall_is_core():
-    """``recall`` is always-on CORE; ``analyze_data_file`` is a conditional bundle.
+    """``recall`` is always-on CORE; ``analyze_data_file`` sits outside it.
 
-    This is the structural fact #800 turns on: the two only co-occur when the
-    turn semantically justifies the data tool — recall is never the gated side.
+    This is the structural fact #800 turns on: the two only co-occur once the
+    session has moved to the full list — recall is never the gated side.
     """
     assert "recall" in DOC_CORE_TOOLS
     assert "analyze_data_file" not in DOC_CORE_TOOLS
     assert "analyze_data_file" in _data_bundle_members()
 
 
-# ── the data tool loads only when justified ────────────────────────────────
+# ── the data tool arrives only when justified ──────────────────────────────
 
 
-def test_structured_data_query_loads_data_tool_with_recall_present():
-    """A data-style turn loads ``analyze_data_file`` *and* keeps ``recall`` (CORE)."""
+def test_structured_data_query_moves_to_the_full_list_with_recall_present():
     loader, reg = _doc_loader({"aggregate the sales csv": {"analyze_data_file": 0.9}})
-    loaded = loader.select("aggregate the sales csv", reg)
-    assert loaded is not None
-    assert "analyze_data_file" in loaded  # justified → loaded
-    assert "recall" in loaded  # CORE → always present
+    assert loader.select("aggregate the sales csv", reg) == _all_doc_tools()
 
 
-def test_recall_query_keeps_recall_and_omits_data_tool():
-    """A turn that justifies no data tool keeps ``recall`` and omits the data tool.
+def test_recall_query_stays_on_core():
+    """Empty query scores → zero vector → nothing clears τ, so the list stays core.
 
-    Empty query scores → zero vector → nothing clears τ, so only CORE is admitted.
     This realizes #800 AC #2 ("not both unless justified") on the conditional side.
     """
     loader, reg = _doc_loader({"what did we cover earlier": {}})
-    loaded = loader.select("what did we cover earlier", reg)
-    assert loaded is not None
-    assert "recall" in loaded  # CORE → present
-    assert "analyze_data_file" not in loaded  # unjustified → absent
+    assert loader.select("what did we cover earlier", reg) == _core_in_registry_order()
+
+
+def test_recall_winning_the_query_keeps_the_data_tool_out():
+    """Both clear τ on a question about the past; a listed tool that wins stays."""
+    query = "what did the csv say last time"
+    loader, reg = _doc_loader({query: {"analyze_data_file": 0.7, "recall": 0.8}})
+    assert loader.select(query, reg) == _core_in_registry_order()
 
 
 # ── mid-conversation pivot (AC #7, in-profile) ─────────────────────────────
 
 
-def test_pivot_loads_data_bundle_mid_conversation():
-    """One session: a recall turn omits the data tool, a later data turn adds it.
+def test_pivot_moves_to_the_full_list_mid_conversation():
+    """One session: a recall turn stays on core, a later data turn moves to full.
 
-    Monotonic growth — the data tool joins on the turn that justifies it, and
-    ``recall`` (CORE) is present throughout. AC #7's in-profile re-evaluation.
+    Nothing is pruned on the way — core tools are on both lists. AC #7's
+    in-profile re-evaluation.
     """
     loader, reg = _doc_loader(
         {
@@ -158,12 +150,8 @@ def test_pivot_loads_data_bundle_mid_conversation():
     )
 
     turn1 = loader.select("what did we cover earlier", reg)
-    assert turn1 is not None
-    assert "analyze_data_file" not in turn1
-    assert "recall" in turn1
-
     turn2 = loader.select("now total the Q1 revenue in the csv", reg)
-    assert turn2 is not None
-    assert "analyze_data_file" in turn2  # added on the justifying turn
-    assert "recall" in turn2
-    assert set(turn1) <= set(turn2)  # monotonic: nothing pruned on pivot
+
+    assert turn1 == _core_in_registry_order()
+    assert turn2 == _all_doc_tools()
+    assert set(turn1) <= set(turn2)

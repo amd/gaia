@@ -8,6 +8,12 @@ description: "Let GAIA agents read and send messages in your Discord servers."
   **Connector ID:** `mcp-discord` · **Type:** `mcp_server` · **Catalog entry:** [`src/gaia/connectors/catalog/mcp_servers.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/mcp_servers.py)
 </Info>
 
+<Tip>
+  Want to **message GAIA from Discord** instead, so it answers you from your PC? That is
+  the [Discord guide](/guides/discord). It uses a bot of its own; don't reuse this
+  connector's.
+</Tip>
+
 ## What you'll need
 
 The connector is an **MCP server**. GAIA starts
@@ -67,7 +73,7 @@ gaia connectors grants grant mcp-discord builtin:chat --scopes "*"
 gaia connectors activations activate mcp-discord builtin:chat
 ```
 
-(In the UI, the tile's **Per-agent** toggle does both.)
+(In the UI, the tile's **GAIA can use Discord in chat** switch does both.)
 
 The tools take Discord IDs, not names. Turn on **Developer Mode** in Discord
 (User Settings → Advanced), right-click your server, and choose **Copy Server

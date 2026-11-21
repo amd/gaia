@@ -48,9 +48,17 @@ from gaia.llm.lemonade_supervisor import (
     _probe,
 )
 from gaia.llm.retry import http_body_text
+from gaia.llm.surface_hints import APP_RESTART_HINT, APP_SERVICE_DOWN_HINT
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
+
+
+def _where_to_look() -> str:
+    from gaia.daemon.paths import log_path
+
+    return f"Where to look: the GAIA background service's log at {log_path()}"
+
 
 __all__ = [
     "LemonadeStartError",
@@ -105,9 +113,8 @@ def ensure_lemonade_running(
 
     Args:
         ctx_size: the machine's profile window
-            (``lemonade_client.profile_ctx_size``). Only the legacy
-            Lemonade CLI takes it at start; modern Lemonade reads
-            no start-time window and gets it on each ``/load`` instead.
+            (``lemonade_client.profile_ctx_size``), logged only: Lemonade
+            reads no start-time window and gets it on each ``/load``.
         timeout: how long a freshly started server gets to answer.
         base_url: which server to check; omit for the ``LEMONADE_BASE_URL``
             environment default.
@@ -135,9 +142,15 @@ def _ask_the_daemon(
     otherwise need) just to be told so. While GAIA runs its own server, only
     that server's recorded address is probed; a stopped one is always started
     by the daemon, on its recorded port.
+
+    A server the user named is authoritative: when it does not answer, this
+    raises instead of asking the daemon for GAIA's own. Starting a different
+    server on another port would be a substitution the user did not choose.
     """
     from gaia.llm.lemonade_client import (
         LemonadeClient,
+        configured_lemonade_url,
+        resolve_lemonade_base_url,
         running_embedded_lemonade_url,
     )
     from gaia.llm.lemonade_launcher import gaia_runs_lemonade
@@ -151,10 +164,20 @@ def _ask_the_daemon(
             if own
             else None
         )
+        external_url = None
     elif base_url:
         client = LemonadeClient(base_url=base_url, keep_alive=True, verbose=False)
+        # Only an address other than GAIA's own default is a server the user named.
+        external_url = (
+            base_url
+            if resolve_lemonade_base_url(base_url) != resolve_lemonade_base_url()
+            else configured_lemonade_url()
+        )
     else:
         client = LemonadeClient(keep_alive=True, verbose=False)
+        # No base_url still means the user's server when LEMONADE_BASE_URL or
+        # the saved external choice names one.
+        external_url = configured_lemonade_url()
     if client is not None and _probe(client):
         return LemonadeState(
             base_url=client.base_url,
@@ -164,6 +187,11 @@ def _ask_the_daemon(
             waited_seconds=0.0,
         )
 
+    if external_url:
+        from gaia.llm.lemonade_choice import unreachable_server_message
+
+        raise LemonadeStartError(unreachable_server_message(external_url))
+
     payload = {"ctx_size": ctx_size} if ctx_size else {}
     body = _post_start(payload, timeout)
     served_url = body.get("base_url")
@@ -171,8 +199,7 @@ def _ask_the_daemon(
         raise LemonadeStartError(
             "The GAIA background service answered without saying where the "
             f"local model server listens: {body}\n"
-            "To fix: restart it with `gaia daemon stop` then `gaia daemon start`.\n"
-            "Where to look: `gaia daemon logs`"
+            f"To fix: {APP_RESTART_HINT}\n{_where_to_look()}"
         )
     return LemonadeState(
         base_url=served_url,
@@ -217,6 +244,15 @@ def ensure_daemon_owns_lemonade(kind: str = "cli", name: str = "") -> None:
     except DaemonError as e:
         log.warning("Could not start the GAIA background service: %s", e)
         started = False
+    if started and kind == "app":
+        # An app's chats run through the daemon: it must use the app's server.
+        try:
+            restarted = daemon_client.match_launch_lemonade()
+        except DaemonError as e:
+            log.warning("The GAIA background service was kept as it is: %s", e)
+        else:
+            if restarted:
+                log.info("Restarted the GAIA background service: %s", restarted)
     try:
         # Even without our own daemon: another home's may own the server.
         hold_lemonade_open(kind, name)
@@ -509,8 +545,7 @@ def _post_start(payload: dict, timeout: float) -> dict:
         raise LemonadeStartError(
             "The local model server is not running, and neither is the GAIA "
             "background service that owns it — so nothing can start it.\n"
-            "To fix: run `gaia daemon start`, then retry.\n"
-            "Where to look: `gaia daemon logs`"
+            f"To fix: {APP_SERVICE_DOWN_HINT}\n{_where_to_look()}"
         )
 
     url = f"http://{inst.host}:{inst.port}{API_PREFIX}/lemonade/start"
@@ -524,8 +559,7 @@ def _post_start(payload: dict, timeout: float) -> dict:
         raise LemonadeStartError(
             "The local model server is not running, and the request asking the "
             f"background service to start it failed: {e}\n"
-            "To fix: check it with `gaia daemon status`, then retry.\n"
-            "Where to look: `gaia daemon logs`"
+            f"To fix: {APP_RESTART_HINT}\n{_where_to_look()}"
         ) from e
 
     if resp.status_code == 200:
@@ -543,7 +577,6 @@ def _post_start(payload: dict, timeout: float) -> dict:
         or (
             f"The background service refused to start the local model server "
             f"(HTTP {resp.status_code}).\n"
-            "To fix: check it with `gaia daemon status`.\n"
-            "Where to look: `gaia daemon logs`"
+            f"To fix: {APP_RESTART_HINT}\n{_where_to_look()}"
         )
     )

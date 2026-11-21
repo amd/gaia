@@ -87,6 +87,16 @@ test("the chip restarts silently and reopens the app when nothing would be lost"
   expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(true, true);
 });
 
+test("the quit a restart starts is one that installs the update", async () => {
+  // main.cjs stops the daemon in that quit: the installer replaces the files it runs from.
+  mockUpdater.autoInstallOnAppQuit = false;
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  expect(m.installsOnQuit()).toBe(false);
+  await finishDownload();
+  await clickRestartChip();
+  expect(m.installsOnQuit()).toBe(true);
+});
+
 test("Keep running puts the restart off; the update installs on the next quit", async () => {
   saveConfig({ autoUpdate: true });
   const confirmRestart = jest.fn(async () => false);
@@ -97,6 +107,7 @@ test("Keep running puts the restart off; the update installs on the next quit", 
   expect(mockUpdater.quitAndInstall).not.toHaveBeenCalled();
   expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
   expect(m.getState().status).toBe("downloaded");
+  expect(m.installsOnQuit()).toBe(true);
 });
 
 test("a failing restart check reaches the chip's caller, and nothing installs", async () => {
@@ -466,6 +477,92 @@ describe("a silent install that fails", () => {
     expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
   });
 
+  test("a failed install is reported once, and the launch after installs silently again", async () => {
+    failedLastTime();
+    initUpdater({ confirmRestart: async () => true });
+    expect(fs.existsSync(attemptFile())).toBe(false);
+    loaded.pop().destroy();
+    mockUpdater.removeAllListeners();
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().installFailed).toBeNull();
+    await finishDownload();
+    await clickRestartChip();
+    expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(true, true);
+  });
+
+  test("after the failure is reported, the next launch installs on quit again", async () => {
+    saveConfig({ autoUpdate: true });
+    failedLastTime();
+    let m = initUpdater({ confirmRestart: async () => true });
+    expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+    m.destroy();
+    mockUpdater.removeAllListeners();
+    const on = jest.spyOn(electronMock.app, "on");
+    m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().installFailed).toBeNull();
+    expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
+    await finishDownload();
+    on.mock.calls.filter(([event]) => event === "before-quit").at(-1)[1]();
+    expect(JSON.parse(fs.readFileSync(attemptFile(), "utf8"))).toEqual({
+      from: "0.25.0",
+      target: "0.26.0",
+    });
+  });
+
+  test("a retry that fails again is reported again, then forgotten", async () => {
+    failedLastTime();
+    let m = initUpdater({ confirmRestart: async () => true });
+    await finishDownload();
+    await clickRestartChip();
+    expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
+    m.destroy();
+    mockUpdater.removeAllListeners();
+    mockUpdater.quitAndInstall.mockClear();
+
+    m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().installFailed).toEqual({ target: "0.26.0", from: "0.25.0" });
+    expect(fs.existsSync(attemptFile())).toBe(false);
+    m.destroy();
+    mockUpdater.removeAllListeners();
+
+    m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().installFailed).toBeNull();
+    await finishDownload();
+    await clickRestartChip();
+    expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(true, true);
+  });
+
+  test("an attempt record that can't be deleted still reports the failure", () => {
+    failedLastTime();
+    const realRm = fs.rmSync;
+    const rm = jest.spyOn(fs, "rmSync").mockImplementation((target, opts) => {
+      if (target === attemptFile()) throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      return realRm(target, opts);
+    });
+    const m = initUpdater({ confirmRestart: async () => true });
+    rm.mockRestore();
+    expect(m.getState().installFailed).toEqual({ target: "0.26.0", from: "0.25.0" });
+    expect(fs.existsSync(attemptFile())).toBe(true);
+  });
+
+  test("a failed install doesn't make a later backend failure blame an old update", () => {
+    saveConfig({ previousAppVersion: "0.24.0", launchesSinceUpdate: 4 });
+    failedLastTime();
+    let m;
+    jest.isolateModules(() => {
+      m = require("../../src/gaia/apps/webui/services/auto-updater.cjs");
+    });
+    m.reportStartFailure();
+    expect(m.getState().startFailed).toBe(false);
+    m = initUpdater({ confirmRestart: async () => true });
+    m.reportStartFailure();
+    expect(m.getState().startFailed).toBe(false);
+    m.destroy();
+    m = initUpdater({ confirmRestart: async () => true });
+    m.reportStartFailure();
+    expect(m.getState().startFailed).toBe(false);
+  });
+
   test("a launch on a different version counts as installed and forgets the attempt", async () => {
     failedLastTime({ from: "0.24.0", target: "0.25.0" });
     const m = initUpdater({ confirmRestart: async () => true });
@@ -666,6 +763,28 @@ describe("going back after a bad update", () => {
     });
   });
 
+  test("a go-back that didn't land is reported once; the launch after updates normally", () => {
+    saveConfig({ autoUpdate: true, pinnedVersion: "v0.25.0", previousAppVersion: "0.25.0" });
+    electronMock.app.getVersion = () => "0.26.0";
+    fs.mkdirSync(path.dirname(attemptFile()), { recursive: true });
+    fs.writeFileSync(attemptFile(), JSON.stringify({ from: "0.26.0", target: "0.25.0" }));
+    let m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().installFailed).toEqual({ target: "0.25.0", from: "0.26.0" });
+    expect(fs.existsSync(attemptFile())).toBe(false);
+    m.destroy();
+    m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState()).toMatchObject({ installFailed: null, pinnedVersion: null, previousVersion: "0.25.0" });
+    expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
+  });
+
+  test("a landed update installs the next one on quit", () => {
+    saveConfig({ autoUpdate: true });
+    updatedFrom("0.25.0");
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().installFailed).toBeNull();
+    expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
+  });
+
   test("a pinned launch checks the pinned release, not a dead default feed", () => {
     saveConfig({ pinnedVersion: "v0.25.0" });
     jest.spyOn(mockUpdater, "setFeedURL");
@@ -733,6 +852,269 @@ describe("going back after a bad update", () => {
     const m = initUpdater({ confirmRestart: async () => true });
     m.reportStartFailure();
     expect(m.getState().startFailed).toBe(false);
+  });
+});
+
+describe("going back to the version that last finished setup", () => {
+  const recordFile = () => path.join(tmpHome, ".gaia", "last-working-version.json");
+  const configFile = () => path.join(tmpHome, ".gaia", "update-config.json");
+  const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+
+  // Going back is offered only where the in-app installer is proven: Windows and the AppImage.
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", realPlatform);
+    delete process.env.APPIMAGE;
+  });
+
+  function setupWorkedOn(version, at = "2026-11-02T09:30:00.000Z") {
+    fs.mkdirSync(path.dirname(recordFile()), { recursive: true });
+    fs.writeFileSync(recordFile(), JSON.stringify({ version, at }));
+  }
+
+  function feedServes(version) {
+    jest.spyOn(mockUpdater, "setFeedURL");
+    mockUpdater.checkForUpdates = jest.fn(async () => {
+      mockUpdater.emit("update-available", { version });
+      return null;
+    });
+    mockUpdater.downloadUpdate = jest.fn(async () => {
+      mockUpdater.emit("update-downloaded", { version });
+      return [];
+    });
+  }
+
+  test("a finished setup records the running version and when", () => {
+    const m = initUpdater({ confirmRestart: async () => true });
+    const before = Date.now();
+    m.markSetupWorked();
+    const record = JSON.parse(fs.readFileSync(recordFile(), "utf8"));
+    expect(record.version).toBe("0.25.0");
+    expect(Date.parse(record.at)).toBeGreaterThanOrEqual(before - 1000);
+    // The running version is where setup works, so there's nothing to go back to.
+    expect(m.getState().lastWorking).toBeNull();
+  });
+
+  test("the IPC call records it too, and answers with the state", async () => {
+    initUpdater({ confirmRestart: async () => true });
+    const state = await electronMock.ipcMain.simulateInvoke("gaia:update:setup-worked");
+    expect(JSON.parse(fs.readFileSync(recordFile(), "utf8")).version).toBe("0.25.0");
+    expect(state.lastWorking).toBeNull();
+  });
+
+  test("an older version that finished setup is offered, with its date", () => {
+    setupWorkedOn("0.25.0");
+    electronMock.app.getVersion = () => "0.26.0-rc.13";
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().lastWorking).toEqual({ version: "0.25.0", at: "2026-11-02T09:30:00.000Z" });
+    expect(m.lastWorkingVersion()).toEqual({ version: "0.25.0", at: "2026-11-02T09:30:00.000Z" });
+  });
+
+  test("it is known before the updater starts", () => {
+    setupWorkedOn("0.25.0");
+    electronMock.app.getVersion = () => "0.26.0";
+    let m;
+    jest.isolateModules(() => {
+      m = require("../../src/gaia/apps/webui/services/auto-updater.cjs");
+    });
+    expect(m.lastWorkingVersion()).toEqual({ version: "0.25.0", at: "2026-11-02T09:30:00.000Z" });
+  });
+
+  test("a newer version that worked is never offered as a way back", () => {
+    setupWorkedOn("0.27.0");
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().lastWorking).toBeNull();
+  });
+
+  test("with no record there is nothing to offer, even after an update", () => {
+    saveConfig({ previousAppVersion: "0.24.0" });
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().lastWorking).toBeNull();
+  });
+
+  test("an unreadable record offers nothing rather than guess", () => {
+    fs.mkdirSync(path.dirname(recordFile()), { recursive: true });
+    fs.writeFileSync(recordFile(), "{not json");
+    electronMock.app.getVersion = () => "0.26.0";
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().lastWorking).toBeNull();
+  });
+
+  test("a record that names no real version offers nothing", () => {
+    setupWorkedOn("latest");
+    electronMock.app.getVersion = () => "0.26.0";
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().lastWorking).toBeNull();
+  });
+
+  test("updates turned off offer nothing", () => {
+    setupWorkedOn("0.25.0");
+    electronMock.app.getVersion = () => "0.26.0";
+    process.env.GAIA_DISABLE_UPDATE = "1";
+    let m;
+    jest.isolateModules(() => {
+      m = require("../../src/gaia/apps/webui/services/auto-updater.cjs");
+    });
+    expect(m.lastWorkingVersion()).toBeNull();
+  });
+
+  test("an AppImage can go back: its updater replaces the file", () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    process.env.APPIMAGE = "/home/u/Applications/gaia.AppImage";
+    setupWorkedOn("0.25.0");
+    electronMock.app.getVersion = () => "0.26.0";
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().lastWorking).toEqual({ version: "0.25.0", at: "2026-11-02T09:30:00.000Z" });
+  });
+
+  test("a .deb offers nothing: the package manager owns its files", () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    setupWorkedOn("0.25.0");
+    electronMock.app.getVersion = () => "0.26.0";
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().lastWorking).toBeNull();
+  });
+
+  test("a Mac offers nothing until releases publish its update", () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    setupWorkedOn("0.25.0");
+    electronMock.app.getVersion = () => "0.26.0";
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().lastWorking).toBeNull();
+  });
+
+  test("a .deb still records where setup worked, for the day it can go back", () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    const m = initUpdater({ confirmRestart: async () => true });
+    m.markSetupWorked();
+    expect(JSON.parse(fs.readFileSync(recordFile(), "utf8")).version).toBe("0.25.0");
+  });
+
+  test("going back installs that version, pins it and restarts", async () => {
+    setupWorkedOn("0.26.0-rc.12");
+    electronMock.app.getVersion = () => "0.26.0-rc.13";
+    const m = initUpdater({ confirmRestart: async () => true });
+    feedServes("0.26.0-rc.12");
+    const state = await electronMock.ipcMain.simulateInvoke("gaia:update:revert-to-working");
+    expect(mockUpdater.allowDowngrade).toBe(true);
+    expect(mockUpdater.setFeedURL.mock.calls.at(-1)[0].url).toMatch(/\/v0\.26\.0-rc12\/?$/);
+    expect(JSON.parse(fs.readFileSync(configFile(), "utf8")).pinnedVersion).toBe("v0.26.0-rc12");
+    expect(mockUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    expect(state.pinnedVersion).toBe("v0.26.0-rc12");
+  });
+
+  test("a pin to the broken version still lets setup's failure go back", async () => {
+    setupWorkedOn("0.25.0");
+    saveConfig({ pinnedVersion: "v0.26.0" });
+    electronMock.app.getVersion = () => "0.26.0";
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().lastWorking).toEqual({ version: "0.25.0", at: "2026-11-02T09:30:00.000Z" });
+    feedServes("0.25.0");
+    await m.revertToLastWorking();
+    expect(JSON.parse(fs.readFileSync(configFile(), "utf8")).pinnedVersion).toBe("v0.25.0");
+  });
+
+  test("a failed download drops the pin and keeps the offer", async () => {
+    setupWorkedOn("0.25.0");
+    electronMock.app.getVersion = () => "0.26.0";
+    const m = initUpdater({ confirmRestart: async () => true });
+    feedServes("0.25.0");
+    mockUpdater.downloadUpdate = jest.fn(async () => {
+      throw new Error("net::ERR_INTERNET_DISCONNECTED");
+    });
+    await expect(m.revertToLastWorking()).rejects.toThrow(/ERR_INTERNET_DISCONNECTED/);
+    expect(JSON.parse(fs.readFileSync(configFile(), "utf8")).pinnedVersion).toBeFalsy();
+    expect(m.getState().lastWorking).toEqual({ version: "0.25.0", at: "2026-11-02T09:30:00.000Z" });
+    expect(mockUpdater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  test("a failed download restores a pin the user had", async () => {
+    setupWorkedOn("0.25.0");
+    saveConfig({ pinnedVersion: "v0.26.0" });
+    electronMock.app.getVersion = () => "0.26.0";
+    const m = initUpdater({ confirmRestart: async () => true });
+    feedServes("0.25.0");
+    mockUpdater.downloadUpdate = jest.fn(async () => {
+      throw new Error("offline");
+    });
+    await expect(m.revertToLastWorking()).rejects.toThrow(/offline/);
+    expect(JSON.parse(fs.readFileSync(configFile(), "utf8")).pinnedVersion).toBe("v0.26.0");
+  });
+
+  test("with nothing to go back to the error says what to do", async () => {
+    const m = initUpdater({ confirmRestart: async () => true });
+    await expect(m.revertToLastWorking()).rejects.toMatchObject({ code: "noEarlier" });
+  });
+
+  test("a refused restart drops the pin and the download, so nothing installs later", async () => {
+    setupWorkedOn("0.25.0");
+    electronMock.app.getVersion = () => "0.26.0";
+    const statfs = jest.spyOn(fs.promises, "statfs").mockResolvedValue({ bavail: 100, bsize: 1024 * 1024 });
+    const m = initUpdater({ confirmRestart: async () => true });
+    feedServes("0.25.0");
+    await expect(m.revertToLastWorking()).rejects.toThrow(/needs about 1 GB free/);
+    expect(mockUpdater.quitAndInstall).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(configFile(), "utf8")).pinnedVersion).toBeFalsy();
+    expect(m.getState()).toMatchObject({ status: "idle", pinnedVersion: null });
+    expect(m.installsOnQuit()).toBe(false);
+    expect(m.getState().lastWorking).toEqual({ version: "0.25.0", at: "2026-11-02T09:30:00.000Z" });
+    statfs.mockRestore();
+  });
+
+  test("a refused restart puts back a pin the user had", async () => {
+    setupWorkedOn("0.25.0");
+    saveConfig({ pinnedVersion: "v0.26.0", autoUpdate: true });
+    electronMock.app.getVersion = () => "0.26.0";
+    const statfs = jest.spyOn(fs.promises, "statfs").mockResolvedValue({ bavail: 100, bsize: 1024 * 1024 });
+    const m = initUpdater({ confirmRestart: async () => true });
+    feedServes("0.25.0");
+    await expect(m.revertToLastWorking()).rejects.toThrow(/needs about 1 GB free/);
+    expect(JSON.parse(fs.readFileSync(configFile(), "utf8")).pinnedVersion).toBe("v0.26.0");
+    expect(m.getState()).toMatchObject({ status: "idle", pinnedVersion: "v0.26.0" });
+    // The restored pin is enforced, not just shown: its feed, and no background download.
+    expect(mockUpdater.setFeedURL.mock.calls.at(-1)[0].url).toMatch(/\/v0\.26\.0\/$/);
+    expect(mockUpdater.autoDownload).toBe(false);
+    statfs.mockRestore();
+  });
+
+  test("a declined restart keeps the download, to install when the user restarts", async () => {
+    setupWorkedOn("0.25.0");
+    electronMock.app.getVersion = () => "0.26.0";
+    const m = initUpdater({ confirmRestart: async () => false });
+    feedServes("0.25.0");
+    await m.revertToLastWorking();
+    expect(mockUpdater.quitAndInstall).not.toHaveBeenCalled();
+    expect(m.getState()).toMatchObject({ status: "downloaded", version: "0.25.0", pinnedVersion: "v0.25.0" });
+  });
+
+  test("an update already downloading is not mistaken for the way back", async () => {
+    setupWorkedOn("0.25.0");
+    electronMock.app.getVersion = () => "0.26.0";
+    const m = initUpdater({ confirmRestart: async () => true });
+    mockUpdater.emit("update-available", { version: "0.26.1" });
+    mockUpdater.downloadUpdate = jest.fn(() => new Promise(() => {}));
+    m.downloadUpdate();
+    expect(m.getState().status).toBe("downloading");
+    await expect(m.revertToLastWorking()).rejects.toMatchObject({ code: "checkBusy" });
+    expect(fs.existsSync(configFile())).toBe(false);
+  });
+
+  test("a record with a date that isn't one offers nothing", () => {
+    setupWorkedOn("0.25.0", "yesterday-ish");
+    electronMock.app.getVersion = () => "0.26.0";
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().lastWorking).toBeNull();
+  });
+
+  test("the version gone back to records itself once its setup passes", async () => {
+    setupWorkedOn("0.25.0");
+    electronMock.app.getVersion = () => "0.25.0";
+    const m = initUpdater({ confirmRestart: async () => true });
+    m.markSetupWorked();
+    expect(JSON.parse(fs.readFileSync(recordFile(), "utf8")).version).toBe("0.25.0");
+    expect(m.getState().lastWorking).toBeNull();
   });
 });
 

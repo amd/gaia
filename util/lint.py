@@ -45,7 +45,18 @@ DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718,W0212"
 EXCLUDE_DIRS = (
     ".git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules"
 )
+# The hub packages GAIA ships. Keep them in the same blocking lint surface as
+# the core source and tests; otherwise a hub-only change can pass without any
+# style check examining the code that will be published.
+HUB_DIRS = sorted(p.as_posix() for p in Path("hub/agents").glob("*/python")) + [
+    "hub/skills"
+]
 LINT_DIRS = [SRC_DIR, TEST_DIR]
+FORMAT_DIRS = LINT_DIRS + HUB_DIRS
+# Hub packages predate this gate and carry a small, documented legacy style
+# backlog. Keep checking them for every other Flake8 error without turning this
+# coverage fix into a mass rewrite of published agent tests.
+HUB_FLAKE8_IGNORES = "F401,E201,E202,E731"
 
 
 def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:
@@ -118,7 +129,7 @@ def check_black(fix: bool = False) -> CheckResult:
     print("-" * 40)
 
     if fix:
-        cmd = uvx("black", *LINT_DIRS, "--config", "pyproject.toml")
+        cmd = uvx("black", *FORMAT_DIRS, "--config", "pyproject.toml")
         print(f"[CMD] {' '.join(cmd)}")
         exit_code, output = run_command(cmd)
 
@@ -143,7 +154,7 @@ def check_black(fix: bool = False) -> CheckResult:
             return CheckResult("Code Formatting (Black)", True, False, 0, output)
     else:
         cmd = uvx(
-            "black", "--check", "--diff", *LINT_DIRS, "--config", "pyproject.toml"
+            "black", "--check", "--diff", *FORMAT_DIRS, "--config", "pyproject.toml"
         )
 
     print(f"[CMD] {' '.join(cmd)}")
@@ -192,7 +203,7 @@ def check_isort(fix: bool = False) -> CheckResult:
     print("-" * 40)
 
     if fix:
-        cmd = uvx("isort", *LINT_DIRS, "--settings-path", "pyproject.toml")
+        cmd = uvx("isort", *FORMAT_DIRS, "--settings-path", "pyproject.toml")
         print(f"[CMD] {' '.join(cmd)}")
         exit_code, output = run_command(cmd)
 
@@ -218,7 +229,7 @@ def check_isort(fix: bool = False) -> CheckResult:
             "isort",
             "--check-only",
             "--diff",
-            *LINT_DIRS,
+            *FORMAT_DIRS,
             "--settings-path",
             "pyproject.toml",
         )
@@ -283,9 +294,22 @@ def check_flake8() -> CheckResult:
         "--max-line-length=88",
         "--extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722",
     )
+    hub_cmd = uvx(
+        "flake8",
+        *HUB_DIRS,
+        f"--exclude={EXCLUDE_DIRS}",
+        "--count",
+        "--statistics",
+        "--max-line-length=88",
+        f"--extend-ignore=E203,W503,E501,F541,W291,W293,E402,F841,E722,{HUB_FLAKE8_IGNORES}",
+    )
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
+    print(f"[CMD] {' '.join(hub_cmd)}")
+    hub_exit_code, hub_output = run_command(hub_cmd)
+    exit_code = exit_code or hub_exit_code
+    output += hub_output
 
     if exit_code != 0:
         # Count violation lines
@@ -878,7 +902,7 @@ def count_python_files() -> tuple[int, int]:
     total_files = 0
     total_lines = 0
 
-    for dir_name in LINT_DIRS:
+    for dir_name in FORMAT_DIRS:
         dir_path = Path(dir_name)
         if dir_path.exists():
             for py_file in dir_path.rglob("*.py"):
@@ -904,7 +928,7 @@ def print_summary(results: list[CheckResult]) -> int:
     print("[STATS] Project Statistics:")
     print(f"   - Python Files: {total_files}")
     print(f"   - Lines of Code: {total_lines:,}")
-    print(f"   - Directories: {', '.join(LINT_DIRS)}")
+    print(f"   - Directories: {', '.join(FORMAT_DIRS)}")
 
     # Build results
     pass_count = 0

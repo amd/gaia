@@ -84,9 +84,13 @@ func (m ChatModel) updateModelSetup(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case modelsetup.FinishedMsg:
 		m.modelSetup, m.modelSetupOpen = nil, false
 		m.lemonadeKnown, m.lemonadeDownRefused = false, false
+		var switchCmd tea.Cmd
+		if msg.ChatModel != "" {
+			m, switchCmd = m.applySetupChatModel(msg.ChatModel)
+		}
 		m.messages = append(m.messages, Message{Role: RoleStatus, Content: "[✓] Setup complete."})
 		m.updateViewport()
-		return m, m.releaseAfterSetupGate(), true
+		return m, tea.Batch(switchCmd, m.releaseAfterSetupGate()), true
 	case modelsetup.BackMsg:
 		m.modelSetup, m.modelSetupOpen = nil, false
 		m.setupChoices = msg.Choices

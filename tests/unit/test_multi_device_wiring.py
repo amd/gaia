@@ -16,6 +16,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from gaia.version import LEMONADE_VERSION
+
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures", "hardware")
 
 
@@ -32,6 +34,7 @@ def _make_status(running=True, context_size=32768, loaded_models=None):
         context_size=context_size,
         loaded_models=loaded_models,
         busy=False,
+        version=LEMONADE_VERSION,
     )
 
 
@@ -549,6 +552,28 @@ class TestSessionsRouterDeviceRewrite:
         body = resp.json()
         assert body["device"] == "npu"
         assert body["model"] == "gemma4-it-e4b-FLM"
+
+    @pytest.mark.parametrize("device", ["npu", "cpu", "gpu"])
+    def test_device_switch_keeps_a_hybrid_session_on_hybrid(self, client, device):
+        created = client.post("/api/sessions", json={"model": "hybrid"}).json()
+        resp = client.put(f"/api/sessions/{created['id']}", json={"device": device})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["device"] == device
+        assert body["model"] == "hybrid"
+        assert body["effective_model"] == "hybrid"
+        assert body["inference_remote"] is True
+
+    def test_device_switch_keeps_a_session_on_a_hybrid_default(self, client):
+        from gaia.config import GaiaConfig
+
+        GaiaConfig(default_model="hybrid").save()
+        created = client.post("/api/sessions", json={}).json()
+        assert created["model"] == "hybrid"
+
+        resp = client.put(f"/api/sessions/{created['id']}", json={"device": "npu"})
+        assert resp.status_code == 200
+        assert resp.json()["model"] == "hybrid"
 
     def test_create_session_with_corrupt_config_returns_actionable_500(self, client):
         from gaia import config as config_mod

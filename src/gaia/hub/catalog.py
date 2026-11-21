@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -131,6 +132,142 @@ def fetch_bytes(url: str, timeout: int = _HTTP_TIMEOUT) -> bytes:
     resp = requests.get(url, timeout=timeout, headers=headers)
     resp.raise_for_status()
     return resp.content
+
+
+class ArtifactDownloadError(RuntimeError):
+    """An artifact download failed on every attempt, or ran out of time."""
+
+
+class _ShortBody(Exception):
+    """The server closed the connection before the whole body arrived."""
+
+
+# Artifact downloads (the flagship binary is ~150 MB) get their own budget: a
+# stall ends one attempt, a dropped connection is retried, and the whole
+# download has a deadline so setup never sits on "Downloading" forever.
+ARTIFACT_CONNECT_TIMEOUT_SECONDS = 15.0
+ARTIFACT_READ_TIMEOUT_SECONDS = 30.0
+ARTIFACT_DOWNLOAD_ATTEMPTS = 4
+ARTIFACT_BACKOFF_SECONDS = 2.0
+ARTIFACT_DEADLINE_SECONDS = 30 * 60.0
+_ARTIFACT_CHUNK_BYTES = 1 << 20
+_CONTENT_RANGE = re.compile(r"bytes\s+(\d+)-\d+/(\d+|\*)")
+
+
+def download_artifact(
+    url: str,
+    *,
+    attempts: int = ARTIFACT_DOWNLOAD_ATTEMPTS,
+    deadline_seconds: float = ARTIFACT_DEADLINE_SECONDS,
+    backoff_seconds: float = ARTIFACT_BACKOFF_SECONDS,
+    read_timeout: float = ARTIFACT_READ_TIMEOUT_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> bytes:
+    """Download a large artifact, retrying dropped or stalled connections.
+
+    A retry asks for the rest with a ``Range`` request and keeps what it has
+    when the server answers ``206`` from the right offset; any other answer
+    restarts from zero. Fails with :class:`ArtifactDownloadError` once
+    *attempts* are spent or *deadline_seconds* pass. HTTP errors other than
+    5xx/429 are not retried. The caller still verifies the checksum.
+    """
+    if url.startswith("file://"):
+        return fetch_bytes(url)
+
+    import requests
+
+    retryable = (
+        requests.ConnectionError,
+        requests.Timeout,
+        requests.exceptions.ChunkedEncodingError,
+        _ShortBody,
+    )
+    started = clock()
+    body = bytearray()
+    last_error: Optional[BaseException] = None
+
+    def out_of_time() -> bool:
+        return clock() - started > deadline_seconds
+
+    for attempt in range(1, attempts + 1):
+        headers = {
+            CORE_VERSION_HEADER: _running_core_version(),
+            # Byte offsets must refer to the stored bytes, not a gzip stream.
+            "Accept-Encoding": "identity",
+        }
+        if body:
+            headers["Range"] = f"bytes={len(body)}-"
+        try:
+            with requests.get(
+                url,
+                headers=headers,
+                stream=True,
+                timeout=(ARTIFACT_CONNECT_TIMEOUT_SECONDS, read_timeout),
+            ) as resp:
+                if resp.status_code in (416, 429) or resp.status_code >= 500:
+                    body.clear()
+                    raise requests.ConnectionError(
+                        f"HTTP {resp.status_code} from {url}"
+                    )
+                resp.raise_for_status()
+                expected_total: Optional[int] = None
+                if body and resp.status_code == 206:
+                    match = _CONTENT_RANGE.match(resp.headers.get("Content-Range", ""))
+                    if not match or int(match.group(1)) != len(body):
+                        body.clear()
+                        raise _ShortBody(
+                            f"{url} answered the resume from the wrong offset"
+                        )
+                    if match.group(2) != "*":
+                        expected_total = int(match.group(2))
+                else:
+                    if body:
+                        logger.info(
+                            "hub: %s does not resume downloads; starting over", url
+                        )
+                    body.clear()
+                    length = resp.headers.get("Content-Length")
+                    if length and length.isdigit():
+                        expected_total = int(length)
+                for chunk in resp.iter_content(_ARTIFACT_CHUNK_BYTES):
+                    body.extend(chunk)
+                    if out_of_time():
+                        break
+                if out_of_time():
+                    break
+                if expected_total is not None and len(body) != expected_total:
+                    raise _ShortBody(
+                        f"{len(body)} of {expected_total} bytes arrived from {url}"
+                    )
+                return bytes(body)
+        except retryable as exc:
+            last_error = exc
+            logger.warning(
+                "hub: download attempt %d/%d of %s failed (%s; %d bytes kept)",
+                attempt,
+                attempts,
+                url,
+                exc,
+                len(body),
+            )
+        if attempt == attempts or out_of_time():
+            break
+        delay = backoff_seconds * (2 ** (attempt - 1))
+        if clock() - started + delay > deadline_seconds:
+            break
+        sleep(delay)
+
+    if out_of_time():
+        raise ArtifactDownloadError(
+            f"The download of {url} did not finish within "
+            f"{deadline_seconds / 60:.0f} minutes, so it was stopped. Check your "
+            f"internet connection and try again."
+        ) from last_error
+    raise ArtifactDownloadError(
+        f"Couldn't download {url}: the connection failed {attempt} time(s), "
+        f"last with: {last_error}. Check your internet connection and try again."
+    ) from last_error
 
 
 def _fetch_json(url: str, fetcher: Fetcher) -> Any:
@@ -428,15 +565,90 @@ def fetch_manifest(
     base_url: Optional[str] = None,
     fetcher: Optional[Fetcher] = None,
 ) -> Dict[str, Any]:
-    """Fetch the per-agent aggregate manifest (``agents/<id>/manifest.json``)."""
+    """Fetch the per-agent aggregate manifest (``agents/<id>/manifest.json``).
+
+    Raises:
+        CatalogError: the manifest is not the shape the installer reads; the
+            message names the URL and the first field that is wrong.
+    """
     fetcher = fetcher or fetch_bytes
-    data = _fetch_json(manifest_url(agent_id, base_url), fetcher)
+    url = manifest_url(agent_id, base_url)
+    data = _fetch_json(url, fetcher)
     if not isinstance(data, dict) or not data.get("versions"):
         raise CatalogError(
             f"Hub manifest for '{agent_id}' is malformed or has no published "
             f"versions. Try again later or check GAIA_HUB_URL."
         )
+    problem = _manifest_shape_problem(data)
+    if problem:
+        raise CatalogError(
+            f"The hub manifest at {url} is malformed: {problem}. Check "
+            "GAIA_HUB_URL, or report it at https://github.com/amd/gaia/issues."
+        )
     return data
+
+
+_ARTIFACT_KEYS = ("filename", "path", "sha256")
+
+
+def _artifact_shape_problem(artifact: Any, where: str, required) -> Optional[str]:
+    if not isinstance(artifact, dict):
+        return f"{where} is {type(artifact).__name__}, not an object"
+    for key in _ARTIFACT_KEYS:
+        if key not in artifact:
+            if key in required:
+                return f"{where} has no '{key}'"
+            continue
+        if not isinstance(artifact[key], str):
+            return f"{where}.{key} is {type(artifact[key]).__name__}, not a string"
+    size = artifact.get("size_bytes")
+    if size is not None and (isinstance(size, bool) or not isinstance(size, int)):
+        return f"{where}.size_bytes is {type(size).__name__}, not a number"
+    return None
+
+
+def _manifest_shape_problem(data: Dict[str, Any]) -> Optional[str]:
+    """The first field the installer would misread, or None for a good manifest."""
+    for key in ("id", "language", "latest_version", "min_gaia_version"):
+        if data.get(key) is not None and not isinstance(data[key], str):
+            return f"'{key}' is {type(data[key]).__name__}, not a string"
+    requirements = data.get("requirements")
+    if requirements is not None:
+        if not isinstance(requirements, dict):
+            return f"'requirements' is {type(requirements).__name__}, not an object"
+        platforms = requirements.get("platforms")
+        if platforms is not None and (
+            not isinstance(platforms, list)
+            or not all(isinstance(p, str) for p in platforms)
+        ):
+            return "'requirements.platforms' is not a list of strings"
+    versions = data["versions"]
+    if not isinstance(versions, dict):
+        return f"'versions' is {type(versions).__name__}, not an object"
+    for version, entry in versions.items():
+        where = f"versions['{version}']"
+        if not isinstance(entry, dict):
+            return f"{where} is {type(entry).__name__}, not an object"
+        floor = entry.get("min_gaia_version")
+        if floor is not None and not isinstance(floor, str):
+            return f"{where}.min_gaia_version is {type(floor).__name__}, not a string"
+        artifacts = entry.get("artifacts")
+        if artifacts is not None:
+            if not isinstance(artifacts, list):
+                return f"{where}.artifacts is {type(artifacts).__name__}, not a list"
+            for i, artifact in enumerate(artifacts):
+                problem = _artifact_shape_problem(
+                    artifact, f"{where}.artifacts[{i}]", _ARTIFACT_KEYS
+                )
+                if problem:
+                    return problem
+        if entry.get("artifact") is not None:
+            problem = _artifact_shape_problem(
+                entry["artifact"], f"{where}.artifact", ()
+            )
+            if problem:
+                return problem
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -504,8 +716,24 @@ def compare_versions(a: str, b: str) -> int:
 # Core-version gate (min_gaia_version)
 # ---------------------------------------------------------------------------
 
-#: What a user runs to get a newer GAIA core.
+#: What a pip-installed GAIA runs to get a newer core.
 CORE_UPGRADE_COMMAND = "pip install --upgrade amd-gaia"
+
+
+def core_upgrade_hint() -> str:
+    """How to get a newer GAIA core, true for this kind of install.
+
+    The apps ship a frozen gaia that pip cannot touch; it updates with them.
+    """
+    if getattr(sys, "frozen", False):
+        return (
+            "update GAIA (the app updates itself, or download the latest from "
+            "https://amd-gaia.ai/#install)"
+        )
+    return (
+        f"`{CORE_UPGRADE_COMMAND}` (or re-run the installer from https://amd-gaia.ai)"
+    )
+
 
 # The core's own version is PEP 440 (0.25.0, 0.25.0rc3, 0.25.0.dev1, ...).
 _CORE_VERSION_RE = re.compile(

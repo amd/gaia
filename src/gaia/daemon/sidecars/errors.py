@@ -3,9 +3,8 @@
 """Loud, actionable error types for daemon-supervised sidecar agents (no
 silent fallbacks).
 
-Relocated verbatim from ``gaia.ui.email_sidecar.errors`` (issue #2142, T1) —
-``gaia.ui.email_sidecar.errors`` is now a pure re-export shim over this
-module so existing importers keep working unchanged.
+Lives under the daemon, which owns sidecar spawning, so the daemon never has
+to import ``gaia.ui``.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ KIND_MODE_CONFLICT = "mode_conflict"
 KIND_NOT_INSTALLED = "not_installed"
 KIND_SERVICE_UNREACHABLE = "service_unreachable"
 KIND_SERVICE_OUTDATED = "service_outdated"
+KIND_NO_RELEASE = "no_release"
 
 
 class SidecarError(Exception):

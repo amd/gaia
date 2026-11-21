@@ -3,16 +3,13 @@
 # SPDX-License-Identifier: MIT
 """Check or stamp every version field GAIA keeps in step with a source of truth.
 
-Three sources of truth, each edited by hand and nowhere else:
+Two sources of truth, each edited by hand and nowhere else:
 
     core      src/gaia/version.py  (__version__, LEMONADE_VERSION)
     flagship  hub/agents/gaia/python/gaia_agent/__init__.py  (__version__)
-    chat      hub/agents/chat/python/pyproject.toml  ([project] version)
 
-Every other field in ``TARGETS`` follows one of them. The flagship and chat
-agents keep their own versions until they join core's (#5172). The chat package
-is a deprecated re-export shim of the flagship (#6099), so its gaia-agent-gaia
-floor follows the flagship's version.
+Every other field in ``TARGETS`` follows one of them. The flagship agent keeps
+its own version until it joins core's (#5172).
 
 Usage::
 
@@ -44,11 +41,6 @@ FIX_CMD = "python util/release_versions.py --stamp"
 
 CORE_PY = "src/gaia/version.py"
 FLAGSHIP_INIT = "hub/agents/gaia/python/gaia_agent/__init__.py"
-CHAT_PYPROJECT = "hub/agents/chat/python/pyproject.toml"
-
-# The flagship 0.3.1 binary is frozen from hub/agents/{gaia,chat}/python, so the
-# chat shim's __version__ stays as shipped until v0.25.1 final (#5172).
-_HELD = "left as shipped until v0.25.1 final and flagship 0.3.1 publish (#5172)"
 
 _CORE_RE = re.compile(r"^(?P<base>\d+\.\d+\.\d+)(?:rc(?P<rc>[1-9]\d*))?$")
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -59,7 +51,6 @@ _TOML_VERSION = re.compile(r'(?m)^(version\s*=\s*")([^"\r\n]*)(")')
 _YAML_VERSION = re.compile(r"(?m)^(version:[ \t]*)([^\s#]+)()")
 _YAML_MIN_GAIA = re.compile(r"""(?m)^(min_gaia_version:[ \t]*["']?)([^"'\s#]+)()""")
 _GAIA_FLOOR = re.compile(r'("amd-gaia(?:\[[^\]"]*\])?>=)([^",\s]+)(")')
-_FLAGSHIP_FLOOR = re.compile(r'("gaia-agent-gaia>=)([^",\s]+)(")')
 _JSON_TOP_VERSION = re.compile(r'(?m)^(  "version":\s*")([^"]*)(")')
 _NAV_GAIA = re.compile(r'("label":\s*"v)([^"\s]+)(\s*(?:\\u00b7|·)\s*Lemonade\s)')
 _NAV_LEMONADE = re.compile(
@@ -81,13 +72,11 @@ class Target:
     path: str
     what: str
     pattern: re.Pattern[str]
-    # core | core-floor | lemonade | flagship | chat
+    # core | core-floor | lemonade | flagship
     source: str
     count: int = 1
     # Spelling an RC tag stamps: "pep440" (PyPI) or "npm"; None = not stamped.
     rc: str | None = None
-    # Non-empty: drift is reported but does not fail, and --stamp leaves it.
-    held: str = ""
 
 
 TARGETS: tuple[Target, ...] = (
@@ -146,19 +135,6 @@ TARGETS: tuple[Target, ...] = (
         re.compile(r"(must also be \*\*)(\d+\.\d+\.\d+)(\+\*\*)"),
         "core-floor",
     ),
-    Target(CHAT_PYPROJECT, "amd-gaia floor", _GAIA_FLOOR, "core-floor"),
-    Target(
-        "hub/agents/chat/python/gaia-agent.yaml",
-        "min_gaia_version",
-        _YAML_MIN_GAIA,
-        "core-floor",
-    ),
-    Target(
-        "hub/agents/chat/python/gaia-agent.yaml",
-        "amd-gaia floor",
-        _GAIA_FLOOR,
-        "core-floor",
-    ),
     # Flagship agent: follows gaia_agent/__init__.py.
     Target(
         "hub/agents/gaia/python/pyproject.toml", "version", _TOML_VERSION, "flagship"
@@ -194,23 +170,6 @@ TARGETS: tuple[Target, ...] = (
         re.compile(r'("baseUrl":\s*"https?://[^"]*?/agents/gaia/)([^"/]+)(/?")'),
         "flagship",
     ),
-    # The chat shim requires the flagship it re-exports (#6099).
-    Target(CHAT_PYPROJECT, "gaia-agent-gaia floor", _FLAGSHIP_FLOOR, "flagship"),
-    Target(
-        "hub/agents/chat/python/gaia-agent.yaml",
-        "gaia-agent-gaia floor",
-        _FLAGSHIP_FLOOR,
-        "flagship",
-    ),
-    # Chat agent: follows its pyproject.toml.
-    Target("hub/agents/chat/python/gaia-agent.yaml", "version", _YAML_VERSION, "chat"),
-    Target(
-        "hub/agents/chat/python/gaia_agent_chat/__init__.py",
-        "__version__",
-        _PY_VERSION,
-        "chat",
-        held=_HELD,
-    ),
 )
 
 SOURCE_FILES = {
@@ -218,7 +177,6 @@ SOURCE_FILES = {
     "core-floor": CORE_PY,
     "lemonade": CORE_PY,
     "flagship": FLAGSHIP_INIT,
-    "chat": CHAT_PYPROJECT,
 }
 
 
@@ -232,7 +190,6 @@ class Sources:
     core_rc: int | None
     lemonade: str
     flagship: str
-    chat: str
 
     @property
     def core_pep440(self) -> str:
@@ -254,7 +211,6 @@ class Sources:
         return {
             "lemonade": self.lemonade,
             "flagship": self.flagship,
-            "chat": self.chat,
         }[target.source]
 
 
@@ -262,7 +218,6 @@ class Sources:
 class Report:
     ok: list[str] = field(default_factory=list)
     drift: list[str] = field(default_factory=list)
-    held: list[str] = field(default_factory=list)
     stamped: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -297,16 +252,13 @@ def read_sources(root: Path) -> Sources:
         )
     lemonade = _single(root, CORE_PY, _LEMONADE, "LEMONADE_VERSION")
     flagship = _single(root, FLAGSHIP_INIT, _PY_VERSION, "__version__")
-    chat = _single(root, CHAT_PYPROJECT, _TOML_VERSION, "[project] version")
-    for rel, value in ((FLAGSHIP_INIT, flagship), (CHAT_PYPROJECT, chat)):
-        if not _SEMVER_RE.match(value):
-            raise VersionError(f"{rel}: version '{value}' is not X.Y.Z")
+    if not _SEMVER_RE.match(flagship):
+        raise VersionError(f"{FLAGSHIP_INIT}: version '{flagship}' is not X.Y.Z")
     return Sources(
         core_base=m.group("base"),
         core_rc=int(m.group("rc")) if m.group("rc") else None,
         lemonade=lemonade,
         flagship=flagship,
-        chat=chat,
     )
 
 
@@ -356,9 +308,7 @@ def run(root: Path, stamp: bool, targets: tuple[Target, ...] = TARGETS) -> Repor
             f"{_label(t)}: {', '.join(bad)}, expected {want} "
             f"(follows {SOURCE_FILES[t.source]})"
         )
-        if t.held:
-            report.held.append(f"{line} -- {t.held}")
-        elif stamp:
+        if stamp:
             texts[path] = t.pattern.sub(
                 lambda m, w=want: f"{m.group(1)}{w}{m.group(3)}", texts[path]
             )
@@ -419,8 +369,6 @@ def print_report(report: Report, stamp: bool) -> int:
     print(f"  OK     {len(report.ok)} field(s) match their source")
     for line in report.stamped:
         print(f"  STAMP  {line}")
-    for line in report.held:
-        print(f"  HELD   {line}")
     for line in report.drift:
         print(f"  DRIFT  {line}")
     for line in report.errors:
@@ -440,11 +388,10 @@ def print_report(report: Report, stamp: bool) -> int:
         )
     if report.errors or report.drift:
         return 1
-    held = f" ({len(report.held)} held, listed above)" if report.held else ""
     if stamp:
-        print(f"\nStamped {len(report.stamped)} field(s){held}.")
+        print(f"\nStamped {len(report.stamped)} field(s).")
     else:
-        print(f"\nEvery version field matches its source{held}.")
+        print("\nEvery version field matches its source.")
     return 0
 
 

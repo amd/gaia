@@ -141,8 +141,6 @@ type SSEClient struct {
 	agentID string
 	daemon  *daemon.Client
 	opts    SSEOptions
-	// stream is reused across turns: one Transport per client, not per turn.
-	stream *http.Client
 	// cancelHTTP is the short-timeout client for the cancel POST.
 	cancelHTTP *http.Client
 
@@ -199,7 +197,7 @@ type runHandle struct {
 }
 
 // NewSSEClient builds a daemon-transport client for agentID (the path segment in
-// /v1/<agent>/query, e.g. "email").
+// /v1/<agent>/query, e.g. "gaia").
 func NewSSEClient(agentID string, dc *daemon.Client, opts SSEOptions) *SSEClient {
 	if opts.ConnectTimeout <= 0 {
 		opts.ConnectTimeout = defaultConnectTimeout
@@ -236,6 +234,12 @@ type queryRequest struct {
 	SessionID string `json:"session_id,omitempty"`
 	// Sent only to a peer proven >= 2.20 (negotiate.go); empty omits it.
 	Surface string `json:"surface,omitempty"`
+	// The folder GAIA was started in: where relative paths and the project map
+	// resolve. Sent only to a peer proven >= 2.24.
+	WorkingDirectory string `json:"working_directory,omitempty"`
+	// That same folder as the session's file scope, as `gaia -p` sends it, so
+	// the agent looks there first and reads there without asking.
+	AllowedPaths []string `json:"allowed_paths,omitempty"`
 }
 
 // Send starts one turn. The returned channel carries the canonical event types
@@ -249,7 +253,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	closed := s.closed
 	s.mu.Unlock()
 	if closed {
-		return nil, fmt.Errorf("the %s agent connection is closed; relaunch the agent from the hub", s.agentID)
+		return nil, fmt.Errorf("the connection to the %s agent has closed; send your message again, and restart GAIA if it still fails", s.agentID)
 	}
 	runID, err := newRunID()
 	if err != nil {
@@ -301,6 +305,15 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	if peer.supportsSurface {
 		surface = "tui"
 	}
+	var workingDirectory string
+	var allowedPaths []string
+	if peer.supportsWorkingDirectory {
+		workingDirectory, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("could not read the folder GAIA was started in, which the agent needs to resolve file names you give without a full path; restart GAIA from a folder that exists: %w", err)
+		}
+		allowedPaths = []string{workingDirectory}
+	}
 
 	payload, err := json.Marshal(queryRequest{
 		Query:              query,
@@ -311,6 +324,8 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		CanAnswerQuestions: canAnswer,
 		SessionID:          sessionID,
 		Surface:            surface,
+		WorkingDirectory:   workingDirectory,
+		AllowedPaths:       allowedPaths,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not encode the '%s' query request: %w", s.agentID, err)
@@ -510,6 +525,10 @@ func (s *SSEClient) consume(
 		evt := event.ParseCanonicalEvent(payload)
 		if crashed, ok := evt.(event.CanonicalErrorEvent); ok && crashed.RawDetail != "" {
 			s.opts.Logf("sse: the '%s' agent stopped mid-turn: %s", s.agentID, crashed.RawDetail)
+			if crashed.Detail == event.AgentStoppedDetail && streamed.Len() == 0 {
+				crashed.Detail = event.AgentStoppedBeforeAnswerDetail // nothing is "kept above"
+				evt = crashed
+			}
 		}
 		if malformed, bad := evt.(event.CanonicalMalformedEvent); bad {
 			// Visible, but never fatal: one broken frame must not kill the run.
@@ -549,8 +568,16 @@ func (s *SSEClient) consume(
 			followUps := append([]string(nil), handle.followUps...)
 			s.mu.Unlock()
 			s.appendTurn(query, answer, shown, followUps)
+		} else {
+			s.fileUnansweredFollowUps(handle, query, unansweredErrored)
 		}
 		return
+	}
+
+	if (ctx.Err() != nil || !delivered) && !timedOut.Load() {
+		s.fileUnansweredFollowUps(handle, query, unansweredCancelled)
+	} else {
+		s.fileUnansweredFollowUps(handle, query, unansweredErrored)
 	}
 
 	// No terminal event: report first (the user should not wait on a network
@@ -565,7 +592,7 @@ func (s *SSEClient) consume(
 			Source: "tui",
 		})
 	case ctx.Err() != nil || !delivered:
-		// The user cancelled the turn (Esc / hub exit) — the UI already says so.
+		// The user cancelled the turn (Esc / quit) — the UI already says so.
 		s.opts.Logf("sse: '%s' run %s cancelled by the caller", s.agentID, handle.runID)
 	case runCtx.Err() != nil:
 		// Close() cancelled the run without the caller's context ending.
@@ -576,13 +603,19 @@ func (s *SSEClient) consume(
 			Source: "tui",
 		})
 	case reader.Err() != nil:
+		// The daemon or agent went away mid-answer; the next message restarts it.
+		raw := fmt.Sprintf("the '%s' query stream failed mid-run: %v", s.agentID, reader.Err())
+		s.opts.Logf("sse: %s", raw)
+		detail := event.AgentStoppedDetail
+		if streamed.Len() == 0 {
+			detail = event.AgentStoppedBeforeAnswerDetail // nothing is "kept above"
+		}
 		emit(event.CanonicalErrorEvent{
-			Type: event.CanonicalTypeError,
-			Detail: fmt.Sprintf(
-				"the '%s' query stream failed mid-run: %v. Check `gaia daemon status`",
-				s.agentID, reader.Err()),
-			Status: http.StatusBadGateway,
-			Source: "tui",
+			Type:      event.CanonicalTypeError,
+			Detail:    detail,
+			RawDetail: raw,
+			Status:    http.StatusBadGateway,
+			Source:    "tui",
 		})
 	default:
 		// The contract mandates exactly one terminal event; a clean EOF without
@@ -707,11 +740,10 @@ type respondRequest struct {
 // verbatim, exactly like Respond and cancelRun build their own paths instead
 // of taking one off the wire.
 //
-// No shipped sidecar implements this route today: the email agent's `/query`
-// speaks the stateless stop-and-hand-off model, where needs_confirmation ends
-// the run immediately and there is no server-side pause to resume. Calling
-// this against that sidecar gets a 404, handled below like any other
-// already-ended run — the same shape Respond already handles, not a new
+// No shipped sidecar implements this route today. A sidecar whose `/query`
+// speaks the stateless stop-and-hand-off model ends the run at
+// needs_confirmation, with no server-side pause to resume, so calling this
+// against it gets a 404, handled below like any other already-ended run — the same shape Respond already handles, not a new
 // failure class.
 func (s *SSEClient) Confirm(ctx context.Context, runID string, approved bool) error {
 	s.mu.Lock()
@@ -852,8 +884,7 @@ func (s *SSEClient) cancelRun(handle *runHandle) error {
 // stream — unlike the caller's context.CancelFunc, which tears that read
 // down immediately and is exactly what let a resend beat the daemon's
 // session run_lock (cooperative cancellation, released by the sidecar's
-// worker thread's own `finally`, checked once per agent-loop step; see
-// hub/agents/email/python/gaia_agent_email/query_routes.py).
+// worker thread's own `finally`, checked once per agent-loop step).
 //
 // Leaving the read running is what makes the eventual terminal signal a
 // near-certain settlement signal in practice — not a proven one. The
@@ -967,9 +998,10 @@ func (s *SSEClient) SendFollowUp(ctx context.Context, text string) error {
 		// Two places to put it, because the turn's own user+assistant pair is
 		// only written when the turn ENDS. While the run is still the live one,
 		// it rides the handle and appendTurn files it between that pair, where
-		// it was said. If the turn settled during this round-trip, that pair is
-		// already written and the handle is read by nothing — so it goes
-		// straight on the end instead. Late, but present: the user has been
+		// it was said (fileUnansweredFollowUps does the same for a turn that
+		// ends without a `final`). If the turn settled during this round-trip,
+		// that pair is already written and the handle is read by nothing — so
+		// it goes straight on the end instead. Late, but present: the user has been
 		// told it was sent, and a conversation missing a line the user can see
 		// on their own screen is the worse of the two.
 		s.mu.Lock()
@@ -1035,6 +1067,37 @@ func (s *SSEClient) appendTurn(query, answer string, shown, followUps []string) 
 	s.mu.Unlock()
 }
 
+// Assistant-side notes for a turn that ended without an answer. Same metadata
+// framing as uiContextMarker, so the model reads them as a record, not a reply.
+const (
+	unansweredCancelled = "[ui-context: the user cancelled this turn before it was answered]"
+	unansweredErrored   = "[ui-context: this turn ended in an error before it was answered]"
+)
+
+// fileUnansweredFollowUps keeps follow-ups the sidecar confirmed on a turn that
+// ended without a `final`. The user was told they were delivered and still sees
+// them on screen, so they go into the next turn's context together with the
+// question they amended. A turn with no follow-ups leaves no trace, as before.
+//
+// The run is retired under the same lock it is read under: a follow-up landing
+// afterwards sees no live run and is appended straight to the transcript.
+func (s *SSEClient) fileUnansweredFollowUps(handle *runHandle, query, note string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == handle {
+		s.active = nil
+	}
+	if len(handle.followUps) == 0 {
+		return
+	}
+	s.transcript = append(s.transcript, Turn{Role: "user", Content: query})
+	for _, f := range handle.followUps {
+		s.transcript = append(s.transcript, Turn{Role: "user", Content: f})
+	}
+	s.transcript = append(s.transcript, Turn{Role: "assistant", Content: note})
+	handle.followUps = nil
+}
+
 // displayedCard renders a drawn card as the few lines a model needs to resolve
 // a reference to it. Deliberately lossy: senders and subjects are what users
 // point at, and a verbatim payload would crowd the context it is meant to help.
@@ -1072,8 +1135,8 @@ func displayedCard(tr event.CanonicalToolResultEvent) string {
 	return strings.Join(rows, "\n")
 }
 
-// Transcript returns a copy of the host-owned transcript pushed as `context`.
-func (s *SSEClient) Transcript() []Turn {
+// transcriptSnapshot returns a copy of the transcript pushed as `context`.
+func (s *SSEClient) transcriptSnapshot() []Turn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Turn(nil), s.transcript...)
@@ -1186,9 +1249,8 @@ func newRunID() (string, error) {
 func (s *SSEClient) Supports(c Capability) (supported, known bool) {
 	switch c {
 	case CapabilityMemory:
-		// Agent id alone, and therefore answerable without the peer: `email`
-		// has no memory store at any version, while the flagship has one at
-		// every version. Deliberately NOT gated on the contract floor — see
+		// Agent id alone, and therefore answerable without the peer: only the
+		// flagship has a memory store, and it has one at every version. Deliberately NOT gated on the contract floor — see
 		// the doc comment.
 		return s.agentID == memoryAgentID, true
 	default:

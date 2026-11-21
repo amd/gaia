@@ -27,7 +27,14 @@ from gaia.agents.base.completion import CompletionEvidence
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.turn_scope import TurnScopeGuard
 from gaia.chat.sdk import AgentResponse
-from gaia.llm.providers.lemonade import LemonadeProvider, LemonadeStreamCutOffError
+from gaia.llm.failure_record import failure_kind
+from gaia.llm.lemonade_client import LemonadeClientError
+from gaia.llm.providers.lemonade import (
+    LemonadeProvider,
+    LemonadeReplyStalledError,
+    LemonadeStreamCutOffError,
+)
+from gaia.llm.retry import StreamStalledError
 
 # --------------------------------------------------------------------------
 # Script-written outputs and folders named in prose
@@ -134,6 +141,8 @@ def test_a_file_from_before_the_turn_does_not_count(tmp_path):
     old.write_text("old\n")
     hour_ago = time.time() - 3600
     os.utime(old, (hour_ago, hour_ago))
+    # Created (or utime'd) before the run's clock slack, as a real old file is.
+    time.sleep(0.1)
     ledger = CompletionEvidence("Save the outputs into out/", str(tmp_path))
     _run_script(ledger, lambda: None)
     assert _missing(_gaps(ledger))
@@ -375,9 +384,13 @@ def test_the_work_a_completion_check_asks_for_is_not_refused(agent, tmp_path):
         call("write_file", file_path="out/summary.md", content="three rows\n"),
         call("read_file", file_path="out/summary.md"),
         {"answer": "Saved the summary to `out/summary.md`: three rows."},
+        # The file now exists, so the turn's one self-check is asked for.
+        {"answer": "RESULT: PASS"},
     )
     result = agent.process_query("Summarize the data and save it to `out/summary.md`")
     assert "[check:completion]" in str(sent[1][-1]["content"])
+    assert "[check:self]" in str(sent[-1][-1]["content"])
+    assert result["result"].startswith("Saved the summary to `out/summary.md`")
     results = " ".join(
         str(m["content"]) for turn in sent for m in turn if m.get("role") == "tool"
     )
@@ -483,6 +496,68 @@ def test_a_cut_off_native_call_is_never_emitted_as_a_call():
             [_call_fragment('{"code": "print(1)"}', name="run_python")]
         ):
             assert "__tool_calls__" not in chunk
+
+
+def _stalled(before_output):
+    """The client's error for a stream gone quiet, as the provider receives it."""
+    stall = StreamStalledError(limit=120, remote=True, before_output=before_output)
+    error = LemonadeClientError(stall.describe(1))
+    error.__cause__ = stall
+    return error
+
+
+def _stalling(chunks, error):
+    yield from chunks
+    raise error
+
+
+def test_a_reply_that_stalls_partway_is_a_cut_off_keeping_its_own_message():
+    error = _stalled(before_output=False)
+    with pytest.raises(LemonadeReplyStalledError) as caught:
+        _provider_stream(_stalling([_text("Let me build the three")], error))
+    assert isinstance(caught.value, LemonadeStreamCutOffError)
+    assert "sent nothing for 120s" in caught.value.user_message
+    assert caught.value.__cause__ is error
+
+
+def test_a_model_silent_from_the_start_is_not_a_cut_off():
+    error = _stalled(before_output=True)
+    with pytest.raises(LemonadeClientError) as caught:
+        _provider_stream(_stalling([], error))
+    assert caught.value is error
+
+
+def test_a_reply_that_stalled_partway_is_requested_again(agent):
+    stalled = LemonadeReplyStalledError(_stalled(before_output=False).args[0])
+    calls = _streams(
+        agent,
+        ["Let me build it.\n", stalled],
+        call("write_file", file_path="a.md", content="real\n"),
+        {"answer": "Wrote a.md."},
+    )
+    result = agent.process_query("Write a.md with the word real.")
+    assert len(calls) == 3
+    assert result["result"].startswith("Wrote a.md.")
+    assert agent.writes == [("a.md", "real\n")]
+
+
+def test_a_reply_that_stalls_every_time_ends_the_turn_failed_with_a_report(agent):
+    def stalled():
+        error = LemonadeReplyStalledError(_stalled(before_output=False).args[0])
+        error.__cause__ = _stalled(before_output=False)
+        return ["Let me build it.", error]
+
+    calls = _streams(agent, stalled(), stalled(), stalled(), stalled())
+    saved = []
+    with patch.object(
+        agent, "_save_failure_record", lambda exc: saved.append(exc) or "GF-1"
+    ):
+        result = agent.process_query("Write a.md.")
+    assert len(calls) == 3
+    assert result["status"] == "failed"
+    assert "GF-1" in result["result"]
+    assert "Let me build it" not in result["result"]
+    assert failure_kind(saved[0]) == "timeout"
 
 
 def _provider_stream_iter(chunks):
@@ -853,6 +928,137 @@ def _write_and_verify(tmp_path, name, content, on_disk=None):
     ledger.record("write_file", args, {"status": "success"}, True)
     Agent._verify_whole_write(_AGENT, ledger, "write_file", args)
     return _gaps(ledger, f"The report is saved to `{name}`.")
+
+
+def _script_writes_then_shell_shows(tmp_path, command, stdout=None, **extra):
+    """A requested output a script wrote, then a shell line that prints it."""
+    ledger = CompletionEvidence("Write the result to out.toml.", str(tmp_path))
+    target = tmp_path / "out.toml"
+    content = "takeoff = 53\nlanding = 62\n"
+    target.write_text(content, encoding="utf-8")
+    ledger.record(
+        "run_python",
+        {"code": "..."},
+        {"status": "success", "file_path": str(target)},
+        True,
+    )
+    args = {"command": command}
+    result = {"status": "success", "stdout": content if stdout is None else stdout}
+    result.update(extra)
+    ledger.record("run_shell_command", args, result, True)
+    Agent._verify_shown_file(_AGENT, ledger, "run_shell_command", args, result)
+    return _gaps(ledger, "The result is saved to `out.toml`.")
+
+
+def test_a_shell_cat_that_showed_the_whole_file_is_a_read_back(tmp_path):
+    """A file a script wrote, shown whole by cat, was still called unread."""
+    gaps = _script_writes_then_shell_shows(tmp_path, "cat out.toml")
+    assert not any("read back" in g for g in gaps)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "type out.toml",
+        "TYPE out.toml",
+        'type "out.toml"',
+        "more out.toml",
+        "Get-Content out.toml",
+        "get-content out.toml",
+        "gc out.toml",
+        "Get-Content -Path out.toml",
+        "Get-Content -LiteralPath 'out.toml'",
+        pytest.param(
+            "gc -Path .\\out.toml",
+            marks=pytest.mark.skipif(
+                sys.platform != "win32", reason="a backslash path is Windows-only"
+            ),
+        ),
+        "Get-Content -Raw out.toml",
+        "Get-Content -Path out.toml -Raw",
+        "Get-Content out.toml -Encoding UTF8",
+        'powershell -Command "Get-Content out.toml"',
+        "powershell -Command Get-Content out.toml",
+        "powershell Get-Content out.toml",
+        "powershell.exe -NoProfile -Command \"Get-Content -LiteralPath 'out.toml'\"",
+        'pwsh -NoProfile -c "gc out.toml"',
+        'powershell -Command "type out.toml"',
+    ],
+)
+def test_the_windows_ways_to_show_a_whole_file_are_read_backs_too(tmp_path, command):
+    """On Windows the model shows a file with type or Get-Content, not cat."""
+    gaps = _script_writes_then_shell_shows(tmp_path, command)
+    assert not any("read back" in g for g in gaps)
+
+
+@pytest.mark.parametrize(
+    "command, stdout, extra",
+    [
+        ("cat out.toml | head -1", None, {}),
+        ("cat out.toml && echo done", None, {}),
+        ("head -1 out.toml", None, {}),
+        ("cat out.toml", "takeoff = 53\n", {}),
+        ("cat out.toml", None, {"output_truncated": True}),
+        ("type out.toml | findstr takeoff", None, {}),
+        ("type out.toml & echo done", None, {}),
+        ("type out.toml other.toml", None, {}),
+        ("type out.toml", "takeoff = 53\n", {}),
+        ("more +1 out.toml", None, {}),
+        ("Get-Content out.toml -TotalCount 1", None, {}),
+        ("Get-Content -Tail 1 out.toml", None, {}),
+        ("Get-Content out.toml | Select-Object -First 1", None, {}),
+        ("Get-Content out.toml; Remove-Item out.toml", None, {}),
+        ("Get-Content -Path out.toml", "takeoff = 53\n", {}),
+        ("gc out.toml", None, {"output_truncated": True}),
+        ("Get-ChildItem out.toml", None, {}),
+        ('powershell -Command "Get-Content out.toml -TotalCount 1"', None, {}),
+        ('powershell -Command "Get-Content out.toml | Select -First 1"', None, {}),
+        ('powershell -Command "Get-Content out.toml; Remove-Item out.toml"', None, {}),
+        ('powershell -Command "Get-Content out.toml" | findstr takeoff', None, {}),
+        ('powershell -Command "Get-Content out.toml"', "takeoff = 53\n", {}),
+        ("powershell -File show.ps1 out.toml", None, {}),
+        ("powershell -EncodedCommand RwBlAHQA", None, {}),
+    ],
+)
+def test_a_shell_line_that_did_not_show_all_of_it_is_no_read_back(
+    tmp_path, command, stdout, extra
+):
+    gaps = _script_writes_then_shell_shows(tmp_path, command, stdout, **extra)
+    assert any("read back" in g for g in gaps)
+
+
+def test_a_cat_run_in_another_folder_reads_the_file_there(tmp_path):
+    """After a cd the shell is elsewhere; the path is relative to that folder."""
+    ledger = CompletionEvidence("Write the result to out/r.toml.", str(tmp_path))
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "r.toml").write_text("ok = true" + chr(10), encoding="utf-8")
+    ledger.record(
+        "run_python",
+        {"code": "..."},
+        {"status": "success", "file_path": str(out / "r.toml")},
+        True,
+    )
+    args = {"command": "cat r.toml"}
+    result = {"status": "success", "stdout": "ok = true" + chr(10), "cwd": str(out)}
+    ledger.record("run_shell_command", args, result, True)
+    Agent._verify_shown_file(_AGENT, ledger, "run_shell_command", args, result)
+    gaps = _gaps(ledger, "The result is saved to `out/r.toml`.")
+    assert not any("read back" in g for g in gaps)
+
+
+def test_a_cat_of_a_script_output_not_yet_recorded_is_a_read_back(tmp_path):
+    """The script reported no path and the request named none: still a read."""
+    ledger = CompletionEvidence("Save the result as a TOML file.", str(tmp_path))
+    target = tmp_path / "out.toml"
+    content = "takeoff = 53\n"
+    _run_script(ledger, lambda: target.write_text(content, encoding="utf-8"))
+    args = {"command": "cat out.toml"}
+    result = {"status": "success", "stdout": content}
+    ledger.record("run_shell_command", args, result, True)
+    Agent._verify_shown_file(_AGENT, ledger, "run_shell_command", args, result)
+    gaps = _gaps(ledger, "The result is saved to `out.toml`.")
+    assert not any("read back" in g for g in gaps)
 
 
 def test_a_whole_write_the_framework_matched_needs_no_read_back(tmp_path):

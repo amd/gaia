@@ -14,7 +14,7 @@ import (
 
 // Lemonade /system-info bodies for the two NPU target PCs, plus one without.
 const (
-	haloNPU    = `{"Physical Memory":"128 GB","devices":{"amd_gpu":[{"available":true,"integrated":true,"vram_gb":64.0,"virtual_mem_gb":32.0}],"amd_npu":{"available":true,"family":"XDNA2"}},"model_storage":{"free_bytes":900000000000}}`
+	haloNPU    = `{"OS Version":"Linux-7.0.0-31-generic","Physical Memory":"62.40 GB","devices":{"amd_gpu":[{"available":true,"integrated":true,"vram_gb":64.0,"virtual_mem_gb":32.0}],"amd_npu":{"available":true,"family":"XDNA2"}},"model_storage":{"free_bytes":900000000000}}`
 	laptopNPU  = `{"Physical Memory":"16 GB","devices":{"amd_gpu":[{"available":true,"integrated":true,"vram_gb":0.5,"virtual_mem_gb":7.7}],"amd_npu":{"available":true}},"model_storage":{"free_bytes":200000000000}}`
 	npuMissing = `{"Physical Memory":"64 GB","devices":{"amd_gpu":[{"available":true,"integrated":true,"vram_gb":32.0}],"amd_npu":{"available":false}},"model_storage":{"free_bytes":900000000000}}`
 )
@@ -35,14 +35,14 @@ func entriesByID(entries []Entry) map[string]Entry {
 	return out
 }
 
-// Mirrors tests/unit/test_npu_twin_models.py: the NPU's memory is RAM less the
-// GPU carve-out, and the GPU pool is left as it was.
-func TestNPUMemoryIsRAMLessTheCarveOut(t *testing.T) {
+// Mirrors tests/unit/test_npu_twin_models.py: the NPU's memory is the RAM Linux
+// sees, and the GPU pool is left as it was.
+func TestNPUMemoryIsTheRAMLinuxSees(t *testing.T) {
 	c := capacityOf(t, haloNPU)
-	if c.NPUMemoryGB != 64 || c.MemorySource != "AMD iGPU" {
+	if c.NPUMemoryGB != 62.4 || c.MemorySource != "AMD iGPU" {
 		t.Fatalf("got NPU %.1f GB, pool %q", c.NPUMemoryGB, c.MemorySource)
 	}
-	if npu, ok := c.NPU(); !ok || npu.MemoryGB != 64 || npu.MemorySource != "NPU, system RAM" {
+	if npu, ok := c.NPU(); !ok || npu.MemoryGB != 62.4 || npu.MemorySource != "NPU, system RAM" {
 		t.Fatalf("NPU view: %+v ok=%v", npu, ok)
 	}
 	if _, ok := capacityOf(t, npuMissing).NPU(); ok {
@@ -65,7 +65,7 @@ func TestOnlyGemmaIsRecommendedAsAnNPUModel(t *testing.T) {
 }
 
 func TestBigNPUPCIsOfferedGemma(t *testing.T) {
-	by := entriesByID(BuildEntries("local", flmCatalog(), capacityOf(t, haloNPU), nil))
+	by := entriesByID(BuildEntries("local", flmCatalog(), capacityOf(t, haloNPU), nil, verdict(true, true, true)))
 	if e := by["gemma4-it-e4b-FLM"]; !e.Selectable() || !e.OnNPU() || e.Recommended == nil {
 		t.Fatalf("Gemma NPU should be a selectable NPU recommendation: %+v", e)
 	}
@@ -75,14 +75,14 @@ func TestBigNPUPCIsOfferedGemma(t *testing.T) {
 }
 
 func TestSmallNPULaptopIsOfferedGemmaOnly(t *testing.T) {
-	by := entriesByID(BuildEntries("local", flmCatalog(), capacityOf(t, laptopNPU), nil))
+	by := entriesByID(BuildEntries("local", flmCatalog(), capacityOf(t, laptopNPU), nil, verdict(true, true, true)))
 	if !by["gemma4-it-e4b-FLM"].Selectable() {
 		t.Fatalf("Gemma NPU should fit 15.5 GB of NPU RAM: %+v", by["gemma4-it-e4b-FLM"])
 	}
 }
 
 func TestNoNPUBlocksEveryFLMModelWithAReason(t *testing.T) {
-	for _, e := range BuildEntries("local", flmCatalog(), capacityOf(t, npuMissing), nil) {
+	for _, e := range BuildEntries("local", flmCatalog(), capacityOf(t, npuMissing), nil, verdict(false, false, true)) {
 		if !e.OnNPU() {
 			continue
 		}
@@ -92,28 +92,35 @@ func TestNoNPUBlocksEveryFLMModelWithAReason(t *testing.T) {
 	}
 }
 
-func TestDownloadedFLMModelStaysSelectable(t *testing.T) {
+// Downloaded skips the download checks, not the readiness check: on a ready
+// NPU it stays selectable even when memory alone would refuse it, and the
+// not-ready and unknown cases are covered in catalog_verdict_test.go.
+func TestDownloadedFLMModelStaysSelectableOnAReadyNPU(t *testing.T) {
 	models := flmCatalog()
 	models[0].Downloaded = true
-	by := entriesByID(BuildEntries("local", models, capacityOf(t, npuMissing), nil))
+	tight := Capacity{MemoryGB: 40, MemorySource: "AMD iGPU", DiskFreeGB: 500, NPUMemoryGB: 8}
+	by := entriesByID(BuildEntries("local", models, tight, nil, verdict(true, true, true)))
 	if !by["qwen3.6-moe-35b-a3b-FLM"].Selectable() {
 		t.Fatal("a downloaded model is never blocked by the fit check")
 	}
 }
 
-// Lemonade hides FLM models until its NPU backend is installed; Pull installs it.
-func TestUnlistedNPUModelsAreHiddenWithoutAnNPUAndDownloadableWithOne(t *testing.T) {
-	for _, e := range BuildEntries("local", nil, capacityOf(t, npuMissing), nil) {
-		if e.Recommended != nil && e.Recommended.Device == "npu" {
-			t.Fatalf("a PC with no NPU was shown %s", e.Model.ID)
-		}
+// A confirmed-absent NPU is not an option to explain, so the unlisted
+// recommendation is hidden. Lemonade hides FLM models until its NPU backend is
+// installed; Pull installs it.
+func TestAnNPURecommendationIsHiddenOnAConfirmedAbsentNPU(t *testing.T) {
+	by := entriesByID(BuildEntries("local", nil, capacityOf(t, npuMissing), nil, verdict(false, false, true)))
+	if e, ok := by["gemma4-it-e4b-FLM"]; ok {
+		t.Fatalf("a PC with no NPU must not show the recommendation: %+v", e)
 	}
-	by := entriesByID(BuildEntries("local", nil, capacityOf(t, haloNPU), nil))
-	for _, id := range []string{"gemma4-it-e4b-FLM"} {
-		e, ok := by[id]
-		if !ok || !e.Selectable() || !e.NeedsDownload() || e.Reason != "" {
-			t.Fatalf("%s on an NPU PC without the backend: %+v", id, e)
-		}
+}
+
+// A ready NPU keeps the recommendation, even before Lemonade lists the model.
+func TestAnNPURecommendationIsShownOnAReadyNPU(t *testing.T) {
+	by := entriesByID(BuildEntries("local", nil, capacityOf(t, haloNPU), nil, verdict(true, true, true)))
+	e, ok := by["gemma4-it-e4b-FLM"]
+	if !ok || !e.Selectable() || !e.NeedsDownload() || e.Reason != "" {
+		t.Fatalf("%s on an NPU PC without the backend: %+v", "gemma4-it-e4b-FLM", e)
 	}
 }
 
@@ -129,7 +136,7 @@ func TestSingleTurnFLMBuildsAreNotChatOptions(t *testing.T) {
 // The NPU model is an option the user picks, never shown as a recommendation.
 func TestNPUModelIsListedWithTheOtherModelsNotRecommended(t *testing.T) {
 	gpu := Model{ID: "Gemma-4-E4B-it-GGUF", Size: 5.97, Labels: []string{"chat"}}
-	entries := BuildEntries("local", append([]Model{gpu}, flmCatalog()...), capacityOf(t, haloNPU), nil)
+	entries := BuildEntries("local", append([]Model{gpu}, flmCatalog()...), capacityOf(t, haloNPU), nil, verdict(true, true, true))
 	seenOther := false
 	for _, e := range entries {
 		if e.Model.ID == "gemma4-it-e4b-FLM" {
@@ -178,6 +185,24 @@ func TestNPUModelPullsByNameOnly(t *testing.T) {
 		body := PullRequest(Entry{Model: Model{ID: r.ID, Recipe: "flm"}, Recommended: &r})
 		if len(body) != 2 || body["model_name"] != r.ID || body["stream"] != true {
 			t.Fatalf("%s: pull must go by name only, got %v", r.ID, body)
+		}
+	}
+}
+
+// Mirrors tests/unit/test_flm_models.py: a Windows Lemonade reports installed
+// RAM, so the carve-out comes off; Linux's MemTotal is already without it.
+func TestNPUMemoryTakesTheCarveOutOffOnlyOnWindows(t *testing.T) {
+	const apu = `{"OS Version":%q,"Physical Memory":"%s","devices":{"amd_igpu":{"available":true,"vram_gb":16.0},"amd_npu":{"available":true}}}`
+	for _, tc := range []struct {
+		os, physical string
+		want         float64
+	}{
+		{"Windows 11 Pro 24H2", "64.00 GB", 48},
+		{"Linux-6.14.0-ubuntu-24.04", "48.00 GB", 48},
+		{"Windows 11 Pro 24H2", "16.00 GB", 0},
+	} {
+		if got := capacityOf(t, fmt.Sprintf(apu, tc.os, tc.physical)).NPUMemoryGB; got != tc.want {
+			t.Errorf("%s, %s: NPU memory %.1f GB, want %.1f", tc.os, tc.physical, got, tc.want)
 		}
 	}
 }

@@ -20,6 +20,7 @@ import pytest
 
 from gaia.llm.lemonade_client import LemonadeClientError, LemonadeStatus
 from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
+from gaia.version import LEMONADE_VERSION
 
 # A co-loaded non-LLM model. Its tiny ctx_size must never be mistaken for the
 # server's, and its presence must never be mistaken for "a chat model is up".
@@ -47,6 +48,7 @@ def _reset_manager():
 
 def _status(running=True, context_size=0, loaded_models=None):
     return LemonadeStatus(
+        version=LEMONADE_VERSION,
         running=running,
         context_size=context_size,
         loaded_models=[] if loaded_models is None else loaded_models,
@@ -546,19 +548,22 @@ def test_reload_clamps_to_known_ceiling_and_reports_honestly(mock_cls):
 def test_known_ceiling_stops_repeat_reload_attempts(mock_cls):
     client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
     client.get_model_max_context_window.return_value = 40960
+    loaded = _status(
+        running=True,
+        context_size=65536,
+        loaded_models=[
+            {
+                "id": "Gemma-4-E4B-it-GGUF",
+                "model_name": "Gemma-4-E4B-it-GGUF",
+                "max_context_window": 40960,
+            }
+        ],
+    )
+    # The third status answers the second call's re-check.
     client.get_status.side_effect = [
         _status(running=True, context_size=0, loaded_models=[]),
-        _status(
-            running=True,
-            context_size=65536,
-            loaded_models=[
-                {
-                    "id": "Gemma-4-E4B-it-GGUF",
-                    "model_name": "Gemma-4-E4B-it-GGUF",
-                    "max_context_window": 40960,
-                }
-            ],
-        ),
+        loaded,
+        loaded,
     ]
     mock_cls.return_value = client
 
@@ -1009,7 +1014,7 @@ def test_recheck_with_only_non_llm_model_warns_loudly(mock_cls, caplog, capsys):
         assert "no LLM loaded" in surface
         assert "Whisper-Large-v3-Turbo" in surface
         assert "gaia init" in surface
-        assert "server.log" in surface
+        assert "log has the full error" in surface
 
     # The silent part that must NOT happen: caching min_context_size as if a
     # chat model were up.

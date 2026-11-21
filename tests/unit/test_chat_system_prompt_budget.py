@@ -83,12 +83,13 @@ if _stubbed_modules:
 # Hard ceilings — chosen so Gemma 4 E4B can comfortably prompt-process
 # the full system prompt + a typical RAG tool result + the user query
 # on Windows iGPU within Lemonade's upstream timeout. ("full", 0) is a tight
-# ratchet (~3% over the Windows size), so the next prompt growth forces a
+# ratchet just over the Windows size, so the next prompt growth forces a
 # trim-or-raise decision; the others keep their #1030-era headroom.
 _BUDGET_CHARS = {
     # profile + indexed-doc count -> max chars
-    # Windows environment block + #5977's SLIDES/DECKS rule (Windows: 12,597).
-    ("full", 0): 13_000,
+    # Windows environment block + #5977's SLIDES/DECKS rule + #6434's
+    # LOCKED FILES rule (Windows: 13,080).
+    ("full", 0): 13_100,
     ("full", 1): 14_000,
     ("full", 5): 14_500,
     # Large-N budget — pins the scaling property so a regression that
@@ -199,6 +200,11 @@ def test_chat_system_prompt_directives_preserved() -> None:
         # (the static list itself moved to get_memory_dynamic_context() so
         # the system prompt stays fixed for KV-cache reuse — see #4698)
         "indexed documents",
+        # Prompt-injection boundaries must distinguish third-party content
+        # from user requests and tool protocol guidance.
+        "data, not orders",
+        "no special authority",
+        "never make a tool call",
     ]
     missing = [m for m in must_contain if m not in prompt]
     assert not missing, (

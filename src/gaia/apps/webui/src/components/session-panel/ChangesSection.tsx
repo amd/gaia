@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CornerDownRight, FileDiff as FileDiffIcon, GitBranch, GitCommit, GitPullRequest, Loader2, Undo2, X } from 'lucide-react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
+import { requestErrorParam, requestErrorText } from '../../utils/requestErrors';
 import { log } from '../../utils/logger';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
@@ -21,17 +22,14 @@ import { announceUndo, useUndoEvents } from '../../utils/undoEvents';
 import { untrackedWarning } from '../../utils/untrackedWork';
 import { DiffCard } from '../render/DiffCard';
 import { PanelSection } from './PanelSection';
+import { useSessionPanelStore } from '../../stores/sessionPanelStore';
 import type { ChatFileChange, GitRepo, SessionChanges, SessionGit } from '../../types/sessionPanel';
-import { ref, type MessageKey } from '../../i18n/registry';
+import { ref, type MessageKey, type Param } from '../../i18n/registry';
 import { tEn, useT, type Translate } from '../../i18n/useT';
+import { visibleName } from '../CalendarApproval';
 
 function plural(n: number, one: string, many = `${one}s`): string {
     return `${n} ${n === 1 ? one : many}`;
-}
-
-function errorText(err: unknown): string {
-    if (err instanceof api.ApiError) return err.detail || err.message;
-    return err instanceof Error ? err.message : String(err);
 }
 
 function baseName(path: string): string {
@@ -70,7 +68,7 @@ interface ChangesSectionProps {
 export function ChangesSection({ sessionId, busy, onJumpToMessage }: ChangesSectionProps) {
     const t = useT();
     const [changes, setChanges] = useState<SessionChanges | null>(null);
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<Param | null>(null);
     // Kept here: after Undo all the list empties, and the result must stay readable.
     const [undone, setUndone] = useState<string | null>(null);
 
@@ -78,12 +76,14 @@ export function ChangesSection({ sessionId, busy, onJumpToMessage }: ChangesSect
         Promise.resolve()
             .then(() => api.getSessionChanges(sessionId))
             .then((res) => {
-                setChanges(expectShape(res, (r) => Array.isArray(r.files), "list of this chat's changes"));
+                const loaded = expectShape(res, (r) => Array.isArray(r.files), "list of this chat's changes");
+                setChanges(loaded);
+                useSessionPanelStore.getState().setSignals(sessionId, { changedFiles: loaded.files.length });
                 setError(null);
             })
             .catch((err) => {
                 log.ui.warn(`Could not total what session=${sessionId} changed`, err);
-                setError(errorText(err));
+                setError(requestErrorParam(err));
             });
     }, [sessionId]);
     useEffect(load, [load]);
@@ -152,7 +152,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
             await refreshTurnChanges(sessionId);
         } catch (err) {
             const conflict = (err as { reason?: unknown } | null)?.reason === 'conflict';
-            setMessage(errorText(err));
+            setMessage(requestErrorText(err));
             setPhase(conflict ? 'conflict' : 'idle');
         }
     };
@@ -172,7 +172,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
                     return (
                         <li key={f.path} className="sp-change">
                             <div className="sp-item-text">
-                                <span className="sp-item-name" dir="auto" title={f.path}>{baseName(f.path)}</span>
+                                <span className="sp-item-name" dir="ltr" title={visibleName(f.path)}>{visibleName(baseName(f.path))}</span>
                                 <span className="sp-meta">
                                     {t(CHANGE_LABEL[f.change])}
                                     {f.additions != null && <> · <span className="sp-add">+{f.additions}</span> <span className="sp-del">−{f.deletions}</span></>}
@@ -187,7 +187,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
                                     type="button"
                                     className="btn-icon-sm"
                                     onClick={() => onJumpToMessage(latest)}
-                                    aria-label={t('chg.goToLast', { name: baseName(f.path) })}
+                                    aria-label={t('chg.goToLast', { name: visibleName(baseName(f.path)) })}
                                     title={t('sp.goToTurn')}
                                 >
                                     <CornerDownRight size={12} />
@@ -199,7 +199,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
             </ul>
             {changes.incomplete && (
                 <p className="sp-warn-text" role="note">
-                    <AlertTriangle size={11} aria-hidden="true" /> {untrackedWarning(changes.untracked, { inChat: true, undo: 'Undo all' })}
+                    <AlertTriangle size={11} aria-hidden="true" /> {untrackedWarning(changes.untracked, { inChat: true }, t)}
                 </p>
             )}
             <div className="sp-actions-row">
@@ -272,7 +272,7 @@ function ChatChangesReview({ changes, onClose }: { changes: SessionChanges; onCl
                         <section key={file.path} className="changes-review-file">
                             <DiffCard
                                 data={{
-                                    title: file.path,
+                                    path: file.path,
                                     badge: CHANGE_BADGE[file.change],
                                     note: note(file),
                                     unified: file.binary || file.too_large ? '' : file.unified,
@@ -289,7 +289,7 @@ function ChatChangesReview({ changes, onClose }: { changes: SessionChanges; onCl
 function GitActions({ sessionId, busy, onCommitted }: { sessionId: string; busy: boolean; onCommitted: () => void }) {
     const t = useT();
     const [git, setGit] = useState<SessionGit | null>(null);
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<Param | null>(null);
     const [dialog, setDialog] = useState<{ kind: 'commit' | 'pr'; repo: GitRepo } | null>(null);
     const [done, setDone] = useState<string | null>(null);
 
@@ -300,7 +300,7 @@ function GitActions({ sessionId, busy, onCommitted }: { sessionId: string; busy:
                 setGit(expectShape(res, (r) => Array.isArray(r.repos), 'list of git repositories'));
                 setError(null);
             })
-            .catch((err) => setError(errorText(err)));
+            .catch((err) => setError(requestErrorParam(err)));
     }, [sessionId]);
     useEffect(load, [load]);
     useTurnEnd(busy, load);
@@ -313,8 +313,8 @@ function GitActions({ sessionId, busy, onCommitted }: { sessionId: string; busy:
         <div className="sp-git">
             {git.repos.map((repo) => (
                 <div key={repo.root} className="sp-git-repo">
-                    <span className="sp-meta" title={repo.root}>
-                        <GitBranch size={12} aria-hidden="true" /> {baseName(repo.root)} · {repo.branch}
+                    <span className="sp-meta" title={visibleName(repo.root)}>
+                        <GitBranch size={12} aria-hidden="true" /> {visibleName(baseName(repo.root))} · {visibleName(repo.branch)}
                         {repo.uncommitted.length === 0 && repo.files.length > 0 && ' · committed'}
                     </span>
                     <span className="sp-actions-row">
@@ -381,7 +381,7 @@ function GitDialog({ sessionId, kind, repo, onClose, onDone }: {
                 onDone(`Opened ${res.url}`);
             }
         } catch (err) {
-            setError(errorText(err));
+            setError(requestErrorText(err));
             setRunning(false);
         }
     };
@@ -406,8 +406,8 @@ function GitDialog({ sessionId, kind, repo, onClose, onDone }: {
                 <div className="modal-body sp-git-body">
                     <p className="sp-meta">
                         {kind === 'commit'
-                            ? `In ${repo.root} on ${repo.branch}. Only the files below are committed; anything else you changed stays as it is.`
-                            : `Pushes ${repo.branch} to ${repo.remote} (never forced), then opens a pull request with GitHub's gh tool.`}
+                            ? `In ${visibleName(repo.root)} on ${visibleName(repo.branch)}. Only the files below are committed; anything else you changed stays as it is.`
+                            : `Pushes ${visibleName(repo.branch)} to ${repo.remote} (never forced), then opens a pull request with GitHub's gh tool.`}
                     </p>
                     <label className="sp-field">
                         <span>{kind === 'commit' ? 'Summary' : 'Title'}</span>

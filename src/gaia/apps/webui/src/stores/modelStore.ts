@@ -3,11 +3,26 @@
 
 /** The model new turns run on, and where it runs (this PC or a cloud provider). */
 
+import { forgetModelChecks } from './modelNeededStore';
 import { create } from 'zustand';
 import * as api from '../services/api';
 import { useChatStore } from './chatStore';
 import { log } from '../utils/logger';
-import type { ActiveModel, Session } from '../types';
+import { tEn, useT, type Translate } from '../i18n/useT';
+import type { ActiveModel, Session, WarmUpStatus } from '../types';
+
+/** Why a pick's load failed: the backend's own reason, or a translated one when GAIA lost track. */
+export interface PickLoadError {
+    key?: 'banner.pickLoad.noReason' | 'banner.pickLoad.lostTrack' | 'banner.pickLoad.startFailed';
+    reason: string;
+}
+
+/** A local model picked from the list, loading in the background; `error` once that load failed. */
+export interface PickLoad {
+    model: string;
+    seconds: number;
+    error: PickLoadError | null;
+}
 
 interface ModelState {
     active: ActiveModel | null;
@@ -20,6 +35,7 @@ interface ModelState {
     queueError: string | null;
     /** Friendly names the backend gave, by model id. */
     names: Record<string, string>;
+    pickLoad: PickLoad | null;
     refresh: () => Promise<void>;
     retryNow: () => void;
     select: (model: string) => Promise<void>;
@@ -27,17 +43,29 @@ interface ModelState {
     applyQueued: () => Promise<void>;
     rememberNames: (models: Array<{ id: string; display_name?: string }>) => void;
     dismissRestoreNotice: () => void;
+    /** Ask for the failed pick's load again. */
+    retryPickLoad: () => Promise<void>;
+    dismissPickLoad: () => void;
 }
 
+export const PICK_LOAD_POLL_MS = 1_000;
 const RESTORE_RETRY_MS = 5_000;
 const RESTORE_RETRIES = 24;
 /** A failed read is retried, doubling up to the cap: the backend may still be starting. */
 export const MODEL_RETRY_INITIAL_MS = 1_000;
 export const MODEL_RETRY_MAX_MS = 30_000;
 let restoreRetries = 0;
+let restoreTimer: ReturnType<typeof setTimeout> | null = null;
 let namesRequested = false;
 let failRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let failRetryMs = MODEL_RETRY_INITIAL_MS;
+// Bumped by each pick, so an older pick's watch stops.
+let pickLoadWatch = 0;
+
+function clearRestoreRetry(): void {
+    if (restoreTimer) clearTimeout(restoreTimer);
+    restoreTimer = null;
+}
 
 function clearFailRetry(): void {
     if (failRetryTimer) clearTimeout(failRetryTimer);
@@ -47,9 +75,44 @@ function clearFailRetry(): void {
 /** Forget pending retries and backoff, so each test starts from a fresh launch. */
 export function resetModelRetryForTests(): void {
     clearFailRetry();
+    clearRestoreRetry();
     failRetryMs = MODEL_RETRY_INITIAL_MS;
     restoreRetries = 0;
     namesRequested = false;
+    pickLoadWatch += 1;
+}
+
+/** The pick's own warm-up: one on another model is still finishing, and the pick's runs next. */
+function isPickWarmUp(w: WarmUpStatus, model: string): boolean {
+    return !w.model || sameModelId(w.model, model);
+}
+
+/** Follow the backend's load of a picked local model until it is ready or has failed. */
+function watchPickLoad(model: string, set: (s: Partial<ModelState>) => void): void {
+    const watch = ++pickLoadWatch;
+    set({ pickLoad: { model, seconds: 0, error: null } });
+    const poll = async () => {
+        const w: WarmUpStatus = await api.getWarmUp();
+        if (watch !== pickLoadWatch) return;
+        const seconds = Math.floor(w.elapsed_seconds ?? 0);
+        if (w.state === 'warming') {
+            set({ pickLoad: { model, seconds: isPickWarmUp(w, model) ? seconds : 0, error: null } });
+            setTimeout(() => { void poll().catch(fail); }, PICK_LOAD_POLL_MS);
+        } else if (w.state === 'failed' && isPickWarmUp(w, model)) {
+            const error: PickLoadError = w.error ? { reason: w.error } : { key: 'banner.pickLoad.noReason', reason: '' };
+            set({ pickLoad: { model, seconds, error } });
+        } else {
+            set({ pickLoad: null });
+        }
+    };
+    // A watch that breaks says so rather than leave "Loading" up for good.
+    const fail = (err: unknown) => {
+        if (watch !== pickLoadWatch) return;
+        log.system.warn(`Lost track of loading ${model}`, err);
+        const reason = err instanceof Error ? err.message : String(err);
+        set({ pickLoad: { model, seconds: 0, error: { key: 'banner.pickLoad.lostTrack', reason } } });
+    };
+    void poll().catch(fail);
 }
 
 /** Local models' friendly names, read once so every surface names a model as the chip does. */
@@ -70,6 +133,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     queued: null,
     queueError: null,
     names: {},
+    pickLoad: null,
     refresh: async () => {
         if (!namesRequested) {
             namesRequested = true;
@@ -80,17 +144,20 @@ export const useModelStore = create<ModelState>((set, get) => ({
             clearFailRetry();
             failRetryMs = MODEL_RETRY_INITIAL_MS;
             const r = active.restore;
-            // The model server is still starting; the saved model is checked once it answers.
-            if (r?.status === 'pending' && restoreRetries < RESTORE_RETRIES) {
+            // The server is still starting, or a cloud key may arrive: check the saved model again.
+            const recheck = r?.status === 'pending' || (r?.status === 'failed' && r.retry);
+            if (recheck && !restoreTimer && restoreRetries < RESTORE_RETRIES) {
                 restoreRetries += 1;
-                setTimeout(() => { void get().refresh(); }, RESTORE_RETRY_MS);
+                restoreTimer = setTimeout(() => { restoreTimer = null; void get().refresh(); }, RESTORE_RETRY_MS);
             }
+            const recovered = (r?.status === 'restored' || r?.status === 'none') && !r.message
+                && get().restoreNotice?.ok === false;
             set({
                 active,
                 error: null,
                 ...(r && r.status !== 'none' && r.message
                     ? { restoreNotice: { ok: r.status === 'restored', message: r.message } }
-                    : {}),
+                    : recovered ? { restoreNotice: null } : {}),
             });
         } catch (err) {
             set({ error: err instanceof Error ? err.message : String(err) });
@@ -109,6 +176,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
         void get().refresh();
     },
     select: async (model) => {
+        forgetModelChecks();
+        clearRestoreRetry();
         const active = await api.selectModel(model);
         // Sessions name the model they run; refetch so the chip doesn't lag a poll behind.
         let sessions: Session[] | null = null;
@@ -118,10 +187,21 @@ export const useModelStore = create<ModelState>((set, get) => ({
             log.system.error('Could not refresh chats after a model switch; the next poll will', err);
         }
         set({ active, error: null, restoreNotice: null });
+        // The backend starts loading a local pick; follow it so the wait is visible.
+        if (active.remote) {
+            pickLoadWatch += 1;
+            set({ pickLoad: null });
+        } else {
+            watchPickLoad(model, set);
+        }
         // An empty list has no model to report, and must not wipe the sidebar.
         if (sessions?.length) useChatStore.getState().setSessions(sessions);
     },
-    queue: (model) => set({ queued: model, queueError: null }),
+    queue: (model) => {
+        set({ queued: model, queueError: null });
+        // The reply may have ended between the click and its render: apply now.
+        if (model && !useChatStore.getState().isStreaming) void get().applyQueued();
+    },
     applyQueued: async () => {
         const model = get().queued;
         if (!model) return;
@@ -141,7 +221,44 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set({ names: next });
     },
     dismissRestoreNotice: () => set({ restoreNotice: null }),
+    retryPickLoad: async () => {
+        const model = get().pickLoad?.model;
+        if (!model) return;
+        try {
+            await api.requestWarmUp(true);
+        } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            set({ pickLoad: { model, seconds: 0, error: { key: 'banner.pickLoad.startFailed', reason } } });
+            return;
+        }
+        watchPickLoad(model, set);
+    },
+    dismissPickLoad: () => {
+        pickLoadWatch += 1;
+        set({ pickLoad: null });
+    },
 }));
+
+/**
+ * A setting changed the model outside the picker (a custom model id, Local only):
+ * re-read it everywhere a pick would, and follow the load the backend started.
+ * *before* is the model in use before the change was sent.
+ */
+export async function syncModelAfterSettingChange(before?: string | null): Promise<void> {
+    forgetModelChecks();
+    await useModelStore.getState().refresh();
+    const active = useModelStore.getState().active;
+    // Only a change starts a load; an old warm-up's failure is not this one's.
+    if (active?.model && !active.remote && !sameModelId(active.model, before)) {
+        watchPickLoad(active.model, useModelStore.setState);
+    }
+    try {
+        const sessions = (await api.listSessions()).sessions;
+        if (sessions.length) useChatStore.getState().setSessions(sessions);
+    } catch (err) {
+        log.system.error('Could not refresh chats after a model setting change; the next poll will', err);
+    }
+}
 
 // A pick made during a reply keeps that reply on its model, then applies.
 useChatStore.subscribe((state, prev) => {
@@ -204,7 +321,16 @@ export interface InferencePlace {
 export function inferencePlace(
     active: ActiveModel | null,
     location: InferenceLocation | undefined,
+    t: Translate = tEn,
 ): InferencePlace | null {
+    const local = (backendSentence: string | null | undefined): InferencePlace => {
+        const model = location?.effective_model || active?.model;
+        return {
+            remote: false,
+            label: t.bare('modelStatus.local'),
+            description: backendSentence && model ? t.bare('modelStatus.localNotice', { model: displayModelName(model) }) : null,
+        };
+    };
     // The chat names a model this window's pick doesn't (another window or the TUI
     // changed it): its own location goes with that name, or the chip contradicts itself.
     const pickIsStale =
@@ -212,7 +338,7 @@ export function inferencePlace(
     if (active?.remote && !(pickIsStale && location?.inference_remote !== undefined)) {
         return {
             remote: true,
-            label: active.provider === 'fireworks' ? 'Fireworks AI' : 'AMD LLM Gateway',
+            label: active.provider_name || 'a cloud provider',
             description: null,
         };
     }
@@ -224,11 +350,11 @@ export function inferencePlace(
         };
     }
     if (location?.inference_remote === false) {
-        return { remote: false, label: 'Local', description: location.inference_description ?? null };
+        return local(location.inference_description);
     }
     // No chat yet: the backend's answer for where a new chat would run.
     if (location === undefined && active?.inference_remote === false) {
-        return { remote: false, label: 'Local', description: active.inference_description ?? null };
+        return local(active.inference_description);
     }
     return null;
 }
@@ -240,7 +366,8 @@ export const UNKNOWN_PLACE_TITLE =
 export function useInferencePlace(): InferencePlace | null {
     const active = useModelStore((s) => s.active);
     const location = useChatStore((s) => selectInferenceLocation(s.sessions, s.currentSessionId));
-    return inferencePlace(active, location);
+    const t = useT();
+    return inferencePlace(active, location, t);
 }
 
 /**

@@ -115,6 +115,14 @@ def test_attachments_are_left_out_of_a_question_title():
     assert ch._title_from_question(sent) == "hi"
 
 
+def test_a_research_message_is_named_by_its_topic():
+    assert ch._title_from_question("/research the EU AI Act") == "the EU AI Act"
+    assert ch._title_from_question("  /RESEARCH\njwst") == "jwst"
+    assert ch._title_from_question("/researcher notes") == "/researcher notes"
+    assert ch._title_from_question("/research-report jwst") == "jwst"
+    assert ch._title_from_question("/research") is None
+
+
 def test_an_image_sent_alone_is_named_by_its_file():
     assert ch._title_from_question("![red.png](/api/files/uploads/ab12_red.png)") == (
         "red.png"
@@ -373,6 +381,24 @@ def test_a_local_guard_chat_is_not_titled_by_a_cloud_default():
     gen.assert_not_awaited()
 
 
+def test_a_local_guard_chat_is_not_titled_by_a_discovered_cloud_default():
+    """A cloud provider known only from the catalog is still a cloud model."""
+    from gaia.llm import lemonade_client as lc
+
+    lc.record_cloud_models({"data": [{"id": "opencode.big-model", "recipe": "cloud"}]})
+    db = ChatDatabase(":memory:")
+    sid = db.create_session(title="New Task")["id"]
+    try:
+        with patch(
+            "gaia.llm.lemonade_client.resolve_default_chat_model",
+            return_value="opencode.big-model",
+        ):
+            gen = _retitle(db, sid, "Llama-Guard-3-8B-GGUF")
+    finally:
+        lc.record_cloud_models({"data": []})
+    gen.assert_not_awaited()
+
+
 # ── The cloud title request ──────────────────────────────────────────────
 
 
@@ -418,7 +444,9 @@ def test_cloud_title_request_is_valid_and_leaves_room_to_reason(lemonade):
     # deepseek-v4p1-flash spent all of 24 tokens reasoning (content null).
     assert body["max_completion_tokens"] >= 256
     # llama.cpp-only fields make a cloud provider answer 400.
-    assert not {"id_slot", "chat_template_kwargs", "repeat_penalty"} & body.keys()
+    assert not {"id_slot", "repeat_penalty"} & body.keys()
+    # DeepSeek is the cloud model that honors the switch.
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 def test_a_cloud_reply_cut_short_is_logged_with_its_reason(lemonade, caplog):

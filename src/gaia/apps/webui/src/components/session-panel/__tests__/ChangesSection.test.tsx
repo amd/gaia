@@ -81,6 +81,13 @@ describe('ChangesSection', () => {
         expect(container).toBeEmptyDOMElement();
     });
 
+    it('says GAIA cannot be reached instead of the raw "Failed to fetch" (#6588)', async () => {
+        mocked.getSessionChanges.mockRejectedValue(new TypeError('Failed to fetch'));
+        renderSection();
+        expect(await screen.findByText(/Couldn't total this chat's changes: GAIA can't be reached right now/)).toBeInTheDocument();
+        expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
+    });
+
     it('totals the chat and lists each file with its lines and turns', async () => {
         renderSection();
         expect(await screen.findByText('3 files changed, +13 −4')).toBeInTheDocument();
@@ -179,7 +186,7 @@ describe('ChangesSection', () => {
         });
         renderSection();
         expect(await screen.findByRole('note')).toHaveTextContent(
-            "In this chat, GAIA ran 2 Python snippets and 1 command it can't track. If they changed any files, Undo all won't restore them.",
+            "In this chat, GAIA ran 2 Python snippets and 1 command. Undo all only restores files GAIA edited itself, so anything they changed or installed stays.",
         );
     });
 
@@ -286,5 +293,48 @@ describe('totalText', () => {
     it('reads like a sentence', () => {
         expect(totalText(CHANGES)).toBe('3 files changed, +13 −4');
         expect(totalText({ ...CHANGES, totals: { files: 1, additions: 0, deletions: 2, uncounted: 0 } })).toBe('1 file changed, +0 −2');
+    });
+});
+
+describe('ChangesSection marks hidden characters in names', () => {
+    it('shows a right-to-left override as a code in the list and in the review', async () => {
+        mocked.getSessionChanges.mockResolvedValue({
+            ...CHANGES,
+            files: [file({ path: 'C:\\repo\\invoice\u202Etxt.md', message_ids: [2] })],
+            totals: { files: 1, additions: 1, deletions: 1, uncounted: 0 },
+        });
+        renderSection();
+        const name = await waitFor(() => {
+            const found = document.querySelector('.sp-change .sp-item-name');
+            expect(found).not.toBeNull();
+            return found!;
+        });
+        expect(name.textContent).toBe('invoice[U+202E]txt.md');
+        expect(name.getAttribute('title')).toBe('C:\\repo\\invoice[U+202E]txt.md');
+
+        fireEvent.click(screen.getByRole('button', { name: /Review changes/ }));
+        const dialog = screen.getByRole('dialog', { name: "Review this chat's changes" });
+        expect(dialog).toHaveTextContent('C:\\repo\\invoice[U+202E]txt.md');
+        expect(document.body.textContent).not.toContain('\u202E');
+    });
+});
+
+describe('ChangesSection git line marks hidden characters', () => {
+    it('shows an override in the repository folder and branch as a code', async () => {
+        const rlo = String.fromCodePoint(0x202e);
+        mocked.getSessionGit.mockResolvedValue({
+            available: true, repos: [{ ...REPO, root: `C:\\repo${rlo}x`, branch: `fix${rlo}y` }],
+        });
+        renderSection();
+        const line = await waitFor(() => {
+            const found = document.querySelector('.sp-git-repo .sp-meta');
+            expect(found).not.toBeNull();
+            return found!;
+        });
+        expect(line.textContent).toContain('repo[U+202E]x · fix[U+202E]y');
+        expect(line.getAttribute('title')).toBe('C:\\repo[U+202E]x');
+        fireEvent.click(screen.getByRole('button', { name: /Commit…/ }));
+        expect(screen.getByRole('dialog')).toHaveTextContent('In C:\\repo[U+202E]x on fix[U+202E]y.');
+        expect(document.body.innerHTML).not.toContain(rlo);
     });
 });

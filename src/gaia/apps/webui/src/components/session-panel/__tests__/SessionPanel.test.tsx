@@ -63,7 +63,7 @@ afterEach(() => {
 describe('SessionPanel', () => {
     it("names this turn's model the way the model chip does, not by its raw id", () => {
         useModelStore.setState({ names: { 'Gemma-4-E4B-it-GGUF': 'Gemma 4 E4B' } });
-        const local = { ...SUMMARY, model: { ...SUMMARY.model!, name: 'Gemma-4-E4B-it-GGUF' } };
+        const local = { ...SUMMARY, model: { ...SUMMARY.model!, remote: true, name: 'Gemma-4-E4B-it-GGUF' } };
         render(<Panel messages={[ANSWERED[0], { ...ANSWERED[1], turnSummary: local }]} />);
         expect(screen.getByText('Gemma 4 E4B')).toHaveAttribute('title', 'Gemma-4-E4B-it-GGUF');
         useModelStore.setState({ names: {} });
@@ -72,10 +72,21 @@ describe('SessionPanel', () => {
     it('is docked open by default with every section', async () => {
         render(<Panel />);
         expect(panel()).toHaveClass('is-docked');
-        for (const name of ['This answer', 'Environment', 'Context & performance', 'Outputs']) {
+        for (const name of ['This answer', 'Environment', 'Context & performance', 'Session']) {
             expect(screen.getByRole('button', { name: new RegExp(`^${name}`) })).toBeInTheDocument();
         }
         await waitFor(() => expect(mocked.getOutputs).toHaveBeenCalledWith(SID));
+    });
+
+    it('leads with the environment, and keeps how it ran under Details', () => {
+        render(<Panel />);
+        const heads = [...panel().querySelectorAll('.sp-section-title, .sp-group-title')].map((el) => el.textContent);
+        const at = (name: string) => heads.findIndex((h) => h?.startsWith(name));
+
+        expect(at('Environment')).toBe(0);
+        expect(at('Environment')).toBeLessThan(at('Details'));
+        expect(at('Details')).toBeLessThan(at('Context & performance'));
+        expect(screen.getByRole('button', { name: /^Context & performance/ })).toHaveAttribute('aria-expanded', 'false');
     });
 
     it('closes, remembers it, and reopens from the header toggle', () => {
@@ -120,11 +131,11 @@ describe('SessionPanel', () => {
     it('collapses a section, stops reading it, and remembers it', async () => {
         render(<Panel />);
         await waitFor(() => expect(mocked.getOutputs).toHaveBeenCalledTimes(1));
-        const head = screen.getByRole('button', { name: /^Outputs/ });
+        const head = screen.getByRole('button', { name: /^Environment/ });
         fireEvent.click(head);
         expect(head).toHaveAttribute('aria-expanded', 'false');
-        expect(useSessionPanelStore.getState().sections.outputs).toBe(false);
-        expect(JSON.parse(window.localStorage.getItem('gaia.sessionPanel.sections') ?? '{}').outputs).toBe(false);
+        expect(useSessionPanelStore.getState().sections.environment).toBe(false);
+        expect(JSON.parse(window.localStorage.getItem('gaia.sessionPanel.sections') ?? '{}').environment).toBe(false);
     });
 
     it('resizes from the keyboard within its limits and remembers the width', () => {

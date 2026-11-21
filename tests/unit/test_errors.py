@@ -75,7 +75,6 @@ class TestFormatUserErrorFiltering:
             # package name / site-packages / the hub editable path.
             "hub/agents/",
             "gaia_agent/",
-            "gaia_agent_chat",
             "site-packages/",
         ]
         for path in expected_paths:

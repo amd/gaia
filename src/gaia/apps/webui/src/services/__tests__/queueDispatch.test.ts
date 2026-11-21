@@ -9,6 +9,7 @@
 import { act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../api';
+import { refreshActiveRuns } from '../activeRuns';
 import { useChatStore } from '../../stores/chatStore';
 import * as messageQueue from '../../utils/messageQueue';
 import type { QueuedMessage } from '../../utils/messageQueue';
@@ -17,6 +18,7 @@ import {
     QUEUE_BUSY_WAIT_MS,
     claimView,
     dispatchNext,
+    idleByPoll,
     markActivity,
     resetQueueDispatch,
     sendInBackground,
@@ -140,6 +142,28 @@ describe('a chat left while it was answering', () => {
 
         release();
         expect(calls.map((c) => c.text)).toEqual(['mine']);
+    });
+});
+
+describe('GAIA cannot be reached (#6588)', () => {
+    it('sends nothing while it is unreachable, and sends once it says the chat is idle', async () => {
+        const { send, calls } = manualSender();
+        markActivity(A, 1_000);
+        poll([A], 1_001);
+        queue(A, ['follow-up', 'queued']);
+        stop = startQueueDispatcher(send);
+
+        mockedApi.getActiveRuns.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+        await refreshActiveRuns();
+        await flush();
+
+        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+        expect(idleByPoll(A)).toBe(false);
+        expect(calls).toHaveLength(0);
+        expect(states(A)).toEqual([['follow-up', 'queued']]);
+
+        await refreshActiveRuns();
+        expect(calls.map((c) => c.text)).toEqual(['follow-up']);
     });
 });
 

@@ -230,7 +230,7 @@ class TestRAGSDK:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir)
+            config = RAGConfig(allowed_paths=[temp_dir], cache_dir=temp_dir)
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -255,7 +255,7 @@ class TestRAGSDK:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir)
+            config = RAGConfig(allowed_paths=[temp_dir], cache_dir=temp_dir)
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -304,7 +304,12 @@ class TestRAGSDK:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, chunk_size=50, chunk_overlap=10)
+            config = RAGConfig(
+                allowed_paths=[temp_dir],
+                cache_dir=temp_dir,
+                chunk_size=50,
+                chunk_overlap=10,
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -330,7 +335,7 @@ class TestRAGSDK:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir)
+            config = RAGConfig(allowed_paths=[temp_dir], cache_dir=temp_dir)
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -353,7 +358,7 @@ class TestRAGSDK:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir)
+            config = RAGConfig(allowed_paths=[temp_dir], cache_dir=temp_dir)
 
             with (
                 patch("gaia.rag.sdk.RAGSDK._check_dependencies"),
@@ -385,7 +390,7 @@ class TestRAGSDK:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir)
+            config = RAGConfig(allowed_paths=[temp_dir], cache_dir=temp_dir)
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -401,7 +406,7 @@ class TestRAGSDK:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir)
+            config = RAGConfig(allowed_paths=[temp_dir], cache_dir=temp_dir)
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 # Create fake PDF file
@@ -426,7 +431,9 @@ class TestRAGSDK:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -472,7 +479,9 @@ class TestRAGSDK:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             doc1 = Path(temp_dir) / "doc1.txt"
             doc1.write_text("doc1")
@@ -544,7 +553,7 @@ class TestRAGSDK:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir)
+            config = RAGConfig(allowed_paths=[temp_dir], cache_dir=temp_dir)
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -567,7 +576,9 @@ class TestRAGSDK:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -624,7 +635,9 @@ class TestRAGSDK:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -878,7 +891,7 @@ class TestErrorHandling:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir)
+            config = RAGConfig(allowed_paths=[temp_dir], cache_dir=temp_dir)
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -965,6 +978,7 @@ class TestMemoryLimits:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             config = RAGConfig(
+                allowed_paths=[temp_dir],
                 cache_dir=temp_dir,
                 max_indexed_files=1,
                 enable_lru_eviction=False,
@@ -997,6 +1011,7 @@ class TestMemoryLimits:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             config = RAGConfig(
+                allowed_paths=[temp_dir],
                 cache_dir=temp_dir,
                 max_total_chunks=2,
                 enable_lru_eviction=False,
@@ -1030,6 +1045,7 @@ class TestMemoryLimits:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             config = RAGConfig(
+                allowed_paths=[temp_dir],
                 cache_dir=temp_dir,
                 max_indexed_files=1,
                 enable_lru_eviction=True,
@@ -1069,7 +1085,9 @@ class TestMemoryLimits:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -1100,6 +1118,7 @@ class TestMemoryLimits:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             config = RAGConfig(
+                allowed_paths=[temp_dir],
                 cache_dir=temp_dir,
                 max_indexed_files=1,
                 enable_lru_eviction=False,
@@ -1145,6 +1164,7 @@ class TestMemoryLimits:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             config = RAGConfig(
+                allowed_paths=[temp_dir],
                 cache_dir=temp_dir,
                 max_indexed_files=1,
                 enable_lru_eviction=True,
@@ -1192,7 +1212,9 @@ class TestMemoryLimits:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 # First pass: index document to create cache
@@ -1288,7 +1310,9 @@ class TestCacheSecurity:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -1315,7 +1339,9 @@ class TestCacheSecurity:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -1341,7 +1367,9 @@ class TestCacheSecurity:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -1367,7 +1395,9 @@ class TestCacheSecurity:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -1392,7 +1422,9 @@ class TestCacheSecurity:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -1423,7 +1455,9 @@ class TestCacheSecurity:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -1453,7 +1487,9 @@ class TestCacheSecurity:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
             key_dir = Path(temp_dir) / "hmac_home" / ".gaia" / "cache"
 
             with (
@@ -1481,7 +1517,9 @@ class TestCacheSecurity:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -1516,7 +1554,9 @@ class TestCacheSecurity:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -1552,7 +1592,9 @@ class TestCacheSecurity:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
 
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
@@ -1594,7 +1636,9 @@ class TestCacheSecurity:
 
         monkeypatch.setattr(file_lock_mod, "LOCK_TIMEOUT_SECONDS", 0.2)
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            config = RAGConfig(
+                allowed_paths=[temp_dir], cache_dir=temp_dir, show_stats=False
+            )
             with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
                 rag = RAGSDK(config)
                 fake_pdf = Path(temp_dir) / "test.pdf"

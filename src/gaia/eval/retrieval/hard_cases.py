@@ -43,7 +43,6 @@ class CaseContext:
     repo: Dataset
     model: Optional[str]
     answers: bool
-    financebench: Optional[Dataset] = None
     log: Callable[[str], None] = print
     rag_overrides: Dict[str, object] = field(default_factory=dict)
 
@@ -224,48 +223,6 @@ def exact_duplicate(ctx: CaseContext) -> dict:
         "pass" if ok else "fail",
         finding.strip(),
         per_question=per_q,
-    )
-
-
-def near_duplicate_filings(ctx: CaseContext) -> dict:
-    """Same company, consecutive years: does retrieval stay in the asked-about filing?"""
-    fb = ctx.financebench
-    if fb is None:
-        return _result(
-            "near_duplicate_filings",
-            "Near-duplicate filings (same company, other years)",
-            "skipped",
-            "Needs the FinanceBench download (full suite only).",
-        )
-    families = ("ADOBE_", "3M_")
-    docs = [d for d in fb.documents if d.id.startswith(families) and "10K" in d.id]
-    doc_ids = {d.id for d in docs}
-    questions = [q for q in fb.questions if set(q.doc_ids) <= doc_ids]
-    bench = ctx.bench(ctx.workdir / "near-duplicate", docs)
-    bench.build()
-    ranks, precision = [], []
-    for q in questions:
-        evidence, _ = bench.evidence_for(q)
-        ranked, _ = bench.sdk_search(q.question, depth=5)
-        ranks.append(bench._rank(ranked, evidence))  # pylint: disable=protected-access
-        wanted = {e.path for e in evidence}
-        precision.append(
-            sum(1 for i in ranked if i in bench.spans and bench.spans[i].path in wanted)
-            / max(len(ranked), 1)
-        )
-    summary = retrieval_summary(ranks, ks=(1, 5))
-    share = sum(precision) / len(precision) if precision else 0.0
-    return _result(
-        "near_duplicate_filings",
-        "Near-duplicate filings (same company, other years)",
-        "measured",
-        f"With {len(docs)} filings from two companies indexed, recall@5 is "
-        f"{summary.get('recall@5', 0):.0%} and {share:.0%} of the top-5 chunks come from the "
-        "filing the question names.",
-        documents=sorted(doc_ids),
-        questions=len(questions),
-        retrieval=summary,
-        right_filing_share_top5=round(share, 3),
     )
 
 
@@ -594,4 +551,4 @@ PR_CASES = (
     capacity_eviction,
     scanned_pdf,
 )
-FULL_CASES = PR_CASES + (near_duplicate_filings, prompt_injection, query_history_leak)
+FULL_CASES = PR_CASES + (prompt_injection, query_history_leak)

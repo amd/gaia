@@ -122,13 +122,15 @@ LONG_INPUTS = {
 @pytest.mark.parametrize("name", LONG_INPUTS)
 def test_masking_stays_fast_on_long_input(name):
     text = LONG_INPUTS[name]
-    started = time.perf_counter()
+    # This thread's CPU time, so time spent waiting for a busy runner's CPU or
+    # on another thread in the worker doesn't count.
+    started = time.thread_time()
 
     MemoryMixin._mask_credentials(text)
     MemoryMixin._looks_like_credential(text)
 
-    # ~0.2s locally; the bound catches runaway backtracking, not a busy CI runner.
-    assert time.perf_counter() - started < 5.0
+    # Under 0.5s of CPU even on a loaded box; runaway backtracking takes 20s+.
+    assert time.thread_time() - started < 5.0
 
 
 def test_remember_refuses_a_pin(store):
@@ -136,6 +138,49 @@ def test_remember_refuses_a_pin(store):
     out = _tool("remember")(fact="My bank PIN is 4821", category="fact")
     assert out["status"] == "skipped"
     assert store._conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0] == 0
+
+
+def test_a_refused_secret_is_still_in_this_chat(store):
+    """Not saving a secret is not the same as it being gone from the chat.
+
+    In v0.26.0-rc18, asked one turn later for a passphrase still on screen,
+    the agent answered "it wasn't stored, so there's nothing for me to recall".
+    """
+    _Host(store, [])
+    kid = store.store(category="fact", content="User's vault is in the study")
+
+    refusals = [
+        _tool("remember")(fact="The vault passphrase is cobalt-heron-417"),
+        _tool("update_memory")(
+            knowledge_id=kid, content="The vault passphrase is cobalt-heron-417"
+        ),
+    ]
+
+    for out in refusals:
+        assert out["status"] == "skipped"
+        assert "this chat" in out["message"]
+        assert "new chat" in out["message"]
+
+
+def test_the_refusal_neither_echoes_nor_keeps_the_secret(store):
+    """The new wording points at the chat; it must not repeat or save the secret."""
+    _Host(store, [])
+    kid = store.store(category="fact", content="User's vault is in the study")
+    secret = "cobalt-heron-417"
+
+    outs = [
+        _tool("remember")(fact=f"The vault passphrase is {secret}"),
+        _tool("update_memory")(
+            knowledge_id=kid, content=f"The vault passphrase is {secret}"
+        ),
+    ]
+
+    for out in outs:
+        assert secret not in out["message"]
+    assert "password manager" in outs[0]["message"]
+    assert store.get_item(kid)["content"] == "User's vault is in the study"
+    rows = store._conn.execute("SELECT content FROM knowledge").fetchall()
+    assert all(secret not in r[0] for r in rows)
 
 
 def test_the_conversation_log_keeps_no_secret(store):

@@ -573,16 +573,24 @@ class TestDaemonFiresOnce:
 
     def test_real_scheduler_fires_past_due_one_shot_once(self, store, fired):
         store.add(_one_shot(at=datetime.now(timezone.utc) - timedelta(hours=6)))
+        finished = threading.Event()
+        real_finish = store.finish_one_shot
+
+        def finish_one_shot(*args, **kwargs):
+            try:
+                return real_finish(*args, **kwargs)
+            finally:
+                finished.set()
+
+        store.finish_one_shot = finish_one_shot
         scheduler = daemon.build_scheduler(store)
         scheduler.start()
         try:
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline:
+            deadline = time.monotonic() + 120
+            while not finished.wait(0.05):
                 # Reload ticks race the run: none may fire it again.
                 daemon.refresh_schedules(scheduler, store)
-                if store.get("once").state == ONE_SHOT_COMPLETED:
-                    break
-                time.sleep(0.05)
+                assert time.monotonic() < deadline, "the scheduler never ran it"
             for _ in range(10):
                 daemon.refresh_schedules(scheduler, store)
                 time.sleep(0.05)

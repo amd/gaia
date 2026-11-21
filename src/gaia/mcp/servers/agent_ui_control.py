@@ -19,6 +19,8 @@ Kept free of the optional ``mcp`` dependency so it is unit-testable on its own.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hmac
 import ipaddress
 import json
@@ -31,6 +33,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
+from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.ui.sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
@@ -178,6 +181,9 @@ class TurnTracker:
         self.done_stats: Optional[Dict[str, Any]] = None
         self.message_id: Optional[int] = None
         self.cancelled = False
+        # A backend terminal event is distinct from a transport disconnect: the
+        # backend may still list it briefly, but re-attaching would replay it.
+        self.saw_done = False
         self.stop_requested = False
         self.history_notice: Optional[str] = None
         self.live_status: Optional[str] = None
@@ -208,6 +214,10 @@ class TurnTracker:
                         self.raw_content += "\n\n"
                     self._tool_since_text = False
                 self.raw_content += content
+        elif etype == "status" and event.get("retracts_answer"):
+            # A reply cut off when the model server stopped; it starts over.
+            self.raw_content = ""
+            self._tool_since_text = False
         elif etype == "answer":
             if event.get("content"):
                 self.raw_content = event["content"]
@@ -227,8 +237,22 @@ class TurnTracker:
                 if k in event
             }
         elif etype == "done":
+            self.saw_done = True
+            failed = bool(event.get("failed")) or self.error is not None
+            if failed and self.error is None:
+                self.error = str(
+                    event.get("failure")
+                    or event.get("content")
+                    or self._last_error_detail()
+                    or "Unknown error"
+                )
             self._finish_locked(
-                "cancelled" if event.get("cancelled") else "completed", None
+                (
+                    "cancelled"
+                    if event.get("cancelled")
+                    else "error" if failed else "completed"
+                ),
+                self.error if failed else None,
             )
             self.cancelled = bool(event.get("cancelled"))
             self.message_id = event.get("message_id")
@@ -288,6 +312,13 @@ class TurnTracker:
                 return step
         return None
 
+    def _last_error_detail(self) -> Optional[str]:
+        # A refused turn closes with an empty failed `done`; its reason is this step.
+        for step in reversed(self.steps):
+            if step["type"] == "error" and step.get("detail"):
+                return step["detail"]
+        return None
+
     def _add_step(self, step: Dict[str, Any]) -> None:
         self.steps.append(step)
 
@@ -323,6 +354,9 @@ class TurnTracker:
                     event.get("detail") or json.dumps(event.get("args"), default=str)
                 )
         elif etype == "thinking":
+            if event.get("retracts_answer"):
+                self.raw_content = ""
+                self._tool_since_text = False
             if last.get("type") == "thinking":
                 last["detail"] = _cap(
                     (last.get("detail") or "") + (event.get("content") or ""), 4000
@@ -388,15 +422,18 @@ class TurnTracker:
                 }
             )
         elif etype == "agent_error":
+            detail = _cap(event.get("content"))
             self._add_step(
                 {
                     "type": "error",
                     "label": "Error",
-                    "detail": _cap(event.get("content")),
+                    "detail": detail,
                     "active": False,
                     "success": False,
                 }
             )
+            if event.get("fatal"):
+                self.error = detail or "The agent turn failed."
         elif etype == "policy_alert":
             tool = event.get("tool") or "unknown tool"
             self._add_step(
@@ -746,7 +783,7 @@ class TurnRegistry:
         # attaching then would replay the turn we just watched end.
         if (
             current is not None
-            and current.outcome in ("completed", "cancelled")
+            and (current.outcome in ("completed", "cancelled") or current.saw_done)
             and time.monotonic() - (current.ended_at or 0) < ATTACH_GRACE_S
         ):
             return current, ""
@@ -1165,4 +1202,19 @@ def remote_app(mcp, host: str, token: str):
         ),
         host=host,
     )
-    return BearerTokenMiddleware(app, token)
+    return BearerTokenMiddleware(_keep_listening(app), token)
+
+
+def _keep_listening(app):
+    """*app* (a Starlette app) with the listener guard armed at startup."""
+    serve = app.router.lifespan_context
+
+    @contextlib.asynccontextmanager
+    async def lifespan(scope_app):
+        # A client resetting a queued connection must not close the listener.
+        keep_listening_after_client_resets(asyncio.get_running_loop())
+        async with serve(scope_app) as state:
+            yield state
+
+    app.router.lifespan_context = lifespan
+    return app

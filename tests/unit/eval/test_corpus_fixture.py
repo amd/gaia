@@ -169,6 +169,24 @@ def test_missing_manifest_fails(corpus):
         runner.generate_corpus()
 
 
+def test_undeclared_document_fails(corpus):
+    (corpus / "documents" / "stray.md").write_text("undeclared", encoding="utf-8")
+    with pytest.raises(RuntimeError, match=r"1 file\(s\).*stray\.md"):
+        runner.generate_corpus()
+
+
+def test_undeclared_adversarial_document_fails(corpus):
+    (corpus / "adversarial" / "stray.txt").write_text("undeclared", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="stray.txt"):
+        runner.generate_corpus()
+
+
+def test_hidden_files_are_not_undeclared(corpus):
+    # The listing above skips dotfiles; the manifest check skips them too.
+    (corpus / "documents" / ".DS_Store").write_text("junk", encoding="utf-8")
+    runner.generate_corpus()
+
+
 def test_cli_validates_the_real_corpus():
     csv_before = CSV.read_bytes()
     # Pin the child to this checkout's source, not whichever one is installed.

@@ -178,9 +178,9 @@ class LemonadeSupervisor:
 
         Args:
             ctx_size: the caller's profile window
-                (``lemonade_client.profile_ctx_size``). Only the legacy
-                Lemonade CLI takes it at start; modern Lemonade
-                reads no start-time window and gets it on each ``/load``.
+                (``lemonade_client.profile_ctx_size``), logged only:
+                Lemonade reads no start-time window and gets it on each
+                ``/load``.
             timeout: how long a freshly started server gets to answer.
 
         Raises:
@@ -331,7 +331,7 @@ class LemonadeSupervisor:
 
         # argv and env come from the launcher and are passed through untouched:
         # the three launch forms do not share a shape.
-        spec = build_start_command(tooling, ctx_size)
+        spec = build_start_command(tooling)
         log.info(
             "lemonade: starting supervised server: %s (ctx_size=%s)",
             render_command(spec),
@@ -504,10 +504,8 @@ class LemonadeSupervisor:
     def _start_failed_error(
         self, base_url: str, spec, timeout: float, exit_code: Optional[int]
     ) -> LemonadeStartError:
-        # Rendered through the launcher, not " ".join(argv): a modern install
-        # carries ctx_size in the ENV, so a user copying a bare argv line would
-        # get a server at the wrong context window — health-green and failing
-        # every long request.
+        # Rendered through the launcher, not " ".join(argv), so the env and
+        # Windows quoting survive into the line a user copies.
         cmd = render_command(spec)
         if exit_code:
             what = (

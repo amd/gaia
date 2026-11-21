@@ -938,6 +938,7 @@ def install_migrated(
         SkillInstallError: the skill ships code and ``allow_experimental`` is unset.
         SkillCaptureError: symlinks in the source, or an audit BLOCK.
     """
+    from gaia.skills.audit.findings import ignore_bytecode_caches
     from gaia.skills.capture import SOURCE_MIGRATED, _refuse_symlinks, import_bundle
 
     if not outcome.migrated or outcome.skill is None:
@@ -982,7 +983,8 @@ def install_migrated(
                 source_dir,
                 staged,
                 ignore=lambda directory, names: (
-                    [SKILL_FILENAME] if Path(directory) == source_dir else []
+                    ignore_bytecode_caches(directory, names)
+                    | ({SKILL_FILENAME} if Path(directory) == source_dir else set())
                 ),
             )
         else:

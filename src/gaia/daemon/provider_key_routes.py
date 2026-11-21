@@ -63,16 +63,17 @@ def build_provider_key_router(token: str) -> APIRouter:
 
     @router.post("/{provider}/authenticate")
     def authenticate(provider: str) -> dict:
-        """Replay the kept key into Lemonade. The key never leaves this process."""
+        """Reconnect the provider in Lemonade with the kept key, registering
+        Fireworks again after a restart. The key never leaves this process."""
         import requests
 
-        from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
+        from gaia.llm.cloud_keys import CloudKeyError, reconnect_provider
         from gaia.llm.gateway import GatewayError
         from gaia.llm.local_only import CloudDisabledError
 
         _known(provider)
         try:
-            return {"authenticated": ensure_authenticated(provider)}
+            return {"authenticated": reconnect_provider(provider)}
         except CloudDisabledError as e:
             # Not transient: retrying won't help until the user changes it.
             raise HTTPException(status_code=409, detail=str(e)) from e

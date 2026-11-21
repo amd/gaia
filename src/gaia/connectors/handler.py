@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from gaia.connectors.context import agent_runtime_active, current_agent_id
 from gaia.connectors.errors import (
+    AccountChoiceRequiredError,
     AuthRequiredError,
     ConfigurationError,
     ConnectorsError,
@@ -85,7 +86,7 @@ class ConnectorHandler(Protocol):
         """Remove stored credentials for this connector.
 
         OAuth handlers return a revoke-outcome dict (``revoke_supported``,
-        ``revoked_remotely``, ``revoke_error`` — see
+        ``revoked_remotely``, ``nothing_stored``, ``revoke_error`` (see
         ``oauth_pkce.OAuthPkceHandler.disconnect``) so callers can report the
         provider-side outcome honestly; handlers with no remote-revoke
         concept (e.g. ``mcp_server``) may return ``None``.
@@ -259,13 +260,29 @@ async def disconnect(
     connector_id: str,
     *,
     account_id: Optional[str] = None,
+    all_accounts: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Disconnect a connector (remove stored credentials).
+
+    ``account_id`` disconnects one account of an OAuth connector. Without it,
+    an OAuth connector with several accounts raises
+    ``AccountChoiceRequiredError`` unless ``all_accounts`` is set, so no
+    caller removes accounts nobody chose.
 
     Returns the handler's revoke-outcome dict, or ``None`` for handler types
     with no remote-revoke concept — see ``ConnectorHandler.disconnect``.
     """
     spec = REGISTRY.get(connector_id)
+    if spec.type == "oauth_pkce" and account_id is None and not all_accounts:
+        from gaia.connectors.accounts import accounts_for_delete
+
+        stored = accounts_for_delete(spec.oauth_provider_ref or spec.id)
+        if len(stored) > 1:
+            raise AccountChoiceRequiredError(
+                connector_id,
+                [a.email or a.account_id for a in stored],
+                action="disconnect",
+            )
     handler = _get_handler(spec)
     return await handler.disconnect(spec, account_id=account_id)
 

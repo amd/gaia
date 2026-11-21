@@ -29,7 +29,7 @@ type Runner interface {
 	// Check probes every precondition in dependency order.
 	Check(ctx context.Context, cfg Config) Report
 	// Fix applies a row's one-key fix. A fix with progress to report streams it
-	// through onProgress (see streamsProgress); one without never calls it.
+	// through onProgress; one without never calls it.
 	Fix(ctx context.Context, cfg Config, kind FixKind, onProgress func(Progress)) FixResult
 }
 
@@ -60,12 +60,6 @@ type FixResult struct {
 
 // OK reports whether the fix succeeded.
 func (r FixResult) OK() bool { return r.Err == nil }
-
-// streamsProgress reports whether kind's fix narrates while it runs, so the
-// screen shows the streaming panel rather than a spinner and a note.
-func streamsProgress(kind FixKind) bool {
-	return kind == FixPullModel || runsSetup(kind)
-}
 
 // runsSetup reports whether kind's fix is a `gaia init` run.
 func runsSetup(kind FixKind) bool {

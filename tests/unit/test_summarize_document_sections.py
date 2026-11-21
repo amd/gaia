@@ -239,6 +239,26 @@ def test_a_summary_cut_off_at_the_limit_is_an_error_not_a_summary(summarize):
     assert "cut off" in result["error"]
 
 
+def test_text_with_no_page_markers_is_still_summarized_in_sections(summarize):
+    """A transcript has no [Page N], so it used to go out as one oversized prompt."""
+    chat = _Chat()
+    tool = summarize(chat, pages=1)
+    host_text = "spoken word " * 5000
+    meta = _TOOL_REGISTRY["summarize_document"]["function"].__closure__
+    rag = next(c.cell_contents for c in meta if isinstance(c.cell_contents, _Host)).rag
+    rag.file_metadata[DOC]["full_text"] = host_text
+
+    result = tool(file_path=DOC, summary_type="brief", max_words_per_section=1000)
+
+    assert result["status"] == "success"
+    *sections, _final = chat.prompts
+    assert len(sections) >= 10
+    longest = max(len(prompt.split()) for prompt in sections)
+    assert longest < 1500, "a section must stay near the requested size"
+    sent = " ".join(sections)
+    assert sent.count("spoken") >= 5000, "every word still reaches the model"
+
+
 def test_a_section_cut_off_fails_the_summary_instead_of_vanishing(summarize):
     chat = _Chat(finish_reasons=["stop", "length"])
     tool = summarize(chat, pages=6)

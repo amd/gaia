@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef } from 'react';
-import { AlertTriangle, Lightbulb, ExternalLink, X, AlertCircle, Bug } from 'lucide-react';
+import { AlertTriangle, X, AlertCircle, Bug } from 'lucide-react';
+import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../utils/mediaFiles';
+import { useT } from '../i18n/useT';
+import { serverFailureText, serverNotAddedText } from '../utils/documentFailure';
 import './UnsupportedFeature.css';
 
-const GITHUB_ISSUES_URL = 'https://github.com/amd/gaia/issues';
 const GITHUB_NEW_ISSUE_URL = 'https://github.com/amd/gaia/issues/new';
 const GITHUB_FEATURE_REQUEST_URL = `${GITHUB_NEW_ISSUE_URL}?template=feature_request.md`;
 const GITHUB_BUG_REPORT_URL = `${GITHUB_NEW_ISSUE_URL}?template=bug_report.md`;
@@ -32,23 +34,21 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
     },
     {
         label: 'Video',
-        extensions: new Set(['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v']),
-        message: 'Video files are not supported for indexing.',
+        extensions: VIDEO_EXTENSIONS,
+        message: 'Video files can\'t go in the document library.',
         alternatives: [
-            'Extract subtitles or transcripts from videos and index those',
-            'Use GAIA\'s voice/talk mode for audio: gaia talk',
+            'Attach the video to a chat, and GAIA will transcribe it',
         ],
-        featureTitle: 'Support video file indexing',
+        featureTitle: 'Support video files in the document library',
     },
     {
         label: 'Audio',
-        extensions: new Set(['.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus']),
-        message: 'Audio files are not supported for indexing.',
+        extensions: AUDIO_EXTENSIONS,
+        message: 'Audio files can\'t go in the document library.',
         alternatives: [
-            'Use GAIA\'s voice mode for speech interaction: gaia talk',
-            'Transcribe audio to text first, then index the transcript',
+            'Attach the recording to a chat, and GAIA will transcribe it',
         ],
-        featureTitle: 'Support audio file transcription and indexing',
+        featureTitle: 'Support audio files in the document library',
     },
     {
         label: 'Archive',
@@ -214,16 +214,19 @@ export function bugReportUrl(title: string, errorDetail?: string): string {
 
 /** Failures retrying can't fix until the file changes (the backend's error kind), and what to do instead. */
 export const PERMANENT_FAILURE_HINTS: Record<string, string> = {
-    corrupted: 'The file looks damaged. Re-download or re-export it, then index the new copy.',
-    encrypted: 'The PDF needs a password to open. Save a copy without the password, then index that.',
-    empty: 'The PDF has no readable text, which usually means it is a scan. Run OCR on it, then index it again.',
-    empty_file: 'This file is empty. Add content to it, then index it again.',
-    unsupported_workbook: 'This is an old .xls workbook or has a password. Open it in Excel, save a copy as .xlsx without a password, then index that.',
+    corrupted: 'The file looks damaged. Re-download or re-export it, then add the new copy.',
+    encrypted: 'The PDF needs a password to open. Save a copy without the password, then add that.',
+    empty: 'The PDF has no readable text, which usually means it is a scan. Run OCR on it, then add it again.',
+    empty_file: 'This file is empty. Add content to it, then add it again.',
+    unsupported_workbook: 'This is an old .xls workbook or has a password. Open it in Excel, save a copy as .xlsx without a password, then add that.',
 };
 
 /** The backend's message without its leading category label, e.g. "File not found:". */
 function stripPrefix(message: string, prefix: string): string {
-    return message.startsWith(prefix) ? message.slice(prefix.length).trim() : message;
+    if (!message.startsWith(prefix)) return message;
+    const rest = message.slice(prefix.length).trim();
+    // What follows the label is now the sentence's start.
+    return rest.charAt(0).toUpperCase() + rest.slice(1);
 }
 
 interface UploadErrorToastProps {
@@ -246,6 +249,7 @@ interface UploadErrorToastProps {
  * Parses the backend error to show helpful context and a GitHub link.
  */
 export function UploadErrorToast({ filename, error, status, kind, onDismiss, timeout = 15000 }: UploadErrorToastProps) {
+    const t = useT();
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
@@ -284,9 +288,20 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
         detail = permanentHint;
         issueUrl = null;
         Icon = AlertTriangle;
+    } else if (serverFailureText(kind, t)) {
+        // The file is fine; the model server didn't answer.
+        title = serverNotAddedText(kind, filename, t) ?? t('docs.notAddedServer', { name: filename });
+        detail = serverFailureText(kind, t) ?? error;
+        issueUrl = null;
+        Icon = AlertTriangle;
+    } else if (kind === 'too_large') {
+        title = t('docs.tooLarge', { name: filename });
+        detail = error;
+        issueUrl = null;
+        Icon = AlertTriangle;
     } else if (status === 404) {
-        title = `"${filename}" doesn't exist`;
-        detail = stripPrefix(error, 'File not found:');
+        title = t('docs.notFound', { name: filename });
+        detail = t('docs.notFoundDetail');
         issueUrl = null;
         Icon = AlertTriangle;
     } else if (status === 403) {
@@ -343,61 +358,6 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
             <button className="upload-error-dismiss" onClick={onDismiss} aria-label="Dismiss">
                 <X size={14} />
             </button>
-        </div>
-    );
-}
-
-// ── Inline Unsupported Feature Banner (for chat messages) ────────────────
-
-interface UnsupportedFeatureBannerProps {
-    /** Short title of the unsupported feature. */
-    title: string;
-    /** Description of what the user asked for. */
-    description: string;
-    /** Things the user can do instead. */
-    alternatives?: string[];
-    /** Pre-filled feature request title for GitHub. */
-    featureTitle?: string;
-}
-
-/**
- * Rendered inside assistant messages when the agent detects an unsupported feature.
- * Shows what's available instead and links to GitHub for feature requests.
- */
-export function UnsupportedFeatureBanner({ title, description, alternatives, featureTitle }: UnsupportedFeatureBannerProps) {
-    const issueUrl = featureTitle
-        ? featureRequestUrl(featureTitle)
-        : `${GITHUB_ISSUES_URL}`;
-
-    return (
-        <div className="unsupported-banner">
-            <div className="unsupported-banner-header">
-                <AlertTriangle size={16} />
-                <span>{title}</span>
-            </div>
-            <div className="unsupported-banner-body">
-                <p>{description}</p>
-                {alternatives && alternatives.length > 0 && (
-                    <>
-                        <p><strong>What you can do instead:</strong></p>
-                        <ul className="unsupported-alternatives">
-                            {alternatives.map((alt, i) => (
-                                <li key={i}>{alt}</li>
-                            ))}
-                        </ul>
-                    </>
-                )}
-            </div>
-            <div className="unsupported-feature-request">
-                <Lightbulb size={14} />
-                <span>
-                    Want this feature?{' '}
-                    <a href={issueUrl} target="_blank" rel="noopener noreferrer">
-                        Request it on GitHub
-                        <ExternalLink size={10} style={{ marginLeft: 3, verticalAlign: 'middle' }} />
-                    </a>
-                </span>
-            </div>
         </div>
     );
 }

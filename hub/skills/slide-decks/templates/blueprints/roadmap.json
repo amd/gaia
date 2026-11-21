@@ -1,0 +1,87 @@
+{
+  "name": "roadmap",
+  "aliases": [
+    "timeline",
+    "plan",
+    "strategy_roadmap",
+    "launch_plan"
+  ],
+  "title": "Roadmap / timeline",
+  "description": "Roadmap or plan over time: the goal, workstreams by period, key milestones, dependencies, risks and next steps.",
+  "default_slides": 5,
+  "min_slides": 1,
+  "max_slides": 9,
+  "one_slide": "roadmap",
+  "storyline": "Where we are going, the route by period, the dates that matter, and what the plan depends on.",
+  "slots": [
+    {
+      "id": "title",
+      "type": "title",
+      "priority": 1,
+      "title": "<Plan name> <period>",
+      "guidance": "Plan, owner, date."
+    },
+    {
+      "id": "goal",
+      "type": "bullets",
+      "priority": 2,
+      "title": "<Where the plan gets us>",
+      "guidance": "The end state and the 2-3 measures of success."
+    },
+    {
+      "id": "roadmap",
+      "type": "timeline",
+      "priority": 1,
+      "title": "<How the workstreams line up by period>",
+      "guidance": "Lanes per workstream, bars per initiative, periods as columns (quarters or months).",
+      "repeat": 3,
+      "grow": 2.0,
+      "spec": {
+        "periods": [
+          "P1",
+          "P2",
+          "P3",
+          "P4"
+        ]
+      }
+    },
+    {
+      "id": "milestones",
+      "type": "timeline",
+      "priority": 2,
+      "title": "<The dates that matter>",
+      "guidance": "4-8 milestones with dates."
+    },
+    {
+      "id": "dependencies",
+      "type": "diagram",
+      "priority": 3,
+      "title": "<What the plan depends on>",
+      "guidance": "A flow of the critical dependencies.",
+      "spec": {
+        "diagram": "flow"
+      }
+    },
+    {
+      "id": "risks",
+      "type": "bullets",
+      "priority": 4,
+      "title": "<What could delay it>",
+      "guidance": "Top risks with mitigations."
+    },
+    {
+      "id": "next_steps",
+      "type": "table",
+      "title": "Next steps: who does what by when",
+      "guidance": "Columns Action | Owner | Due. One row per commitment; a named owner and a date on every row.",
+      "spec": {
+        "columns": [
+          "Action",
+          "Owner",
+          "Due"
+        ]
+      },
+      "priority": 3
+    }
+  ]
+}

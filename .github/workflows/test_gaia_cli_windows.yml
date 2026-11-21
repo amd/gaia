@@ -15,7 +15,7 @@ on:
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
       - '.github/actions/setup-ffmpeg/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # The Lemonade launch scripts depend on each other, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -54,6 +54,12 @@ on:
       - 'tests/unit/conftest.py'
       - 'tests/unit/test_daemon_secret_acl.py'
       - 'tests/unit/test_schedule_lock.py'
+      - 'src/gaia/agents/tools/path_access.py'
+      - 'src/gaia/agents/tools/file_io_tools.py'
+      - 'src/gaia/agents/tools/__init__.py'
+      - 'src/gaia/agents/base/tools.py'
+      - 'src/gaia/security.py'
+      - 'tests/unit/test_read_file_locked.py'
       - 'tests/unit/test_llm.py'
       - 'tests/unit/test_asr.py'
       - 'tests/unit/test_lemonade_speech.py'
@@ -66,7 +72,7 @@ on:
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
       - '.github/actions/setup-ffmpeg/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # The Lemonade launch scripts depend on each other, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -105,6 +111,12 @@ on:
       - 'tests/unit/conftest.py'
       - 'tests/unit/test_daemon_secret_acl.py'
       - 'tests/unit/test_schedule_lock.py'
+      - 'src/gaia/agents/tools/path_access.py'
+      - 'src/gaia/agents/tools/file_io_tools.py'
+      - 'src/gaia/agents/tools/__init__.py'
+      - 'src/gaia/agents/base/tools.py'
+      - 'src/gaia/security.py'
+      - 'tests/unit/test_read_file_locked.py'
       - 'tests/unit/test_llm.py'
       - 'tests/unit/test_asr.py'
       - 'tests/unit/test_lemonade_speech.py'
@@ -133,7 +145,6 @@ jobs:
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
-          # Note: 'blender' excluded as bpy requires Blender runtime
           install-package: '.[dev,talk,rag,mcp,api]'
 
       - name: Install Lemonade Server
@@ -225,6 +236,20 @@ jobs:
           echo ----------------------------------------------------------------
 
           exit /b %lock_exit%
+
+      - name: Run Windows Locked-File Read Tests (CMD)
+        shell: cmd
+        env:
+          PYTHONUTF8: 1
+        run: |
+          REM Activate virtual environment
+          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
+
+          REM read_file's sharing-violation probe calls CreateFileW, and
+          REM tests/unit/ runs on ubuntu-latest only, where the real-lock tests
+          REM skip. -rs shows a skip here, which would mean no real coverage.
+          python -m pytest tests\unit\test_read_file_locked.py -v -rs --tb=short
+          exit /b %ERRORLEVEL%
 
       - name: Setup FFmpeg
         uses: ./.github/actions/setup-ffmpeg

@@ -10,7 +10,6 @@ chat must file them under it. The delete itself is tested in
 from unittest.mock import patch
 
 import pytest
-
 from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 

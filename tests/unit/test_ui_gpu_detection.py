@@ -204,9 +204,7 @@ def test_a_bogus_vram_report_cannot_outrank_a_real_card():
 # ── /api/system/status ───────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "kind,source", [("legacy", "probe"), ("modern", "env"), ("modern", "probe")]
-)
+@pytest.mark.parametrize("kind,source", [("modern", "env"), ("modern", "probe")])
 @pytest.mark.allow_network
 def test_system_status_renders_the_complete_context_remedy(
     kind, source, stub_lemonade, monkeypatch
@@ -221,9 +219,7 @@ def test_system_status_renders_the_complete_context_remedy(
             kind=kind,
             source=source,
             client_path="/usr/bin/lemonade",
-            server_launcher=(
-                "/usr/bin/lemonade-server" if kind == "legacy" else "/usr/bin/lemond"
-            ),
+            server_launcher="/usr/bin/lemond",
         ),
     )
     stub_lemonade(
@@ -235,16 +231,27 @@ def test_system_status_renders_the_complete_context_remedy(
     )
     body = TestClient(create_app(db_path=":memory:")).get("/api/system/status").json()
 
-    if kind == "legacy":
-        assert body["start_command"] == (
-            "/usr/bin/lemonade-server serve --ctx-size 32768"
-        )
-    elif source == "env":
+    if source == "env":
         assert body["start_command"] == "/usr/bin/lemond"
     else:
         assert body["start_command"] is None
         assert "32768" in body["start_instruction"]
         assert "reload the model" in body["start_instruction"]
+
+
+@pytest.mark.allow_network
+def test_system_status_gives_no_start_command_for_gaias_own_server(
+    stub_lemonade, monkeypatch
+):
+    """The app has no command to show: GAIA starts its own server by itself."""
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda base_url=None: True
+    )
+    stub_lemonade({"/health": {}, "/models": {"data": []}, "/system-info": {}})
+    body = TestClient(create_app(db_path=":memory:")).get("/api/system/status").json()
+
+    assert body["start_command"] is None
+    assert body["start_instruction"] is None
 
 
 @pytest.mark.parametrize("fixture,expected_name,expected_vram", REAL_PAYLOADS)

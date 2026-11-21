@@ -21,6 +21,7 @@ export function isReleaseCandidate(version: string | null): boolean {
 /** One line saying where updates stand. */
 export function describeUpdateStatus(s: UpdateState, t: Translate): string {
     const version = s.version ?? '';
+    if (s.readFailed) return t('update.status.readFailed');
     switch (s.status) {
         case 'checking':
             return t('update.status.checking');
@@ -75,36 +76,43 @@ export function UpdatesSection() {
     const disabled = update.status === 'disabled';
     const working = busy || update.status === 'checking' || update.status === 'downloading';
 
-    const line = `${t('update.settings.running', { version: update.currentVersion ?? t('update.settings.unknownVersion') })} ${describeUpdateStatus(update, t)}`;
+    // An unread status has no version to report, so the line skips "Running GAIA unknown".
+    const line = update.readFailed
+        ? describeUpdateStatus(update, t)
+        : `${t('update.settings.running', { version: update.currentVersion ?? t('update.settings.unknownVersion') })} ${describeUpdateStatus(update, t)}`;
     const needsYou = ['available', 'downloaded', 'error'].includes(update.status)
-        || !!update.pinnedVersion || !!update.installFailed || !!update.configError || !!error;
+        || !!update.pinnedVersion || !!update.installFailed || !!update.configError || !!update.readFailed || !!error;
 
     return (
         <SettingsDisclosure title={t('update.settings.title')} titleId="updates-label" hint={line} forceOpen={needsYou}>
             <div className="settings-field" role="group" aria-labelledby="updates-label">
                 <p className="visually-hidden" role="status">{line}</p>
 
-                <label className="setting-row">
-                    <span>{t('update.settings.auto')}</span>
-                    <span className="toggle-switch">
-                        <input
-                            type="checkbox"
-                            role="switch"
-                            checked={update.autoUpdate}
-                            aria-describedby="updates-auto-hint"
-                            aria-label={t('update.settings.auto')}
-                            aria-busy={busy}
-                            disabled={disabled}
-                            onChange={() => {
-                                if (!busy) void run('update.action.saveAuto', (b) => b.setAutoUpdate(!update.autoUpdate));
-                            }}
-                        />
-                        <span className="toggle-track" />
-                    </span>
-                </label>
-                <p className="settings-hint" id="updates-auto-hint">
-                    {t('update.settings.autoHint')}
-                </p>
+                {!update.manualInstall && (
+                    <>
+                        <label className="setting-row">
+                            <span>{t('update.settings.auto')}</span>
+                            <span className="toggle-switch">
+                                <input
+                                    type="checkbox"
+                                    role="switch"
+                                    checked={update.autoUpdate}
+                                    aria-describedby="updates-auto-hint"
+                                    aria-label={t('update.settings.auto')}
+                                    aria-busy={busy}
+                                    disabled={disabled}
+                                    onChange={() => {
+                                        if (!busy) void run('update.action.saveAuto', (b) => b.setAutoUpdate(!update.autoUpdate));
+                                    }}
+                                />
+                                <span className="toggle-track" />
+                            </span>
+                        </label>
+                        <p className="settings-hint" id="updates-auto-hint">
+                            {t('update.settings.autoHint')}
+                        </p>
+                    </>
+                )}
 
                 <label className="setting-row">
                     <span>{t('update.settings.rc')}</span>
@@ -147,7 +155,18 @@ export function UpdatesSection() {
                 )}
 
                 <div className="setting-actions">
-                    {update.status === 'available' && !update.pinnedVersion && (
+                    {update.status === 'available' && update.manualInstall && (
+                        <a
+                            className="btn-primary update-download-link"
+                            href={update.downloadUrl ?? RELEASES_PAGE}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-describedby="updates-manual-hint"
+                        >
+                            {t('update.settings.downloadVersion', { version: update.version ?? '' })}
+                        </a>
+                    )}
+                    {update.status === 'available' && !update.manualInstall && !update.pinnedVersion && (
                         <button
                             type="button"
                             className="btn-primary"
@@ -167,14 +186,32 @@ export function UpdatesSection() {
                             {t('update.settings.restart')}
                         </button>
                     )}
-                    <button
-                        type="button"
-                        className="btn-secondary"
-                        disabled={working || disabled}
-                        onClick={() => void run('update.action.check', (b) => b.check())}
-                    >
-                        {t('update.settings.check')}
-                    </button>
+                    {update.readFailed ? (
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={busy}
+                            onClick={async () => {
+                                setBusy(true);
+                                try {
+                                    await update.reload();
+                                } finally {
+                                    setBusy(false);
+                                }
+                            }}
+                        >
+                            {t('update.settings.retryRead')}
+                        </button>
+                    ) : (
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={working || disabled}
+                            onClick={() => void run('update.action.check', (b) => b.check())}
+                        >
+                            {t('update.settings.check')}
+                        </button>
+                    )}
                     <button
                         type="button"
                         className="btn-secondary"
@@ -195,6 +232,9 @@ export function UpdatesSection() {
                         </button>
                     )}
                 </div>
+                {update.status === 'available' && update.manualInstall && (
+                    <p className="settings-hint" id="updates-manual-hint">{t('update.settings.manualHint')}</p>
+                )}
                 {update.previousVersion && (
                     <p className="settings-hint" id="updates-back-hint">{t('update.settings.goBackHint')}</p>
                 )}
@@ -209,7 +249,7 @@ export function UpdatesSection() {
                 )}
                 {update.configError && <p className="settings-error" role="alert">{update.configError}</p>}
                 {error && <p className="settings-error" role="alert">{error}</p>}
-                {showPicker && <VersionPicker onClose={() => setShowPicker(false)} />}
+                {showPicker && <VersionPicker onClose={() => setShowPicker(false)} manualInstall={update.manualInstall} />}
             </div>
         </SettingsDisclosure>
     );

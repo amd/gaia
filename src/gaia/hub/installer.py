@@ -30,6 +30,7 @@ Safety properties (CLAUDE.md — fail loudly, no silent fallbacks):
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
@@ -52,10 +53,12 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gaia.config import gaia_agents_dir
 from gaia.daemon.sidecars.spec import builtin_specs
+from gaia.frozen import is_frozen
 from gaia.hub import catalog as catalog_mod
 from gaia.hub import prerelease as prerelease_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
+from gaia.retired_agents import RETIRED_AGENT_IDS, retired_install_message
 from gaia.utils.archive import ArchiveError, safe_extract
 from gaia.utils.file_lock import (
     FileLockTimeout,
@@ -119,6 +122,16 @@ PipRunner = Callable[[List[str]], None]
 
 class InstallError(RuntimeError):
     """Base class for install-lifecycle failures (actionable message)."""
+
+
+class RetiredAgentError(InstallError):
+    """The requested agent was removed from GAIA."""
+
+
+def refuse_retired_agent(agent_id: str) -> None:
+    """Raise :class:`RetiredAgentError` when *agent_id* was removed from GAIA."""
+    if agent_id in RETIRED_AGENT_IDS:
+        raise RetiredAgentError(retired_install_message(agent_id))
 
 
 class ChecksumError(InstallError):
@@ -201,8 +214,7 @@ def _require_safe_agent_id(agent_id: str) -> str:
         raise InstallError(
             f"Invalid agent id {agent_id!r}: agent ids must start with a letter "
             "or digit and contain only letters, digits, '.', '_' or '-' "
-            "(max 128 chars). Check the id against the hub catalog "
-            "('gaia agent list') or the package's gaia-agent.yaml."
+            "(max 128 chars). Check the id against the package's gaia-agent.yaml."
         )
     return agent_id
 
@@ -511,7 +523,13 @@ def clear_progress(agent_id: Optional[str] = None) -> None:
 def _download_and_verify(
     url: str, expected_sha256: str, fetcher: catalog_mod.Fetcher
 ) -> bytes:
-    data = fetcher(url)
+    if fetcher is catalog_mod.fetch_bytes:
+        try:
+            data = catalog_mod.download_artifact(url)
+        except catalog_mod.ArtifactDownloadError as exc:
+            raise InstallError(str(exc)) from exc
+    else:
+        data = fetcher(url)
     actual = hashlib.sha256(data).hexdigest()
     if actual != (expected_sha256 or "").lower():
         raise ChecksumError(
@@ -1259,8 +1277,7 @@ def resolve_installable_version(
         raise CoreTooOldError(
             f"No published version of '{agent_id}' runs on GAIA {core}: the "
             f"oldest needs GAIA {required} or newer. Upgrade with "
-            f"`{catalog_mod.CORE_UPGRADE_COMMAND}` (or re-run the installer from "
-            f"https://amd-gaia.ai), then install '{agent_id}' again.",
+            f"{catalog_mod.core_upgrade_hint()}, then install '{agent_id}' again.",
             required=required,
             core=core,
         )
@@ -1275,8 +1292,8 @@ def resolve_installable_version(
         )
         raise CoreTooOldError(
             f"'{agent_id}' {version} needs GAIA {floor} or newer, and this is "
-            f"GAIA {core}. Upgrade with `{catalog_mod.CORE_UPGRADE_COMMAND}` (or "
-            f"re-run the installer from https://amd-gaia.ai), then retry.{hint}",
+            f"GAIA {core}. Upgrade with {catalog_mod.core_upgrade_hint()}, "
+            f"then retry.{hint}",
             required=floor,
             core=core,
         )
@@ -1614,6 +1631,7 @@ def register_installed_sidecars(registry: Any) -> None:
             category=spec.category,
             tags=list(spec.tags),
             icon=spec.icon,
+            consumes_mcp_servers=spec.consumes_mcp_servers,
         )
 
 
@@ -1677,6 +1695,82 @@ class InstallResult:
         }
 
 
+def _install_source(
+    agent_id: str,
+    version: Optional[str],
+    manifest: Optional[Dict[str, Any]],
+    base_url: str,
+    fetcher: catalog_mod.Fetcher,
+):
+    """The manifest, download origin and RC source :func:`install` uses."""
+    rc_source = None
+    if version is None:
+        try:
+            rc_fetcher = fetcher
+            if fetcher is catalog_mod.fetch_bytes:
+                rc_fetcher = functools.partial(
+                    catalog_mod.fetch_bytes,
+                    timeout=prerelease_mod.MANIFEST_READ_TIMEOUT_SECONDS,
+                )
+            rc_source = prerelease_mod.flagship_source(agent_id, fetcher=rc_fetcher)
+        except prerelease_mod.PrereleaseFlagshipError as exc:
+            raise InstallError(str(exc)) from exc
+    if rc_source is not None:
+        return rc_source.manifest, rc_source.base_url, rc_source
+    if manifest is None:
+        manifest = catalog_mod.fetch_manifest(
+            agent_id, base_url=base_url, fetcher=fetcher
+        )
+    return manifest, base_url, None
+
+
+def _machine_gate(
+    manifest: Dict[str, Any], artifact: Dict[str, Any], install_root: Path
+) -> None:
+    """Refuse a machine the manifest's requirements rule out, or a full disk."""
+    report = check_compatibility(
+        manifest.get("requirements"),
+        download_size_bytes=artifact.get("size_bytes", 0),
+        install_dir=install_root,
+        artifact_kind=artifact.get("artifact_kind", ARTIFACT_KIND_WHEEL),
+    )
+    if not report.compatible:
+        blockers = "; ".join(report.blockers)
+        if not report.disk_ok:
+            raise DiskSpaceError(blockers)
+        raise CompatibilityError(blockers)
+
+
+def no_build_reason(
+    agent_id: str,
+    *,
+    base_url: Optional[str] = None,
+    fetcher: Optional[catalog_mod.Fetcher] = None,
+    platform_key: Optional[str] = None,
+    install_root: Optional[Path] = None,
+) -> Optional[str]:
+    """Why :func:`install` would find no build of *agent_id* for this machine.
+
+    ``None`` when it has one. Runs install's own source, version, artifact and
+    machine checks, downloading nothing; these are the refusals
+    ``gaia init`` treats as "no build for this machine" rather than a failure.
+
+    Raises:
+        catalog_mod.CatalogError, InstallError, requests.RequestException: the
+            question could not be answered (hub unreachable, malformed
+            manifest, no version this core runs).
+    """
+    fetcher = fetcher or catalog_mod.fetch_bytes
+    base_url = (base_url or catalog_mod.get_hub_base_url()).rstrip("/")
+    manifest, _, _ = _install_source(agent_id, None, None, base_url, fetcher)
+    try:
+        _, artifact = _resolve_version(manifest, None, platform_key=platform_key)
+        _machine_gate(manifest, artifact, install_root or default_install_root())
+    except (UnsupportedPlatformError, CompatibilityError) as exc:
+        return str(exc)
+    return None
+
+
 def install(
     agent_id: str,
     *,
@@ -1725,6 +1819,7 @@ def install(
         InstallInProgressError, ChecksumError, DiskSpaceError,
         CompatibilityError, TrustRequiredError, InstallError.
     """
+    refuse_retired_agent(agent_id)
     fetcher = fetcher or catalog_mod.fetch_bytes
     run_pip = run_pip or _default_run_pip
     root = install_root or default_install_root()
@@ -1735,20 +1830,9 @@ def install(
             agent_id, status="running", phase="resolving", percent=5, version=version
         )
         try:
-            rc_source = None
-            if version is None:
-                try:
-                    rc_source = prerelease_mod.flagship_source(
-                        agent_id, fetcher=fetcher
-                    )
-                except prerelease_mod.PrereleaseFlagshipError as exc:
-                    raise InstallError(str(exc)) from exc
-            if rc_source is not None:
-                manifest, base_url = rc_source.manifest, rc_source.base_url
-            elif manifest is None:
-                manifest = catalog_mod.fetch_manifest(
-                    agent_id, base_url=base_url, fetcher=fetcher
-                )
+            manifest, base_url, rc_source = _install_source(
+                agent_id, version, manifest, base_url, fetcher
+            )
             language = manifest.get("language", "python")
 
             # Trust gate — refuse any non-verified package unless the caller
@@ -1769,6 +1853,14 @@ def install(
                 manifest, version, platform_key=platform_key
             )
             artifact_kind = artifact.get("artifact_kind", ARTIFACT_KIND_WHEEL)
+            if artifact_kind == ARTIFACT_KIND_WHEEL and is_frozen():
+                raise InstallError(
+                    f"'{agent_id}' {resolved_version} ships as a Python package, "
+                    "and this GAIA build can't install packages: it runs agents "
+                    "that ship as binaries. A wheel agent needs GAIA installed "
+                    "from PyPI or source; see "
+                    "https://amd-gaia.ai/docs/guides/custom-agent."
+                )
             effective_platform_key = platform_key or current_platform_key()
 
             # --- compatibility / disk gate ---
@@ -1780,16 +1872,7 @@ def install(
                 version=resolved_version,
             )
             if not skip_compatibility_check:
-                report = check_compatibility(
-                    manifest.get("requirements"),
-                    download_size_bytes=artifact.get("size_bytes", 0),
-                    install_dir=root,
-                )
-                if not report.compatible:
-                    blockers = "; ".join(report.blockers)
-                    if not report.disk_ok:
-                        raise DiskSpaceError(blockers)
-                    raise CompatibilityError(blockers)
+                _machine_gate(manifest, artifact, root)
 
             # --- download + verify ---
             _set_progress(
@@ -2434,8 +2517,3 @@ def run_setup(
 
     _persist()
     return SetupResult(steps=steps)
-
-
-def get_setup_status(install_root: Optional[Path] = None) -> Optional[Dict[str, Any]]:
-    """Return the latest persisted setup state (for the polling endpoint)."""
-    return read_setup_state(default_setup_state_path(install_root))

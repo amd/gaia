@@ -330,25 +330,23 @@ class TestEnsureModelLoadedCtxResolution:
 
 
 class TestLaunchServerCtxSize:
-    """Verify launch_server passes ctx_size through to the launch command.
-
-    Pinned to LEGACY tooling: modern Lemonade takes no context size at
-    launch (no --ctx-size flag, no env var — #316, #3320); the modern path
-    is covered by TestLaunchServerModernLegacyDispatch in
-    tests/unit/test_lemonade_client_http.py. health_check is stubbed to fail so the
-    already-healthy launch guard never short-circuits against a real local
-    server.
+    """Lemonade takes no context size at launch (no --ctx-size flag, no env
+    var — #316, #3320), so launch_server never puts one in the command; the
+    window goes with every /load instead. health_check is stubbed to fail so
+    the already-healthy launch guard never short-circuits against a real
+    local server.
     """
 
     @staticmethod
-    def _legacy_tooling():
+    def _tooling():
         from gaia.llm.lemonade_launcher import LemonadeTooling
 
         return LemonadeTooling(
             found=True,
-            kind="legacy",
-            client_path="lemonade-server",
-            server_launcher="lemonade-server",
+            kind="modern",
+            client_path="/opt/lemonade/lemond",
+            server_launcher="/opt/lemonade/lemond",
+            source="env",
         )
 
     @patch("builtins.open", MagicMock())
@@ -359,7 +357,7 @@ class TestLaunchServerCtxSize:
     @patch("subprocess.Popen")
     @patch("socket.create_connection")
     @patch("time.sleep")
-    def test_ctx_size_appended_to_command(
+    def test_ctx_size_never_reaches_the_command(
         self, _sleep, mock_conn, mock_popen, mock_kill
     ):
         mock_conn.return_value = MagicMock()
@@ -370,14 +368,13 @@ class TestLaunchServerCtxSize:
             patch.object(client, "health_check", side_effect=Exception("server down")),
             patch(
                 "gaia.llm.lemonade_client.resolve_lemonade",
-                return_value=self._legacy_tooling(),
+                return_value=self._tooling(),
             ),
         ):
             client.launch_server(ctx_size=65536, background="silent")
 
         cmd = mock_popen.call_args[0][0]
-        assert "--ctx-size" in cmd
-        assert "65536" in cmd
+        assert cmd == ["/opt/lemonade/lemond"]
 
     @patch("builtins.open", MagicMock())
     @patch(
@@ -396,7 +393,7 @@ class TestLaunchServerCtxSize:
             patch.object(client, "health_check", side_effect=Exception("server down")),
             patch(
                 "gaia.llm.lemonade_client.resolve_lemonade",
-                return_value=self._legacy_tooling(),
+                return_value=self._tooling(),
             ),
         ):
             client.launch_server(background="silent")

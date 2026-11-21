@@ -118,6 +118,51 @@ def test_warns_with_the_oldest_questions_before_they_are_dropped(window):
     assert retained <= budget // 2
 
 
+@pytest.mark.parametrize(
+    "question, quoted",
+    [
+        ("what is the capital of France", "what is the capital of France"),
+        ("first paragraph\n\nthen the question", "first paragraph then the question"),
+    ],
+)
+def test_warning_quotes_the_user_not_the_injected_memory_block(
+    window, question, quoted
+):
+    window(6000)
+    memory = (
+        "[GAIA Memory Context]\nCurrent time: 2026-11-04T19:22:02-0800 (Wednesday)"
+        "\n\nLearned earlier this session:\n  - prefers metric units"
+    )
+    turns = []
+    while True:
+        turns.append(_text_turn(history.frame_user_message(memory, question), 120))
+        usage = history.context_usage(_agent(), turns)
+        if usage["at_risk"]:
+            break
+        assert len(turns) < 50, "never warned"
+
+    assert set(usage["at_risk"]) == {quoted}
+
+
+@pytest.mark.parametrize("framed", [False, True])
+def test_warning_quotes_the_user_not_the_hidden_turns_note(window, framed):
+    window(6000)
+    question = "what is the capital of France"
+    if framed:
+        question = history.frame_user_message("[GAIA Memory Context]\nnote", question)
+    noted = f"{history.HIDDEN_TURNS_NOTE}\n\n{question}"
+    turns = [_text_turn(noted, 120)]
+    while True:
+        turns.append(_text_turn("later question", 120))
+        usage = history.context_usage(_agent(), turns)
+        if usage["at_risk"]:
+            break
+        assert len(turns) < 50, "never warned"
+
+    assert usage["at_risk"][0] == "what is the capital of France"
+    assert not any("GAIA note" in quoted for quoted in usage["at_risk"])
+
+
 def test_no_warning_while_history_has_room(window):
     usage = history.context_usage(_agent(), [_text_turn("q")])
     assert usage["at_risk"] == []

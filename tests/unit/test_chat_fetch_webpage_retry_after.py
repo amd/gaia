@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """The chat agent's ``fetch_webpage`` returns a rate limit's ``Retry-After``.
 
-Needs the gaia-agent-chat wheel, so it runs in test_chat_agent.yml; the
+Needs the gaia-agent-gaia wheel, so it runs in test_chat_agent.yml; the
 core helper and ``fetch_page`` are covered by test_fetch_retry_after.py.
 """
 

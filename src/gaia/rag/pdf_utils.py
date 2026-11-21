@@ -8,6 +8,7 @@ PDF image extraction utilities for multi-modal RAG.
 Extracts individual images from PDF pages (not whole page conversion).
 """
 
+import contextlib
 import hashlib
 import io
 from typing import List, Tuple
@@ -16,6 +17,24 @@ from gaia.logger import get_logger
 from gaia.utils.parsing import PDFIUM_LOCK
 
 logger = get_logger(__name__)
+
+# pypdf's own cap is 100,000; SEC filings' catalogs pass it. Bounded, because
+# each element costs memory on a hostile file.
+PDF_MAX_ARRAY_ELEMENTS = 1_000_000
+
+
+def pdf_parse_limits():
+    """pypdf limits for one read, with the array cap raised to PDF_MAX_ARRAY_ELEMENTS.
+
+    pypdf parses lazily, so hold this around every use of the reader, not
+    just its construction.
+    """
+    try:
+        from pypdf import apply_configuration  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        # PyPDF2 has no array cap to raise.
+        return contextlib.nullcontext()
+    return apply_configuration(array_maximum_element_count=PDF_MAX_ARRAY_ELEMENTS)
 
 
 def prepare_image_for_vlm(image_bytes: bytes) -> dict:
@@ -204,21 +223,6 @@ def extract_images_from_page_pdfium(pdf_path: str, page_num: int) -> List[dict]:
     return images
 
 
-def extract_images_from_page(
-    page, page_num: int  # pylint: disable=unused-argument
-) -> List[dict]:
-    """
-    DEPRECATED: Use extract_images_from_page_pdfium instead.
-
-    Kept for backwards compatibility; it extracts nothing.
-    """
-    logger.warning(
-        "extract_images_from_page is deprecated and extracts nothing - "
-        "use extract_images_from_page_pdfium"
-    )
-    return []
-
-
 class PdfPageInspectionError(RuntimeError):
     """A page's image inventory could not be read (#3551).
 
@@ -265,57 +269,3 @@ def count_images_in_page(page, page_num: int = 0) -> Tuple[bool, int]:
         ) from e
 
     return (count > 0, count)
-
-
-def get_image_positions_on_page(pdf_path: str, page_num: int) -> List[dict]:
-    """
-    Get positions of images on a PDF page.
-
-    Args:
-        pdf_path: Path to PDF file
-        page_num: Page number (0-indexed)
-
-    Returns:
-        One entry per image placement, in top-left-origin page points:
-        [
-            {
-                "image_index": int,
-                "bbox": [x0, y0, x1, y1],
-                "position_y": float,  # Y-coordinate for sorting
-                "width": int,
-                "height": int
-            },
-            ...
-        ]
-
-    Raises:
-        FileNotFoundError: *pdf_path* does not exist.
-        PdfImageExtractionError: the file or page could not be opened.
-    """
-    import pypdfium2.raw as pdfium_c
-
-    with PDFIUM_LOCK:
-        pdf, page = _open_pdf_page(pdf_path, page_num)
-        try:
-            try:
-                page_height = page.get_height()
-                positions: List[dict] = []
-                image_objects = page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE])
-                for img_index, obj in enumerate(image_objects):
-                    # PDFium bounds are bottom-left origin; callers sort top-down.
-                    left, bottom, right, top = obj.get_bounds()
-                    y0 = page_height - top
-                    positions.append(
-                        {
-                            "image_index": img_index,
-                            "bbox": [left, y0, right, page_height - bottom],
-                            "position_y": y0,
-                            "width": int(right - left),
-                            "height": int(top - bottom),
-                        }
-                    )
-                return positions
-            finally:
-                page.close()
-        finally:
-            pdf.close()

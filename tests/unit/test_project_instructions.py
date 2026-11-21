@@ -24,6 +24,7 @@ from gaia.agents.base.project_map import (
     clear_project_map_cache,
     render_project_instructions,
 )
+from gaia.project_trust import TRUSTED, remember_folder_trust
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -470,6 +471,7 @@ class _ModelAgent(_FakeAgent):
 def ruled_repo(repo, monkeypatch):
     monkeypatch.delenv("GAIA_PROJECT_CONTEXT", raising=False)
     (repo / "CLAUDE.md").write_text("Run make check.\n", encoding="utf-8")
+    remember_folder_trust(repo, TRUSTED)
     return repo
 
 
@@ -582,6 +584,7 @@ def test_a_nested_repo_reads_only_its_own_instructions(tmp_path, monkeypatch):
     agent = _ModelAgent(None, "amd.Claude-Opus-5-5")
     assert agent.get_project_instructions_system_prompt() == ""
     (inner / "CLAUDE.md").write_text("Inner rule.\n", encoding="utf-8")
+    remember_folder_trust(inner, TRUSTED)
     text = _ModelAgent(
         None, "amd.Claude-Opus-5-5"
     ).get_project_instructions_system_prompt()

@@ -390,12 +390,13 @@ class TestListingAndSearch:
 
     def test_browse_outside_is_refused(self, tools, confined):
         result = _tool("browse_directory")(path=str(confined.key.parent))
-        assert "answer_key" not in result
-        assert ALLOWED_PATHS_ENV in result
+        assert result["executed"] is False
+        assert "answer_key" not in _text(result)
+        assert ALLOWED_PATHS_ENV in _text(result)
 
     def test_tree_outside_is_refused(self, tools, confined):
         result = _tool("tree")(path=str(confined.home))
-        assert "answer_key" not in result
+        assert "answer_key" not in _text(result)
 
     @pytest.mark.parametrize("scope", ["home", "smart"])
     def test_wide_name_search_stays_in_the_task(self, tools, confined, scope):

@@ -113,14 +113,15 @@ export function translate(code: string, key: MessageKey, params?: Params): strin
 /**
  * A line `build` assembles from several messages, written once per language and
  * bracketed once: "فهرس المستندات، استعلم في ملف (Indexed documents, queried file)",
- * not a bracket after every piece.
+ * not a bracket after every piece. `build` also gets the language it is writing, so a
+ * time or date in the English half can be English too.
  */
-export function compose(code: string, build: (say: Say) => string): string {
+export function compose(code: string, build: (say: Say, code: string) => string): string {
     const locale = getLocale(code);
     const rtl = locale.meta.dir === 'rtl';
-    const own = build((key, params) => fill(locale, key, params, rtl));
+    const own = build((key, params) => fill(locale, key, params, rtl), code);
     if (!locale.meta.showEnglishInBrackets || locale === en) return own;
-    const english = build((key, params) => fill(en, key, params, rtl));
+    const english = build((key, params) => fill(en, key, params, rtl), en.meta.code);
     if (own === english) return own;
     return `${isolate(own, locale.meta.dir)}${BRACKET_JOIN}${isolate(`(${english})`, 'ltr')}`;
 }

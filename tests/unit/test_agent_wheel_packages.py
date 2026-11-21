@@ -35,11 +35,6 @@ UTIL_DIR = REPO_ROOT / "util"
 # removed in the agent-collapse (its only AGENT_MODELS entry went with it).
 INFRA_ONLY_AGENT_IDS: set[str] = set()
 
-# Deprecated re-export shims that register no id of their own: gaia-agent-chat
-# re-exports ChatAgent from the flagship for one release, and its old ids
-# resolve to the flagship through the registry's legacy aliases (#6099).
-SHIM_ONLY_AGENT_IDS: set[str] = {"chat"}
-
 if str(UTIL_DIR) not in sys.path:
     sys.path.insert(0, str(UTIL_DIR))
 
@@ -57,7 +52,7 @@ def test_production_agent_list_nonempty(packages):
     ids = {p.agent_id for p in packages}
     # Spot-check the surviving hub agents; the helper enforces the full set
     # exists on disk, so this just sanity-checks the mapping direction.
-    assert {"email", "chat", "gaia"} <= ids
+    assert {"gaia"} <= ids
 
 
 def test_dist_name_and_directory_convention(packages):
@@ -71,9 +66,8 @@ def test_dist_name_and_directory_convention(packages):
 def test_every_wheel_declares_amd_gaia_dependency(packages):
     """Issue #1179 scope 3: each wheel depends on amd-gaia>={min_gaia_version}.
 
-    An optional ``[extras]`` segment is allowed (e.g. ``amd-gaia[api]>=`` — the
-    email wheel pulls the [api] extra so consumers auto-get the REST-server deps
-    + keyring; see #1617).
+    An optional ``[extras]`` segment is allowed (e.g. ``amd-gaia[api]>=``, so a
+    wheel can pull the REST-server deps; see #1617).
     """
     # amd-gaia, an optional [extras] group, then a >= floor.
     pat = re.compile(r"amd-gaia(\[[^\]]*\])?>=")
@@ -164,7 +158,7 @@ def test_pyproject_declares_gaia_agent_entry_point(packages):
     class-path from the API server, not via the registry entry point (#1102).
     """
     for p in packages:
-        if p.agent_id in INFRA_ONLY_AGENT_IDS | SHIM_ONLY_AGENT_IDS:
+        if p.agent_id in INFRA_ONLY_AGENT_IDS:
             continue
         pyproject = (p.path / "pyproject.toml").read_text(encoding="utf-8")
         assert (
@@ -220,7 +214,7 @@ def test_helper_rejects_bad_naming(tmp_path):
 
 
 def test_only_filter_ids():
-    """--only email returns exactly the email agent when using --format ids."""
+    """--only gaia returns exactly the flagship agent when using --format ids."""
     import subprocess  # nosec B404 — fixed argv, no shell
 
     out = subprocess.run(
@@ -228,7 +222,7 @@ def test_only_filter_ids():
             sys.executable,
             str(UTIL_DIR / "list_agent_packages.py"),
             "--only",
-            "email",
+            "gaia",
             "--format",
             "ids",
         ],
@@ -237,11 +231,11 @@ def test_only_filter_ids():
         check=True,
     )
     lines = [ln for ln in out.stdout.splitlines() if ln.strip()]
-    assert lines == ["email"], f"expected ['email'] but got {lines!r}"
+    assert lines == ["gaia"], f"expected ['gaia'] but got {lines!r}"
 
 
 def test_only_filter_matrix_single_entry():
-    """--format matrix --only email yields an include list of length 1 with correct fields."""
+    """--format matrix --only gaia yields an include list of length 1 with correct fields."""
     import json
     import subprocess  # nosec B404 — fixed argv, no shell
 
@@ -252,7 +246,7 @@ def test_only_filter_matrix_single_entry():
             "--format",
             "matrix",
             "--only",
-            "email",
+            "gaia",
         ],
         capture_output=True,
         text=True,
@@ -262,9 +256,9 @@ def test_only_filter_matrix_single_entry():
     assert "include" in matrix
     assert len(matrix["include"]) == 1
     entry = matrix["include"][0]
-    assert entry["id"] == "email"
-    assert entry["dist"] == "gaia-agent-email"
-    assert entry["path"].endswith("hub/agents/email/python")
+    assert entry["id"] == "gaia"
+    assert entry["dist"] == "gaia-agent-gaia"
+    assert entry["path"].endswith("hub/agents/gaia/python")
 
 
 def test_only_filter_unknown_id_fails():
@@ -281,5 +275,5 @@ def test_only_filter_unknown_id_fails():
     assert (
         "nope" in result.stderr
         or "valid" in result.stderr.lower()
-        or "email" in result.stderr
+        or "gaia" in result.stderr
     )

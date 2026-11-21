@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import pytest
 import test_prompt_prefix_stability as stability
-from test_prompt_prefix_stability import flagship  # noqa: F401 - fixture
 
 from gaia.agents.base import project_map
 from gaia.project_context import PROJECT_CONTEXT_ENV, ProjectContextError
+from gaia.project_trust import DECLINED, TRUSTED, remember_folder_trust
 
 RULE = "Run `make check` before every commit."
 CLAUDE = "amd.Claude-Opus-5-5"
@@ -55,15 +55,14 @@ def test_claude_md_and_project_skills_reach_a_stable_prompt(repo, flagship):
     assert "==== PROJECT INSTRUCTIONS ====" in system[0] and RULE in system[0]
     assert "- release-steps: How this repo cuts a release." in system[0]
     assert system[0] == system[1]
-    before, after = (stability._render(request) for request in model.requests)
-    assert after.startswith(before)
+    stability._assert_each_extends_the_last(model.requests)
 
 
 def test_the_model_can_load_a_project_skill_by_name(repo, flagship):
     agent, _model, _doc = flagship
     result = agent._tools_registry["load_skill"]["function"](name="release-steps")
     assert result["status"] == "success", result
-    assert "Tag, then publish." in agent.system_prompt
+    assert "Tag, then publish." in agent._prompt_text()
 
 
 # --------------------------------------------------------------------------
@@ -229,6 +228,7 @@ def test_claude_gets_instructions_skills_and_the_repository_section(
 ):
     agent, _model, _doc = flagship
     agent.config.project_context = "auto"
+    remember_folder_trust(repo, TRUSTED)
     deepseek = _as_model(agent, DEEPSEEK)
     for model, use_claude in ((CLAUDE, False), ("claude-opus-5", True)):
         prompt = _as_model(agent, model, use_claude)
@@ -237,6 +237,19 @@ def test_claude_gets_instructions_skills_and_the_repository_section(
         assert "WORKING IN A CODE REPOSITORY" in prompt
     # Switching back restores the other model's prompt exactly.
     assert _as_model(agent, DEEPSEEK) == deepseek
+
+
+def test_claude_gets_nothing_from_a_folder_the_user_has_not_trusted(
+    repo, flagship, auto
+):
+    agent, _model, _doc = flagship
+    agent.config.project_context = "auto"
+    for decision in (None, DECLINED):
+        if decision:
+            remember_folder_trust(repo, decision)
+        prompt = _as_model(agent, CLAUDE)
+        assert RULE not in prompt and "release-steps" not in prompt
+        assert "WORKING IN A CODE REPOSITORY" not in prompt
 
 
 def test_the_user_setting_beats_the_model(repo, flagship, auto):

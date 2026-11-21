@@ -5,6 +5,7 @@ import { useCallback, useState } from 'react';
 import { AlertTriangle, FileDiff as FileDiffIcon, Undo2 } from 'lucide-react';
 import * as api from '../services/api';
 import { useTurnChanges } from '../hooks/useTurnChanges';
+import { useT } from '../i18n/useT';
 import { announceUndo } from '../utils/undoEvents';
 import { groupUntracked, untrackedWarning } from '../utils/untrackedWork';
 import { ChangesReview } from './ChangesReview';
@@ -18,6 +19,7 @@ type Phase = 'idle' | 'confirm' | 'working' | 'conflict' | 'done';
 
 /** "Undo this turn" and "Review changes" under an answer whose turn changed files. */
 export function TurnChanges({ sessionId, messageId }: { sessionId: string; messageId: number }) {
+    const t = useT();
     const { turn, error: loadError, refresh } = useTurnChanges(sessionId, messageId);
     const [phase, setPhase] = useState<Phase>('idle');
     const [message, setMessage] = useState<string | null>(null);
@@ -51,7 +53,7 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
         return (
             <div className="turn-changes is-error" role="note">
                 <AlertTriangle size={12} aria-hidden="true" />
-                <span>Could not check this turn's file changes: {loadError}</span>
+                <span>{t('turnChanges.loadError', { error: loadError })}</span>
             </div>
         );
     }
@@ -59,7 +61,7 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
 
     const count = turn.files.length;
     const undone = Boolean(turn.restored_at);
-    const groups = groupUntracked(turn.untracked);
+    const groups = groupUntracked(turn.untracked, t);
 
     return (
         <div className="turn-changes" aria-label="File changes from this turn">
@@ -95,7 +97,7 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
                 <div className="turn-changes-warning" role="note">
                     <AlertTriangle size={12} aria-hidden="true" />
                     <span>
-                        {untrackedWarning(turn.untracked, { also: count > 0 })}
+                        {untrackedWarning(turn.untracked, { also: count > 0 }, t)}
                         {groups.length > 0 && (
                             <ul>
                                 {groups.map((g) => (
@@ -108,7 +110,7 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
                                                 <ul>
                                                     {g.entries.map((e) => (
                                                         <li key={e.detail} title={e.detail || undefined}>
-                                                            {e.label || 'No description'}
+                                                            {e.label || t('untracked.noDescription')}
                                                             {e.count > 1 && ` ×${e.count}`}
                                                         </li>
                                                     ))}

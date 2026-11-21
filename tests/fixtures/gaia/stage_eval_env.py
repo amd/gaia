@@ -27,7 +27,12 @@ It does four things:
 ``gh``.
 
 ``--home`` is required: defaulting to the developer's real home would overwrite
-their installed skills and add a throwaway key to their trust store.
+their installed skills and add a throwaway key to their trust store. CI passes
+the runner's profile, because the scenarios name ``~/gaia-eval`` as written.
+``util/run_eval_lane.py`` instead passes a folder under its ``--out``, with
+``--hub-out`` beside it, so nothing lands in the real home or the checkout's
+shared ``fixture_hub/_prepared``; it then points the runner at that copy
+(``GAIA_EVAL_ROOT``, see ``gaia.eval.fixture_env``).
 """
 
 from __future__ import annotations
@@ -213,9 +218,16 @@ def main(argv: list[str] | None = None) -> int:
         help="The GAIA home of the agent under eval, when GAIA_HOME moves it "
         "off <home>/.gaia. Skills and the fixture hub's trust land here.",
     )
+    parser.add_argument(
+        "--hub-out",
+        type=Path,
+        help="Build the fixture hub here instead of the checkout's "
+        "fixture_hub/_prepared; serve it with serve_fixtures.py --hub-dir.",
+    )
     args = parser.parse_args(argv)
     gaia_home = args.gaia_home.expanduser().resolve() if args.gaia_home else None
-    stage(args.home.expanduser().resolve(), gaia_home)
+    hub_out = args.hub_out.expanduser().resolve() if args.hub_out else None
+    stage(args.home.expanduser().resolve(), gaia_home, hub_out=hub_out)
     return 0
 
 

@@ -226,6 +226,32 @@ def test_lists_offer_only_models_this_pc_runs(pc, capacity, available):
         assert m["available"] == (m["unavailable_reason"] is None)
 
 
+@pytest.mark.parametrize(
+    "state,offered",
+    [("installed", True), ("installable", True), ("unsupported", False)],
+)
+def test_npu_model_is_offered_only_where_its_backend_runs(state, offered):
+    # Linux without the amdxdna driver: Lemonade sees the NPU and its memory,
+    # but FastFlowLM cannot run, so the model must not read as "Fits this PC".
+    info = system_info()
+    info["recipes"]["flm"]["backends"] = _backends(
+        npu=(state, "amdxdna driver not loaded" if state == "unsupported" else "")
+    )
+    (flm,) = annotate_local_models(
+        _MODELS[2:],
+        health={"all_models_loaded": []},
+        system_info=info,
+        capacity=replace(_cap(64), npu_memory_gb=64.0),
+        preferred_backend=None,
+        speeds={},
+    )
+    # The Fits badge needs both (ModelRow.tsx): memory fits, and it can run.
+    assert flm["fits"] is True
+    assert flm["available"] is offered
+    if not offered:
+        assert "amdxdna driver not loaded" in flm["unavailable_reason"]
+
+
 def test_too_large_model_says_why():
     out = annotate_local_models(
         _MODELS[1:2],
@@ -427,7 +453,7 @@ def test_config_rejects_a_malformed_context_sizes():
     # Looked up at call time: test_cli_config reloads gaia.config, replacing the class.
     with pytest.raises(config_mod.GaiaConfigError, match="context_sizes"):
         config_mod.GaiaConfig.load()
-    with pytest.raises(config_mod.GaiaConfigError, match="Settings › Model"):
+    with pytest.raises(config_mod.GaiaConfigError, match="Settings › Agent & model"):
         config_mod.GaiaConfig().set("context_sizes", "{}")
 
 
@@ -511,7 +537,7 @@ def test_a_saved_size_is_not_loaded_unchecked_when_memory_is_unreadable(monkeypa
             LemonadeClientError, match="can't read this PC's memory"
         ) as e:
             resolve_ctx_size(LARGE_DEFAULT_MODEL_NAME, base_url=BASE)
-        assert "Choose Automatic in Settings › Model" in str(e.value)
+        assert "Choose Automatic in Settings › Agent & model" in str(e.value)
         assert _load_bodies() == []
     finally:
         lc._CAPACITY_CACHE.clear()

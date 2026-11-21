@@ -76,11 +76,11 @@ func (m ChatModel) armFullAccess() (tea.Model, tea.Cmd) {
 		Content: "[!] Full access would let " + m.agentName +
 			" run every tool with no prompt — shell commands, file writes, " +
 			"anything it decides to do — for the rest of this session.\n" +
-			"    It also takes the shell guardrails off: it can redirect " +
-			"output, and the read-only allowlist is replaced by a developer set " +
-			"(node, npm, make, go, cargo, python, pytest, gh, git) that can " +
-			"execute arbitrary code in this directory. git is unrestricted " +
-			"there, including push and history rewrites.\n" +
+			"    It also takes the shell guardrails off: it can run any " +
+			"program, delete files, redirect output and reach any folder, " +
+			"and nothing is refused. That is arbitrary code execution with " +
+			"your account. git is unrestricted, including push and history " +
+			"rewrites.\n" +
 			"    Type /full-access confirm to turn it on, or /full-access off at any " +
 			"time to turn it back off. Once it has been on, Shift+Tab switches " +
 			"straight to it.\n" +
@@ -182,12 +182,6 @@ func (m ChatModel) applyLaunchFullAccess() ChatModel {
 		Content: "[!] " + reason + ": " + m.agentName + " runs tools without asking.\n    " + undo,
 	})
 	return m
-}
-
-// fullAccessHelpLine documents the command wherever the TUI lists what it can do.
-func fullAccessHelpLine() string {
-	return "/full-access — let the agent run tools without asking (off by default);\n" +
-		"              add `always` to keep it on for every session, `never` to stop"
 }
 
 // isFullAccessCommand reports whether a composed line is one of the full-access

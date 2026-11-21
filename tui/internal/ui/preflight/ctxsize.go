@@ -2,7 +2,6 @@ package preflight
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
 
@@ -14,9 +13,8 @@ import (
 // Modern Lemonade takes no window at launch: it has no `--ctx-size` flag and
 // reads no environment variable for it (#3320), so a start command cannot carry
 // one. GAIA sends the window with every `/load` instead. The value here is used
-// for two things only: the legacy CLI's `--ctx-size` flag, and the AI model row,
-// which reports the window the server really loaded and says so when it falls
-// short of this target (see markCtxShortfall).
+// for the AI model row only, which reports the window the server really loaded
+// and says so when it falls short of this target (see markCtxShortfall).
 //
 // The value is DERIVED, never hardcoded. GAIA pins one context window per device
 // profile (lemonade_client.GPU_CTX_SIZE / NPU_CTX_SIZE) and `gaia init` records
@@ -91,12 +89,6 @@ func readDeviceConfig(p hostProbe) deviceConfig {
 
 func configPath(p hostProbe) string {
 	return lemonade.ConfigPathFrom(p.getenv, p.homeDir)
-}
-
-// legacyCtxFlag is how the PRE-10.7 CLI took the window: a flag
-// (lemonade_launcher.build_start_command's legacy branch).
-func legacyCtxFlag(ctx int) string {
-	return fmt.Sprintf(" --ctx-size %d", ctx)
 }
 
 // osReadFile is the real file reader for hostProbe.

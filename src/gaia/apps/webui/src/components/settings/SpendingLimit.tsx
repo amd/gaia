@@ -49,11 +49,16 @@ export function SpendingLimit() {
             <p className="spending-total">
                 <bdi dir="ltr"><strong>{formatTotal(report.total_usd)}</strong></bdi>
                 {limit != null && <> {t('settings.spend.ofLimit', { limit: formatTotal(limit) })}</>}
-                <span className="settings-hint"> · {t.plural('settings.spend.turns', report.turns)}</span>
+                <span className="settings-hint"> · {t.plural('settings.spend.turns', report.turns - report.unpriced_turns - report.unreported_turns)}</span>
             </p>
             {report.unpriced_turns > 0 && (
                 <p className="settings-hint">
                     {t.plural('settings.spend.unpriced', report.unpriced_turns)}
+                </p>
+            )}
+            {report.unreported_turns > 0 && (
+                <p className="settings-hint">
+                    {t.plural('settings.spend.unreported', report.unreported_turns)}
                 </p>
             )}
             {report.state === 'near' && (

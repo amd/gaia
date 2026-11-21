@@ -8,7 +8,7 @@ rest of the value was parsed as PowerShell:
 
 * ``rag.pptx_utils.convert_pptx_to_pdf`` — the *filename* of an uploaded deck,
   executed during indexing with no tool call and no confirmation;
-* ``gaia_agent_chat``'s ``notify_desktop`` Windows fallback — the message and
+* ``ChatAgent``'s ``notify_desktop`` Windows fallback — the message and
   title the model chose.
 
 Both now hand their values to the child through the environment, so the command

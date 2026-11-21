@@ -871,11 +871,22 @@ def _run_live_gates(pkg_dir: Path, timeout: int) -> None:
                 f"agent crashed on prompt {prompt!r}: {error}. Fix the agent "
                 f"and re-run 'gaia agent test --live'."
             ) from error
+        failure = _failed_response(result)
+        if failure:
+            reason, remedy = failure
+            raise AgentWorkflowError(
+                f"agent failed on prompt {prompt!r}: {reason}. {remedy}, then "
+                f"re-run 'gaia agent test --live'."
+            )
         if not _nonempty_response(result):
             raise AgentWorkflowError(
                 f"agent returned an empty response for prompt {prompt!r}. "
-                f"Check the agent's logic and model availability."
+                f"Return the answer as a string, or in a dict under one of "
+                f"{', '.join(_ANSWER_KEYS)}, and check model availability."
             )
+        note = _failed_turn_note(result)
+        if note:
+            _warn(f"prompt {i}: the agent marked its turn failed ({note})")
         _ok(f"responded to prompt {i}")
     print("\nAll live gates passed.")
 
@@ -1228,19 +1239,100 @@ def _starters_from_init(pkg_dir: Path, module_name: str) -> List[str]:
         ) from exc
 
 
+_ANSWER_KEYS = ("result", "response", "text", "answer", "final_answer")
+
+
 def _nonempty_response(result) -> bool:
     if result is None:
         return False
     if isinstance(result, str):
         return bool(result.strip())
     if isinstance(result, dict):
-        for key in ("result", "response", "text", "answer", "final_answer"):
+        for key in _ANSWER_KEYS:
             val = result.get(key)
             if isinstance(val, str) and val.strip():
                 return True
-        # A dict with any truthy content counts as a response.
-        return any(bool(v) for v in result.values())
+        # Metadata (system_prompt, conversation, ...) is always present on an
+        # Agent result, so only the answer keys above count as a response.
+        return False
     return True
+
+
+_MODEL_REMEDY = "Check that Lemonade Server is running and the model is loaded"
+_UNUSABLE_REMEDY = (
+    "The model replied but its output could not be used: try a larger or "
+    "tool-calling model, or raise max_tokens if replies were cut off"
+)
+
+
+def _failed_response(result) -> Optional[Tuple[str, str]]:
+    """``(reason, remedy)`` when a process_query result is a failure, else None.
+
+    Agent.process_query reports a failed model call in the result dict instead
+    of raising, and still fills ``result`` with the error text, so a non-empty
+    answer alone does not mean the agent worked. ``status == "failed"`` alone is
+    not a failure here: it is also set by errors the turn recovered from (e.g. a
+    trimmed context overflow), so the answer can still be valid.
+    """
+    if not isinstance(result, dict):
+        return None
+    if result.get("model_unreachable"):
+        return "the model was unreachable", _MODEL_REMEDY
+    if result.get("model_failed"):
+        reason = "the model call failed"
+        detail = _last_error(result)
+        remedy = (
+            _UNUSABLE_REMEDY
+            if _last_error_type(result) == "output_truncated"
+            else _MODEL_REMEDY
+        )
+        return (f"{reason} ({detail})" if detail else reason), remedy
+    unusable = _unrecovered_unusable_reply(result)
+    if unusable:
+        return f"the model never gave a usable reply ({unusable})", _UNUSABLE_REMEDY
+    if result.get("status") == "error":
+        detail = result.get("error") or _last_error(result)
+        reason = "status 'error'" + (f" ({detail})" if detail else "")
+        return reason, "Fix the agent"
+    return None
+
+
+def _unrecovered_unusable_reply(result: dict) -> Optional[str]:
+    """The last unparsable or cut-off reply the turn never recovered from, else None."""
+    from gaia.agents.base.agent import _RECOVERABLE_ERROR_TYPES
+
+    errors = result.get("error_history")
+    if not isinstance(errors, list):
+        return None
+    for entry in reversed(errors):
+        if (
+            isinstance(entry, dict)
+            and entry.get("type") in _RECOVERABLE_ERROR_TYPES
+            and not entry.get("recovered")
+        ):
+            return str(entry.get("error") or entry["type"])
+    return None
+
+
+def _failed_turn_note(result) -> Optional[str]:
+    """Why a ``status: failed`` turn that still answered failed, else None."""
+    if not isinstance(result, dict) or result.get("status") != "failed":
+        return None
+    return _last_error(result) or "no error recorded"
+
+
+def _last_error_type(result: dict) -> Optional[str]:
+    errors = result.get("error_history")
+    last = errors[-1] if isinstance(errors, list) and errors else None
+    return last.get("type") if isinstance(last, dict) else None
+
+
+def _last_error(result: dict) -> Optional[str]:
+    errors = result.get("error_history")
+    last = errors[-1] if isinstance(errors, list) and errors else None
+    if isinstance(last, dict):
+        last = last.get("error") or last.get("message")
+    return str(last) if last else None
 
 
 def _ensure_on_path(pkg_dir: Path) -> None:

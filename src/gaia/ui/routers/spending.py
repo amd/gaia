@@ -30,6 +30,24 @@ def get_spending(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     return _report(db)
 
 
+@router.get("/api/spending/chat/{session_id}")
+def get_chat_spending(
+    session_id: str,
+    since: str,
+    model: Optional[str] = None,
+    db: ChatDatabase = Depends(get_db),
+) -> Dict[str, Any]:
+    """This chat's cloud spending and every chat's since *since* (the local day's start)."""
+    if not db.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    try:
+        return spending.chat_spend(db, session_id, model, since)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 class LimitRequest(BaseModel):
     """``limit_usd`` None removes the limit."""
 

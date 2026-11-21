@@ -15,6 +15,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +27,7 @@ from gaia.agents.base.console import (
     OutputHandler,
     SilentConsole,
     format_confirmation_args,
+    someone_can_answer,
     terminal_is_interactive,
 )
 from gaia.agents.base.tools import tool
@@ -280,6 +282,32 @@ class TestTerminalDetection:
         assert AgentConsole().confirm_tool_execution("send_now", {}) is False
 
 
+class TestSomeoneCanAnswer:
+    """``someone_can_answer``: the one check path access and folder trust share."""
+
+    @pytest.mark.parametrize(
+        "flags, expected",
+        [
+            ({"blocking_confirmation": True}, True),
+            # A blocking console still cannot be answered on a background run.
+            ({"blocking_confirmation": True, "background_mode": True}, False),
+            ({"blocking_confirmation": True, "nobody_answers": True}, False),
+            ({}, False),
+        ],
+    )
+    def test_console_flags(self, flags, expected):
+        assert someone_can_answer(SimpleNamespace(**flags)) is expected
+
+    def test_a_terminal_console_on_a_terminal(self, tty):
+        assert someone_can_answer(SilentConsole()) is True
+
+    def test_a_terminal_console_without_one(self, no_tty):
+        assert someone_can_answer(SilentConsole()) is False
+
+    def test_no_console(self):
+        assert someone_can_answer(None) is False
+
+
 class TestAgentConsoleInteractive:
     """The CLI console attached to a real terminal."""
 
@@ -491,7 +519,7 @@ class _StubChatAgent:
 class TestAlwaysAllowScope:
     """ "Always" must not become a blank cheque for arbitrary execution."""
 
-    @pytest.mark.parametrize("tool_name", ["run_shell_command", "run_cli_command"])
+    @pytest.mark.parametrize("tool_name", ["run_shell_command", "wait_for_condition"])
     def test_a_shell_grant_covers_only_that_command(self, tty, monkeypatch, tool_name):
         """The shell tools may be granted, but never wholesale.
 

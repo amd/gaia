@@ -18,9 +18,11 @@ Three layers:
 from __future__ import annotations
 
 import ast
+import gc
 import json
 import random
 import time
+from collections.abc import Sequence
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1335,34 +1337,70 @@ _PYTEST_ARGV = "subprocess.run([sys.executable, '-m', 'pytest'])\n"
 _PYTEST_IN_A_DEF = "def run_tests():\n    " + _PYTEST_ARGV
 
 
+def _scan_seconds(source: str, repeats: int = 1) -> float:
+    # Times the walk only: CPython's own parse of the f-string storm is itself
+    # super-linear, and the walk is where the n**2 / 2 bug lived.
+    tree = ast.parse(source)
+    with patch("gaia.agents.base.checks.ast.parse", return_value=tree):
+        started = time.perf_counter()
+        for _ in range(repeats):
+            _detect_test_runner(source)
+        return time.perf_counter() - started
+
+
+_GROWTH = 8
+
+
+def _growth_seconds(small: str, big: str) -> tuple[float, float]:
+    # The small snippet runs _GROWTH times per sample so both samples last about
+    # as long: a busy runner then preempts each alike, rather than sparing the
+    # few-ms one. Interleaved best-of-5 with GC paused.
+    small_best = big_best = float("inf")
+    gc.disable()
+    try:
+        for _ in range(5):
+            small_best = min(small_best, _scan_seconds(small, _GROWTH))
+            big_best = min(big_best, _scan_seconds(big))
+    finally:
+        gc.enable()
+    return small_best, big_best
+
+
+def _assert_grows_linearly(make_source) -> None:
+    # 8x the launches against 8 runs of the small one: linear is ~1-2x the
+    # time, the unbounded n**2 / 2 is ~8x.
+    small, big = _growth_seconds(make_source(500), make_source(500 * _GROWTH))
+    assert big < 3 * small + 0.02, (small, big)
+
+
 @pytest.mark.parametrize(
     "storm",
     [
-        "s = ''\n" + "s += 'echo a; '\nos.system(s)\n" * 5000,
-        "s = []\n" + "s += ['echo', 'a']\nsubprocess.run(s)\n" * 5000,
-        "s = 'echo'\n" + "s = f'{s} a'\nos.system(s)\n" * 5000,
+        lambda n: "s = ''\n" + "s += 'echo a; '\nos.system(s)\n" * n,
+        lambda n: "s = []\n" + "s += ['echo', 'a']\nsubprocess.run(s)\n" * n,
+        lambda n: "s = 'echo'\n" + "s = f'{s} a'\nos.system(s)\n" * n,
     ],
     ids=["shell-text", "argv", "f-string"],
 )
 @pytest.mark.parametrize("runner", ["before", "after", "in-def"])
 def test_a_command_grown_and_launched_each_time_stays_linear(storm, runner):
     # Launch k sees all k commands: unbounded, the checks add up to n**2 / 2.
-    source = (
-        _LAUNCH_HEADER
-        + {
-            "before": _PYTEST_ARGV + storm,
-            "after": storm + _PYTEST_ARGV,
-            "in-def": _PYTEST_IN_A_DEF + storm + "run_tests()\n",
-        }[runner]
-    )
+    def with_runner(n: int) -> str:
+        return (
+            _LAUNCH_HEADER
+            + {
+                "before": _PYTEST_ARGV + storm(n),
+                "after": storm(n) + _PYTEST_ARGV,
+                "in-def": _PYTEST_IN_A_DEF + storm(n) + "run_tests()\n",
+            }[runner]
+        )
+
     with patch("gaia.agents.base.checks.log") as log:
-        found, seconds = _detect_seconds(source)
-    assert found is True
-    assert seconds < _linear_bound(source)
+        assert _detect_test_runner(with_runner(5000)) is True
     assert not log.warning.called
-    storm_only, seconds = _detect_seconds(_LAUNCH_HEADER + storm)
-    assert storm_only is False
-    assert seconds < _linear_bound(_LAUNCH_HEADER + storm)
+    assert _detect_test_runner(_LAUNCH_HEADER + storm(5000)) is False
+    _assert_grows_linearly(with_runner)
+    _assert_grows_linearly(lambda n: _LAUNCH_HEADER + storm(n))
 
 
 _WIDE = 5001
@@ -1406,11 +1444,38 @@ def test_a_command_grown_many_times_is_still_read(prefixes):
     assert _detect_test_runner(source) is True
 
 
+class _CountingArgv(Sequence):
+    """An argv that counts every word read, so linearity is checked without a clock."""
+
+    def __init__(self, words, reads=None):
+        self._words = list(words)
+        self.reads = reads if reads is not None else [0]
+
+    def __len__(self):
+        return len(self._words)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            part = self._words[index]
+            self.reads[0] += len(part)
+            return _CountingArgv(part, self.reads)
+        self.reads[0] += 1
+        return self._words[index]
+
+
 def test_a_long_launcher_chain_is_unwrapped_in_linear_time():
-    started = time.perf_counter()
-    assert argv_check_label(["uv", "run"] * 100_000 + ["pytest"]) == "pytest"
-    assert argv_check_label(["npx"] * 100_000 + ["cat", "pytest.log"]) is None
-    assert time.perf_counter() - started < 5
+    for chain, tail, expected in (
+        (["uv", "run"], ["pytest"], "pytest"),
+        (["npx"], ["cat", "pytest.log"], None),
+    ):
+        reads = []
+        for repeats in (1_000, 2_000):
+            argv = _CountingArgv(chain * repeats + tail)
+            assert argv_check_label(argv) == expected
+            reads.append(argv.reads[0])
+        # Linear reads double with the chain; re-reading the rest per launcher quadruples.
+        assert reads[1] <= 2.5 * reads[0], (chain, reads)
+        assert reads[1] <= 4 * len(argv), (chain, reads)
 
     command = "uv run " * 40_000 + "pytest"
     source = _LAUNCH_HEADER + f"os.system({command!r})\n"

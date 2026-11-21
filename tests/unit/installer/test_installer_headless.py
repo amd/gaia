@@ -9,12 +9,14 @@ remove real software and refuse to run outside CI; this checks that they refuse.
 
 from __future__ import annotations
 
+import email.utils
 import importlib.util
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -26,6 +28,7 @@ REPO = Path(__file__).resolve().parents[3]
 HEADLESS = REPO / "installer" / "headless"
 WORKFLOW = REPO / ".github" / "workflows" / "test_installers_headless.yml"
 THRESHOLDS = REPO / "installer" / "install_time_thresholds.json"
+FIXTURE = REPO / "tests" / "fixtures" / "github" / "releases.json"
 
 
 def _load(name: str):
@@ -147,6 +150,19 @@ class TestReleaseNaming:
     def test_older_candidates_still_rebuild_theirs(self, tag):
         assert not self.PACKAGES & set(resolve.required(tag))
 
+    def test_the_raw_terminal_binaries_go_by_what_the_release_carries(self):
+        """gaia-cli-<platform>, except on a release from before that name."""
+        assert resolve.expected_assets("v1.2.3")["tui-bin-linux-x64"] == (
+            "gaia-cli-linux-amd64"
+        )
+        both = ["gaia-linux-amd64", "gaia-cli-linux-amd64"]
+        assert resolve.expected_assets("v1.2.3", both)["tui-bin-linux-x64"] == (
+            "gaia-cli-linux-amd64"
+        )
+        before = resolve.expected_assets("v0.25.0", ["gaia-windows-amd64.exe"])
+        assert before["tui-bin-win-x64"] == "gaia-windows-amd64.exe"
+        assert before["tui-bin-darwin-x64"] == "gaia-cli-darwin-amd64"
+
     def test_a_candidate_names_its_packages_with_its_own_version(self):
         names = resolve.expected_assets("v0.25.1-rc4")
         assert names["tui-deb"] == "gaia_0.25.1-rc.4_amd64.deb"
@@ -176,6 +192,291 @@ class TestReleaseNaming:
         assert names["tui-pkg-darwin-arm64"] == built["darwin-arm64-pkg"]
         assert names["tui-pkg-darwin-x64"] == built["darwin-x64-pkg"]
         assert names["win-setup"] == built["win-x64-setup"]
+
+
+# ── releases API retries ─────────────────────────────────────────────────────
+
+
+RETRY_URL = "https://api.github.com/repos/amd/gaia/releases?per_page=100&page=1"
+
+
+def _http_error(status: int, headers=None) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(RETRY_URL, status, "error", headers or {}, None)
+
+
+class _JsonResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self._body
+
+
+class TestResolveReleaseRetries:
+    URL = RETRY_URL
+
+    @pytest.fixture(autouse=True)
+    def _isolate_env(self, monkeypatch):
+        for name in ("GITHUB_FETCH_RETRIES", "GH_TOKEN", "GITHUB_TOKEN"):
+            monkeypatch.delenv(name, raising=False)
+        self.sleeps = []
+        self.requests = []
+        monkeypatch.setattr(resolve.time, "sleep", self.sleeps.append)
+
+    def _urlopen(self, monkeypatch, *responses):
+        """urlopen returning or raising each response in turn."""
+        pending = list(responses)
+
+        def fake(req, timeout):
+            self.requests.append(req)
+            item = pending.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+        monkeypatch.setattr(resolve.urllib.request, "urlopen", fake)
+
+    def test_retries_a_403_then_returns_the_json(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "2")
+        self._urlopen(
+            monkeypatch,
+            _http_error(403, {"Retry-After": "1"}),
+            _JsonResponse(b'[{"tag_name": "v1.0.0"}]'),
+        )
+
+        assert resolve._get(self.URL) == [{"tag_name": "v1.0.0"}]
+        assert len(self.requests) == 2
+        assert self.sleeps == [1.0]
+
+    def test_retries_a_429(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "1")
+        self._urlopen(
+            monkeypatch,
+            _http_error(429, {"Retry-After": "0"}),
+            _JsonResponse(b"[]"),
+        )
+
+        assert resolve._get(self.URL) == []
+        assert len(self.requests) == 2
+
+    def test_exhausted_retries_name_the_url_status_attempts_and_setting(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "2")
+        monkeypatch.setenv("GH_TOKEN", "test-token")
+        self._urlopen(
+            monkeypatch,
+            *[_http_error(403, {"Retry-After": "0"}) for _ in range(3)],
+        )
+
+        with pytest.raises(RuntimeError) as caught:
+            resolve._get(self.URL)
+        message = str(caught.value)
+        assert self.URL in message
+        assert "HTTP 403" in message
+        assert "3 attempt" in message
+        assert "GITHUB_FETCH_RETRIES=2" in message
+        assert "hourly quota" in message
+        assert isinstance(caught.value.__cause__, urllib.error.HTTPError)
+        assert len(self.requests) == 3
+        assert self.sleeps == [0.0, 0.0]
+
+    def test_default_is_no_retry_and_the_original_error_propagates(self, monkeypatch):
+        error = _http_error(403)
+        self._urlopen(monkeypatch, error)
+
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            resolve._get(self.URL)
+        assert caught.value is error
+        assert len(self.requests) == 1
+        assert self.sleeps == []
+
+    def test_a_500_is_not_retried(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "3")
+        error = _http_error(500)
+        self._urlopen(monkeypatch, error)
+
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            resolve._get(self.URL)
+        assert caught.value is error
+        assert len(self.requests) == 1
+        assert self.sleeps == []
+
+    @pytest.mark.parametrize("value", ["not-a-number", "3.5", "-1", "6"])
+    def test_invalid_retry_limit_is_rejected(self, monkeypatch, value):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", value)
+        with pytest.raises(SystemExit, match="GITHUB_FETCH_RETRIES"):
+            resolve._retry_limit()
+
+    def test_a_wait_that_lands_exactly_on_the_budget_is_allowed(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "1")
+        self._urlopen(
+            monkeypatch,
+            _http_error(403, {"Retry-After": "30"}),
+            _JsonResponse(b"[]"),
+        )
+
+        assert resolve._get(self.URL) == []
+        assert self.sleeps == [30.0]
+        assert len(self.requests) == 2
+
+    def test_the_total_wait_cannot_be_pushed_past_the_budget(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "3")
+        self._urlopen(
+            monkeypatch,
+            _http_error(403, {"Retry-After": "20"}),
+            _http_error(403, {"Retry-After": "10"}),
+            _http_error(403, {"Retry-After": "1"}),
+        )
+
+        with pytest.raises(RuntimeError, match="wait budget"):
+            resolve._get(self.URL)
+        assert sum(self.sleeps) == 30.0
+        assert len(self.requests) == 3
+
+    @pytest.mark.parametrize(
+        "env, expected",
+        [
+            ({"GITHUB_TOKEN": "g"}, "Bearer g"),
+            ({"GH_TOKEN": "h"}, "Bearer h"),
+            ({"GH_TOKEN": "h", "GITHUB_TOKEN": "g"}, "Bearer h"),
+            ({}, None),
+        ],
+    )
+    def test_token_header(self, monkeypatch, env, expected):
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        self._urlopen(monkeypatch, _JsonResponse(b"[]"))
+
+        resolve._get(self.URL)
+        assert self.requests[0].get_header("Authorization") == expected
+
+    def test_delay_prefers_retry_after_seconds(self):
+        assert resolve._retry_delay(_http_error(403, {"Retry-After": "5"}), 1) == 5.0
+
+    def test_delay_accepts_retry_after_as_an_http_date(self):
+        when = email.utils.formatdate(time.time() + 5, usegmt=True)
+        delay = resolve._retry_delay(_http_error(403, {"Retry-After": when}), 1)
+        assert 3.0 <= delay <= 5.0
+
+    def test_delay_uses_the_rate_limit_reset_epoch(self):
+        reset = str(int(time.time()) + 10)
+        delay = resolve._retry_delay(_http_error(403, {"X-RateLimit-Reset": reset}), 1)
+        assert 8.0 <= delay <= 10.0
+
+    def test_delay_falls_back_and_caps_at_30_seconds(self):
+        assert resolve._retry_delay(_http_error(403), 1) == 0.5
+        assert resolve._retry_delay(_http_error(403), 3) == 2.0
+        assert resolve._retry_delay(_http_error(403, {"Retry-After": "600"}), 1) == 30.0
+
+
+# ── checked-in release fixture ────────────────────────────────────────────────
+
+
+class TestResolveReleaseFixture:
+    @pytest.fixture(autouse=True)
+    def _fixture(self, monkeypatch):
+        for name in (
+            "GITHUB_FETCH_RETRIES",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GITHUB_OUTPUT",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("GAIA_GITHUB_FIXTURE", str(FIXTURE))
+
+        def no_network(*args, **kwargs):
+            raise AssertionError("fixture reads must not call the network")
+
+        monkeypatch.setattr(resolve.urllib.request, "urlopen", no_network)
+
+    def test_list_releases_comes_from_the_fixture(self):
+        releases = resolve.list_releases()
+        assert [release["tag_name"] for release in releases] == [
+            "v0.26.1-rc2",
+            "v0.26.0",
+        ]
+
+    def test_pick_default_and_previous_stable_use_the_fixture(self):
+        releases = resolve.list_releases()
+        tag = resolve.pick_default(releases)
+        assert tag == "v0.26.1-rc2"
+        assert resolve.previous_stable(releases, tag)["tag_name"] == "v0.26.0"
+
+    def test_release_assets_come_from_the_fixture(self):
+        assets = resolve.release_assets("v0.26.1-rc2")
+        assert assets is not None
+        assert "gaia-0.26.1-rc.2-win-x64-setup.exe" in assets
+        assert resolve.release_assets("v9.9.9") is None
+
+    def test_main_writes_the_fixture_release_without_network(self, tmp_path):
+        out = tmp_path / "release.json"
+        assert resolve.main(["--out", str(out)]) == 0
+        info = json.loads(out.read_text(encoding="utf-8"))
+        assert info["tag"] == "v0.26.1-rc2"
+        assert info["prev_tag"] == "v0.26.0"
+        assert info["missing"] == {}
+        assert info["urls"]
+        for name, url in info["urls"].items():
+            assert url == (
+                f"https://github.com/amd/gaia/releases/download/{info['tag']}/{name}"
+            )
+        assert info["prev_urls"]
+        for name, url in info["prev_urls"].items():
+            assert url == (
+                "https://github.com/amd/gaia/releases/download/"
+                f"{info['prev_tag']}/{name}"
+            )
+
+    def test_fixture_matches_the_live_transformations(self, monkeypatch):
+        data = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        by_tag = {release["tag_name"]: release for release in data["releases"]}
+
+        def fake_get(url):
+            if "/tags/" in url:
+                return by_tag[url.rsplit("/", 1)[-1]]
+            return data["releases"]
+
+        monkeypatch.delenv("GAIA_GITHUB_FIXTURE", raising=False)
+        monkeypatch.setattr(resolve, "_get", fake_get)
+        live_releases = resolve.list_releases()
+        live_tag = resolve.pick_default(live_releases)
+        live_assets = resolve.release_assets(live_tag)
+
+        monkeypatch.setenv("GAIA_GITHUB_FIXTURE", str(FIXTURE))
+        fixture_releases = resolve.list_releases()
+        fixture_tag = resolve.pick_default(fixture_releases)
+        fixture_assets = resolve.release_assets(fixture_tag)
+
+        assert fixture_releases == live_releases
+        assert fixture_tag == live_tag
+        assert fixture_assets == live_assets
+
+    def test_main_rejects_invalid_retries_even_with_a_fixture(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "not-a-number")
+        with pytest.raises(SystemExit, match="must be an integer"):
+            resolve.main(["--out", str(tmp_path / "release.json")])
+
+    def test_a_missing_fixture_fails_loudly(self, monkeypatch, tmp_path):
+        missing = tmp_path / "missing.json"
+        monkeypatch.setenv("GAIA_GITHUB_FIXTURE", str(missing))
+        with pytest.raises(SystemExit, match="could not read GAIA_GITHUB_FIXTURE"):
+            resolve.list_releases()
+
+    def test_a_malformed_fixture_fails_loudly(self, monkeypatch, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text(json.dumps({"releases": [{"assets": []}]}), encoding="utf-8")
+        monkeypatch.setenv("GAIA_GITHUB_FIXTURE", str(bad))
+        with pytest.raises(SystemExit, match="without a string tag_name"):
+            resolve.list_releases()
 
 
 # ── phase records and the gate ───────────────────────────────────────────────
@@ -482,6 +783,44 @@ class TestJourney:
         )
         assert out.returncode == 124
 
+    def test_a_phase_whose_output_the_console_cannot_encode_still_passes(
+        self, results, tmp_path
+    ):
+        # The phase writes UTF-8 bytes, as gaia-cli does; only the relay's own
+        # console is cp1252, as on a Windows runner.
+        script = tmp_path / "utf8_phase.py"
+        script.write_text(
+            "import sys\n" "sys.stdout.buffer.write('\\u274c failed\\n'.encode())\n",
+            encoding="utf-8",
+        )
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+        env["PYTHONIOENCODING"] = "cp1252"
+        out = subprocess.run(
+            [
+                sys.executable,
+                str(HEADLESS / "journey.py"),
+                "run",
+                "--results",
+                str(results),
+                "--phases",
+                "health",
+                "--thresholds",
+                str(_thresholds(tmp_path, {})),
+                "--",
+                sys.executable,
+                str(script),
+                "{phase}",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="cp1252",
+            errors="replace",
+            env=env,
+        )
+        assert "Traceback" not in out.stderr, out.stderr
+        assert out.returncode == 0, out.stdout + out.stderr
+        assert json.loads(results.read_text())["phases"]["health"]["status"] == "pass"
+
     def test_summarize_fails_when_any_row_failed(self, tmp_path):
         d = tmp_path / "res"
         d.mkdir()
@@ -526,6 +865,41 @@ class TestKnownFailuresFile:
                 assert (
                     e["phase"] in rows[row]["phases"].split()
                 ), f"{row} has no {e['phase']} phase"
+
+
+class TestKnownFailureSchedule:
+    ENTRY = {"issue": 5527}
+
+    @staticmethod
+    def _issue(state="OPEN", reason=None, milestone="v0.25.5 — Critical bugs"):
+        return {
+            "state": state,
+            "stateReason": reason,
+            "milestone": {"title": milestone} if milestone else None,
+        }
+
+    def test_an_open_issue_on_an_unshipped_milestone_may_stay(self):
+        assert journey.unscheduled_known(self.ENTRY, self._issue(), False) is None
+
+    def test_a_fixed_issue_stays_until_its_release_ships(self):
+        issue = self._issue("CLOSED", "COMPLETED")
+        assert journey.unscheduled_known(self.ENTRY, issue, False) is None
+
+    def test_an_entry_past_its_shipped_milestone_fails(self):
+        # #5527 at v0.25.2: still milestoned v0.25.2, released, journeys still green.
+        issue = self._issue(milestone="v0.25.2 — Polish & security")
+        assert "has shipped" in journey.unscheduled_known(self.ENTRY, issue, True)
+
+    @pytest.mark.parametrize("milestone", [None, "Backlog"])
+    def test_an_entry_without_a_release_milestone_fails(self, milestone):
+        issue = self._issue(milestone=milestone)
+        assert "no release milestone" in journey.unscheduled_known(
+            self.ENTRY, issue, False
+        )
+
+    def test_an_issue_closed_unfixed_fails(self):
+        issue = self._issue("CLOSED", "NOT_PLANNED")
+        assert "without a fix" in journey.unscheduled_known(self.ENTRY, issue, False)
 
 
 # ── the fake model server ────────────────────────────────────────────────────
@@ -670,17 +1044,31 @@ class TestWorkflow:
         windows = (HEADLESS / "windows-journey.ps1").read_text(encoding="utf-8")
         step = windows[windows.index("'uninstall' {") : windows.index("'leftovers' {")]
         run = step.index('gaia.exe" uninstall --purge')
-        wait = step.index('while ((Test-Path "$gaiaHome\\venv")')
+        wait = step.index(
+            'while (((Test-Path "$gaiaHome\\venv") -or (Test-Path "$gaiaHome\\bin"))'
+        )
         assert run < wait < step.index("} else {", wait)
-        assert "gaia-uninstall-venv-*.log" in step
+        assert "gaia-uninstall-*-*.log" in step
         uninstall_src = (
             REPO / "src" / "gaia" / "installer" / "uninstall_command.py"
         ).read_text(encoding="utf-8")
-        assert 'f"gaia-uninstall-venv-{os.getpid()}.log"' in uninstall_src
+        assert 'f"gaia-uninstall-{venv.name}-{os.getpid()}.log"' in uninstall_src
 
     def test_pull_request_trigger_has_no_base_branch_filter(self):
         wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         assert "branches" not in wf[True]["pull_request"]
+
+    def test_resolve_step_passes_tokens_retries_and_the_pr_fixture(self):
+        wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+        step = next(s for s in wf["jobs"]["resolve"]["steps"] if s.get("id") == "r")
+        assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+        assert step["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+        retries = step["env"]["GITHUB_FETCH_RETRIES"]
+        assert "github.event_name != 'pull_request'" in retries
+        assert "'3'" in retries
+        fixture = step["env"]["GAIA_GITHUB_FIXTURE"]
+        assert "github.event_name == 'pull_request'" in fixture
+        assert "tests/fixtures/github/releases.json" in fixture
 
 
 class TestScriptsRefuseOutsideCi:
@@ -713,3 +1101,52 @@ class TestScriptsRefuseOutsideCi:
             "New-Item"
         )
         assert "RUNNER_TEMP" in posix and "RUNNER_TEMP" in windows
+
+
+def _posix_function(name: str) -> str:
+    script = (HEADLESS / "posix-journey.sh").read_text(encoding="utf-8")
+    start = script.index(f"\n{name}() {{\n") + 1
+    return script[start : script.index("\n}\n", start) + 3]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="bash script")
+class TestLaunchWaitsForTheMainLog:
+    """A cold AppImage can open electron-main.log just past the 10s check."""
+
+    def _wait(self, tmp_path, app: str, writer: str, seconds: int):
+        log = tmp_path / "electron-main.log"
+        body = (
+            "set -u\n"
+            f"LOGS={str(tmp_path)!r}\n"
+            f"LOG={str(log)!r}\n"
+            ': > "$LOGS/app.err"\n'
+            'die() { echo "DIE: $*" >&2; exit 1; }\n'
+            + _posix_function("wait_for_main_log")
+            + f"{app}\n"
+            "trap 'kill $pid 2>/dev/null' EXIT\n"
+            f"{writer}\n"
+            f'wait_for_main_log "$pid" "$LOG" {seconds}\n'
+        )
+        return subprocess.run(
+            ["bash", "-c", body], capture_output=True, text=True, timeout=60
+        )
+
+    def test_a_log_written_after_the_check_starts_passes(self, tmp_path):
+        out = self._wait(tmp_path, "sleep 30 & pid=$!", '(sleep 2; : > "$LOG") &', 10)
+        assert out.returncode == 0, out.stderr
+
+    def test_a_running_app_that_never_writes_the_log_fails(self, tmp_path):
+        out = self._wait(tmp_path, "sleep 30 & pid=$!", ":", 2)
+        assert out.returncode == 1
+        assert "is running but wrote no" in out.stderr
+        assert "within 12s of launch" in out.stderr
+
+    def test_an_app_that_exits_first_fails_at_once(self, tmp_path):
+        out = self._wait(tmp_path, "true & pid=$!; wait $pid", ":", 30)
+        assert out.returncode == 1
+        assert "the app exited without writing" in out.stderr
+
+    def test_launch_uses_the_wait_not_a_one_shot_check(self):
+        launch = _posix_function("launch_agent_ui")
+        assert "wait_for_main_log" in launch
+        assert '[ -f "${GAIA_HOME}/electron-main.log" ] ||' not in launch

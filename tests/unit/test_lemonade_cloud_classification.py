@@ -21,6 +21,7 @@ from gaia.llm.lemonade_client import (
     may_be_cloud_model,
     record_cloud_models,
 )
+from gaia.llm.providers.lemonade import LemonadeProvider
 
 CLOUD_MODEL = "amd.Claude-Opus-5"
 LOCAL_MODEL = "Gemma-4-E4B-it-GGUF"
@@ -198,6 +199,60 @@ class TestNoDownloadOrLoad:
                     MagicMock(), CLOUD_MODEL, auto_download=True, error=original
                 )
         download.assert_not_called()
+
+
+class TestSharedCatalog:
+    """A client recognises a model any client in this process has discovered."""
+
+    MODEL = "opencode.big-model"
+    DISCOVERED = {"data": [{"id": MODEL, "recipe": "cloud", "labels": []}]}
+
+    def test_a_new_client_knows_a_model_another_client_discovered(self):
+        assert LemonadeClient(verbose=False).cloud_model_provider(self.MODEL) is None
+
+        record_cloud_models(self.DISCOVERED)
+
+        assert (
+            LemonadeClient(verbose=False).cloud_model_provider(self.MODEL) == "opencode"
+        )
+
+    @pytest.mark.parametrize("model", ["user.my-model", "Qwen3.6-27B-GGUF"])
+    def test_a_dotted_local_id_stays_local(self, model):
+        record_cloud_models(self.DISCOVERED)
+
+        assert LemonadeClient(verbose=False).cloud_model_provider(model) is None
+
+    def test_a_removed_provider_stops_counting_as_cloud(self):
+        record_cloud_models(self.DISCOVERED)
+        client = LemonadeClient(verbose=False)
+        assert client.cloud_model_provider(self.MODEL) == "opencode"
+
+        record_cloud_models({"data": []})
+
+        assert client.cloud_model_provider(self.MODEL) is None
+
+    def test_a_clients_own_local_entry_still_wins(self):
+        record_cloud_models(self.DISCOVERED)
+        client = LemonadeClient(verbose=False)
+        client._model_metadata[self.MODEL] = {"recipe": "llamacpp"}
+
+        assert client.cloud_model_provider(self.MODEL) is None
+
+    @pytest.mark.parametrize(
+        "model, local", [(MODEL, False), ("Gemma-4-E4B-it-GGUF", True)]
+    )
+    def test_a_new_provider_sends_llama_cpp_fields_only_to_local_models(
+        self, model, local
+    ):
+        record_cloud_models(self.DISCOVERED)
+        reply = {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}
+        with patch.object(
+            LemonadeClient, "chat_completions", return_value=reply
+        ) as send:
+            LemonadeProvider(model=model).chat([{"role": "user", "content": "q"}])
+
+        assert ("id_slot" in send.call_args.kwargs) is local
+        assert ("repeat_penalty" in send.call_args.kwargs) is local
 
 
 class TestSlotLease:

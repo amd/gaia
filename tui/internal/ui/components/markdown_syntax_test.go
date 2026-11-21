@@ -273,3 +273,24 @@ func TestTheModelsLineBreaksSurvive(t *testing.T) {
 		}
 	}
 }
+
+// A compact diff paints the same syntax colours on its added and removed tints,
+// so every one of them has to stay readable there too.
+func TestEverySyntaxColourIsLegibleOnTheDiffTints(t *testing.T) {
+	const floor = 4.5
+
+	for name, s := range map[string]syntax{"dark": darkSyntax, "light": lightSyntax} {
+		for _, bg := range []string{s.addedBg, s.removedBg} {
+			for token, hex := range map[string]string{
+				"text": s.text, "comment": s.comment, "keyword": s.keyword,
+				"typeName": s.typeName, "function": s.function, "str": s.str,
+				"number": s.number, "builtin": s.builtin, "punct": s.punct,
+				"meta": s.meta,
+			} {
+				if got := contrast(t, hex, bg); got < floor {
+					t.Errorf("%s %s (%s) is %.2f:1 on the diff tint %s, under %.1f:1", name, token, hex, got, bg, floor)
+				}
+			}
+		}
+	}
+}

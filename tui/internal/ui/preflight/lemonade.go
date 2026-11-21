@@ -26,19 +26,14 @@ import (
 // So the remedy is RESOLVED against this machine rather than hardcoded. That is
 // deliberately stronger than switching on runtime.GOOS: `gaia.llm
 // .lemonade_launcher.resolve_lemonade` — the Python that owns this decision —
-// only probes the Windows and Linux canonical paths before falling back to the
-// legacy CLI names, so on macOS it reports "nothing installed" even where
-// /usr/local/bin/lemond is the process serving the port. A GOOS table copied
-// from it would inherit that hole. Probing what is on disk cannot.
+// once probed only the Windows and Linux canonical paths, so on macOS it
+// reported "nothing installed" even where /usr/local/bin/lemond is the process
+// serving the port. A GOOS table copied from it would inherit that kind of
+// hole. Probing what is on disk cannot.
 //
-// The two lists it agrees with exactly: the legacy CLI names and their order,
-// and the modern per-platform launchers. `lemonade-server` also remains the
-// correct PACKAGE name (the MSI and .deb are `lemonade-server-*`); it is only
-// the run command that is stale, so it stays in the legacy probe below.
-
-// legacyBinaries are the pre-10.7 CLI names, in probe order. Mirrors
-// lemonade_launcher._LEGACY_BINARIES — `-dev` is the pip/CI variant.
-var legacyBinaries = []string{"lemonade-server", "lemonade-server-dev"}
+// It agrees with the Python on the per-platform launchers. `lemonade-server`
+// remains the PACKAGE name (the MSI and .deb are `lemonade-server-*`), never a
+// command.
 
 // serverPathEnv is the explicit override. Mirrors lemonade_launcher: an
 // override is run VERBATIM, never rerouted to systemctl, because a user who
@@ -232,18 +227,7 @@ func resolveLauncherWith(p hostProbe) launcher {
 		}
 	}
 
-	// 3. Legacy CLI, if this machine really does still have it.
-	for _, name := range legacyBinaries {
-		if _, err := p.lookPath(name); err == nil {
-			// The legacy CLI takes the window as a FLAG, not an environment
-			// variable (build_start_command's legacy branch), so it appends its
-			// own and opts out of the env prefix.
-			cmd := name + " serve" + legacyCtxFlag(profileCtxSize(p))
-			return launcher{Start: cmd, Restart: cmd, ServiceManaged: true, Found: true}
-		}
-	}
-
-	// 4. Nothing is installed. "Start it" is not a remedy for something that is
+	// 3. Nothing is installed. "Start it" is not a remedy for something that is
 	// not there — the only honest next step is the installer.
 	return launcher{}
 }

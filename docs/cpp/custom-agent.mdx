@@ -166,7 +166,7 @@ protected:
 ```
 
 <Note>
-The `ToolParameter` aggregate is `{name, type, required, description}`. Optional parameters should have a matching default in your callback (use `args.value("key", default_value)` from nlohmann/json).
+The `ToolParameter` aggregate is `{name, type, required, description}`. For an array or object whose shape the model must be told, set its `schema` member to the JSON schema to send in place of the bare type (for example `{"type": "array", "items": {"type": "string"}}`). Optional parameters should have a matching default in your callback (use `args.value("key", default_value)` from nlohmann/json).
 </Note>
 
 ---
@@ -715,7 +715,7 @@ private:
     static gaia::AgentConfig makeConfig() {
         gaia::AgentConfig cfg;
         cfg.baseUrl              = "http://localhost:13305/api/v1";
-        cfg.modelId              = "Qwen3.5-35B-A3B-GGUF";
+        cfg.modelId              = "Qwen3.6-35B-A3B-GGUF";
         cfg.maxSteps             = 15;
         cfg.maxPlanIterations    = 3;
         cfg.maxConsecutiveRepeats = 4;

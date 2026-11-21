@@ -2,10 +2,12 @@ package client
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/event"
 )
 
 func TestFlagshipModelOverrideReachesSubprocessWithoutMutatingCatalog(t *testing.T) {
@@ -51,7 +53,7 @@ func TestModelOverrideRejectsUnsupportedSubprocessAgent(t *testing.T) {
 }
 
 func TestForAgentBuildsTheDeclaredTransport(t *testing.T) {
-	daemonAgent := catalog.Agent{ID: "email", Transport: catalog.TransportDaemon}
+	daemonAgent := catalog.Agent{ID: "notes", Transport: catalog.TransportDaemon}
 	c, err := ForAgent(daemonAgent, ForAgentOptions{})
 	if err != nil {
 		t.Fatalf("ForAgent(daemon): %v", err)
@@ -130,7 +132,7 @@ func TestForAgentRejectsAnUnknownTransport(t *testing.T) {
 // Model / MaxSteps must reach the request body, not be silently dropped.
 func TestForAgentPlumbsModelAndMaxSteps(t *testing.T) {
 	c, err := ForAgent(
-		catalog.Agent{ID: "email", Transport: catalog.TransportDaemon},
+		catalog.Agent{ID: "notes", Transport: catalog.TransportDaemon},
 		ForAgentOptions{Model: "Gemma-4-E4B-it-GGUF", MaxSteps: 7},
 	)
 	if err != nil {
@@ -164,18 +166,25 @@ func TestDevModeForwardsDevArgsToTheChild(t *testing.T) {
 		name    string
 		devArgs []string
 		dev     bool
+		traced  bool
 		want    []string
 	}{
-		{"off, so the child argv is untouched", []string{"--dev"}, false, []string{"--json-events"}},
-		{"on, so the child goes verbose too", []string{"--dev"}, true, []string{"--json-events", "--dev"}},
-		{"on but the agent has no dev mode", nil, true, []string{"--json-events"}},
+		{"off, so the child argv is untouched", []string{"--dev"}, false, false, []string{"--json-events"}},
+		{"on, so the child goes verbose too", []string{"--dev"}, true, false, []string{"--json-events", "--dev"}},
+		{"on but the agent has no dev mode", nil, true, false, []string{"--json-events"}},
+		{"traced, so the child logs at DEBUG too", []string{"--dev"}, false, true, []string{"--json-events", "--dev"}},
+		{"traced and on, the flag goes once", []string{"--dev"}, true, true, []string{"--json-events", "--dev"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := catalog.Agent{
 				ID: "gaia", BinaryPath: self,
 				BinaryArgs: []string{"--json-events"}, DevArgs: tc.devArgs,
 			}
-			c, err := ForAgent(agent, ForAgentOptions{Dev: tc.dev})
+			opts := ForAgentOptions{Dev: tc.dev}
+			if tc.traced {
+				opts.Trace = testTrace(t)
+			}
+			c, err := ForAgent(agent, opts)
 			if err != nil {
 				t.Fatalf("ForAgent: %v", err)
 			}
@@ -264,7 +273,7 @@ func TestForwardingUseClaudeDoesNotMutateTheCatalogEntry(t *testing.T) {
 // keeps using Lemonade.
 func TestUseClaudeOnTheDaemonTransportIsRefused(t *testing.T) {
 	_, err := ForAgent(
-		catalog.Agent{ID: "email", Transport: catalog.TransportDaemon},
+		catalog.Agent{ID: "notes", Transport: catalog.TransportDaemon},
 		ForAgentOptions{UseClaude: true},
 	)
 	if err == nil {
@@ -319,7 +328,7 @@ func TestForwardingDevArgsDoesNotMutateTheCatalogEntry(t *testing.T) {
 }
 
 func TestDaemonFullAccessFailsBeforeConnection(t *testing.T) {
-	for _, id := range []string{"gaia", "email"} {
+	for _, id := range []string{"gaia", "notes"} {
 		c, err := ForAgent(catalog.Agent{ID: id, Transport: catalog.TransportDaemon}, ForAgentOptions{FullAccess: true})
 		if c != nil {
 			c.Close()
@@ -342,4 +351,14 @@ func TestSubprocessFullAccessStillReachesAgent(t *testing.T) {
 	if !c.(*SubprocessClient).FullAccessAtLaunch() {
 		t.Fatal("subprocess full access was dropped")
 	}
+}
+
+func testTrace(t *testing.T) *event.TraceWriter {
+	t.Helper()
+	w, err := event.NewTraceWriter(filepath.Join(t.TempDir(), "trace.jsonl"))
+	if err != nil {
+		t.Fatalf("NewTraceWriter: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	return w
 }

@@ -54,8 +54,8 @@ Published agents are the project's shop window: an integrator installs them and 
 by them. In **both** modes, each lens double-checks any published agent explicitly and
 **bumps a gap up one severity** (never 🟡; a default-path break is 🔴). Published agents are
 detected by a `release_agent_<id>.yml` workflow, a shipped `SCORECARD.md`, or a released
-`version:` in `gaia-agent.yaml` — currently the **email agent** (`hub/agents/email/python/`
-+ `hub/agents/email/npm/`). The bar, per lens:
+`version:` in `gaia-agent.yaml` — currently the **gaia flagship agent** (`hub/agents/gaia/python/`
++ `hub/agents/gaia/npm/`). The bar, per lens:
 
 - **docs** — README (integrator-facing, high quality), `SPEC.md` (full reference), `SKILL.md`
   (AI-integration playbook), `CHANGELOG.md`, and any shipped contract spec, all present,
@@ -102,8 +102,9 @@ surviving defect it does exactly one of three things:
 - **Comment on an existing issue** — when a backlog candidate would be closed by the same
   fix. This is the #1077 fix, and synthesis is told to err toward it.
 - **File ONE issue** (🔴/🟠, labelled `weekly-audit`) listing **every** location of that
-  defect. It carries each location's `evidence` and an **auto-fixable** flag; a maintainer
-  promotes it with **`bug`** (→ existing `auto-fix` job) or permanently silences it with
+  defect. It carries each location's `evidence` and an **auto-fixable** flag. Auto-fixable
+  issues go to the existing `auto-fix` job (`scripts/audit/promote_autofix.py`, capped per
+  run); a maintainer can promote any other with **`bug`** or permanently silence one with
   **`audit-wontfix`**. No new PR-creation code.
 
 The per-run report — a one-line tally, then a section per dimension in fixed order

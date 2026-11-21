@@ -44,6 +44,7 @@ const plain = (text: string | null | undefined) => stripIsolates(text ?? '');
 beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.deleteSession).mockResolvedValue(undefined);
+    vi.mocked(api.getSettings).mockResolvedValue({ network_policy: 'cloud_allowed' } as never);
     useModelStore.setState({
         active: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma', remote: false, is_default: true },
     });

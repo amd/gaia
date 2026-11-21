@@ -220,8 +220,8 @@ def test_non_200_health_ends_the_turn():
 # ---------------------------------------------------------------------------
 
 
-def test_connect_error_ends_the_turn_with_what_to_check():
-    """httpx.ConnectError during /health → the turn fails saying what to check."""
+def test_connect_error_ends_the_turn_with_what_to_do():
+    """httpx.ConnectError during /health → the turn fails saying what to do."""
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
         patch(_HTTPX_GET, side_effect=httpx.ConnectError("refused")),
@@ -229,8 +229,9 @@ def test_connect_error_ends_the_turn_with_what_to_check():
     ):
         mock_mgr.get_base_url.return_value = _BASE_URL
 
-        with pytest.raises(RuntimeError, match="Check that Lemonade is running"):
+        with pytest.raises(RuntimeError, match="close GAIA and open it again") as exc:
             _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF")
+        assert "gaia init" not in str(exc.value)
 
         mock_cls.assert_not_called()
 
@@ -650,3 +651,87 @@ def test_a_built_in_model_is_still_matched_when_listed_with_a_namespace():
         mock_mgr.get_base_url.return_value = _BASE_URL
         _maybe_load_expected_model("Gemma-4-E4B-it-GGUF")
     mock_cls.return_value.load_model.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# A model the Settings list marks unavailable fails before any load
+# ---------------------------------------------------------------------------
+
+
+def test_a_turn_on_a_blocked_npu_model_says_why_instead_of_try_again(monkeypatch):
+    """Fedora, memlock still 8 MB: the chat said "try again" while Settings said why."""
+    from gaia.llm import npu_linux
+    from gaia.llm.providers.lemonade import (
+        LemonadeModelUnavailableError,
+        classify_lemonade_exception,
+    )
+    from gaia.ui.routers import providers
+
+    from .test_npu_linux import MEMLOCK, linux_system_info
+
+    model = "gemma4-it-e4b-FLM"
+    monkeypatch.setattr(npu_linux, "_on_linux", lambda: True)
+    monkeypatch.setattr(npu_linux, "problems", lambda: list(MEMLOCK))
+    answers = {
+        "system-info": linux_system_info(),
+        "health": {"all_models_loaded": []},
+        "models?show_all=true": {
+            "data": [{"id": model, "downloaded": True, "recipe": "flm", "labels": []}]
+        },
+    }
+    monkeypatch.setattr(
+        providers, "_lemonade", lambda method, path: (200, answers[path])
+    )
+
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, return_value=_health_ok([])),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        with pytest.raises(LemonadeModelUnavailableError) as raised:
+            _maybe_load_expected_model(model, sse_handler=_sse())
+
+    mock_cls.return_value.load_model.assert_not_called()
+    wrapper = RuntimeError("agent wrapped it")
+    wrapper.__cause__ = raised.value
+    classified = classify_lemonade_exception(wrapper)
+    assert classified is raised.value
+    assert classified.retryable is False
+    message = classified.user_message
+    assert "locked-memory limit" in message and "8 MB" in message
+    assert "Settings" in message
+    assert "try" not in message.lower()
+
+
+def test_a_turn_on_an_npu_model_that_may_not_fit_still_loads(monkeypatch):
+    """A ready NPU with less RAM than the estimate: load and let Lemonade say."""
+    from gaia.llm import npu_linux
+    from gaia.ui.routers import providers
+
+    from .test_npu_linux import linux_system_info
+
+    model = "gemma4-it-e4b-FLM"
+    monkeypatch.setattr(npu_linux, "_on_linux", lambda: False)
+    info = linux_system_info(flm_state="installed")
+    info["Physical Memory"] = "4.00 GB"
+    answers = {
+        "system-info": info,
+        "health": {"all_models_loaded": []},
+        "models?show_all=true": {
+            "data": [{"id": model, "downloaded": True, "recipe": "flm", "labels": []}]
+        },
+    }
+    monkeypatch.setattr(
+        providers, "_lemonade", lambda method, path: (200, answers[path])
+    )
+
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, return_value=_health_ok([])),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        _maybe_load_expected_model(model, sse_handler=_sse())
+
+    mock_cls.return_value.load_model.assert_called_once()

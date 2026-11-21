@@ -18,10 +18,9 @@ import re
 import socket
 import threading
 import time
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
+from collections import deque
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Deque, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 
 import requests
@@ -29,8 +28,10 @@ import urllib3
 from requests.adapters import HTTPAdapter
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
+from gaia.llm.retry import parse_retry_after
 from gaia.logger import get_logger
 from gaia.tool_cancellation import ToolCancelled
+from gaia.utils.paths import WINDOWS_DEVICE_NAMES
 
 log = get_logger(__name__)
 
@@ -192,6 +193,7 @@ class _Deadline:
         self._thread_id = threading.get_ident()
         self._response = None
         self._done = False
+        self._paused = False
         self._timer = threading.Timer(seconds, self._fire)
         self._timer.daemon = True
 
@@ -240,7 +242,7 @@ class _Deadline:
 
     def _fire(self) -> None:
         with _SOCKETS_LOCK:
-            if self._done:
+            if self._done or self._paused:
                 return
             self.fired.set()
             sock = _THREAD_SOCKETS.get(self._thread_id)
@@ -249,6 +251,33 @@ class _Deadline:
             response = self._response
             if response is not None:
                 _abort_stream(response)
+
+    def run_without_clock(self, operation):
+        """Run a non-network pause without charging it to this deadline.
+
+        Rate-limit waits happen between requests, while no socket is open. The
+        wait still needs to be enforced, but it must not make a valid redirect
+        fail merely because the per-domain pacing interval is longer than the
+        overall fetch deadline.
+        """
+        with _SOCKETS_LOCK:
+            if self._done or self.fired.is_set():
+                raise self.error()
+            self._paused = True
+            self._timer.cancel()
+        started = time.monotonic()
+        try:
+            return operation()
+        finally:
+            elapsed = time.monotonic() - started
+            with _SOCKETS_LOCK:
+                self._at += elapsed
+                self._paused = False
+                if not self._done and not self.fired.is_set():
+                    remaining = max(0.0, self._at - time.monotonic())
+                    self._timer = threading.Timer(remaining, self._fire)
+                    self._timer.daemon = True
+                    self._timer.start()
 
 
 #: What a read cut short by the deadline (its timeout, or the timer's
@@ -289,6 +318,20 @@ def _cap_timeout(timeout, remaining: float):
     if isinstance(timeout, (int, float)):
         return min(timeout, remaining)
     return timeout
+
+
+class BlockedHostError(ValueError):
+    """A URL whose host is a private, link-local, loopback or reserved address.
+
+    Attributes:
+        host: The host as the URL named it.
+        address: The address it resolved to, or the literal it already was.
+    """
+
+    def __init__(self, message: str, host: str, address: str):
+        super().__init__(message)
+        self.host = host
+        self.address = address
 
 
 def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
@@ -335,8 +378,10 @@ def _assert_ip_allowed(ip_str: str, hostname: str) -> None:
     except ValueError:
         # Not parseable as an IP — treat as unsafe rather than letting an
         # unvalidated value reach the socket layer (fail loudly).
-        raise ValueError(
-            f"Blocked: {hostname} resolved to unparseable address {ip_str!r}."
+        raise BlockedHostError(
+            f"Blocked: {hostname} resolved to unparseable address {ip_str!r}.",
+            hostname,
+            ip_str,
         )
     # Opt-in affordance: loopback ONLY, for a host the operator named. Not
     # `is_private` — that covers 169.254.0.0/16, so it would reopen the cloud
@@ -344,9 +389,11 @@ def _assert_ip_allowed(ip_str: str, hostname: str) -> None:
     if hostname in _loopback_allowed_hosts() and ip.is_loopback:
         return
     if _is_blocked_ip(ip):
-        raise ValueError(
+        raise BlockedHostError(
             f"Blocked: {hostname} resolves to private/reserved IP {ip}. "
-            "Cannot fetch internal network addresses."
+            "Cannot fetch internal network addresses.",
+            hostname,
+            str(ip),
         )
 
 
@@ -585,20 +632,51 @@ class SearchUnavailableError(RuntimeError):
         self.status = status
 
 
+class SearchStatusError(RuntimeError):
+    """The search endpoint answered a status that is neither results nor a block.
+
+    A ``RuntimeError`` as before, with ``status`` so a caller can tell a server
+    error (5xx) from a refused request (4xx) without parsing the message.
+    """
+
+    def __init__(self, service: str, status: int):
+        if status >= 500:
+            hint = "It may be down for a moment; try again later."
+        elif status >= 400:
+            hint = "It rejected the request; check the query or URL and try again."
+        else:
+            hint = "Try again later."
+        super().__init__(
+            f"{service} answered HTTP {status}, so no results were read. {hint}"
+        )
+        self.status = status
+
+
 class _SearchGate:
     """Process-wide pacing for search requests, shared by every ``WebClient``.
 
     Agents fire searches in parallel; each caller reserves the next free slot,
-    so requests leave at least ``min_interval`` apart. A block signal pushes
-    every caller back until ``blocked_until``.
+    so requests leave at least ``min_interval`` apart. With ``burst`` set, no
+    more than ``burst`` requests leave in any ``window`` seconds, which keeps a
+    long research turn under the burst that makes DuckDuckGo refuse. A block
+    signal pushes every caller back until ``blocked_until``.
     """
 
-    def __init__(self, min_interval: float, sleep=time.sleep) -> None:
+    def __init__(
+        self,
+        min_interval: float,
+        sleep=time.sleep,
+        burst: int = 0,
+        window: float = 0.0,
+    ) -> None:
         self.min_interval = min_interval
+        self.burst = burst
+        self.window = window
         self._sleep = sleep
         self._lock = threading.Lock()
         self._next_slot = 0.0
         self._blocked_until = 0.0
+        self._recent: Deque[float] = deque()
 
     def blocked_for(self) -> float:
         """Seconds until searching is allowed again after a block, or 0."""
@@ -613,6 +691,12 @@ class _SearchGate:
         with self._lock:
             now = time.monotonic()
             slot = max(now, self._next_slot, self._blocked_until)
+            if self.burst > 0:
+                if len(self._recent) >= self.burst:
+                    slot = max(slot, self._recent[-self.burst] + self.window)
+                self._recent.append(slot)
+                while self._recent[0] <= slot - self.window:
+                    self._recent.popleft()
             self._next_slot = slot + self.min_interval
         remaining = slot - now
         if should_stop is None:
@@ -635,27 +719,14 @@ class _SearchGate:
             self._blocked_until = max(self._blocked_until, time.monotonic() + seconds)
 
 
-_SEARCH_GATE = _SearchGate(min_interval=1.5)
+#: Measured from one PC: 14 quick searches in ~35 s answered, the 15th was
+#: refused. Ten a minute stays under that with room for the html->lite retry.
+_SEARCH_GATE = _SearchGate(min_interval=1.5, burst=10, window=60.0)
 
 
 def _retry_after_seconds(response: requests.Response) -> Optional[float]:
     """The ``Retry-After`` header in seconds (delta or HTTP-date), if present."""
-    value = (response.headers or {}).get("Retry-After")
-    if not value:
-        return None
-    value = str(value).strip()
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        pass
-    try:
-        when = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
-        log.debug("Unparseable Retry-After header: %r", value)
-        return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+    return parse_retry_after(response.headers)
 
 
 def fetch_error_text(exc: Exception) -> str:
@@ -807,9 +878,11 @@ class WebClient:
                 continue
 
             if _is_blocked_ip(ip):
-                raise ValueError(
+                raise BlockedHostError(
                     f"Blocked: {hostname} resolves to private/reserved IP {ip}. "
-                    "Cannot fetch internal network addresses."
+                    "Cannot fetch internal network addresses.",
+                    hostname,
+                    str(ip),
                 )
 
     # -- Rate Limiting -------------------------------------------------------
@@ -970,7 +1043,9 @@ class WebClient:
             # Rate limit for new domain
             new_domain = urlparse(redirect_url).hostname
             if new_domain != domain:
-                self._rate_limit_wait(new_domain)
+                deadline.run_without_clock(
+                    lambda domain=new_domain: self._rate_limit_wait(domain)
+                )
                 domain = new_domain
 
             current_url = redirect_url
@@ -1441,7 +1516,7 @@ class WebClient:
         Raises:
             SearchUnavailableError: every attempt was turned away.
             ToolCancelled: ``should_stop`` returned True during a wait.
-            RuntimeError: DDG answered another non-200 status.
+            SearchStatusError: DDG answered another non-200 status (a RuntimeError).
         """
         if not BS4_AVAILABLE:
             raise ImportError("beautifulsoup4 is required for web search.")
@@ -1461,10 +1536,7 @@ class WebClient:
                 blocked = _ddg_block_reason(response)
                 if blocked is None:
                     if response.status_code != 200:
-                        raise RuntimeError(
-                            f"DuckDuckGo answered HTTP {response.status_code}, so "
-                            "no results were read."
-                        )
+                        raise SearchStatusError("DuckDuckGo", response.status_code)
                     if reason:
                         log.warning(
                             "DuckDuckGo %s endpoint answered after an earlier "
@@ -1545,11 +1617,7 @@ class WebClient:
     # Windows opens the console device instead of a file, and ``CON.txt``
     # still resolves to the device. Avoid these even on non-Windows so
     # downloads remain portable.
-    _WINDOWS_RESERVED = frozenset(
-        {"CON", "PRN", "AUX", "NUL"}
-        | {f"COM{i}" for i in range(1, 10)}
-        | {f"LPT{i}" for i in range(1, 10)}
-    )
+    _WINDOWS_RESERVED = frozenset(name.upper() for name in WINDOWS_DEVICE_NAMES)
 
     @staticmethod
     def _sanitize_filename(raw_name: str) -> str:

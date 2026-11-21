@@ -24,6 +24,7 @@ only from the package that documents it.
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import List, Optional
 
@@ -66,12 +67,44 @@ def _configure_logging() -> None:
     configure()
 
 
+def _discard_keychain_credential() -> None:
+    """Delete a keychain credential this amd-gaia cannot use.
+
+    Left behind, the file and its path in the environment would reach every
+    command the agent runs.
+    """
+    path = os.environ.pop("GAIA_HOST_KEYCHAIN_SECRET_FILE", None)
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        raise RuntimeError(
+            f"Could not delete the keychain credential the GAIA daemon left at "
+            f"{path}: {e}. Delete it, then restart the agent with "
+            "`gaia daemon restart`."
+        ) from e
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Dispatch this process onto one of the agent's two transports.
 
     A flag belonging to the other transport is an argparse error from the one
     that was selected — never a quiet switch to the other.
     """
+    try:
+        from gaia.platform_guard import avoid_wmi
+    except ImportError:  # amd-gaia older than the WMI guard; the pin allows it
+        print(
+            "WARNING: this amd-gaia cannot keep the agent off WMI, so on a busy "
+            "Windows PC the agent may crash. Fix: update the amd-gaia package.",
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        avoid_wmi()
     try:
         from gaia.tls import use_os_trust_store
     except ImportError:  # amd-gaia older than the trust-store switch; the pin allows it
@@ -103,6 +136,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Imported here, not at module scope: this is the branch that may use
         # FastAPI, and it is the only one that should have to have it.
         _configure_logging()
+        # Before the server imports anything that may read a secret.
+        try:
+            from gaia.connectors.daemon_keyring import install_daemon_keyring_from_env
+        except ImportError:  # amd-gaia older than this; the pin allows it
+            _discard_keychain_credential()
+            print(
+                "WARNING: this amd-gaia cannot read the keychain through the GAIA "
+                "daemon, so macOS may ask for keychain access after each update. "
+                "Fix: pip install --upgrade amd-gaia",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            install_daemon_keyring_from_env()
         from gaia_agent.server import serve_http
 
         return serve_http(args)

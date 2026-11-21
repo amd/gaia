@@ -34,6 +34,29 @@ def python_with_pip(tmp_path_factory):
     return str(env_dir / bin_dir / Path(sys.executable).name)
 
 
+@pytest.fixture
+def pip_available(monkeypatch):
+    """Make ``python -m pip`` the installer, as on a dev box with pip.
+
+    GAIA's own installer builds a pip-less venv, where the product stops at
+    "Cannot install Python packages" before a mocked install is reached. A test
+    that patches ``_pip_available`` itself still wins: its patch comes later.
+    """
+    monkeypatch.setattr("gaia.agents.install_hints._pip_available", lambda: True)
+
+
+@pytest.fixture
+def gh_on_path(monkeypatch):
+    """Make every binary the shell tool looks up, ``gh`` included, look installed.
+
+    Without it a machine with no ``gh`` gets the "not installed here" refusal
+    before the behaviour a test checks.
+    """
+    monkeypatch.setattr(
+        "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
+
+
 class _OsNamed:
     """``os`` as one module sees it, with only ``name`` overridden."""
 
@@ -101,16 +124,44 @@ def _restore_environ():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_gaia_config(tmp_path, monkeypatch):
+def _isolate_gaia_config(tmp_path_factory, monkeypatch):
     """Keep unit tests off the developer's real ``~/.gaia/config.json``.
 
     ``GAIA_CONFIG_FILE`` is resolved at import time, so patching ``HOME`` is
     not enough.
+
+    The config gets its own folder, not ``tmp_path``: any config read leaves
+    ``config.json.lock`` beside the file, and ``tmp_path`` belongs to the test.
     """
     from gaia import config as config_mod
 
-    monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", tmp_path)
-    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
+    config_dir = tmp_path_factory.mktemp("gaia-config")
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_dir / "config.json")
+
+
+@pytest.fixture(autouse=True)
+def _stub_daemon_scheduler_notifications(request, monkeypatch):
+    """Keep unit tests from opening real desktop notifications."""
+    if request.node.get_closest_marker("real_sinks"):
+        yield
+        return
+
+    from gaia.schedule import sinks
+
+    monkeypatch.setattr(sinks, "dispatch", lambda *args, **kwargs: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_failure_records(request, monkeypatch):
+    """A real problem report probes Lemonade and scans every process (~2 s); only its own tests save one."""
+    if request.node.get_closest_marker("failure_records"):
+        return
+    from gaia.llm import failure_record
+
+    monkeypatch.setattr(failure_record, "record_failure", lambda *_a, **_k: None)
+    monkeypatch.setattr(failure_record, "record_local_failure", lambda *_a, **_k: None)
 
 
 @pytest.fixture(autouse=True)
@@ -119,6 +170,47 @@ def _forget_crashed_loads(monkeypatch):
     from gaia.llm import lemonade_client
 
     monkeypatch.setattr(lemonade_client, "_CRASHED_LOADS", {})
+
+
+@pytest.fixture(autouse=True)
+def _isolate_learned_reasoning(tmp_path, monkeypatch):
+    """Start each test with nothing learned about cloud reasoning, and keep
+    probes off the developer's real ``~/.gaia/gateway.json``."""
+    from gaia.llm import gateway
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(gateway, "GATEWAY_STATE_FILE", tmp_path / "gateway.json")
+    monkeypatch.setattr(
+        lc,
+        "_CLOUD_REASONING",
+        lc._LearnedCapability(
+            "reasoning",
+            "reasoning_models",
+            "no_reasoning_models",
+            "reasoning_probe_failures",
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _forget_engine_start_failure(monkeypatch):
+    """A failed start one test staged must not fail the next test's model call."""
+    from gaia.llm import lemonade_client
+
+    monkeypatch.setattr(lemonade_client, "_ENGINE_START_FAILURE", None)
+
+
+@pytest.fixture(autouse=True)
+def _forget_agent_registry():
+    """A server test's startup leaves its agent registry behind; the next chat test must not inherit it.
+
+    With no hub agents installed (as in CI) that registry is empty, so a later
+    chat turn answers "GAIA's assistant isn't installed" instead of running.
+    Cleared before the test, since a ``monkeypatch`` undo can put it back after.
+    """
+    helpers = sys.modules.get("gaia.ui._chat_helpers")
+    if helpers is not None:
+        helpers.set_agent_registry(None)
 
 
 #: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
@@ -165,10 +257,26 @@ def _isolate_gaia_home(_session_gaia_home, monkeypatch):
     _patch_default_gaia_home(monkeypatch, _session_gaia_home)
 
 
+@pytest.fixture
+def user_terminal(monkeypatch):
+    """Run the test as the user's terminal, not an agent tool or its child.
+
+    Trust-changing skill calls refuse under an agent's marker, and pytest
+    inherits it when GAIA runs this suite. Opt in per module with
+    ``pytestmark = pytest.mark.usefixtures("user_terminal")``.
+    """
+    from gaia.skills import human_only
+
+    monkeypatch.delenv(human_only.AGENT_CHILD_ENV, raising=False)
+    token = human_only._IN_AGENT_TOOL.set(False)
+    yield
+    human_only._IN_AGENT_TOOL.reset(token)
+
+
 _DAEMON_SPAWN_MESSAGE = (
     "Unit test tried to spawn a real GAIA daemon (gaia.daemon.client."
     "_spawn_and_wait). Mock the daemon boundary instead — e.g. monkeypatch "
-    "gaia.ui.email_sidecar.daemon_client.acquire_handle or "
+    "gaia.ui.sidecar.daemon_client.acquire_handle or "
     "gaia.daemon.client.start_or_attach. Real daemons belong in tests/integration/."
 )
 
@@ -182,6 +290,24 @@ def _isolate_daemon_home(tmp_path_factory):
     """
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_DAEMON_HOME", str(tmp_path_factory.mktemp("daemon-home")))
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_agent_turn():
+    """Stop setup's test turn starting a daemon and the assistant's program.
+
+    Session-wide because a setup run's thread can outlive its test, past any
+    per-test mock. Tests of the turn itself call ``.real``.
+    """
+    from gaia.ui import setup_runner
+
+    def no_agent_turn(model_id=None):
+        return None
+
+    no_agent_turn.real = setup_runner._agent_turn_problem
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(setup_runner, "_agent_turn_problem", no_agent_turn)
         yield
 
 
@@ -291,6 +417,10 @@ def pytest_configure(config):
         "GAIA_TEST_ALLOW_REAL_LEMONADE=1 also let the test spawn or kill a "
         "real Lemonade server",
     )
+    config.addinivalue_line(
+        "markers",
+        "failure_records: save real problem reports (see _no_failure_records)",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -393,14 +523,22 @@ def _program(token) -> str:
     return name[:-4] if name.endswith(".exe") else name
 
 
+def _normalized(path) -> str:
+    return os.path.normcase(os.path.realpath(str(path)))
+
+
+# Read once at startup: tests rebind tempfile.tempdir, so the live value can
+# point anywhere by the time a fake binary is checked.
+_TEST_TEMP_ROOTS = [_normalized(tempfile.gettempdir())]
+
+
 def _is_test_fixture(path) -> bool:
-    """True for a file under the temp dir: a fake binary a test made itself."""
+    """True for a file under a test-owned temp dir: a fake binary a test made."""
     try:
-        resolved = os.path.normcase(os.path.realpath(str(path)))
+        resolved = _normalized(path)
     except (OSError, ValueError):
         return False
-    tmp = os.path.normcase(os.path.realpath(tempfile.gettempdir()))
-    return resolved.startswith(tmp + os.sep)
+    return any(resolved.startswith(root + os.sep) for root in _TEST_TEMP_ROOTS)
 
 
 def _lemonade_process_name(pid) -> "str | None":
@@ -463,11 +601,14 @@ def _check_kill(pid) -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _forbid_real_lemonade_all_session():
+def _forbid_real_lemonade_all_session(tmp_path_factory):
     """Refuse spawning or killing a real Lemonade for the whole unit session."""
     import subprocess
 
     import psutil
+
+    # --basetemp can put tmp_path outside the system temp dir.
+    _TEST_TEMP_ROOTS.append(_normalized(tmp_path_factory.getbasetemp()))
 
     real_execute_child = subprocess.Popen._execute_child
     real_kill = os.kill
@@ -517,6 +658,22 @@ def _forbid_real_lemonade_all_session():
             + " Code running between tests (a finalizer or a leftover thread) "
             "tried: " + "; ".join(sorted({action for _, action in outside}))
         )
+
+
+@pytest.fixture(autouse=True)
+def _dead_lemonade_address_is_not_a_stopped_server(monkeypatch):
+    """A dead Lemonade address in a unit test stands in for a model server the
+    test fakes at a higher layer, so the Agent UI must not fail a turn over it.
+    A test of that check puts the real probe back itself."""
+    import importlib.util
+
+    if importlib.util.find_spec("fastapi") is None:
+        yield
+        return
+    from gaia.ui import _chat_helpers
+
+    monkeypatch.setattr(_chat_helpers, "_stopped_users_server", lambda: None)
+    yield
 
 
 _LEMONADE_ENV_VARS = ("LEMONADE_BASE_URL", "LEMONADE_HOST", "LEMONADE_PORT")

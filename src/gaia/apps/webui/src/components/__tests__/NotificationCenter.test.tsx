@@ -11,11 +11,15 @@
  * for real so a selector that stops being cached crashes the suite, not a user.
  */
 
-import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NotificationCenter } from '../NotificationCenter';
-import { useNotificationStore } from '../../stores/notificationStore';
+import { useNotificationStore, PATH_ACCESS_TOOL } from '../../stores/notificationStore';
 import type { GaiaNotification } from '../../types/agent';
+import { stripIsolates } from '../../i18n/registry';
+import { translator } from '../../i18n/useT';
+import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../test/dates';
+import notificationCss from '../NotificationCenter.css?raw';
 
 const notif = (id: string, message: string): GaiaNotification => ({
     id,
@@ -37,7 +41,29 @@ beforeEach(() => {
 describe('NotificationCenter', () => {
     it('renders an empty panel without looping', () => {
         expect(() => render(<NotificationCenter onClose={vi.fn()} />)).not.toThrow();
-        expect(screen.getByText('No notifications')).toBeTruthy();
+        expect(screen.getByText("You're all caught up")).toBeTruthy();
+        // Nothing to filter, so no filter tabs.
+        expect(screen.queryByRole('tab')).toBeNull();
+    });
+
+    it('offers only the filters that have something in them', () => {
+        useNotificationStore.setState({
+            notifications: [
+                notif('n-1', 'Model finished loading'),
+                { ...notif('n-2', 'Could not index'), type: 'error' },
+            ],
+        });
+        render(<NotificationCenter onClose={vi.fn()} />);
+        expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['All', 'Errors', 'Info']);
+    });
+
+    it('keeps the chosen filter offered even when it empties', () => {
+        useNotificationStore.setState({
+            notifications: [notif('n-1', 'Model finished loading')],
+            typeFilter: 'error',
+        });
+        render(<NotificationCenter onClose={vi.fn()} />);
+        expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['All', 'Errors', 'Info']);
     });
 
     it('renders notifications without looping', () => {
@@ -59,5 +85,154 @@ describe('NotificationCenter', () => {
         render(<NotificationCenter onClose={vi.fn()} />);
         expect(screen.getByText('Still here')).toBeTruthy();
         expect(screen.queryByText('Gone')).toBeNull();
+    });
+});
+
+describe('NotificationCenter dates follow the interface language', () => {
+    afterEach(resetUiLocale);
+
+    it('shows a week-old notification date in Arabic in an Arabic UI', () => {
+        setUiLocale('ar');
+        useNotificationStore.setState({
+            notifications: [{ ...notif('n-1', 'Old news'), timestamp: Date.now() - 30 * 86_400_000 }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        const time = stripIsolates(container.querySelector('.notification-time')!.textContent ?? '');
+        expect(time).toMatch(ARABIC_MONTH);
+        expect(time).not.toMatch(ENGLISH_MONTH);
+    });
+
+    it('says how long ago in Arabic for a recent one', () => {
+        setUiLocale('ar');
+        useNotificationStore.setState({
+            notifications: [{ ...notif('n-1', 'Fresh'), timestamp: Date.now() - 5 * 60_000 }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(stripIsolates(container.querySelector('.notification-time')!.textContent ?? '')).toContain('قبل 5 د');
+    });
+});
+
+describe('NotificationCenter permission prompts follow the interface language', () => {
+    afterEach(resetUiLocale);
+
+    const prompt = (extra: Partial<GaiaNotification>): GaiaNotification => ({
+        ...notif('perm-1', 'GAIA needs your OK before running python.'),
+        type: 'permission_request',
+        title: 'Allow running python?',
+        priority: 'high',
+        ...extra,
+    });
+
+    it('words a tool prompt in Arabic, the tool kept left to right', () => {
+        setUiLocale('ar');
+        useNotificationStore.setState({
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        const title = container.querySelector('.notification-title')!;
+        expect(title.textContent).toContain('هل تسمح بـ');
+        expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^editing file$/);
+        expect(container.querySelector('.notification-message')).toHaveTextContent('يحتاج GAIA إلى موافقتك قبل');
+    });
+
+    it('words a path prompt in Arabic, the path kept left to right', () => {
+        setUiLocale('ar');
+        useNotificationStore.setState({
+            notifications: [prompt({
+                tool: PATH_ACCESS_TOOL, title: 'Let GAIA use this folder?',
+                message: 'GAIA wants to use the folder C:\\data. Allow it for this chat?',
+                toolArgs: { path: 'C:\\data', kind: 'folder' },
+            })],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container.querySelector('.notification-title')).toHaveTextContent('هل تسمح لـ GAIA باستخدام هذا المجلد؟');
+        const message = container.querySelector('.notification-message')!;
+        expect(message).toHaveTextContent('يريد GAIA استخدام المجلد');
+        expect(message.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^C:\\data$/);
+    });
+
+    it('reads the same as before in English', () => {
+        useNotificationStore.setState({
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(stripIsolates(container.querySelector('.notification-title')!.textContent!)).toBe('Allow editing file?');
+        expect(stripIsolates(container.querySelector('.notification-message')!.textContent!)).toBe('GAIA needs your OK before editing file.');
+    });
+});
+
+describe('a permission entry', () => {
+    it('says what it was in words, with no raw tool id', () => {
+        useNotificationStore.setState({
+            notifications: [{ ...notif('perm-9', 'GAIA needs your OK before running Python.'), type: 'permission_request', tool: 'run_python', toolLabel: 'running Python', toolArgs: { code: 'print(1)' } }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container.querySelector('.notification-item')).not.toHaveTextContent('run_python');
+    });
+
+    it('wraps its filter tabs instead of running them off the edge', () => {
+        expect(notificationCss).toMatch(/\.notification-filter-bar \{[^}]*flex-wrap: wrap/);
+    });
+});
+
+describe('clicking a notification that names a chat', () => {
+    it('opens that chat and marks the notification read', () => {
+        const onOpenChat = vi.fn();
+        useNotificationStore.setState({
+            notifications: [{ ...notif('done-1', 'Three headlines today.'), title: 'Scheduled task "news" finished', sessionId: 'chat-1' }],
+        });
+        render(<NotificationCenter onClose={vi.fn()} onOpenChat={onOpenChat} />);
+        fireEvent.click(screen.getByText('Scheduled task "news" finished'));
+        expect(onOpenChat).toHaveBeenCalledExactlyOnceWith('chat-1');
+        expect(useNotificationStore.getState().notifications[0].read).toBe(true);
+    });
+
+    it('only marks it read when there is no chat to open', () => {
+        const onOpenChat = vi.fn();
+        useNotificationStore.setState({ notifications: [notif('plain-1', 'Document indexed')] });
+        render(<NotificationCenter onClose={vi.fn()} onOpenChat={onOpenChat} />);
+        fireEvent.click(screen.getByText('Document indexed'));
+        expect(onOpenChat).not.toHaveBeenCalled();
+        expect(useNotificationStore.getState().notifications[0].read).toBe(true);
+    });
+});
+
+describe('NotificationCenter marks hidden characters', () => {
+    it('shows a right-to-left override in a permission request path as a code', () => {
+        useNotificationStore.setState({
+            notifications: [{
+                ...notif('perm-rlo', 'GAIA needs your OK.'),
+                type: 'permission_request',
+                title: 'Allow?',
+                priority: 'high',
+                tool: PATH_ACCESS_TOOL,
+                toolArgs: { path: 'C:\\w\\report\u202Etxt.md', kind: 'file' },
+            }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container).toHaveTextContent('report[U+202E]txt.md');
+        expect(container.textContent).not.toContain('\u202E');
+    });
+
+    it('shows a right-to-left override in a plain notification as a code', () => {
+        useNotificationStore.setState({
+            notifications: [{ ...notif('n-rlo', 'Saved invoice\u202Etxt.md'), title: 'Wrote invoice\u202Etxt.md' }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container.querySelector('.notification-title')!.textContent).toBe('Wrote invoice[U+202E]txt.md');
+        expect(container.querySelector('.notification-message')!.textContent).toBe('Saved invoice[U+202E]txt.md');
+    });
+
+    it('keeps the isolates an Arabic translation wraps its halves and params in', () => {
+        setUiLocale('ar');
+        const title = translator('ar')('chatError.resendFailed');
+        expect(title).toMatch(/[⁦-⁩]/);
+        useNotificationStore.setState({
+            notifications: [{ ...notif('n-ar', `⁨invoice‮txt.md⁩`), title }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container.querySelector('.notification-title')!.textContent).toBe(title);
+        expect(container.querySelector('.notification-message')!.textContent).toBe('⁨invoice[U+202E]txt.md⁩');
+        resetUiLocale();
     });
 });

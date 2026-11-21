@@ -3,12 +3,12 @@
 
 import { StrictMode } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelSettings } from '../ModelSettings';
 import { useModelStore } from '../../../stores/modelStore';
 import { useChatStore } from '../../../stores/chatStore';
 import * as api from '../../../services/api';
-import { mockSetupApis } from '../../../test/setupApiMocks';
+import { mockSetupApis, SETTINGS } from '../../../test/setupApiMocks';
 import type { ActiveModel, ProviderInfo, ProviderModel } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -43,7 +43,7 @@ beforeEach(() => {
     useModelStore.setState({ active: LOCAL_ACTIVE, error: null, restoreNotice: null });
     mockedApi.getCloudPrices.mockResolvedValue({ provider: 'fireworks', models: [], source: null, note: 'Prices are set by the organization that runs the gateway.' });
     mockedApi.getSpending.mockResolvedValue({
-        month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price',
+        month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price',
     });
     useChatStore.setState({ systemStatus: null, settingsProvider: null });
     withProviders(fireworks());
@@ -55,6 +55,19 @@ beforeEach(() => {
     });
 });
 
+describe('ModelSettings agent', () => {
+    it('picks the agent at the top of the page; the comparison says when a switch applies', async () => {
+        mockedApi.updateSettings.mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiacpp' });
+        render(<ModelSettings />);
+        const card = await screen.findByRole('region', { name: 'Agent' });
+        fireEvent.click(await within(card).findByRole('button', { name: 'Compare the two' }));
+        expect(within(card).getByText('A switch applies from the next message in every chat.')).toBeVisible();
+        fireEvent.click(await within(card).findByRole('radio', { name: /gaiacpp/ }));
+        expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
+        await waitFor(() => expect(within(card).getByRole('radio', { name: /gaiacpp/ })).toHaveAttribute('aria-checked', 'true'));
+    });
+});
+
 describe('ModelSettings provider keys', () => {
     it('opens on the provider "Add your key" named, not the one in use', async () => {
         useChatStore.getState().openSettings('model', 'fireworks');
@@ -62,6 +75,17 @@ describe('ModelSettings provider keys', () => {
         const card = await screen.findByRole('region', { name: 'Fireworks AI' });
         expect(within(card).getByLabelText('Fireworks AI API key')).toBeInTheDocument();
         expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toHaveAttribute('aria-checked', 'true');
+    });
+
+    it('keeps cloud providers visible but blocked under Local only', async () => {
+        withProviders(fireworks({ blocked: true, blocked_reason: 'run a command instead' }));
+        render(<ModelSettings />);
+
+        const tab = await screen.findByRole('radio', { name: /Fireworks AI/ });
+        expect(tab).toBeDisabled();
+        expect(tab).toHaveAttribute('title', 'Blocked by Local only. Turn it off in Settings to use cloud models.');
+        expect(mockedApi.listProviderModels).toHaveBeenCalledWith('local');
+        expect(mockedApi.listProviderModels).not.toHaveBeenCalledWith('fireworks');
     });
 
     it('says when the models shown are known ones, because the list is down', async () => {
@@ -117,9 +141,35 @@ describe('ModelSettings provider keys', () => {
     it('an environment key can be neither replaced nor removed here', async () => {
         withProviders(fireworks({ models_discovered: true, key_source: 'environment' }));
         const card = await openFireworks();
-        expect(within(card).getByLabelText('Saved Fireworks AI API key')).toHaveValue('Set in FIREWORKS_API_KEY');
+        expect(within(card).getByLabelText('Saved Fireworks AI API key')).toHaveValue('From your environment (FIREWORKS_API_KEY)');
         expect(within(card).queryByRole('button', { name: 'Replace' })).not.toBeInTheDocument();
         expect(within(card).queryByRole('button', { name: 'Remove key' })).not.toBeInTheDocument();
+    });
+
+    it('an environment key GAIA handed over can be replaced but not removed', async () => {
+        withProviders(fireworks({ key_source: 'environment', key_from_gaia_env: true }));
+        const card = await openFireworks();
+        fireEvent.click(within(card).getByRole('button', { name: 'Replace' }));
+        expect(within(card).getByLabelText('Fireworks AI API key')).toBeInTheDocument();
+        expect(within(card).queryByRole('button', { name: 'Remove key' })).not.toBeInTheDocument();
+    });
+
+    it('a key that is not connected says why there are no models and offers to connect', async () => {
+        withProviders(fireworks({ key_source: 'environment', models_discovered: false }));
+        mockedApi.connectProviderWaitingForOs.mockResolvedValue({ ...fireworks({ key_source: 'environment', models_discovered: true }), remembered: false, remember_error: null });
+        const card = await openFireworks();
+        expect(within(card).getByLabelText('Saved Fireworks AI API key')).toHaveValue('From your environment (FIREWORKS_API_KEY)');
+        expect(within(card).getByText('Not connected')).toBeInTheDocument();
+        expect(within(card).getByText('Fireworks AI has your key but is not connected yet, so no models are listed.')).toBeInTheDocument();
+        fireEvent.click(within(card).getByRole('button', { name: 'Reconnect' }));
+        await waitFor(() => expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('fireworks', { api_key: undefined }, expect.any(Function), expect.any(Function)));
+    });
+
+    it('a connection error replaces the generic not-connected hint', async () => {
+        withProviders(fireworks({ key_source: 'environment', error: 'The key in FIREWORKS_API_KEY reached Fireworks AI, but no models were found.' }));
+        const card = await openFireworks();
+        expect(within(card).getByRole('alert')).toHaveTextContent('no models were found');
+        expect(within(card).queryByText(/is not connected yet/)).not.toBeInTheDocument();
     });
 
     it('finishes connecting under StrictMode, which remounts effects in development', async () => {
@@ -174,6 +224,30 @@ describe('ModelSettings provider keys', () => {
         expect(await within(card).findByText('Not connected', {}, { timeout: 4000 })).toBeInTheDocument();
     });
 
+    it('says the key store is locked and asks the OS again only on Try again', async () => {
+        const locked = {
+            providers: [LOCAL, fireworks({
+                key_state: 'store_locked' as const,
+                key_message: 'The OS credential store is locked: its unlock prompt was closed.',
+            })],
+            active: LOCAL_ACTIVE,
+            lemonade_error: null,
+        };
+        mockedApi.listProviders.mockResolvedValue(locked);
+        mockedApi.retryKeyStore.mockResolvedValue({ retrying: true });
+        const card = await openFireworks();
+        expect(within(card).getByText(/key store is locked/)).toBeInTheDocument();
+        expect(within(card).queryByText('No key yet.')).not.toBeInTheDocument();
+        const reads = mockedApi.listProviders.mock.calls.length;
+        // A locked store is not polled: polling would reopen the prompt the user closed.
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        expect(mockedApi.listProviders.mock.calls.length).toBe(reads);
+
+        fireEvent.click(within(card).getByRole('button', { name: 'Try again' }));
+        await waitFor(() => expect(mockedApi.retryKeyStore).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(mockedApi.listProviders.mock.calls.length).toBe(reads + 1));
+    });
+
     it('connects with the typed key and clears the field', async () => {
         mockedApi.connectProviderWaitingForOs.mockResolvedValue({ ...fireworks(), remembered: true, remember_error: null });
         const card = await openFireworks();
@@ -220,7 +294,9 @@ describe('ModelSettings provider keys', () => {
         const card = await openFireworks();
         fireEvent.click(within(card).getByRole('button', { name: 'Remove key' }));
         expect(mockedApi.forgetProviderKey).not.toHaveBeenCalled();
-        fireEvent.click(within(card).getByRole('button', { name: 'Remove' }));
+        const ask = screen.getByRole('alertdialog', { name: 'Remove this key?' });
+        expect(within(ask).getByRole('button', { name: 'Keep' })).toHaveFocus();
+        fireEvent.click(within(ask).getByRole('button', { name: 'Remove key' }));
         await waitFor(() => expect(mockedApi.forgetProviderKey).toHaveBeenCalledWith('fireworks'));
         expect(await within(card).findByRole('status')).toHaveTextContent('Key cleared');
     });
@@ -413,7 +489,7 @@ describe('ModelSettings: an unreachable AMD gateway (#5604)', () => {
         render(<ModelSettings />);
         const tab = await screen.findByRole('radio', { name: /AMD LLM Gateway/ });
         expect(tab).toBeDisabled();
-        expect(tab).toHaveAttribute('title', NO_NET);
+        expect(tab).toHaveAttribute('title', "Unavailable: needs AMD's network or VPN.");
         expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toBeEnabled();
     });
 
@@ -431,5 +507,28 @@ describe('ModelSettings: an unreachable AMD gateway (#5604)', () => {
         });
         fireEvent.click(within(card).getByRole('button', { name: 'Check again' }));
         expect(await within(card).findByLabelText('AMD LLM Gateway API key')).toBeInTheDocument();
+    });
+});
+
+describe('ModelSettings in Arabic', () => {
+    afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+    it('names Local in Arabic and says in Arabic that chat history leaves the PC', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.listProviders.mockResolvedValue({
+            providers: [
+                { ...LOCAL, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' },
+                fireworks({ privacy_notice: 'Chat history is sent to Fireworks AI. Usage may incur charges.' }),
+            ],
+            active: LOCAL_ACTIVE,
+            lemonade_error: null,
+        });
+        render(<ModelSettings />);
+        expect(await screen.findByRole('radio', { name: 'محلي' })).toBeInTheDocument();
+        expect(screen.queryByRole('radio', { name: 'Local' })).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('radio', { name: /Fireworks AI/ }));
+        const card = await screen.findByRole('region', { name: 'Fireworks AI' });
+        expect(card).toHaveTextContent('يُرسَل سجل المحادثة إلى Fireworks AI. قد يترتب على الاستخدام رسوم.');
     });
 });

@@ -169,26 +169,6 @@ class AgentMCPServer:
                                     )
                                     # Keep original kwargs if parsing fails
 
-                        # Map common parameter variations to what agent expects
-                        # VSCode may send different param names than agent expects
-
-                        # Map VSCode's app_dir to Docker agent's appPath
-                        if "app_dir" in kwargs and "appPath" not in kwargs:
-                            kwargs["appPath"] = kwargs.pop("app_dir")
-                            if verbose:
-                                logger.info("[MCP] Mapped app_dir to appPath")
-
-                        # Map other common variations
-                        if "directory" in kwargs and "appPath" not in kwargs:
-                            kwargs["appPath"] = kwargs.pop("directory")
-                            if verbose:
-                                logger.info("[MCP] Mapped directory to appPath")
-
-                        if "project_path" in kwargs and "appPath" not in kwargs:
-                            kwargs["appPath"] = kwargs.pop("project_path")
-                            if verbose:
-                                logger.info("[MCP] Mapped project_path to appPath")
-
                         if verbose:
                             logger.info("[MCP TOOL] Final args to agent:")
                             try:

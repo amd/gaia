@@ -26,9 +26,11 @@ from gaia.llm.model_fit import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NPU = {"available": True, "family": "XDNA2"}
 
-# Strix Halo, 128 GB with a 64 GB GPU carve-out (Linux reports it as vram_gb).
+# Strix Halo, 128 GB with a 64 GB GPU carve-out, as its Linux Lemonade reports
+# it: vram_gb is the carve-out, and Physical Memory is MemTotal, without it.
 STRIX_HALO_128 = {
-    "Physical Memory": "128 GB",
+    "OS Version": "Linux-7.0.0-31-generic",
+    "Physical Memory": "62.40 GB",
     "devices": {
         "amd_gpu": [
             {
@@ -142,11 +144,11 @@ class TestFreshPullRequestShape:
 
 
 class TestNpuCapacity:
-    def test_npu_memory_is_ram_less_the_carve_out(self):
+    def test_npu_memory_is_the_ram_linux_sees(self):
         cap = capacity_from_system_info(STRIX_HALO_128)
-        assert cap.npu_memory_gb == pytest.approx(64.0)
+        assert cap.npu_memory_gb == pytest.approx(62.4)
         npu = npu_capacity(cap)
-        assert (npu.memory_gb, npu.memory_source) == (pytest.approx(64.0), NPU_RAM)
+        assert (npu.memory_gb, npu.memory_source) == (pytest.approx(62.4), NPU_RAM)
         # The NPU view never counts as a GPU for the GPU-only product rule.
         assert not npu.on_gpu
         # And the GPU view is untouched.
@@ -197,7 +199,7 @@ class TestNpuProfilePick:
         with pytest.raises(ModelFitError, match="no available AMD NPU.*--profile npu"):
             lc.recommend_npu_chat_model(FakeClient(NO_NPU))
 
-    def test_init_downloads_the_pick_and_the_flm_embedder(self):
+    def test_init_downloads_the_pick_and_the_gpu_embedder(self):
         choice = resolve_init_chat_model(
             FakeClient(STRIX_HALO_128),
             reset_corrupt=False,
@@ -205,7 +207,7 @@ class TestNpuProfilePick:
             profile="npu",
         )
         ids = with_chat_model("npu", INIT_PROFILES["npu"]["models"], lambda: choice)
-        assert ids == [lc.NPU_DEFAULT_MODEL_NAME, "embed-gemma-300m-FLM"]
+        assert ids == [lc.NPU_DEFAULT_MODEL_NAME, "user.embeddinggemma-300m-GGUF"]
 
 
 class TestProfileSwitch:
