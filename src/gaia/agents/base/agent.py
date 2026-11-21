@@ -15922,10 +15922,6 @@ Do NOT wrap conversational replies in JSON.
             if step_exit == "continue":
                 continue
 
-                # Otherwise fall through to stats / answer / next iter.
-                # The legacy ``if parsed.get("tool")`` branch below is
-                # gated to skip when ``tool_calls`` is set so it won't
-                # double-execute the first call.
 
             # If the response contains a tool call, execute it (legacy
             # embedded-JSON path). Skipped when ``tool_calls`` is set —
