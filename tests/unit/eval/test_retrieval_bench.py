@@ -787,10 +787,9 @@ def _fake_run_with(label_errors, errors=()):
 def cli_run(tmp_path, monkeypatch):
     import contextlib
 
-    from gaia.eval import eval_lock
-
     monkeypatch.setattr(
-        eval_lock, "exclusive_eval", lambda command: contextlib.nullcontext()
+        "gaia.eval.eval_lock.exclusive_eval",
+        lambda command: contextlib.nullcontext(),
     )
     root = sources.repo_root()
     monkeypatch.setattr(sources, "_repo_root", None)
