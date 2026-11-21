@@ -445,8 +445,9 @@ def test_alternating_between_two_calls_is_a_loop(agent):
     result = agent.process_query("fix it", max_steps=20)
 
     assert result["result"].startswith("answered from what it had")
-    # Rounds one and two ran; the third round's closing call was corrected.
-    assert agent.calls == 5
+    # Rounds one and two ran; the third "find" repeats its result, so it is
+    # corrected before the round completes.
+    assert agent.calls == 4
     assert len(_corrections(sent)) == 1
 
 
@@ -488,3 +489,39 @@ def test_a_refused_repeat_is_not_left_running(agent, calls):
         if e and e.get("type") == "tool_result" and "repeated" in str(e)
     ]
     assert len(refused) == 1 and refused[0]["success"] is False
+
+
+# ---------------------------------------------------------------------------
+# Repeats in no fixed order
+# ---------------------------------------------------------------------------
+
+
+def _call_with(command: str) -> str:
+    return json.dumps(
+        {"thought": "try", "tool": _TOOL, "tool_args": {"command": command}}
+    )
+
+
+def test_a_call_repeating_its_result_in_shuffled_order_is_caught(agent):
+    """Qwen3.5-2B cycled twenty searches in no fixed order for 314 calls."""
+    agent.results = [{"status": "success", "matches": []}]
+    order = ["a", "b", "c", "b", "a", "c", "a"]
+    sent = _stub_chat(agent, *[_call_with(c) for c in order], _answer("nothing found"))
+
+    result = agent.process_query("find it", max_steps=20)
+
+    assert result["result"].startswith("nothing found")
+    assert agent.calls == 6  # the third "a" with the same result was not run
+    assert len(_corrections(sent)) == 1
+
+
+def test_a_call_whose_result_changed_is_not_a_repeat(agent):
+    """Reading a file again after editing it returns something new each time."""
+    agent.results = [{"status": "success", "content": f"v{i}"} for i in range(6)]
+    order = ["a", "b", "a", "b", "a"]
+    _stub_chat(agent, *[_call_with(c) for c in order], _answer("done"))
+
+    result = agent.process_query("edit and re-read", max_steps=20)
+
+    assert result["result"].startswith("done")
+    assert agent.calls == 5
