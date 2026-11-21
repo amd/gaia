@@ -203,6 +203,7 @@ _TEXT_RESULT_FIELDS = {
     "description": "snippet",
     "content": "snippet",
     "snippet": "snippet",
+    "snippets": "snippet",
 }
 
 #: A search result's snippet is a summary; longer text is page content.
@@ -261,7 +262,7 @@ def _parse_search_text(text: str) -> List[Dict[str, str]]:
         {
             "title": r.get("title", ""),
             "url": r["url"],
-            "snippet": r.get("snippet", "")[:_SNIPPET_CHARS],
+            "snippet": r.get("snippet", "").strip()[:_SNIPPET_CHARS],
         }
         for r in records
         if r.get("url")
@@ -323,6 +324,7 @@ def _connector_fallback(
         is_mcp_server_configured,
         is_mcp_server_enabled,
     )
+    from gaia.connectors.offsite import offsite_blocked_message
 
     errors: List[str] = []
     for spec in _search_connectors():
@@ -330,6 +332,10 @@ def _connector_fallback(
             if not is_mcp_server_configured(spec.id) or not is_mcp_server_enabled(
                 spec.id
             ):
+                continue
+            blocked = offsite_blocked_message(spec)
+            if blocked:
+                errors.append(blocked)
                 continue
             if spec.id == _TAVILY_CONNECTOR_ID:
                 results = _tavily_search(query, num_results)

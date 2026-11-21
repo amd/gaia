@@ -39,6 +39,8 @@ KEPT_IDS = frozenset(
         # Launch-checked by tests/integration/test_mcp_catalog_launch.py.
         "mcp-notion",
         "mcp-brave-search",
+        # Keyless; launch-checked like the other search connectors.
+        "mcp-keenable",
     }
 )
 
