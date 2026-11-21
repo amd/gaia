@@ -538,12 +538,12 @@ jobs:
           note: "The gaia agent release eval passed on `${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}` with no regression (run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Closing automatically; reopen if this still needs a look."
 
   # ── Stage 2: native sidecar freeze on every platform ────────────────
-  # The matrix lives in build_flagship_sidecar.yml, shared with publish.yml's
+  # The matrix lives in build_gaiapy.yml, shared with publish.yml's
   # release-candidate build so both freeze the binary the same way.
   freeze:
     name: Freeze sidecar
     needs: [version]
-    uses: ./.github/workflows/build_flagship_sidecar.yml
+    uses: ./.github/workflows/build_gaiapy.yml
 
   # ── Stage 3: verify the pinned terminal-hub component ───────────────
   # The TUI is not built here. This job proves the pinned terminal-hub version is

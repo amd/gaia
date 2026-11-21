@@ -23,7 +23,7 @@
 #           shortcuts and uninstall are all still exercised; only the sidecar's
 #           identity is not, and nothing built this way is ever published.
 #   artifact (release-train dry run) the gaia-agent-<platform> artifacts the
-#           caller's own build_flagship_sidecar.yml run uploaded, verified
+#           caller's own build_gaiapy.yml run uploaded, verified
 #           against the hash each freeze leg recorded.
 #
 # Each package also ships gaiacpp, the native agent the terminal UI runs in

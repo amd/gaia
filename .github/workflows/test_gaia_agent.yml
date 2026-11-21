@@ -15,7 +15,7 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/test_gaia_agent.yml'
-      - '.github/workflows/build_flagship_sidecar.yml'
+      - '.github/workflows/build_gaiapy.yml'
       - 'setup.py'
       - 'pyproject.toml'
       - 'conftest.py'
@@ -89,7 +89,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - '.github/workflows/test_gaia_agent.yml'
-      - '.github/workflows/build_flagship_sidecar.yml'
+      - '.github/workflows/build_gaiapy.yml'
       - 'setup.py'
       - 'pyproject.toml'
       - 'conftest.py'

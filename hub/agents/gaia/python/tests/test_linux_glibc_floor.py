@@ -20,10 +20,7 @@ import yaml
 
 PACKAGING = Path(__file__).resolve().parents[1] / "packaging"
 WORKFLOW = (
-    Path(__file__).resolve().parents[5]
-    / ".github"
-    / "workflows"
-    / "build_flagship_sidecar.yml"
+    Path(__file__).resolve().parents[5] / ".github" / "workflows" / "build_gaiapy.yml"
 )
 
 

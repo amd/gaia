@@ -41,7 +41,7 @@ on:
       - 'pyproject.toml'
       - 'hub/agents/gaia/python/pyproject.toml'
       - 'hub/agents/gaia/python/packaging/**'
-      - '.github/workflows/build_flagship_sidecar.yml'
+      - '.github/workflows/build_gaiapy.yml'
   schedule:
     - cron: '0 7 * * 1'
 
