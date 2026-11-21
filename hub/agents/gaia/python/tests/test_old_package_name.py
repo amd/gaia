@@ -46,6 +46,48 @@ def test_a_module_runs_by_its_old_name():
     assert "--serve" in done.stdout
 
 
+def test_a_module_that_reads_its_file_runs_by_its_old_name():
+    """``export_openapi`` resolves its artifact path from ``__file__`` at import."""
+    runs = [
+        subprocess.run(
+            [sys.executable, "-m", f"{name}.export_openapi", "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        for name in ("gaia_agent", "gaiapy")
+    ]
+    old, new = runs
+    assert old.returncode == 0, old.stderr
+    assert old.stdout == new.stdout
+
+
+def test_importing_by_the_old_name_keeps_the_real_spec():
+    code = (
+        "import importlib\n"
+        "import gaiapy.stdio as first\n"
+        "import gaia_agent.stdio as old\n"
+        "import gaia_agent.tool_bundles as fresh\n"
+        "import gaiapy.tool_bundles as new\n"
+        "assert old is first and fresh is new\n"
+        "for m in (old, fresh):\n"
+        "    assert m.__spec__.name == m.__name__, m.__spec__.name\n"
+        "    assert m.__spec__.origin == m.__file__\n"
+        "new.FULL_CORE_TOOLS = None\n"
+        "assert importlib.reload(fresh) is new\n"
+        "assert new.FULL_CORE_TOOLS is not None, 'reload did not re-run it'\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert done.returncode == 0, done.stderr
+
+
 def test_find_spec_does_not_invent_a_missing_submodule():
     assert importlib.util.find_spec("gaia_agent.no_such_module") is None
     assert importlib.util.find_spec("gaia_agent.tool_bundles") is not None
