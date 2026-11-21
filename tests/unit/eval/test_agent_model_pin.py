@@ -163,10 +163,12 @@ def test_a_run_that_measured_nothing_names_no_model():
 # ---------------------------------------------------------------------------
 
 
-def _scorecard(path, agent_model=GEMMA, judge=JUDGE, status="PASS"):
+def _scorecard(path, agent_model=GEMMA, judge=JUDGE, status="PASS", program=None):
     config = {"model": judge}
     if agent_model is not None:
         config["agent_model"] = agent_model
+    if program is not None:
+        config["agent_program"] = program
     results = [
         {
             "scenario_id": "a",
@@ -338,3 +340,19 @@ def test_the_cli_exits_3_for_a_scorecard_from_another_model(
     assert result.returncode == expected, result.stdout + result.stderr
     if expected == 3:
         assert "Not comparable" in result.stdout
+
+
+def test_a_gaiacpp_run_is_not_compared_with_a_gaiapy_baseline(tmp_path):
+    # Every committed baseline predates the field and ran the Python flagship.
+    baseline = _baseline_dir(tmp_path)
+    current = _scorecard(tmp_path / "current.json", program="gaiacpp")
+
+    with pytest.raises(ScorecardMismatchError, match="agent program is 'gaiapy'"):
+        compare_scorecards(baseline, current)
+
+
+def test_two_gaiacpp_runs_are_compared(tmp_path):
+    baseline = _scorecard(tmp_path / "base.json", program="gaiacpp")
+    current = _scorecard(tmp_path / "current.json", program="gaiacpp")
+
+    assert compare_scorecards(baseline, current)["regressed"] == []

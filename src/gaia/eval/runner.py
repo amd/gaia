@@ -3190,14 +3190,31 @@ def baseline_identity(baseline_path, baseline: dict) -> dict:
             return {
                 "agent_model": meta.get("model"),
                 "eval_model": meta.get("eval_model"),
+                "agent_program": _recorded_program(meta),
                 "source": str(meta_path),
             }
     config = baseline.get("config") or {}
     return {
         "agent_model": config.get("agent_model"),
         "eval_model": config.get("model"),
+        "agent_program": _recorded_program(config),
         "source": str(baseline_path),
     }
+
+
+def _agent_program() -> str:
+    """The flagship program this eval's GAIA home runs: gaiapy or gaiacpp."""
+    from gaia.daemon.sidecars.fetch import chosen_flagship
+
+    return chosen_flagship()
+
+
+def _recorded_program(record: dict) -> str:
+    """The program a scorecard or baseline ran; one that predates the field ran
+    gaiapy, since the eval could not run gaiacpp before it was recorded."""
+    from gaia.daemon.sidecars.fetch import PYTHON_FLAGSHIP
+
+    return record.get("agent_program") or PYTHON_FLAGSHIP
 
 
 def check_comparable(baseline_path, baseline: dict, current: dict) -> None:
@@ -3224,6 +3241,13 @@ def check_comparable(baseline_path, baseline: dict, current: dict) -> None:
             want["eval_model"],
             config.get("model"),
             "Re-run with --model set to the baseline's eval model.",
+        ),
+        (
+            "agent program",
+            want["agent_program"],
+            _recorded_program(config),
+            "Run the eval on a GAIA home whose flagship_agent is the baseline's "
+            "program (util/run_eval_lane.py --agent-program).",
         ),
     )
     problems = []
@@ -3981,6 +4005,8 @@ class AgentEvalRunner:
             stopped["partial"] = _partial(stopped, len(results), switches)
         # The one local model this run may claim; --compare checks it.
         config = {**config, "agent_model": run_agent_model(results, self.agent_model)}
+        # Which program was the flagship (gaiapy or gaiacpp); --compare checks it.
+        config["agent_program"] = _agent_program()
         if switches:
             config["claude_account_switches"] = [
                 *(config.get("claude_account_switches") or []),
