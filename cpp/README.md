@@ -262,8 +262,7 @@ gaia/                           # repo root
     │   ├── clean_console.cpp
     │   └── database.cpp
     ├── agents/
-    │   ├── gaia/               # gaiacpp — the general-purpose GAIA agent (CLI, headless, server)
-    │   ├── bash/               # gaia-bash — the coding agent
+    │   ├── gaiacpp/            # gaiacpp — the general-purpose GAIA agent (CLI, headless, server)
     │   └── <id>/gaia-agent.yaml  # Packaging manifest per agent (see agents/README.md)
     ├── packaging/
     │   ├── package_agents.py   # Packages each agent's binary for the Agent Hub

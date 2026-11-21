@@ -27,7 +27,7 @@
 #include <gaia/security.h>
 #include <gaia/skill_library.h>
 
-#include "../bash/bash_tools.h"
+#include "bash_tools.h"
 #include "gaia_agent.h"
 
 #ifndef GAIACPP_VERSION

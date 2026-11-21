@@ -45,7 +45,6 @@ TARGET_BY_ID: Dict[str, str] = {
     "process": "process_agent",
     "security-demo": "security_demo",
     "vlm": "vlm_agent",
-    "bash": "gaia-bash",
     "gaia": "gaiacpp",
 }
 

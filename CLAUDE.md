@@ -637,7 +637,6 @@ gaia/
 │   └── agents/gaia/python/  # gaiapy: the Python harness (package gaia_agent, binary gaia-agent)
 ├── cpp/                # C++17 agent framework (CMake project gaia-cpp)
 │   ├── agents/gaiacpp/ # gaiacpp: the native harness (binary gaiacpp)
-│   ├── agents/bash/    # gaia-bash coding agent
 │   └── examples/       # Single-file demo agents (health, wifi, process, vlm…)
 ├── tui/                # Go terminal UI (module github.com/amd/gaia/tui)
 ├── eval/               # Eval scenarios, corpus, CI lanes and tiers (the framework is src/gaia/eval/)
