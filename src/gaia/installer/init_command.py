@@ -54,7 +54,7 @@ from gaia.agents.install_hints import (
 from gaia.frozen import is_frozen
 from gaia.installer import model_choice
 from gaia.installer._stdin import stdin_is_tty
-from gaia.llm.model_fit import MachineCapacity, format_gb
+from gaia.llm.model_fit import MachineCapacity, format_gb, with_app_headroom
 from gaia.logger import get_logger
 from gaia.ui.build import WebuiBuildStatus
 
@@ -2664,10 +2664,15 @@ class InitCommand:
                     f"   Chat model: {choice.model_id} (default_model in ~/.gaia/config.json)"
                 )
             else:
-                cap = choice.capacity
+                cap = with_app_headroom(choice.capacity) if choice.capacity else None
+                kept = (
+                    f" once {format_gb(cap.kept_for_apps_gb)} GB is kept for other apps"
+                    if cap and cap.kept_for_apps_gb
+                    else ""
+                )
                 where = (
-                    f" — this PC has {format_gb(cap.memory_gb)} GB for models "
-                    f"({cap.memory_source})"
+                    f" — this PC has {format_gb(cap.memory_gb)} GB for models"
+                    f"{kept} ({cap.memory_source})"
                     if cap
                     else ""
                 )

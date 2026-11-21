@@ -590,3 +590,29 @@ def test_download_later_still_fails_when_its_own_pull_fails(lemonade, home):
     fake.pull_model_stream = broken
     cmd = InitCommand(profile="gaia", yes=True, extra_models=[LARGE_DEFAULT_MODEL_NAME])
     assert not _download(cmd)
+
+
+def test_the_chat_model_line_counts_the_memory_kept_for_other_apps(monkeypatch):
+    """A 16 GB laptop's headline must agree with the reasons under it: 6 GB, not 10."""
+    from gaia.installer import init_command
+    from gaia.llm.model_fit import MachineCapacity
+
+    laptop = MachineCapacity(
+        memory_gb=10.0,
+        memory_source="AMD iGPU",
+        disk_free_gb=500.0,
+        installed_ram_gb=16.0,
+        carve_out_gb=4.0,
+    )
+    choice = init_command.ChatModelChoice(
+        model_id=TINY_DEFAULT_MODEL_NAME, user_set=False, skipped=[], capacity=laptop
+    )
+    monkeypatch.setattr(init_command, "resolve_init_chat_model", lambda *a, **k: choice)
+    cmd = InitCommand(profile="gaia", yes=True)
+    said = []
+    monkeypatch.setattr(cmd, "_print", lambda text, *a, **k: said.append(text))
+    cmd._chat_model(object())
+    assert said[0] == (
+        f"   Chat model: {TINY_DEFAULT_MODEL_NAME} — this PC has 6 GB for models "
+        "once 10 GB is kept for other apps (AMD iGPU)"
+    )
