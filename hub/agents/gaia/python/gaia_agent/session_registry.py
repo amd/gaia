@@ -107,7 +107,9 @@ def _carry_session_state(old: Any, new: Any, session_id: str) -> None:
             new_validator.add_read_only_path(str(path))
         # Last, so a document the user took off stays refused over any grant.
         for path in sorted(old_validator.withheld_paths):
-            new_validator.withhold_path(str(path))
+            new_validator.withhold_path(
+                str(path), document=old_validator.is_withheld_document(path)
+            )
     # Which documents are attached, so one removed next turn loses its grant.
     for records in ("_attached_documents", "_withheld_documents"):
         if hasattr(old, records):

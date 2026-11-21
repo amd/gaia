@@ -1204,7 +1204,7 @@ ShellSession::ShellSession(const std::string& startCwd, const std::string& shell
     impl_->baselineEnv = captureProcessEnv();
 
 #ifdef _WIN32
-    // A POSIX shell is used when one was named (the bash agent detects Git
+    // A POSIX shell is used when one was named (gaiacpp detects Git
     // Bash / MSYS / WSL); otherwise commands run as a cmd.exe batch script.
     impl_->shell = shell;
     impl_->posixScript = !shell.empty();

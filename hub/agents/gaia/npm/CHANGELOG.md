@@ -8,6 +8,29 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **A conversation can't read another conversation's documents.** Every
+  document dragged into any chat sat in GAIA's documents folder, which every
+  chat may use, so a chat could list and read the others'. Those copies now
+  live in GAIA's chat data, where the file tools open only the files sent in
+  the conversation's `documents` or `allowed_paths`, and only to read; no
+  folder grant, approval or full access opens the rest. (Under full access the
+  shell and Python tools still run unchecked.) A file taken off a conversation
+  is refused with "attach it to this chat again" instead of advice to re-add a
+  folder under Environment.
+
+- **Editing a config, data or skill file after the tests marks "tests pass"
+  stale again.** Since 0.3.6 a requested `settings.yaml`, `app.json`,
+  `schema.sql`, `Dockerfile` or similar file, or a `SKILL.md` or prompt file,
+  could be edited after the test run and the agent still reported the old pass.
+  Now only docs and requested reports (prose, text, tables, documents, images)
+  leave the run standing; anything under a `skills` or `prompts` folder counts
+  as a change.
+- **A slow script that times out is offered more time again.** A data or build
+  script killed at its timeout was told to run the linter on the changed files.
+  It now gets the background-run and longer-timeout options back; test and lint
+  runs are still scoped to the changed files.
+- **`read_tool_output` with a `to_entry` past the last part returns what is
+  there** instead of an error.
 - **Ask for research with `/research`.** A query that starts with `/research`
   loads the `research-report` skill for the turn and asks for a report that
   cites, for every claim, a page the agent fetched, with a check for newer
@@ -273,7 +296,9 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   instead of ending the turn; the work done so far is kept either way.
 - A file a script wrote and the agent then showed whole with `cat` counts as
   read back. Before, the answer still carried "has not been read back
-  completely" and the turn was marked unfinished.
+  completely" and the turn was marked unfinished. The Windows ways of showing
+  a file count too: `type`, `more`, and `Get-Content` or `gc`, on their own or
+  inside `powershell -Command "..."`.
 - A cloud model that spends a whole reply reasoning and returns nothing is
   asked for its lowest reasoning level on the next request, so the turn moves
   on; after a second such reply in one turn, that level holds for the rest of

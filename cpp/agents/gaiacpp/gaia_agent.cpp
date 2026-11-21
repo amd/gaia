@@ -22,7 +22,7 @@
 #include <gaia/web_tools.h>
 #include <gaia/workspace.h>
 
-#include "../bash/bash_tools.h"
+#include "bash_tools.h"
 
 namespace gaia {
 

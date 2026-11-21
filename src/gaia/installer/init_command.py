@@ -2327,7 +2327,10 @@ class InitCommand:
             return f"Check the Lemonade Server at {self._lemonade_base_url}."
         from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
-        return f"Read {EmbeddedLemonade().log_path} for the server's own error."
+        server = EmbeddedLemonade()
+        read_log = f"Read {server.log_path} for the server's own error."
+        ca_problem = server.ca_problem()
+        return f"{ca_problem} {read_log}" if ca_problem else read_log
 
     def _verify_model(self, client, model_id: str) -> tuple:
         """

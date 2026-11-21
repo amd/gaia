@@ -364,13 +364,16 @@ at a limit its caller never chose is a failure with no visible cause.
 
 A command killed at its timeout still returns what it printed: commands run
 with `PYTHONUNBUFFERED=1` unless the command or the user's environment sets it,
-so a Python child's output isn't lost in its buffer. The result's `hint` never
-suggests a larger timeout. For a `test` or `script` command it names the files
-the turn changed and says to run the check on just those, or, with nothing
-changed, to narrow the run to one test file or the edited files: a repo-wide
-lint or test run that blew one budget usually blows a bigger one too. Any other
-class is pointed at a background run polled with `wait_for_condition`, or at
-shorter steps.
+so a Python child's output isn't lost in its buffer. For a `test` command, or
+a `script` command that runs a test or lint check (`python util/lint.py`,
+`python -m flake8`), the result's `hint` names the files the turn changed and
+says to run the check on just those, or, with nothing changed, to narrow the
+run to one test file or the edited files; it never suggests a larger timeout,
+because a repo-wide lint or test run that blew one budget usually blows a
+bigger one too. Any other `script` command (a data job, a seed or training
+script) may just be slow: its hint offers a background run polled with
+`wait_for_condition`, or a re-run with a larger timeout up to the 3600s
+ceiling. Any other class is pointed at a background run, or at shorter steps.
 
 ### Waiting Without Spinning
 
@@ -633,7 +636,7 @@ for arg in cmd_parts[1:]:
 
 ## Testing Requirements
 
-**File:** `tests/agents/chat/test_shell_tools_mixin.py`
+The block below is an illustrative example, not a file in the repo. The real tests are under `tests/unit/`, for example `tests/unit/test_shell_guardrails.py`.
 
 ```python
 def test_run_shell_command_success(agent):

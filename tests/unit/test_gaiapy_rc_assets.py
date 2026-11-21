@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """A release candidate ships the flagship built from its own commit.
 
-Covers util/flagship_rc_assets.py (the pre-release packager) and the workflow
+Covers util/gaiapy_rc_assets.py (the pre-release packager) and the workflow
 wiring that makes an RC unpublishable without that build.
 """
 
@@ -21,7 +21,7 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
 def _load():
     spec = importlib.util.spec_from_file_location(
-        "flagship_rc_assets", REPO_ROOT / "util" / "flagship_rc_assets.py"
+        "gaiapy_rc_assets", REPO_ROOT / "util" / "gaiapy_rc_assets.py"
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -132,7 +132,7 @@ def test_the_rc_release_attaches_the_flagship():
     attach = next(
         s for s in steps if s.get("name", "").startswith("Attach the flagship")
     )
-    assert "flagship_rc_assets.py release" in attach["run"]
+    assert "gaiapy_rc_assets.py release" in attach["run"]
 
 
 def test_the_rc_real_engine_check_installs_this_runs_flagship():
@@ -141,7 +141,7 @@ def test_the_rc_real_engine_check_installs_this_runs_flagship():
 
     core = _jobs("build_core.yml")
     pack = "\n".join(s.get("run", "") for s in core["rc-flagship"]["steps"])
-    assert "flagship_rc_assets.py release" in pack
+    assert "gaiapy_rc_assets.py release" in pack
     assert "inputs.flagship == 'artifact'" in core["rc-flagship"]["if"]
 
     real = core["real-engine"]

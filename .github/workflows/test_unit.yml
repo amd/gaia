@@ -27,7 +27,6 @@
 name: Unit Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:
@@ -45,7 +44,7 @@ on:
       - '.github/dependabot.yml'
       # C++ files the gaiacpp release, model-table and CI-coverage tests read.
       - 'cpp/CMakeLists.txt'
-      - 'cpp/agents/gaia/main.cpp'
+      - 'cpp/agents/gaiacpp/main.cpp'
       - 'cpp/src/model_registry.cpp'
       - 'cpp/tests/chaos/chaos_gaiacpp.py'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
@@ -129,7 +128,7 @@ on:
       - '.github/dependabot.yml'
       # C++ files the gaiacpp release, model-table and CI-coverage tests read.
       - 'cpp/CMakeLists.txt'
-      - 'cpp/agents/gaia/main.cpp'
+      - 'cpp/agents/gaiacpp/main.cpp'
       - 'cpp/src/model_registry.cpp'
       - 'cpp/tests/chaos/chaos_gaiacpp.py'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.

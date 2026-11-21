@@ -370,12 +370,32 @@ _LOCAL_SERVER_RE = re.compile(r"\bthe local (?:LLM|model)(?: server)?\b", re.IGN
 def wording_for_model(message: str, model_id: Optional[str]) -> str:
     """*message* as a chat on *model_id* should read it.
 
-    A cloud chat still goes through GAIA's Lemonade, so a failure there is
-    real, but "the local LLM" would tell the user their model runs here.
+    A cloud chat still goes through a Lemonade on this side, so a failure
+    there is real, but "the local LLM" would tell the user their model runs
+    here. The server is named as GAIA's only when GAIA runs it.
     """
     if not message or cloud_model_provider(model_id) is None:
         return message
-    return _LOCAL_SERVER_RE.sub("GAIA's AI engine", message)
+    if not _user_chose_the_server():
+        return _LOCAL_SERVER_RE.sub("GAIA's AI engine", message)
+    return _LOCAL_SERVER_RE.sub(
+        lambda m: (
+            "Your model server" if m.group()[0].isupper() else "your model server"
+        ),
+        message,
+    )
+
+
+def _user_chose_the_server() -> bool:
+    """True when the model server is the user's own, not one GAIA runs."""
+    from ..lemonade_choice import LemonadeChoiceError
+    from ..lemonade_client import configured_lemonade_url
+
+    try:
+        return configured_lemonade_url() is not None
+    except LemonadeChoiceError:
+        # "Use the one I have" saved without an address: still not GAIA's.
+        return True
 
 
 #: The wording of :class:`LemonadeServerDownError`, once a wrapper flattened it.

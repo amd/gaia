@@ -578,8 +578,10 @@ In normal permission mode, a path outside the conversation's supplied scope
 requires an approval before it is granted. Full access (the session bypass
 route) grants such a path without that separate prompt when the caller can
 answer for the session, but it does not override `GAIA_ALLOWED_PATHS`, the
-secret- and write-path denylists described below, or the refusal of grants that
-cover the home folder or a drive root.
+secret- and write-path denylists described below, the refusal of grants that
+cover the home folder or a drive root, or GAIA's chat data (`$GAIA_HOME/chat`),
+where the file tools open only the files you sent in `documents` or
+`allowed_paths`, read-only — never another conversation's.
 
 **Being in scope is not the same as being safe, and two denylists apply inside
 it.** Reads refuse secrets — `.env`, `id_rsa`, `credentials.json`, `.netrc`,

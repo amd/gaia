@@ -99,7 +99,7 @@ The GAIA agent has two interchangeable programs behind it, and the desktop app a
 | Harness | What it is | Source |
 |---------|------------|--------|
 | **`gaiapy`** | The Python harness: every tool and feature, and the default | [`hub/agents/gaia/python/`](hub/agents/gaia/python/) on the SDK in [`src/gaia/`](src/gaia/) |
-| **`gaiacpp`** | The native C++ harness: starts instantly and uses little memory, with fewer features so far (beta) | [`cpp/agents/gaia/`](cpp/agents/gaia/) on the framework in [`cpp/`](cpp/README.md) |
+| **`gaiacpp`** | The native C++ harness: starts instantly and uses little memory, with fewer features so far (beta) | [`cpp/agents/gaiacpp/`](cpp/agents/gaiacpp/) on the framework in [`cpp/`](cpp/README.md) |
 
 Switch in the desktop app under Settings › Agent & model, or with `/agent` in the terminal. See [The two harnesses](docs/reference/harnesses.mdx).
 

@@ -151,7 +151,7 @@ echo "List the Python files here" | gaia -p --output-format json
 | `--base-url <url>` | Use a remote Lemonade server instead of the local one |
 | `--disallowed-tools <tools>` | Tools the agent may neither see nor call, comma- or space-separated, with `*` globs (`search_web,browser_*`). Repeatable. `search_tools` never finds a withheld tool, and a tool a skill adds mid-turn is withheld too when a pattern matches it. Each pattern must match a tool the agent has when the turn starts, or the run fails (exit 1) before it begins, so a typo can't leave a tool on |
 | `--no-web` | Withhold GAIA's tools that search, read, download or install from the internet: `search_web`, `fetch_page`, `fetch_webpage`, `download_file`, `open_url`, `browser_*`, `search_documentation`, `search_skill_hub`, `install_skill`, `install_cli` and `transcribe_media`. The shell and connector (MCP) tools stay available; withhold those with `--disallowed-tools`. The agent is also told not to search or fetch from the web through the shell or a script. That is an instruction, not a block: cut the network to enforce it |
-| `--no-skills` | No skill catalogue or suggestions in the prompt, no learned skill changes, and no tools to find, load, install or learn skills. A skill the agent always loads stays loaded |
+| `--no-skills` | No skill catalogue or suggestions in the prompt, no learned skill changes, and no tools to find, load, install or learn skills. A prompt that starts with `/<skill-name>` does not load that skill either: the answer says skills are off. `--disallowed-tools load_skill` does the same. A skill the agent always loads stays loaded |
 
 `-p` takes no subcommand: `gaia -p "hi" chat` is a usage error. The flags above
 apply only to `-p`; given before a subcommand without it (`gaia --model X chat`)
@@ -2067,11 +2067,14 @@ or link-local address (`169.254.169.254`, `fe80::/10`,
 and Python for the rest of that turn. Private LAN addresses stay reachable from
 the shell.
 
-Four things hold in every mode, full access included. Tokens in shell and
+Five things hold in every mode, full access included. Tokens in shell and
 Python output, such as the one in a `git remote -v` URL, are masked before the
 model reads it. A call you declined stays declined for the rest of that request.
-A calendar change and an outgoing email still wait for a person. And a folder
-you removed from a chat is not used as the shell's working folder.
+A calendar change and an outgoing email still wait for a person. A folder
+you removed from a chat is not used as the shell's working folder. And the file
+tools open nothing in GAIA's chat data (`~/.gaia/chat`) except what is attached
+to the chat, so one chat can't read another's documents or attachments that
+way.
 
 Full access is one of three permission modes. `Shift+Tab` in the TUI cycles
 them, and the status bar shows the one that is on:

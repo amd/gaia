@@ -43,9 +43,8 @@ type modelSwitchRecorder interface {
 func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bool) {
 	switch e := evt.(type) {
 	case event.CanonicalStatusEvent:
-		// Replaced whole: a skill removed since the last report must not linger.
 		if e.Skills != nil {
-			m.skillCommands = e.Skills
+			m.setReportedSkills(e.Skills)
 			if e.ModelID == "" && e.Message == "" {
 				break
 			}

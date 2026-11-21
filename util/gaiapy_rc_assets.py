@@ -15,11 +15,11 @@ A required platform that is missing or does not match stops the release.
 Usage::
 
     # assemble the pre-release assets
-    python util/flagship_rc_assets.py release --artifacts artifacts \\
+    python util/gaiapy_rc_assets.py release --artifacts artifacts \\
         --tag v0.25.0-rc3 --commit "$GITHUB_SHA" --out release-assets
 
     # stage one platform's binary under its installed name (Windows setup)
-    python util/flagship_rc_assets.py stage --artifacts artifacts \\
+    python util/gaiapy_rc_assets.py stage --artifacts artifacts \\
         --platform win32-x64 --out stage/win-x64
 """
 

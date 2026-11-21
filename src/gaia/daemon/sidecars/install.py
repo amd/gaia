@@ -419,6 +419,19 @@ def assert_no_live_process_in(install_dir: Path, agent_id: str) -> None:
     import psutil
 
     target = install_dir.resolve()
+    # Hundreds of processes share a few executables, and resolving a path
+    # costs a disk round trip on Windows.
+    inside: dict[str, bool] = {}
+
+    def runs_from_target(candidate: str) -> bool:
+        if candidate not in inside:
+            try:
+                Path(candidate).resolve().relative_to(target)
+                inside[candidate] = True
+            except (ValueError, OSError):
+                inside[candidate] = False
+        return inside[candidate]
+
     survivors = []
     # Attributes are read one at a time: inside process_iter, a read error
     # ends the whole scan.
@@ -431,15 +444,8 @@ def assert_no_live_process_in(install_dir: Path, agent_id: str) -> None:
         exe = _read_process(proc, "executable", proc.exe)
         argv = _read_process(proc, "command line", proc.cmdline)
         candidates = [exe or ""] + list(argv or [])[:2]
-        for candidate in candidates:
-            if not candidate:
-                continue
-            try:
-                Path(candidate).resolve().relative_to(target)
-            except (ValueError, OSError):
-                continue
+        if any(runs_from_target(candidate) for candidate in candidates if candidate):
             survivors.append(proc.pid)
-            break
     if survivors:
         unique = sorted(set(survivors))
         raise StopFailedError(

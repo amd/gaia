@@ -400,35 +400,17 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# gaia-bash agent binary
-# ---------------------------------------------------------------------------
-option(GAIA_BUILD_BASH_AGENT "Build the gaia-bash coding agent" ON)
-if(GAIA_BUILD_BASH_AGENT)
-    add_executable(gaia-bash
-        agents/bash/main.cpp
-        agents/bash/bash_agent.cpp
-        agents/bash/bash_tools.cpp
-        agents/bash/mcp_server.cpp
-    )
-    target_include_directories(gaia-bash PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/agents/bash
-    )
-    target_link_libraries(gaia-bash PRIVATE gaia::gaia_core)
-
-endif()
-
-# ---------------------------------------------------------------------------
 # gaiacpp: the general-purpose GAIA agent (headless, serve, interactive)
 # ---------------------------------------------------------------------------
 option(GAIA_BUILD_GAIA_AGENT "Build the gaiacpp agent" ON)
 if(GAIA_BUILD_GAIA_AGENT)
     add_executable(gaiacpp
-        agents/gaia/main.cpp
-        agents/gaia/gaia_agent.cpp
-        agents/gaia/delegation.cpp
-        agents/gaia/sidecar.cpp
-        agents/gaia/stdio_server.cpp
-        agents/bash/bash_tools.cpp
+        agents/gaiacpp/main.cpp
+        agents/gaiacpp/gaia_agent.cpp
+        agents/gaiacpp/delegation.cpp
+        agents/gaiacpp/sidecar.cpp
+        agents/gaiacpp/stdio_server.cpp
+        agents/gaiacpp/bash_tools.cpp
     )
     # A GAIA release stamps its own version (0.25.4, 0.25.4-rc.1); the daemon
     # and the release checks read it back from `gaiacpp --version`.
@@ -451,10 +433,10 @@ if(GAIA_BUILD_GAIA_AGENT)
         # The manifest makes UTF-8 the process code page, so a path outside the
         # PC's legacy code page survives every narrow string and file call.
         if(MSVC)
-            target_sources(gaiacpp PRIVATE agents/gaia/gaiacpp.manifest)
+            target_sources(gaiacpp PRIVATE agents/gaiacpp/gaiacpp.manifest)
         else()
             enable_language(RC)
-            target_sources(gaiacpp PRIVATE agents/gaia/gaiacpp.rc)
+            target_sources(gaiacpp PRIVATE agents/gaiacpp/gaiacpp.rc)
         endif()
     endif()
     # Release archives must run on older distros than the build host (Lemonade
@@ -514,9 +496,9 @@ if(GAIA_BUILD_TESTS)
         tests/test_memory_store.cpp
         tests/test_skill_signing.cpp
         tests/test_media_tools.cpp
-        agents/gaia/gaia_agent.cpp
-        agents/gaia/delegation.cpp
-        agents/bash/bash_tools.cpp
+        agents/gaiacpp/gaia_agent.cpp
+        agents/gaiacpp/delegation.cpp
+        agents/gaiacpp/bash_tools.cpp
         tests/test_console.cpp
         tests/test_http_client.cpp
         tests/test_lemonade_client.cpp
@@ -565,7 +547,7 @@ if(GAIA_BUILD_TESTS)
         # the repo root. test_skill.cpp discovers them from disk: skills/ must
         # conform, <vendor>_skills/ are third-party inputs that need not.
         GAIA_REPO_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures"
-        # test_skill_sets.cpp parses cpp/agents/bash/gaia-agent.yaml to prove a
+        # test_skill_sets.cpp parses cpp/agents/vlm/gaia-agent.yaml to prove a
         # real shipped manifest that declares no skills stays empty and falsy.
         GAIA_CPP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     )
@@ -575,7 +557,7 @@ if(GAIA_BUILD_TESTS)
     # the CLI, and the sidecar HTTP + SSE API the Agent UI and the TUI use.
     if(GAIA_BUILD_GAIA_AGENT)
         target_sources(tests_mock PRIVATE tests/test_gaiacpp_cli.cpp tests/test_gaiacpp_sidecar.cpp)
-        target_sources(tests_mock PRIVATE tests/test_gaiacpp_stdio.cpp agents/gaia/stdio_server.cpp)
+        target_sources(tests_mock PRIVATE tests/test_gaiacpp_stdio.cpp agents/gaiacpp/stdio_server.cpp)
         target_compile_definitions(tests_mock PRIVATE GAIACPP_BIN="$<TARGET_FILE:gaiacpp>")
         add_dependencies(tests_mock gaiacpp)
     endif()

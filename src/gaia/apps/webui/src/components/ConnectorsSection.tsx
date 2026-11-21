@@ -170,9 +170,14 @@ function PersonalizeButton({ connector, primary, onStarted }: {
  * or ``null`` when the disconnect was a full, confirmed revoke and there is
  * nothing more to say (#2591 review — the Disconnect button previously
  * always implied a full revoke, even when only the local credential was
- * cleared). Mirrors the CLI wording in ``connectors/cli.py::_handle_disconnect``.
+ * cleared). A disconnect with nothing stored says so instead of claiming a
+ * revoke (#8607). Mirrors the CLI wording in
+ * ``connectors/cli.py::_handle_disconnect``.
  */
 function describeDisconnectOutcome(payload: Record<string, unknown>, t: Translate): string | null {
+    if (payload.nothing_stored) {
+        return t('settings.connectors.nothingStored');
+    }
     if (!('revoke_supported' in payload)) {
         // Handler type with no remote-revoke concept (e.g. MCP servers).
         return null;

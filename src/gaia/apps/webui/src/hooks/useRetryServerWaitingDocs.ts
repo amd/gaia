@@ -5,16 +5,17 @@ import { useEffect, useRef } from 'react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import type { Document } from '../types';
-import { isServerFailure } from '../utils/documentFailure';
+import { waitsForServerReturn } from '../utils/documentFailure';
 import { log } from '../utils/logger';
 
 function waitsOnServer(d: Document): boolean {
-    return d.indexing_status === 'failed' && isServerFailure(d.error_kind);
+    return d.indexing_status === 'failed' && waitsForServerReturn(d.error_kind);
 }
 
 /**
  * Re-indexes documents that failed only because the model server was down,
  * once each time the server comes back, so "waiting for the model server" holds.
+ * A document the server was too busy for stays on its row's Retry.
  */
 export function useRetryServerWaitingDocs(): void {
     const serverUp = useChatStore((s) => s.systemStatus?.lemonade_running === true);

@@ -2757,13 +2757,6 @@ AGENT_PROFILES = {
         min_ctx_size=GPU_CTX_SIZE,
         description="Interactive chat with RAG and vision support",
     ),
-    "bash": AgentProfile(
-        name="bash",
-        display_name="Bash Agent",
-        models=["gemma-4-e4b"],
-        min_ctx_size=GPU_CTX_SIZE,
-        description="Native C++ bash scripting agent (gaia-bash binary)",
-    ),
     "talk": AgentProfile(
         name="talk",
         display_name="Talk Agent",
@@ -11621,56 +11614,3 @@ def create_lemonade_client(
             raise
 
     return client
-
-
-def initialize_lemonade(
-    agent: str = "mcp",
-    ctx_size: Optional[int] = None,
-    auto_start: bool = True,
-    timeout: int = 120,
-    verbose: bool = False,
-    quiet: bool = False,
-    host: Optional[str] = None,
-    port: Optional[int] = None,
-) -> LemonadeStatus:
-    """
-    Convenience function to initialize Lemonade Server.
-
-    This is a simplified interface for initializing Lemonade with agent-specific
-    profiles. It creates a temporary client and runs initialization.
-
-    Args:
-        agent: Agent name (gaia, chat, email, rag, talk, vlm, minimal, mcp)
-        ctx_size: Override context size
-        auto_start: Automatically start server if not running
-        timeout: Timeout for server startup
-        verbose: Enable verbose output
-        quiet: Suppress output
-        host: Lemonade server host (defaults to LEMONADE_BASE_URL, then
-              LEMONADE_HOST, then localhost)
-        port: Lemonade server port (same resolution as host)
-
-    Returns:
-        LemonadeStatus with server status
-
-    Example:
-        from gaia.llm.lemonade_client import initialize_lemonade
-
-        # Initialize for chat agent
-        status = initialize_lemonade(agent="chat")
-
-        # Initialize with a larger context window
-        status = initialize_lemonade(agent="chat", ctx_size=65536)
-    """
-    # Named host/port win; otherwise LEMONADE_BASE_URL, which this defaulted
-    # past entirely — a documented remote server was initialized on localhost
-    # instead, and auto_start then tried to free the local port (#3558).
-    client = LemonadeClient(host=host, port=port, keep_alive=True)
-    return client.initialize(
-        agent=agent,
-        ctx_size=ctx_size,
-        auto_start=auto_start,
-        timeout=timeout,
-        verbose=verbose,
-        quiet=quiet,
-    )

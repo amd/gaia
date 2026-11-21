@@ -194,6 +194,24 @@ func TestWithNoChoiceThePythonAgentRunsBesideAnInstalledGaiacpp(t *testing.T) {
 	}
 }
 
+// gaiapy is what the saved choice and /agent call the Python agent, so
+// --agent-program and GAIA_TUI_AGENT take that name too.
+func TestGaiapyNamesThePythonAgent(t *testing.T) {
+	f := isolateNative(t)
+	python := writeProgram(t, f.path, PythonAgentBinary)
+
+	for _, name := range []string{PythonAgentChoice, "GaiaPy"} {
+		c := NewCatalog()
+		if err := selectAgent(c, name); err != nil {
+			t.Fatalf("%s was refused as an agent program: %v", name, err)
+		}
+		got := c.Get(FlagshipID)
+		if got.Native || len(got.BinaryArgs) != 0 || !samePath(t, got.BinaryPath, python) {
+			t.Errorf("asking for %s did not run %s bare: %+v", name, PythonAgentBinary, got)
+		}
+	}
+}
+
 // An install record can put the flagship behind the daemon, which runs the
 // Python agent. gaiacpp is spawned by the terminal UI itself, so picking it has
 // to bring the entry back to the subprocess transport, or it would be marked
@@ -437,5 +455,71 @@ func TestSetMockBinaryReplacesTheNativeAgentToo(t *testing.T) {
 	got := c.Get(FlagshipID)
 	if got.Native || got.CanonicalEvents || len(got.BinaryArgs) != 0 || got.BinaryPath != "/tmp/mock-agent" {
 		t.Errorf("--mock left the native agent's settings behind: %+v", got)
+	}
+}
+
+// gaiapy on a daemon install gets the same notice as gaia-agent, and the
+// notice never names a program the user did not type.
+func TestGaiapyOnADaemonInstallStaysBehindTheDaemon(t *testing.T) {
+	f := isolateNative(t)
+	dir := filepath.Join(f.home, ".gaia", "agents", FlagshipID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	record := `{"id":"gaia","version":"0.1.1","artifact_kind":"binary"}`
+	if err := os.WriteFile(filepath.Join(dir, SentinelName), []byte(record), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeProgram(t, dir, PythonAgentBinary)
+
+	c := NewCatalog()
+	c.DiscoverBinaries()
+	notice, err := c.SelectFlagshipAgent(PythonAgentChoice)
+	if err != nil {
+		t.Fatalf("gaiapy was refused on a daemon install: %v", err)
+	}
+	if notice != DaemonPythonNotice || strings.Contains(notice, PythonAgentBinary+" was asked for") {
+		t.Errorf("gaiapy got the wrong notice: %q", notice)
+	}
+	if got := c.Get(FlagshipID); got.Transport != TransportDaemon || got.Native {
+		t.Errorf("gaiapy moved the flagship off the daemon: %+v", got)
+	}
+}
+
+// An unknown name lists every name the terminal UI does take, gaiapy included.
+func TestAnUnknownAgentProgramListsGaiapy(t *testing.T) {
+	isolateNative(t)
+	err := selectAgent(NewCatalog(), "gaiarust")
+	if err == nil {
+		t.Fatal("an unknown agent program was accepted")
+	}
+	for _, name := range []string{NativeAgentBinary, PythonAgentChoice, PythonAgentBinary} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("the error does not name %s: %v", name, err)
+		}
+	}
+}
+
+// A missing Python agent asked for as gaiapy is reported under the name the
+// user typed, with the program the search looked for beside it.
+func TestAMissingGaiapyIsReportedUnderTheNameTyped(t *testing.T) {
+	isolateNative(t)
+	for _, name := range []string{PythonAgentChoice, "GAIAPY"} {
+		err := selectAgent(NewCatalog(), name)
+		var missing *MissingProgramError
+		if !errors.As(err, &missing) {
+			t.Fatalf("%s with no Python agent installed: got %v, want a missing-program error", name, err)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, PythonAgentChoice+" (the "+PythonAgentBinary+" program) was asked for") {
+			t.Errorf("%s: the error does not name gaiapy and the program searched for: %v", name, err)
+		}
+		if strings.Contains(msg, ": "+PythonAgentBinary+" was asked for") {
+			t.Errorf("%s: the error claims gaia-agent was asked for: %v", name, err)
+		}
+	}
+	err := selectAgent(NewCatalog(), PythonAgentBinary)
+	if err == nil || !strings.Contains(err.Error(), ": "+PythonAgentBinary+" was asked for") {
+		t.Errorf("gaia-agent is no longer reported under its own name: %v", err)
 	}
 }

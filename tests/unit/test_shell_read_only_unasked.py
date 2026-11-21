@@ -17,6 +17,16 @@ class Host(ShellToolsMixin):
         return False
 
 
+@pytest.fixture(autouse=True)
+def _absolute_path_entries_only(monkeypatch):
+    # A PC whose PATH holds a non-absolute entry (a literal %NVM_HOME%) asks
+    # before every read; tests that want such an entry add their own.
+    entries = os.environ.get("PATH", "").split(os.pathsep)
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join(e for e in entries if e and os.path.isabs(e))
+    )
+
+
 @pytest.fixture
 def host(tmp_path):
     return Host(tmp_path)

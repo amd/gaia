@@ -285,12 +285,13 @@ class OAuthPkceHandler:
 
         logger.info(
             "oauth_pkce: disconnected connector_id=%s accounts=%s remaining=%d "
-            "revoke_supported=%s revoked_remotely=%s",
+            "revoke_supported=%s revoked_remotely=%s nothing_stored=%s",
             spec.id,
             "all" if account_id is None else "one",
             revoke_result["remaining_accounts"],
             revoke_result["revoke_supported"],
             revoke_result["revoked_remotely"],
+            revoke_result.get("nothing_stored", False),
         )
         return revoke_result
 

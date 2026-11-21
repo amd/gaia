@@ -10,7 +10,7 @@ import { visibleName } from './CalendarApproval';
 import { middleTruncate } from '../utils/format';
 import { useT } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
-import { isServerFailure } from '../utils/documentFailure';
+import { needsRetry, waitsForServerReturn } from '../utils/documentFailure';
 
 /** What one chat searches at once: ``RAGConfig.max_indexed_files`` and ``max_total_chunks`` in ``gaia/rag/sdk.py``. */
 export const SEARCHED_AT_ONCE = 100;
@@ -83,8 +83,9 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
     const failedDocs = sessionDocs.filter((d) => d.indexing_status === 'failed');
     const failedCount = failedDocs.length;
     // A file that failed only because the model server was down isn't unreadable.
-    const serverWaitCount = failedDocs.filter((d) => isServerFailure(d.error_kind)).length;
-    const unreadableCount = failedCount - serverWaitCount;
+    const serverWaitCount = failedDocs.filter((d) => waitsForServerReturn(d.error_kind)).length;
+    const retryCount = failedDocs.filter((d) => needsRetry(d.error_kind)).length;
+    const unreadableCount = failedCount - serverWaitCount - retryCount;
     const readableCount = sessionDocs.length - failedCount;
     const byId = new Map(sessionDocs.map((d) => [d.id, d]));
     const loadOrder = (session?.document_ids ?? []).flatMap((id) => {
@@ -96,6 +97,7 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
         readableCount > 0 ? say(pluralKey('docsBar.count', readableCount), { n: readableCount }) : null,
         unreadableCount > 0 ? say(pluralKey('docsBar.failed', unreadableCount), { n: unreadableCount }) : null,
         serverWaitCount > 0 ? say(pluralKey('docsBar.serverWaiting', serverWaitCount), { n: serverWaitCount }) : null,
+        retryCount > 0 ? say(pluralKey('docsBar.needsRetry', retryCount), { n: retryCount }) : null,
     ].filter(Boolean).join(' · '));
     return (
         <div
@@ -111,7 +113,9 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
             <div className={`doc-context-pills${docsExpanded ? ' doc-context-pills-expanded' : ''}`}>
                 {visibleDocs.map((d) => {
                     const failed = d.indexing_status === 'failed';
-                    const failedTitle = isServerFailure(d.error_kind) ? 'docsBar.serverTitle' : 'docsBar.failedTitle';
+                    const failedTitle = waitsForServerReturn(d.error_kind)
+                        ? 'docsBar.serverTitle'
+                        : needsRetry(d.error_kind) ? 'docsBar.busyTitle' : 'docsBar.failedTitle';
                     return (
                     <span
                         key={d.id}
