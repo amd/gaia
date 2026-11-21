@@ -1330,7 +1330,14 @@ def _repeat_count(history: List[Any], max_period: int = _MAX_LOOP_PERIOD) -> int
 
 
 def _note_turn_result(seen: Dict[Any, Tuple[int, int]], call: Any, result: Any) -> None:
-    """Record *call*'s result: how many times in a row this turn it came back the same."""
+    """Record *call*'s result: how many times in a row this turn it came back the same.
+
+    A wait clears every count: the model expects the next result to differ, as
+    when it polls a job's status between waits.
+    """
+    if _call_tool_name(call) in _PACING_TOOLS:
+        seen.clear()
+        return
     digest = hash(str(result))
     last, times = seen.get(call, (None, 0))
     seen[call] = (digest, times + 1 if last == digest else 1)
@@ -1341,7 +1348,8 @@ def _same_result_repeats(seen: Dict[Any, Tuple[int, int]], call: Any) -> int:
 
     Catches a loop with no fixed order — a small model cycling twenty searches
     in shuffled order ran 314 calls in one turn — while a read after an edit,
-    whose result changed, starts over.
+    whose result changed, starts over. The count spans the whole turn, so four
+    re-reads of a file that never changed end it however far apart they were.
     """
     if _call_tool_name(call) in _PACING_TOOLS:
         return 0
@@ -15208,13 +15216,13 @@ Do NOT wrap conversational replies in JSON.
                     # Execute
                     tool_result = self._execute_tool_timed(tool_name, tool_args)
                     self.console.stop_progress()
-                    if not self._is_throttled_result(tool_result):
-                        _note_turn_result(turn_results, current_call, tool_result)
                     if self._is_throttled_result(tool_result):
                         # Never ran, so not a repeat. Bounded: the shell
                         # limiter's windows drain within a few capped waits.
                         tool_call_history.pop()
                         self._wait_out_rate_limit(tool_result)
+                    else:
+                        _note_turn_result(turn_results, current_call, tool_result)
 
                     # Result-based dedup for query family tools
                     _QUERY_TOOLS = (
@@ -15469,13 +15477,13 @@ Do NOT wrap conversational replies in JSON.
 
                 # Stop progress indicator
                 self.console.stop_progress()
-                if not self._is_throttled_result(tool_result):
-                    _note_turn_result(turn_results, current_call, tool_result)
                 if self._is_throttled_result(tool_result):
                     # Never ran, so not a repeat. Bounded: the shell limiter's
                     # windows drain within a few capped waits.
                     tool_call_history.pop()
                     self._wait_out_rate_limit(tool_result)
+                else:
+                    _note_turn_result(turn_results, current_call, tool_result)
 
                 if _is_image_tool(tool_name):
                     capability_tool_last_succeeded = not tool_result_failed(

@@ -525,3 +525,38 @@ def test_a_call_whose_result_changed_is_not_a_repeat(agent):
 
     assert result["result"].startswith("done")
     assert agent.calls == 5
+
+
+class _PollingAgent(_DummyAgent):
+    def _register_tools(self) -> None:
+        super()._register_tools()
+        agent = self
+        agent.waits = 0
+
+        @tool
+        def sleep(seconds: int) -> dict:
+            """Wait before checking again."""
+            del seconds
+            agent.waits += 1
+            return {"status": "success", "slept": True}
+
+
+def test_polling_between_waits_is_not_a_loop():
+    """Wait, check a job that is still running, wait, check again: the same
+    result is expected until it finishes, so the waits keep it from counting."""
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        a = _PollingAgent(silent_mode=True, skip_lemonade=True)
+    a.streaming = False
+    a.max_consecutive_repeats = 3
+    a.results = [{"status": "success", "state": "running"}]
+    wait = json.dumps(
+        {"thought": "wait", "tool": "sleep", "tool_args": {"seconds": 30}}
+    )
+    rounds = [wait, _call_with("status")] * 5
+    sent = _stub_chat(a, *rounds, _answer("still running"))
+
+    result = a.process_query("tell me when the job finishes", max_steps=30)
+
+    assert result["result"].startswith("still running")
+    assert (a.calls, a.waits) == (5, 5)
+    assert _corrections(sent) == []
