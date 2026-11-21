@@ -74,7 +74,7 @@ class TestFormatUserErrorFiltering:
             # Hub agents: gaia/email ship as wheels, filtered via the
             # package name / site-packages / the hub editable path.
             "hub/agents/",
-            "gaia_agent/",
+            "gaiapy/",
             "site-packages/",
         ]
         for path in expected_paths:

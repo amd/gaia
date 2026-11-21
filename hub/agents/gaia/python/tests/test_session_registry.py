@@ -12,7 +12,7 @@ telling the user the skill is still loaded.
 import threading
 
 import pytest
-from gaia_agent import session_registry as sr
+from gaiapy import session_registry as sr
 
 
 class _FakeAgent:
@@ -270,7 +270,7 @@ def test_close_agent_is_loud_when_an_agent_exposes_no_teardown(caplog):
 def test_the_real_gaia_agent_exposes_the_teardown_the_registry_calls():
     """The regression itself, asserted against the shipped class rather than a
     fake — a fake that defines ``close_db`` proved nothing about GaiaAgent."""
-    from gaia_agent.agent import GaiaAgent
+    from gaiapy.agent import GaiaAgent
 
     assert callable(getattr(GaiaAgent, "close", None)) or callable(
         getattr(GaiaAgent, "close_db", None)

@@ -102,7 +102,7 @@ Only the flagship agent exists and ships, and its version equals core's.
 **The 0.3 to 0.26 jump is deliberate and safe.** SemVer only asks that versions increase.
 
 - An integrator on `^0.3.0` stays on 0.3.x, because a caret on 0.x is minor-locked, until they switch to `@amd-gaia/agent`. That's the deprecation path we want.
-- The wire contract stays independent (`API_VERSION` in `gaia_agent/server.py`, the lock `schemaVersion`, the daemon host API), so compatibility is still expressed where it's real.
+- The wire contract stays independent (`API_VERSION` in `gaiapy/server.py`, the lock `schemaVersion`, the daemon host API), so compatibility is still expressed where it's real.
 - The agent CHANGELOG says this in one line.
 
 Every other agent harness GAIA built is removed in [Phase 8](#5-phases): the chat agent, the email agent, and the teaching templates (`hello-world`, `word-count`, `connectors-demo`). None of them joins the train. `ChatAgent` is the flagship's base class, so its code folds into the flagship package or core. The SDK base classes in `src/gaia/agents/base/` stay; they aren't harnesses.
@@ -115,7 +115,7 @@ Every other agent harness GAIA built is removed in [Phase 8](#5-phases): the cha
 |---|---|
 | `src/gaia/apps/webui/package.json` + lock root version | `bump-ui-version.mjs` |
 | `hub/components/{terminal-hub,agent-ui}/gaia-agent.yaml` `version` | hand `sed` (gaia-release skill, step 6) |
-| Flagship: `gaia_agent/__init__.py`, `pyproject.toml`, `gaia-agent.yaml` (`version`, `min_gaia_version`), `npm/package.json` + lock, doc URLs | `stamp_version.py` + hand bump |
+| Flagship: `gaiapy/__init__.py`, `pyproject.toml`, `gaia-agent.yaml` (`version`, `min_gaia_version`), `npm/package.json` + lock, doc URLs | `stamp_version.py` + hand bump |
 | `docs/docs.json` navbar label (latest **final** · Lemonade) | hand |
 | `binaries.lock.json` | release bot PR → now generated at build time, not committed |
 

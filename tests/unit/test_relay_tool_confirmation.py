@@ -294,11 +294,11 @@ _SIDECAR_TOKEN = "test-sidecar-token"
 def live_gaia_sidecar(monkeypatch):
     """The real flagship ``/v1/gaia`` app on a real port, with a gated agent."""
     uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     import requests
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     from gaia.daemon.sidecars.manager import find_free_port
 
@@ -402,7 +402,7 @@ def test_an_unanswered_prompt_is_denied_and_a_late_answer_reaches_nothing(
 ):
     """Timeout is a no, and the click that arrives after it changes nothing."""
     base_url, agents = live_gaia_sidecar
-    from gaia_agent import stdio
+    from gaiapy import stdio
 
     # The sidecar's own bound for a session prompt (15 minutes in production).
     monkeypatch.setattr(stdio, "ORPHANED_CONFIRM_TIMEOUT_SECONDS", 1.0)
@@ -444,8 +444,8 @@ def test_full_access_relays_a_gated_shell_prompt_to_the_ui(
     from gaia.ui.sidecar.proxy import SidecarProxy
 
     base_url, agents = live_gaia_sidecar
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     def build(**kw):
         agents.append(_GatedShellAgent(**kw))

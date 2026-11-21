@@ -35,12 +35,12 @@ from unittest import mock
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import session_registry as sr  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import session_registry as sr  # noqa: E402
 
 _BASE_URL = "http://127.0.0.1:8141"
 _TOKEN = "test-caller-token"
@@ -929,7 +929,7 @@ def switched_backend(monkeypatch):
     ``switched`` replaces ``_AgentSession.switch_model`` wholesale, which also
     skips the provider it records — the thing the tests below are about.
     """
-    from gaia_agent import stdio
+    from gaiapy import stdio
 
     calls: list = []
 
@@ -965,7 +965,7 @@ def test_a_local_session_asked_for_claude_switches_to_claude(built, switched_bac
     # The symbol `_default_model_for` actually reads. Identical to
     # ChatAgentConfig's today by inheritance, but naming that one instead would
     # fail confusingly the day the flagship overrides the default.
-    from gaia_agent.agent import GaiaAgentConfig
+    from gaiapy.agent import GaiaAgentConfig
 
     client, _ = built
     client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
@@ -1158,7 +1158,7 @@ def test_a_decision_for_a_finished_run_is_refused_rather_than_dropped(built):
 @pytest.mark.parametrize("decision", ["allow", "deny", "always"])
 def test_every_decision_the_stdio_channel_accepts_is_accepted_here(decision):
     """The two transports must not disagree about the vocabulary."""
-    from gaia_agent import stdio
+    from gaiapy import stdio
 
     assert decision in {
         stdio.DECISION_ALLOW,

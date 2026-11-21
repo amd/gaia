@@ -25,7 +25,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 # Per agent: the Python package files that carry its version.
 HUB_AGENTS = {
-    "gaia": ["gaia_agent/__init__.py"],
+    "gaia": ["gaiapy/__init__.py"],
 }
 
 

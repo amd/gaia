@@ -29,7 +29,7 @@ stateless D1 stub, same as email) rather than parking a run nobody can
 answer.
 
 :func:`main` also owns the binary's TRANSPORT DISPATCH: ``--serve`` runs this
-HTTP surface, anything else delegates to :mod:`gaia_agent.stdio`. One
+HTTP surface, anything else delegates to :mod:`gaiapy.stdio`. One
 executable serves both, so the release matrix stays one artifact per platform.
 """
 
@@ -49,18 +49,18 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
-from gaia_agent import caller_auth
-from gaia_agent.entry import main as _entry_main
-from gaia_agent.memory_dump import build_memory_dump
-from gaia_agent.session import validate_session_id
-from gaia_agent.session_registry import (
+from gaiapy import caller_auth
+from gaiapy.entry import main as _entry_main
+from gaiapy.memory_dump import build_memory_dump
+from gaiapy.session import validate_session_id
+from gaiapy.session_registry import (
     AGENT_BUILD_LOCK,
     PROVIDER_CLAUDE,
     PROVIDER_LOCAL,
     SessionCapacityError,
     close_agent,
 )
-from gaia_agent.session_registry import registry as session_registry
+from gaiapy.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import StreamingResponse
 
@@ -470,7 +470,7 @@ class QueryFollowUpResponse(_Strict):
 
 
 #: The answers a tool confirmation accepts, matching the stdio control
-#: channel's vocabulary exactly (``gaia_agent.stdio.DECISION_*``). Any other
+#: channel's vocabulary exactly (``gaiapy.stdio.DECISION_*``). Any other
 #: spelling is refused here rather than guessed at.
 _TOOL_DECISIONS = ("allow", "deny", "always", "timeout")
 
@@ -772,7 +772,7 @@ def _terminal_error_detail(exc: BaseException, surface: str) -> str:
     'something went wrong' would hide the one detail that makes a bug
     reportable.
     """
-    from gaia_agent.stdio import model_server_failure, model_server_message
+    from gaiapy.stdio import model_server_failure, model_server_message
 
     typed = model_server_failure(exc)
     if typed is not None:
@@ -782,7 +782,7 @@ def _terminal_error_detail(exc: BaseException, surface: str) -> str:
 
 def _start_failure(exc: BaseException, surface: str) -> HTTPException:
     """The HTTP error for a run that failed before its loop started."""
-    from gaia_agent.stdio import model_server_failure, model_server_message
+    from gaiapy.stdio import model_server_failure, model_server_message
 
     typed = model_server_failure(exc)
     if typed is None:
@@ -1221,7 +1221,7 @@ def build_query_agent(**config_kwargs: Any):
 
     A seam, so tests can inject a scripted agent without a model server.
     """
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     with AGENT_BUILD_LOCK:
         return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
@@ -1230,7 +1230,7 @@ def build_query_agent(**config_kwargs: Any):
 def _probe_lemonade() -> Dict[str, Any]:
     """Read-only probe of the local model server. Never pulls or loads."""
     import requests
-    from gaia_agent.agent import GaiaAgentConfig
+    from gaiapy.agent import GaiaAgentConfig
 
     from gaia.llm.lemonade_client import (
         _model_ids_match,
@@ -1392,7 +1392,7 @@ async def memory() -> Dict[str, Any]:
     """The ``/memory`` view's snapshot, for the daemon transport.
 
     Same payload as the stdio ``MEMORY_DUMP_QUERY`` sentinel
-    (``gaia_agent.stdio._memory_dump_event`` -> ``build_memory_dump``), just
+    (``gaiapy.stdio._memory_dump_event`` -> ``build_memory_dump``), just
     without that path's JSON-in-a-final-event wrapping — this is a plain GET,
     so the dict is the whole response body. ``*SSEClient.FetchMemory`` decodes
     it straight into ``client.MemoryDump`` (``tui/internal/client/memory.go``).
@@ -1441,7 +1441,7 @@ async def skills() -> Dict[str, Any]:
     The bundled skills live inside the frozen binary, so a UI that does not
     have the agent package installed beside it can only list them from here.
     """
-    from gaia_agent.agent import ENGINEERING_SKILL, GaiaAgent
+    from gaiapy.agent import ENGINEERING_SKILL, GaiaAgent
 
     from gaia.skills.errors import SkillError
     from gaia.skills.listing import skills_listing_for_agent
@@ -1470,7 +1470,7 @@ def _check_model_matches_provider(provider: str, model: str) -> None:
     conversation the caller asked to keep local to Anthropic, and honouring
     ``provider`` points a backend at an id it cannot serve.
     """
-    from gaia_agent.stdio import is_claude_model
+    from gaiapy.stdio import is_claude_model
 
     if is_claude_model(model) == (provider == PROVIDER_CLAUDE):
         return
@@ -1498,7 +1498,7 @@ def _effective_provider(request: "QueryRequest") -> str:
     retained session is left where it is unless the turn says otherwise, so
     ``_switch_target`` deliberately reads ``request.provider`` raw instead.
     """
-    from gaia_agent.stdio import is_claude_model
+    from gaiapy.stdio import is_claude_model
 
     if request.provider is not None:
         return request.provider
@@ -1510,7 +1510,7 @@ def _effective_provider(request: "QueryRequest") -> str:
 def _default_model_for(provider: str) -> str:
     """The model a new session on *provider* gets when the request names none."""
     if provider == PROVIDER_CLAUDE:
-        from gaia_agent.agent import GaiaAgentConfig
+        from gaiapy.agent import GaiaAgentConfig
 
         return GaiaAgentConfig.claude_model
     from gaia.llm.lemonade_client import resolve_default_chat_model
@@ -2261,7 +2261,7 @@ async def query(request: QueryRequest):
                         # once the cancelled loop returns.
                         await asyncio.to_thread(thread.join, _RUN_RESULT_WAIT_SECONDS)
                         if not thread.is_alive():
-                            from gaia_agent.stdio import _usage_from_result
+                            from gaiapy.stdio import _usage_from_result
 
                             usage = _usage_from_result(run.result)
                             if usage:
@@ -2651,7 +2651,7 @@ def build_app() -> FastAPI:
     - ``GET /v1/gaia/version`` — the TUI's ``negotiate.go`` probe, which gates
       optional request fields on ``apiVersion``.
     """
-    from gaia_agent import __version__
+    from gaiapy import __version__
 
     # Loopback is not access control: without this, any page the user visits can
     # drive an agent that has shell and file tools. Wired ONLY here, on the
@@ -2838,7 +2838,7 @@ def _warmup_blocking() -> None:
 
 
 def _warm_chat_model(state: _StartupWarmUp) -> None:
-    from gaia_agent.session_registry import build_session_agent
+    from gaiapy.session_registry import build_session_agent
 
     from gaia.chat.sdk import LLMCallCancelled
     from gaia.llm.lemonade_client import cloud_model_provider
@@ -2927,7 +2927,7 @@ def serve_http(argv: List[str]) -> int:
 
     # The warm-up swallows agent-build errors, so a stale GAIA_SKILL_SET or a
     # bad GAIA_ALLOWED_PATHS would otherwise leave a healthy-looking sidecar.
-    from gaia_agent.agent import check_skill_set_selection
+    from gaiapy.agent import check_skill_set_selection
 
     from gaia.security import AllowedPathsEnvError, env_allowed_paths
     from gaia.skills.errors import SkillSetError
@@ -2959,7 +2959,7 @@ def serve_http(argv: List[str]) -> int:
     return 0
 
 
-# The transport split lives in ``gaia_agent.entry`` so the stdio wire never has
+# The transport split lives in ``gaiapy.entry`` so the stdio wire never has
 # to import FastAPI to find out it was not selected. Re-exported here because
 # the frozen binary's entry point (packaging/server.py) reaches ``main`` through
 # this module — one implementation, two names, rather than two dispatchers that

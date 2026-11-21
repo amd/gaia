@@ -727,7 +727,7 @@
     },
     "/v1/gaia/memory": {
       "get": {
-        "description": "The ``/memory`` view's snapshot, for the daemon transport.\n\nSame payload as the stdio ``MEMORY_DUMP_QUERY`` sentinel\n(``gaia_agent.stdio._memory_dump_event`` -> ``build_memory_dump``), just\nwithout that path's JSON-in-a-final-event wrapping — this is a plain GET,\nso the dict is the whole response body. ``*SSEClient.FetchMemory`` decodes\nit straight into ``client.MemoryDump`` (``tui/internal/client/memory.go``).\nA one-shot agent is enough: the memory store lives at ``~/.gaia/memory.db``\nregardless of which agent instance opens it.",
+        "description": "The ``/memory`` view's snapshot, for the daemon transport.\n\nSame payload as the stdio ``MEMORY_DUMP_QUERY`` sentinel\n(``gaiapy.stdio._memory_dump_event`` -> ``build_memory_dump``), just\nwithout that path's JSON-in-a-final-event wrapping — this is a plain GET,\nso the dict is the whole response body. ``*SSEClient.FetchMemory`` decodes\nit straight into ``client.MemoryDump`` (``tui/internal/client/memory.go``).\nA one-shot agent is enough: the memory store lives at ``~/.gaia/memory.db``\nregardless of which agent instance opens it.",
         "operationId": "memory_v1_gaia_memory_get",
         "responses": {
           "200": {

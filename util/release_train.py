@@ -169,13 +169,13 @@ def core_version(target: Path) -> str:
 
 
 def agent_version(target: Path) -> str:
-    text = (target / "hub/agents/gaia/python/gaia_agent/__init__.py").read_text(
+    text = (target / "hub/agents/gaia/python/gaiapy/__init__.py").read_text(
         encoding="utf-8"
     )
     m = re.search(r'(?m)^__version__\s*=\s*"([^"]+)"', text)
     if not m:
         raise VerifyError(
-            "no __version__ in hub/agents/gaia/python/gaia_agent/__init__.py"
+            "no __version__ in hub/agents/gaia/python/gaiapy/__init__.py"
         )
     return m.group(1)
 

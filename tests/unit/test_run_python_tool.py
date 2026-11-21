@@ -16,14 +16,14 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.chat_agent import (  # noqa: E402
+from gaiapy.chat_agent import (  # noqa: E402
     ChatAgent,
     ChatAgentConfig,
     _imports_gaia_tools,
 )
-from gaia_agent.tool_bundles import FULL_CORE_TOOLS  # noqa: E402
+from gaiapy.tool_bundles import FULL_CORE_TOOLS  # noqa: E402
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION  # noqa: E402
 from gaia.agents.base.checks import CHECK_RESULT_KEY, CheckResult  # noqa: E402
@@ -56,8 +56,8 @@ def make_run_python():
 
     def build(allowed_path):
         with (
-            patch("gaia_agent.chat_agent.RAGSDK"),
-            patch("gaia_agent.chat_agent.RAGConfig"),
+            patch("gaiapy.chat_agent.RAGSDK"),
+            patch("gaiapy.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(
                 ChatAgentConfig(silent_mode=True, allowed_paths=[str(allowed_path)])
@@ -462,7 +462,7 @@ def test_a_src_layout_checkout_imports_its_own_code(
 
 def test_an_empty_src_folder_is_not_put_on_the_path(make_run_python, project):
     """``src/`` with no package (a JS app's, say) adds nothing to the path."""
-    from gaia_agent.chat_agent import _project_import_paths
+    from gaiapy.chat_agent import _project_import_paths
 
     assert _project_import_paths(project) == [str(project)]
 
@@ -560,7 +560,7 @@ def test_a_snippet_that_is_not_a_test_run_declares_no_check(
 
 def test_an_unreadable_src_folder_fails_loudly(project, monkeypatch):
     """Guessing would run the installed copy while reporting on the project."""
-    from gaia_agent.chat_agent import _project_import_paths
+    from gaiapy.chat_agent import _project_import_paths
 
     real_iterdir = Path.iterdir
 
@@ -797,8 +797,8 @@ def test_a_script_outside_the_allowed_paths_runs_only_under_full_access(
 def test_the_child_is_guarded_and_marked_only_without_full_access(
     make_run_python, project, monkeypatch, full_access
 ):
-    from gaia_agent import chat_agent
-    from gaia_agent.python_runner import GUARDED_FOLDERS_ENV
+    from gaiapy import chat_agent
+    from gaiapy.python_runner import GUARDED_FOLDERS_ENV
 
     seen = {}
     real = chat_agent.run_python_job

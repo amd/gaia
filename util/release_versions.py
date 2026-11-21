@@ -6,7 +6,7 @@
 Two sources of truth, each edited by hand and nowhere else:
 
     core      src/gaia/version.py  (__version__, LEMONADE_VERSION)
-    flagship  hub/agents/gaia/python/gaia_agent/__init__.py  (__version__)
+    flagship  hub/agents/gaia/python/gaiapy/__init__.py  (__version__)
 
 Every other field in ``TARGETS`` follows one of them. The flagship agent keeps
 its own version until it joins core's (#5172).
@@ -40,7 +40,7 @@ from release_tag import parse_tag  # noqa: E402  pylint: disable=wrong-import-po
 FIX_CMD = "python util/release_versions.py --stamp"
 
 CORE_PY = "src/gaia/version.py"
-FLAGSHIP_INIT = "hub/agents/gaia/python/gaia_agent/__init__.py"
+FLAGSHIP_INIT = "hub/agents/gaia/python/gaiapy/__init__.py"
 
 _CORE_RE = re.compile(r"^(?P<base>\d+\.\d+\.\d+)(?:rc(?P<rc>[1-9]\d*))?$")
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -135,7 +135,7 @@ TARGETS: tuple[Target, ...] = (
         re.compile(r"(must also be \*\*)(\d+\.\d+\.\d+)(\+\*\*)"),
         "core-floor",
     ),
-    # Flagship agent: follows gaia_agent/__init__.py.
+    # Flagship agent: follows gaiapy/__init__.py.
     Target(
         "hub/agents/gaia/python/pyproject.toml", "version", _TOML_VERSION, "flagship"
     ),

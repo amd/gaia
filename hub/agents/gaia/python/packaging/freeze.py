@@ -24,10 +24,10 @@ Design notes / gotchas baked in (mirrors the email sidecar's freeze):
   ``full`` profile's tool groups (RAG, filesystem, scratchpad, browser,
   screenshot), so collect the agent package wholesale.
 - ``gaia.connectors`` discovers providers dynamically; collect it explicitly.
-- ``gaia-agent.yaml``, the agent's own ``gaia_agent/skills`` and the starter
+- ``gaia-agent.yaml``, the agent's own ``gaiapy/skills`` and the starter
   pack (``hub/skills``) are DATA, invisible to the import analyzer ->
-  ``--add-data``. All of it lands under ``gaia_agent/`` and resolves relative to
-  ``__file__`` at runtime (see ``gaia_agent/agent.py``).
+  ``--add-data``. All of it lands under ``gaiapy/`` and resolves relative to
+  ``__file__`` at runtime (see ``gaiapy/agent.py``).
 - A bundled skill's ``tools.py`` and ``scripts/`` are imported or run from that
   data at runtime, so nothing reaches their imports statically. Each one is
   added as a hidden import, and the build fails if one is not installed.
@@ -71,12 +71,12 @@ PATHEX = [
 ]
 
 MANIFEST_SRC = PKG_ROOT / "gaia-agent.yaml"
-SKILLS_SRC = PKG_ROOT / "gaia_agent" / "skills"
+SKILLS_SRC = PKG_ROOT / "gaiapy" / "skills"
 #: The first-party starter pack. A checkout discovers it in place; the frozen
 #: binary has no hub/ tree, so it is staged beside the agent's own skills.
 HUB_SKILLS_SRC = REPO_ROOT / "hub" / "skills"
-#: Where both land in the binary — the root ``gaia_agent.agent._SKILLS_DIR`` reads.
-SKILLS_DEST = "gaia_agent/skills"
+#: Where both land in the binary — the root ``gaiapy.agent._SKILLS_DIR`` reads.
+SKILLS_DEST = "gaiapy/skills"
 # Linux only: the bundled OpenSSL looks for CA certs where the BUILD distro keeps
 # them, so point it at the host's bundle (see the hook's docstring).
 LINUX_CA_HOOK = HERE / "rthook_linux_ca.py"
@@ -97,7 +97,7 @@ COLLECT_SUBMODULES = [
     # keyring: OS backend resolution via entry points.
     "keyring",
     # The agent package registers tools lazily inside functions.
-    "gaia_agent",
+    "gaiapy",
     # connector provider discovery is dynamic.
     "gaia.connectors",
     # pydantic v2 ships a compiled core; collect data to be safe.
@@ -416,7 +416,7 @@ def _resolve_add_data() -> list[tuple[Path, str]]:
             "sets could be declared and the hub metadata would be absent. "
             "Restore hub/agents/gaia/python/gaia-agent.yaml and re-run."
         )
-    add_data: list[tuple[Path, str]] = [(MANIFEST_SRC, "gaia_agent"), *NOTICES]
+    add_data: list[tuple[Path, str]] = [(MANIFEST_SRC, "gaiapy"), *NOTICES]
 
     skill_files = (
         sorted(p for p in SKILLS_SRC.rglob("*") if p.is_file() and p.name != ".gitkeep")

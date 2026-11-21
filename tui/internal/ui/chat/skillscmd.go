@@ -9,7 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// skillsCommandPrefix must match gaia_agent.stdio.SKILLS_COMMAND_PREFIX: the
+// skillsCommandPrefix must match gaiapy.stdio.SKILLS_COMMAND_PREFIX: the
 // flagship's stdio loop answers `/skills` itself (run_skills_command), so it
 // rides the query channel like `/model` and never reaches the LLM.
 const skillsCommandPrefix = "/skills"

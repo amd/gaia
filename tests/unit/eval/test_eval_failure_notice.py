@@ -138,7 +138,7 @@ def test_the_body_puts_mechanics_in_a_details_block_github_renders(tmp_path):
     # Fixes and reproduce steps are mechanical, so they live below the fold.
     assert "recommended fix" in details and "recommended fix" not in head
     assert "gaia eval agent --compare" in details
-    assert "hub/agents/gaia/python/gaia_agent/chat_agent.py" in details
+    assert "hub/agents/gaia/python/gaiapy/chat_agent.py" in details
 
 
 def test_untrusted_judge_text_cannot_break_out_of_its_cell(tmp_path):

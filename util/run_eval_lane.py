@@ -76,7 +76,7 @@ SERVE_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "gaia" / "serve_fixtures.py"
 STAGE_TIMEOUT_S = 1800
 MCP_STUB = "tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py"
 #: Modules whose origin proves which checkout the backend and eval run.
-ANCHOR_MODULES = ("gaia", "gaia_agent")
+ANCHOR_MODULES = ("gaia", "gaiapy")
 _ORIGINS_SCRIPT = """
 import importlib, json, sys
 out = {}

@@ -104,7 +104,7 @@ def _measure() -> None:
 
 def _gaiapy_installed() -> bool:
     """True when the Python agent can answer: importable, or a binary setup installed."""
-    if importlib.util.find_spec("gaia_agent") is not None:
+    if importlib.util.find_spec("gaiapy") is not None:
         return True
     if fetch.installer_placed_flagship() is not None:
         return True

@@ -592,8 +592,8 @@ async def async_main(action, **kwargs):
         # package, or, where the agent ships as its own binary (as the apps
         # ship it), on that binary through the daemon, as the Agent UI does.
         try:
-            from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent.interactive import interactive_mode
+            from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+            from gaiapy.interactive import interactive_mode
         except ImportError:
             return _gaia_chat_relay(kwargs)
 
@@ -1080,8 +1080,8 @@ def _launch_interactive_cli(log=None):
             sys.exit(1)
 
         try:
-            from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent.interactive import interactive_mode
+            from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+            from gaiapy.interactive import interactive_mode
         except ImportError:
             # The agent ships as its own binary: chat with it through the daemon.
             sys.exit(_gaia_chat_relay({}))

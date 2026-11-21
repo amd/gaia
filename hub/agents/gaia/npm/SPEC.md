@@ -250,7 +250,7 @@ Both defaults are overridable (`--sidecar-dir`, `--cache-dir`).
 
 ## 5. Sidecar HTTP surface
 
-Served by `gaia_agent.server`. Bound to `127.0.0.1` only.
+Served by `gaiapy.server`. Bound to `127.0.0.1` only.
 
 Every request must carry a loopback `Host` header. A `Host` that is non-loopback,
 absent or empty is refused with `400` before routing — that check is what defeats
@@ -291,7 +291,7 @@ the header.
 The full, machine-readable contract — every field, type, and which are
 required — is the committed
 [`openapi.gaia.json`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/openapi.gaia.json),
-regenerated from the live routes by `python -m gaia_agent.export_openapi` and
+regenerated from the live routes by `python -m gaiapy.export_openapi` and
 checked for drift in CI. Required: **`query`**, **`run_id`**,
 **`context`** — `additionalProperties: false`, so an unrecognized field or a
 missing required one is `422` before the agent runs. `run_id` must parse as a
@@ -727,7 +727,7 @@ backward-compatible addition and is accepted.
 
 Loopback binding is not access control: this sidecar exposes shell and file
 tools, so an unauthenticated port lets any page the user visits drive it. Three
-controls guard it, all in `gaia_agent.caller_auth`, which binds this sidecar's
+controls guard it, all in `gaiapy.caller_auth`, which binds this sidecar's
 env-var names and exempt paths onto the shared mechanism in
 `gaia.sidecar.caller_auth`:
 
@@ -797,7 +797,7 @@ container or VM.
 
 The HTTP server above is the surface this package drives, and everything in
 this document describes it. It is not the agent's only transport:
-`gaia_agent.stdio` runs the same agent over newline-delimited JSON on
+`gaiapy.stdio` runs the same agent over newline-delimited JSON on
 stdin/stdout — no port, no token, no discovery file. The terminal UI reaches it
 that way when it spawns the agent as a subprocess; an agent **installed** from
 the hub, which is what this package delivers, is supervised by the daemon over

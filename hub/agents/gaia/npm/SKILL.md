@@ -26,7 +26,7 @@ Two ways in:
 > **This file is NOT one of the agent's own skills.** It is the integration
 > playbook: how *you* wire this package into an app. The agent separately loads
 > **Agent Skills** into its own prompt at runtime from
-> `gaia_agent/skills/<name>/SKILL.md`. Same filename, different artifact —
+> `gaiapy/skills/<name>/SKILL.md`. Same filename, different artifact —
 > don't ship this one as an agent skill. See
 > [Skills](#10-skills--one-always-on-the-rest-opt-in).
 
@@ -616,7 +616,7 @@ separate OS user, container or VM. Embedding `GaiaAgent` lets you pass an explic
 list instead (the variable still narrows it):
 
 ```python
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 agent = GaiaAgent(config=GaiaAgentConfig(allowed_paths=["/home/me/Documents"]))
 ```

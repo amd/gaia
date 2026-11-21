@@ -5,7 +5,7 @@
 # pylint: disable=protected-access
 
 import pytest
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 from gaia.agents.base.context_eviction import CONTEXT_EVICTION_ENV_VAR
 

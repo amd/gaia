@@ -110,7 +110,7 @@ def test_process_entry_points_inject(monkeypatch, module_name, entry):
         getattr(module, entry)()
 
 
-@pytest.mark.parametrize("module_name", ["gaia_agent.entry"])
+@pytest.mark.parametrize("module_name", ["gaiapy.entry"])
 def test_hub_agent_sidecars_inject(monkeypatch, module_name):
     module = pytest.importorskip(module_name)
     monkeypatch.setattr(tls, "use_os_trust_store", mock.Mock(side_effect=_Stop))

@@ -18,9 +18,9 @@ import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from gaia_agent import stdio
-from gaia_agent.interactive import interactive_mode
-from gaia_agent.stdio import PermissionState
+from gaiapy import stdio
+from gaiapy.interactive import interactive_mode
+from gaiapy.stdio import PermissionState
 
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.ui.sse_handler import SSEOutputHandler
@@ -250,8 +250,8 @@ def test_cli_reset_that_fails_to_save_keeps_the_conversation_and_its_grants(
 
 _STDIO_CHILD = r"""
 import sys
-import gaia_agent.agent as agent_mod
-from gaia_agent import stdio
+import gaiapy.agent as agent_mod
+from gaiapy import stdio
 
 class Agent:
     def __init__(self, config=None):

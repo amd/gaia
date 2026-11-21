@@ -219,7 +219,7 @@ def test_stop_ends_the_watcher_without_firing():
         daemon.kill()
 
 
-@pytest.mark.parametrize("agent, package", [("gaia", "gaia_agent")])
+@pytest.mark.parametrize("agent, package", [("gaia", "gaiapy")])
 def test_the_dev_mode_module_starts_the_watch_when_imported(
     monkeypatch, agent, package
 ):
@@ -254,7 +254,7 @@ def test_the_dev_mode_module_refuses_a_bad_pid_in_one_line(monkeypatch):
     import importlib.util
     from pathlib import Path
 
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     path = (
         Path(__file__).resolve().parents[2]
         / "hub"
