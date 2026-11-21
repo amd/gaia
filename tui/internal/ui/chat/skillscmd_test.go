@@ -120,3 +120,79 @@ func TestSkillsAddOverTheRelayNamesNoTerminalCommand(t *testing.T) {
 		t.Errorf("the refusal must point at the Agent UI, not a terminal, got %+v", last)
 	}
 }
+
+// Where /skills cannot add, the palette does not offer adding, and each form
+// that does not work says what does, without naming a terminal command.
+func TestSkillsOverTheRelaySaysWhatWorks(t *testing.T) {
+	c := &relaySkillsClient{skills: []event.SkillCommand{{Name: "log-triage"}}}
+	m := NewChatModelForFlagship(c, "gaia", "gaia", true)
+	m.width, m.height = 100, 30
+
+	m.input.SetValue("/skills")
+	var row *paletteCommand
+	for _, r := range m.paletteFiltered() {
+		if r.Name == skillsCommandPrefix {
+			row = &r
+		}
+	}
+	if row == nil || row.Desc != skillsListOnlyDesc || strings.Contains(row.Desc, "add") {
+		t.Fatalf("the palette must offer /skills as a list only, got %+v", row)
+	}
+
+	for line, want := range map[string]string{
+		"/skills add acme/skills":         "Settings › Skills",
+		"/skills add acme/skills confirm": "Settings › Skills",
+		"/skills remove log-triage":       "Type /<skill-name>",
+		"/skills list":                    "Type /<skill-name>",
+	} {
+		updated, cmd := m.submit(line)
+		got := updated.(ChatModel)
+		last := got.messages[len(got.messages)-1]
+		if cmd != nil || len(c.sent) != 0 || last.Role != RoleError || !strings.Contains(last.Content, want) {
+			t.Errorf("%q: sent %v, answered %+v; want %q and no turn", line, c.sent, last, want)
+		}
+		for _, banned := range []string{"gaia skill", "in a terminal", "not available in this session"} {
+			if strings.Contains(last.Content, banned) {
+				t.Errorf("%q answered with %q: %s", line, banned, last.Content)
+			}
+		}
+	}
+
+	// An agent the TUI runs itself still offers adding from a link.
+	own := NewChatModelForFlagship(&nullClient{}, "gaia", "gaia", true)
+	own.input.SetValue("/skills")
+	for _, r := range own.paletteFiltered() {
+		if r.Name == skillsCommandPrefix && !strings.Contains(r.Desc, "/skills add") {
+			t.Errorf("the subprocess palette lost /skills add: %q", r.Desc)
+		}
+	}
+}
+
+// Research mode over the relay: the skill list the agent was asked for decides
+// what is a skill command, and until it answers the line is sent as typed.
+func TestResearchModeOverTheRelayRunsSkillCommands(t *testing.T) {
+	c := &relaySkillsClient{skills: []event.SkillCommand{{Name: "summarize"}, {Name: "office-docs"}}}
+	m := NewChatModelForFlagship(c, "gaia", "gaia", true)
+	m.width, m.height = 100, 30
+	m.researchMode = true
+
+	// Before the list arrives nothing says /summarize is not a skill.
+	if got := m.withResearch("/summarize this page"); got != "/summarize this page" {
+		t.Errorf("before the skill list arrived, sent %q", got)
+	}
+	if got := m.withResearch("what is new in go"); got != "/research what is new in go" {
+		t.Errorf("a plain question was sent as %q", got)
+	}
+
+	next, _ := m.Update(m.listSkillsCmd()())
+	m = next.(ChatModel)
+	for _, line := range []string{"/summarize this page", "/office-docs make a memo"} {
+		if got := m.withResearch(line); got != line {
+			t.Errorf("%q was sent as %q", line, got)
+		}
+	}
+	// Known list: a name that is not a skill is researched.
+	if got := m.withResearch("/sumarize this page"); got != "/research /sumarize this page" {
+		t.Errorf("a mistyped skill name was sent as %q", got)
+	}
+}

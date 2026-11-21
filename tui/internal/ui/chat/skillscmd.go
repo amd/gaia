@@ -27,6 +27,25 @@ func isSkillsCommand(query string) bool {
 		strings.HasPrefix(trimmed, skillsCommandPrefix+" ")
 }
 
+// Over the daemon relay the agent has no route that adds a skill, so `/skills`
+// only lists there: the palette says so, and the other forms answer with what
+// does work.
+const (
+	skillsListOnlyDesc  = "List the skills this chat can run"
+	skillsListOnlyUsage = "/skills lists the skills this chat can run. Type /<skill-name> to run one."
+	skillsAddElsewhere  = "Adding a skill from a link isn't available in this chat yet. " +
+		"Add it in the Agent UI under Settings › Skills, then type /skills here to see it."
+)
+
+// skillsListOnly reports a chat where `/skills` lists and cannot add.
+func (m ChatModel) skillsListOnly() bool {
+	if _, relayed := m.relayedSwitcher(); !relayed {
+		return false
+	}
+	_, lists := m.client.(client.SkillLister)
+	return lists
+}
+
 // skillsCommandListedMsg answers a bare `/skills` over the daemon relay.
 type skillsCommandListedMsg struct {
 	skills []event.SkillCommand
@@ -53,8 +72,10 @@ func (m ChatModel) submitSkillsCommand(query string) (tea.Model, tea.Cmd) {
 				return skillsCommandListedMsg{skills: skills, err: err}
 			}
 		}
-		refuse = "Adding skills from a link isn't available in this session yet. " +
-			"Add them from Skills in the Agent UI."
+		refuse = skillsListOnlyUsage
+		if args := strings.Fields(line[len(skillsCommandPrefix):]); len(args) > 0 && args[0] == "add" {
+			refuse = skillsAddElsewhere
+		}
 	}
 	if refuse != "" {
 		m.messages = append(m.messages, Message{Role: RoleError, Content: refuse})

@@ -81,6 +81,10 @@ func (m ChatModel) isSkillCommand(query string) bool {
 	if match == nil {
 		return false
 	}
+	// Not reported yet: the agent decides, as it would with research mode off.
+	if m.skillCommands == nil {
+		return true
+	}
 	for _, s := range m.skillCommands {
 		if s.Name == match[1] {
 			return true
