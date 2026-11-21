@@ -226,6 +226,48 @@ def test_lists_offer_only_models_this_pc_runs(pc, capacity, available):
         assert m["available"] == (m["unavailable_reason"] is None)
 
 
+def test_settings_marks_models_that_leave_other_apps_little_memory():
+    """A 16 GB laptop: Gemma and the 4B load, but are tight; the 2B is not."""
+    laptop = MachineCapacity(
+        memory_gb=10.0,
+        memory_source="AMD iGPU",
+        disk_free_gb=500.0,
+        installed_ram_gb=16.0,
+    )
+    models = [
+        {"id": m, "recipe": "llamacpp", "downloaded": False, "size": size}
+        for m, size in (
+            ("Gemma-4-E4B-it-GGUF", 5.97),
+            ("Qwen3.5-4B-GGUF", 3.58),
+            ("Qwen3.5-2B-GGUF", 2.01),
+        )
+    ]
+    out = annotate_local_models(
+        models,
+        health={"all_models_loaded": []},
+        system_info=system_info(npu=False),
+        capacity=laptop,
+        preferred_backend=None,
+        speeds={},
+    )
+    by_id = {m["id"]: m for m in out}
+    assert all(m["fits"] and m["available"] for m in out)
+    assert by_id["Gemma-4-E4B-it-GGUF"]["tight"] is True
+    assert by_id["Qwen3.5-4B-GGUF"]["tight"] is True
+    assert by_id["Qwen3.5-2B-GGUF"]["tight"] is False
+    # A discrete GPU's own memory holds the model: nothing is tight.
+    card = replace(laptop, memory_source="AMD GPU", memory_gb=12.0)
+    out = annotate_local_models(
+        models,
+        health={"all_models_loaded": []},
+        system_info=system_info(npu=False),
+        capacity=card,
+        preferred_backend=None,
+        speeds={},
+    )
+    assert not any(m["tight"] for m in out)
+
+
 @pytest.mark.parametrize(
     "state,offered",
     [("installed", True), ("installable", True), ("unsupported", False)],

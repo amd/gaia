@@ -27,6 +27,8 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     LARGE_DEFAULT_MODEL_NAME,
     NPU_DEFAULT_MODEL_NAME,
+    SMALL_DEFAULT_MODEL_NAME,
+    TINY_DEFAULT_MODEL_NAME,
     LemonadeClient,
 )
 from gaia.ui import setup_plan as sp
@@ -64,6 +66,8 @@ class FakeLemonade(LemonadeClient):
             for m, size, labels, recipe in (
                 (LARGE_DEFAULT_MODEL_NAME, 23.3, [], "llamacpp"),
                 (DEFAULT_MODEL_NAME, 5.97, ["vision"], "llamacpp"),
+                (SMALL_DEFAULT_MODEL_NAME, 3.58, ["vision"], "llamacpp"),
+                (TINY_DEFAULT_MODEL_NAME, 2.01, ["vision"], "llamacpp"),
                 (EMBEDDER, 0.33, ["embeddings"], "llamacpp"),
                 (FLM, 3.4, ["chat"], "flm"),
                 *extra,

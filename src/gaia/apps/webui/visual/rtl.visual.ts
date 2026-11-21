@@ -3038,6 +3038,10 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await page.locator('.settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await expect(page.getByText('needs 180 GB of memory', { exact: false }).first()).toBeVisible();
+            // A model that fits but squeezes other apps says so instead of "Fits this PC".
+            await expect(page.locator('.model-badge.is-tight')).toHaveCount(1);
+            await page.locator('.model-badge.is-tight').scrollIntoViewIfNeeded();
+            await shot(page, `model-${locale}-tight`);
             // A size inside a sentence stays whole only inside its own bidi isolate.
             if (locale === 'ar') await expect(page.locator('.model-row-meta', { hasText: 'tok/s' }).first()).toContainText('\u206841 tok/s\u2069');
             await shot(page, `model-${locale}-long`);

@@ -360,8 +360,8 @@ def resolve_init_chat_model(
 ) -> ChatModelChoice:
     """The chat model `gaia init` sets up: the user's ``default_model`` when it
     is a local Lemonade model, else the downloaded local model they last
-    chatted on, else the largest default that fits this machine (Qwen3.6 35B
-    A3B wherever a GPU holds it, Gemma 4 E4B everywhere else).
+    chatted on, else the largest default that fits this machine once other
+    apps keep their share of RAM (:func:`~gaia.llm.lemonade_client.ladder_verdict`).
 
     ``--check`` and ``run()`` both go through here so they can never disagree
     about what "set up" means on this machine. ``reset_corrupt`` is run()'s
@@ -609,13 +609,16 @@ def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
     ``resolve_chat`` returns a :class:`ChatModelChoice`, and is only called for
     hardware-chosen profiles, so the others never probe Lemonade. A chat model
     the hardware picked is added beside Gemma, which the image tools load by
-    name. A ``default_model`` the user chose replaces Gemma: the image tools
-    then ask the user to download Gemma first (:func:`skipped_gemma`).
+    name, except on a PC too small for Gemma, whose own model reads images. A
+    ``default_model`` the user chose replaces Gemma: the image tools then ask
+    the user to download Gemma first (:func:`skipped_gemma`).
     """
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_NAME,
         NPU_DEFAULT_MODEL_NAME,
+        VISION_CHAT_MODELS,
         _model_ids_match,
+        below_gemma,
     )
 
     ids = list(model_ids)
@@ -631,7 +634,10 @@ def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
     else:
         choice = resolve_chat()
         chat = choice.model_id
-        if choice.user_set and not _model_ids_match(chat, DEFAULT_MODEL_NAME):
+        reads_images_itself = below_gemma(chat) and chat in VISION_CHAT_MODELS
+        if reads_images_itself or (
+            choice.user_set and not _model_ids_match(chat, DEFAULT_MODEL_NAME)
+        ):
             ids = [m for m in ids if not _model_ids_match(m, DEFAULT_MODEL_NAME)]
     if chat not in ids:
         ids.append(chat)
@@ -2601,12 +2607,14 @@ class InitCommand:
         ``--profile npu``: asking for the NPU is the choice, so its model
         replaces a local ``default_model`` and ``last_model``, the one the Agent
         UI and TUI start on. A Claude or cloud model is left as it is.
-        Records nothing when the pick is the floor model every agent already
-        defaults to (unless free memory forced it) or when setup did not
-        download it (declined, or ``--skip-models``) or could not verify it.
+        Records nothing when the pick is Gemma, which every agent already
+        defaults to (unless free memory forced it), when setup did not
+        download it (declined, or ``--skip-models``), or when setup could not
+        verify it, unless the pick is smaller than Gemma.
         """
         from gaia.llm.lemonade_client import (
             DEFAULT_MODEL_NAME,
+            below_gemma,
             cloud_model_provider,
             runs_on_npu,
         )
@@ -2615,7 +2623,11 @@ class InitCommand:
         if choice is None:
             return
         # An undownloaded default would make every agent's first load fail.
-        if not self._chat_model_ready or not self._setup_verified:
+        if not self._chat_model_ready:
+            return
+        # A failed verify records nothing, except a small PC's downloaded pick:
+        # without it every agent falls back to a Gemma that PC never downloaded.
+        if not self._setup_verified and not below_gemma(choice.model_id):
             return
 
         def replaceable(model_id) -> bool:
@@ -2683,14 +2695,23 @@ class InitCommand:
                 self.profile, model_ids, lambda: self._chat_model_choice(client)
             )
             if skipped_gemma(self.profile, model_ids):
-                from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+                from gaia.llm.lemonade_client import (
+                    DEFAULT_MODEL_NAME,
+                    VISION_CHAT_MODELS,
+                )
                 from gaia.llm.surface_hints import CLI_VISION_DOWNLOAD_HINT
 
-                self._print(
-                    f"   Not downloading {DEFAULT_MODEL_NAME}: your "
-                    f"default_model is {self._chat_choice.model_id}. "
-                    f"{CLI_VISION_DOWNLOAD_HINT}"
-                )
+                chat = self._chat_choice.model_id
+                if chat in VISION_CHAT_MODELS:
+                    self._print(
+                        f"   Not downloading {DEFAULT_MODEL_NAME}: {chat} reads "
+                        "images itself on this PC."
+                    )
+                else:
+                    self._print(
+                        f"   Not downloading {DEFAULT_MODEL_NAME}: your "
+                        f"default_model is {chat}. {CLI_VISION_DOWNLOAD_HINT}"
+                    )
 
         # A Claude-backed session never calls the local chat LLM — only
         # RAG/memory/code-index embeddings still need Lemonade (Anthropic has

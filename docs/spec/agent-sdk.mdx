@@ -49,7 +49,7 @@ AgentSDK provides a unified interface for text-based chat interactions with auto
 class AgentConfig:
     """Configuration for AgentSDK."""
 
-    model: str = DEFAULT_MODEL_NAME
+    model: str = field(default_factory=resolve_local_chat_model)  # gaia init's local pick, else Gemma
     max_tokens: int = 512
     temperature: Optional[float] = None
     system_prompt: Optional[str] = None

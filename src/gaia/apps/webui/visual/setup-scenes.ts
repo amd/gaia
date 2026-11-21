@@ -72,6 +72,16 @@ const PLAN_PRESENT = {
     catalog: CATALOG.map((e) => (e.planned ? { ...e, downloaded: true, size_gb: 0 } : e)),
 };
 const PLAN_SHORT = { ...PLAN, disk: { ...PLAN.disk, free_gb: 2.1 } };
+// A 16 GB laptop: GAIA keeps 10.7 GB for other apps, so Qwen3.5 2B is the pick (13.1 GB left) and reads
+// images itself; the 4B and Gemma would load but are tight.
+const QWEN_2B = entry({ id: 'Qwen3.5-2B-GGUF', name: 'Qwen3.5 2B (Multimodal)', roles: ['chat'], size_gb: 2.01, full_size_gb: 2.01, recommended: true, planned: true, selected: true, need_gb: 4.1, capacity_gb: 10.7, reads_images: true, feature_tier: 'compact' });
+const QWEN_4B = entry({ id: 'Qwen3.5-4B-GGUF', name: 'Qwen3.5 4B (Multimodal)', roles: ['chat'], size_gb: 3.58, full_size_gb: 3.58, need_gb: 7.4, capacity_gb: 10.7, reads_images: true, feature_tier: 'compact', tight: true });
+const PLAN_SMALL_PC = {
+    ...PLAN,
+    chat_model: { id: 'Qwen3.5-2B-GGUF', user_set: false, size_gb: 2.01, downloaded: false },
+    recommended_model: 'Qwen3.5-2B-GGUF', left_for_apps_gb: 13.1, memory_gb: 10, capacity_gb: 10.7, download_gb: 2.3,
+    catalog: [QWEN_2B, EMBED, QWEN_4B, { ...GEMMA, recommended: false, planned: false, selected: false, capacity_gb: 10.7, tight: true }, { ...QWEN, capacity_gb: 10.7 }],
+};
 // #6632: Linux with an NPU Lemonade reports, but memlock at 8 MB and no access to the device.
 const PLAN_NPU_NOT_READY = {
     ...PLAN,
@@ -425,6 +435,16 @@ export const SETUP_SCENES: SetupScene[] = [
             await page.locator('.setup-where-card').nth(1).click();
             await expect(page.locator('.setup-where-card.is-active')).toHaveCount(1);
             await expect(page.locator('.setup-where-card').nth(1)).toHaveClass(/is-active/);
+        },
+    },
+    {
+        // A 16 GB laptop says why it gets a smaller model.
+        name: 'plan-small-pc',
+        answers: { plan: PLAN_SMALL_PC },
+        reach: async (page) => {
+            await toPlan(page);
+            // Evaluated, small PC, fits, private: the local card's four reasons.
+            await expect(page.locator('.setup-where-card').first().locator('.setup-reasons li')).toHaveCount(4);
         },
     },
     {
