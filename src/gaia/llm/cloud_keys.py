@@ -218,6 +218,52 @@ def provider_lost(provider: str, client: Optional[LemonadeClient] = None) -> boo
     return not (entry and (entry.get("env_var_set") or entry.get("runtime_key_set")))
 
 
+def provider_found_no_models(
+    provider: str, client: Optional[LemonadeClient] = None
+) -> bool:
+    """Whether *provider* holds a key but listed no models: Lemonade could not
+    reach it (offline when it started) or the provider refused the key."""
+    _check(provider)
+    client = client or LemonadeClient(verbose=False)
+    try:
+        base_url = client.credential_base_url()
+    except LemonadeClientError as e:
+        raise CloudKeyError(str(e)) from e
+    entry = _provider_entry(base_url, provider)
+    return bool(
+        entry
+        and (entry.get("env_var_set") or entry.get("runtime_key_set"))
+        and not entry.get("models_discovered")
+    )
+
+
+def rediscover_models(provider: str, client: Optional[LemonadeClient] = None) -> bool:
+    """Hand a keyed Fireworks its key again so Lemonade reads the model list once
+    more. Only on a Lemonade GAIA runs itself; True when it now finds models."""
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    _check(provider)
+    if cloud_blocked():
+        raise CloudKeyBlockedError(local_only_key_message(provider))
+    if provider != "fireworks":
+        return False
+    client = client or LemonadeClient(verbose=False)
+    try:
+        base_url = client.credential_base_url()
+    except LemonadeClientError as e:
+        raise CloudKeyError(str(e)) from e
+    if not gaia_runs_lemonade(base_url):
+        return False
+    key = recall_key(provider) or env_key(provider)
+    if not key:
+        return False
+    result = _request(
+        base_url, "POST", "cloud/auth", {"provider": provider, "api_key": key}
+    )
+    del key
+    return bool(result.get("models_discovered"))
+
+
 def reconnect_provider(provider: str, client: Optional[LemonadeClient] = None) -> bool:
     """Bring *provider* back on a Lemonade that restarted: register it, then key it.
 
