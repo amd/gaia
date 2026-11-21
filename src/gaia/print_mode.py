@@ -663,11 +663,26 @@ def _start_server(
         "chat", quiet=True, base_url=base_url, model=model, preload=preload
     )
     if not success:
-        raise PrintModeError(
-            "The model server could not be started. Run `gaia daemon status` for "
-            "its state and `gaia init` if Lemonade is not installed."
-        )
+        raise PrintModeError(_server_down_message(base_url))
     return detected_base_url
+
+
+def _server_down_message(base_url: Optional[str]) -> str:
+    """Why the model server is unreachable, for GAIA's own or the user's server."""
+    from gaia.llm.lemonade_client import configured_lemonade_url
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    chosen = base_url or configured_lemonade_url()
+    if chosen and not gaia_runs_lemonade(base_url):
+        return (
+            f"The model server at {chosen} isn't answering. GAIA doesn't start "
+            "a model server at an address you chose, so start it the way you "
+            "usually do, then try again."
+        )
+    return (
+        "The model server could not be started. Run `gaia daemon status` for "
+        "its state and `gaia init` if Lemonade is not installed."
+    )
 
 
 def _run_turn(

@@ -1345,9 +1345,19 @@ def test_the_relayed_turn_does_not_run_after_a_failed_download(
     assert list(relay) == []
 
 
+def _server_owner(monkeypatch, chosen, gaia_runs):
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.configured_lemonade_url", lambda: chosen
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda base_url=None: gaia_runs
+    )
+
+
 def test_run_returns_1_with_an_actionable_message_when_the_server_fails(
-    stub_env, capsys
+    stub_env, monkeypatch, capsys
 ):
+    _server_owner(monkeypatch, chosen=None, gaia_runs=True)
     stub_env.return_value = (False, None)
     assert print_mode.run("q", model="m") == 1
     captured = capsys.readouterr()
@@ -1356,6 +1366,28 @@ def test_run_returns_1_with_an_actionable_message_when_the_server_fails(
     assert "gaia daemon status" in captured.err
     assert "gaia init" in captured.err
     assert _StubAgent.instances == []
+
+
+@pytest.mark.parametrize(
+    "env_url, base_url, shown",
+    [
+        ("http://127.0.0.1:4328", None, "http://127.0.0.1:4328"),
+        (None, "http://box:8000/api/v1", "http://box:8000/api/v1"),
+    ],
+)
+def test_a_stopped_server_the_user_chose_is_named_not_started(
+    stub_env, monkeypatch, capsys, env_url, base_url, shown
+):
+    _server_owner(monkeypatch, chosen=env_url, gaia_runs=False)
+    stub_env.return_value = (False, None)
+    assert print_mode.run("q", model="m", base_url=base_url, output_format="json") == 1
+    error = json.loads(capsys.readouterr().out)["error"]
+    assert error == (
+        f"The model server at {shown} isn't answering. GAIA doesn't start a "
+        "model server at an address you chose, so start it the way you "
+        "usually do, then try again."
+    )
+    assert "gaia init" not in error and "gaia daemon" not in error
 
 
 def test_run_reads_the_prompt_from_stdin(stub_env, monkeypatch, capsys):
