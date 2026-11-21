@@ -2119,3 +2119,65 @@ def test_a_claimed_save_in_a_named_input_is_owed_beside_the_missing_output(tmp_p
     found = " ".join(gaps(ledger, "I wrote the fix in app.log."))
     assert "app.log" in found
     assert "report.json" in found
+
+
+def _fixed_and_noted(tmp_path, query):
+    for name in ("config.py", "utils.py", "app.log"):
+        (tmp_path / name).write_text("x = 1\n")
+    ledger = CompletionEvidence(query, str(tmp_path))
+    write(ledger, "notes.md")
+    read(ledger, "notes.md")
+    return ledger
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Fix the bug in config.py and save a summary to notes.md",
+        "config.py has a bug, fix it and save a summary to notes.md",
+        "The bug in config.py needs fixing. Save a summary to notes.md",
+        "In config.py, fix the off-by-one and save a summary to notes.md",
+        "Update config.py and save a summary to notes.md",
+        "Fix config.py using the traceback in app.log and save a summary to notes.md",
+    ],
+)
+def test_a_file_the_request_asks_to_change_is_not_a_read_only_input(tmp_path, query):
+    answer = "I wrote the fix in config.py and saved the summary to notes.md."
+    found = " ".join(gaps(_fixed_and_noted(tmp_path, query), answer))
+    assert "config.py" in found
+    assert "app.log" not in found
+
+
+def test_every_file_the_request_asks_to_change_is_owed(tmp_path):
+    query = (
+        "Fix the bug in config.py and the typo in utils.py and save a summary "
+        "to notes.md"
+    )
+    answer = (
+        "I wrote the fix in config.py, the typo fix in utils.py, and saved the "
+        "summary to notes.md."
+    )
+    found = " ".join(gaps(_fixed_and_noted(tmp_path, query), answer))
+    assert "config.py" in found
+    assert "utils.py" in found
+
+
+def test_the_input_an_edit_draws_on_stays_read_only(tmp_path):
+    query = "Fix config.py using the traceback in app.log and save a summary to notes.md"
+    ledger = _fixed_and_noted(tmp_path, query)
+    write(ledger, "config.py")
+    read(ledger, "config.py")
+    answer = "I saved the summary to notes.md, covering the traceback in app.log."
+    assert gaps(ledger, answer) == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Read app.log, suggest a fix, and save it to notes.md",
+        "Explain how to fix app.log and save notes to notes.md",
+    ],
+)
+def test_a_fix_the_request_never_asks_for_leaves_the_log_read_only(tmp_path, query):
+    answer = "I saved the summary to notes.md with the errors in app.log."
+    assert gaps(_fixed_and_noted(tmp_path, query), answer) == []
