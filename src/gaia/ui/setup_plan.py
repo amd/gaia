@@ -111,7 +111,7 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
 
     Judged as :func:`recommend_default_chat_model` judges them (registry size,
     the server's version, then the memory free now); the size shown is the
-    server's catalog size.
+    one Settings shows (:func:`model_choice.download_size_gb`).
     """
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_LADDER,
@@ -157,7 +157,9 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
         options.append(
             {
                 "id": model_id,
-                "size_gb": catalog.get(model_id, size),
+                "size_gb": model_choice.download_size_gb(
+                    model_id, catalog.get(model_id)
+                ),
                 "fits": fits,
                 "reason": reason,
             }
@@ -478,7 +480,8 @@ def _catalog(
                 ),
                 "recipe": recipe,
                 "size_gb": remaining,
-                "full_size_gb": float(full) if full is not None else None,
+                # Shown only: Settings' decimal GB, not the server's GiB figure.
+                "full_size_gb": model_choice.download_size_gb(model_id, full),
                 "partial": partial_gb > 0,
                 "partial_gb": partial_gb,
                 "downloaded": downloaded if client is not None else None,
