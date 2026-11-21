@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for the `gaia knowledge` CLI handler wiring (issue #2000).
 
-Covers ``handle_knowledge_command`` (src/gaia/cli.py):
+Covers ``handle`` (src/gaia/knowledge_cli.py):
 
   * ``BudgetConfig`` is constructed with ``block = not args.no_block`` —
     inverting this would silently disable the Tavily spend cap
@@ -24,7 +24,7 @@ import pytest
 import requests
 
 import gaia.web.tavily as tavily_module
-from gaia import cli
+from gaia import knowledge_cli
 from gaia.web.client import SearchUnavailableError, WebClient
 
 _REAL_BUDGET_CONFIG = tavily_module.BudgetConfig
@@ -125,19 +125,19 @@ def _patch_tavily(monkeypatch):
 
 
 def test_budget_blocks_by_default_when_no_block_is_false():
-    cli.handle_knowledge_command(_knowledge_args("usage", no_block=False))
+    knowledge_cli.handle(_knowledge_args("usage", no_block=False))
 
     assert _RecordingBudgetConfig.last_kwargs["block"] is True
 
 
 def test_no_block_flag_disables_blocking():
-    cli.handle_knowledge_command(_knowledge_args("usage", no_block=True))
+    knowledge_cli.handle(_knowledge_args("usage", no_block=True))
 
     assert _RecordingBudgetConfig.last_kwargs["block"] is False
 
 
 def test_budget_cap_is_forwarded():
-    cli.handle_knowledge_command(_knowledge_args("usage", budget=42, no_block=False))
+    knowledge_cli.handle(_knowledge_args("usage", budget=42, no_block=False))
 
     assert _RecordingBudgetConfig.last_kwargs["cap"] == 42
     assert _RecordingBudgetConfig.last_kwargs["block"] is True
@@ -157,7 +157,7 @@ def test_budget_exceeded_during_search_exits_1(capsys):
     _FakeTavilyClient.on_search = _raise_budget
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.handle_knowledge_command(_knowledge_args("search"))
+        knowledge_cli.handle(_knowledge_args("search"))
 
     assert excinfo.value.code == 1
     assert "credit cap of 10 reached" in capsys.readouterr().out
@@ -172,7 +172,7 @@ def test_config_error_during_search_exits_1(capsys):
     _FakeTavilyClient.on_search = _raise_config
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.handle_knowledge_command(_knowledge_args("search"))
+        knowledge_cli.handle(_knowledge_args("search"))
 
     assert excinfo.value.code == 1
     assert "tavily-python SDK is not installed" in capsys.readouterr().out
@@ -187,7 +187,7 @@ def test_budget_exceeded_during_extract_exits_1():
     _FakeTavilyClient.on_extract = _raise_budget
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.handle_knowledge_command(_knowledge_args("extract"))
+        knowledge_cli.handle(_knowledge_args("extract"))
 
     assert excinfo.value.code == 1
 
@@ -210,14 +210,14 @@ def test_client_is_closed_even_when_budget_exceeded(monkeypatch):
     _FakeTavilyClient.on_search = _raise_budget
 
     with pytest.raises(SystemExit):
-        cli.handle_knowledge_command(_knowledge_args("search"))
+        knowledge_cli.handle(_knowledge_args("search"))
 
     assert created[0].closed is True
 
 
 def test_successful_search_does_not_exit():
     # A clean run must not raise SystemExit at all.
-    cli.handle_knowledge_command(_knowledge_args("search"))
+    knowledge_cli.handle(_knowledge_args("search"))
 
 
 # ---------------------------------------------------------------------------
@@ -236,13 +236,13 @@ def _seeded_usage(monkeypatch):
 
 @pytest.mark.parametrize("action", ["search", "extract"])
 def test_spending_actions_report_session_credits(_seeded_usage, capsys, action):
-    cli.handle_knowledge_command(_knowledge_args(action))
+    knowledge_cli.handle(_knowledge_args(action))
     out = capsys.readouterr().out
     assert "Credits used: 7 total, 1 this session (cap: 5)" in out
 
 
 def test_usage_action_omits_always_zero_session_figure(_seeded_usage, capsys):
-    cli.handle_knowledge_command(_knowledge_args("usage"))
+    knowledge_cli.handle(_knowledge_args("usage"))
     out = capsys.readouterr().out
     assert "Credits used: 7 total (cap: 5)" in out
     assert "this session" not in out
@@ -277,7 +277,7 @@ def test_dropped_connection_during_search_is_actionable(capsys, exc):
     _FakeTavilyClient.on_search = _raiser(exc)
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.handle_knowledge_command(_knowledge_args("search"))
+        knowledge_cli.handle(_knowledge_args("search"))
 
     assert excinfo.value.code == 1
     out = capsys.readouterr().out
@@ -291,7 +291,7 @@ def test_dropped_connection_names_tavily_when_configured(capsys):
     _FakeTavilyClient.on_search = _raiser(requests.exceptions.ConnectionError("x"))
 
     with pytest.raises(SystemExit):
-        cli.handle_knowledge_command(_knowledge_args("search"))
+        knowledge_cli.handle(_knowledge_args("search"))
 
     assert "Web search failed: Tavily could not be reached" in capsys.readouterr().out
 
@@ -301,7 +301,7 @@ def test_dropped_connection_during_extract_is_actionable(capsys):
     _FakeTavilyClient.on_extract = _raiser(requests.exceptions.ConnectionError("x"))
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.handle_knowledge_command(_knowledge_args("extract"))
+        knowledge_cli.handle(_knowledge_args("extract"))
 
     assert excinfo.value.code == 1
     assert "Web extract failed: Tavily could not be reached" in (
@@ -320,7 +320,7 @@ def test_rate_limited_search_prints_the_wait_and_exits_1(capsys):
     )
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.handle_knowledge_command(_knowledge_args("search"))
+        knowledge_cli.handle(_knowledge_args("search"))
 
     assert excinfo.value.code == 1
     out = capsys.readouterr().out
@@ -340,7 +340,7 @@ def test_client_is_closed_after_a_network_failure(monkeypatch):
     _FakeTavilyClient.on_search = _raiser(requests.exceptions.ConnectionError("x"))
 
     with pytest.raises(SystemExit):
-        cli.handle_knowledge_command(_knowledge_args("search"))
+        knowledge_cli.handle(_knowledge_args("search"))
 
     assert created[0].closed is True
 
@@ -353,7 +353,7 @@ def test_non_network_errors_are_not_swallowed(exc):
     _FakeTavilyClient.on_search = _raiser(exc)
 
     with pytest.raises(type(exc)):
-        cli.handle_knowledge_command(_knowledge_args("search"))
+        knowledge_cli.handle(_knowledge_args("search"))
 
 
 def test_real_fallback_path_with_dropped_connection_passes_the_freeze_walk(
@@ -378,7 +378,7 @@ def test_real_fallback_path_with_dropped_connection_passes_the_freeze_walk(
     )
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.handle_knowledge_command(_knowledge_args("search", query="smoke-walk"))
+        knowledge_cli.handle(_knowledge_args("search", query="smoke-walk"))
 
     assert excinfo.value.code == 1
     out = capsys.readouterr().out
@@ -395,7 +395,7 @@ def test_a_server_error_is_not_blamed_on_the_users_connection(capsys):
     )
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.handle_knowledge_command(_knowledge_args("search"))
+        knowledge_cli.handle(_knowledge_args("search"))
 
     assert excinfo.value.code == 1
     out = capsys.readouterr().out
@@ -414,7 +414,7 @@ def test_a_rejected_request_is_not_called_an_outage(capsys):
     )
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.handle_knowledge_command(_knowledge_args("search"))
+        knowledge_cli.handle(_knowledge_args("search"))
 
     assert excinfo.value.code == 1
     out = capsys.readouterr().out
@@ -430,7 +430,7 @@ def test_a_connection_dropped_mid_response_is_a_dropped_connection(capsys):
     )
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.handle_knowledge_command(_knowledge_args("search"))
+        knowledge_cli.handle(_knowledge_args("search"))
 
     assert excinfo.value.code == 1
     out = capsys.readouterr().out
@@ -453,7 +453,7 @@ def test_any_other_request_error_is_still_a_clean_exit(capsys, exc):
     _FakeTavilyClient.on_extract = _raiser(exc)
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.handle_knowledge_command(_knowledge_args("extract"))
+        knowledge_cli.handle(_knowledge_args("extract"))
 
     assert excinfo.value.code == 1
     out = capsys.readouterr().out
@@ -471,7 +471,7 @@ def test_a_duckduckgo_error_status_is_one_line_not_a_traceback(capsys, status, h
     _FakeTavilyClient.on_search = _raiser(SearchStatusError("DuckDuckGo", status))
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.handle_knowledge_command(_knowledge_args("search"))
+        knowledge_cli.handle(_knowledge_args("search"))
 
     assert excinfo.value.code == 1
     out = capsys.readouterr().out

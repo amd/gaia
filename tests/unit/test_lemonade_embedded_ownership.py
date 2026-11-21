@@ -738,6 +738,8 @@ class TestStartupExitMessage:
         import gaia.llm.npu_linux as npu_linux
 
         monkeypatch.setattr(npu_linux, "raise_memlock_soft_limit", lambda: None)
+        # The host's own CA layout is not under test here.
+        monkeypatch.setattr(EmbeddedLemonade, "_ca_overlay", lambda self: None)
         monkeypatch.setenv("LD_LIBRARY_PATH", "/home/u/.gaia/app-core/_internal")
         monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
         self._exits_writing(manager, monkeypatch, b"")

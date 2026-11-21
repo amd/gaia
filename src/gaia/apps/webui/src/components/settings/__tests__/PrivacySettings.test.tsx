@@ -134,7 +134,7 @@ describe('PrivacySettings local only', () => {
 
             const alert = await screen.findByRole('alert');
             expect(alert).toHaveTextContent("Local only is on, but GAIA couldn't check whether your saved model collection.router is a cloud model because the model server isn't answering");
-            expect(alert).toHaveTextContent('Settings → Model');
+            expect(alert).toHaveTextContent('Settings → Agent & model');
             expect(alert).toHaveTextContent('keeps any cloud keys it already holds');
             expect(alert.textContent).not.toMatch(/HTTPConnectionPool|WinError|Request failed|\(/);
             expect(screen.getByRole('switch', { name: 'Local only' })).toBeChecked();

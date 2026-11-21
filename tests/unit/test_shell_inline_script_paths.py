@@ -10,6 +10,7 @@ reach the access prompt; and nothing that was refused before may pass now.
 """
 
 import base64
+import os
 import sys
 from pathlib import Path
 
@@ -373,14 +374,14 @@ def test_an_attached_option_value_inside_the_allowed_paths_passes(layout):
 
 
 def test_a_path_that_cannot_be_resolved_is_refused(layout, monkeypatch):
-    real_resolve = Path.resolve
+    real_realpath = os.path.realpath
 
-    def resolve(self, *args, **kwargs):
-        if "unresolvable" in str(self):
+    def realpath(path, *args, **kwargs):
+        if "unresolvable" in str(path):
             raise OSError("simulated resolution failure")
-        return real_resolve(self, *args, **kwargs)
+        return real_realpath(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "resolve", resolve)
+    monkeypatch.setattr(os.path, "realpath", realpath)
     refusal, _ = _check("cat sub/unresolvable.txt", layout["work"], layout["home"])
 
     assert refusal is not None

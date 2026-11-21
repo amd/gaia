@@ -425,6 +425,11 @@ Testing, add each account as a test user first.
 Agents you granted Google scopes can use every connected Google account.
 To remove one account, run `gaia connectors disconnect google --account
 <address>`; its token is revoked with Google and the others keep working.
+On a keyring GAIA won't read from (a plaintext or weakly encrypted backend,
+or a chain it can't inspect), the account is removed from this PC only and
+GAIA tells you to remove its access at
+[Google's permissions page](https://myaccount.google.com/permissions); see
+[Connectors security model](/security/connections).
 
 ## Revoking access
 

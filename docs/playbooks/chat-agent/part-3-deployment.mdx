@@ -487,7 +487,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     - Small PDF (10 pages): ~2-3 seconds
     - Medium PDF (50 pages): ~8-12 seconds
     - Large PDF (200 pages): ~30-45 seconds
-    - Embedding generation: ~50-100 chunks/second on NPU
+    - Embedding generation: ~50-100 chunks/second on the integrated GPU
   </Accordion>
 </AccordionGroup>
 
@@ -581,7 +581,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     - ~10KB per file watcher event
 
     <Tip>
-    **AI PC Performance:** On Ryzen AI systems, NPU handles embedding generation offloading work from CPU/RAM, improving overall system responsiveness.
+    **AI PC Performance:** On Ryzen AI systems, the integrated GPU handles embedding generation, offloading work from the CPU and improving overall system responsiveness.
     </Tip>
   </Tab>
 

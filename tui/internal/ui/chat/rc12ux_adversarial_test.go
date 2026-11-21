@@ -40,7 +40,7 @@ func TestHostileReportedVersionsKeepTheHeaderOneCleanRow(t *testing.T) {
 	}
 	for name, version := range cases {
 		t.Run(name, func(t *testing.T) {
-			m := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", false, true)
+			m := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", true)
 			m.width, m.height = 80, 24
 			m = feed(t, m, versionedPing(version, version))
 
@@ -78,7 +78,7 @@ func TestHostileReportedVersionsKeepTheHeaderOneCleanRow(t *testing.T) {
 // erase a version the ping did report.
 func TestLiveProbeBeatsThePingButABlankProbeDoesNot(t *testing.T) {
 	c := &versionedClient{version: "0.9.0"}
-	m := NewChatModelForFlagship(c, "gaia", "GAIA", false, true)
+	m := NewChatModelForFlagship(c, "gaia", "GAIA", true)
 	m = feed(t, m, versionedPing("0.3.0", ""))
 	if got := m.agentIdentity(); got != "agent gaia v0.9.0" {
 		t.Errorf("identity = %q, want the probe's 0.9.0", got)
@@ -178,24 +178,34 @@ func TestHoldingCtrlBackspaceEmptiesALongComposerWithoutPanicking(t *testing.T) 
 func TestInterleavedHeadlinesAreEachKeptAndNeverMultiplied(t *testing.T) {
 	m := newTestChat(t)
 	m.expandWork = true
-	a := "Following the plan to compare the term sheets"
-	b := "Following the plan to draft the summary"
+	// Real goals interleave and each heads its own step; the plan runner's
+	// "Following the plan to <request>" is a template and is never shown.
+	a, b := "Compare the term sheets", "Draft the summary"
 	for step := 1; step <= 4; step++ {
-		headline := a
+		goal := a
 		if step%2 == 0 {
-			headline = b
+			goal = b
 		}
 		m = feed(t, m,
 			event.CanonicalStatusEvent{Type: "status", Message: fmt.Sprintf("Executing step %d of the plan", step)},
-			event.CanonicalStatusEvent{Type: "status", Message: headline},
+			event.CanonicalStatusEvent{Type: "status", Message: "Following the plan to " + goal},
+			event.CanonicalStatusEvent{Type: "status", Message: goal},
 			event.CanonicalToolCallEvent{Type: "tool_call", Tool: "read_file"},
 			event.CanonicalToolResultEvent{Type: "tool_result", Tool: "read_file", Preview: "ok"},
 		)
 	}
-	out := ansi.Strip(m.renderLiveRegion())
+	out := ansi.Strip(m.renderWork(&Message{Role: RoleWork, Work: m.activity}))
 	for _, h := range []string{a, b} {
-		if n := strings.Count(out, h); n < 1 || n > 2 {
-			t.Errorf("%q shown %d times:\n%s", h, n, out)
+		if n := strings.Count(out, "● "+h); n != 2 {
+			t.Errorf("%q heads %d steps, want 2:\n%s", h, n, out)
+		}
+		if n := strings.Count(out, h); n != 2 {
+			t.Errorf("%q is said %d times, want once per step:\n%s", h, n, out)
+		}
+	}
+	for _, noise := range []string{"Following the plan", "Executing step"} {
+		if strings.Contains(out, noise) {
+			t.Errorf("plan template %q reached the screen:\n%s", noise, out)
 		}
 	}
 }

@@ -19,8 +19,9 @@ import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
 import { IndexingProgress } from './IndexingProgress';
-import { isServerFailure, serverFailureText } from '../utils/documentFailure';
+import { needsRetry, serverFailureText, serverNotAddedText, waitsForServerReturn } from '../utils/documentFailure';
 import './DocumentLibrary.css';
+import { visibleName } from './CalendarApproval';
 
 /** Split a stored indexing error into a one-line summary and the rest. */
 function splitFailureReason(lastError: string): { summary: string; more: string } {
@@ -334,15 +335,16 @@ export function DocumentLibrary() {
     const totalSize = shownDocs.reduce((sum, d) => sum + d.file_size, 0);
     const failedDocs = shownDocs.filter((d) => d.indexing_status === 'failed');
     // A file that failed only because the model server was down isn't unreadable.
-    const serverWaitCount = failedDocs.filter((d) => isServerFailure(d.error_kind)).length;
-    const unreadableCount = failedDocs.length - serverWaitCount;
+    const serverWaitCount = failedDocs.filter((d) => waitsForServerReturn(d.error_kind)).length;
+    const retryCount = failedDocs.filter((d) => needsRetry(d.error_kind)).length;
+    const unreadableCount = failedDocs.length - serverWaitCount - retryCount;
 
     /** Attach a document where the user chose, and say where it went. */
     const attachToTarget = useCallback(async (docId: string, filename: string) => {
         noticeDocId.current = docId;
         if (!targetSessionId) {
             addDraftDocuments([docId]);
-            setNotice(t('docs.willAttach', { name: filename }));
+            setNotice(t('docs.willAttach', { name: visibleName(filename) }));
             log.doc.info(`"${filename}" will be attached to the next new chat`);
             return;
         }
@@ -359,7 +361,7 @@ export function DocumentLibrary() {
                 d.id === docId ? { ...d, sessions_using: (d.sessions_using ?? 0) + 1 } : d
             )));
         }
-        setNotice(t('docs.attached', { name: filename, chat: targetChatName }));
+        setNotice(t('docs.attached', { name: visibleName(filename), chat: targetChatName }));
         log.doc.info(`Attached "${filename}" to session ${targetSessionId}`);
     }, [targetSessionId, targetChatName, updateSessionInList, addDraftDocuments, t]);
 
@@ -426,9 +428,7 @@ export function DocumentLibrary() {
                 // Its row carries the reason and Retry; attaching it would promise a chat a file it can't search.
                 log.doc.warn(`"${filename}" couldn't be added (${doc.error_kind ?? 'unreadable'}); not attaching it`);
                 const name = doc.filename || filename;
-                setActionError(serverFailureText(doc.error_kind, t)
-                    ? t('docs.notAddedServer', { name })
-                    : t('docs.notAdded', { name }));
+                setActionError(serverNotAddedText(doc.error_kind, name, t) ?? t('docs.notAdded', { name }));
             } else if (doc?.id) {
                 try {
                     await attachToTarget(doc.id, doc.filename || filename);
@@ -536,7 +536,7 @@ export function DocumentLibrary() {
         } catch (err) {
             log.doc.error(`Failed to delete document: ${name}`, err);
             setPendingRemoval((p) => (p?.id === id ? null : p));
-            setActionError(t('docs.deleteFailed', { name, error: requestErrorParam(err) }));
+            setActionError(t('docs.deleteFailed', { name: visibleName(name), error: requestErrorParam(err) }));
             return;
         }
         indexingStartTimes.current.delete(id);
@@ -589,7 +589,7 @@ export function DocumentLibrary() {
             await api.openFileOrFolder(filepath, true);
         } catch (err) {
             log.doc.error(`Failed to open folder for: ${filename}`, err);
-            setActionError(t('docs.openFolderFailed', { name: filename, error: requestErrorParam(err) }));
+            setActionError(t('docs.openFolderFailed', { name: visibleName(filename), error: requestErrorParam(err) }));
         }
     }, [t]);
 
@@ -601,7 +601,7 @@ export function DocumentLibrary() {
             await api.cancelIndexing(id);
         } catch (err) {
             log.doc.error(`Failed to cancel indexing: ${name}`, err);
-            setActionError(t('docs.cancelFailed', { name, error: requestErrorParam(err) }));
+            setActionError(t('docs.cancelFailed', { name: visibleName(name), error: requestErrorParam(err) }));
             return;
         }
         indexingStartTimes.current.delete(id);
@@ -694,7 +694,7 @@ export function DocumentLibrary() {
                             className="btn-cancel"
                             onClick={(e) => { e.stopPropagation(); handleCancelIndexing(doc.id); }}
                             title={t('docs.cancelIndexing')}
-                            aria-label={t('docs.cancelIndexingAria', { name: doc.filename })}
+                            aria-label={t('docs.cancelIndexingAria', { name: visibleName(doc.filename) })}
                         >
                             <StopCircle size={14} />
                             {t('docs.cancel')}
@@ -705,23 +705,24 @@ export function DocumentLibrary() {
             case 'failed': {
                 const hint = doc.error_kind ? PERMANENT_FAILURE_HINTS[doc.error_kind] : undefined;
                 const serverReason = serverFailureText(doc.error_kind, t);
+                const waiting = waitsForServerReturn(doc.error_kind);
                 const lastError = serverReason ?? doc.last_error;
                 const reason = lastError ? splitFailureReason(lastError) : null;
                 return (
                     <div className="doc-failure">
                         <div className="doc-indexing-status">
                             <span
-                                className="doc-status-badge doc-status-failed"
+                                className={waiting ? 'doc-status-badge doc-status-waiting' : 'doc-status-badge doc-status-failed'}
                                 title={lastError || undefined}
-                                aria-label={lastError ? t('docs.failedAria', { error: lastError }) : t('docs.indexingFailed')}
+                                aria-label={lastError ? t(waiting ? 'docs.waitingAria' : 'docs.failedAria', { error: lastError }) : t('docs.indexingFailed')}
                             >
-                                <AlertCircle size={12} /> {hint ? t('docs.cantRead') : t('docs.failed')}
+                                <AlertCircle size={12} /> {hint ? t('docs.cantRead') : waiting ? t('docs.waiting') : t('docs.failed')}
                             </span>
                             <button
                                 className={hint ? 'btn-retry btn-retry-quiet' : 'btn-retry'}
                                 onClick={(e) => { e.stopPropagation(); handleReindex(doc.id); }}
                                 title={hint ? t('docs.retryTitleFix') : t('docs.retryTitle')}
-                                aria-label={t('docs.retryAria', { name: doc.filename })}
+                                aria-label={t('docs.retryAria', { name: visibleName(doc.filename) })}
                                 disabled={reindexingIds.has(doc.id)}
                             >
                                 <RefreshCcw size={hint ? 12 : 14} />
@@ -946,6 +947,9 @@ export function DocumentLibrary() {
                             {serverWaitCount > 0 && (
                                 <span className="doc-stats-failed doc-stats-server">{t.plural('docs.serverWaiting', serverWaitCount)}</span>
                             )}
+                            {retryCount > 0 && (
+                                <span className="doc-stats-failed">{t.plural('docs.needsRetry', retryCount)}</span>
+                            )}
                             <span>&middot;</span>
                             <bdi dir="ltr">{formatSize(totalSize)}</bdi>
                         </div>
@@ -989,7 +993,7 @@ export function DocumentLibrary() {
                         {documents.filter((d) => d.id !== pendingRemoval?.id).map((doc) => (
                             <div key={doc.id} hidden={!matchesFilter(doc)} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
-                                    <DocName name={doc.filename} />
+                                    <DocName name={visibleName(doc.filename)} />
                                     {renderDocStatus(doc)}
                                     {renderUsage(doc)}
                                 </div>
@@ -998,8 +1002,8 @@ export function DocumentLibrary() {
                                         <button
                                             className="btn-icon-sm doc-open-folder"
                                             onClick={() => handleOpenFolder(doc.filepath, doc.filename)}
-                                            title={t('docs.openFolder', { path: doc.filepath })}
-                                            aria-label={t('docs.openFolderAria', { name: doc.filename })}
+                                            title={t('docs.openFolder', { path: visibleName(doc.filepath) })}
+                                            aria-label={t('docs.openFolderAria', { name: visibleName(doc.filename) })}
                                         >
                                             <FolderOpen size={14} />
                                         </button>
@@ -1013,8 +1017,8 @@ export function DocumentLibrary() {
                                             onClick={() => handleAttachDoc(doc.id)}
                                             title={targetSessionId ? t('docs.useIn', { chat: targetChatName }) : t('docs.useNext')}
                                             aria-label={targetSessionId
-                                                ? t('docs.attachAria', { name: doc.filename, chat: targetChatName })
-                                                : t('docs.attachNextAria', { name: doc.filename })}
+                                                ? t('docs.attachAria', { name: visibleName(doc.filename), chat: targetChatName })
+                                                : t('docs.attachNextAria', { name: visibleName(doc.filename) })}
                                         >
                                             <Link2 size={14} />
                                             {targetSessionId ? t('docs.addToThisChat') : t('docs.addToNextChat')}
@@ -1025,7 +1029,7 @@ export function DocumentLibrary() {
                                             className="btn-icon-sm doc-delete"
                                             onClick={() => handleDeleteDoc(doc.id)}
                                             title={t('docs.remove')}
-                                            aria-label={t('docs.removeAria', { name: doc.filename })}
+                                            aria-label={t('docs.removeAria', { name: visibleName(doc.filename) })}
                                         >
                                             <Trash2 size={14} />
                                         </button>

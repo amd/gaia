@@ -428,7 +428,7 @@ def run_query(
             if response.status_code != 200:
                 raise DaemonError(
                     f"the daemon relay refused the '{agent_id}' query "
-                    f"(HTTP {response.status_code}): {client._error_detail(response)} "
+                    f"(HTTP {response.status_code}): {client.error_detail(response)} "
                     f"Check `gaia daemon status` and the daemon log at "
                     f"{paths.log_path()}."
                 )

@@ -10,8 +10,12 @@
 #                  The queue diffs the group against its base, as if its PRs
 #                  were one, and a group that changes nothing in the paths
 #                  filter below (docs only, say) runs no tests at all.
+#                  On a pull request macOS runs only when a changed file
+#                  touches the OS (os_reason in select_tests.py). The ci:full
+#                  label runs the whole suite on all three.
 #   push to main   Linux runs the full suite; Windows and macOS run the
-#                  OS-touching files the merge can reach.
+#                  OS-touching files reachable from the changes since the last
+#                  commit a green push run tested.
 #   nightly        the full suite on all three at the head of main, and Linux
 #                  rebuilds the coverage map the selection reads. A red nightly
 #                  files an issue, which the next green one closes.
@@ -23,7 +27,6 @@
 name: Unit Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:
@@ -39,6 +42,11 @@ on:
       - '.github/actions/**'
       # test_check_dependabot.py checks the real config against the tracked lockfiles.
       - '.github/dependabot.yml'
+      # C++ files the gaiacpp release, model-table and CI-coverage tests read.
+      - 'cpp/CMakeLists.txt'
+      - 'cpp/agents/gaiacpp/main.cpp'
+      - 'cpp/src/model_registry.cpp'
+      - 'cpp/tests/chaos/chaos_gaiacpp.py'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
       # The flagship's npm package files and lock, read by the installer and version tests.
@@ -59,10 +67,14 @@ on:
       - 'scripts/audit/**'
       - 'examples/skill_references_example.py'
       - 'examples/mcp_windows_system_health_agent.py'
+      - 'cpp/packaging/package_lemonade.py'
       - 'eval/ci_lanes.json'
       - 'eval/ci_tiers.json'
       - 'eval/tasks/tasks.json'
       - 'eval/retrieval/**'
+      # test_eval_ci_guide_timeouts.py scales the guide's timeouts by these categories' scenario counts.
+      - 'eval/scenarios/rag_quality/**'
+      - 'eval/scenarios/context_retention/**'
       - 'data/pdf/**'
       - 'cpp/src/unicode_upper_ranges.inc'
       - 'website/src/scripts/download-target.ts'
@@ -79,6 +91,7 @@ on:
       - 'docs/connectors/slack.mdx'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
+      - 'docs/guides/eval-ci.mdx'
       - 'docs/guides/gaia.mdx'
       - 'docs/guides/install.mdx'
       - 'docs/guides/npu.mdx'
@@ -88,6 +101,7 @@ on:
       - 'docs/plans/desktop-installer.mdx'
       - 'docs/reference/cli.mdx'
       - 'docs/runbooks/google-oauth-client.md'
+      - 'docs/sdk/mixins/tool-mixins.mdx'
       - 'docs/sdk/sdks/agent-ui.mdx'
       - 'docs/sdk/sdks/rag.mdx'
       - 'docs/sdk/sdks/skills.mdx'
@@ -112,6 +126,11 @@ on:
       - '.github/actions/**'
       # test_check_dependabot.py checks the real config against the tracked lockfiles.
       - '.github/dependabot.yml'
+      # C++ files the gaiacpp release, model-table and CI-coverage tests read.
+      - 'cpp/CMakeLists.txt'
+      - 'cpp/agents/gaiacpp/main.cpp'
+      - 'cpp/src/model_registry.cpp'
+      - 'cpp/tests/chaos/chaos_gaiacpp.py'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
       # The flagship's npm package files and lock, read by the installer and version tests.
@@ -132,10 +151,14 @@ on:
       - 'scripts/audit/**'
       - 'examples/skill_references_example.py'
       - 'examples/mcp_windows_system_health_agent.py'
+      - 'cpp/packaging/package_lemonade.py'
       - 'eval/ci_lanes.json'
       - 'eval/ci_tiers.json'
       - 'eval/tasks/tasks.json'
       - 'eval/retrieval/**'
+      # test_eval_ci_guide_timeouts.py scales the guide's timeouts by these categories' scenario counts.
+      - 'eval/scenarios/rag_quality/**'
+      - 'eval/scenarios/context_retention/**'
       - 'data/pdf/**'
       - 'cpp/src/unicode_upper_ranges.inc'
       - 'website/src/scripts/download-target.ts'
@@ -152,6 +175,7 @@ on:
       - 'docs/connectors/slack.mdx'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
+      - 'docs/guides/eval-ci.mdx'
       - 'docs/guides/gaia.mdx'
       - 'docs/guides/install.mdx'
       - 'docs/guides/npu.mdx'
@@ -161,6 +185,7 @@ on:
       - 'docs/plans/desktop-installer.mdx'
       - 'docs/reference/cli.mdx'
       - 'docs/runbooks/google-oauth-client.md'
+      - 'docs/sdk/mixins/tool-mixins.mdx'
       - 'docs/sdk/sdks/agent-ui.mdx'
       - 'docs/sdk/sdks/rag.mdx'
       - 'docs/sdk/sdks/skills.mdx'
@@ -196,13 +221,12 @@ jobs:
        contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
     permissions:
       contents: read
-      # A push diffs against the last commit a successful run tested.
-      actions: read
     outputs:
       linux_full: ${{ steps.pick.outputs.linux_full }}
       linux_count: ${{ steps.pick.outputs.linux_count }}
       platform_full: ${{ steps.pick.outputs.platform_full }}
       platform_count: ${{ steps.pick.outputs.platform_count }}
+      platform_os: ${{ steps.pick.outputs.platform_os }}
       linux_triggered: ${{ steps.pick.outputs.linux_triggered }}
     steps:
       - uses: actions/checkout@v7
@@ -227,16 +251,28 @@ jobs:
           key: unit-test-map-${{ github.sha }}-${{ github.run_id }}
           restore-keys: unit-test-map-
 
+      # The last commit a green push run tested, saved by Unit Tests Result.
+      # From the cache, not the REST API: `gh run list` here shared the
+      # GITHUB_TOKEN quota with every other job and failed main with HTTP 403.
+      - name: Restore the last green push commit
+        if: github.event_name == 'push'
+        uses: actions/cache/restore@v6
+        with:
+          path: .unit-tests-green
+          key: unit-tests-green-main-${{ github.sha }}
+          restore-keys: unit-tests-green-main-
+
       - name: Pick the test files this change can reach
         id: pick
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
           QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-          GH_TOKEN: ${{ github.token }}
+          LABEL_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
         run: |
           set -euo pipefail
           filter=()
+          why=""
           case "$EVENT" in
             pull_request) base="origin/$BASE_REF" ;;
             # The group's head holds every batched PR, so this diff covers them
@@ -245,20 +281,30 @@ jobs:
                          filter=(--trigger-paths-from .github/workflows/test_unit.yml) ;;
             # Not event.before: a burst of merges drops the pending runs in
             # between, and their changes would never reach Windows or macOS.
-            push) base=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow test_unit.yml \
-                    --branch main --event push --status success --limit 1 \
-                    --json headSha --jq '.[0].headSha // ""') ;;
-            *) base="" ;;
+            push) base=$(cat .unit-tests-green/sha 2>/dev/null || true)
+                  why="no record of a commit a green push run tested" ;;
+            *) base=""; why="every $EVENT run is a full run" ;;
           esac
-          # No earlier tested commit to diff against: run everything.
-          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+          if [ "$EVENT" = pull_request ] && [ "$LABEL_FULL" = true ]; then
+            base=""; why="the ci:full label is on this pull request"
+          fi
+          if [ -n "$base" ] && ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            why="$base is not in this checkout"; base=""
+          fi
+          if [ "$EVENT" = push ] && [ -n "$base" ] && ! git merge-base --is-ancestor "$base" HEAD; then
+            why="$base is not an ancestor of $GITHUB_SHA"; base=""
+          fi
+          # No base to diff against: run everything on every OS, and say why.
+          if [ -z "$base" ]; then
             {
               echo "linux_full=true"; echo "linux_count=0"; echo "linux_triggered=true"
-              echo "platform_full=true"; echo "platform_count=0"
+              echo "platform_full=true"; echo "platform_count=0"; echo "platform_os=true"
             } >> "$GITHUB_OUTPUT"
-            echo "**Test selection** — full suite on every OS ($EVENT)" >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::Full suite on every OS: $why."
+            echo "**Test selection** — full suite on every OS ($why)" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          # A diff git can't compute exits non-zero here and fails the run.
           python util/select_tests.py select --base "$base" --map test_map.json \
             "${filter[@]}" --out linux.txt --github-output linux
           python util/select_tests.py select --base "$base" --map test_map.json \
@@ -675,9 +721,12 @@ jobs:
     runs-on: macos-latest
     # The full unit suite takes ~33 min here; 30 cut it off at 92%.
     timeout-minutes: 60
+    # On a pull request, only for a change that touches the OS; push, merge
+    # queue, nightly and dispatch runs are not gated.
     if: >-
       !cancelled() && needs.select.result == 'success' &&
-      (needs.select.outputs.platform_full == 'true' || needs.select.outputs.platform_count != '0')
+      (needs.select.outputs.platform_full == 'true' || needs.select.outputs.platform_count != '0') &&
+      (github.event_name != 'pull_request' || needs.select.outputs.platform_os == 'true')
     steps:
       - uses: actions/checkout@v7
 
@@ -841,6 +890,7 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           LINUX_RUNS: ${{ needs.select.outputs.linux_triggered != 'false' }}
           PLATFORM_RUNS: ${{ needs.select.outputs.platform_full == 'true' || needs.select.outputs.platform_count != '0' }}
+          MACOS_GATE: ${{ github.event_name != 'pull_request' || needs.select.outputs.platform_os == 'true' }}
         run: |
           set -euo pipefail
           select=$(jq -r '.select.result' <<<"$NEEDS")
@@ -852,7 +902,10 @@ jobs:
           for job in unit-tests import-floor-py310 offline-integration unit-tests-macos unit-tests-windows; do
             result=$(jq -r --arg j "$job" '.[$j].result' <<<"$NEEDS")
             case "$job" in
-              unit-tests-macos|unit-tests-windows) must_run=$PLATFORM_RUNS ;;
+              unit-tests-windows) must_run=$PLATFORM_RUNS ;;
+              unit-tests-macos)
+                must_run=false
+                if [ "$PLATFORM_RUNS" = true ] && [ "$MACOS_GATE" = true ]; then must_run=true; fi ;;
               *) must_run=$LINUX_RUNS ;;
             esac
             if [ "$result" = success ] || { [ "$result" = skipped ] && [ "$must_run" = false ]; }; then
@@ -863,6 +916,18 @@ jobs:
             fi
           done
           exit "$failed"
+
+      # The next push diffs from here (see "Restore the last green push commit").
+      - name: Record this commit as tested
+        if: github.event_name == 'push'
+        run: mkdir -p .unit-tests-green && echo "$GITHUB_SHA" > .unit-tests-green/sha
+
+      - name: Save the last green push commit
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v6
+        with:
+          path: .unit-tests-green
+          key: unit-tests-green-main-${{ github.sha }}
 
   # The nightly full run on main is what catches anything the selection on a
   # PR or in the merge queue left out, so a red one files an issue.

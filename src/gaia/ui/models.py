@@ -336,6 +336,10 @@ class SettingsResponse(BaseModel):
     # True when GAIA_DYNAMIC_TOOLS is set ⇒ the env wins ⇒ the UI toggle
     # reflects the effective value and disables (no silent no-op).
     dynamic_tools_locked: bool = False
+    # The program that is the GAIA agent; ~/.gaia/config.json, shared with the terminal UI.
+    flagship_agent: Literal["gaiapy", "gaiacpp"] = "gaiapy"
+    # False when gaiacpp is not installed on this PC, so it cannot be chosen.
+    gaiacpp_available: bool = False
     # The shared policy file, not the Agent UI database. Local only clears
     # saved cloud selections and removes runtime cloud keys when it is enabled.
     network_policy: Literal["cloud_allowed", "local_ai_only"] = "cloud_allowed"
@@ -384,6 +388,15 @@ class SettingsUpdateRequest(BaseModel):
             "'goal_driven' (execute approved goals). Default: 'goal_driven'. "
             "'autonomous' (observe, infer, and execute own goals) is not "
             "implemented yet and is rejected (#2005)."
+        ),
+    )
+    flagship_agent: Optional[Literal["gaiapy", "gaiacpp"]] = Field(
+        None,
+        description=(
+            "Which program is the GAIA agent: gaiapy (the Python agent) or "
+            "gaiacpp (the native C++ agent, beta). Applies from the next "
+            "message. Choosing gaiacpp where it is not installed is refused. "
+            "Omit the field to leave the choice unchanged."
         ),
     )
     dynamic_tools: Optional[bool] = Field(

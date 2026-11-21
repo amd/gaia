@@ -28,7 +28,7 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 **Security Model:**
 - `run_shell_command` is confirmation-gated, so interactively every call is shown to the user
 - Read-only list (`ALLOWED_COMMANDS`): what a blanket pre-approval (`GAIA_AUTO_APPROVE_TOOLS`, `auto_approve_gated_tools`) may run
-- Anything else is `TIER_CONFIRM`: it runs once the user approves it (`git commit`, `npm test`, `rm notes.txt`), and is refused under a blanket pre-approval unless the console's `full_access` is on
+- Anything else is `TIER_CONFIRM`: it runs once the user approves it (`git commit`, `npm test`, `rm notes.txt`), and is refused under a blanket pre-approval. With the console's `full_access` on, no tier applies: every line runs
 - `TIER_CONFIRM_ONCE` for what GAIA's own checks don't cover (`git push`, `git -c`, `python -c`, uninspectable PowerShell, shell operators, a path outside the allowed folders): the prompt shows the exact line and its full folder with a risk note, offers no "always", and an approval runs that line once through the shell. A multi-line command (a heredoc) is one of these too: the prompt shows every line, and each line is checked like the first. It is refused under a blanket pre-approval, and `wait_for_condition` never polls one
 - `TIER_REFUSE` for text a prompt can't show honestly (encoded PowerShell, invisible characters or a carriage return, broken quoting, and on Windows a second line, which cmd.exe never runs), for anything that deletes or discards work on a line GAIA can't fully check (`git push --force`, `git reset --hard`, also inside `$(…)` or behind a `-c`), for a granted CLI's `never_offered_actions` (`gh issue close`, `gh pr merge`), and for any of these run through a launcher such as `sudo`, `env`, `timeout`, `nice` or `xargs` (an unfamiliar launcher option is read both ways, so it can't hide the command), and for folders no approval may open. A command refused on its text ends its hint with `NOT_APPROVABLE`, so the agent doesn't tell the user to approve it
 - Every command on a line validated before any of it runs, and the strictest segment decides the line: one `TIER_REFUSE` segment stops it, one `TIER_CONFIRM_ONCE` segment makes the whole line a one-time approval
@@ -364,13 +364,16 @@ at a limit its caller never chose is a failure with no visible cause.
 
 A command killed at its timeout still returns what it printed: commands run
 with `PYTHONUNBUFFERED=1` unless the command or the user's environment sets it,
-so a Python child's output isn't lost in its buffer. The result's `hint` never
-suggests a larger timeout. For a `test` or `script` command it names the files
-the turn changed and says to run the check on just those, or, with nothing
-changed, to narrow the run to one test file or the edited files: a repo-wide
-lint or test run that blew one budget usually blows a bigger one too. Any other
-class is pointed at a background run polled with `wait_for_condition`, or at
-shorter steps.
+so a Python child's output isn't lost in its buffer. For a `test` command, or
+a `script` command that runs a test or lint check (`python util/lint.py`,
+`python -m flake8`), the result's `hint` names the files the turn changed and
+says to run the check on just those, or, with nothing changed, to narrow the
+run to one test file or the edited files; it never suggests a larger timeout,
+because a repo-wide lint or test run that blew one budget usually blows a
+bigger one too. Any other `script` command (a data job, a seed or training
+script) may just be slow: its hint offers a background run polled with
+`wait_for_condition`, or a re-run with a larger timeout up to the 3600s
+ceiling. Any other class is pointed at a background run, or at shorter steps.
 
 ### Waiting Without Spinning
 
@@ -503,7 +506,7 @@ denied because nobody could be asked, returns `status: "denied"` with
 where a person can be asked they are, and otherwise the call is refused with
 the command to run by hand.
 
-### Bypass Permissions
+### Full access
 
 Off by default. Turned on only by the flagship sidecar's `--full-access`
 launch flag or the TUI's `/full-access confirm` (a bare `/full-access` only
@@ -511,53 +514,41 @@ explains the mode), both of which set `full_access` on the session's output
 handler. `full_access_active()` reads that attribute live,
 so a mid-session toggle takes effect on the next command.
 
-When on, `_validate_command` short-circuits the whole read-only policy above and
-answers one question instead: is the binary in
-`ALLOWED_COMMANDS | DEVELOPER_COMMANDS`?
+When on, nothing above applies. `_line_verdict` returns no error for any line
+that has a command on it, so there is no command list, no excluded command
+(`rm`, `rmdir` and `del` run), no path check on the working folder, a `cd` or an
+argument, no credential-file or link check, and no refusal of a package install,
+a `gaia skill` command or a server. `ALLOWED_COMMANDS` is unchanged: it is the
+no-prompt list of the other modes.
 
-```python
-DEVELOPER_COMMANDS = frozenset({
-    "node", "npm", "make", "cmake", "go", "cargo",
-    "sed", "awk", "curl", "sleep", "timeout", "export", "cp", "mv",
-    # consolidation, not new reach — these already have their own paths
-    "python", "python3", "pytest", "gh", "git",
-})   # "rm" deliberately excluded
-```
+How a line runs:
 
-`git` is in the set, so the binary policy that holds `git push`, `git reset` and
-`git rebase` does not apply under bypass. Without bypass those commands ask once
-instead of failing. That drops a tripwire, not a boundary:
-`python` and `make` reach git by shelling out regardless. Leaving it out would
-also have made bypass *stricter* than the default tier, where git's read-only
-floor still runs `git status`.
+- A line the step runner can split (`cd build && make | tee out.txt`) runs step
+  by step through a shell, so a `cd` that ran still carries to the next call.
+  `_full_access_steps` decides this.
+- Any other line goes to the shell whole (`sh`, or `cmd.exe` on Windows):
+  control flow (`for`, `if`, `while`), a `( )` group, an unterminated heredoc, a
+  quoting the runner reads differently from the shell. Such a line does not
+  move the session's folder.
+- On Windows a command of several lines is joined with `&` (`_cmd_lines`), since
+  `cmd.exe` stops at the first line break. A line break inside a quoted
+  argument (`python -c "<code>"`) cannot pass through `cmd.exe`, so that one
+  command is started directly.
 
-`ALLOWED_COMMANDS` is unchanged — the developer set is separate, so the
-read-only tier keeps meaning what it says. The operator block and the rate limit
-come off with it, and the per-segment `_split_pipeline` + `_validate_command`
-walk stays intact so every invocation is still audited to
-`~/.gaia/cache/file_audit.log`.
+A program that is not installed fails with the shell's own error. The rate limit
+is off, for `wait_for_condition` too. The process a command starts is not marked
+as started by an agent (`GAIA_AGENT_CHILD`). Every line is still audited to
+`~/.gaia/cache/file_audit.log`, with the segments the walk found.
 
-Chaining and pipes are not what bypass buys: `&&`, `||`, `;` and `|` run by
-default, each step judged on its own binary. What the operator block still holds
-back — and bypass lifts — is redirection (`>`, `<`), backgrounding (`&`),
-substitution (`` ` ``, `$()`) and the newline, the operators only a shell can
-act on. Those are also why a bypassed step runs through a shell on every
-platform, not just Windows.
+`Agent._policy_refusal` skips the Python tools' checks under full access
+(`python_scope`, `credential_reads`, `python_human_only`), and a refusal GAIA
+made by itself is neither recorded on the denied-effects ledger nor honoured
+from it. A call the user declined still is. A folder the user removed from the
+chat is still not used as the working folder.
 
-Segment separators include the newline, not just `&&`, `||`, `;`, `&` and `|` —
-the shell running the string treats a line break as a command separator, so the
-walk has to as well, or a second command rides in unvalidated and unaudited. A
-newline inside quotes stays ordinary data.
-
-A command that is *only* a skill-granted CLI runs argv-only, never through a
-shell, so a redirect on that one path is refused rather than passed to the
-binary as a literal argument. `_is_lone_granted_segment` is what both the
-pre-flight refusal and the executor's `use_shell` read, so they cannot disagree
-about which commands take it.
-
-This permits arbitrary code execution, and is reachable on the stdio transport
-only. See [Security Model](/plans/security-model) §4.5 for the full blast radius
-and why the HTTP transport is excluded.
+This permits arbitrary code execution. It is reachable on the stdio transport
+and, through `POST /v1/gaia/sessions/{id}/bypass`, on an HTTP session. See
+[Security Model](/plans/security-model) §4.5.
 
 A heredoc (`python3 - <<'EOF' ... EOF`) is input to the command that opened
 it, not a command of its own: the body is stripped before the binary walk
@@ -626,8 +617,14 @@ for arg in cmd_parts[1:]:
         if candidate_path.startswith(("http://", "https://", "git://")):
             continue
 
-        # Resolve and validate path
-        resolved_path = str(Path(cwd).joinpath(candidate_path).resolve())
+        # Judge the canonical spelling the file tools use; a share on another
+        # computer or a device path is refused outright
+        try:
+            resolved_path = canonical_path(
+                join_under(cwd, candidate_path), for_comparison=True
+            )
+        except UncheckablePathError as exc:
+            return {"status": "error", "error": f"Access denied: {exc}"}
         if not self.path_validator.is_path_allowed(resolved_path):
             return {
                 "status": "error",
@@ -639,7 +636,7 @@ for arg in cmd_parts[1:]:
 
 ## Testing Requirements
 
-**File:** `tests/agents/chat/test_shell_tools_mixin.py`
+The block below is an illustrative example, not a file in the repo. The real tests are under `tests/unit/`, for example `tests/unit/test_shell_guardrails.py`.
 
 ```python
 def test_run_shell_command_success(agent):

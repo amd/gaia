@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
+import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage, AgentPrograms, AgentDownload } from '../types';
 import type { LogReadResponse, LogSourcesResponse, ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import type { PageElementWire } from '../../services/browser-pane/contract';
@@ -249,6 +249,20 @@ export async function updateSettings(data: Partial<Settings>): Promise<Settings>
     return apiFetch<Settings>('PUT', '/settings', data);
 }
 
+/** Both agent programs: installed or not, their size, and any running gaiacpp download. */
+export async function getAgentPrograms(): Promise<AgentPrograms> {
+    return apiFetch<AgentPrograms>('GET', '/agent-programs');
+}
+
+/** Start downloading gaiacpp, or join the download already running. */
+export async function startAgentDownload(): Promise<AgentDownload> {
+    return apiFetch<AgentDownload>('POST', '/agent-programs/gaiacpp/download');
+}
+
+export async function getAgentDownload(): Promise<AgentDownload> {
+    return apiFetch<AgentDownload>('GET', '/agent-programs/gaiacpp/download');
+}
+
 export async function loadModel(modelName: string, ctxSize?: number, force = false): Promise<{ status: string; model: string; ctx_size: number }> {
     return apiFetch('POST', '/system/load-model', { model_name: modelName, ctx_size: ctxSize, force });
 }
@@ -284,6 +298,15 @@ export async function downloadModel(
         model_name: modelName,
         force,
         load_after: loadAfter,
+    });
+}
+
+/** Forget a failed download on the server, so it stays dismissed after a reload. */
+export async function dismissDownloadFailure(
+    modelName: string,
+): Promise<{ status: string; model: string }> {
+    return apiFetch('POST', '/system/download-progress/dismiss', {
+        model_name: modelName,
     });
 }
 
@@ -636,7 +659,7 @@ const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'commentary', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'skill_use', 'agent_error',
     'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
-    'followup_taken', 'followup_returned', 'followup_unavailable', 'context_usage',
+    'followup_taken', 'followup_returned', 'followup_unavailable', 'context_usage', 'draft',
 ]);
 
 /** What a send carries besides its text and callbacks. */

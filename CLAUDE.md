@@ -315,7 +315,7 @@ The PR / commit message is where multi-paragraph context lives. The code carries
 
 **Why the rule exists:** fallbacks hide regressions. A review bot silently downgraded from Opus to a smaller model looks fine but produces worse reviews for weeks. A config loader that defaults a missing API key to `""` produces confusing 401s deep in the request pipeline instead of a clear `"ANTHROPIC_API_KEY is not set"` at startup. Better a loud error the user can fix than a quiet wrong answer.
 
-**On existing violations:** the codebase has pre-existing `except Exception: pass` blocks (mostly in `src/gaia/ui/`) that predate this rule. They are **tech debt, not precedent**. When you touch a file that has one, fix it in the same commit — add a specific exception type, log with context, or re-raise. Don't cite existing violations to justify adding new ones.
+**On existing violations:** the codebase has pre-existing `except Exception: pass` blocks that predate this rule. They are **tech debt, not precedent**. When you touch a file that has one, fix it in the same commit — add a specific exception type, log with context, or re-raise. Don't cite existing violations to justify adding new ones.
 
 ### Testing Requirements
 
@@ -581,7 +581,6 @@ gaia/
 │   ├── agents/         # Agent framework (no agents live in core)
 │   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent mixins
 │   │   ├── tools/      # Cross-agent tool mixins (rag, file, shell, browser, scratchpad, screenshot…)
-│   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
 │   │   #   The one packaged agent lives in hub/agents/gaia/python/ (the
 │   │   #   flagship, incl. its ChatAgent base). Per-task agents were collapsed
@@ -590,12 +589,15 @@ gaia/
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
 │   │   └── llm/        # LLM standalone app
+│   ├── automations/    # Reminders, alerts, triggers, summaries (gaia automation)
 │   ├── audio/          # Audio: Lemonade ASR, speaker diarization, TTS, media decode
-│   ├── chat/           # Agent SDK (AgentSDK class, prompts, app entry)
+│   ├── browser/        # Live-browser automation (Playwright) behind the browser_use tools
+│   ├── chat/           # Agent SDK (AgentSDK class, prompts)
 │   ├── code_index/     # Code indexing/search backend
 │   ├── connectors/     # Connector framework (Google/GitHub OAuth, MCP-server connectors, grants)
 │   ├── daemon/         # Headless daemon (gaia daemon): custody, broker, scheduler, sidecars
 │   ├── database/       # DatabaseMixin and DatabaseAgent
+│   ├── engineering/    # Developer-only coding-app context bridge (gaia mcp engineering)
 │   ├── eval/           # Evaluation framework
 │   ├── factory/        # Claude Code session-corpus harvest/analysis (LLM-free, local cache)
 │   ├── filesystem/     # Filesystem service/utilities
@@ -603,9 +605,9 @@ gaia/
 │   ├── hub/            # Download-server client: fetch, verify, install agent binaries (gaia init, daemon)
 │   ├── img/            # Shared image assets
 │   ├── installer/      # Install/init commands (gaia init, lemonade installer)
-│   ├── llm/            # LLM backend clients (Lemonade, Claude, OpenAI) + providers/
+│   ├── llm/            # LLM backend clients + providers/ (Lemonade, Claude, Fireworks)
 │   ├── mcp/            # Model Context Protocol servers/clients
-│   ├── messaging/      # Messaging adapters (Telegram, …)
+│   ├── messaging/      # Messaging adapters (Telegram, Slack, Discord)
 │   ├── rag/            # Document retrieval (RAG)
 │   ├── schedule/       # Cron scheduling backend (gaia schedule)
 │   ├── sd/             # Stable Diffusion tool mixin (SDToolsMixin)
@@ -619,22 +621,49 @@ gaia/
 │   ├── vlm/            # Vision LLM tool mixin (VLMToolsMixin, structured extraction)
 │   ├── web/            # Web utilities (search/fetch backend)
 │   └── cli.py          # Main CLI entry point (all `gaia <command>` subparsers)
+├── src/vscode/gaia/    # VS Code extension
 ├── tests/              # Test suite
 │   ├── unit/           # Unit tests
 │   ├── mcp/            # MCP integration tests
 │   ├── integration/    # Cross-system integration tests
 │   ├── installer/      # Installer / gaia init tests
+│   ├── hardware/       # Tests that need real AMD hardware (self-hosted runners)
+│   ├── setup_journey/  # Clean-PC setup journey tests
 │   ├── stress/         # Stress/load tests
 │   ├── electron/       # Electron app tests (Jest)
 │   ├── fixtures/       # Shared test fixtures/data
 │   └── test_*.py       # Top-level feature tests (sdk, api, chat, code, rag, eval…)
 ├── hub/                # Packages GAIA ships — agents/<id>/{npm,python}/, skills/, components/
+│   └── agents/gaia/python/  # gaiapy: the Python harness (package gaia_agent, binary gaia-agent)
+├── cpp/                # C++17 agent framework (CMake project gaia-cpp)
+│   ├── agents/gaiacpp/ # gaiacpp: the native harness (binary gaiacpp)
+│   ├── agents/bash/    # gaia-bash coding agent
+│   └── examples/       # Single-file demo agents (health, wifi, process, vlm…)
 ├── tui/                # Go terminal UI (module github.com/amd/gaia/tui)
+├── eval/               # Eval scenarios, corpus, CI lanes and tiers (the framework is src/gaia/eval/)
+├── examples/           # Example Python agents built on the SDK
+├── installer/          # Installers: NSIS, macOS pkg, Linux packages, install.ps1 / install.sh
+├── website/            # amd-gaia.ai marketing site (Astro)
+├── workers/            # Cloudflare Workers: download server (agent-hub), admin, website-router
 ├── scripts/            # Build, install, and launch scripts
 ├── util/               # Repo tooling (lint.py, check_doc_links.py, …)
 ├── docs/               # Documentation (MDX format)
 └── .github/workflows/  # CI/CD pipelines
 ```
+
+### Two harnesses: gaiapy and gaiacpp
+
+The flagship GAIA agent is one agent with two interchangeable programs
+("harnesses") behind it. Both speak the same sidecar/stdio contract, so the
+Agent UI and the TUI drive either one.
+
+| Harness | What it is | Source | Binary |
+|---------|------------|--------|--------|
+| `gaiapy` | The Python harness: every tool and feature, the default | `hub/agents/gaia/python/gaia_agent/` on the framework in `src/gaia/` | `gaia-agent` |
+| `gaiacpp` | The native C++ harness: fast and light, fewer features, beta | `cpp/agents/gaiacpp/` on the framework in `cpp/` | `gaiacpp` |
+
+`flagship_agent` in `~/.gaia/config.json` (`gaiapy` or `gaiacpp`) picks one;
+unset, the Python harness runs.
 
 ### Console Script Entry Points
 
@@ -714,12 +743,14 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `filesystem` | `gaia.agents.tools.filesystem_tools.FileSystemToolsMixin` | File system navigation |
 | `scratchpad` | `gaia.agents.tools.scratchpad_tools.ScratchpadToolsMixin` | SQL scratchpad tables for data analysis |
 | `browser` | `gaia.agents.tools.browser_tools.BrowserToolsMixin` | Web search, page fetch, download |
+| `browser_use` | `gaia.agents.tools.browser_use_tools.BrowserUseToolsMixin` | Live-browser tools: open, observe, act, and sign in |
 | `email` | `gaia.agents.tools.email_tools.EmailToolsMixin` | Read-only mailbox tools (Gmail / Outlook) |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
 | `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
 | `skill_learning` | `gaia.agents.tools.skill_learning_tools.SkillLearningToolsMixin` | Persist lessons learned while running a skill |
 | `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio, video or a video link via Lemonade, label speakers, extract a timestamped list, export subtitles |
+| `dictation` | `gaia.agents.tools.dictation_tools.DictationToolsMixin` | Turn a document into an MP3 or WAV with the local Kokoro voice |
 | `audio_generation` | `gaia.agents.tools.audio_generation_tools.AudioGenerationToolsMixin` | Generate WAV music and sound effects via Lemonade |
 | `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 | `reasoning_effort` | `gaia.agents.tools.reasoning_tools.ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
@@ -732,8 +763,8 @@ When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can c
 - Lemonade lists no FLM model and refuses to pull one until its `flm:npu` backend is installed, so a download installs the backend first (`ensure_npu_backend`, and `Client.Pull` in the TUI). A pasted FastFlowLM link (`-NPU2` repo) resolves through that FastFlowLM release's `model_list.json` to the built-in, pulled by name.
 - Feature tier: each `MODELS` entry sets `feature_tier`. Gemma E4B (GPU and FLM) is `compact`, which withholds the scratchpad, email, image-generation and skill-hub tools and the skills that need them; everything else is `full`. One table, [`src/gaia/agents/base/model_features.py`](src/gaia/agents/base/model_features.py); `GAIA_FEATURE_TIER` forces a tier. Give a compact model a feature back only once it passes that feature's evals.
 - Agents that leave `model_id` unset call `resolve_default_chat_model()` — `default_model`, else `DEFAULT_MODEL_NAME`. That covers GaiaAgent and ChatAgent. Sharing one model id is what keeps switching agents from evicting and cold-reloading the resident model.
-- Context window: a model that declares `max_ctx_size` and `kv_bytes_per_token` in `MODELS` ([`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)) gets the largest window that fits the GPU memory Lemonade reports (`largest_context` in [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py)), and the fit check charges the KV cache at that same window. Every other model gets its `min_ctx_size`, else `GPU_CTX_SIZE` (65536). FLM models size the same way, against system RAM (`gemma4-it-e4b-FLM` reaches 128K); `NPU_CTX_SIZE` (32768, FastFlowLM's default) is only the starting window for an FLM build with no memory figures, never a limit. Settings › Model (`context_sizes`) and `GAIA_CTX_SIZE` override it on any device, up to the model's `max_context_window`. Gemma-4-E4B loads at 65536 (the eval baseline was captured there) when memory allows. Before every load, free memory is checked too (`check_free_memory` in `model_fit.py`): when it is short, the window drops in 8K steps to a 32K floor, and below that the load is refused with how much is needed and free.
-- Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported. The RAG SDK reads scans and images with a tested vision model already loaded, else the default chat model when it has vision, else Gemma, and none while chat runs on the NPU (`resident_vision_model`, `resolve_default_vision_model`). When that pick isn't downloaded and the user chose no `vision_model`, the image tools and RAG read with a downloaded `VISION_CHAT_MODELS` entry, a loaded one first (`downloaded_vision_model`, from the VLM client's `check_availability` and `_refuse_missing_vlm`); with none on disk they ask for the download
+- Context window: a model that declares `max_ctx_size` and `kv_bytes_per_token` in `MODELS` ([`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)) gets the largest window that fits the GPU memory Lemonade reports (`largest_context` in [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py)), and the fit check charges the KV cache at that same window. Every other model gets its `min_ctx_size`, else `GPU_CTX_SIZE` (65536). FLM models size the same way, against system RAM (`gemma4-it-e4b-FLM` reaches 128K); `NPU_CTX_SIZE` (32768, FastFlowLM's default) is only the starting window for an FLM build with no memory figures, never a limit. Settings › Agent & model (`context_sizes`) and `GAIA_CTX_SIZE` override it on any device, up to the model's `max_context_window`. Gemma-4-E4B loads at 65536 (the eval baseline was captured there) when memory allows. Before every load, free memory is checked too (`check_free_memory` in `model_fit.py`): when it is short, the window drops in 8K steps to a 32K floor, and below that the load is refused with how much is needed and free.
+- Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported. The RAG SDK and the image tools (`analyze_image`, `answer_question_about_image`) read scans and images with a tested vision model already loaded, else the default chat model when it has vision, else Gemma, and none while chat runs on the NPU (`resident_vision_model`, `resolve_default_vision_model`). When that pick isn't downloaded and the user chose no `vision_model`, the image tools and RAG read with a downloaded `VISION_CHAT_MODELS` entry, a loaded one first (`downloaded_vision_model`, from the VLM client's `check_availability` and `_refuse_missing_vlm`); with none on disk they ask for the download
 - Image generation (SD): `SDXL-Turbo`
 
 ### IMPORTANT: Never hardcode how Lemonade is started — `lemonade-server serve` is dead
@@ -780,20 +811,25 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia knowledge {search|extract|usage}` - Web knowledge via Tavily (search/extract)
 
 **Servers & infrastructure:**
-- `gaia daemon` - The headless daemon (one machine-wide custody process; supervises sidecar agents)
+- `gaia daemon {start|status|stop|restart|agents|start-agent|stop-agent|logs}` - The headless daemon (one machine-wide custody process; supervises sidecar agents)
 - `gaia api` - OpenAI-compatible API server
-- `gaia mcp {start|stop|status|test|agent|serve|tui|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
+- `gaia mcp {start|stop|status|test|agent|serve|tui|list|tools|test-client|code-index|engineering}` - MCP bridge (add/remove moved to the connectors framework, #977)
 - `gaia schedule {add|list|show|remove|pause|resume|run|daemon}` - Run a skill or prompt on a cron schedule
 - `gaia telegram {start|stop|status}` - Telegram messaging adapter
 - `gaia slack {setup|start|stop|connect|decline|status}` - Slack messaging adapter
+- `gaia discord` - Discord messaging adapter (drive the agent from a Discord DM)
+- `gaia automation` - Reminders, alerts, triggers and summaries GAIA runs on its own
+- `gaia gateway` - Connect GAIA to the AMD LLM gateway (requires Lemonade >= 11.8)
 - `gaia connectors` - Manage connectors (Google/GitHub OAuth, MCP servers) and per-agent grants
 - `gaia cache {status|clear}` - Cache management
 
 **Setup & utilities:**
 - `gaia init` - Setup Lemonade Server and download models
-- `gaia lemonade embedded {start|stop|status|install|install-backend}` - GAIA's private, self-contained Lemonade instance (#3121)
+- `gaia lemonade embedded {start|stop|status|install|install-backend|uninstall}` - GAIA's private, self-contained Lemonade instance (#3121)
+- `gaia lemonade {connect|detect|status}` - Point GAIA at a Lemonade Server and check it
 - `gaia uninstall` - Tiered cleanup of `~/.gaia` and caches
 - `gaia config {show|get|set}` - Persistent config in `~/.gaia/config.json`
+- `gaia trust {list|add|decline|forget}` (also `gaia project trust`) - Saved folder trust decisions
 - `gaia skill` - Author and manage agent skills (`SKILL.md` capabilities)
 - `gaia download` - Download a model
 - `gaia kill` - Kill stray GAIA / Lemonade processes
@@ -815,6 +851,7 @@ the installers. **Skills are the one exception:** each final release publishes
 
 **Evaluation & analysis** (see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)):
 - `gaia eval agent` - Run the agent eval benchmark (`--fix` auto-fixes failures)
+- `gaia eval {sessions|code|retrieval|memory|tasks}` - Other benchmarks: real Claude Code sessions, code generation, retrieval, long-run memory, outcome-scored tasks
 - `gaia perf-vis` - Visualize performance results
 
 **Standalone binaries** (separate `console_scripts`, not subcommands):

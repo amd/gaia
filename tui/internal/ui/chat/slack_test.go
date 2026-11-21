@@ -15,7 +15,7 @@ import (
 
 func slackModel(t *testing.T) ChatModel {
 	t.Helper()
-	m := NewChatModel(&nullClient{}, "gaia", "", false)
+	m := NewChatModel(&nullClient{}, "gaia", "")
 	m.width, m.height = 100, 30
 	return m
 }

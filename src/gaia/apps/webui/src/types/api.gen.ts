@@ -40,11 +40,13 @@ export interface ApiSchemas {
   DiscordStartRequest: DiscordStartRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
+  DismissDownloadRequest: DismissDownloadRequest;
   DocumentListResponse: DocumentListResponse;
   DocumentResponse: DocumentResponse;
   DocumentUploadRequest: DocumentUploadRequest;
   DownloadProgress: DownloadProgress;
   EditScheduleRequest: EditScheduleRequest;
+  EmbedderBody: EmbedderBody;
   EvalMailboxRequest: EvalMailboxRequest;
   FileEntry: FileEntry;
   FileListResponse: FileListResponse;
@@ -65,6 +67,9 @@ export interface ApiSchemas {
   GpuMemoryRevertRequest: GpuMemoryRevertRequest;
   GrantRequest: GrantRequest;
   HTTPValidationError: HTTPValidationError;
+  ImageModel: ImageModel;
+  ImageSettings: ImageSettings;
+  ImageSettingsUpdate: ImageSettingsUpdate;
   IndexFolderRequest: IndexFolderRequest;
   IndexFolderResponse: IndexFolderResponse;
   InferenceCommit: InferenceCommit;
@@ -561,6 +566,9 @@ export interface DiscoveryCommitItem {
   entity?: string | null;
   sensitive?: boolean;
 }
+export interface DismissDownloadRequest {
+  model_name: string;
+}
 /**
  * List of documents.
  */
@@ -632,6 +640,12 @@ export interface EditScheduleRequest {
    * IANA time zone the schedule's times are in. Defaults to the server machine's zone.
    */
   timezone?: string | null;
+}
+/**
+ * ``npu`` or ``gpu``; None is the default (the GPU).
+ */
+export interface EmbedderBody {
+  device?: ("npu" | "gpu") | null;
 }
 export interface EvalMailboxRequest {
   attached: boolean;
@@ -780,6 +794,34 @@ export interface ValidationError {
   loc: (string | number)[];
   msg: string;
   type: string;
+}
+export interface ImageModel {
+  default_size: string;
+  default_steps: number;
+  downloaded: boolean;
+  downloads_on_first_use: boolean;
+  id: string;
+  recipe?: string | null;
+  size_gb?: number | null;
+  sizes: string[];
+}
+export interface ImageSettings {
+  chat_model: string;
+  chat_model_creates_images: boolean;
+  max_steps?: number;
+  model: string;
+  model_available: boolean;
+  models: ImageModel[];
+  size: string | null;
+  steps: number | null;
+}
+/**
+ * Fields left out keep their value; ``null`` size or steps means automatic.
+ */
+export interface ImageSettingsUpdate {
+  model?: string | null;
+  size?: string | null;
+  steps?: number | null;
 }
 /**
  * Request to index all supported documents in a folder.
@@ -1412,6 +1454,8 @@ export interface SettingsResponse {
   custom_model?: string | null;
   dynamic_tools?: boolean;
   dynamic_tools_locked?: boolean;
+  flagship_agent?: "gaiapy" | "gaiacpp";
+  gaiacpp_available?: boolean;
   model_status?: ModelStatus | null;
   network_policy?: "cloud_allowed" | "local_ai_only";
   policy_notices?: PolicyNotice[];
@@ -1437,6 +1481,10 @@ export interface SettingsUpdateRequest {
    * Dynamic tool loading: send the tool list in short form and full docs only as needed, to cut first-turn TTFT without breaking the prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.
    */
   dynamic_tools?: boolean | null;
+  /**
+   * Which program is the GAIA agent: gaiapy (the Python agent) or gaiacpp (the native C++ agent, beta). Applies from the next message. Choosing gaiacpp where it is not installed is refused. Omit the field to leave the choice unchanged.
+   */
+  flagship_agent?: ("gaiapy" | "gaiacpp") | null;
   /**
    * Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud models, clears saved cloud model choices, and removes cloud keys from GAIA's running Lemonade server. Omit to leave the policy unchanged.
    */

@@ -151,7 +151,10 @@ class ChatAgent(
         pass
 
     def load_session(self, session_id: str) -> bool:
-        """Load saved session, restoring indexed docs and history."""
+        """Load saved session, restoring indexed docs and history.
+
+        Forgets every "always" answer given so far once the session is found.
+        """
         pass
 
     def save_current_session(self) -> bool:
@@ -322,7 +325,7 @@ def _validate_and_open_file(self, file_path: str, mode: str = "r"):
 ### Unit Tests
 
 ```python
-# tests/agents/test_chat_agent.py
+# tests/test_chat_agent.py
 
 def test_chat_agent_initialization(tmp_path):
     """Test ChatAgent initializes correctly."""

@@ -1282,6 +1282,14 @@ def build_parser():
         "the turn (default: config default_model, else the agent's)",
     )
     parser.add_argument(
+        "--yes",
+        "-y",
+        dest="print_yes",
+        action="store_true",
+        help="With -p: download the run's model without asking when it is not "
+        "downloaded yet (non-interactive/CI use)",
+    )
+    parser.add_argument(
         "--output-format",
         dest="print_output_format",
         choices=["text", "json"],
@@ -2105,59 +2113,11 @@ def build_parser():
 
     schedule_parser.set_defaults(action="schedule")
 
-    # Knowledge command — web research via the Tavily wrapper
-    knowledge_parser = subparsers.add_parser(
-        "knowledge",
-        help="Web research via Tavily (search|extract|usage), with caching and a credit budget",
-    )
-    knowledge_subparsers = knowledge_parser.add_subparsers(
-        dest="knowledge_action", help="knowledge action to perform"
-    )
+    # Knowledge command — web research via the Tavily wrapper. Lives in
+    # gaia.knowledge_cli to keep this file lean.
+    from gaia import knowledge_cli
 
-    k_search = knowledge_subparsers.add_parser("search", help="Run a web search")
-    k_search.add_argument("query", help="Search query")
-    k_search.add_argument(
-        "--max-results", type=int, default=5, help="Max results (default: 5)"
-    )
-    k_search.add_argument(
-        "--depth",
-        choices=("basic", "advanced"),
-        default="basic",
-        help="Search depth — advanced costs more credits (default: basic)",
-    )
-    k_search.add_argument(
-        "--budget",
-        type=int,
-        default=None,
-        help="Credit cap for this session; omit for unlimited",
-    )
-    k_search.add_argument(
-        "--no-block",
-        action="store_true",
-        help="Warn instead of blocking when the budget cap is exceeded",
-    )
-
-    k_extract = knowledge_subparsers.add_parser(
-        "extract", help="Extract clean content from one or more URLs (requires Tavily)"
-    )
-    k_extract.add_argument("urls", nargs="+", help="One or more URLs to extract")
-    k_extract.add_argument(
-        "--depth",
-        choices=("basic", "advanced"),
-        default="basic",
-        help="Extract depth (default: basic)",
-    )
-    k_extract.add_argument(
-        "--budget", type=int, default=None, help="Credit cap for this session"
-    )
-    k_extract.add_argument(
-        "--no-block",
-        action="store_true",
-        help="Warn instead of blocking when the budget cap is exceeded",
-    )
-
-    knowledge_subparsers.add_parser("usage", help="Show cached credit-usage totals")
-    knowledge_parser.set_defaults(action="knowledge")
+    knowledge_cli.add_subparser(subparsers)
 
     # Add model download command
     download_parser = subparsers.add_parser(
@@ -3023,6 +2983,12 @@ afterwards (or `swebench <run_dir>` does, later).
         action="store_true",
         help="Give GAIA no path boundary and no shell guardrails, the reach "
         "Claude Code has with its permissions skipped",
+    )
+    tasks_run_parser.add_argument(
+        "--research-command",
+        action="store_true",
+        help="Send each research task as `/research <prompt>`, GAIA's research "
+        "mode (gaia harness only)",
     )
     tasks_run_parser.add_argument(
         "--meter",
@@ -4416,7 +4382,10 @@ def _handle_eval_tasks(args):
             if "error" in grade:
                 print(f"  {task_id}: judge failed - {grade['error']}")
             else:
-                scores = " ".join(f"{a}={grade[a]}" for a in ft.AXES)
+                shown = ft.AXES + tuple(
+                    k for k in ft.RESEARCH_AXES + ft.RESEARCH_VERDICTS if k in grade
+                )
+                scores = " ".join(f"{a}={grade[a]}" for a in shown)
                 print(f"  {task_id}: {scores} | {grade['one_line']}")
 
         print(f"[JUDGE] {judge_model}")
@@ -4497,6 +4466,7 @@ def _handle_eval_tasks(args):
                 therock_url=args.therock_url,
                 fence=args.fence,
                 full_access=args.full_access,
+                research_command=args.research_command,
                 repeats=args.repeats,
                 meter=args.meter,
                 fireworks_account=args.fireworks_account,
@@ -4706,7 +4676,7 @@ def _handle_schedule(args):
                 f"  gaia schedule add --name {args.name} "
                 + (f'--at "{args.at}"' if args.at else f'--cron "{args.cron}"')
                 + ' --prompt "<text>"\n'
-                "Track progress: https://github.com/amd/gaia/issues/1019",
+                "Track progress: https://github.com/amd/gaia/issues/6470",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -4998,6 +4968,10 @@ def _init_model_choices(args, profile: str):
 
 
 def main():
+    from gaia.platform_guard import avoid_wmi
+
+    # Before anything asks `platform`: a timed-out WMI query crashes the process.
+    avoid_wmi()
     from gaia.logger import configure
 
     log_manager = configure()
@@ -5038,6 +5012,7 @@ def main():
         "--disallowed-tools": bool(args.print_disallowed_tools),
         "--no-web": args.print_no_web,
         "--no-skills": args.print_no_skills,
+        "--yes": args.print_yes,
     }
     if args.print_prompt is None and any(print_only.values()):
         used = ", ".join(flag for flag, given in print_only.items() if given)
@@ -5087,6 +5062,7 @@ def main():
                 disallowed_tools=args.print_disallowed_tools or (),
                 no_web=args.print_no_web,
                 no_skills=args.print_no_skills,
+                yes=args.print_yes,
             )
         )
 
@@ -5314,7 +5290,7 @@ def main():
                                 + (f": {detail}" if detail else "")
                             )
                     else:
-                        os.kill(pid, signal.SIGKILL)
+                        os.kill(pid, signal.SIGKILL)  # pylint: disable=no-member
                     print(f"Force-stopped Telegram adapter (pid {pid}).")
                     # A hard-killed adapter cannot clean up its PID file.
                     with contextlib.suppress(FileNotFoundError):
@@ -6255,9 +6231,11 @@ Let me know your answer!
         handle_cache_command(args)
         return
 
-    # Handle Knowledge command (Tavily web research)
+    # Handle Knowledge command — see gaia.knowledge_cli
     if args.action == "knowledge":
-        handle_knowledge_command(args)
+        from gaia import knowledge_cli
+
+        knowledge_cli.handle(args)
         return
 
     # Handle Memory command
@@ -6852,105 +6830,6 @@ def handle_perf_vis_command(args):
 
     if exit_code != 0:
         sys.exit(exit_code)
-
-
-def _print_knowledge_usage(client, show_session=True):
-    """Print a one-line credit-usage summary for a Tavily client."""
-    usage = client.usage()
-    cap = usage["cap"]
-    cap_str = "unlimited" if cap is None else str(cap)
-    # A bare `usage` run spends nothing, so its session figure would always be 0.
-    session = f", {usage['session_credits']} this session" if show_session else ""
-    print(
-        f"\n💳 Credits used: {usage['total_credits']} total{session} (cap: {cap_str})"
-    )
-
-
-def handle_knowledge_command(args):
-    """Handle `gaia knowledge` — Tavily web research with caching + budget.
-
-    Args:
-        args: Parsed command-line arguments
-    """
-    action = getattr(args, "knowledge_action", None)
-    if action is None:
-        print("❌ Error: No knowledge action specified")
-        print("Available actions: search, extract, usage")
-        print("Run 'gaia knowledge --help' for more information")
-        return
-
-    import requests
-
-    from gaia.web.client import SearchStatusError, SearchUnavailableError
-    from gaia.web.tavily import (
-        BudgetConfig,
-        TavilyBudgetExceeded,
-        TavilyClient,
-        TavilyConfigError,
-    )
-
-    budget = BudgetConfig(
-        cap=getattr(args, "budget", None),
-        block=not getattr(args, "no_block", False),
-    )
-    client = TavilyClient(budget=budget)
-    try:
-        if action == "search":
-            result = client.search(
-                args.query, search_depth=args.depth, max_results=args.max_results
-            )
-            source = result.get("source", "tavily")
-            print(f"\n=== Results for {args.query!r} (source: {source}) ===")
-            for i, r in enumerate(result.get("results", []), 1):
-                print(f"{i}. {r.get('title', '')}")
-                print(f"   {r.get('url', '')}")
-                content = r.get("content") or r.get("snippet") or ""
-                if content:
-                    print(f"   {content[:200]}")
-            _print_knowledge_usage(client)
-        elif action == "extract":
-            result = client.extract(args.urls, extract_depth=args.depth)
-            print(json.dumps(result, indent=2))
-            _print_knowledge_usage(client)
-        elif action == "usage":
-            _print_knowledge_usage(client, show_session=False)
-    except TavilyBudgetExceeded as e:
-        print(f"🛑 {e}")
-        sys.exit(1)
-    except (TavilyConfigError, SearchUnavailableError, SearchStatusError) as e:
-        print(f"❌ {e}")
-        sys.exit(1)
-    except (
-        requests.exceptions.ConnectionError,
-        requests.exceptions.Timeout,
-        requests.exceptions.ChunkedEncodingError,  # dropped mid-response
-    ) as e:
-        service = "Tavily" if client.configured else "DuckDuckGo"
-        print(
-            f"❌ Web {action} failed: {service} could not be reached ({e}). "
-            "Check your internet connection or proxy settings and try again."
-        )
-        sys.exit(1)
-    except requests.exceptions.HTTPError as e:
-        # The service answered with an error, so the user's network is fine.
-        service = "Tavily" if client.configured else "DuckDuckGo"
-        status = getattr(e.response, "status_code", None) or "an error"
-        hint = (
-            "It rejected the request; check the query or URL and try again."
-            if isinstance(status, int) and status < 500
-            else "It may be down for a moment; try again later."
-        )
-        print(f"❌ Web {action} failed: {service} answered with {status}. {hint}")
-        sys.exit(1)
-    except requests.exceptions.RequestException as e:
-        # Redirect loops, a malformed URL and the like: still an error, not a crash.
-        service = "Tavily" if client.configured else "DuckDuckGo"
-        print(
-            f"❌ Web {action} failed: the {service} request could not complete ({e})."
-        )
-        sys.exit(1)
-    finally:
-        client.close()
 
 
 def handle_config_command(args):
@@ -9008,13 +8887,19 @@ def _diag_gaia_processes(gaia_dir):
     except (OSError, ValueError, AttributeError) as e:
         notes.append(f"lemonade: unreadable {state_path}: {type(e).__name__}")
 
-    pid_path = gaia_dir / "backend.pid"
-    try:
-        found.append(("ui backend", int(pid_path.read_text().strip()), None))
-    except FileNotFoundError:
-        pass
-    except (OSError, ValueError) as e:
-        notes.append(f"ui backend: unreadable {pid_path}: {type(e).__name__}")
+    # One record per desktop app (backend-pids/<app pid>.pid); backend.pid is
+    # what older apps wrote.
+    pid_dir = gaia_dir / "backend-pids"
+    pid_paths = [gaia_dir / "backend.pid"]
+    if pid_dir.is_dir():
+        pid_paths += sorted(pid_dir.glob("*.pid"))
+    for pid_path in pid_paths:
+        try:
+            found.append(("ui backend", int(pid_path.read_text().strip()), None))
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as e:
+            notes.append(f"ui backend: unreadable {pid_path}: {type(e).__name__}")
     return found, notes
 
 
@@ -9545,13 +9430,9 @@ def _handle_daemon_status():
 
 def _daemon_http_detail(response) -> str:
     """The actionable `detail` from a daemon error response (or the raw status)."""
-    try:
-        body = response.json()
-    except ValueError:
-        return f"HTTP {response.status_code}"
-    if isinstance(body, dict) and body.get("detail"):
-        return str(body["detail"])
-    return f"HTTP {response.status_code}"
+    from gaia.daemon.client import error_detail
+
+    return error_detail(response)
 
 
 def _fetch_daemon_agents(inst) -> list:

@@ -200,6 +200,19 @@ def _forget_engine_start_failure(monkeypatch):
     monkeypatch.setattr(lemonade_client, "_ENGINE_START_FAILURE", None)
 
 
+@pytest.fixture(autouse=True)
+def _forget_agent_registry():
+    """A server test's startup leaves its agent registry behind; the next chat test must not inherit it.
+
+    With no hub agents installed (as in CI) that registry is empty, so a later
+    chat turn answers "GAIA's assistant isn't installed" instead of running.
+    Cleared before the test, since a ``monkeypatch`` undo can put it back after.
+    """
+    helpers = sys.modules.get("gaia.ui._chat_helpers")
+    if helpers is not None:
+        helpers.set_agent_registry(None)
+
+
 #: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
 _RUN_HOME = Path.home()
 

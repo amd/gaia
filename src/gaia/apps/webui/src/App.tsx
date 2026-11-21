@@ -10,6 +10,8 @@ import { ModelNeededDialog } from './components/ModelNeededDialog';
 import { LogsDialog } from './components/LogsDialog';
 import { ShortcutsDialog } from './components/ShortcutsDialog';
 import { SetupScreen } from './components/SetupScreen';
+import { GoBackOffer } from './components/setup/GoBackOffer';
+import { getUpdaterBridge } from './hooks/useUpdateStatus';
 import { ensureModel } from './stores/modelNeededStore';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { buildPersonalizePrompt, PERSONALIZE_EVENT, type PersonalizeRequest } from './utils/connectorPersonalize';
@@ -28,6 +30,7 @@ import { useScheduleStore } from './stores/scheduleStore';
 import { useGoalHealthStore } from './stores/goalHealthStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
+import { useRetryServerWaitingDocs } from './hooks/useRetryServerWaitingDocs';
 import { useWindowTitle } from './hooks/useWindowTitle';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { startActiveRunsPoll } from './services/activeRuns';
@@ -112,6 +115,15 @@ function Loading() {
 
 // First failure, then every 10th (~5 min at the 30 s cap), so a stuck read stays in the log.
 const shouldLogRetry = (attempt: number) => attempt === 1 || attempt % 10 === 0;
+
+/** Local setup works on this version: the desktop app remembers it as the one to come back to. */
+function noteSetupWorked() {
+    // A cloud model skips the local engine, so it proves nothing about this version.
+    if (useModelStore.getState().active?.remote) return;
+    getUpdaterBridge()?.markSetupWorked().catch((err: unknown) => {
+        log.system.warn("Couldn't record that setup works on this version", err);
+    });
+}
 
 function App() {
     const t = useT();
@@ -222,6 +234,7 @@ function App() {
                 // Read status and chats before showing the app, so it never flashes "lost connection" or "no chats".
                 if (waited > 0) await Promise.all([refreshStatus.current(), reloadSessions.current()]);
                 setNoAgentBuild(!!check.no_agent_build);
+                if (check.ready) noteSetupWorked();
                 // Seen ready before: an unreachable server is an outage, not a first run.
                 const serverDown = !check.ready && check.stage === 'server' && !!check.initialized;
                 setSetup(check.ready ? { state: 'ready' }
@@ -453,6 +466,7 @@ function App() {
     useEffect(() => startQueueDispatcher(), []);
 
     useChatAlerts();
+    useRetryServerWaitingDocs();
 
     // Open a chat named in the URL (?session= or #hash), on load and on back/forward.
     const urlResolved = useRef(false);
@@ -585,6 +599,8 @@ function App() {
         }
         store.clearDraftDocuments();
         store.setDraftPrivate(false);
+        // Not a chat opened from elsewhere (the file browser, a connector).
+        store.adoptDraftResearch(session.id, text);
         store.setDraftFolder(null);
         // Always sent, so the chat runs in exactly the mode its chip showed.
         // Set before the chat opens, so a refused message can wait in its box.
@@ -703,6 +719,7 @@ function App() {
     }, [newChat, startChatOrHold]);
 
     const finishSetup = useCallback((first?: StartCard) => {
+        noteSetupWorked();
         setSetup({ state: 'ready' });
         reloadAgentsAfterSetup();
         void checkSystemStatus();
@@ -899,10 +916,13 @@ function App() {
                     </div>
                 )}
                 {setup.state === 'unknown' && (setup.upgradeFailed ? (
-                    <div className="app-notice is-warning" role="status">
-                        <span>{t('setup.upgrading.failed', { error: setup.error })}</span>
-                        <button type="button" className="link-btn" onClick={() => void checkSetup()}>{t('setup.upgrading.retry')}</button>
-                    </div>
+                    <>
+                        <div className="app-notice is-warning" role="status">
+                            <span>{t('setup.upgrading.failed', { error: setup.error })}</span>
+                            <button type="button" className="link-btn" onClick={() => void checkSetup()}>{t('setup.upgrading.retry')}</button>
+                        </div>
+                        <GoBackOffer className="app-go-back" />
+                    </>
                 ) : (
                     <div className="app-notice is-warning" role="status">
                         <span>{t('setup.unknown.failed', { error: setup.error })}</span>

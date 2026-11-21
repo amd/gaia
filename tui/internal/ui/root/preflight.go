@@ -65,8 +65,13 @@ func (m FlagshipModel) localOptions(agent catalog.Agent) preflight.LocalOptions 
 	opts := preflight.LocalOptions{Binary: agent.BinaryPath}
 	if m.pfLocal != nil {
 		opts = *m.pfLocal
+		if m.programSwitch != nil {
+			// The override names the launch's program; this gate is for the other one.
+			opts.Binary = agent.BinaryPath
+		}
 	}
 	opts.Model = m.launchModel(agent)
+	opts.Native = agent.Native
 	opts.ClaudeMode = m.useClaude
 	// Only the flagship can switch where chat runs, so only it is asked.
 	opts.AskWhereChatRuns = agent.ID == catalog.FlagshipID
@@ -203,6 +208,15 @@ func (m FlagshipModel) cancelFromGate() (tea.Model, tea.Cmd) {
 	m.closeGate()
 	m.pendingTranscript = nil
 
+	if switching && m.programSwitch != nil {
+		sw := m.programSwitch
+		m.programSwitch = nil
+		m.activeView = viewChat
+		m.chat.AppendStatus(fmt.Sprintf(
+			"Switch to %s cancelled — staying on %s. Your saved choice was not changed.",
+			sw.to, sw.from))
+		return m.syncChatSize()
+	}
 	if switching {
 		m.activeView = viewChat
 		m.chat.AppendStatus(fmt.Sprintf("Switch cancelled — staying on %s.", m.agent.ID))

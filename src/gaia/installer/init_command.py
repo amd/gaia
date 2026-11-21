@@ -239,12 +239,11 @@ INIT_PROFILES = {
         # The flagship, from the Agent Hub like the `gaia` profile -- the Agent
         # UI lists no agent without it (#2972). Only the models differ.
         "agent": "gaia",
-        # FLM chat model + FLM-native embedder so chat and embeddings stay
-        # co-resident on the NPU backend. A GGUF embedder would run on Vulkan
-        # and evict the FLM chat model every turn (#1744). Both are built-in
-        # Lemonade *-FLM models, pulled by name only (no recipe — #1655).
+        # FLM chat model, pulled by name only (no recipe — #1655), and the
+        # GPU embedder: the FLM one's search isn't proven. Lemonade holds one
+        # model per type, so the two stay loaded side by side.
         # The chat model is Gemma 4 E4B's NPU twin (``with_chat_model``).
-        "models": ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"],
+        "models": ["gemma4-it-e4b-FLM", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~10 GB",
         # The floor every profile shares (issue #1745); the chat model itself
         # loads at its own window, 64K for the NPU twin.
@@ -1950,16 +1949,11 @@ class InitCommand:
             try:
                 from gaia.config import GaiaConfig
 
-                def _apply_profile(config) -> None:
-                    config.profile = self.profile
-                    config.default_device = "npu" if self.profile == "npu" else "gpu"
-                    self._record_chat_choice(config)
-
                 # Read under the lock, so a default_model another process saved
                 # during this long-running init survives. init is the recovery
                 # path, so a corrupt file is reset rather than left in place.
                 GaiaConfig.update(
-                    _apply_profile,
+                    self._apply_profile_to,
                     on_unreadable=lambda e: self._print_warning(
                         f"Resetting unreadable config: {e}"
                     ),
@@ -2333,7 +2327,10 @@ class InitCommand:
             return f"Check the Lemonade Server at {self._lemonade_base_url}."
         from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
-        return f"Read {EmbeddedLemonade().log_path} for the server's own error."
+        server = EmbeddedLemonade()
+        read_log = f"Read {server.log_path} for the server's own error."
+        ca_problem = server.ca_problem()
+        return f"{ca_problem} {read_log}" if ca_problem else read_log
 
     def _verify_model(self, client, model_id: str) -> tuple:
         """
@@ -2586,6 +2583,17 @@ class InitCommand:
             self._print_error(f"Failed to install backend '{backend_spec}': {e}")
             self._print_error(self._server_problem_hint())
             return False
+
+    def _apply_profile_to(self, config) -> None:
+        """Record this profile, its device and the chat model setup chose."""
+        config.profile = self.profile
+        if self.profile == "npu":
+            config.default_device = "npu"
+        elif not (self.profile == "gaia" and config.default_device == "npu"):
+            # The app runs "gaia" on every PC; the device picks the embedder,
+            # and changing it clears every memory vector.
+            config.default_device = "gpu"
+        self._record_chat_choice(config)
 
     def _record_chat_choice(self, config) -> None:
         """Save a hardware-picked chat model as ``default_model`` so every agent

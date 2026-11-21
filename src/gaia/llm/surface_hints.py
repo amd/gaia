@@ -44,7 +44,7 @@ AGENT_UI_OWN_SERVER_START_HINT = "GAIA starts its model server when it needs it"
 #: What an Agent UI user does about a model that isn't downloaded, or one that
 #: failed to load; a terminal gets the client or restart command instead.
 AGENT_UI_MODEL_DOWNLOAD_HINT = (
-    "Download it under Settings > Model, or open Settings > Setup and press Run "
+    "Download it under Settings > Agent & model, or open Settings > Setup and press Run "
     "setup again, then try again."
 )
 AGENT_UI_PRELOAD_RETRY_HINT = (
@@ -60,7 +60,7 @@ TUI_PROVIDER_AUTH_HINT = (
     "verify LEMONADE_API_KEY."
 )
 AGENT_UI_PROVIDER_AUTH_HINT = (
-    "Open Settings > Model, paste the provider's API key and press Reconnect, "
+    "Open Settings > Agent & model, paste the provider's API key and press Reconnect, "
     "then send your message again. If the key is right, check that your "
     "account has access to this model."
 )
@@ -78,9 +78,9 @@ SERVICE_PROVIDER_AUTH_HINT = (
 
 #: Where the TUI keeps provider connections, as the tail of a sentence.
 TUI_PROVIDER_SETTINGS = "in the TUI provider settings"
-AGENT_UI_PROVIDER_SETTINGS = "under Settings > Model"
+AGENT_UI_PROVIDER_SETTINGS = "under Settings > Agent & model"
 CLI_PROVIDER_SETTINGS = (
-    "with /provider in the TUI or under Settings > Model in the Agent UI"
+    "with /provider in the TUI or under Settings > Agent & model in the Agent UI"
 )
 SERVICE_PROVIDER_SETTINGS = (
     "on the model server this GAIA host uses (LEMONADE_BASE_URL)"
@@ -108,7 +108,7 @@ TUI_GATEWAY_KEY_HINT = (
     "Run /gateway in the TUI and enter a current AMD LLM gateway key."
 )
 AGENT_UI_GATEWAY_KEY_HINT = (
-    "Enter a current AMD LLM gateway key under Settings > Model."
+    "Enter a current AMD LLM gateway key under Settings > Agent & model."
 )
 CLI_GATEWAY_KEY_HINT = "Run `gaia gateway auth` with a current AMD LLM gateway key."
 SERVICE_GATEWAY_KEY_HINT = (
@@ -122,7 +122,7 @@ TUI_GATEWAY_INSTALL_HINT = (
     "Open /gateway in the TUI to register the gateway, then try again."
 )
 AGENT_UI_GATEWAY_INSTALL_HINT = (
-    "Open Settings > Model and connect the AMD gateway, then try again."
+    "Open Settings > Agent & model and connect the AMD gateway, then try again."
 )
 CLI_GATEWAY_INSTALL_HINT = (
     "Run `gaia gateway install` to register it, then run `gaia gateway auth` again."
@@ -172,18 +172,28 @@ CLI_WEDGED_SERVER_HINT = (
 CLI_VISION_DOWNLOAD_HINT = (
     "To ask about images, download it (~6 GB) with `gaia download --agent vlm`."
 )
-AGENT_UI_VISION_DOWNLOAD_HINT = (
-    "To ask about images later, tick it under Settings > Model (a ~6 GB download)."
-)
+AGENT_UI_VISION_DOWNLOAD_HINT = "To ask about images later, tick it under Settings > Agent & model (a ~6 GB download)."
 
 #: How to download a vision model the image tools found missing.
 VISION_DOWNLOAD_HINT = (
-    "Download it under Settings > Model in the Agent UI, or with /setup in the "
+    "Download it under Settings > Agent & model in the Agent UI, or with /setup in the "
     "TUI, then ask again."
 )
 AGENT_UI_VISION_DOWNLOAD_STEP = (
-    "Download it under Settings > Model > Manage downloads and disk space, then "
+    "Download it under Settings > Agent & model > Manage downloads and disk space, then "
     "ask again."
+)
+
+#: How to download the voice a speech tool found missing: reading a reply aloud
+#: downloads it in both apps.
+SPEECH_DOWNLOAD_HINT = (
+    "To download it, read any reply aloud once: press Read aloud under a reply "
+    "in the Agent UI, or type /read-aloud in the TUI. Then ask again."
+)
+#: What to do when the model server does not list the voice at all.
+SPEECH_SETUP_HINT = (
+    "Open Settings > Setup in the Agent UI and press Run setup again, or run "
+    "/setup in the TUI, then ask again."
 )
 
 #: How an Agent UI user lets cloud models back in; the CLI's command is

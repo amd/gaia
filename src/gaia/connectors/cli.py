@@ -874,14 +874,20 @@ def _handle_disconnect(args: argparse.Namespace) -> int:
     # bare "Disconnected" that implies GAIA's app access was actually
     # revoked when only the local keyring entry was cleared.
     result = result or {}
-    if account is not None:
+    nothing_stored = result.get("nothing_stored")
+    if account is not None and not nothing_stored:
         named = result.get("account_email") or account
         remaining = result.get("remaining_accounts", 0)
         sys.stdout.write(
             f"Removed {named} from {args.connector_id}; {remaining} other "
             f"account{'s' if remaining != 1 else ''} still connected.\n"
         )
-    if not result.get("revoke_supported"):
+    if nothing_stored:
+        sys.stdout.write(
+            f"Nothing stored for {args.connector_id}; there was nothing to "
+            "disconnect or revoke.\n"
+        )
+    elif not result.get("revoke_supported"):
         if "revoke_supported" not in result:
             # Handler type with no remote-revoke concept at all (e.g. an
             # MCP-server connector) — nothing to be honest or dishonest about.

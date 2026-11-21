@@ -14,6 +14,8 @@ GAIA never writes tokens or API keys to plaintext files. All secrets live exclus
 | Linux | gnome-keyring or kwallet |
 | Windows | Credential Locker |
 
+GAIA refuses a plaintext or weakly encrypted keyring backend (`keyrings.alt`'s `PlaintextKeyring`, `EncryptedKeyring`, `Win32CryptoKeyring`, or anything derived from them) before every read and write — for connector tokens, API keys, Slack and Discord bot tokens, the browser session key, MCP server secrets and Agent Hub publisher tokens alike. If keyring chains several backends, every one of them is checked, and a chain GAIA cannot fully inspect is refused. Deleting a secret still works on such a backend, since it only reduces what is exposed: GAIA removes it and logs a warning to switch backends. That includes disconnecting a Google or Microsoft account, with one difference: revoking GAIA's access at the provider needs the stored token, which GAIA will not read there, so the disconnect removes the account from this PC only and tells you to remove GAIA from your account's app permissions page ([Google](https://myaccount.google.com/permissions), [Microsoft personal](https://account.live.com/consent/Manage), [Microsoft work or school](https://myapps.microsoft.com)). To fix the error, install a system credential store (gnome-keyring or kwallet on Linux), or point `PYTHON_KEYRING_BACKEND` at one, and restart GAIA.
+
 On macOS, the GAIA daemon reads the keychain for the flagship agent, using a credential only that agent receives. The keychain ties approval to the exact build asking, so this keeps agent updates from prompting again. The trade-off: when macOS asks, **Always Allow** now approves the daemon's Python interpreter, not the agent, and any script that same interpreter runs can then read these items without a prompt. An agent started without the daemon reads the keychain itself.
 
 Each connector occupies a dedicated keyring slot keyed by `gaia.connections:<connector-id>:<secret-name>`. MCP server tokens use `$keyring:<slot>` references in `~/.gaia/mcp_servers.json` — the JSON file itself contains no actual secrets.
@@ -57,7 +59,7 @@ You can revoke access at any level:
 
 | Action | Effect |
 |---|---|
-| Settings → Connectors → \<connector\> → **Disconnect** | Removes token from keyring AND clears all grants AND all activations for that connector; all agent calls fail with `NOT_CONNECTED`. An OAuth connector with several accounts asks which one to remove (or all); grants are cleared only when the last account goes |
+| Settings → Connectors → \<connector\> → **Disconnect** | Removes token from keyring AND clears all grants AND all activations for that connector; all agent calls fail with `NOT_CONNECTED`. An OAuth connector with several accounts asks which one to remove (or all); grants are cleared only when the last account goes. GAIA also revokes its access at the provider where the provider allows it; when it can't (Microsoft, or a keyring GAIA refuses to read), the result says so and where to revoke by hand |
 | `gaia connectors grants revoke <connector> <agent>` | Removes the per-agent grant; that agent's calls fail with `AGENT_NOT_GRANTED` |
 | `gaia connectors activations deactivate <mcp-server-connector> <agent>` | Removes the per-agent activation; that agent stops seeing the MCP server's tools but the grant survives so re-activation is one click. Only valid for `mcp_server` connectors |
 | Revoke the PAT/OAuth client at the provider | Invalidates the token at the source; GAIA's next API call surfaces the provider's error |

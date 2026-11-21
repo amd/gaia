@@ -841,3 +841,76 @@ def test_probing_a_new_entry_never_strands_its_owner(tmp_path, monkeypatch):
         monkeypatch.setattr(mod, "_release_fd", real_release)
         real_release(owner_fd)
         mod._discard_entry(entry.path)
+
+
+def _flaky_read(mod, monkeypatch, *, holds, error):
+    """Make Path.read_bytes refuse *holds* times with *error*, then succeed."""
+    real = mod.Path.read_bytes
+    calls = []
+
+    def read_bytes(self):
+        calls.append(self)
+        if len(calls) <= holds:
+            raise error
+        return real(self)
+
+    monkeypatch.setattr(mod.Path, "read_bytes", read_bytes)
+    return calls
+
+
+def test_read_waits_out_a_brief_hold(tmp_path, monkeypatch):
+    from gaia.utils import file_lock as mod
+
+    monkeypatch.setattr(mod, "_WINDOWS", True)
+    target = tmp_path / "store.toml"
+    target.write_bytes(b"a = 1\n")
+    calls = _flaky_read(
+        mod, monkeypatch, holds=3, error=PermissionError(13, "Access is denied")
+    )
+    assert mod.read_bytes_retrying(target) == b"a = 1\n"
+    assert len(calls) == 4
+
+
+def test_read_held_too_long_names_both_causes(tmp_path, monkeypatch):
+    import time
+
+    from gaia.utils import file_lock as mod
+
+    monkeypatch.setattr(mod, "_WINDOWS", True)
+    monkeypatch.setattr(mod, "REPLACE_RETRY_SECONDS", 0.1)
+    target = tmp_path / "store.toml"
+    target.write_bytes(b"a = 1\n")
+    _flaky_read(
+        mod, monkeypatch, holds=10**9, error=PermissionError(13, "Access is denied")
+    )
+    started = time.monotonic()
+    with pytest.raises(PermissionError) as raised:
+        mod.read_bytes_retrying(target)
+    assert time.monotonic() - started < 2
+    message = str(raised.value)
+    assert str(target) in message
+    assert "another program has it open" in message
+    assert "may not read it" in message
+    assert isinstance(raised.value.__cause__, PermissionError)
+
+
+@pytest.mark.parametrize(
+    "windows, error",
+    [
+        pytest.param(False, PermissionError(13, "denied"), id="posix-eacces"),
+        pytest.param(True, PermissionError("path policy refused"), id="no-errno"),
+        pytest.param(True, FileNotFoundError(2, "gone"), id="missing"),
+        pytest.param(True, IsADirectoryError(21, "dir"), id="not-a-file"),
+    ],
+)
+def test_read_raises_other_errors_at_once(tmp_path, monkeypatch, windows, error):
+    from gaia.utils import file_lock as mod
+
+    monkeypatch.setattr(mod, "_WINDOWS", windows)
+    target = tmp_path / "store.toml"
+    target.write_bytes(b"a = 1\n")
+    calls = _flaky_read(mod, monkeypatch, holds=10**9, error=error)
+    with pytest.raises(type(error)) as raised:
+        mod.read_bytes_retrying(target)
+    assert raised.value is error
+    assert len(calls) == 1

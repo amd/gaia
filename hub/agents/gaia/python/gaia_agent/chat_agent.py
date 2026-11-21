@@ -17,7 +17,6 @@ import shutil
 import sqlite3
 import sys
 import threading
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
@@ -72,6 +71,12 @@ from gaia_agent.tool_requests import requested_tools
 from gaia.agents.base.agent import Agent, _withheld_skill_tools, default_max_steps
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, READ, call_risk
 from gaia.agents.base.checks import attach_check, check_from_python_run, snippet_target
+from gaia.agents.base.code_path_screen import (
+    python_code_preflight,
+    python_code_refusal,
+    python_file_preflight,
+    python_file_refusal,
+)
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_KEEP_STEPS,
@@ -81,7 +86,6 @@ from gaia.agents.base.context_eviction import (
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import (
     SnapshotError,
-    before_change,
     note_folder_changes,
     note_untracked,
     watch_script_folders,
@@ -98,6 +102,7 @@ from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 # dynamic_tools_env_override is re-exported so callers importing it from
 # this module keep working; its canonical home is the core tool_loader
 # so the UI settings router shares it without depending on this wheel (#1102).
+from gaia.agents.base.script_preview import changed_script_refusal
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
 from gaia.agents.base.tool_loader import (
     ToolLoader,
@@ -112,7 +117,7 @@ from gaia.agents.base.verification import (
     cut_by_time_limit,
 )
 from gaia.agents.install_hints import missing_package_hint
-from gaia.agents.registry import get_embedding_model_for_device
+from gaia.agents.registry import machine_embedding_model
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
@@ -121,6 +126,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     BrowserToolsMixin,
     BrowserUseToolsMixin,
     CliSetupToolsMixin,
+    DictationToolsMixin,
     FileIOToolsMixin,
     FileSearchToolsMixin,
     FileToolsMixin,
@@ -327,6 +333,17 @@ def _with_project_paths(env: Dict[str, str], project: os.PathLike | str) -> None
     )
 
 
+def _python_path_refused(agent: Any, path: str, full_access: bool) -> bool:
+    """Whether a Python tool may not run *path*, or run in it.
+
+    Full access opens every folder but one the user removed from the chat.
+    """
+    validator = agent.path_validator
+    if full_access:
+        return validator.withheld_root(path) is not None
+    return not validator.is_path_allowed(path)
+
+
 def _server_refusal(
     agent: Any, source: str, folder: Optional[str]
 ) -> Optional[Dict[str, Any]]:
@@ -495,6 +512,44 @@ def _stopped_run_result(agent: Any, job: Any, timeout: int) -> Dict[str, Any]:
     return result
 
 
+#: On every Python run's result: a model that assumes the last call's
+#: variables are still there writes a snippet that dies on the first of them.
+FRESH_INTERPRETER = "new for this call: nothing is kept from earlier calls"
+
+#: Past this size a failed snippet is told how to fix it without sending it again.
+_COSTLY_TO_RESEND_CHARS = 2000
+
+
+def _fix_and_rerun_hint(
+    last_line: str, script: Optional[str], snippet_chars: int, tools: Collection[str]
+) -> Optional[str]:
+    """How to fix a failed run without typing the whole script again.
+
+    *script* is the saved file that ran, or None for a snippet. A name the
+    code never defined is most often one an earlier call defined.
+    """
+    edit = "edit_file" if "edit_file" in tools else None
+    save = "write_file" if "write_file" in tools else None
+    lost_name = last_line.startswith("NameError")
+    if script is not None:
+        if edit is None:
+            return None
+        fix = f"fix {script} with {edit} and run it again; don't send the script again"
+        if lost_name:
+            return f"Each call starts fresh, so the script must define it: {fix}"
+        return fix[0].upper() + fix[1:]
+    if edit is None or save is None:
+        return (
+            "Each call starts fresh: define it in this snippet" if lost_name else None
+        )
+    route = f"save the script with {save}, fix it with {edit}, and run it by path"
+    if lost_name:
+        return f"Each call starts fresh: {route}"
+    if snippet_chars >= _COSTLY_TO_RESEND_CHARS:
+        return f"To fix it without sending the code again, {route}"
+    return None
+
+
 def _python_run_result(
     run: Any,
     stdout: str,
@@ -502,11 +557,17 @@ def _python_run_result(
     seconds: float,
     note: Optional[str] = None,
     system_python_runs: bool = False,
+    script: Optional[str] = None,
+    snippet_chars: int = 0,
+    tools: Collection[str] = (),
 ) -> Dict[str, Any]:
     """A finished Python run as a tool result; a non-zero exit is an error.
 
     The error names the last stderr line — the exception or ``sys.exit``
     message — so a failed run never reads as a success to the model or the UI.
+    *script* is the saved file that ran (None for a snippet of *snippet_chars*
+    characters) and *tools* the agent's tool names: a failure says how to fix
+    and re-run it with them.
     """
     code = run.returncode
     result: Dict[str, Any] = {
@@ -516,6 +577,7 @@ def _python_run_result(
         "return_code": code,
         "has_errors": code != 0,
         "duration_seconds": round(seconds, 2),
+        "interpreter": FRESH_INTERPRETER,
     }
     if note:
         result["note"] = note
@@ -527,8 +589,10 @@ def _python_run_result(
         result["error"] = f"Python exited with code {code}" + (
             f": {last[:300]}" if last else ""
         )
-        hint = _missing_library_hint(last) or _system_python_hint(
-            last, system_python_runs
+        hint = (
+            _missing_library_hint(last)
+            or _system_python_hint(last, system_python_runs)
+            or _fix_and_rerun_hint(last, script, snippet_chars, tools)
         )
         if hint:
             result["error"] += f". {hint}"
@@ -833,6 +897,7 @@ class ChatAgent(
     AudioToolsMixin,
     AudioGenerationToolsMixin,
     WaitToolsMixin,
+    DictationToolsMixin,
     ReasoningEffortToolsMixin,
     MCPClientMixin,
 ):
@@ -955,11 +1020,10 @@ class ChatAgent(
         # Its clients keep this server; a change in Settings needs a new agent.
         self._model_server_at_build = configured_lemonade_url()
 
-        # Embedder is device-scoped: the NPU profile uses the FLM-native
-        # embedder so chat and embeddings stay co-resident on the NPU backend
-        # (a GGUF embedder runs on Vulkan and evicts the FLM chat model every
-        # turn — #1744). GPU/CPU use the GGUF embedder `gaia init` downloads.
-        effective_embedding_model = get_embedding_model_for_device(config.device)
+        # One per PC, not per chat device, so a chat on the other device
+        # doesn't clear Memory's vectors.
+        effective_embedding_model = machine_embedding_model()
+        self._embedder_at_build = effective_embedding_model
 
         # RAG (#2323 Increment 3): ``RAGConfig`` is cheap (no I/O) and built
         # eagerly here — every profile's allowed_paths/model/embedding wiring
@@ -1567,13 +1631,16 @@ class ChatAgent(
     def _standing_skill_tools(self) -> List[str]:
         """Tools that join the list for the skills in use, without a jump.
 
-        A loaded skill's own tools are registered whether or not its body renders
-        this turn, and an undeclared one cannot be called.
+        Every loaded skill counts, whether or not its body renders this turn:
+        its instructions name these tools, and an undeclared one cannot be
+        called.
         """
         tools = self._loaded_skill_tools()
         for skill in getattr(self, "loaded_skills", {}).values():
+            # getattr: test stubs stand in for a skill with a bare namespace.
+            tools.extend(getattr(getattr(skill, "gaia", None), "tools_required", ()))
             tools.extend(skill.namespaced_tool_name(tool) for tool in skill.tool_names)
-        return tools
+        return list(dict.fromkeys(tools))
 
     def _select_tools_for_turn(self, user_input: str) -> Optional[List[str]]:
         """Return this turn's tool list, or ``None`` for every tool.
@@ -2239,7 +2306,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             unsupported += " Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process."
         data_file_rules += unsupported + "\n"
         data_file_rules += """
-**SLIDES / DECKS:** Asked to make one (not just mentioned) → a file, never an image. No .pptx or HTML named → always ask "PowerPoint (.pptx) or HTML?" (alongside any other question) and build nothing until they answer. Then build it (`run_python` with python-pptx, or `write_file` one self-contained .html) and give the path.
+**SLIDES / DECKS:** Asked to make one (not just mentioned) → a file, never an image. Make a .pptx unless asked for HTML; never ask which. For .pptx, load `slide-decks` and use its tools (no hand-written python-pptx); without that skill, load `office-docs`. HTML: `write_file` one self-contained .html. Give the path.
 """
         # A rule about a tool the session lacks made the model offer images.
         if self._offers_image_generation():
@@ -2604,10 +2671,19 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     def built_settings_changed(self) -> bool:
         """True when a setting this agent was built from changed since.
 
-        Its model server and MCP tools are fixed as it is built, so a chat
-        must rebuild its agent to follow Settings.
+        Its model server, embedder and MCP tools are fixed as it is built, so
+        a chat must rebuild its agent to follow Settings.
         """
-        return self.model_server_changed() or self.mcp_settings_changed()
+        return (
+            self.model_server_changed()
+            or self.embedder_changed()
+            or self.mcp_settings_changed()
+        )
+
+    def embedder_changed(self) -> bool:
+        """True when the embedder chosen in Settings › Memory changed since this agent was built."""
+        built = getattr(self, "_embedder_at_build", None)
+        return built is not None and built != machine_embedding_model()
 
     def model_server_changed(self) -> bool:
         """True when the Lemonade Server chosen in Settings changed since this agent was built.
@@ -2844,7 +2920,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except Exception as e:
                     return {"status": "error", "error": str(e)}
 
-            @tool(timeout_arg="timeout")
+            @tool(
+                timeout_arg="timeout",
+                preflight=python_file_preflight(self, may_write_files),
+            )
             @_lists_script_libraries
             def execute_python_file(
                 file_path: str, args: str = "", timeout: int = DEFAULT_PYTHON_TIMEOUT
@@ -2880,7 +2959,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 file_path = str(
                     _resolve_target(file_path, None, _workspace_default(self))
                 )
-                if not self.path_validator.is_path_allowed(file_path):
+                refused = python_file_refusal(self, file_path, may_write_files, args)
+                if refused is not None:
+                    return refused
+                full_access = self._full_access_on()
+                if _python_path_refused(self, file_path, full_access):
                     return {
                         "status": "error",
                         "error": f"Access denied: {file_path}."
@@ -2897,14 +2980,23 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     p.resolve(), shlex.split(args) if args.strip() else []
                 )
                 try:
-                    source = p.read_text(encoding="utf-8", errors="replace")
+                    data = p.read_bytes()
                 except OSError as e:
                     return {
                         "status": "error",
                         "error": f"Could not read {file_path}: {e}",
                         "has_errors": True,
                     }
-                refused = _server_refusal(self, source, str(p.resolve().parent))
+                changed = changed_script_refusal(self, file_path, data)
+                if changed is not None:
+                    return changed
+                # Line endings as read_text would give them.
+                source = "\n".join(data.decode("utf-8", errors="replace").splitlines())
+                refused = (
+                    None
+                    if full_access
+                    else _server_refusal(self, source, str(p.resolve().parent))
+                )
                 if refused is not None:
                     return refused
                 start = time.monotonic()
@@ -2912,6 +3004,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 try:
                     project = self._script_project_root()
                     run_dir, env = _python_script_run_context(p, project)
+                    if full_access:
+                        env.pop(GUARDED_FOLDERS_ENV, None)
                     if not run_dir.is_dir():
                         # The project folder went away; the script's own
                         # folder exists, since the script was just read.
@@ -2950,6 +3044,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             should_stop=lambda: stop_requested(self),
                             watch=watch,
                             ignore=[p.resolve()],
+                            marked=not full_access,
                         )
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
@@ -2984,6 +3079,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                                 n for n in (finished_job_note(job), undo_note) if n
                             )
                             or None,
+                            script=str(p),
+                            tools=self._tools_registry,
                         ),
                         check_from_python_run(
                             " ".join([file_path, args]).strip(),
@@ -2999,32 +3096,64 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except Exception as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
-            @tool(timeout_arg="timeout")
+            @tool(
+                timeout_arg="timeout",
+                preflight=python_code_preflight(self, may_write_files),
+            )
             @_lists_script_libraries
-            def run_python(code: str, timeout: int = DEFAULT_PYTHON_TIMEOUT) -> dict:
-                """Run a Python snippet and return what it prints.
+            def run_python(
+                code: str = "",
+                path: str = "",
+                args: str = "",
+                timeout: int = DEFAULT_PYTHON_TIMEOUT,
+            ) -> dict:
+                """Run a Python snippet (`code`) or saved script (`path`).
 
-                Compute or check something without a file. Runs from the
-                project root, or your scratch directory with no project, so
-                use absolute paths for user files.
-                Report numbers from its output.
-
-                No access to your tools: `from gaia import <tool>` fails;
-                call it directly as a tool.
+                Every call starts a new interpreter: nothing carries over.
+                Long script: write_file it, run it by `path`, fix it with
+                edit_file; never send it twice. Runs from the project root
+                or your scratch directory: use absolute paths.
+                Report numbers from its output. `from gaia import <tool>`
+                fails: call it directly as a tool.
 
                 {script_libraries}
 
                 Args:
-                    code: Python source to run; print() whatever you need back.
+                    code: Python source to run; print() whatever you need back. Not with `path`.
+                    path: A saved .py file to run instead of `code`.
+                    args: Space-separated CLI arguments for the script at `path`.
                     timeout: Max seconds to run (default 120, max 1800). Raise it for big data jobs.
-
-                Returns:
-                    stdout, stderr, return_code, and duration.
                 """
                 import tempfile
                 import time
 
                 from gaia.agents.base.project_map import resolve_project_root
+
+                code = code if isinstance(code, str) else ""
+                path = path.strip() if isinstance(path, str) else ""
+                if bool(code.strip()) == bool(path):
+                    return {
+                        "status": "error",
+                        "error": (
+                            "Give run_python exactly one of `code` (Python "
+                            "source) or `path` (a saved .py file to run)"
+                            + (", not both." if path else ".")
+                        ),
+                        "has_errors": True,
+                        "executed": False,
+                    }
+                if path:
+                    return execute_python_file(path, args, timeout)
+                if isinstance(args, str) and args.strip():
+                    return {
+                        "status": "error",
+                        "error": (
+                            "`args` are passed to a saved script: give its "
+                            "`path` instead of `code`, or drop `args`."
+                        ),
+                        "has_errors": True,
+                        "executed": False,
+                    }
 
                 try:
                     timeout = resolve_python_timeout(timeout)
@@ -3033,6 +3162,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 timeout = self.time_capped_run_seconds(timeout)
                 if not timeout:
                     return dict(OUT_OF_TIME)
+
+                refused = python_code_refusal(self, code, may_write_files)
+                if refused is not None:
+                    return refused
 
                 tool_names = set(_TOOL_REGISTRY) | set(
                     getattr(self, "_tools_registry", None) or ()
@@ -3051,7 +3184,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         ),
                         "has_errors": True,
                     }
-                refused = _server_refusal(self, code, None)
+                full_access = self._full_access_on()
+                refused = None if full_access else _server_refusal(self, code, None)
                 if refused is not None:
                     return refused
 
@@ -3077,7 +3211,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 chosen_root = getattr(
                     self.config, "project_root", None
                 ) or os.environ.get(PROJECT_ROOT_ENV)
-                if chosen_root and not project:
+                if chosen_root and not project and not full_access:
                     return {
                         "status": "error",
                         "error": f"Access denied: the project root {chosen_root} "
@@ -3120,7 +3254,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     except OSError as e:
                         logger.error("run_python: scratch dir unusable: %s", e)
                         return _start_failure("Python", Path(run_dir), e)
-                if not self.path_validator.is_path_allowed(str(run_dir)):
+                if _python_path_refused(self, str(run_dir), full_access):
                     return {
                         "status": "error",
                         "error": f"Access denied: {run_dir} is not in allowed "
@@ -3131,7 +3265,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     }
                 env = child_env(relaunch_self=True)
                 env["PYTHONIOENCODING"] = "utf-8"
-                env[GUARDED_FOLDERS_ENV] = _guarded_folders()
+                if not full_access:
+                    env[GUARDED_FOLDERS_ENV] = _guarded_folders()
                 env["PYTHONUTF8"] = "1"
                 env.setdefault("PYTHONUNBUFFERED", "1")
                 if project:
@@ -3175,6 +3310,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             should_stop=lambda: stop_requested(self),
                             watch=watch,
                             ignore=[snippet],
+                            marked=not full_access,
                         )
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
@@ -3231,6 +3367,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     time.monotonic() - start,
                     " ".join(n for n in notes if n) or None,
                     system_python_runs=_shell_runs_any_python(self),
+                    snippet_chars=len(code),
+                    tools=self._tools_registry,
                 )
                 return attach_check(
                     result,
@@ -3275,6 +3413,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     enable_edit_tools=getattr(
                         self.config, "enable_sd_edit_tools", False
                     ),
+                    follow_user_settings=True,
                 )
                 logger.debug(
                     "SD tools registered (generate_image, list_sd_models, "
@@ -3769,6 +3908,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
         # ── TTS (voice output) ──────────────────────────────────────────────────
 
+        self.register_dictation_tools()
+
         @tool(timeout=900)
         def text_to_speech(
             text: str,
@@ -3776,17 +3917,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             voice: str = "",
             speed: Optional[float] = None,
         ) -> dict:
-            """Turn text into one WAV audio file with an installed local TTS model.
+            """Turn text into one audio file with an installed local TTS model.
 
-            Use this when the user asks to hear, narrate, or save text as audio.
-            It never downloads a model. Empty output_path writes a WAV to GAIA's
-            audio folder. Use a listed Kokoro voice; unknown voices are refused
-            before Lemonade can return a server error. Long text is split at
-            sentence boundaries and joined into one file.
+            Use when the user asks to hear, narrate or save text as audio; to
+            read a whole document aloud use dictate_document. Never downloads a
+            model. The audio is kept in GAIA's audio folder, where the app
+            plays it; output_path adds a copy where the user asked. Long text
+            is split at sentences and joined into one file.
 
             Args:
                 text: Text to speak.
-                output_path: Optional WAV destination. Empty uses GAIA's audio folder.
+                output_path: Optional destination ending in .wav or .mp3 (mp3
+                    is smaller). Empty saves a WAV in GAIA's audio folder only.
                 voice: Kokoro voice, such as af_bella, am_michael, bf_emma, or
                     bm_george. Omit to use the voice the user chose for
                     reading aloud.
@@ -3794,74 +3936,52 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     the user's chosen speed.
 
             Returns:
-                status, output_path, audio_path, duration_seconds, voice, model,
-                chunks.
+                status, audio_path (the app's copy), output_path,
+                duration_seconds, voice, model, chunks.
             """
-            import time
-
-            import gaia.config as gaia_config
+            from gaia.agents.tools.dictation_tools import (
+                CopyFailed,
+                copy_for_user,
+                format_of,
+                new_speech_file,
+                speech_settings,
+            )
             from gaia.audio.lemonade_tts import (
                 DEFAULT_TTS_MODEL,
-                DEFAULT_VOICE,
-                KOKORO_VOICES,
+                SPEECH_CHUNK_CHARS,
                 LemonadeTTSClient,
                 LemonadeTTSError,
-            )
-            from gaia.config import (
-                READ_ALOUD_MAX_SPEED,
-                READ_ALOUD_MIN_SPEED,
-                GaiaConfig,
-                GaiaConfigError,
+                _split_text,
             )
 
             # The same voice and speed the Agent UI and TUI read replies in.
             try:
-                saved = GaiaConfig.load()
-            except GaiaConfigError as exc:
+                voice, speed = speech_settings(voice, speed)
+            except ValueError as exc:
                 return {"status": "error", "error": str(exc)}
-            voice = voice or saved.read_aloud_voice or DEFAULT_VOICE
-            if speed is None:
-                speed = saved.read_aloud_speed / 100
-            if voice not in KOKORO_VOICES:
-                return {
-                    "status": "error",
-                    "error": (
-                        f"Unknown Kokoro voice '{voice}'. Choose one of: "
-                        f"{', '.join(KOKORO_VOICES)}."
-                    ),
-                }
-            low, high = READ_ALOUD_MIN_SPEED / 100, READ_ALOUD_MAX_SPEED / 100
-            if not low <= speed <= high:
-                return {
-                    "status": "error",
-                    "error": f"speed must be between {low} and {high}.",
-                }
             if not text or not text.strip():
                 return {"status": "error", "error": "text to speak must not be empty."}
-            if not output_path:
-                # Where the Agent UI serves inline audio from (gaia.ui.generated_media).
-                tts_dir = (
-                    Path(gaia_config.GAIA_CONFIG_DIR)
-                    / "cache"
-                    / "audio"
-                    / "generations"
-                )
-                tts_dir.mkdir(parents=True, exist_ok=True)
-                ts = time.strftime("%Y%m%d_%H%M%S")
-                destination = tts_dir / f"speech_{ts}_{uuid.uuid4().hex[:10]}.wav"
-            else:
+            destination = None
+            audio_format = "wav"
+            if output_path:
                 destination = _workspace_target(self, output_path)
                 denied = write_access_error(self, destination)
                 if denied:
                     return denied
-            if destination.suffix.lower() != ".wav":
-                return {
-                    "status": "error",
-                    "error": "output_path must end in .wav for local speech output.",
-                }
+                audio_format = format_of(destination)
+                if audio_format is None:
+                    return {
+                        "status": "error",
+                        "error": "output_path must end in .wav or .mp3 for local "
+                        "speech output.",
+                    }
 
             model = DEFAULT_TTS_MODEL
+            # Recorded where the Agent UI serves inline audio from
+            # (gaia.ui.generated_media), then copied to where the user asked.
+            pieces = _split_text(text.strip(), SPEECH_CHUNK_CHARS)
             try:
+                audio = new_speech_file("speech", audio_format)
                 client = LemonadeTTSClient(
                     base_url=resolve_lemonade_base_url(
                         getattr(self, "_base_url", None)
@@ -3869,27 +3989,35 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     model=model,
                 )
                 client.check_model_available()
-                before_change(destination, "text_to_speech")
-                duration, chunks = client.synthesize_to_wav_long(
-                    text, destination, voice=voice, speed=speed
+                duration = client.synthesize_file(
+                    pieces, audio, voice=voice, speed=speed, audio_format=audio_format
                 )
+                if destination is not None:
+                    copy_for_user(audio, destination, "text_to_speech")
+            except CopyFailed as exc:
+                return {"status": "error", "error": str(exc), "kept_at": str(audio)}
             except (ConnectionError, LemonadeTTSError, OSError, ValueError) as exc:
                 return {"status": "error", "error": str(exc)}
-            if not destination.is_file() or destination.stat().st_size == 0:
+            saved = destination or audio
+            if not saved.is_file() or saved.stat().st_size == 0:
                 return {
                     "status": "error",
-                    "error": f"Speech synthesis did not create a non-empty WAV at {destination}.",
+                    "error": f"Speech synthesis did not create a non-empty file at {saved}.",
                 }
-            return {
+            result = {
                 "status": "success",
-                "output_path": str(destination),
-                "file_path": str(destination),
-                "audio_path": str(destination),
+                "output_path": str(saved),
+                "file_path": str(saved),
+                "audio_path": str(audio),
                 "duration_seconds": round(duration, 2),
+                "format": audio_format,
                 "voice": voice,
                 "model": model,
-                "chunks": chunks,
+                "chunks": len(pieces),
             }
+            if destination is not None:
+                result["saved_to"] = str(destination)
+            return result
 
         # Must run last so MCP tools don't bloat context before we know the base count.
         self._load_mcp_tools()
@@ -4077,6 +4205,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (file_io_tools.py): read_file, write_file, edit_file (3 generic tools only)
     # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
+    # - DictationToolsMixin (dictation_tools.py): dictate_document
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from <gaia_home>/mcp_servers.json)
 
     def _register_external_tools_conditional(self) -> None:
@@ -4333,6 +4462,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         """
         Load a saved session.
 
+        Every "always" answer given so far is forgotten once the session is
+        found, so the loaded conversation starts with none. A session that is
+        missing or unreadable leaves the current one, and its answers, as is.
+
         Args:
             session_id: Session ID to load
 
@@ -4345,6 +4478,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 logger.error(f"Session not found: {session_id}")
                 return False
 
+            # "Always" answers belong to the conversation they were given in;
+            # drop them before any of the other conversation is loaded.
+            reset_approvals = getattr(
+                getattr(self, "console", None), "reset_tool_approvals", None
+            )
+            if callable(reset_approvals):
+                reset_approvals()
             self.current_session = session
 
             # Restore indexed documents (only if RAG is available)

@@ -6,6 +6,8 @@ A test the selector leaves out is a bug that merges green, so each way a test
 can depend on a file gets a case here, built in a throwaway repo.
 """
 
+import re
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -453,14 +455,13 @@ def test_a_data_file_named_by_its_path_selects_its_reader(graph, changed, reader
         "util/run_eval_lane.py",
         "tests/unit/helpers.py",
         "tests/fixtures/gaia/email/build_mailbox.py",
-        # Data files, named exactly or not.
-        "README.md",
+        # Data files, named exactly or not. Skills stay here: shipped code
+        # loads them by scanning a folder, which the graph can't follow.
         "hub/skills/inbox-triage/SKILL.md",
         "hub/skills/s2/SKILL.md",
         "hub/skills/inbox-triage/references/guide.md",
         "tests/fixtures/data/cases.json",
         "eval/scenarios/rag/basic.yaml",
-        "docs/guides/chat.mdx",
         "src/gaia/tools/tiers.json",
         # .py files outside what the map measures.
         "tests/integration/test_live.py",
@@ -627,7 +628,7 @@ def test_a_group_that_runs_keeps_every_file_it_changed(graph):
     # The filter decides only whether the group runs. Once it does, a file
     # outside the filter counts as it does on the PR: tests read such files.
     triggers = st.workflow_trigger_paths(UNIT_WORKFLOW)
-    changed = ["README.md", "src/gaia/core/base.py"]
+    changed = ["eval/scenarios/rag/basic.yaml", "src/gaia/core/base.py"]
     group = st.select(graph, changed, FULL_MAP, trigger_paths=triggers)
     on_its_pr = st.select(graph, changed, FULL_MAP)
     assert group.triggered and group.full
@@ -753,5 +754,463 @@ def test_select_writes_whether_the_change_triggered_the_workflow(
     st.main(base + ["--changed", "README.md"])
     st.main(base + ["--changed", "src/gaia/core/base.py"])
     lines = out.read_text(encoding="utf-8").splitlines()
-    assert lines[:3] == ["linux_full=false", "linux_count=0", "linux_triggered=false"]
-    assert lines[5] == "linux_triggered=true"
+    assert lines[:4] == [
+        "linux_full=false",
+        "linux_count=0",
+        "linux_triggered=false",
+        "linux_os=false",
+    ]
+    assert lines[6] == "linux_triggered=true"
+
+
+# Docs, Agent UI, the Go TUI and hub data are only ever read by tests, so each
+# reaches just the tests that name it or scan its folder.
+RO_FILES = {
+    **FILES,
+    "examples/unread.md": "nobody reads me",
+    "src/gaia/apps/webui/src/App.tsx": "export {}",
+    "src/gaia/apps/webui/src/styles/index.css": "body {}",
+    "src/gaia/apps/webui/src/i18n/locales/en.json": "{}",
+    "src/gaia/apps/webui/package.json": "{}",
+    "tui/go.mod": "module x",
+    "tui/internal/lemonade/recommended_models.json": "[]",
+    "tui/internal/ui/view.go": "package ui",
+    "hub/agents/gaia/npm/README.md": "readme",
+    "hub/agents/gaia/npm/binaries.lock.json": "{}",
+    "hub/agents/mail/python/gaia_agent_mail/prompt.md": "prompt",
+    "website/src/pages/not-a-unit-test-input.astro": "---",
+    "tests/unit/test_webui_app.py": "APP = ROOT / 'src/gaia/apps/webui/src/App.tsx'\n",
+    "tests/unit/test_webui_strings.py": (
+        "def test_s():\n"
+        "    for f in (ROOT / 'src' / 'gaia' / 'apps' / 'webui').rglob('*.json'):\n"
+        "        f.read_text()\n"
+    ),
+    "tests/unit/test_tui_models.py": "NAME = 'recommended_models.json'\n",
+    "tests/unit/test_npm_readme.py": (
+        "PATH = ROOT / 'hub' / 'agents' / 'gaia' / 'npm' / 'README.md'\n"
+    ),
+    # A folder named by path, then a file in it by a computed name.
+    "src/gaia/apps/webui/src/i18n/locales/en.ts": "export {}",
+    "src/gaia/apps/webui/src/i18n/locales/ar.ts": "export {}",
+    "tests/unit/test_locale_fstring.py": (
+        "def test_l(webui, locale):\n"
+        "    (webui / f'i18n/locales/{locale}.ts').read_text()\n"
+    ),
+    "tests/unit/test_locale_folder.py": (
+        "LOCALES = ROOT / 'src/gaia/apps/webui/src/i18n/locales'\n"
+        "def test_l(locale):\n"
+        "    (LOCALES / f'{locale}.ts').read_text()\n"
+    ),
+    "eval/prompts/judge.md": "judge",
+    "installer/tui/README.md": "readme",
+}
+
+
+@pytest.fixture
+def ro_graph(tmp_path):
+    for rel, text in RO_FILES.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return st.build_graph(repo=tmp_path, files=sorted(RO_FILES))
+
+
+@pytest.mark.parametrize(
+    "path, kind",
+    [
+        ("docs/guides/chat.mdx", "docs"),
+        ("README.md", "docs"),
+        ("src/gaia/apps/webui/src/App.tsx", "webui"),
+        ("src/gaia/apps/webui/src/styles/index.css", "webui"),
+        ("tui/internal/ui/view.go", "tui"),
+        ("hub/agents/gaia/npm/README.md", "hub data"),
+        ("hub/components/x/gaia-agent.yaml", "hub data"),
+        # Pinned manifests and lockfiles several lanes read.
+        ("src/gaia/apps/webui/package.json", None),
+        ("src/gaia/apps/webui/package-lock.json", None),
+        ("tui/go.mod", None),
+        ("tui/go.sum", None),
+        ("hub/agents/gaia/npm/binaries.lock.json", None),
+        ("hub/agents/mail/python/pyproject.toml", None),
+        # Loaded by shipped code that scans a folder.
+        ("hub/skills/triage/SKILL.md", None),
+        ("hub/agents/mail/python/gaia_agent_mail/prompt.md", None),
+        # Python, fixtures, files that always force a full run, and unknowns.
+        ("src/gaia/cli.py", None),
+        ("tests/fixtures/notes.md", None),
+        ("CLAUDE.md", None),
+        (".claude/agents/x.md", None),
+        ("src/gaia/agents/prompt.md", None),
+        ("website/src/pages/not-a-unit-test-input.astro", None),
+        ("eval/ci_lanes.json", None),
+        # Prompts, corpora and installer notes are inputs, not docs pages.
+        ("eval/prompts/judge.md", None),
+        ("eval/corpus/doc.md", None),
+        ("installer/tui/README.md", None),
+    ],
+)
+def test_read_only_class_names_the_files_that_only_reach_their_readers(path, kind):
+    assert st.read_only_class(path) == kind
+
+
+@pytest.mark.parametrize(
+    "changed, readers",
+    [
+        ("docs/guides/chat.mdx", {"tests/unit/test_chat_doc.py"}),
+        ("src/gaia/apps/webui/src/App.tsx", {"tests/unit/test_webui_app.py"}),
+        # Read through a folder scan, not a spelled-out path.
+        (
+            "src/gaia/apps/webui/src/i18n/locales/en.json",
+            {"tests/unit/test_webui_strings.py"},
+        ),
+        (
+            "tui/internal/lemonade/recommended_models.json",
+            {"tests/unit/test_tui_models.py"},
+        ),
+        ("hub/agents/gaia/npm/README.md", {"tests/unit/test_npm_readme.py"}),
+        # The folder is named by path; the file by an f-string or a variable.
+        (
+            "src/gaia/apps/webui/src/i18n/locales/ar.ts",
+            {"tests/unit/test_locale_fstring.py", "tests/unit/test_locale_folder.py"},
+        ),
+    ],
+)
+def test_a_read_only_file_selects_only_its_readers(ro_graph, changed, readers):
+    sel = st.select(ro_graph, [changed], FULL_MAP)
+    assert not sel.full, sel.reason
+    assert readers <= set(sel.tests)
+    assert "tests/unit/test_unrelated.py" not in sel.tests
+    assert len(sel.tests) < sel.total
+
+
+@pytest.mark.parametrize(
+    "changed",
+    ["examples/unread.md", "tui/internal/ui/view.go", "README.md"],
+)
+def test_a_read_only_file_nobody_reads_selects_nothing(ro_graph, changed):
+    sel = st.select(ro_graph, [changed], FULL_MAP)
+    assert not sel.full and sel.tests == [], sel.reason
+
+
+def test_python_beside_a_doc_page_narrows_to_both_reaches(ro_graph):
+    # The common feature PR: code plus its guide no longer runs everything.
+    sel = st.select(
+        ro_graph, ["src/gaia/core/base.py", "docs/guides/chat.mdx"], FULL_MAP
+    )
+    assert not sel.full, sel.reason
+    assert {"tests/unit/test_base.py", "tests/unit/test_chat_doc.py"} <= set(sel.tests)
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "src/gaia/apps/webui/package.json",
+        "tui/go.mod",
+        "hub/agents/gaia/npm/binaries.lock.json",
+        "hub/agents/mail/python/gaia_agent_mail/prompt.md",
+        # A file type no rule names still runs everything.
+        "website/src/pages/not-a-unit-test-input.astro",
+    ],
+)
+def test_pinned_and_unknown_files_still_run_the_full_suite(ro_graph, changed):
+    _full(ro_graph, changed)
+
+
+def test_a_deleted_read_only_file_runs_the_full_suite(ro_graph):
+    # A test may still name the old path; nothing on disk does.
+    assert "deleted or renamed" in _full(ro_graph, "docs/guides/removed.mdx")
+
+
+def test_without_a_map_a_read_only_change_still_runs_everything(ro_graph):
+    _full(ro_graph, "docs/guides/chat.mdx", coverage=None)
+
+
+def test_force_full_runs_everything_and_says_why(graph):
+    sel = st.select(
+        graph, ["tests/unit/test_base.py"], FULL_MAP, force_full="ci:full label"
+    )
+    assert sel.full and len(sel.tests) == sel.total and sel.reason == "ci:full label"
+    # On Windows and macOS too: the label means the whole suite, not the OS subset.
+    platform = st.select(
+        graph,
+        ["tests/unit/test_base.py"],
+        FULL_MAP,
+        platform_only=True,
+        force_full="ci:full label",
+    )
+    assert platform.full and len(platform.tests) == platform.total
+
+
+def test_the_label_reaches_the_workflow_outputs(graph, tmp_path, monkeypatch):
+    monkeypatch.setattr(st, "build_graph", lambda: graph)
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    st.main(
+        [
+            "select",
+            "--changed",
+            "docs/guides/chat.mdx",
+            "--platform-only",
+            "--force-full",
+            "ci:full label",
+            "--github-output",
+            "platform",
+        ]
+    )
+    lines = set(out.read_text(encoding="utf-8").splitlines())
+    assert {"platform_full=true", "platform_os=true"} <= lines
+
+
+@pytest.mark.parametrize(
+    "changed, runs",
+    [
+        # Read-only files never need macOS.
+        (["docs/guides/chat.mdx"], False),
+        (["src/gaia/apps/webui/src/App.tsx"], False),
+        (["tui/internal/ui/view.go"], False),
+        # Python outside the OS-touching modules, even one that spawns a
+        # process: a macOS-only break there surfaces on the push to main.
+        (["src/gaia/core/base.py"], False),
+        (["src/gaia/tools/sinks.py"], False),
+        (["src/gaia/daemon_client.py"], False),
+        (["tests/unit/test_base.py"], False),
+        # A test that makes OS calls itself.
+        (["tests/unit/test_proc.py"], True),
+        (["tests/unit/test_cli_proc.py"], True),
+        # An OS-touching module, whatever is in it.
+        (["src/gaia/daemon/server.py"], True),
+        (["src/gaia/connectors/store.py"], True),
+        (["src/gaia/utils/process_tree.py"], True),
+        (["src/gaia/agents/tools/shell_tools.py"], True),
+        (["installer/core/freeze.py"], True),
+        (["installer/tui/build-pkg.sh"], True),
+        # Files that force a full run, and Python that can't be read.
+        (["setup.py"], True),
+        (["tests/conftest.py"], True),
+        (["src/gaia/gone.py"], True),
+        # One OS-touching file among many is enough.
+        (["docs/guides/chat.mdx", "src/gaia/daemon/server.py"], True),
+    ],
+)
+def test_macos_runs_on_a_pr_only_for_os_touching_changes(graph, changed, runs):
+    assert bool(st.os_reason(changed, graph)) is runs
+
+
+TUI_WORKFLOW = REPO / ".github/workflows/build_tui.yml"
+WEBUI = "src/gaia/apps/webui/"
+
+
+@pytest.mark.parametrize(
+    "changed, full",
+    [
+        (["src/gaia/apps/webui/src/App.tsx"], False),
+        (["src/gaia/apps/webui/src/App.tsx", "src/gaia/apps/webui/src/a.css"], False),
+        # A file outside the TUI filter never triggered it, so it can't widen it.
+        (["src/gaia/apps/webui/src/App.tsx", "src/gaia/ui/server.py"], False),
+        (["src/gaia/apps/webui/src/App.tsx", "tui/internal/ui/view.go"], True),
+        (["src/gaia/apps/webui/src/App.tsx", "installer/core/freeze.py"], True),
+        (["src/gaia/apps/webui/src/App.tsx", "src/gaia/daemon/server.py"], True),
+        (["src/gaia/apps/webui/src/App.tsx", "src/gaia/version.py"], True),
+        (["tui/internal/ui/view.go"], True),
+        # Nothing in the filter: run everything rather than guess.
+        (["docs/guides/chat.mdx"], True),
+    ],
+)
+def test_the_tui_workflow_narrows_only_for_an_agent_ui_change(changed, full):
+    patterns = st.workflow_trigger_paths(TUI_WORKFLOW)
+    got, reason = st.lane_scope(changed, patterns, [WEBUI])
+    assert got is full, reason
+
+
+def test_the_tui_workflow_runs_in_full_for_the_label():
+    patterns = st.workflow_trigger_paths(TUI_WORKFLOW)
+    full, reason = st.lane_scope(
+        ["src/gaia/apps/webui/src/App.tsx"], patterns, [WEBUI], "ci:full label"
+    )
+    assert full and reason == "ci:full label"
+
+
+def test_the_tui_filter_runs_the_workflow_when_its_decision_changes():
+    # Editing the script that narrows the TUI workflow must run it in full.
+    rx = st.path_filter(st.workflow_trigger_paths(TUI_WORKFLOW))
+    assert rx.match("util/select_tests.py")
+    assert rx.match(".github/workflows/build_tui.yml")
+
+
+def _git(repo, *args):
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+
+@pytest.fixture
+def git_repo(tmp_path):
+    """A repo whose branch edits a webui file and a doc page, while main moves on."""
+    _git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "a.mdx").write_text("a", encoding="utf-8")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    _git(tmp_path, "checkout", "-q", "-b", "feature")
+    ui = tmp_path / WEBUI / "src"
+    ui.mkdir(parents=True)
+    (ui / "App.tsx").write_text("x", encoding="utf-8")
+    (tmp_path / "docs" / "a.mdx").write_text("b", encoding="utf-8")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "change")
+    # A later commit on main must not show up in the branch's diff.
+    _git(tmp_path, "checkout", "-q", "main")
+    (tmp_path / "later.py").write_text("x", encoding="utf-8")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "later")
+    _git(tmp_path, "checkout", "-q", "feature")
+    return tmp_path
+
+
+def test_changed_files_come_from_git_against_the_merge_base(git_repo):
+    changed = st.changed_since("main", repo=git_repo)
+    assert sorted(changed) == ["docs/a.mdx", f"{WEBUI}src/App.tsx"]
+
+
+def test_an_unknown_base_fails_loudly_instead_of_narrowing(git_repo):
+    with pytest.raises(SystemExit, match="fetch-depth: 0"):
+        st.changed_since("origin/no-such-branch", repo=git_repo)
+
+
+def test_lane_scope_reads_the_diff_from_git(git_repo, tmp_path_factory, monkeypatch):
+    wf = tmp_path_factory.mktemp("wf") / "wf.yml"
+    wf.write_text(
+        "on:\n  pull_request:\n    paths: ['src/gaia/apps/webui/**', 'tui/**']\n",
+        encoding="utf-8",
+    )
+    out = tmp_path_factory.mktemp("out") / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    real = st.changed_since
+    monkeypatch.setattr(st, "changed_since", lambda base: real(base, repo=git_repo))
+    args = ["lane-scope", "--base", "main", "--workflow", str(wf)]
+    st.main(args + ["--narrow-prefix", WEBUI, "--github-output", "tui"])
+    assert out.read_text(encoding="utf-8").splitlines() == ["tui_full=false"]
+
+
+def test_a_folder_read_does_not_widen_a_python_change(ro_graph):
+    # Python reaches its readers through imports, not through folder reads.
+    hit = _reach(ro_graph, "src/gaia/core/base.py")
+    assert "tests/unit/test_locale_folder.py" not in hit
+
+
+def test_a_single_folder_name_is_not_a_folder_read(tmp_path):
+    files = {
+        "docs/a.mdx": "a",
+        "tests/unit/test_one_name.py": "DOCS = 'docs'\n",
+    }
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    graph = st.build_graph(repo=tmp_path, files=sorted(files))
+    assert not graph.folder_reads.get("tests/unit/test_one_name.py")
+
+
+# The two real tests that read a locale file by a computed name.
+LOCALE_READERS = [
+    "tests/unit/test_other_server_start_hint_translated.py",
+    "tests/unit/test_flagship_tool_labels.py",
+]
+
+
+@pytest.mark.parametrize("locale", ["en", "ar"])
+def test_the_real_locale_tests_are_selected_by_a_locale_edit(locale):
+    locales = "src/gaia/apps/webui/src/i18n/locales"
+    files = sorted(
+        LOCALE_READERS
+        + [p.relative_to(REPO).as_posix() for p in (REPO / locales).iterdir()]
+    )
+    graph = st.build_graph(repo=REPO, files=files)
+    hit = st.affected_files(graph, [f"{locales}/{locale}.ts"], {})
+    assert set(LOCALE_READERS) <= hit
+
+
+_DARWIN_RE = re.compile(
+    r"""sys\.platform\s*(?:==|!=|\.startswith\()\s*\(?["']darwin"""
+    r"""|platform\.system\(\)\s*==\s*["']Darwin"""
+)
+
+
+def _unlisted_darwin_modules(sources):
+    """The paths, of ``{path: source}``, that branch on macOS but aren't gated."""
+    return sorted(
+        path
+        for path, source in sources.items()
+        if _DARWIN_RE.search(source) and not st.is_os_touching_path(path)
+    )
+
+
+def test_an_unlisted_module_that_branches_on_macos_fails_the_check():
+    sources = {
+        "src/gaia/not_listed_xyz.py": "import sys\nIS_MAC = sys.platform == 'darwin'\n",
+        "src/gaia/daemon/listed.py": "import sys\nIS_MAC = sys.platform == 'darwin'\n",
+        "src/gaia/no_branch.py": "X = 1\n",
+    }
+    assert _unlisted_darwin_modules(sources) == ["src/gaia/not_listed_xyz.py"]
+
+
+def _tracked_src_sources(repo):
+    """``{path: source}`` for the Python under src/gaia that git tracks."""
+    # Untracked Python (node-gyp under webui/node_modules) isn't shipped source.
+    return {
+        path: (repo / path).read_text(encoding="utf-8", errors="ignore")
+        for path in st.tracked_files(repo)
+        if path.startswith("src/gaia/") and path.endswith(".py")
+    }
+
+
+def test_untracked_python_is_not_scanned_but_a_tracked_unlisted_module_is(tmp_path):
+    darwin = "import sys\nIS_MAC = sys.platform == 'darwin'\n"
+    tracked = tmp_path / "src/gaia/not_listed_xyz.py"
+    tracked.parent.mkdir(parents=True)
+    tracked.write_text(darwin, encoding="utf-8")
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    for vendored in (
+        f"{WEBUI}node_modules/node-gyp/gyp/pylib/gyp/__init__.py",
+        "src/gaia/.venv/lib/site.py",
+        "src/gaia/build/lib/mac.py",
+    ):
+        (tmp_path / vendored).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / vendored).write_text(darwin, encoding="utf-8")
+    sources = _tracked_src_sources(tmp_path)
+    assert _unlisted_darwin_modules(sources) == ["src/gaia/not_listed_xyz.py"]
+
+
+def test_every_module_that_branches_on_macos_runs_the_macos_lane():
+    # A module with a darwin branch the gate doesn't list would merge without
+    # the macOS lane ever running on its PR.
+    sources = _tracked_src_sources(REPO)
+    assert "src/gaia/cli.py" in sources
+    missing = _unlisted_darwin_modules(sources)
+    assert not missing, (
+        "These modules branch on macOS but the macOS lane skips them on a PR. "
+        f"Add them to OS_MODULE_PREFIXES in util/select_tests.py: {missing}"
+    )
+
+
+def test_a_folder_joined_with_a_computed_name_is_a_folder_read(tmp_path):
+    files = {
+        "docs/guides/chat.mdx": "a",
+        "docs/other/x.mdx": "b",
+        "tests/unit/test_guide_by_name.py": (
+            "def page(name):\n" "    return ROOT / 'docs' / 'guides' / f'{name}.mdx'\n"
+        ),
+    }
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    graph = st.build_graph(repo=tmp_path, files=sorted(files))
+    reader = "tests/unit/test_guide_by_name.py"
+    assert reader in st.affected_files(graph, ["docs/guides/chat.mdx"], {})
+    assert reader not in st.affected_files(graph, ["docs/other/x.mdx"], {})

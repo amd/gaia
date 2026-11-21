@@ -37,9 +37,23 @@ colors the text shades adjust on their own so everything stays readable.
 you change it, and **Run setup again** goes through it once more. Your
 models, keys and chats stay. See [Setup in detail](/guides/agent-ui/getting-started#setup-in-detail).
 
-### Model
+### Agent & model
 
 The model in use, context size, the models on this PC, cloud providers and keys, and this month's cloud spend. See [Choose a model](/guides/agent-ui/control#choose-a-model).
+
+**Agent**, at the top, picks the program that runs GAIA, each shown with its download size: **gaiapy**, the full-featured Python agent (the default), or **gaiacpp**, the fast and light native C++ agent (beta). **Compare the two** opens their strengths and trade-offs. A gaiacpp that isn't on this PC has a **Download** button on its row; its row can't be picked until then. Download shows a progress bar in the card and switches to gaiacpp when it's in; a failed download says so in the card with **Retry**, and the agent stays as it was. A switch applies from the next message in every chat; GAIA restarts the agent for it. Where this release offers no gaiacpp, its row says **Not installed** and the reason is shown under it. While GAIA is answering in a chat, a switch waits: finish or stop the answer first.
+
+### Image creation
+
+The model GAIA makes pictures with, the size and the number of steps (more
+steps add detail and time). The models are the image models downloaded in
+Lemonade, plus the older SD models that download the first time you use them;
+each offers only the sizes it handles well. **Automatic** keeps the model's own
+size or steps. Asking for a size or a model in the chat still overrides these.
+On a chat model too small to be offered image creation (Gemma 4 E4B), the
+section says so and links to **Settings → Agent & model**. A created image shows in the
+chat, and the activity line reads "Created an image". The
+[terminal app](/guides/tui) uses the same settings.
 
 ### Permissions
 
@@ -97,16 +111,19 @@ GAIA manages it for you, and it gives its memory back when you stop using GAIA:
 | When | What happens |
 |---|---|
 | You open the app (desktop, `npx @amd-gaia/agent-ui`, or `gaia-cli`) | GAIA's background service starts the server if it is not running |
-| You close the last GAIA app | Every model is unloaded, so your GPU memory is free again. The server itself stays up for a quick next launch |
-| Another GAIA process is still using it, or a request is in flight | Nothing is unloaded until it is done |
+| You close the last GAIA app | Every model is unloaded and the agent processes it used are stopped, so your memory is free again. The server itself stays up for a quick next launch |
+| Another GAIA app or command is still using it, an agent is still answering, or a request is in flight | Nothing is unloaded until it is done |
 | No GAIA process has held it, and it has served no request, for 15 minutes | The server stops entirely |
 | A GAIA process sends a request after it stopped | It starts again and the request goes through, after a cold model load |
 | `gaia daemon stop` | The server stops, including the one first-time setup started |
 
 Every GAIA process that talks to the server holds a lease on it while it
-runs: the app, each `gaia` command, sidecar agents, and a process started with
-another `GAIA_HOME` that points `LEMONADE_BASE_URL` at this server. The server
-is never stopped while a lease is held or a request is in flight.
+runs: the app, each `gaia` command, and a process started with another
+`GAIA_HOME` that points `LEMONADE_BASE_URL` at this server. The server is never
+stopped while a lease is held, an agent is answering, or a request is in
+flight. An agent running in the background on GAIA's behalf does not count on
+its own: it is there to serve the apps, so it is stopped when the last one
+closes and started again on your next message.
 
 The server keeps the same port and API key from one start to the next, so a
 chat that was open before a restart keeps working. If another program has taken
@@ -156,7 +173,7 @@ The same setting from a terminal:
 gaia config set llamacpp_backend vulkan   # vulkan | auto
 ```
 
-**Change model** opens Settings → Model. To use a different server, enter its
+**Change model** opens Settings → Agent & model. To use a different server, enter its
 address under **Settings → Advanced → Model server** (see [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run)).
 
 **Settings → Advanced → Model server** switches between GAIA's own Lemonade

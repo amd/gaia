@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.file_snapshots import SnapshotError, before_change
+from gaia.agents.tools import path_access
 from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
@@ -137,6 +138,7 @@ class SDToolsMixin:
         enable_3d_tools: bool = False,
         enable_variation_tools: bool = False,
         enable_edit_tools: bool = False,
+        follow_user_settings: bool = False,
     ) -> None:
         """
         Initialize SD tools and register them with the agent.
@@ -157,6 +159,11 @@ class SDToolsMixin:
                 ``create_image_variation`` tool.
             enable_edit_tools: Register the opt-in ``edit_image`` and
                 ``upscale_image`` tools.
+            follow_user_settings: Take the model, size and steps from the
+                user's ``image_model`` / ``image_size`` / ``image_steps`` in
+                ``~/.gaia/config.json``, read at every generation, ahead of
+                the defaults above. A request that names a model uses only
+                that model's own defaults.
 
         Example:
             # Fast generation with defaults (SDXL-Turbo)
@@ -191,6 +198,7 @@ class SDToolsMixin:
         self.sd_enable_3d_tools = enable_3d_tools
         self.sd_enable_variation_tools = enable_variation_tools
         self.sd_enable_edit_tools = enable_edit_tools
+        self.sd_follow_user_settings = follow_user_settings
 
         logger.debug(
             f"SD tools initialized: endpoint={self.sd_client.base_url}/images/generations, output={self.sd_output_dir}"
@@ -223,7 +231,7 @@ class SDToolsMixin:
             Args:
                 prompt: Text description of the image.
                 model: Exact image model ID from list_sd_models(), including
-                    TheNoise models. Omit to use the legacy SDXL-Turbo default.
+                    TheNoise models. Omit to use the user's chosen image model.
                 size: Optional WIDTHxHEIGHT; otherwise model defaults apply.
                 steps: Optional steps; otherwise model defaults apply.
                 cfg_scale: Optional guidance; otherwise model defaults apply.
@@ -233,6 +241,9 @@ class SDToolsMixin:
                 {"status": "success", "image_path": str, ...} or
                 {"status": "error", "error": str}.
             """
+            refusal = self._slide_image_refusal()
+            if refusal is not None:
+                return refusal
             return self._generate_image(prompt, model, size, steps, cfg_scale, seed)
 
         if self.sd_enable_edit_tools:
@@ -280,10 +291,11 @@ class SDToolsMixin:
                         speed=self._estimate_generation_time(name, defaults["size"]),
                     )
                 listed.append(entry)
+            saved = self._saved_image_settings()
             return {
                 "status": "success",
                 "models": listed,
-                "default_model": self.sd_default_model,
+                "default_model": saved["model"] if saved else self.sd_default_model,
             }
 
         @tool(
@@ -314,9 +326,7 @@ class SDToolsMixin:
                 model must already be downloaded in Lemonade. The output is saved
                 beside generated images and is never silently downloaded.
                 """
-                from gaia.agents.tools.path_access import read_access_error
-
-                refusal = read_access_error(self, image_path)
+                refusal = path_access.read_access_error(self, image_path)
                 if refusal:
                     return refusal
                 source = Path(image_path).expanduser()
@@ -414,13 +424,11 @@ class SDToolsMixin:
         self, image_path: str
     ) -> tuple[Optional[Path], Optional[Dict[str, Any]]]:
         """Check read scope and resolve one local source image."""
-        from gaia.agents.tools.path_access import image_file_error, read_access_error
-
         path = Path(image_path).expanduser()
-        denied = read_access_error(self, path)
+        denied = path_access.read_access_error(self, path)
         if denied:
             return None, denied
-        invalid = image_file_error(path, image_path)
+        invalid = path_access.image_file_error(path, image_path)
         if invalid:
             return None, invalid
         try:
@@ -564,9 +572,7 @@ class SDToolsMixin:
         n: int = 1,
     ) -> Dict[str, Any]:
         """Vary *image_path* through Lemonade and save each result as a PNG."""
-        from gaia.agents.tools.path_access import read_access_error
-
-        refusal = read_access_error(self, image_path)
+        refusal = path_access.read_access_error(self, image_path)
         if refusal:
             return refusal
         try:
@@ -658,6 +664,51 @@ class SDToolsMixin:
         self.sd_generations.append({**result, "created_at": datetime.now().isoformat()})
         return result
 
+    #: A request about a slide, deck or chart: its image is the built file, drawn.
+    _SLIDE_REQUEST = re.compile(
+        r"\b(?:slides?|decks?|presentations?|powerpoint|pptx|keynote|charts?)\b", re.I
+    )
+
+    def _slide_image_refusal(self) -> Optional[Dict[str, Any]]:
+        """Turn the first image call for a slide toward the slide-decks skill.
+
+        Stable Diffusion cannot draw a slide's text or numbers. A second call in
+        the same turn goes through: the model has judged it a real picture.
+        """
+        # The user's own words: _current_query also holds recalled memory text.
+        request = str(
+            getattr(self, "_original_user_input", None)
+            or getattr(self, "_current_query", "")
+            or ""
+        )
+        if not self._SLIDE_REQUEST.search(request):
+            return None
+        if getattr(self, "_slide_image_redirected", None) == request:
+            return None
+        self.__dict__["_slide_image_redirected"] = request
+        if self._slide_skill_installed():
+            instead = (
+                "Load the slide-decks skill, build the slide, then save it with "
+                "slide-decks/export_slide_image (PNG, or JPEG if asked)."
+            )
+        else:
+            instead = "Build it as a file (a .pptx or .html) instead."
+        return {
+            "status": "error",
+            "error": (
+                "This request is about a slide, deck or chart, and image generation "
+                f"cannot draw its words or numbers. {instead} If the user really "
+                "wants an artwork, call generate_image again."
+            ),
+        }
+
+    def _slide_skill_installed(self) -> bool:
+        """True when this agent can load the slide-decks skill."""
+        manager = getattr(self, "skill_manager", None)
+        if manager is None:
+            return False
+        return any(s.name == "slide-decks" for s in manager.list_skills())
+
     def _generate_image(
         self,
         prompt: str,
@@ -684,6 +735,12 @@ class SDToolsMixin:
         import time
 
         # Apply instance defaults first
+        saved = self._saved_image_settings()
+        # Naming the saved model, as list_sd_models suggests, keeps its saved size and steps.
+        if saved and (not model or model == saved["model"]):
+            model = saved["model"]
+            size = size or saved["size"]
+            steps = steps if steps is not None else saved["steps"]
         model = model or self.sd_default_model
         size = size or self.sd_default_size
         steps = steps if steps is not None else self.sd_default_steps
@@ -696,6 +753,14 @@ class SDToolsMixin:
             try:
                 models = self.sd_client.list_sd_models()
                 if not any(m.get("id") == model for m in models):
+                    if saved and model == saved["model"]:
+                        return {
+                            "status": "error",
+                            "error": f"{model}, the image model chosen in GAIA's "
+                            "image settings, is not downloaded on this Lemonade. "
+                            "Choose another model in those settings, or download "
+                            f"{model} in Settings › Agent & model.",
+                        }
                     return {
                         "status": "error",
                         "error": f"Invalid model '{model}' or model not downloaded. "
@@ -900,6 +965,28 @@ class SDToolsMixin:
             logger.error(error_msg, exc_info=True)
             return {"status": "error", "error": error_msg}
 
+    def _saved_image_settings(self) -> Optional[Dict[str, Any]]:
+        """The user's saved image model, size and steps, when this agent follows them.
+
+        Read fresh so a change in either app's settings applies to the next
+        image. None when not following, or when no model was saved.
+
+        Raises:
+            GaiaConfigError: config.json exists but cannot be read.
+        """
+        if not getattr(self, "sd_follow_user_settings", False):
+            return None
+        from gaia.config import GaiaConfig
+
+        config = GaiaConfig.load()
+        if not config.image_model:
+            return None
+        return {
+            "model": config.image_model,
+            "size": config.image_size,
+            "steps": config.image_steps,
+        }
+
     @staticmethod
     def _describe_client_error(error: Exception, model: str) -> str:
         """Turn a Lemonade client error into something the user can act on.
@@ -966,12 +1053,13 @@ class SDToolsMixin:
         Returns:
             Path to saved image file
         """
-        # Create safe filename from prompt
+        # Both prompt and model can originate in a tool call: neither may
+        # introduce path segments or control whitespace into an output name.
         safe_prompt = re.sub(r"\s+", "_", re.sub(r"[^\w\s-]", "", prompt[:40]).strip())
+        safe_model = re.sub(r"\.{2,}|[^A-Za-z0-9_.-]", "_", model[:80])
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # Content hash: two fast Turbo runs of one prompt land in the same second.
         digest = hashlib.sha256(image_bytes).hexdigest()[:8]
-        safe_model = re.sub(r"[^A-Za-z0-9_.-]", "_", model)
         filename = f"{safe_prompt}_{safe_model}_{timestamp}_{digest}.png"
 
         image_path = self.sd_output_dir / filename

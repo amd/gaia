@@ -342,3 +342,10 @@ def test_a_source_inside_the_output_dir_is_never_overwritten(edit_tools, method)
     assert source.read_bytes() == original
     assert str(source.resolve()) not in result["image_paths"]
     assert len(set(result["image_paths"])) == 2
+
+
+def test_save_image_sanitizes_a_model_path(edit_tools):
+    host, _backend, output = edit_tools
+    saved = host._save_image("edited source", b"image", "../../x")
+    assert saved.parent == output.resolve()
+    assert ".." not in saved.name and "/" not in saved.name and "\\" not in saved.name

@@ -10,7 +10,6 @@
 name: Gaia Agent Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:
@@ -69,6 +68,7 @@ on:
       - 'tests/unit/agents/test_engine_down_query_start.py'
       - 'tests/unit/test_tool_loader_token_budget.py'
       - 'tests/unit/test_tool_list_invariants.py'
+      - 'tests/unit/test_skill_tools_pinned.py'
       - 'tests/unit/test_warm_up.py'
       - 'tests/unit/test_flagship_tool_labels.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
@@ -142,6 +142,7 @@ on:
       - 'tests/unit/agents/test_engine_down_query_start.py'
       - 'tests/unit/test_tool_loader_token_budget.py'
       - 'tests/unit/test_tool_list_invariants.py'
+      - 'tests/unit/test_skill_tools_pinned.py'
       - 'tests/unit/test_warm_up.py'
       - 'tests/unit/test_flagship_tool_labels.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
@@ -261,6 +262,7 @@ jobs:
           python -m pytest \
             tests/unit/test_tool_loader_token_budget.py \
             tests/unit/test_tool_list_invariants.py \
+            tests/unit/test_skill_tools_pinned.py \
             tests/unit/test_warm_up.py \
             tests/unit/test_flagship_tool_labels.py \
             tests/unit/eval/test_harness_flagship_target.py \

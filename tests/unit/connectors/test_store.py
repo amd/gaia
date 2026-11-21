@@ -20,6 +20,8 @@ Coverage:
 
 from __future__ import annotations
 
+import logging
+
 import keyring
 import pytest
 
@@ -725,31 +727,54 @@ class TestStandaloneSecrets:
         assert peek_connection("google") is not None
         assert peek_provider_credentials("google") is not None
 
-    def test_refused_backend_blocks_every_operation(self):
+    def test_refused_backend_blocks_reads_and_writes_but_not_deletes(self, caplog):
+        from gaia.connectors import keyring_access
+
         class PlaintextKeyring(keyring.backend.KeyringBackend):
             priority = 1
+            viable = False
+
+            def __init__(self):
+                super().__init__()
+                self.items = {}
 
             def get_password(self, service, username):
-                return None
+                return self.items.get((service, username))
 
             def set_password(self, service, username, password):
                 raise AssertionError("must not write to a plaintext backend")
 
             def delete_password(self, service, username):
-                raise AssertionError("must not touch a plaintext backend")
+                if (service, username) not in self.items:
+                    raise keyring.errors.PasswordDeleteError("absent")
+                del self.items[(service, username)]
 
+        backend = PlaintextKeyring()
+        # A chunked secret saved before the check existed.
+        base = _secret_username("k")
+        backend.items[(SERVICE_NAME, base)] = "gaia-chunked-v2:2:00000000"
+        backend.items[(SERVICE_NAME, f"{base}#0")] = "aa"
+        backend.items[(SERVICE_NAME, f"{base}#1")] = "bb"
         previous = keyring.get_keyring()
-        keyring.set_keyring(PlaintextKeyring())
+        keyring.set_keyring(backend)
+        keyring_access._warned.clear()
         try:
             for call in (
                 lambda: save_secret("k", "v"),
                 lambda: peek_secret("k"),
-                lambda: delete_secret("k"),
             ):
                 with pytest.raises(ConnectorsError, match="Insecure keyring backend"):
                     call()
+            with caplog.at_level(
+                logging.WARNING, logger="gaia.connectors.keyring_access"
+            ):
+                delete_secret("k")
+                delete_secret("k")  # absent now: still fine
         finally:
             keyring.set_keyring(previous)
+        assert backend.items == {}
+        assert caplog.text.count("insecure keyring backend") == 1
+        assert keyring_access.DOCS_URL in caplog.text
 
 
 class TestConstants:

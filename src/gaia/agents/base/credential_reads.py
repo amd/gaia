@@ -11,7 +11,7 @@ only computes when it runs is beyond this check.
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 from gaia.agents.base.denied_effects import PYTHON_READ_CALLS, python_file_reads
 from gaia.agents.base.verification import NOT_EXECUTED
@@ -21,6 +21,34 @@ log = get_logger(__name__)
 
 #: Tools that run Python, and the argument carrying the code or the script.
 PYTHON_TOOLS = {"run_python": "code", "execute_python_file": "file_path"}
+
+#: The snippet tool's argument that names a saved script to run instead.
+SCRIPT_PATH_ARG = "path"
+
+
+def as_script_call(tool_name: str, tool_args: Any) -> Tuple[str, Any]:
+    """``run_python`` asked to run a saved script, as the ``execute_python_file``
+    call it is; any other call as given.
+
+    One spelling for one action, so every rule about running a file (scope,
+    credentials, approval, a denial) covers it by either route.
+    """
+    if tool_name != "run_python" or not isinstance(tool_args, dict):
+        return tool_name, tool_args
+    path = tool_args.get(SCRIPT_PATH_ARG)
+    code = tool_args.get("code")
+    if not isinstance(path, str) or not path.strip():
+        return tool_name, tool_args
+    # Both given: the snippet tool refuses the call itself.
+    if code is not None and str(code).strip():
+        return tool_name, tool_args
+    rest = {
+        key: value
+        for key, value in tool_args.items()
+        if key not in (SCRIPT_PATH_ARG, "code")
+    }
+    return "execute_python_file", {"file_path": path, **rest}
+
 
 #: Code that spells none of these names cannot make a read the check finds.
 _READ_CALLS = re.compile(
@@ -76,7 +104,7 @@ def python_credential_refusal(
 ) -> Optional[Dict[str, Any]]:
     """The hard refusal for a Python call that reads a credential file, or None.
 
-    No tier: neither an approval nor full access lifts it.
+    No tier: no approval lifts it. Full access never reaches it.
     """
     key = PYTHON_TOOLS.get(tool_name)
     value = (tool_args or {}).get(key) if key else None
@@ -95,8 +123,8 @@ def python_credential_refusal(
         "status": "error",
         "error": (
             f"Not run: this Python code reads '{found}', which holds credentials, "
-            "keys or secrets. Python tools may not read it, even with full access "
-            "or after approval. Ask the user to open the file themselves."
+            "keys or secrets. Python tools may not read it, even after approval. "
+            "Ask the user to open the file themselves."
         ),
         "has_errors": True,
     }

@@ -559,6 +559,39 @@ export interface ModelStatus {
     checked: boolean;
 }
 
+/** The Python agent (every tool, the default) or the native C++ one (fast, fewer tools). */
+export type FlagshipAgent = 'gaiapy' | 'gaiacpp';
+
+/** A download of gaiacpp, polled while `state` is downloading. */
+export interface AgentDownload {
+    state: 'idle' | 'downloading' | 'done' | 'failed';
+    bytes_done: number;
+    bytes_total: number | null;
+    error: string | null;
+}
+
+export interface AgentProgram {
+    id: FlagshipAgent;
+    installed: boolean;
+    /** Null when the size couldn't be read. */
+    size_bytes: number | null;
+    /** gaiacpp isn't on this PC and this release offers it. */
+    can_download: boolean;
+    /** Why gaiacpp can't be had here, when it isn't installed and can't be downloaded. */
+    unavailable_reason: string | null;
+    /** Set when the reason is one the UI has its own words for; any other reason is shown as it is. */
+    unavailable_code?: 'no_release' | 'unreachable' | 'unverifiable' | null;
+    /** A newer build is offered; not shown yet. */
+    update_available?: boolean;
+}
+
+/** `GET /api/agent-programs`: both agent programs and any running download. */
+export interface AgentPrograms {
+    current: FlagshipAgent;
+    programs: AgentProgram[];
+    download: AgentDownload;
+}
+
 export interface Settings {
     custom_model: string | null;
     model_status: ModelStatus | null;
@@ -572,6 +605,10 @@ export interface Settings {
     agent_mode: 'manual' | 'goal_driven';
     /** Shared network policy controlling cloud AI use. */
     network_policy: 'cloud_allowed' | 'local_ai_only';
+    /** The program that runs the GAIA agent; "gaiapy" when the user never chose. */
+    flagship_agent: FlagshipAgent;
+    /** False when the gaiacpp program isn't installed on this PC, so it can't be chosen. */
+    gaiacpp_available: boolean;
     policy_warnings?: string[];
     policy_notices?: Array<{ code: string; severity: 'info' | 'warning'; url?: string; reason?: string; cause?: string | null; models?: string[] | null }>;
 }

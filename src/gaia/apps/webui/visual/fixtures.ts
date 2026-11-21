@@ -157,6 +157,59 @@ export const SYSTEM_STATUS = {
     data_dir: 'C:\\Users\\you\\.gaia\\chat',
 };
 
+/** Settings on a PC where both agents are installed and the Python one runs. */
+export const SETTINGS = {
+    custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+    network_policy: 'cloud_allowed', flagship_agent: 'gaiapy', gaiacpp_available: true,
+};
+
+const IDLE_AGENT_DOWNLOAD = { state: 'idle', bytes_done: 0, bytes_total: null, error: null };
+
+/** Both agent programs on this PC, with their sizes; the Python one runs. */
+export const AGENT_PROGRAMS = {
+    current: 'gaiapy',
+    programs: [
+        { id: 'gaiapy', installed: true, size_bytes: 412_000_000, can_download: false, unavailable_reason: null },
+        { id: 'gaiacpp', installed: true, size_bytes: 6_800_000, can_download: false, unavailable_reason: null },
+    ],
+    download: IDLE_AGENT_DOWNLOAD,
+};
+
+/** gaiacpp downloading, about 40% through. */
+export const AGENT_DOWNLOADING = { state: 'downloading', bytes_done: 2_720_000, bytes_total: 6_800_000, error: null };
+export const AGENT_DOWNLOAD_FAILED = {
+    state: 'failed', bytes_done: 2_720_000, bytes_total: 6_800_000,
+    error: 'Download of gaiacpp-win32-x64 stopped: the connection was reset (ECONNRESET) after 2.7 MB.',
+};
+
+export interface AgentProgramsAnswers {
+    /** Installed; not here but downloadable; or not here and not offered. */
+    gaiacpp?: 'installed' | 'downloadable' | 'unavailable';
+    /** The download as the listing reports it when the page opens. */
+    download?: object;
+    /** What each poll of the download answers. */
+    poll?: object;
+}
+
+/** The agent programs as this PC would report them, and the gaiacpp download's answers. */
+export async function withAgentPrograms(page: Page, { gaiacpp = 'installed', download = IDLE_AGENT_DOWNLOAD, poll }: AgentProgramsAnswers = {}): Promise<void> {
+    const cpp = gaiacpp === 'installed' ? AGENT_PROGRAMS.programs[1]
+        : gaiacpp === 'downloadable' ? { ...AGENT_PROGRAMS.programs[1], installed: false, can_download: true }
+            : { ...AGENT_PROGRAMS.programs[1], installed: false, size_bytes: null, unavailable_reason: 'this GAIA release has no gaiacpp to download. Use the Python agent, or update GAIA.', unavailable_code: 'no_release' };
+    const listing = { ...AGENT_PROGRAMS, programs: [AGENT_PROGRAMS.programs[0], cpp], download };
+    await page.route((url) => url.pathname.startsWith('/api/agent-programs'), async (route) => {
+        const { pathname } = new URL(route.request().url());
+        if (pathname === '/api/agent-programs') await route.fulfill({ json: listing });
+        else if (route.request().method() === 'POST') await route.fulfill({ status: 202, json: poll ?? AGENT_DOWNLOADING });
+        else await route.fulfill({ json: poll ?? download });
+    });
+}
+
+/** A PC where gaiacpp isn't installed and can't be downloaded. */
+export async function withoutGaiacpp(page: Page): Promise<void> {
+    await withAgentPrograms(page, { gaiacpp: 'unavailable' });
+}
+
 const ROUTES: Record<string, unknown> = {
     'GET /sessions': { sessions: SESSIONS, total: SESSIONS.length },
     [`GET /sessions/${ANSWER_SESSION}/messages`]: MESSAGES,
@@ -166,7 +219,8 @@ const ROUTES: Record<string, unknown> = {
     'GET /setup/check': { ready: true, steps: [] },
     'GET /setup/status': { state: 'idle' },
     'GET /setup/needs/chat': { job: 'chat', needed: false, model: null, disk_free_gb: null },
-    'GET /settings': { custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false },
+    'GET /settings': SETTINGS,
+    'GET /agent-programs': AGENT_PROGRAMS,
     'GET /providers': {
         providers: [
             { id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' },
@@ -217,10 +271,25 @@ const ROUTES: Record<string, unknown> = {
     'GET /agents': { agents: [{ id: 'gaia', name: 'GAIA', description: '', source: 'installed', conversation_starters: [], models: [] }], total: 1 },
     'GET /connectors': { connectors: [] },
     'GET /memory/settings': { memory_enabled: true },
+    'GET /memory/embedder': {
+        device: 'gpu', chosen: false, default_device: 'gpu',
+        options: [
+            { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', proven: true, present: true, available: true, reason: null, downloaded: true },
+            { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', proven: false, present: true, available: false, reason: "its search results aren't reliable yet, so GAIA embeds on the GPU", downloaded: true },
+        ],
+    },
     'GET /skills': { skills: [] },
     'GET /skills/featured': { libraries: [{ id: 'pstack', name: 'pstack', url: 'https://github.com/michael-denyer/pstack-claude', description: 'Engineering workflows: design, review, CI fixes, TDD, PR hygiene (MIT)' }] },
     'GET /system/resources': RESOURCES,
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
+    'GET /images/settings': {
+        model: 'Z-Image-Turbo', size: '1280x720', steps: null, max_steps: 100,
+        model_available: true, chat_model: 'Gemma-4-E4B-it-GGUF', chat_model_creates_images: false,
+        models: [
+            { id: 'Z-Image-Turbo', recipe: 'sd-cpp', downloaded: true, downloads_on_first_use: false, size_gb: 20.7, default_size: '1024x1024', default_steps: 9, sizes: ['512x512', '768x768', '1024x1024', '1280x720', '720x1280'] },
+            { id: 'SDXL-Turbo', recipe: 'sd-cpp', downloaded: false, downloads_on_first_use: true, size_gb: 6.46, default_size: '512x512', default_steps: 4, sizes: ['512x512', '768x768', '1024x1024'] },
+        ],
+    },
     'GET /speech/model': { downloaded: true, size_gb: 0.3 },
     'GET /spending/prices/fireworks': { provider: 'fireworks', models: [], source: null, note: null },
     'GET /speech/settings': {
@@ -382,9 +451,17 @@ export async function withSettingsPanes(page: Page, options: { networkPolicy?: '
             custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven',
             dynamic_tools: false, dynamic_tools_locked: false,
             network_policy: options.networkPolicy ?? 'cloud_allowed', policy_warnings: [],
+            flagship_agent: 'gaiapy', gaiacpp_available: true,
             policy_notices: options.policyNotices ?? [],
         },
         'GET /memory/settings': { memory_enabled: true },
+        'GET /memory/embedder': {
+            device: 'gpu', chosen: false, default_device: 'gpu',
+            options: [
+                { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', proven: true, present: true, available: true, reason: null, downloaded: true },
+                { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', proven: false, present: true, available: false, reason: "its search results aren't reliable yet, so GAIA embeds on the GPU", downloaded: true },
+            ],
+        },
         'GET /skills': {
             skills: [
                 skill('gh-cli', 'agent-bundled', 'Work with GitHub from the terminal: issues, pull requests and releases.', { always_on: true }),
@@ -412,6 +489,7 @@ export async function withSettingsPanes(page: Page, options: { networkPolicy?: '
             await route.fulfill({ json: {
                 custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven',
                 dynamic_tools: false, dynamic_tools_locked: false, network_policy: 'local_ai_only',
+                flagship_agent: 'gaiapy', gaiacpp_available: true,
                 policy_warnings: [], policy_notices: options.policyNotices ?? [],
             } });
         } else if (key in answers) await route.fulfill({ json: answers[key] });

@@ -264,7 +264,7 @@ anything from earlier that it still needs.
 **Desktop app (Agent UI).** It checks 10 seconds after launch and every 4 hours. A
 found release shows as a chip in the corner with **Update now**; once it has
 downloaded, the chip offers the restart, whenever suits you. Quitting GAIA also
-installs it. If the update then fails to finish setting up or start, GAIA offers **Go back** in that error box or on the chip, for the first three launches after an update. The update carries the new version's backend, so the first launch after the restart downloads nothing for it. A failed background check stays quiet and tries again later. Going back keeps your chats, memory and goals: an earlier version opens the data a newer one saved. **Settings → General → Updates** has:
+installs it. If the update then fails to finish setting up or start, GAIA offers **Go back** in that error box or on the chip, for the first three launches after an update. If first-run setup fails on a version, or an update to GAIA's own model server does, GAIA also offers **Go back to GAIA vX**: the last version local setup finished on this PC, with the date it did, on Windows and the Linux AppImage. Nothing goes back until you choose it. The update carries the new version's backend, so the first launch after the restart downloads nothing for it. A failed background check stays quiet and tries again later. Going back keeps your chats, memory and goals: an earlier version opens the data a newer one saved. **Settings → General → Updates** has:
 
 - **Install updates automatically** — off by default. On, releases download in the
   background and you're asked only to restart.
@@ -342,7 +342,7 @@ installations using that folder will stop working. Silent uninstalls keep it.
 Each part you installed has its own entry in **Settings → Apps → Installed apps**, so you can remove one and keep the other. To remove GAIA completely, uninstall both:
 
 - **GAIA** — the desktop app. Removes the app, its Start Menu / Desktop shortcuts, and the autostart registry entry.
-- **GAIA Terminal UI** — the terminal. Stops GAIA's background service, then removes `gaia-cli`, `gaia-agent`, `gaia`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
+- **GAIA Terminal UI** — the terminal. Stops GAIA's background service, then removes `gaia-cli`, `gaia-agent`, `gaiacpp`, `gaia`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
 
 Each uninstaller shows the cleanup prompt above; decline it and `~/.gaia/` is left alone. For tiered cleanup instead of deleting the whole shared folder, open PowerShell before you uninstall and run the `gaia` inside the desktop app (with the terminal installed, plain `gaia uninstall --purge` does the same):
 ```powershell
@@ -390,7 +390,8 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Electron app | Platform-specific (Program Files / /Applications / /opt/GAIA) |
 | Backend (`gaia`) | Inside the app, in `resources/core/` |
 | Chat database | `~/.gaia/chat/gaia_chat.db` |
-| Document Library uploads | `~/.gaia/documents/` |
+| Document Library uploads | `~/.gaia/chat/documents/` (each chat reads only the ones attached to it) |
+| Files the agent saves to GAIA's documents folder | `~/.gaia/documents/` |
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
 | Logs | `~/.gaia/gaia.log` (`$GAIA_HOME/gaia.log` when `GAIA_HOME` is set), or the path in `GAIA_LOG_FILE` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
@@ -401,7 +402,7 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |
 
-Setting `GAIA_HOME` moves Document Library uploads and chat file attachments to `$GAIA_HOME/documents/` and `$GAIA_HOME/chat/uploads/`, the MCP server list to `$GAIA_HOME/mcp_servers.json`, and installed agents to `$GAIA_HOME/agents/`. It must not be your home directory or one of its parents.
+Setting `GAIA_HOME` moves Document Library uploads and chat file attachments to `$GAIA_HOME/chat/documents/` and `$GAIA_HOME/chat/uploads/`, the MCP server list to `$GAIA_HOME/mcp_servers.json`, and installed agents to `$GAIA_HOME/agents/`. It must not be your home directory or one of its parents.
 
 ## Privacy
 
