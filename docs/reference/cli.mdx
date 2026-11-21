@@ -610,6 +610,10 @@ alone, without Gemma. Any model can still be chosen on a PC it fits, with
 that would leave other apps little memory, and setup asks before using one. A model on
 a Ryzen AI NPU, chosen with `--profile npu`, is judged against the NPU's own memory.
 
+A PC that set up before these smaller models existed and already has Gemma keeps it
+after an update: setup does not download a new default. Switch with
+`gaia init --use-model Qwen3.5-2B-GGUF` or in the model picker.
+
 <Note>
 `user.Qwen3.8-Flash-Next-GGUF` (an 82 GB download, multimodal, thinking on) is
 available on a 128 GB Strix Halo and never auto-selected. It needs ~90 GB for models.

@@ -67,6 +67,9 @@ class _FakeLemonade:
     def health_check(self):
         return {"status": "ok", "version": self.version}
 
+    def check_model_available(self, model_id):
+        return model_id in self.downloaded
+
     def get_system_info(self, timeout=None):
         return {
             "Physical Memory": f"{self.ram_gb:.2f} GB",

@@ -570,7 +570,11 @@ def build_plan(
             enforce_fit=False,
             profile=profile,
         )
-        chat = {"id": choice.model_id, "user_set": choice.user_set}
+        # A Gemma kept from before an update is the user's model, not today's pick.
+        chat = {
+            "id": choice.model_id,
+            "user_set": choice.user_set or bool(choice.kept_over),
+        }
         planned = with_chat_model(
             profile, _profile_models(profile, client), lambda: choice
         )

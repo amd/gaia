@@ -348,6 +348,9 @@ class ChatModelChoice:
     capacity: Optional[MachineCapacity] = None
     #: The pick on capacity alone; differs from ``model_id`` when free memory decided.
     capacity_pick: Optional[str] = None
+    #: The smaller default this PC would get now, when an install that already
+    #: had Gemma downloaded keeps it instead.
+    kept_over: Optional[str] = None
 
     @property
     def forced_by_free_memory(self) -> bool:
@@ -361,7 +364,8 @@ def resolve_init_chat_model(
     """The chat model `gaia init` sets up: the user's ``default_model`` when it
     is a local Lemonade model, else the downloaded local model they last
     chatted on, else the largest default that fits this machine once other
-    apps keep their share of RAM (:func:`~gaia.llm.lemonade_client.ladder_verdict`).
+    apps keep their share of RAM (:func:`~gaia.llm.lemonade_client.ladder_verdict`),
+    unless that is below Gemma and Gemma is already downloaded, which it keeps.
 
     ``--check`` and ``run()`` both go through here so they can never disagree
     about what "set up" means on this machine. ``reset_corrupt`` is run()'s
@@ -371,6 +375,8 @@ def resolve_init_chat_model(
     """
     from gaia.config import GaiaConfig, GaiaConfigError
     from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_NAME,
+        below_gemma,
         cloud_model_provider,
         recommend_default_chat_model,
         recommend_npu_chat_model,
@@ -405,6 +411,16 @@ def resolve_init_chat_model(
         return ChatModelChoice(model_id=in_use, user_set=True, skipped=[])
     recommend = recommend_npu_chat_model if on_npu else recommend_default_chat_model
     model_id, skipped, capacity = recommend(client)
+    if not on_npu and below_gemma(model_id) and _gemma_downloaded(client):
+        # Gemma was every PC's default before the ladder went below it, and
+        # those installs saved no choice: an update must not take it away.
+        return ChatModelChoice(
+            model_id=DEFAULT_MODEL_NAME,
+            user_set=False,
+            skipped=[],
+            capacity=capacity,
+            kept_over=model_id,
+        )
     capacity_pick = (
         recommend_default_chat_model(client, judge_free_memory=False)[0]
         if capacity is not None and not on_npu
@@ -417,6 +433,13 @@ def resolve_init_chat_model(
         capacity=capacity,
         capacity_pick=capacity_pick,
     )
+
+
+def _gemma_downloaded(client) -> bool:
+    """Whether this PC's Lemonade already has Gemma, the pre-ladder default."""
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    return bool(client.check_model_available(DEFAULT_MODEL_NAME))
 
 
 def _local_model_in_use(client, config, on_npu: bool) -> Optional[str]:
@@ -2662,6 +2685,12 @@ class InitCommand:
             if choice.user_set:
                 self._print(
                     f"   Chat model: {choice.model_id} (default_model in ~/.gaia/config.json)"
+                )
+            elif choice.kept_over:
+                self._print(
+                    f"   Chat model: {choice.model_id} (already downloaded, kept). "
+                    f"{choice.kept_over} leaves other apps more memory on this PC: "
+                    f"`gaia init --use-model {choice.kept_over}`"
                 )
             else:
                 cap = with_app_headroom(choice.capacity) if choice.capacity else None

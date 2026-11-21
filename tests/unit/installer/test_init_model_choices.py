@@ -616,3 +616,95 @@ def test_the_chat_model_line_counts_the_memory_kept_for_other_apps(monkeypatch):
         f"   Chat model: {TINY_DEFAULT_MODEL_NAME} — this PC has 6 GB for models "
         "once 10 GB is kept for other apps (AMD iGPU)"
     )
+
+
+def _laptop16(monkeypatch):
+    """This PC's pick is the 2B, as on a 16 GB laptop once other apps keep 10 GB."""
+    from gaia.llm.model_fit import MachineCapacity
+
+    laptop = MachineCapacity(
+        memory_gb=10.0,
+        memory_source="AMD iGPU",
+        disk_free_gb=500.0,
+        installed_ram_gb=16.0,
+        carve_out_gb=4.0,
+    )
+    monkeypatch.setattr(
+        lemonade_client,
+        "recommend_default_chat_model",
+        lambda client, judge_free_memory=True: (TINY_DEFAULT_MODEL_NAME, [], laptop),
+    )
+
+
+def test_an_update_keeps_gemma_on_a_small_pc_that_already_has_it(
+    lemonade, home, monkeypatch
+):
+    """Older setups saved no choice when Gemma was every PC's default."""
+    from gaia.installer.init_command import check_setup_status, resolve_init_chat_model
+
+    _laptop16(monkeypatch)
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+
+    assert choice.model_id == DEFAULT_MODEL_NAME
+    assert choice.kept_over == TINY_DEFAULT_MODEL_NAME
+    assert check_setup_status("gaia").ready
+    assert "default_model" not in _config(home)
+
+
+def test_a_new_small_pc_gets_the_2b(lemonade, home, monkeypatch):
+    from gaia.installer.init_command import check_setup_status, resolve_init_chat_model
+
+    _laptop16(monkeypatch)
+    fake = lemonade(downloaded=[EMBEDDER])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+
+    assert choice.model_id == TINY_DEFAULT_MODEL_NAME and choice.kept_over is None
+    status = check_setup_status("gaia")
+    assert not status.ready
+    assert any(TINY_DEFAULT_MODEL_NAME in r for r in status.reasons)
+
+
+def test_a_saved_choice_beats_a_kept_gemma(lemonade, home, monkeypatch):
+    from gaia.installer.init_command import resolve_init_chat_model
+
+    _laptop16(monkeypatch)
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME, TINY_DEFAULT_MODEL_NAME])
+    home.write_text(json.dumps({"default_model": TINY_DEFAULT_MODEL_NAME}))
+
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+
+    assert choice.model_id == TINY_DEFAULT_MODEL_NAME and choice.user_set
+
+
+def test_init_says_it_kept_gemma_and_how_to_switch(lemonade, home, monkeypatch):
+    _laptop16(monkeypatch)
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME])
+    cmd = InitCommand(profile="gaia", yes=True)
+    said = []
+    monkeypatch.setattr(cmd, "_print", lambda text, *a, **k: said.append(text))
+
+    assert cmd._chat_model(fake) == DEFAULT_MODEL_NAME
+    assert said[0] == (
+        f"   Chat model: {DEFAULT_MODEL_NAME} (already downloaded, kept). "
+        f"{TINY_DEFAULT_MODEL_NAME} leaves other apps more memory on this PC: "
+        f"`gaia init --use-model {TINY_DEFAULT_MODEL_NAME}`"
+    )
+
+
+def test_the_setup_screens_show_a_kept_gemma_as_the_users_own(
+    lemonade, home, monkeypatch
+):
+    """Not "recommended", and no left-for-apps line worked out for the 2B."""
+    _laptop16(monkeypatch)
+    lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME])
+
+    plan = sp.build_plan(skip_chat_model=False)
+
+    assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
+    assert plan["chat_model"]["user_set"] is True
+    assert plan["recommended_model"] == TINY_DEFAULT_MODEL_NAME
