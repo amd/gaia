@@ -1,0 +1,32 @@
+{
+  "ref": "p1",
+  "url": "http://127.0.0.1:5000/picker.html",
+  "title": "Pane fixture picker",
+  "tag": "button",
+  "label": "button.primary",
+  "selector": "#settings > button.primary",
+  "role": "button",
+  "name": "Save",
+  "text": "Save",
+  "rect": {
+    "x": 24,
+    "y": 146.5,
+    "width": 64,
+    "height": 36
+  },
+  "component": null,
+  "outerHTML": "<button class=\"primary\" type=\"button\">Save</button>",
+  "styles": {
+    "display": "inline-block",
+    "width": "64px",
+    "height": "36px",
+    "padding": "8px 16px",
+    "color": "rgb(255, 255, 255)",
+    "background-color": "rgb(22, 163, 74)",
+    "font-family": "system-ui, sans-serif",
+    "font-size": "15px",
+    "font-weight": "400",
+    "border-radius": "6px"
+  },
+  "cropUrl": "/api/files/uploads/picked-p1.png"
+}

@@ -24,8 +24,11 @@ import { tooBigText } from './setup/ModelChecklist';
 import { StageLogs } from './setup/StageLogs';
 import { SetupFooter, SetupFooterSlot } from './setup/SetupFooter';
 import { LanguagePicker } from './setup/LanguagePicker';
+import { AgentChoice, type AgentPick } from './setup/AgentChoice';
+import { AgentDownloadRow, useAgentDownload } from './setup/AgentDownload';
 import { BackendChoice, applyTestedBackend } from './setup/BackendChoice';
 import { DetectedSummary } from './setup/DetectedSummary';
+import { GoBackOffer } from './setup/GoBackOffer';
 import { SetupChecks } from './setup/SetupChecks';
 import { SetupRail, type RailStep } from './setup/SetupRail';
 import { TestStep } from './setup/TestStep';
@@ -35,7 +38,7 @@ import {
 } from './setup/selection';
 import type {
     GpuMemoryStatus, LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCatalogEntry,
-    SetupConfirm, SetupModelProgress, SetupPlan, SetupProblem, SetupRunStatus, SetupTest, StartCard,
+    SetupConfirm, SetupModelProgress, SetupPlan, SetupProblem, SetupRunStatus, SetupTest, StartCard, FlagshipAgent,
 } from '../types';
 import './SetupScreen.css';
 import './setup/setup.css';
@@ -347,6 +350,34 @@ type Confirm =
     | { kind: 'server'; detail: SetupConfirm; then: 'chat' | 'run' }
     | { kind: 'server'; detail: SetupConfirm; then: 'retry'; id: string };
 
+/** Continue was pressed with an agent to get first: the run waits for it, with these options. */
+interface HeldRun {
+    acknowledgeLowDisk: boolean;
+}
+
+const AGENT_PICK_KEY = 'gaia.setup.agentPick';
+const HELD_RUN_KEY = 'gaia.setup.heldRun';
+
+/** Kept for this window only, so a reload mid-download keeps the pick and doesn't start over. */
+function readStored<T>(key: string): T | null {
+    try {
+        const raw = sessionStorage.getItem(key);
+        return raw ? (JSON.parse(raw) as T) : null;
+    } catch (err) {
+        console.warn(`[SetupScreen] could not read ${key}; the agent pick starts fresh`, err);
+        return null;
+    }
+}
+
+function writeStored(key: string, value: unknown): void {
+    try {
+        if (value == null) sessionStorage.removeItem(key);
+        else sessionStorage.setItem(key, JSON.stringify(value));
+    } catch (err) {
+        console.warn(`[SetupScreen] could not save ${key}; a reload will lose the agent pick`, err);
+    }
+}
+
 function errorText(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
 }
@@ -468,7 +499,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         const request = ++planRequest.current;
         setPlanError(null);
         try {
-            const p = await api.getSetupPlan();
+            // Setup's own plan: what a local setup downloads, wherever chat runs now.
+            const p = await api.getSetupPlan(false);
             if (request !== planRequest.current) return null;
             setPlan(p);
             return p;
@@ -638,6 +670,117 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
 
     const [ackDisk, setAckDisk] = useState(false);
 
+    // The agent picked on Customize. On Continue it is downloaded if need be and saved before setup's
+    // run starts, so the run's test chat talks to the agent the user chose.
+    const [agentPick, setAgentPickState] = useState<AgentPick | null>(() => readStored<AgentPick>(AGENT_PICK_KEY));
+    const setAgentPick = useCallback((pick: AgentPick | null) => {
+        setAgentPickState(pick);
+        writeStored(AGENT_PICK_KEY, pick);
+    }, []);
+    const [heldRun, setHeldRunState] = useState<HeldRun | null>(() => readStored<HeldRun>(HELD_RUN_KEY));
+    const setHeldRun = useCallback((held: HeldRun | null) => {
+        setHeldRunState(held);
+        writeStored(HELD_RUN_KEY, held);
+    }, []);
+    const [agentError, setAgentError] = useState<string | null>(null);
+    const [agentSaving, setAgentSaving] = useState(false);
+
+    /** Save the agent (unless carrying on without it), then start setup's run. A refused save stops here. */
+    const runAfterAgent = useCallback(async (held: HeldRun, save: AgentPick['id'] | null, latest?: SetupPlan) => {
+        setAgentError(null);
+        if (save) {
+            setAgentSaving(true);
+            try {
+                await api.updateSettings({ flagship_agent: save });
+            } catch (err) {
+                setAgentError(errorText(err));
+                return;
+            } finally {
+                setAgentSaving(false);
+            }
+        }
+        setAgentPick(null);
+        setHeldRun(null);
+        await download(held.acknowledgeLowDisk, latest);
+    }, [download, setAgentPick, setHeldRun]);
+
+    const pickRef = useRef(agentPick);
+    pickRef.current = agentPick;
+    const heldRef = useRef(heldRun);
+    heldRef.current = heldRun;
+    const runAfterRef = useRef(runAfterAgent);
+    runAfterRef.current = runAfterAgent;
+    const agentDownload = useAgentDownload(() => {
+        const pick = pickRef.current;
+        if (pick) setAgentPick({ ...pick, download: false });
+        // Only a run waiting on it goes on; a download left after Cancel just lands.
+        if (pick && heldRef.current) void runAfterRef.current(heldRef.current, pick.id);
+    });
+    const startAgentDownload = agentDownload.start;
+    const followAgentDownload = agentDownload.follow;
+
+    /** Continue with an agent picked: get it if it isn't here, then save it and start the run. */
+    const proceedWithAgent = useCallback(async (held: HeldRun, latest?: SetupPlan) => {
+        const pick = pickRef.current;
+        setHeldRun(held);
+        setViewing(null);
+        setPhase('download');
+        if (!pick || !pick.download) {
+            await runAfterAgent(held, pick?.id ?? null, latest);
+            return;
+        }
+        setAgentError(null);
+        let listing;
+        try {
+            listing = await api.getAgentPrograms();
+        } catch (err) {
+            setAgentError(errorText(err));
+            return;
+        }
+        // It may have finished in the background since a Cancel.
+        if (listing.programs.find((p) => p.id === pick.id)?.installed) {
+            await runAfterAgent(held, pick.id, latest);
+            return;
+        }
+        if (listing.download.state === 'downloading') followAgentDownload(listing.download);
+        else void startAgentDownload();
+    }, [runAfterAgent, setHeldRun, followAgentDownload, startAgentDownload]);
+
+    /** Back to Customize; the download has no cancel and may finish on its own, which is fine. */
+    const cancelAgent = useCallback(() => {
+        setHeldRun(null);
+        setAgentError(null);
+        setViewing(null);
+        setPhase('models');
+    }, [setHeldRun]);
+
+    /** Leave the pick and start the run on the agent in use now. */
+    const carryOn = useCallback(() => {
+        if (heldRun) void runAfterAgent(heldRun, null);
+    }, [heldRun, runAfterAgent]);
+
+    // A reload mid-download follows that download rather than starting another; the pick is kept.
+    const resumed = useRef(false);
+    useEffect(() => {
+        if (resumed.current) return;
+        resumed.current = true;
+        api.getAgentPrograms()
+            .then((l) => {
+                const running = l.download.state === 'downloading';
+                followAgentDownload(l.download);
+                if (!heldRef.current) return;
+                if (running) {
+                    setPhase('download');
+                    return;
+                }
+                // It ended while the page was away: Continue again decides what comes next.
+                setHeldRun(null);
+                const pick = pickRef.current;
+                if (pick && l.programs.find((p) => p.id === pick.id)?.installed) setAgentPick({ ...pick, download: false });
+            })
+            .catch((err: unknown) => console.warn('[SetupScreen] could not read the agent programs; the Agent card says so on Customize', err));
+    }, [followAgentDownload, setHeldRun, setAgentPick]);
+
     /** Save the choices (chat model, vision model, skips), then download. */
     const committing = useRef(false);
     const commit = useCallback(async (acknowledgeLowDisk: boolean, acknowledgeNoFit = noFitAcked) => {
@@ -665,7 +808,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             let latest = plan;
             if (!cloud && selection.defaultChat && selection.defaultChat !== latest.chat_model.id) {
                 try {
-                    latest = await api.chooseSetupChatModel(selection.defaultChat, acknowledgeNoFit);
+                    latest = await api.chooseSetupChatModel(selection.defaultChat, acknowledgeNoFit, false);
                 } catch (err) {
                     const detail = api.setupConfirmFrom(err);
                     if (detail) {
@@ -679,20 +822,21 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 // Whatever the choice, llama.cpp runs on the backend GAIA has tested.
                 await applyTestedBackend();
                 const vision = savedVision(catalog, selection);
-                if (vision !== (latest.vision_model ?? null)) latest = await api.chooseSetupVisionModel(vision);
+                if (vision !== (latest.vision_model ?? null)) latest = await api.chooseSetupVisionModel(vision, false);
                 for (const change of skipChanges(latest, selection)) {
-                    latest = await api.skipSetupModel(change.id, change.skipped);
+                    latest = await api.skipSetupModel(change.id, change.skipped, false);
                 }
             }
             setPlan(latest);
-            await download(acknowledgeLowDisk, latest);
+            if (pickRef.current) await proceedWithAgent({ acknowledgeLowDisk }, latest);
+            else await download(acknowledgeLowDisk, latest);
         } catch (err) {
             setActionError(errorText(err));
         } finally {
             committing.current = false;
             setBusy(false);
         }
-    }, [plan, selection, cloud, noFitAcked, download, t]);
+    }, [plan, selection, cloud, noFitAcked, download, proceedWithAgent, t]);
 
     const stepTo = useCallback((id: Stage) => {
         setActionError(null);
@@ -720,16 +864,21 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     // The plan screen's two ways to run GAIA; this PC is the one recommended.
     const [where, setWhere] = useState<'local' | 'cloud'>('local');
 
+    // Chat already runs in the cloud: carry on there rather than recommend a local download.
+    const inUseCloud = useModelStore((s) => (s.active?.remote && s.active.provider !== 'local' ? s.active.provider : null));
+    const inUseModel = useModelStore((s) => (s.active?.remote ? s.active.model : null));
+
     const toCloud = useCallback((provider: 'fireworks' | 'amd') => {
         if (running && viewing != null) return;
         setCustomizing(false);
         setChoice(provider);
+        // Back returns to the cloud choice, and the model in use stays picked.
+        setWhere('cloud');
+        setCloudPick(provider === inUseCloud ? inUseModel : null);
         stepTo('key');
-    }, [stepTo, running, viewing]);
+    }, [stepTo, running, viewing, inUseCloud, inUseModel]);
     const useCloud = useCallback(() => toCloud(readChoice() === 'amd' ? 'amd' : 'fireworks'), [toCloud]);
 
-    // Chat already runs in the cloud: carry on there rather than recommend a local download.
-    const inUseCloud = useModelStore((s) => (s.active?.remote && s.active.provider !== 'local' ? s.active.provider : null));
     const continueFromChecks = useCallback(() => {
         if (inUseCloud) toCloud(inUseCloud);
         else stepTo('plan');
@@ -796,7 +945,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         setBusy(true);
         try {
             const entry = plan?.catalog?.find((e) => e.id === id);
-            if (entry?.planned) setPlan(await api.skipSetupModel(id, true));
+            if (entry?.planned) setPlan(await api.skipSetupModel(id, true, false));
             setRun((r) => r && { ...r, models: r.models?.map((m) => (m.id === id ? { ...m, state: 'skipped' } : m)) });
             // Finish repeats the last run, which must not fetch this one again.
             const { options } = lastRun.current;
@@ -844,10 +993,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const switchCloud = useCallback((id: ProviderId) => {
         saveChoice(id);
         setChoice(id);
-        setCloudPick(null);
+        setCloudPick(id === inUseCloud ? inUseModel : null);
         setCloudDefault(null);
         setKeyState({ busy: false, error: null, done: false });
-    }, []);
+    }, [inUseCloud, inUseModel]);
 
     // Extras added during the run: fetched and tested the same way, once it ends.
     useEffect(() => {
@@ -1019,6 +1168,46 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     }
     expectedTests.push('agent');
 
+    const agentJob = agentDownload.job;
+    const agentFailed = agentJob?.state === 'failed';
+    // Setup's run waits on the agent: its row and bar, the rest shown waiting, and the way on.
+    const agentWait = heldRun ? (
+        <>
+            {agentJob && agentJob.state !== 'idle' && agentJob.state !== 'done' && (
+                <section className="setup-agent-download" aria-labelledby="setup-agent-download-title">
+                    <h3 className="mc-job-title" id="setup-agent-download-title">{t('setup.agent.title')}</h3>
+                    <AgentDownloadRow
+                        job={agentJob}
+                        name={agentPick?.id ?? 'gaiacpp'}
+                        onRetry={() => void startAgentDownload()}
+                        failedNote={t('setup.agent.carryOnNote', { name: agentPick?.current ?? 'gaiapy' })}
+                        interrupted={agentDownload.interrupted}
+                    />
+                </section>
+            )}
+            {agentError && <p className="setup-error" role="alert">{t('setup.agent.saveFailed', { error: agentError })}</p>}
+            {(agentSaving || (!agentJob && !agentError)) && (
+                <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.download.starting')}</p>
+            )}
+            {plan && <section className="setup-card" aria-label={t('setup.contents.title')}><DownloadContents plan={plan} models={pending} /></section>}
+            <SetupFooter>
+                {(agentFailed || agentError) && (
+                    <button type="button" className="btn-secondary" onClick={carryOn} disabled={agentSaving}>
+                        {t('setup.agent.carryOn', { name: agentPick?.current ?? 'gaiapy' })}
+                    </button>
+                )}
+                {agentError && heldRun && (
+                    <button type="button" className="btn-primary" onClick={() => void proceedWithAgent(heldRun)} disabled={agentSaving}>
+                        {t('setup.tryAgain')}
+                    </button>
+                )}
+                {!agentFailed && !agentError && (
+                    <button type="button" className="btn-secondary" onClick={cancelAgent} disabled={agentSaving}>{t('setup.progress.cancel')}</button>
+                )}
+            </SetupFooter>
+        </>
+    ) : null;
+
     // The key worked: say so, and which model answers, before the download list.
     const keyAccepted = cloud && keyState.done && cloudModel ? (
         <p className="setup-ok setup-key-accepted" role="status">
@@ -1071,7 +1260,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} awaitingChoice={!!lemonadeFound && !lemonadeSettled} />
                             {serverRun?.state === 'running' && (
                                 <>
-                                    <RunActivity run={serverRun} idle={t('setup.check.serverWorking')} />
+                                    <RunActivity run={serverRun} idle={t('setup.check.serverWorking')} bar={false} />
                                     <SetupFooter>
                                         <button type="button" className="btn-secondary" onClick={() => void cancel()}>{t('setup.progress.cancel')}</button>
                                     </SetupFooter>
@@ -1170,7 +1359,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 </section>
                             </div>
                             <SetupFooter>
-                                <button type="button" className="btn-secondary" onClick={customize} disabled={busy || runGoing}>{t('setup.plan.customize')}</button>
+                                {/* Both pick local models, which a cloud setup doesn't download. */}
+                                {where !== 'cloud' && <button type="button" className="btn-secondary" onClick={customize} disabled={busy || runGoing}>{t('setup.plan.customize')}</button>}
                                 {where === 'cloud' ? (
                                     <button type="button" className="btn-primary" onClick={useCloud} disabled={runGoing}>{t('setup.continue')}</button>
                                 ) : (
@@ -1195,10 +1385,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             )}
                             {short && <p className="setup-error" role="alert">{t('setup.summary.short', { need: formatSize(short.needGb), free: formatSize(short.freeGb), drive: t('setup.summary.theDrive'), freeUp: formatSize(short.freeUpGb) })}</p>}
                             {(actionError ?? startError) && <SetupAlert text={(actionError ?? startError)!} />}
-                            <details className="setup-disclosure">
-                                <summary>{t('setup.plan.whatDownloads')}</summary>
-                                <DownloadContents plan={plan} models={pending} />
-                            </details>
+                            {where !== 'cloud' && (
+                                <details className="setup-disclosure">
+                                    <summary>{t('setup.plan.whatDownloads')}</summary>
+                                    <DownloadContents plan={plan} models={pending} />
+                                </details>
+                            )}
                         </>
                     )}
 
@@ -1212,6 +1404,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 mode="setup"
                                 headingId="setup-title"
                                 names={names}
+                                cloud={choice !== 'local'}
                                 onBack={backOne}
                                 onSkip={() => stepTo(gpuFrom)}
                                 onContinue={() => stepTo(gpuFrom)}
@@ -1229,6 +1422,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <button type="button" className="link-btn" onClick={() => openGpu('models')} disabled={busy || runGoing}>{t('setup.found.changeMemory')}</button>
                                 </p>
                             )}
+                            <AgentChoice disabled={busy || runGoing} pending={agentPick?.id ?? null} onPending={setAgentPick} />
                             <ModelsStep
                                 plan={plan}
                                 planError={planError}
@@ -1309,7 +1503,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                             spellCheck={false}
                                             value={key}
                                             onChange={(e) => setKey(e.target.value)}
-                                            placeholder={savedKey ? t('setup.key.placeholder') : t('setup.key.placeholderNew')}
+                                            placeholder={savedKey ? t.bare('setup.key.placeholder') : t.bare('setup.key.placeholderNew')}
                                         />
                                         <button type="button" className="btn-secondary setup-key-show" aria-label={t(showKey ? 'setup.key.hide' : 'setup.key.show')} title={t(showKey ? 'setup.key.hide' : 'setup.key.show')} onClick={() => setShowKey((s) => !s)}>
                                             {showKey ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
@@ -1339,7 +1533,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.download.title')}</h1>
                             <p className="setup-lede">{t('setup.download.lede')}</p>
                             {keyAccepted}
-                            <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.download.starting')}</p>
+                            {agentWait ?? <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.download.starting')}</p>}
                         </>
                     )}
 
@@ -1509,6 +1703,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         </>
                     )}
 
+                    {/* A failed run can go back to the version setup last finished on. */}
+                    {run?.state === 'failed' && <GoBackOffer />}
                 </div>
                 {onClose && !running && stage !== 'plan' && stage !== 'ready' && (
                     <div className="setup-row">

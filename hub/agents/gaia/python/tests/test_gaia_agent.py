@@ -40,6 +40,7 @@ from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 # exactly the drift these tests exist to catch.
 from gaia.agents.base.memory import _MEMORY_TOOLS
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
 
 MANIFEST = Path(__file__).resolve().parent.parent / "gaia-agent.yaml"
 
@@ -58,9 +59,14 @@ def _isolated_registry():
 
 @pytest.fixture(scope="module")
 def tool_surfaces():
-    """``(core, full)`` tool names — memory off, then memory on."""
+    """``(core, full)`` tool names — memory off, then memory on.
+
+    Both are pinned open in GAIA desktop's browser pane, where the browser
+    tools register Playwright or not, so the count doesn't depend on the machine.
+    """
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
+        mp.setattr(BrowserUseToolsMixin, "_pane_at_startup", lambda self: (True, True))
         agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
         agent._register_tools()
         core = sorted(agent._tools_registry.keys())
@@ -215,6 +221,7 @@ CAPABILITIES = {
     "scratchpad (data-explore)": ("create_table", "list_tables"),
     "browser (research-report)": ("fetch_page", "fetch_webpage"),
     "file io (research-report)": ("read_file", "write_file"),
+    "speech (dictation)": ("dictate_document", "text_to_speech"),
     "audio generation (music-gen)": (
         "list_audio_generation_models",
         "generate_music",
@@ -618,7 +625,8 @@ def test_fast_mode_keeps_the_voice():
     """
     with _agent(fast=True) as agent:
         assert "gaia-voice" in (agent.loaded_skills or [])
-        assert "gaia-voice" in agent._compose_system_prompt()
+        agent._compose_system_prompt()
+        assert "gaia-voice" in agent.session_context
 
 
 def test_fast_mode_does_not_advertise_tools_it_removed():
@@ -696,10 +704,16 @@ def test_required_connectors_declare_gmail_read_compose_and_calendar_only():
 
 def test_microsoft_requires_mail_but_only_requests_calendar():
     from gaia.agents.tools._calendar.scopes import SCOPE_GRAPH_CALENDARS_READWRITE
-    from gaia.agents.tools._email.scopes import SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND
+    from gaia.agents.tools._email.scopes import (
+        SCOPE_MAIL_READ,
+        SCOPE_MAIL_READWRITE,
+        SCOPE_MAIL_SEND,
+    )
 
     microsoft = _requirement("microsoft")
+    # Mail.Read is requested so a read-only Connect can ask for it alone.
     assert list(microsoft.scopes) == [
+        SCOPE_MAIL_READ,
         SCOPE_MAIL_READWRITE,
         SCOPE_MAIL_SEND,
         SCOPE_GRAPH_CALENDARS_READWRITE,
@@ -794,6 +808,7 @@ def test_the_callable_entry_point_publishes_the_requirements_to_the_registry():
     assert resolve_declared_scopes(registry, "microsoft", ["installed:gaia"]) == {
         "installed:gaia": [
             "https://graph.microsoft.com/Calendars.ReadWrite",
+            "https://graph.microsoft.com/Mail.Read",
             "https://graph.microsoft.com/Mail.ReadWrite",
             "https://graph.microsoft.com/Mail.Send",
         ]

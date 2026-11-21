@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 from typing import Iterable, List, Tuple
 
+from gaia.agents.base.text_task import instruction_part
+
 # Core only: naming a tool off the short list forces the session's one jump.
 SHELL_TOOLS = ("run_shell_command",)
 
@@ -45,7 +47,113 @@ _SHELL_ONLY_ANSWER = re.compile(
 # Spoken output: "read this aloud" shares no words with the tool's description, so
 # retrieval scored it under small talk.
 _SPEECH_NAMED = re.compile(
-    r"\b(?:aloud|out\s+loud|text[- ]to[- ]speech|into\s+speech)\b", re.IGNORECASE
+    r"\b(?:aloud|out\s+loud|text[- ]to[- ]speech|into\s+speech|narrate)\b",
+    re.IGNORECASE,
+)
+SPEECH_TOOLS = ("text_to_speech", "dictate_document")
+
+# A document turned into audio: "dictate this PDF", "make an audiobook of it".
+_DICTATION_NAMED = re.compile(
+    r"\bdictate\b|\baudio\s?books?\b"
+    r"|\b(?:in)?to\s+(?:an?\s+)?(?:audio|mp3)\b"
+    r"|\bas\s+(?:an?\s+)?(?:audio|mp3)\b"
+    r"|\b(?:audio|spoken)\s+version\b"
+    r"|\bread\s+\S+(?:\s+\S+){0,3}\s+to\s+me\b",
+    re.IGNORECASE,
+)
+# Audio that already exists is for the transcription tools, not for speech.
+_EXISTING_AUDIO = re.compile(
+    r"\b(?:video|recording|transcri\w+|podcast|song|music|meeting|voice\s?memo)\b",
+    re.IGNORECASE,
+)
+
+# An audio file the reply is saved to: "save it as report.mp3", "narrate it to ch1.wav".
+_AUDIO_OUTPUT = re.compile(
+    r"\b(?:save|write|export|output|store|put|turn|convert|render|make|create"
+    r"|produce|generate|dictate|narrate|read|record)\w*\b(?:[^.?!\n]|\.(?=\S)){0,80}?"
+    r"\b(?:as|to|into|called|named)\s+(?:an?\s+|the\s+)?"
+    r"(?P<name>\"[^\"\n]+?\.(?:mp3|wav|m4a|ogg|flac)\"|'[^'\n]+?\.(?:mp3|wav|m4a|ogg|flac)'"
+    r"|[^\s\"'`]*\.(?:mp3|wav|m4a|ogg|flac))(?!\w|\.\w)",
+    re.IGNORECASE,
+)
+
+# Mail questions can score under the retrieval bar, so their intent is matched here.
+MAIL_REQUEST_TOOLS = (
+    "check_mailbox_access",
+    "list_inbox",
+    "search_email",
+    "read_email",
+)
+_MAIL_NOUN = r"\b(?:e-?mails?|mails?)\b"
+_MAILBOX_NOUN = r"\binbox(?:es)?\b|\bmailbox(?:es)?\b|\bmail\s+box\b"
+_MAILBOX_CUE = re.compile(_MAILBOX_NOUN, re.IGNORECASE)
+_NOT_MAIL_TECH = (
+    r"(?!\s+(?:address(?:es)?|format(?:s)?|templates?|validat(?:e|ion|or)"
+    r"|servers?|clients?|protocols?|headers?|signatures?|domains?|hosts?"
+    r"|marketing|campaigns?|aliases?|lists?|filters?|rules?|fields?"
+    r"|columns?)\b)"
+)
+# Filenames, data sources, and contact details are not mailbox questions.
+_NOT_MAIL_DATA = (
+    r"(?!\.\w)"
+    r"(?!\s+is\b)"
+    r"(?!\s+(?:in|from|on|to|into|inside)\s+"
+    r"(?:a|an|the|this|that|my|your|our|their)?\s*"
+    r"(?:csv|spreadsheets?|sheets?|workbooks?|files?|logs?|databases?|dbs?"
+    r"|tables?|datasets?|data|json|yaml|xml|text|folders?|director(?:y|ies)"
+    r"|scripts?|code|regex(?:es)?|formulas?|columns?|rows?|cells?|lists?"
+    r"|forms?|fields?)\b)"
+)
+# A field, column, table, form, or list after a mail noun is data, not mail.
+_NOT_MAIL_FIELD = (
+    r"(?![^.?!\n]{0,30}?\b(?:fields?|columns?|tables?|forms?|lists?"
+    r"|spreadsheets?|dbs?|databases?)\b)"
+)
+_MAIL_NAMED = re.compile(
+    _MAILBOX_NOUN + r"|\b(?:e-?mail|e-?mailed|mail|mailed)\s+(?:me|us)\b"
+    r"(?!\s+(?:at\b|(?:the|a|an|my|your|our|their|his|her|this|that|these"
+    r"|those)\s+\w+|(?:an?\s+|the\s+)?(?:package|parcel|letter|box)\b))"
+    r"|\b(?:write|writes|wrote|written|writing)\s+to\s+(?:me|us)\b"
+    r"|\b(?:my|your|our|all|new|unread|recent|latest|old)\s+"
+    + _MAIL_NOUN
+    + _NOT_MAIL_TECH
+    + _NOT_MAIL_DATA
+    + _NOT_MAIL_FIELD
+    + r"|\b(?:check|read|scan|search|list|open|view|review|sort|triage|summarize"
+    r"|show|look\s+(?:at|in|into|through)|go\s+through|clean\s+(?:up|out)|clear)\b"
+    r"\s+(?:(?:the|a|an|my|your|our|their|his|her|all|any|some|new|unread"
+    r"|recent|latest|old|me|us)\s+){0,2}"
+    + _MAIL_NOUN
+    + _NOT_MAIL_TECH
+    + _NOT_MAIL_DATA
+    + _NOT_MAIL_FIELD
+    + r"|"
+    + _MAIL_NOUN
+    + _NOT_MAIL_DATA
+    + _NOT_MAIL_FIELD
+    + r"(?:\s+from\s+(?:(?:the|my|your|our|their|his|her|a|an|this|that)"
+    r"\s+[\w'-]+|(?:me|us|him|her|them|someone|anyone|everyone|somebody"
+    r"|anybody|everybody)|(?-i:[A-Z][\w'-]*))\b"
+    r"(?!\s+(?:fields?|columns?|tables?|forms?|lists?|spreadsheets?"
+    r"|dbs?|databases?)\b)"
+    r"|\s+(?:about|regarding|saying|says|said|containing|contains"
+    r"|contain|messages?|threads?|conversations?|notifications?)\b)",
+    re.IGNORECASE,
+)
+# A send phrasing such as "I'll email me later" is not a read.
+_SEND_VERB = re.compile(
+    r"(?:\bto|\b(?:i|we|you|he|she|they)(?:['’](?:ll|d|m)"
+    r"|\s+(?:will|would|can|could|should|might|may)))\s+"
+    r"(?:e-?mail|mail)\s+(?:me|us)\b",
+    re.IGNORECASE,
+)
+# A compose request asks the assistant to write unless it names the mailbox.
+_COMPOSE_OPENING = re.compile(
+    r"^\s*(?:(?:please|pls|kindly)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?"
+    r"(?:(?:send|e-?mail|mail|write|draft)\s+(?:to\s+)?(?:me|us)\b"
+    r"|(?:send|draft|write)\s+(?:an?\s+|some\s+)?(?:e-?mails?|mails?)\b)",
+    re.IGNORECASE,
 )
 
 # A file only an off-list tool can open. The prompt names these tools, and a
@@ -214,17 +322,29 @@ def _skill_tools(user_input: str) -> List[str]:
     return wanted
 
 
+def _audio_files(user_input: str) -> Tuple[bool, bool]:
+    """Whether the message names an audio file to save to, and one to read from."""
+    outputs = [m.span("name") for m in _AUDIO_OUTPUT.finditer(user_input)]
+    named = _MEDIA_NAMED[1][0].finditer(user_input)
+    reads = any(not any(a <= m.start() < b for a, b in outputs) for m in named)
+    return bool(outputs), reads
+
+
 def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
     """Return the registry tools *user_input* explicitly asks for, in order.
 
-    Five signals: a registry tool name written out (``run_shell_command``), a
+    Seven signals: a registry tool name written out (``run_shell_command``), a
     request that names the shell or can only be answered by it, a request to
-    speak, a named picture or recording, and a pasted skill or a request to
-    save, install, or correct one. Only names in *registry* are returned, so a
-    profile without shell tools gets none.
+    speak, a request to turn a document into audio (including one saved to a
+    named ``.mp3``/``.wav``/... file), a question about the mailbox, a named
+    picture or recording, and a pasted skill or a request to save, install, or
+    correct one. Only names in *registry* are returned, so a profile without
+    shell or mail tools gets none.
     """
     names = set(registry)
     found: List[str] = []
+    # "Translate: 'Open a shell and ...'" asks for a translation, not a shell.
+    user_input = instruction_part(user_input)
 
     # Underscored names only: single words like "tree" or "recall" are ordinary
     # English and would fire on every sentence that uses them.
@@ -236,13 +356,31 @@ def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
         for name in SHELL_TOOLS:
             if name in names and name not in found:
                 found.append(name)
+    saves_audio, reads_audio = _audio_files(user_input)
+    as_audio = _DICTATION_NAMED.search(user_input) or saves_audio
+    if as_audio and not reads_audio and not _EXISTING_AUDIO.search(user_input):
+        wanted = SPEECH_TOOLS[::-1]
+    elif _SPEECH_NAMED.search(user_input):
+        wanted = SPEECH_TOOLS[:1]
+    else:
+        wanted = ()
+    for name in wanted:
+        if name in names and name not in found:
+            found.append(name)
     if (
-        _SPEECH_NAMED.search(user_input)
-        and "text_to_speech" in names
-        and "text_to_speech" not in found
+        _MAIL_NAMED.search(user_input)
+        and not _SEND_VERB.search(user_input)
+        and not (
+            _COMPOSE_OPENING.match(user_input) and not _MAILBOX_CUE.search(user_input)
+        )
     ):
-        found.append("text_to_speech")
+        for name in MAIL_REQUEST_TOOLS:
+            if name in names and name not in found:
+                found.append(name)
     for pattern, name in _MEDIA_NAMED:
+        # "dictate notes.pdf to notes.mp3" names the output, not a recording to transcribe.
+        if name == "transcribe_media" and "dictate_document" in wanted:
+            continue
         if pattern.search(user_input) and name in names and name not in found:
             found.append(name)
     for name in _skill_tools(user_input):

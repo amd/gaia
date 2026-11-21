@@ -17,6 +17,7 @@ import { NotificationCenter } from '../NotificationCenter';
 import { useNotificationStore, PATH_ACCESS_TOOL } from '../../stores/notificationStore';
 import type { GaiaNotification } from '../../types/agent';
 import { stripIsolates } from '../../i18n/registry';
+import { translator } from '../../i18n/useT';
 import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../test/dates';
 import notificationCss from '../NotificationCenter.css?raw';
 
@@ -40,7 +41,29 @@ beforeEach(() => {
 describe('NotificationCenter', () => {
     it('renders an empty panel without looping', () => {
         expect(() => render(<NotificationCenter onClose={vi.fn()} />)).not.toThrow();
-        expect(screen.getByText('No notifications')).toBeTruthy();
+        expect(screen.getByText("You're all caught up")).toBeTruthy();
+        // Nothing to filter, so no filter tabs.
+        expect(screen.queryByRole('tab')).toBeNull();
+    });
+
+    it('offers only the filters that have something in them', () => {
+        useNotificationStore.setState({
+            notifications: [
+                notif('n-1', 'Model finished loading'),
+                { ...notif('n-2', 'Could not index'), type: 'error' },
+            ],
+        });
+        render(<NotificationCenter onClose={vi.fn()} />);
+        expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['All', 'Errors', 'Info']);
+    });
+
+    it('keeps the chosen filter offered even when it empties', () => {
+        useNotificationStore.setState({
+            notifications: [notif('n-1', 'Model finished loading')],
+            typeFilter: 'error',
+        });
+        render(<NotificationCenter onClose={vi.fn()} />);
+        expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['All', 'Errors', 'Info']);
     });
 
     it('renders notifications without looping', () => {
@@ -171,5 +194,45 @@ describe('clicking a notification that names a chat', () => {
         fireEvent.click(screen.getByText('Document indexed'));
         expect(onOpenChat).not.toHaveBeenCalled();
         expect(useNotificationStore.getState().notifications[0].read).toBe(true);
+    });
+});
+
+describe('NotificationCenter marks hidden characters', () => {
+    it('shows a right-to-left override in a permission request path as a code', () => {
+        useNotificationStore.setState({
+            notifications: [{
+                ...notif('perm-rlo', 'GAIA needs your OK.'),
+                type: 'permission_request',
+                title: 'Allow?',
+                priority: 'high',
+                tool: PATH_ACCESS_TOOL,
+                toolArgs: { path: 'C:\\w\\report\u202Etxt.md', kind: 'file' },
+            }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container).toHaveTextContent('report[U+202E]txt.md');
+        expect(container.textContent).not.toContain('\u202E');
+    });
+
+    it('shows a right-to-left override in a plain notification as a code', () => {
+        useNotificationStore.setState({
+            notifications: [{ ...notif('n-rlo', 'Saved invoice\u202Etxt.md'), title: 'Wrote invoice\u202Etxt.md' }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container.querySelector('.notification-title')!.textContent).toBe('Wrote invoice[U+202E]txt.md');
+        expect(container.querySelector('.notification-message')!.textContent).toBe('Saved invoice[U+202E]txt.md');
+    });
+
+    it('keeps the isolates an Arabic translation wraps its halves and params in', () => {
+        setUiLocale('ar');
+        const title = translator('ar')('chatError.resendFailed');
+        expect(title).toMatch(/[⁦-⁩]/);
+        useNotificationStore.setState({
+            notifications: [{ ...notif('n-ar', `⁨invoice‮txt.md⁩`), title }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container.querySelector('.notification-title')!.textContent).toBe(title);
+        expect(container.querySelector('.notification-message')!.textContent).toBe('⁨invoice[U+202E]txt.md⁩');
+        resetUiLocale();
     });
 });

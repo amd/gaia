@@ -55,5 +55,8 @@ export default defineConfig({
     build: {
         outDir: 'dist',
         emptyOutDir: true,
+        // Browsers with native :dir(): older targets rewrite it into :lang() lists,
+        // which ignore dir="auto" and fade English text in Arabic at the wrong end.
+        cssTarget: ['chrome120', 'edge120', 'firefox120', 'safari16.4'],
     },
 });

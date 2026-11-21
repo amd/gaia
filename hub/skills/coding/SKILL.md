@@ -90,9 +90,9 @@ PYTHONPATH=src python -m pytest -q tests/
 Where only `python3` exists, `python3 -m pytest` works the same way.
 
 pytest often lives only in the project's virtualenv, so it is not on PATH. The
-skill still loads, but without the `pytest` grant — and `python -m pytest` is
-judged as `pytest`, so that spelling is refused too. Run the suite with
-`execute_python_file` instead, which works wherever pytest is importable:
+skill still loads, but without the `pytest` grant, so `python -m pytest` runs
+only once the user approves it. `execute_python_file` works too, wherever
+pytest is importable:
 
 ```python
 import sys, pytest

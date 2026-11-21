@@ -23,13 +23,15 @@ from typing import Any, Collection, Dict, Iterable, List, Optional, Tuple
 from fastapi import HTTPException
 
 from gaia.logger import get_logger
+from gaia.upload_names import reserve_copy_path
 
 from .database import ChatDatabase
-from .routers.documents import _sanitize_stem, _short_id
+from .routers.documents import _sanitize_stem
 from .utils import (
     ALLOWED_EXTENSIONS,
     compute_file_hash,
     compute_file_hash_from_fd,
+    document_copies_dir,
     is_within_document_roots,
     managed_documents_dir,
     safe_open_document,
@@ -94,10 +96,19 @@ def _record_copy(
     if existing:
         return existing, False
 
-    managed = managed_documents_dir()
-    managed.mkdir(parents=True, exist_ok=True)
-    copy = managed / f"{_short_id()}_{_sanitize_stem(path.stem)}{path.suffix.lower()}"
-    shutil.copyfile(path, copy)
+    copies = document_copies_dir()
+    copies.mkdir(parents=True, exist_ok=True)
+    copy = reserve_copy_path(
+        copies,
+        _sanitize_stem(path.stem),
+        path.suffix.lower(),
+        taken=lambda p: db.path_held_by_other_content(str(p), file_hash),
+    )
+    try:
+        shutil.copyfile(path, copy)
+    except OSError:
+        copy.unlink(missing_ok=True)
+        raise
     file_stat = copy.stat()
     doc = db.add_document(
         filename=path.name,
@@ -119,8 +130,11 @@ def _is_other_file(doc: Dict[str, Any], path: Path) -> bool:
     stored = doc.get("filepath") or ""
     if not stored or Path(os.path.realpath(stored)) == path:
         return False
-    managed = Path(os.path.realpath(managed_documents_dir()))
-    return managed not in Path(os.path.realpath(stored)).parents
+    stored_real = Path(os.path.realpath(stored))
+    return not any(
+        Path(os.path.realpath(owned)) in stored_real.parents
+        for owned in (managed_documents_dir(), document_copies_dir())
+    )
 
 
 def add_indexed_documents(

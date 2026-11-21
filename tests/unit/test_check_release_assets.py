@@ -33,6 +33,12 @@ FINAL_ONLY_SETUP = (
 )
 
 TUI = [
+    "gaia-cli-darwin-amd64",
+    "gaia-cli-darwin-arm64",
+    "gaia-cli-linux-amd64",
+    "gaia-cli-linux-arm64",
+    "gaia-cli-windows-amd64.exe",
+    "gaia-cli-windows-arm64.exe",
     "gaia-darwin-amd64",
     "gaia-darwin-arm64",
     "gaia-linux-amd64",
@@ -80,14 +86,26 @@ CORE = [
     "gaia-core-win32-x64.tar.gz",
 ]
 
+# gaiacpp, the native agent, first attached after these too.
+GAIACPP = [
+    "agent_versions.gaia.json",
+    "gaiacpp-SHA256SUMS.txt",
+    "gaiacpp-darwin-arm64",
+    "gaiacpp-darwin-arm64.tar.gz",
+    "gaiacpp-linux-x64",
+    "gaiacpp-linux-x64.tar.gz",
+    "gaiacpp-windows-x64.exe",
+    "gaiacpp-windows-x64.zip",
+]
+
 # What each release really carried, less its Python and flagship agent files.
 # None carried the Mac update zip (#5682) or the frozen gaia, so a complete
 # release adds them.
 V0_25_2 = _desktop("0.25.2") + _combined("0.25.2") + TUI + FEEDS
 V0_25_3 = _desktop("0.25.3") + TUI + FEEDS
 V0_25_4_RC1 = _desktop("0.25.4-rc.1") + _combined("0.25.4-rc.1") + TUI + FEEDS
-COMPLETE_0_25_2 = V0_25_2 + _mac_update("0.25.2") + CORE
-COMPLETE_0_25_4_RC1 = V0_25_4_RC1 + _mac_update("0.25.4-rc.1") + CORE
+COMPLETE_0_25_2 = V0_25_2 + _mac_update("0.25.2") + CORE + GAIACPP
+COMPLETE_0_25_4_RC1 = V0_25_4_RC1 + _mac_update("0.25.4-rc.1") + CORE + GAIACPP
 
 
 @pytest.fixture(autouse=True)
@@ -107,18 +125,28 @@ def _missing(tag: str, names: list[str], **kwargs) -> list[str]:
 
 def test_v0_25_3_is_refused_and_every_lost_file_is_named():
     assert sorted(_missing("v0.25.3", V0_25_3)) == sorted(
-        _combined("0.25.3") + _mac_update("0.25.3") + CORE
+        _combined("0.25.3") + _mac_update("0.25.3") + CORE + GAIACPP
     )
 
 
 def test_a_release_without_the_mac_update_zip_is_refused():
-    assert _missing("v0.25.2", V0_25_2 + CORE) == _mac_update("0.25.2")
+    assert _missing("v0.25.2", V0_25_2 + CORE + GAIACPP) == _mac_update("0.25.2")
 
 
 def test_a_release_without_the_frozen_gaia_is_refused():
     # install.sh and install.ps1 fetch it from the release.
-    names = V0_25_2 + _mac_update("0.25.2")
+    names = V0_25_2 + _mac_update("0.25.2") + GAIACPP
     assert sorted(_missing("v0.25.2", names)) == sorted(CORE)
+
+
+def test_a_release_without_gaiacpp_is_refused():
+    names = V0_25_2 + _mac_update("0.25.2") + CORE
+    assert sorted(_missing("v0.25.2", names)) == GAIACPP
+
+
+def test_an_rc_needs_gaiacpp_too():
+    names = V0_25_4_RC1 + _mac_update("0.25.4-rc.1") + CORE
+    assert sorted(_missing("v0.25.4-rc1", names)) == GAIACPP
 
 
 @pytest.mark.parametrize(
@@ -344,7 +372,7 @@ def _run(
 def test_the_cli_fails_and_names_the_files(monkeypatch, capsys):
     code, out = _run(monkeypatch, capsys, V0_25_3, "--tag", "v0.25.3")
     assert code == 1
-    assert out.startswith("::error::release v0.25.3 is missing 12 of ")
+    assert out.startswith("::error::release v0.25.3 is missing 20 of ")
     assert "gaia-0.25.3-win-x64-setup.exe" in out
     assert "'Attach terminal installers'" in out and "'GitHub Release'" in out
 
@@ -496,5 +524,12 @@ def test_the_binaries_match_the_ones_the_release_checksums(jobs):
         for s in jobs["github-release"]["steps"]
         if s.get("name") == "Checksum TUI binaries"
     ]
-    for name in cra.TUI_FILES:
-        assert name in step["run"]
+    run = step["run"]
+    listed = [n for n in cra.TUI_FILES if n.startswith("gaia-cli-")]
+    assert len(listed) == 6
+    for name in listed:
+        assert name in run
+    # The step derives each earlier name from its gaia-cli one.
+    assert 'cp "${f}" "${f/#gaia-cli-/gaia-}"' in run
+    assert 'sha256sum "${expected[@]}" "${legacy[@]}" > gaia-tui-SHA256SUMS.txt' in run
+    assert {n.replace("gaia-cli-", "gaia-") for n in listed} < set(cra.TUI_FILES)

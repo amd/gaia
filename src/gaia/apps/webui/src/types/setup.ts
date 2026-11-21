@@ -45,6 +45,8 @@ export interface SetupComponent {
     /** null when it can't be known before the download starts. */
     size_gb: number | null;
     source: string;
+    /** It comes with the installer, so nothing is downloaded from `source`. */
+    bundled?: boolean;
     /** null when the plan can't tell yet. */
     installed: boolean | null;
 }
@@ -315,8 +317,8 @@ export interface SetupPlan {
     catalog?: SetupCatalogEntry[];
     /** Backends Lemonade reports for this PC. */
     backends?: Array<{ recipe: string; backend: string; state: string | null; version?: string | null; default: boolean }>;
-    /** An NPU Lemonade reports, and what stops a model running on it yet. */
-    npu?: SetupNpuStatus;
+    /** An NPU Lemonade reports, and what stops a model running on it yet; null when it couldn't be checked. */
+    npu?: SetupNpuStatus | null;
     /** What setup found across the stack; null where nothing could find out. */
     system?: SetupSystem;
     /** Everything else setup fetches. */

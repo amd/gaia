@@ -490,6 +490,19 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: audit-findings
+      - name: Fetch open Claude alerts to carry forward
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Each upload replaces the category's result set, so an alert this run didn't
+          # re-report would be closed as fixed. A failed fetch stops the upload instead.
+          gh api --paginate \
+            "repos/$REPO/code-scanning/alerts?tool_name=gaia-claude-security-audit&state=open&per_page=100" \
+            --jq '.[]' \
+            > open-alerts.jsonl
+          echo "$(wc -l < open-alerts.jsonl) open Claude alert(s) before this run"
       - name: Convert findings to SARIF
         env:
           EXPECTED_LENSES: ${{ needs.preflight.outputs.lens_count }}
@@ -507,7 +520,8 @@ jobs:
             echo "::error title=Security audit::Only $got/$EXPECTED_LENSES lenses produced findings files — the audit did not run. Refusing to upload an empty SARIF (it would clear existing alerts)."
             exit 1
           fi
-          python util/findings_to_sarif.py findings-*.json -o claude-security.sarif
+          python util/findings_to_sarif.py findings-*.json -o claude-security.sarif \
+            --carry-forward open-alerts.jsonl --repo-root .
       - name: Upload Claude SARIF to code scanning
         uses: github/codeql-action/upload-sarif@v4
         with:

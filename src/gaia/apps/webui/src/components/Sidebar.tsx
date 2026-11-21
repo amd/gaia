@@ -32,6 +32,7 @@ import { useT } from '../i18n/useT';
 import type { SessionSearchResult } from '../types/api.gen';
 import { foldText, splitMatch, type MatchParts } from '../utils/chatSearch';
 import './Sidebar.css';
+import { markStrayDirection } from './CalendarApproval';
 
 interface SidebarProps {
     onNewChat: () => void;
@@ -62,7 +63,7 @@ const SEARCH_DEBOUNCE_MS = 200;
 const NO_HITS = new Map<string, SessionSearchResult>();
 
 function Highlight({ parts }: { parts: MatchParts }) {
-    return <>{parts.before}<mark className="sb-hit">{parts.match}</mark>{parts.after}</>;
+    return <>{markStrayDirection(parts.before)}<mark className="sb-hit">{markStrayDirection(parts.match)}</mark>{markStrayDirection(parts.after)}</>;
 }
 
 function readShowAutomated(): boolean {
@@ -122,11 +123,13 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
         setDraft(null);
         if (save) onRename(session.id, draft);
     };
+    // Held while the pointer rests on it: the wider label reverting under a reader puts Pin under the click.
+    const [overDelete, setOverDelete] = useState(false);
     useEffect(() => {
-        if (!confirm) return;
+        if (!confirm || overDelete) return;
         const timer = setTimeout(() => setConfirm(false), 3000);
         return () => clearTimeout(timer);
-    }, [confirm]);
+    }, [confirm, overDelete]);
     useEffect(() => {
         if (!editing && refocus.current) {
             refocus.current = false;
@@ -151,7 +154,8 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
     const waiting = failed > 0 ? `${failed} not sent` : unsent > 0 ? `${unsent} to send` : null;
     const note = [place, waiting].filter(Boolean).join(' · ');
     const snippetText = snippet ? `${snippet.before}${snippet.match}${snippet.after}` : null;
-    const title = <span className="sb-row-title" dir="auto">{titleMatch ? <Highlight parts={titleMatch} /> : session.title}</span>;
+    const shownTitle = markStrayDirection(session.title);
+    const title = <span className="sb-row-title" dir="auto">{titleMatch ? <Highlight parts={titleMatch} /> : shownTitle}</span>;
 
     return (
         <li
@@ -176,7 +180,7 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
                     {...CLAIMS_ESCAPE}
                     autoFocus
                     onFocus={(e) => e.currentTarget.select()}
-                    aria-label={t('row.renameAria', { title: session.title })}
+                    aria-label={t('row.renameAria', { title: shownTitle })}
                     dir="auto"
                 />
             ) : (
@@ -188,8 +192,8 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
                     onClick={() => onSelect(session.id)}
                     onDoubleClick={startEdit}
                     aria-current={active ? 'page' : undefined}
-                    aria-label={[session.title, label, waiting, unread ? t('row.unread') : null, snippetText].filter(Boolean).join(', ')}
-                    title={session.title}
+                    aria-label={[shownTitle, label, waiting, unread ? t('row.unread') : null, snippetText && markStrayDirection(snippetText)].filter(Boolean).join(', ')}
+                    title={shownTitle}
                 >
                     {dot && <span className={`sb-dot is-${dot}`} aria-hidden="true" title={label} />}
                     {session.private && <EyeOff size={12} className="sb-row-icon" aria-label={t('row.private')} />}
@@ -235,7 +239,7 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
                         onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
                         aria-haspopup="dialog"
                         aria-expanded={menuOpen}
-                        aria-label={t('row.moreActions', { title: session.title })}
+                        aria-label={t('row.moreActions', { title: shownTitle })}
                     >
                         <MoreHorizontal size={18} aria-hidden="true" />
                     </button>
@@ -270,7 +274,7 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
                             type="button"
                             className="sb-row-rename"
                             onClick={startEdit}
-                            aria-label={t('row.renameAria', { title: session.title })}
+                            aria-label={t('row.renameAria', { title: shownTitle })}
                             title={t('row.rename')}
                         >
                             <Pencil size={13} />
@@ -281,7 +285,7 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
                         type="button"
                         className={`sb-row-pin${session.pinned ? ' is-pinned' : ''}`}
                         onClick={(e) => onPin(session.id, !session.pinned, false, e.detail === 0)}
-                        aria-label={t(session.pinned ? 'row.unpinAria' : 'row.pinAria', { title: session.title })}
+                        aria-label={t(session.pinned ? 'row.unpinAria' : 'row.pinAria', { title: shownTitle })}
                         aria-pressed={!!session.pinned}
                         title={session.pinned ? t('row.unpin') : t('row.pinToTop')}
                     >
@@ -291,11 +295,13 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
                         type="button"
                         className={`sb-row-delete${confirm ? ' is-confirm' : ''}`}
                         onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
+                        onPointerEnter={() => setOverDelete(true)}
+                        onPointerLeave={() => setOverDelete(false)}
                         aria-label={confirm
                             ? (unsent > 0
-                                ? t.plural('row.confirmDeleteUnsentAria', unsent, { title: session.title })
-                                : t('row.confirmDeleteAria', { title: session.title }))
-                            : t('row.deleteAria', { title: session.title })}
+                                ? t.plural('row.confirmDeleteUnsentAria', unsent, { title: shownTitle })
+                                : t('row.confirmDeleteAria', { title: shownTitle }))
+                            : t('row.deleteAria', { title: shownTitle })}
                         title={confirm
                             ? `${unsent > 0 ? t.plural('row.clickAgainUnsent', unsent) : t('row.clickAgain')}\n${t('row.deleteMemoryNote')}`
                             : t('row.delete')}
@@ -349,12 +355,16 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const [showAutomated, setShowAutomated] = useState(readShowAutomated);
     const phone = useMediaQuery('(max-width: 768px)');
     const searchRef = useRef<HTMLInputElement>(null);
+    // What had focus before search took it, so Esc can give it back.
+    const beforeSearch = useRef<HTMLElement | null>(null);
 
     // Opening or leaving a chat ends the search, so the full list comes back.
     useEffect(() => setQuery(''), [currentSessionId]);
 
     useEffect(() => {
         const focusSearch = () => {
+            const active = document.activeElement;
+            if (active instanceof HTMLElement && active !== searchRef.current) beforeSearch.current = active;
             if (collapsed) toggleCollapsed();
             requestAnimationFrame(() => searchRef.current?.focus());
         };
@@ -512,7 +522,11 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         if (e.key === 'Escape') {
             e.preventDefault();
             setQuery('');
-            searchRef.current?.blur();
+            // Back to where typing was, as closing a dialog does; the message box when nothing had focus.
+            const back = beforeSearch.current;
+            beforeSearch.current = null;
+            const to = back?.isConnected && back !== document.body ? back : document.querySelector<HTMLElement>('.composer-input');
+            if (to) to.focus(); else searchRef.current?.blur();
             return;
         }
         if (!q || results.length === 0 || e.nativeEvent.isComposing) return;
@@ -595,8 +609,9 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
                             onKeyDown={onSearchKey}
+                            onFocus={(e) => { if (e.relatedTarget instanceof HTMLElement) beforeSearch.current = e.relatedTarget; }}
                             {...CLAIMS_ESCAPE}
-                            placeholder={t('sidebar.search')}
+                            placeholder={t.bare('sidebar.search')}
                             aria-label={t.hint(t('sidebar.search'), formatShortcut('Mod+K'))}
                             aria-controls="sb-chat-list"
                             aria-activedescendant={picked ? resultRowId(picked.id) : undefined}
@@ -644,7 +659,8 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                                     <SessionRow
                                         key={s.id}
                                         session={s}
-                                        active={s.id === currentSessionId}
+                                        // Memory replaces the chat on screen, so its row is the one selected.
+                                        active={s.id === currentSessionId && !showMemory}
                                         phone={phone}
                                         moved={s.id === movedId}
                                         focusPin={s.id === pinFocusId}

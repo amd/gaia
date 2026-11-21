@@ -22,6 +22,7 @@ KIND_MODE_CONFLICT = "mode_conflict"
 KIND_NOT_INSTALLED = "not_installed"
 KIND_SERVICE_UNREACHABLE = "service_unreachable"
 KIND_SERVICE_OUTDATED = "service_outdated"
+KIND_NO_RELEASE = "no_release"
 
 
 class SidecarError(Exception):

@@ -12,6 +12,9 @@ a whole sentence or a phrase that reads correctly after the swap.
 the Agent UI's setup log swaps for the app's own.
 """
 
+import re
+
+from gaia.llm.hybrid import CLI_HYBRID_SWAPS
 from gaia.llm.local_only import SETTINGS_HINT as CLI_LOCAL_ONLY_HINT
 
 #: How a TUI user picks another model.
@@ -30,6 +33,25 @@ SERVICE_MODEL_SWITCH_HINT = (
     "host's default with `gaia config set default_model <model-id>`."
 )
 
+#: How GAIA's own model server gets started. The app starts it itself, so the
+#: Agent UI drops the command.
+CLI_OWN_SERVER_START_HINT = (
+    "GAIA starts its Lemonade Server when it needs it. To start it now, run: "
+    "gaia lemonade embedded start"
+)
+AGENT_UI_OWN_SERVER_START_HINT = "GAIA starts its model server when it needs it"
+
+#: What an Agent UI user does about a model that isn't downloaded, or one that
+#: failed to load; a terminal gets the client or restart command instead.
+AGENT_UI_MODEL_DOWNLOAD_HINT = (
+    "Download it under Settings > Agent & model, or open Settings > Setup and press Run "
+    "setup again, then try again."
+)
+AGENT_UI_PRELOAD_RETRY_HINT = (
+    "Send your message again. If it fails the same way, pick another model "
+    "from the model menu next to the Send button."
+)
+
 #: What a TUI user does when the provider rejects the key (HTTP 401/403). The
 #: trailing LEMONADE_API_KEY sentence is what the error classifier anchors on.
 TUI_PROVIDER_AUTH_HINT = (
@@ -38,7 +60,7 @@ TUI_PROVIDER_AUTH_HINT = (
     "verify LEMONADE_API_KEY."
 )
 AGENT_UI_PROVIDER_AUTH_HINT = (
-    "Open Settings > Model, paste the provider's API key and press Reconnect, "
+    "Open Settings > Agent & model, paste the provider's API key and press Reconnect, "
     "then send your message again. If the key is right, check that your "
     "account has access to this model."
 )
@@ -56,9 +78,9 @@ SERVICE_PROVIDER_AUTH_HINT = (
 
 #: Where the TUI keeps provider connections, as the tail of a sentence.
 TUI_PROVIDER_SETTINGS = "in the TUI provider settings"
-AGENT_UI_PROVIDER_SETTINGS = "under Settings > Model"
+AGENT_UI_PROVIDER_SETTINGS = "under Settings > Agent & model"
 CLI_PROVIDER_SETTINGS = (
-    "with /provider in the TUI or under Settings > Model in the Agent UI"
+    "with /provider in the TUI or under Settings > Agent & model in the Agent UI"
 )
 SERVICE_PROVIDER_SETTINGS = (
     "on the model server this GAIA host uses (LEMONADE_BASE_URL)"
@@ -86,11 +108,27 @@ TUI_GATEWAY_KEY_HINT = (
     "Run /gateway in the TUI and enter a current AMD LLM gateway key."
 )
 AGENT_UI_GATEWAY_KEY_HINT = (
-    "Enter a current AMD LLM gateway key under Settings > Model."
+    "Enter a current AMD LLM gateway key under Settings > Agent & model."
 )
 CLI_GATEWAY_KEY_HINT = "Run `gaia gateway auth` with a current AMD LLM gateway key."
 SERVICE_GATEWAY_KEY_HINT = (
     "Run `gaia gateway auth` on the GAIA host with a current AMD LLM gateway key."
+)
+
+#: What a user does when Lemonade has no cloud provider registered yet, so it
+#: refuses a token (#8186). The installer is a terminal command, so the apps
+#: name their own screens instead.
+TUI_GATEWAY_INSTALL_HINT = (
+    "Open /gateway in the TUI to register the gateway, then try again."
+)
+AGENT_UI_GATEWAY_INSTALL_HINT = (
+    "Open Settings > Agent & model and connect the AMD gateway, then try again."
+)
+CLI_GATEWAY_INSTALL_HINT = (
+    "Run `gaia gateway install` to register it, then run `gaia gateway auth` again."
+)
+SERVICE_GATEWAY_INSTALL_HINT = (
+    "Run `gaia gateway install` on the GAIA host, then try again."
 )
 
 #: When GAIA's background service misbehaves. Both apps read it as written.
@@ -103,6 +141,16 @@ CLI_RESTART_HINT = (
 #: next message has the daemon start it.
 APP_SERVER_DOWN_HINT = (
     f"Send your message again and GAIA will start its model server. {APP_RESTART_HINT}"
+)
+
+#: The same for a model server GAIA doesn't run: only its owner can start it.
+#: No command: the apps can't know how a server they didn't start is started.
+APP_OTHER_SERVER_START_HINT = (
+    "GAIA doesn't run this model server, so it can't start it. Start it the "
+    "way you usually do"
+)
+APP_OTHER_SERVER_DOWN_HINT = (
+    f"{APP_OTHER_SERVER_START_HINT}, then send your message again."
 )
 
 #: When GAIA's background service is not running at all, so the CLI must start
@@ -124,18 +172,28 @@ CLI_WEDGED_SERVER_HINT = (
 CLI_VISION_DOWNLOAD_HINT = (
     "To ask about images, download it (~6 GB) with `gaia download --agent vlm`."
 )
-AGENT_UI_VISION_DOWNLOAD_HINT = (
-    "To ask about images later, tick it under Settings > Model (a ~6 GB download)."
-)
+AGENT_UI_VISION_DOWNLOAD_HINT = "To ask about images later, tick it under Settings > Agent & model (a ~6 GB download)."
 
 #: How to download a vision model the image tools found missing.
 VISION_DOWNLOAD_HINT = (
-    "Download it under Settings > Model in the Agent UI, or with /setup in the "
+    "Download it under Settings > Agent & model in the Agent UI, or with /setup in the "
     "TUI, then ask again."
 )
 AGENT_UI_VISION_DOWNLOAD_STEP = (
-    "Download it under Settings > Model > Manage downloads and disk space, then "
+    "Download it under Settings > Agent & model > Manage downloads and disk space, then "
     "ask again."
+)
+
+#: How to download the voice a speech tool found missing: reading a reply aloud
+#: downloads it in both apps.
+SPEECH_DOWNLOAD_HINT = (
+    "To download it, read any reply aloud once: press Read aloud under a reply "
+    "in the Agent UI, or type /read-aloud in the TUI. Then ask again."
+)
+#: What to do when the model server does not list the voice at all.
+SPEECH_SETUP_HINT = (
+    "Open Settings > Setup in the Agent UI and press Run setup again, or run "
+    "/setup in the TUI, then ask again."
 )
 
 #: How an Agent UI user lets cloud models back in; the CLI's command is
@@ -144,9 +202,30 @@ AGENT_UI_LOCAL_ONLY_HINT = (
     "To allow cloud models again, turn off Local only under Settings > Privacy."
 )
 
+# Terminal remedies built around a command only known at run time.
+_AGENT_UI_COMMAND_REMEDIES = (
+    (
+        re.compile(
+            r"(isn't installed on the local LLM server\.) .*? Or: "
+            + re.escape(TUI_SETUP_HINT),
+            re.DOTALL,
+        ),
+        r"\1 " + AGENT_UI_MODEL_DOWNLOAD_HINT,
+    ),
+    (
+        re.compile(
+            r"To recover manually: stop the running server, then restart it "
+            r"\(.*?\) and re-run your GAIA command\.",
+            re.DOTALL,
+        ),
+        AGENT_UI_PRELOAD_RETRY_HINT,
+    ),
+)
+
 _SWAPS = {
     "agent_ui": (
         (CLI_LOCAL_ONLY_HINT, AGENT_UI_LOCAL_ONLY_HINT),
+        (CLI_OWN_SERVER_START_HINT, AGENT_UI_OWN_SERVER_START_HINT),
         (CLI_VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_HINT),
         (VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_STEP),
         (TUI_SERVER_RESTART_HINT, AGENT_UI_SERVER_RESTART_HINT),
@@ -155,6 +234,7 @@ _SWAPS = {
         (TUI_PROVIDER_SETTINGS, AGENT_UI_PROVIDER_SETTINGS),
         (TUI_SETUP_HINT, AGENT_UI_SETUP_HINT),
         (TUI_GATEWAY_KEY_HINT, AGENT_UI_GATEWAY_KEY_HINT),
+        (TUI_GATEWAY_INSTALL_HINT, AGENT_UI_GATEWAY_INSTALL_HINT),
     ),
     "cli": (
         (TUI_MODEL_SWITCH_HINT, CLI_MODEL_SWITCH_HINT),
@@ -162,9 +242,11 @@ _SWAPS = {
         (TUI_PROVIDER_SETTINGS, CLI_PROVIDER_SETTINGS),
         (TUI_SETUP_HINT, CLI_SETUP_HINT),
         (TUI_GATEWAY_KEY_HINT, CLI_GATEWAY_KEY_HINT),
+        (TUI_GATEWAY_INSTALL_HINT, CLI_GATEWAY_INSTALL_HINT),
         (APP_RESTART_HINT, CLI_RESTART_HINT),
         (APP_SERVICE_DOWN_HINT, CLI_SERVICE_DOWN_HINT),
         (APP_WEDGED_SERVER_HINT, CLI_WEDGED_SERVER_HINT),
+        *CLI_HYBRID_SWAPS,
     ),
     "service": (
         (TUI_MODEL_SWITCH_HINT, SERVICE_MODEL_SWITCH_HINT),
@@ -172,9 +254,11 @@ _SWAPS = {
         (TUI_PROVIDER_SETTINGS, SERVICE_PROVIDER_SETTINGS),
         (TUI_SETUP_HINT, SERVICE_SETUP_HINT),
         (TUI_GATEWAY_KEY_HINT, SERVICE_GATEWAY_KEY_HINT),
+        (TUI_GATEWAY_INSTALL_HINT, SERVICE_GATEWAY_INSTALL_HINT),
         (APP_RESTART_HINT, CLI_RESTART_HINT),
         (APP_SERVICE_DOWN_HINT, SERVICE_SERVICE_DOWN_HINT),
         (APP_WEDGED_SERVER_HINT, CLI_WEDGED_SERVER_HINT),
+        *CLI_HYBRID_SWAPS,
     ),
     "tui": (),
 }
@@ -197,6 +281,9 @@ def surface_wording(text: str, surface: str) -> str:
         )
     if not text:
         return text
+    if surface == "agent_ui":
+        for pattern, own in _AGENT_UI_COMMAND_REMEDIES:
+            text = pattern.sub(own, text)
     for tui, own in _SWAPS[surface]:
         text = text.replace(tui, own)
     return text

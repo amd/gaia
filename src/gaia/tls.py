@@ -47,7 +47,7 @@ def use_os_trust_store() -> bool:
             f"certificate store ({type(exc).__name__}: {exc}). It is using "
             "Python's bundled CA list, so hub, model and web requests fail with "
             "CERTIFICATE_VERIFY_FAILED behind a TLS-inspecting proxy. Fix: "
-            "pip install --upgrade 'truststore>=0.10.0'",
+            "pip install --upgrade 'truststore>=0.10.3'",
             file=sys.stderr,
             flush=True,
         )

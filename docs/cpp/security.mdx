@@ -228,6 +228,8 @@ Agents constructed with `config.silentMode = true` (e.g., unit tests, background
 
 This includes MCP tools, which are [gated automatically](#mcp-tools-are-confirm-gated-by-default) — a headless agent that calls `connectMcpServer()` will be denied every discovered tool the server did not prove read-only.
 
+The [helpers](/cpp/gaia-agent#helpers) `gaiacpp` starts with `delegate_task` go further: each is built with read tools only, gets a confirm callback that always denies and an in-memory `AllowedToolsStore("")`, so nothing the parent was allowed, by the user or by a saved answer, reaches a helper.
+
 If your headless agent needs to approve specific tools automatically, pre-populate `AllowedToolsStore` before the agent starts:
 
 ```cpp

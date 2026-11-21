@@ -10,10 +10,12 @@
  *
  *   - ``connector.configured``        ({connector_id, account_id})
  *   - ``connector.disconnected``      ({connector_id, revoke_supported,
- *                                       revoked_remotely, revoke_error} — the
- *                                       last three are the honest provider-
- *                                       side revoke outcome from #2591, not
- *                                       just "local credential cleared")
+ *                                       revoked_remotely, nothing_stored,
+ *                                       revoke_error}. These are the honest
+ *                                       provider-side revoke outcome from
+ *                                       #2591, not just "local credential
+ *                                       cleared"; nothing_stored is separate
+ *                                       from a failed revoke, #8607)
  *   - ``connector.tested``            ({connector_id, ok, detail})
  *   - ``connector.enabled``           ({connector_id})
  *   - ``connector.disabled``          ({connector_id})
@@ -21,6 +23,7 @@
  *   - ``connector.oauth.error``       ({connector_id, error})
  *   - ``connector.grant.changed``     ({connector_id, agent_id, scopes})
  *   - ``connector.activation.changed`` ({connector_id, agent_id, active})
+ *   - ``connector.account.changed``   ({connector_id, account_id, is_default})
  *
  * For backwards compatibility, the legacy event names emitted by
  * ``src/gaia/connectors/flow.py`` (``connection.connected`` /
@@ -53,7 +56,8 @@ export type ConnectorChangeReason =
     | 'oauth_error'
     | 'tested'
     | 'grant_changed'
-    | 'activation_changed';
+    | 'activation_changed'
+    | 'account_changed';
 
 export interface ConnectorChangeEvent {
     /** Which connector changed, if the payload identified one. */
@@ -95,6 +99,8 @@ function reasonFor(eventType: string): ConnectorChangeReason | null {
             return 'grant_changed';
         case 'connector.activation.changed':
             return 'activation_changed';
+        case 'connector.account.changed':
+            return 'account_changed';
         default:
             return null;
     }

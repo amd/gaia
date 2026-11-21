@@ -112,9 +112,6 @@ KNOWN: dict[str, dict[str, tuple[int, str]]] = {
     "src/gaia/agents/tools/skill_library_tools.py": {
         "terminal command": (2, "amd/gaia#7338"),
     },
-    "src/gaia/ui/email_sidecar/profiles.py": {
-        "removed feature": (6, "amd/gaia#4825"),
-    },
     "src/gaia/ui/routers/memory.py": {
         "pip": (1, "amd/gaia#7338"),
     },
@@ -140,12 +137,23 @@ KNOWN: dict[str, dict[str, tuple[int, str]]] = {
 NOT_USER_TEXT: dict[str, dict[str, tuple[int, str]]] = {
     "hub/agents/gaia/python/gaia_agent/server.py": {
         "removed feature": (2, "API schema text for developers"),
+        "pip": (
+            1,
+            "stderr of a pip-installed agent on an older amd-gaia; the app's "
+            "bundled agent always has the daemon watch",
+        ),
     },
     "src/gaia/agents/base/console.py": {
         "pip": (1, "printed by a pip install that lacks rich, never by an app"),
     },
     "src/gaia/agents/base/tool_grants.py": {
         "pip": (2, "names commands GAIA holds for approval"),
+    },
+    "src/gaia/agents/base/project_map.py": {
+        "terminal command": (
+            1,
+            "stderr of a run nobody can answer, such as gaia -p; the apps ask",
+        ),
     },
     "src/gaia/agents/tools/connect_card.py": {
         "terminal command": (

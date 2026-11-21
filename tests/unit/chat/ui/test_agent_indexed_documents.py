@@ -18,7 +18,7 @@ from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.ui._chat_helpers import _add_indexed_documents_to_library, _done_event
 from gaia.ui.agent_documents import add_indexed_documents, not_yet_indexed
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar.relay import _dispatch_one
+from gaia.ui.sidecar.relay import _dispatch_one
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 from gaia.ui.turn_summary import TurnLedger
@@ -311,3 +311,23 @@ def test_a_turn_that_indexed_nothing_adds_nothing(db):
         [],
     )
     assert "documents_added" not in _done_event(1, "ok", False)
+
+
+def test_a_failed_copy_leaves_no_placeholder_that_forces_an_id_prefix(
+    tmp_path, home, db, monkeypatch
+):
+    outside = _outside(tmp_path)
+    session = db.create_session()
+
+    def _boom(src, dst):
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("gaia.ui.agent_documents.shutil.copyfile", _boom)
+        added = add_indexed_documents(db, session["id"], [(str(outside), 3)])
+
+    assert added.notices
+    assert db.list_documents() == []
+    add_indexed_documents(db, session["id"], [(str(outside), 3)])
+    [library_doc] = db.list_documents()
+    assert Path(library_doc["filepath"]).name == "plant_manual.md"

@@ -29,10 +29,12 @@
         "lemonade_version",
         "lemonade_base_url",
         "agent_version",
-        "gaia_version"
+        "gaia_version",
+        "skills"
       ],
       "phase_extension": ["phase", "words", "chars"],
-      "history_cut_extension": ["history_cut"]
+      "history_cut_extension": ["history_cut"],
+      "plan_extension": ["plan"]
     },
     "token": { "fields": ["delta"] },
     "tool_call": { "fields": ["tool", "args", "narration"] },
@@ -54,7 +56,28 @@
       ]
     },
     "final": { "fields": ["answer", "usage"] },
-    "error": { "fields": ["detail", "status", "source"], "not_sent_over_stdio": ["source"] }
+    "error": { "fields": ["detail", "status", "source"], "not_sent_over_stdio": ["source"] },
+    "context_usage": {
+      "fields": [
+        "window",
+        "reply_reserve",
+        "system",
+        "skills",
+        "memory",
+        "tools",
+        "tool_definitions",
+        "documents",
+        "history",
+        "query",
+        "history_budget",
+        "history_used",
+        "turns_in_view",
+        "turns_hidden",
+        "at_risk",
+        "at_risk_tokens",
+        "used"
+      ]
+    }
   },
   "session_index": {
     "_doc": "Opt-in listing the agent writes beside --history-file (<id>.sqlite3): <id>.json is replaced atomically on every status change, <id>.jsonl gains one line per finished turn, and <id>.lock is held for the life of the process. Read by tui/internal/sessionstore.",

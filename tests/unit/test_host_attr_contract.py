@@ -319,9 +319,10 @@ def test_read_file_schema_unchanged():
         "limit",
         "start_line",
         "end_line",
+        "raw",
     }
     assert entry["parameters"]["file_path"]["required"] is True
-    for optional in ("offset", "limit", "start_line", "end_line"):
+    for optional in ("offset", "limit", "start_line", "end_line", "raw"):
         assert entry["parameters"][optional]["required"] is False
     assert "Read any file" in entry["description"]
 

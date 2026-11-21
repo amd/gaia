@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import (
     Any,
+    Collection,
     Dict,
     FrozenSet,
     Iterable,
@@ -284,6 +285,9 @@ def _pptx_blocks(path: str) -> List[Block]:
     return blocks
 
 
+_OFFICE_SUFFIXES = (".xlsx", ".docx", ".pptx")
+
+
 def read_blocks(path: str) -> List[Block]:
     """The figures-bearing content of the file at *path*, bounded in size.
 
@@ -299,6 +303,11 @@ def read_blocks(path: str) -> List[Block]:
                 "Not checking figures in %s: larger than %d bytes", path, MAX_FILE_BYTES
             )
             return []
+        if suffix in _OFFICE_SUFFIXES and not zipfile.is_zipfile(path):
+            # Text saved under an Office name: python-docx and python-pptx raise
+            # their own error class for it, which the handlers below don't name.
+            logger.warning("Not checking figures in %s: not an Office file", path)
+            return []
         if suffix == ".xlsx":
             return _xlsx_blocks(path)
         if suffix == ".docx":
@@ -309,8 +318,13 @@ def read_blocks(path: str) -> List[Block]:
             return text_blocks(handle.read(MAX_TEXT_CHARS), suffix)
     except ImportError as error:
         logger.info("Not checking figures in %s: %s is not installed", path, error.name)
-    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
-        logger.warning("Could not read %s to check its figures: %s", path, error)
+    except Exception as error:  # a parser's own error class: the check is advisory
+        logger.warning(
+            "Could not read %s to check its figures: %s: %s",
+            path,
+            type(error).__name__,
+            error,
+        )
     return []
 
 
@@ -1848,6 +1862,25 @@ _TIMESTAMP = re.compile(
 )
 
 
+def _typed_numbers(records: Sequence[Dict[str, Any]]) -> FrozenSet[float]:
+    """Every number the model typed into a call this turn: in a script, a
+    command, or any other argument. The text of a document or data file it
+    wrote by hand is left out; that file is not one a program built."""
+    numbers: Set[float] = set()
+    for record in records:
+        name = _name(record)
+        args = record.get("args") or {}
+        if _has(name, _WRITE_WORDS) and not _has(name, _EXEC_WORDS):
+            target = args.get("file_path") if isinstance(args, dict) else None
+            suffix = os.path.splitext(str(target or ""))[1].lower()
+            if suffix in DELIVERABLE_SUFFIXES:
+                continue
+        for text in _arg_strings(args):
+            for n in _ANY_NUMBER.findall(_spelled_out(text)):
+                numbers.add(_number(n))
+    return frozenset(numbers)
+
+
 def _mentioned(claim: _Claim, answer: str) -> bool:
     named = {_number(n) for n in _ANY_NUMBER.findall(_spelled_out(answer))}
     return claim.value.number in named
@@ -1862,6 +1895,7 @@ def file_findings(
     inputs: Sequence[str] = (),
     input_names: Sequence[str] = (),
     answer: str = "",
+    built: Collection[str] = (),
 ) -> List[Finding]:
     """Figures in *files* (path → blocks) that nothing this turn supports.
 
@@ -1871,9 +1905,15 @@ def file_findings(
     from files read this turn (*input_names* are the files *inputs* hold).
     An answer that says its figures are unverified and names a
     value has already told the user about it.
+
+    *built* are the paths in *files* a script or a tool produced, rather than
+    the model typing their text. A figure in one of those is the program's
+    output unless a call this turn typed it, so only typed figures are
+    reported there.
     """
     if not files:
         return []
+    typed = _typed_numbers(records) if built else frozenset()
     written = {_basename(path) for path in files}
     read_names = _read_names(records, written) | (
         {_basename(n) for n in input_names} - written
@@ -1929,6 +1969,8 @@ def file_findings(
         missing = _unsupported(blocks, general, money, request_numbers, data_numbers)
         if admitted:
             missing = [c for c in missing if not _mentioned(c, answer)]
+        if path in built:
+            missing = [c for c in missing if c.value.number in typed]
         if not missing:
             continue
         shown = list(dict.fromkeys(c.shown for c in missing))

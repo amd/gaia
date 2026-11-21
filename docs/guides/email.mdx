@@ -88,7 +88,7 @@ That one consent asks for `gmail.readonly` to read and `gmail.compose` to draft 
 
 The first command prints an authorization URL. Open it in a browser **on the machine running GAIA** — the sign-in completes via a `127.0.0.1` callback on that box.
 
-On a remote or headless host, open it there instead, or forward the callback port. The port is picked fresh on every run, so read it out of the printed URL's `redirect_uri=http%3A%2F%2F127.0.0.1%3A<PORT>%2Fcallback` and set the forward up in a second session **while the flow is still waiting** — there is no way to pin it in advance, and no device-code flow for Google.
+On a remote or headless host, open it there instead, or pin the callback port and forward it over SSH: run `gaia connectors connect google --callback-port 8085` and, from your local machine, `ssh -L 8085:127.0.0.1:8085 <user>@<host>`. See [Remote and headless sign-in](/connectors/google#remote-and-headless-sign-in-ssh). There is no device-code flow for Google.
 
 Skip the grant and the first mail tool call fails, naming what to fix — see [Troubleshooting](#troubleshooting).
 
@@ -108,26 +108,13 @@ Email-body inference runs on Lemonade — `gaia init` installs GAIA's own instan
 
 ### 3. Ask for your mail
 
-If you use the Python CLI, install the daemon extra first. A plain
-`pip install amd-gaia` does not include the FastAPI/uvicorn/psutil runtime that
-`gaia email` needs:
-
-```bash
-pip install "amd-gaia[api]"
-gaia email -q "Triage my inbox"
-```
-
-If those dependencies are missing, `gaia email` now stops before starting the
-Lemonade check and prints the same actionable `[api]` remedy instead of the
-opaque `daemon process exited early` error.
-
-Alternatively, use the published npm entry point:
+Mail is part of the flagship GAIA agent, so you ask in the Agent UI or the terminal app. To open the terminal app from the published npm entry point:
 
 ```bash
 npx @amd-gaia/gaia    # requires Node.js and npm
 ```
 
-Or run the installed binary directly — `~/.gaia/bin/gaia-tui`, which you may need to add to your `PATH`.
+Or run the installed binary directly — `~/.gaia/bin/gaia-cli`, which you may need to add to your `PATH`.
 
 Then just ask:
 
@@ -174,6 +161,16 @@ That is a local ledger write — no browser, no OAuth round-trip. It replaces th
 - **Full access doesn't skip this** — in the terminal UI and Agent UI the send still asks. Where nobody can answer, as with `gaia -p --dangerously-skip-permissions` or `GAIA_AUTO_APPROVE_TOOLS`, the send is refused and nothing goes out. Discarding or changing a saved draft are the mail actions full access runs unasked, since nothing leaves the mailbox.
 - **Untrusted input** — message bodies are wrapped in `<<<UNTRUSTED_EMAIL_BODY_*>>>` delimiters and flagged when they show phishing signals ([#4150](https://github.com/amd/gaia/issues/4150)). That is not a general injection defence: the flagship also holds web, file, and shell tools, so treat mail from untrusted senders as untrusted input.
 
+## Upgrading from the email agent
+
+The standalone email agent is gone; the GAIA agent does mail now. The first time GAIA starts after the upgrade it:
+
+- removes the old agent's install folder (`~/.gaia/agents/email`), unless the folder holds anything GAIA did not put there, such as an agent of your own with that name. Then it is left alone and the log says why.
+- clears the old agent's leftover connector state. Your Google or Microsoft connection stays; press **Connect** in the chat, or grant the GAIA agent under Settings › Connectors, to use it.
+- tells you, in one notification and the GAIA log, which emails the old agent had scheduled. They will not be sent. Ask GAIA in a chat to send them instead.
+
+The old agent's own data stays in `~/.gaia/email/` and nothing reads it any more. Delete the folder when you no longer need it; `gaia uninstall --purge` removes it with the rest of GAIA's data.
+
 ## Troubleshooting
 
 ### "This Google connection lacks …"
@@ -191,8 +188,9 @@ The agent could not reach any mailbox. It names each provider's own state, and t
 - *not connected* → press **Connect Google** or **Connect Microsoft** on the card
 - *connected, but without permission to read mail* → press **Reconnect** on the card and leave mail access ticked on the consent screen
 - *connected and readable, but GAIA has not been given access to it* → turn GAIA's access on for that account under **Settings › Connectors** (no sign-in needed)
+- *this PC has no sign-in client for the provider yet* → the card says it needs a one-time setup; press **Set up Google** (or Microsoft) to open that provider in **Settings › Connectors**
 
-The card's sign-in asks for the same access as the terminal command in [setup](#1-connect-your-mailbox): reading, drafting and sending mail, and your calendar. It does not ask for `gmail.modify` or Google Drive.
+The card's sign-in asks only for what the request needs. Asking about your inbox asks to read mail (`gmail.readonly`, or `Mail.Read` on Outlook) and nothing else; the first draft or send asks for `gmail.compose` (`Mail.ReadWrite` and `Mail.Send`), and the first calendar request for calendar access, each keeping what the account already allows. It never asks for `gmail.modify` or Google Drive. Connecting from **Settings › Connectors**, or with the terminal command in [setup](#1-connect-your-mailbox), asks for all of it at once.
 
 In a terminal the same fixes are `gaia connectors connect <provider> --grant-agent installed:gaia` and `gaia connectors grants grant <provider> installed:gaia --scopes <scope>`.
 

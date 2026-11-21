@@ -35,7 +35,7 @@ The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** 
 
 One download for users: on Windows, one installer offers the desktop app, the terminal, or both. See [Install GAIA](https://amd-gaia.ai/docs/guides/install) for every platform, and its [For developers](https://amd-gaia.ai/docs/guides/install#for-developers) section for script, `pip`/`uv` and source installs.
 
-> **Note (Email agent):** the Email agent installs with `gaia hub install email`, which fetches a binary sidecar into your GAIA agents directory — no PyPI wheel and no Node.js toolchain required. An npm client is also published for embedding the agent in a JS/TS app.
+> **Email:** the GAIA agent reads and searches your Gmail or Outlook inbox once you connect the Google or Microsoft connector — see [Email](https://amd-gaia.ai/docs/guides/email). There is no separate email agent to install.
 
 ---
 
@@ -92,9 +92,22 @@ print(result)
 
 ---
 
+## Two harnesses: gaiapy and gaiacpp
+
+The GAIA agent has two interchangeable programs behind it, and the desktop app and the terminal run either one:
+
+| Harness | What it is | Source |
+|---------|------------|--------|
+| **`gaiapy`** | The Python harness: every tool and feature, and the default | [`hub/agents/gaia/python/`](hub/agents/gaia/python/) on the SDK in [`src/gaia/`](src/gaia/) |
+| **`gaiacpp`** | The native C++ harness: starts instantly and uses little memory, with fewer features so far (beta) | [`cpp/agents/gaiacpp/`](cpp/agents/gaiacpp/) on the framework in [`cpp/`](cpp/README.md) |
+
+Switch in the desktop app under Settings › Agent & model, or with `/agent` in the terminal. See [The two harnesses](docs/reference/harnesses.mdx).
+
+---
+
 ## C++ Framework
 
-A C++17 port of the GAIA base agent framework is available under [`cpp/`](cpp/README.md). It implements the same agent loop, tool registry, and MCP client interface without any Python dependency — suitable for embedding in native applications or resource-constrained environments.
+`gaiacpp` is built on a C++17 port of the GAIA base agent framework, under [`cpp/`](cpp/README.md). It implements the same agent loop, tool registry, and MCP client interface without any Python dependency — suitable for embedding in native applications or resource-constrained environments.
 
 ```cpp
 #include <gaia/agent.h>

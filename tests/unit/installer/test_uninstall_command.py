@@ -193,6 +193,7 @@ class TestBuildPlan:
             gaia / "core",
             gaia / "app-core",
             gaia / "traces",
+            gaia / "email",
             gaia / "host",
         ]
         assert plan.stop_daemon
@@ -1706,7 +1707,7 @@ def installer_home(fake_home, monkeypatch):
     _seed_gaia_tree(fake_home)
     gaia = fake_home / ".gaia"
     (gaia / "bin").mkdir()
-    (gaia / "bin" / "gaia-tui").write_text("tui")
+    (gaia / "bin" / "gaia-cli").write_text("tui")
     (gaia / "bin" / "gaia-agent").write_text("agent")
     host = gaia / "host"
     host.mkdir()
@@ -1731,6 +1732,17 @@ class TestInstallerLeftovers:
         assert not (gaia / "host").exists()
         assert not (gaia / "traces").exists()
         assert (gaia / "mcp_servers.json").exists()
+
+    def test_purge_removes_the_removed_email_agents_data(self, installer_home):
+        old = installer_home / ".gaia" / "email"
+        old.mkdir()
+        (old / "state.db").write_text("jobs")
+        (old / "memory.db").write_text("memory")
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=_Capture())
+
+        assert exit_code == uc.EXIT_OK
+        assert not old.exists()
 
     def test_dry_run_lists_leftovers_and_changes_nothing(self, installer_home):
         zshrc = installer_home / ".zshrc"
@@ -1820,7 +1832,7 @@ class TestInstallerLeftovers:
 
         assert exit_code == uc.EXIT_OK
         assert (home / ".zshrc").read_text() == text
-        assert (home / ".gaia" / "bin" / "gaia-tui").exists()
+        assert (home / ".gaia" / "bin" / "gaia-cli").exists()
         assert (home / ".gaia" / "host" / "instance.json").exists()
 
     def test_daemon_home_outside_gaia_home_is_skipped(
@@ -2110,6 +2122,7 @@ _USER_DATA_DIRS = (
     "cache/rag",
     "logs",
     "seeder",
+    "backend-pids",
 )
 
 
@@ -2372,6 +2385,29 @@ class TestCredentialStore:
         }
         assert "[removed] GAIA's sign-ins and API keys" in captured.text
 
+    def test_every_connected_account_is_cleared(self, recording_keyring):
+        from gaia.connectors import accounts, store
+
+        backend, _services = recording_keyring
+        for sub, email in (("alice", "alice@example.com"), ("bob", "bob@example.com")):
+            accounts.save_signed_in_account(
+                "google",
+                account_id=sub,
+                email=email,
+                refresh_token=f"rt-{sub}",
+                scopes=["openid"],
+                client_id_hash="h",
+            )
+        assert len(accounts.list_accounts("google")) == 2
+
+        assert _REAL_CLEAR_CREDENTIALS(printer=_Capture()) is True
+
+        assert accounts.list_accounts("google") == []
+        assert not any(
+            service == store.SERVICE_NAME and user.startswith("google:")
+            for service, user in backend._store
+        )
+
     @pytest.mark.parametrize("module", ["fail", "null"])
     def test_no_usable_credential_store_is_a_skip_not_an_error(self, module):
         """Headless Linux has keyring but no backend; nothing was saved there."""
@@ -2393,13 +2429,13 @@ class TestCredentialStore:
     def test_a_store_failure_is_reported_not_swallowed(
         self, recording_keyring, monkeypatch
     ):
-        from gaia.connectors import store
+        from gaia.connectors import accounts
         from gaia.connectors.errors import ConnectorsError
 
         def _boom(provider, **kwargs):
             raise ConnectorsError("keychain locked")
 
-        monkeypatch.setattr(store, "delete_connection", _boom)
+        monkeypatch.setattr(accounts, "delete_connection", _boom)
         captured = _Capture()
 
         assert _REAL_CLEAR_CREDENTIALS(printer=captured) is False

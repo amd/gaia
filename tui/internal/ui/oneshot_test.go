@@ -35,7 +35,7 @@ func (s *scriptedClient) Close() error { return nil }
 func captureOneShot(t *testing.T, events ...interface{}) (OneShotResult, string, string) {
 	t.Helper()
 	var out, errW bytes.Buffer
-	res := RunOneShot(context.Background(), &scriptedClient{events: events}, "q", &out, &errW, false, nil)
+	res := RunOneShot(context.Background(), &scriptedClient{events: events}, "q", &out, &errW, nil)
 	return res, out.String(), errW.String()
 }
 
@@ -44,8 +44,8 @@ func captureOneShot(t *testing.T, events ...interface{}) (OneShotResult, string,
 func TestRunOneShotSeparatesAnswerFromProgress(t *testing.T) {
 	res, out, errW := captureOneShot(t,
 		event.CanonicalStatusEvent{Type: "status", Message: "Scanning inbox"},
-		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "pre_scan_inbox"},
-		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "pre_scan_inbox", Render: "email_pre_scan"},
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_inbox"},
+		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "list_inbox", Render: "table"},
 		event.CanonicalFinalEvent{Type: "final", Answer: "3 urgent emails", Usage: []byte(`{"steps":2,"tools_used":1}`)},
 	)
 
@@ -58,7 +58,7 @@ func TestRunOneShotSeparatesAnswerFromProgress(t *testing.T) {
 	if strings.TrimSpace(out) != "3 urgent emails" {
 		t.Errorf("stdout must carry only the answer, got %q", out)
 	}
-	for _, want := range []string{"Scanning inbox", "pre_scan_inbox", "email_pre_scan"} {
+	for _, want := range []string{"Scanning inbox", "list_inbox", "table"} {
 		if !strings.Contains(errW, want) {
 			t.Errorf("stderr missing %q: %s", want, errW)
 		}
@@ -129,7 +129,7 @@ func TestRunOneShotNoTerminalEventExitsNonZero(t *testing.T) {
 func TestRunOneShotSendFailureIsReported(t *testing.T) {
 	var out, errW bytes.Buffer
 	c := &scriptedClient{sendErr: errFake("no daemon is registered; start one with `gaia daemon start`")}
-	res := RunOneShot(context.Background(), c, "q", &out, &errW, false, nil)
+	res := RunOneShot(context.Background(), c, "q", &out, &errW, nil)
 
 	if res.ExitCode != 1 {
 		t.Errorf("exit code = %d, want 1", res.ExitCode)
@@ -221,7 +221,7 @@ func runOneShotAsync(
 ) OneShotResult {
 	t.Helper()
 	done := make(chan OneShotResult, 1)
-	go func() { done <- RunOneShot(ctx, c, "triage my inbox", out, errW, false, nil) }()
+	go func() { done <- RunOneShot(ctx, c, "triage my inbox", out, errW, nil) }()
 	select {
 	case res := <-done:
 		return res
@@ -282,8 +282,8 @@ func TestRunOneShotReportsACancelledTurnDistinctly(t *testing.T) {
 }
 
 // Step and tool counts measure the agent loop, not the answer. A one-shot piped
-// into a script should end at the answer; only --dev reports the machinery.
-func TestOneShotReportsItsMachineryOnlyUnderDev(t *testing.T) {
+// into a script ends at the answer, and there is no mode that adds them back.
+func TestOneShotNeverReportsItsMachinery(t *testing.T) {
 	events := []interface{}{
 		event.CanonicalFinalEvent{
 			Type:   event.CanonicalTypeFinal,
@@ -291,39 +291,12 @@ func TestOneShotReportsItsMachineryOnlyUnderDev(t *testing.T) {
 			Usage:  json.RawMessage(`{"steps":4,"tools_used":3}`),
 		},
 	}
-
-	for _, tc := range []struct {
-		name string
-		dev  bool
-		want bool
-	}{
-		{"user mode ends at the answer", false, false},
-		{"dev mode reports the loop", true, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var out, errW bytes.Buffer
-			RunOneShot(context.Background(), &scriptedClient{events: events},
-				"q", &out, &errW, tc.dev, nil)
-
-			if got := strings.Contains(errW.String(), "steps"); got != tc.want {
-				t.Errorf("progress stream = %q; wantSteps=%v", errW.String(), tc.want)
-			}
-			// The answer itself is never mode-dependent.
-			if !strings.Contains(out.String(), "the answer") {
-				t.Errorf("the answer went missing: %q", out.String())
-			}
-		})
+	var out, errW bytes.Buffer
+	RunOneShot(context.Background(), &scriptedClient{events: events}, "q", &out, &errW, nil)
+	if strings.Contains(errW.String(), "steps") || strings.Contains(errW.String(), "tools") {
+		t.Errorf("progress stream reports the loop: %q", errW.String())
 	}
-}
-
-// "1 steps" reads as a bug in the renderer.
-func TestPlural(t *testing.T) {
-	for _, tc := range []struct {
-		n    int
-		want string
-	}{{0, "0 steps"}, {1, "1 step"}, {2, "2 steps"}} {
-		if got := plural(tc.n, "step"); got != tc.want {
-			t.Errorf("plural(%d) = %q, want %q", tc.n, got, tc.want)
-		}
+	if !strings.Contains(out.String(), "the answer") {
+		t.Errorf("the answer went missing: %q", out.String())
 	}
 }

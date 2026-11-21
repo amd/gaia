@@ -38,6 +38,11 @@ those appear on every run. The per-session ``TOOL_LOADER_SESSION`` summary
 (emitted only on ``reset_session``, i.e. the ``gaia chat``/CLI path, **not** the
 UI-server/eval path) is a convenience for CLI logs; the recall gate does not
 depend on it, so the rate is reported for eval runs too. (#1450)
+
+MCP tools have an offline check too (#1971): :func:`measure_mcp_recall` runs
+the loader on requests that each need one mock MCP tool and reports how often
+that tool is on the list, with no model or eval run. ``python -m
+gaia.eval.tool_cost --mcp`` prints it.
 """
 
 from __future__ import annotations
@@ -341,6 +346,110 @@ def _format_report(report: RecallReport, escape_hatch: Optional[Dict] = None) ->
             ]
         )
     return "\n".join(lines)
+
+
+@dataclass
+class MCPRecallReport:
+    """How often the loader offers the MCP tool a request needs (#1971).
+
+    A hit is either *listed*, the tool on the list the session already had, or
+    reached by a *jump*, the session moving to every tool. A jump finds the
+    tool but sends every tool from then on, so the two are counted apart.
+    """
+
+    probes: int
+    listed: int
+    jumps: int
+    misses: List[Tuple[str, str]] = field(default_factory=list)  # (tool, request)
+
+    @property
+    def hits(self) -> int:
+        return self.listed + self.jumps
+
+    @property
+    def recall(self) -> float:
+        return self.hits / self.probes
+
+    @property
+    def jump_rate(self) -> float:
+        """Share of requests that moved the session to every tool."""
+        return self.jumps / self.probes
+
+
+def measure_mcp_recall(agent, entries: Dict[str, Dict], probes) -> MCPRecallReport:
+    """Offline recall of MCP tools: is the needed tool on the list the agent sends?
+
+    Each ``(request, tool)`` probe is a fresh session's first turn on *agent*
+    with the MCP registry *entries* added, selected by the agent's own
+    ``_select_tools_for_turn``. An agent without a loader sends every tool, so
+    each probe is listed: the loader-off side of the comparison.
+
+    Raises:
+        ValueError: *probes* is empty or names a tool *entries* lacks.
+        RuntimeError: The agent has a loader that did not select, so the
+            result would measure the full list instead of the loader.
+    """
+    from gaia.eval.tool_cost import first_turn_tools, with_mcp_tools
+
+    if not probes:
+        raise ValueError("measure_mcp_recall needs at least one probe")
+    loader = agent.tool_loader
+    listed = jumps = 0
+    misses: List[Tuple[str, str]] = []
+    with with_mcp_tools(agent, entries):
+        for request, tool in probes:
+            if tool not in entries:
+                raise ValueError(f"probe names {tool!r}, which no mock server lists")
+            offered = first_turn_tools(agent, request)
+            if offered is None:
+                if loader is not None:
+                    raise RuntimeError(
+                        "the tool loader did not select for this probe (embedder "
+                        "failed, or the agent is not in dynamic-tools mode), so "
+                        "MCP recall cannot be measured; check the embed_fn and "
+                        "the skeleton's _memory_store and model_id"
+                    )
+                listed += 1
+            elif tool not in offered:
+                misses.append((tool, request))
+            elif loader.jumped:
+                jumps += 1
+            else:
+                listed += 1
+    return MCPRecallReport(len(probes), listed, jumps, misses)
+
+
+def check_mcp_recall(
+    on: MCPRecallReport,
+    off: MCPRecallReport,
+    min_recall: float,
+    max_jump_rate: Optional[float] = None,
+) -> Optional[str]:
+    """Return why loader-on MCP recall fails its guard, or ``None`` when it passes.
+
+    *min_recall* is the lowest acceptable loader-on recall; *max_jump_rate*
+    caps how much of it may come from moving to every tool, so recall cannot
+    be bought back with the full list. Loader-off recall must be 1.0, since
+    every tool is sent.
+    """
+    if off.recall < 1.0:
+        return (
+            f"loader-off recall is {off.recall:.1%}, but with every tool sent it "
+            "must be 100%; the probes or the mock servers are broken."
+        )
+    if on.recall < min_recall:
+        missed = ", ".join(tool for tool, _ in on.misses)
+        return (
+            f"MCP recall with the loader on is {on.recall:.1%}, below the "
+            f"{min_recall:.1%} floor. Missed: {missed}."
+        )
+    if max_jump_rate is not None and on.jump_rate > max_jump_rate:
+        return (
+            f"{on.jump_rate:.1%} of MCP requests moved the session to every tool, "
+            f"above the {max_jump_rate:.1%} ceiling: recall is coming from the "
+            "full list, not from the loader listing the tool."
+        )
+    return None
 
 
 def main(argv: Optional[List[str]] = None) -> int:

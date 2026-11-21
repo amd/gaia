@@ -127,8 +127,8 @@ func TestMissingVersionRouteDegradesQuietlyButWorks(t *testing.T) {
 }
 
 // An interactive user whose agent cannot be asked anything is TOLD so — once.
-// Otherwise the in-conversation mailbox fix just never appears and reads as
-// broken rather than as out of date.
+// Otherwise the agent's questions just never appear, which reads as broken
+// rather than as out of date.
 func TestInteractiveUserIsToldWhenThePeerIsTooOld(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.4"
@@ -149,7 +149,7 @@ func TestInteractiveUserIsToldWhenThePeerIsTooOld(t *testing.T) {
 	if notice == "" {
 		t.Fatalf("no notice on the first turn: %#v", first)
 	}
-	for _, want := range []string{"2.4", "cannot ask questions", "gaia hub install email"} {
+	for _, want := range []string{"2.4", "cannot ask questions", "gaia hub install notes"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("notice is missing %q: %s", want, notice)
 		}
@@ -251,18 +251,18 @@ func firstNotice(events []interface{}) string {
 // exist and look right — which is the trap — but they are GAIA-WIDE: bare
 // `gaia uninstall` is the tiered cleanup of the GAIA install itself, one flag
 // from `--purge`. They also reject a trailing agent id, so a user handed
-// `gaia uninstall email` gets an argparse error and may retry without the
+// `gaia uninstall notes` gets an argparse error and may retry without the
 // argument, landing on the wrong tool entirely.
 func TestRemedyNamesTheAgentScopedCommand(t *testing.T) {
-	notice := noticeForMissingCapability("email", "2.4")
+	notice := noticeForMissingCapability("notes", "2.4")
 
-	for _, want := range []string{"gaia hub uninstall email", "gaia hub install email"} {
+	for _, want := range []string{"gaia hub uninstall notes", "gaia hub install notes"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("remedy does not name %q: %s", want, notice)
 		}
 	}
 	// The bare forms must not appear even as a substring of the advice.
-	for _, forbidden := range []string{"`gaia install ", "`gaia uninstall ", "gaia install email", "gaia uninstall email"} {
+	for _, forbidden := range []string{"`gaia install ", "`gaia uninstall ", "gaia install notes", "gaia uninstall notes"} {
 		if strings.Contains(notice, forbidden) && !strings.Contains(notice, "hub "+strings.TrimPrefix(forbidden, "`")) {
 			t.Errorf("remedy names the GAIA-wide command %q: %s", forbidden, notice)
 		}
@@ -274,7 +274,7 @@ func TestRemedyNamesTheAgentScopedCommand(t *testing.T) {
 
 // Every agent id the notice is built for keeps the scoped form.
 func TestRemedyIsScopedForAnyAgent(t *testing.T) {
-	for _, id := range []string{"email", "gaia", "chat"} {
+	for _, id := range []string{"notes", "gaia", "chat"} {
 		notice := noticeForMissingCapability(id, "2.5")
 		if !strings.Contains(notice, "gaia hub install "+id) {
 			t.Errorf("remedy for %q is not agent-scoped: %s", id, notice)
@@ -470,14 +470,20 @@ func TestTheFlagshipAt224IsToldTheStartFolder(t *testing.T) {
 	}
 }
 
-// The start folder only says where relative paths resolve. Sending it as
-// allowed_paths too would replace the session's file scope (#3591).
-func TestTheStartFolderIsNeverSentAsTheFileScope(t *testing.T) {
+// With only working_directory the agent's prompt named the home folder as the
+// place to look first, and a read in the start folder asked for approval.
+func TestTheFlagshipAt224GetsTheStartFolderAsItsScope(t *testing.T) {
+	want, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	f := newFakeRelay(t)
-	f.contractVersion = "2.27"
+	f.contractVersion = "2.24"
 	sendOnce(t, f, "gaia")
-	if raw := f.lastRawBody(); strings.Contains(raw, "allowed_paths") {
-		t.Errorf("the start folder narrowed the session's file scope: %s", raw)
+	got := f.queries[0].AllowedPaths
+	if len(got) != 1 || got[0] != want || got[0] != f.queries[0].WorkingDirectory {
+		t.Errorf("allowed_paths = %q, want exactly the start folder [%q]: %s",
+			got, want, f.lastRawBody())
 	}
 }
 
@@ -497,6 +503,9 @@ func TestEveryTurnCarriesTheStartFolder(t *testing.T) {
 		if q.WorkingDirectory != want {
 			t.Errorf("turn %d working_directory = %q, want %q", i, q.WorkingDirectory, want)
 		}
+		if len(q.AllowedPaths) != 1 || q.AllowedPaths[0] != want {
+			t.Errorf("turn %d allowed_paths = %q, want [%q]", i, q.AllowedPaths, want)
+		}
 	}
 }
 
@@ -512,7 +521,8 @@ func TestOlderPeersAndOtherAgentsGetNoWorkingDirectory(t *testing.T) {
 			f := newFakeRelay(t)
 			f.contractVersion = tc.version
 			sendOnce(t, f, tc.agent)
-			if raw := f.lastRawBody(); strings.Contains(raw, "working_directory") {
+			raw := f.lastRawBody()
+			if strings.Contains(raw, "working_directory") || strings.Contains(raw, "allowed_paths") {
 				t.Errorf("the start folder was sent to a peer that rejects it: %s", raw)
 			}
 		})
@@ -523,7 +533,7 @@ func TestOlderPeersAndOtherAgentsGetNoSurface(t *testing.T) {
 	for _, tc := range []struct{ agent, version string }{
 		{"gaia", "2.19"},
 		{"gaia", ""},
-		{"email", "2.20"},
+		{"notes", "2.20"},
 	} {
 		t.Run(tc.agent+"@"+tc.version, func(t *testing.T) {
 			f := newFakeRelay(t)

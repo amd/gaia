@@ -11,7 +11,7 @@ and surfaced that RuntimeError to the user.
 Three sets have to agree, and nothing used to check that they did:
 
   daemon can supervise it   -> gaia.daemon.sidecars.spec.builtin_specs()
-  UI can relay to it        -> gaia.ui.email_sidecar.profiles.SIDECAR_AGENT_IDS
+  UI can relay to it        -> gaia.ui.sidecar.profiles.SIDECAR_AGENT_IDS
   chat dispatch admits it   -> gaia.ui._chat_helpers._SIDECAR_AGENT_TYPES
 """
 
@@ -27,7 +27,7 @@ from gaia.ui._chat_helpers import (
     _agent_type_unknown,
     _should_relay_to_sidecar,
 )
-from gaia.ui.email_sidecar.profiles import SIDECAR_AGENT_IDS, profile_for
+from gaia.ui.sidecar.profiles import SIDECAR_AGENT_IDS, profile_for
 
 
 class _Registry:
@@ -70,7 +70,7 @@ def test_every_supervised_sidecar_has_a_relay_profile(agent_id):
     assert profile_for(agent_id) is not None, (
         f"'{agent_id}' is in builtin_specs() but has no RelayProfile, so "
         f"Agent UI chat cannot relay it. Add one in "
-        f"gaia/ui/email_sidecar/profiles.py."
+        f"gaia/ui/sidecar/profiles.py."
     )
 
 
@@ -99,8 +99,6 @@ def test_the_unknown_agent_message_does_not_contradict_itself():
     assert "Unknown agent_type 'gaia'" in detail
     listed = detail.split("Registered agent ids: ")[1].split(".")[0]
     assert "gaia" not in listed, f"named as unknown and registered at once: {listed}"
-    # Email still belongs there — its relay needs no registration.
-    assert "email" in listed
     # The flagship installs by re-running setup in the app, never a command.
     assert "Settings > Setup" in detail
     assert "gaia init" not in detail and "gaia hub" not in detail
@@ -126,11 +124,6 @@ def test_uninstalled_flagship_says_so_rather_than_failing_at_the_daemon():
     """ "Install it from the Hub" beats whatever the daemon says about being
     asked to start a sidecar that was never installed."""
     assert _agent_type_unknown("gaia", _Registry(None)) is True
-
-
-def test_email_stays_dispatchable_without_a_registration():
-    """Its relay never needed one, and #2109 left it that way."""
-    assert _agent_type_unknown("email", _Registry(None)) is False
 
 
 def test_dispatch_set_is_the_profile_registry():
@@ -175,12 +168,6 @@ class TestRelayDecision:
         registry = _Registry(None)
         registry.load_error = "ImportError: No module named 'faiss'"
         assert _should_relay_to_sidecar("gaia", registry) is False
-
-    def test_email_always_relays_even_with_a_real_registration(self):
-        """#2109 retired email's in-process loop; the wheel being importable
-        must not resurrect it."""
-        registry = _Registry(_registration("email", is_sidecar=False))
-        assert _should_relay_to_sidecar("email", registry) is True
 
     def test_non_sidecar_agent_never_relays(self):
         assert _should_relay_to_sidecar("my-custom-agent", _Registry(None)) is False

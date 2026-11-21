@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -363,8 +364,12 @@ def test_executor_mutation_invalidates_prior_readback(agent):
         {"answer": "Saved to `summary.md`."},
     )
     result = agent.process_query("Save to `summary.md`", max_steps=4)
-    assert result["status"] == "incomplete"
-    assert "read back" in result["result"]
+    # The file exists, so the turn is done; the unread change is a caveat.
+    assert result["status"] == "success"
+    assert result["completion_gaps"] == []
+    assert any("read back" in gap for gap in result["completion_caveats"])
+    assert "Not checked: `" in result["result"] and "read back" in result["result"]
+    assert "can't confirm" not in result["result"]
 
 
 def test_executor_failure_after_write_cannot_reuse_old_evidence(agent):
@@ -512,6 +517,37 @@ def test_generated_audio_counts_as_binary_save_evidence(tool, tmp_path):
     assert gaps(ledger, "Saved to `sound.wav`.")
     ledger.record(tool, {}, {"audio_path": "sound.wav"}, True)
     assert not gaps(ledger, "Saved to `sound.wav`.")
+
+
+@pytest.mark.parametrize("tool", ["generate_music", "generate_sound_effect"])
+def test_the_users_copy_of_generated_audio_backs_a_saved_claim(tool, tmp_path):
+    saved = tmp_path / "game" / "theme.wav"
+    claim = f"Saved to `{saved}`."
+    ledger = CompletionEvidence("Make a menu theme", str(tmp_path))
+    cache_copy = str(tmp_path / "cache" / "music_1.wav")
+    ledger.record(tool, {}, {"audio_path": cache_copy}, True)
+    assert gaps(ledger, claim)
+
+    ledger.record(
+        tool,
+        {"save_to": str(saved)},
+        {"audio_path": cache_copy, "saved_to": str(saved)},
+        True,
+    )
+    assert not gaps(ledger, claim)
+
+
+@pytest.mark.parametrize("tool", ["generate_music", "generate_sound_effect"])
+def test_a_refused_audio_copy_does_not_back_a_saved_claim(tool, tmp_path):
+    saved = tmp_path / "game" / "theme.wav"
+    ledger = CompletionEvidence("Make a menu theme", str(tmp_path))
+    ledger.record(
+        tool,
+        {"save_to": str(saved)},
+        {"status": "error", "error": "save_to is outside the allowed folders"},
+        False,
+    )
+    assert gaps(ledger, f"Saved to `{saved}`.")
 
 
 def test_refused_mutation_does_not_invalidate_a_completed_save(ledger):
@@ -1091,6 +1127,16 @@ def test_loop_still_rejects_a_false_save_after_a_denied_write(agent, tmp_path):
     assert "Do not retry that write" in correction
 
 
+def test_a_write_gaias_own_rule_stopped_is_not_reported_as_declined(tmp_path):
+    ledger = _documents_ledger(tmp_path)
+    target = str(tmp_path / "Documents" / "ui_notes.txt")
+    _refuse(ledger, target, {"status": "denied", "denied_by": "policy"})
+    found = gaps(ledger, "Saved! `ui_notes.txt` is in your Documents folder.")
+    assert len(found) == 1
+    assert "was not permitted" in found[0]
+    assert "declined" not in found[0]
+
+
 def test_an_unanswered_prompt_is_not_reported_as_declined(tmp_path):
     ledger = _documents_ledger(tmp_path)
     target = str(tmp_path / "Documents" / "ui_notes.txt")
@@ -1537,6 +1583,28 @@ def test_a_bare_output_a_script_wrote_beside_the_named_input_is_found(tmp_path):
     assert not [g for g in gaps(ledger, "Both files are in kx.") if "recon_tables" in g]
 
 
+def test_a_write_the_file_clock_dates_a_tick_early_is_still_the_runs(tmp_path):
+    """Linux and Windows stamp files with a coarse clock that trails time.time_ns."""
+    kx = tmp_path / "kx"
+    kx.mkdir()
+    (kx / "reconciliation.md").write_text("# Recon\n")
+    ledger = CompletionEvidence(
+        f"Read {kx / 'reconciliation.md'} and make recon_tables.xlsx from it.",
+        str(tmp_path),
+    )
+    xlsx = kx / "recon_tables.xlsx"
+
+    tick_early = time.time_ns() - 10_000_000
+
+    def write_a_tick_early():
+        xlsx.write_bytes(b"PK")
+        os.utime(xlsx, ns=(tick_early, tick_early))
+
+    _script_run(ledger, tmp_path / "build.py", write_a_tick_early)
+
+    assert not [g for g in gaps(ledger, "Done.") if "recon_tables" in g]
+
+
 def test_a_bare_output_no_run_wrote_is_still_missing(tmp_path):
     kx = tmp_path / "kx"
     kx.mkdir()
@@ -1553,6 +1621,97 @@ def test_a_bare_output_no_run_wrote_is_still_missing(tmp_path):
     _script_run(ledger, tmp_path / "build.py", lambda: None)
 
     assert any("recon_tables.xlsx" in g for g in gaps(ledger, "Done."))
+
+
+@pytest.mark.parametrize("ticks_after_creation", [0, 1])
+def test_a_file_made_in_the_runs_first_clock_tick_is_not_the_runs(
+    tmp_path, monkeypatch, ticks_after_creation
+):
+    """Windows' Python 3.12 clock ticks every 15.6 ms, as NTFS's does."""
+    import types
+
+    import gaia.agents.base.completion as completion
+
+    kx = tmp_path / "kx"
+    kx.mkdir()
+    (kx / "reconciliation.md").write_text("# Recon\n")
+    old = kx / "recon_tables.xlsx"
+    old.write_bytes(b"PK")
+    stamp = old.stat().st_mtime - 3600
+    os.utime(old, (stamp, stamp))
+    tick = old.stat().st_ctime_ns + ticks_after_creation * 15_625_000
+    monkeypatch.setattr(completion, "time", types.SimpleNamespace(time_ns=lambda: tick))
+    query = f"Read {kx / 'reconciliation.md'} and make recon_tables.xlsx from it."
+    ledger = CompletionEvidence(query, str(tmp_path))
+
+    _script_run(ledger, tmp_path / "build.py", lambda: None)
+
+    assert any("recon_tables.xlsx" in g for g in gaps(ledger, "Done."))
+
+
+def test_a_copy_the_run_makes_a_tick_in_is_still_the_runs(tmp_path, monkeypatch):
+    """A copy keeps its source's old mtime; its creation tick is the evidence."""
+    import shutil
+    import types
+
+    import gaia.agents.base.completion as completion
+
+    kx = tmp_path / "kx"
+    kx.mkdir()
+    source = kx / "reconciliation.md"
+    source.write_text("# Recon\n")
+    stamp = source.stat().st_mtime - 3600
+    os.utime(source, (stamp, stamp))
+    clock = {"now": time.time_ns()}
+    monkeypatch.setattr(
+        completion, "time", types.SimpleNamespace(time_ns=lambda: clock["now"])
+    )
+    query = f"Read {source} and make recon_tables.xlsx from it."
+    ledger = CompletionEvidence(query, str(tmp_path))
+    xlsx = kx / "recon_tables.xlsx"
+
+    def copy_a_tick_later():
+        shutil.copy2(source, xlsx)
+        created = xlsx.stat().st_ctime_ns
+        # The run's start is read one tick before the copy's creation stamp.
+        ledger._exec_started = created - 15_625_000 - completion._FILE_CLOCK_SLACK_NS
+        clock["now"] = created + 15_625_000
+
+    _script_run(ledger, tmp_path / "build.py", copy_a_tick_later)
+
+    assert not [g for g in gaps(ledger, "Done.") if "recon_tables" in g]
+
+
+_RUN_START_NS = 10**18
+_MS = 1_000_000
+_HOUR_AGO = _RUN_START_NS - 3600 * 1000 * _MS
+
+
+@pytest.mark.parametrize(
+    "mtime, ctime, counted",
+    [
+        # Created 10 ms before the run: inside the slack, which is mtime's alone.
+        (_HOUR_AGO, _RUN_START_NS - 10 * _MS, False),
+        # Stamped in the run's first clock tick: on a coarse clock, made before it.
+        (_HOUR_AGO, _RUN_START_NS, False),
+        (_HOUR_AGO, _RUN_START_NS + 1, True),
+        (_RUN_START_NS - 10 * _MS, _HOUR_AGO, True),
+        (_HOUR_AGO, _RUN_START_NS + 10 * _MS, True),
+    ],
+)
+def test_only_mtime_gets_the_file_clock_slack(
+    tmp_path, monkeypatch, mtime, ctime, counted
+):
+    from gaia.agents.base.completion import _FILE_CLOCK_SLACK_NS
+
+    target = tmp_path / "report.csv"
+    target.write_text("x\n")
+    ledger = CompletionEvidence(f"Save the report to `{target}`", str(tmp_path))
+    monkeypatch.setattr(ledger, "_stamp", lambda p: (0, 0, 2, mtime, ctime))
+    start = _RUN_START_NS - _FILE_CLOCK_SLACK_NS
+    ledger.exec_windows.append((start, _RUN_START_NS + 1000 * _MS, True, 0))
+
+    assert (ledger.key(str(target)) in ledger.written_files()) is counted
 
 
 def test_a_bare_output_is_not_looked_for_in_a_folder_nobody_named(tmp_path):

@@ -49,20 +49,15 @@ func TestHeadlessActionRewritesEveryRemedyShape(t *testing.T) {
 // renders Remedy.Action itself and must keep its keys.
 func TestReportStringIsKeystrokeFreeButRowsKeepTheirKeys(t *testing.T) {
 	scenarios := map[string]*fakeTransport{
-		"unreachable": newFake().with("GET /v1/email/init", 503, initUnreachable),
-		"too old":     newFake().with("GET /v1/email/init", 503, initTooOld),
-		"model":       newFake().with("GET /v1/email/init", 503, initModelMissing),
-		"mailbox":     newFake().with("GET /v1/email/connectors", 200, connectorsNone),
-		"no send":     newFake().with("GET /v1/email/connectors", 200, connectorsNoSend),
-		"no grant":    newFake().with("GET /v1/email/connectors", 200, connectorsNoGrant),
-		"creds dead":  newFake().with("POST /v1/email/search", 502, searchNoForwardedCredential),
-		"revoked":     newFake().with("POST /v1/email/search", 403, searchRevoked),
+		"unreachable": newFake().with("GET /v1/gaia/init", 503, initUnreachable),
+		"too old":     newFake().with("GET /v1/gaia/init", 503, initTooOld),
+		"model":       newFake().with("GET /v1/gaia/init", 503, initModelMissing),
 		"sidecar":     newFake().with("GET /daemon/v1/agents", 200, agentsStopped),
-		"wedged":      newFake().with("GET /v1/email/health", 503, healthWedged),
+		"wedged":      newFake().with("GET /v1/gaia/health", 503, healthWedged),
 	}
 	interactiveKeys := 0
 	for name, f := range scenarios {
-		rep := Check(context.Background(), f, EmailConfig())
+		rep := Check(context.Background(), f, testConfig())
 		out := rep.String()
 		if m := keystroke.FindString(out); m != "" {
 			t.Errorf("%s: one-shot report tells the reader to %q:\n%s", name, m, out)

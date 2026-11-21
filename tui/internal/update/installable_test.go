@@ -21,13 +21,14 @@ func TestCheckSkipsAReleaseWithNothingForThisMachine(t *testing.T) {
 		sums: map[string]string{
 			"v0.26.0/" + installerSums: sumsOf("gaia-agent-ui-0.26.0-x64-setup.exe"),
 			"v0.25.1/" + installerSums: sumsOf("gaia-0.25.1-win-x64-setup.exe"),
+			"v0.25.1/" + tuiSums:       sumsOf("gaia-cli-linux-amd64"),
 			"v0.25.0/" + installerSums: sumsOf("gaia_0.25.0_amd64.deb"),
 			"v0.25.0/" + tuiSums:       sumsOf("gaia-windows-amd64.exe"),
 		},
 	})
 
 	withHome(t)
-	withExecutable(t, `C:\Programs\GAIA Terminal Hub\gaia-tui.exe`, "windows")
+	withExecutable(t, `C:\Programs\GAIA Terminal Hub\gaia-cli.exe`, "windows")
 	st, err := Check(context.Background())
 	if err != nil || !st.Available || st.Latest.Tag != "v0.25.1" {
 		t.Fatalf("windows setup install offered %q (%v, %v); want v0.25.1", st.Latest.Tag, st.Available, err)
@@ -50,7 +51,7 @@ func TestCheckSkipsAReleaseWithNothingForThisMachine(t *testing.T) {
 	// A binary no installer put there is offered only a release with a build
 	// for this OS and architecture.
 	home := withHome(t)
-	withExecutable(t, home+"/src/gaia-tui.exe", "windows")
+	withExecutable(t, home+"/src/gaia-cli.exe", "windows")
 	goarch = "amd64"
 	st, err = Check(context.Background())
 	if err != nil || st.Latest.Tag != "v0.25.0" {
@@ -135,7 +136,7 @@ func TestGoingBackBeforeTheInstallersExistedSaysWhy(t *testing.T) {
 		},
 	})
 	withHome(t)
-	withExecutable(t, `C:\Programs\GAIA Terminal Hub\gaia-tui.exe`, "windows")
+	withExecutable(t, `C:\Programs\GAIA Terminal Hub\gaia-cli.exe`, "windows")
 
 	_, err := PlanTag(context.Background(), "v0.25.3")
 	if err == nil || !strings.Contains(err.Error(), "came out before GAIA had a Windows setup installer") {

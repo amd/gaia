@@ -7,6 +7,8 @@ the install. psutil's macOS cmdline read can raise ``SystemError`` for a live
 process, which used to fail the install outright.
 """
 
+from pathlib import Path
+
 import psutil
 import pytest
 
@@ -89,6 +91,31 @@ def test_a_sidecar_with_an_unreadable_cmdline_is_still_found_by_its_executable(
 
     with pytest.raises(StopFailedError, match="4242"):
         mod.assert_no_live_process_in(install_dir, "email")
+
+
+def test_a_path_many_processes_share_is_resolved_once(tmp_path, monkeypatch):
+    """Resolving a path is slow on Windows, and most processes share a few."""
+    install_dir = tmp_path / "agents" / "email"
+    browser = "/usr/bin/browser"
+    _machine(
+        monkeypatch,
+        [_Proc(pid, exe=browser, cmdline=[browser, "--tab"]) for pid in range(50)]
+        + [_Proc(4242, exe=str(install_dir / "email-agent"), cmdline=[])],
+    )
+    resolved = []
+    real_resolve = Path.resolve
+
+    def _counting_resolve(self, *args, **kwargs):
+        resolved.append(self)
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", _counting_resolve)
+
+    with pytest.raises(StopFailedError, match="4242"):
+        mod.assert_no_live_process_in(install_dir, "email")
+
+    assert resolved.count(Path(browser)) == 1
+    assert resolved.count(Path("--tab")) == 1
 
 
 def test_a_script_run_from_the_folder_is_found_by_its_cmdline(tmp_path, monkeypatch):

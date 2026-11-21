@@ -1,6 +1,6 @@
 ---
 name: "integrate-hub-agent"
-description: "Embeds one of this repo's pre-built hub agents (under hub/agents/) into a developer's own application. Use when a developer wants to integrate, add, embed, or wire a GAIA hub agent into their app, project, or codebase — e.g. 'integrate a hub agent into my app', 'add the <name> agent to my project', 'embed a GAIA agent', 'how do I use the email/gaia agent in my code'. Not for authoring a new agent (use gaia-agent-builder) or releasing/publishing one (use agent-hub-release)."
+description: "Embeds one of this repo's pre-built hub agents (under hub/agents/) into a developer's own application. Use when a developer wants to integrate, add, embed, or wire a GAIA hub agent into their app, project, or codebase — e.g. 'integrate a hub agent into my app', 'add the <name> agent to my project', 'embed a GAIA agent', 'how do I use the gaia agent in my code'. Not for authoring a new agent (use gaia-agent-builder) or releasing/publishing one (use agent-hub-release)."
 ---
 
 # Integrating a GAIA Hub Agent
@@ -10,7 +10,7 @@ This repo's `hub/` ships pre-built agents, each packaged for a developer to drop
 pin down **which** agent they mean, then **hand off to that agent's own guidance** —
 where the real, current, agent-specific steps live.
 
-The recipe is **agent-agnostic.** Any agent named below (e.g. npm `agent-email`) is a
+The recipe is **agent-agnostic.** Any agent named below (e.g. npm `@amd-gaia/gaia`) is a
 labeled example of its shape, never the subject. Discover the real agent set live —
 never trust a hardcoded list.
 
@@ -21,8 +21,8 @@ Hub agents are one directory per agent, with a runtime subdir inside:
 changes:
 
 ```bash
-ls hub/agents/                 # one dir per agent (e.g. gaia, chat, email, …)
-ls hub/agents/email/           # an agent's runtimes (e.g. python, npm; cpp when present)
+ls hub/agents/                 # one dir per agent (e.g. gaia, chat, …)
+ls hub/agents/gaia/            # an agent's runtimes (e.g. python, npm; cpp when present)
 ```
 
 Treat whatever the listing returns as authoritative. A missing runtime subdir just
@@ -33,16 +33,16 @@ catalog of the python set if the developer is unsure what's available.
 
 Pin down a single `<name>/<runtime>` before integrating:
 
-- If the developer named an agent ("the email agent", "GAIA"), match it against the
+- If the developer named an agent ("the GAIA agent", "the flagship"), match it against the
   listing. Several names can diverge — watch for it: the friendly name, the
   **directory** (`<name>`), the registry **`id`** in `gaia-agent.yaml`, and the
   package/module names (the flagship's python module is `gaia_agent`, not
   `gaia_agent_gaia`; its npm package is `@amd-gaia/gaia`). The directory is how you find the
   package; the **`id`** is what you pass when invoking a python agent (Step 3).
-- The same capability can ship in more than one runtime (the email agent is npm
-  `agent-email` **and** python `email`). Confirm the runtime, since it picks the shape:
+- The same capability can ship in more than one runtime (the flagship is npm
+  `@amd-gaia/gaia` **and** python `gaia-agent-gaia`). Confirm the runtime, since it picks the shape:
   a JS/TS/Electron app wants the npm package; a Python app wants the python package.
-- If they described a capability ("triage my inbox", "analyze a CSV"), skim candidate
+- If they described a capability ("read my inbox", "analyze a CSV"), skim candidate
   agents' `gaia-agent.yaml` `description`/`tags` (python) or `package.json`
   `description` (npm) to find the match, then confirm with the developer.
 
@@ -64,7 +64,7 @@ The package is a **client for a local native sidecar**. Shape:
 No Python, no separate GAIA install — the frozen binary carries the agent. The sidecar
 usually serves **same-origin only**, so an Electron renderer drives it via main-process
 IPC, not a cross-origin fetch. The agent still needs a local model backend (Lemonade
-Server) for inference. Reference example: npm `agent-email`.
+Server) for inference. Reference example: npm `@amd-gaia/gaia`.
 
 ### python agents (`hub/agents/<name>/python/`)
 
@@ -107,8 +107,8 @@ instructions as the integration steps.** That file is itself a skill addressed t
 you, the assistant — it is the authoritative, agent-specific recipe, not something to
 merely mention to the developer. Follow its steps directly, and follow any deeper
 file it points to (e.g. a `SPEC.md` next to it) when its steps call for that detail.
-The npm `agent-email` package is the current working example: its `SKILL.md`
-(frontmatter `name: integrate-agent-email`) cascades into a `SPEC.md` for the full
+The npm `@amd-gaia/gaia` package is the current working example: its `SKILL.md`
+(frontmatter `name: integrate-gaia`) cascades into a `SPEC.md` for the full
 contract.
 
 **Branch B — no per-agent `SKILL.md`:**
@@ -122,7 +122,7 @@ integration steps from them (don't just list the files back to the developer):
    `package.json` for npm: the canonical `id`/package name, declared `models`,
    exposed `interfaces`, dependencies, and entry points.
 3. **Source entry point** — the package's entry module (python: `entry_module` /
-   `entry_class` in `gaia-agent.yaml`, e.g. `gaia_agent_email` / `EmailTriageAgent`; the
+   `entry_class` in `gaia-agent.yaml`, e.g. `gaia_agent` / `GaiaAgent`; the
    class usually lives in `<entry_module>/agent.py`; npm: the `main`/`exports` entry in
    `package.json`): the ground truth when README and manifest leave a gap.
 

@@ -20,6 +20,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Callable, Optional
 
+from gaia.client_hangups import quiet_client_hangups
 from gaia.daemon.constants import (
     API_PREFIX,
     AUTH_SCHEME,
@@ -95,6 +96,7 @@ def create_app(
     lemonade=None,
     lemonade_owner=None,
     lemonade_clients=None,
+    relay_turns=None,
 ):
     """Build the FastAPI app bound to this daemon's identity.
 
@@ -136,12 +138,18 @@ def create_app(
     *lemonade_clients* (a :class:`gaia.daemon.lemonade_clients.LemonadeClients`,
     given with *lemonade_owner*) mounts ``/daemon/v1/lemonade/clients``, where
     front ends register while they use GAIA's Lemonade and release on exit.
+
+    *relay_turns* (a :class:`gaia.daemon.relay.RelayTurns`) counts the relay's
+    open streams; pass the one *lemonade_clients* reads. One is made when
+    *registry* is given without it.
     """
     import anyio
     from fastapi import Depends, FastAPI, HTTPException
 
     @asynccontextmanager
     async def lifespan(_app):
+        # A client quitting mid-connection is not an error here.
+        quiet_client_hangups(asyncio.get_running_loop())
         # A client resetting a queued connection must not close the listener.
         keep_listening_after_client_resets(asyncio.get_running_loop())
         if on_startup is not None:
@@ -162,8 +170,7 @@ def create_app(
     )
 
     require_token = build_require_token(token)
-    relay_turns = None
-    if registry is not None:
+    if registry is not None and relay_turns is None:
         from gaia.daemon.relay import RelayTurns
 
         relay_turns = RelayTurns()

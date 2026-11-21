@@ -77,7 +77,7 @@ describe('apiFetch non-JSON handling', () => {
 
 /**
  * #2117 — authorizeConnector forwards `grant_agents` so connecting a mailbox
- * grants it to the email agent in the same flow.
+ * grants it to the agent in the same flow.
  */
 describe('authorizeConnector grant_agents', () => {
     beforeEach(() => {
@@ -97,10 +97,10 @@ describe('authorizeConnector grant_agents', () => {
         (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
             jsonResponse({ flow_id: 'f1', authorization_url: 'https://auth' }),
         );
-        await authorizeConnector('google', ['openid'], ['installed:email']);
+        await authorizeConnector('google', ['openid'], ['installed:gaia']);
         expect(lastBody()).toEqual({
             scopes: ['openid'],
-            grant_agents: ['installed:email'],
+            grant_agents: ['installed:gaia'],
         });
     });
 
