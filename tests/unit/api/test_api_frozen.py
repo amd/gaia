@@ -3,7 +3,7 @@
 """``gaia api`` in the frozen gaia, where the flagship can never be imported.
 
 v0.26.0-rc18's frozen gaia started the server, listed the 'gaia' model, then
-answered every chat completion with 404 "No module named 'gaia_agent'" and a
+answered every chat completion with 404 "No module named 'gaiapy'" and a
 remedy spliced from two messages. It now refuses at startup with one message.
 """
 
@@ -25,7 +25,7 @@ def frozen(monkeypatch):
 
 @pytest.fixture
 def no_flagship(monkeypatch):
-    for name in ("gaia_agent", "gaia_agent.agent"):
+    for name in ("gaiapy", "gaiapy.agent"):
         monkeypatch.setitem(sys.modules, name, None)
 
 
@@ -60,7 +60,7 @@ def test_reason_only_for_a_frozen_build_without_the_agent(monkeypatch, no_flagsh
 
 
 def test_reason_is_none_when_the_agent_imports(frozen):
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     assert api_unavailable_reason() is None
 
 

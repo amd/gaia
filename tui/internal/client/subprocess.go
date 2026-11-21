@@ -746,7 +746,7 @@ const queryKey = "gaia_query"
 // RespondToolPermission/SetFullAccess do) would sit unread in the OS
 // pipe buffer until some LATER, unrelated Send() call started scanning again —
 // at which point it would be misread as the first event of THAT turn. This is
-// why live model switching (`/model`, gaia_agent.stdio.run_model_command) does
+// why live model switching (`/model`, gaiapy.stdio.run_model_command) does
 // NOT use this channel despite looking like a natural fit: it needs an actual
 // response (the switched-to model, or why the switch was refused), so it rides
 // the ordinary query channel (Send) like a real turn instead, guaranteeing a
@@ -937,7 +937,7 @@ func (s *SubprocessClient) ClaudeAtLaunch() bool {
 // could disagree. It is what lets the chip say "claude · haiku-4.5" from the
 // first frame instead of a bare "claude" -- the agent's own model-state ping
 // is authoritative, but it is not read until the first turn (see
-// gaia_agent.stdio.main), which on a session that opens and waits is never.
+// gaiapy.stdio.main), which on a session that opens and waits is never.
 func (s *SubprocessClient) ClaudeModelAtLaunch() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

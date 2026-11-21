@@ -48,7 +48,7 @@ def build_session_agent(**config_kwargs: Any):
     Imported lazily so this module stays dependency-light until a session is
     actually created. Tests monkeypatch this attribute to inject a fake agent.
     """
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     with AGENT_BUILD_LOCK:
         return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
@@ -64,7 +64,7 @@ def _permission_state():
     tools run unasked and the shell runs any command. The caller-auth token
     decides who may turn it on.
     """
-    from gaia_agent.stdio import PermissionState
+    from gaiapy.stdio import PermissionState
 
     return PermissionState()
 
@@ -189,7 +189,7 @@ class _AgentSession:
     def switch_model(self, target: str) -> str:
         """Move this session's retained agent onto *target*, keeping the chat.
 
-        Delegates to ``gaia_agent.stdio.switch_model`` — the same in-place client
+        Delegates to ``gaiapy.stdio.switch_model`` — the same in-place client
         swap the stdio transport's ``/model`` performs, and the reason a switch
         keeps ``conversation_history`` and ``loaded_skills`` instead of
         destroying them the way a rebuilt agent would. Two implementations of
@@ -201,8 +201,8 @@ class _AgentSession:
         Returns the friendly display name. Raises ``RuntimeError`` with an
         actionable message on failure, having left the agent untouched.
         """
-        from gaia_agent.stdio import is_claude_model
-        from gaia_agent.stdio import switch_model as _switch
+        from gaiapy.stdio import is_claude_model
+        from gaiapy.stdio import switch_model as _switch
 
         display = _switch(self.agent, target)
         self.model_id = target

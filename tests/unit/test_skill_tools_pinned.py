@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from gaia.agents.base.agent import Agent  # noqa: E402
 from gaia.agents.base.tool_loader import ToolLoader  # noqa: E402

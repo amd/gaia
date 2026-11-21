@@ -609,10 +609,10 @@ class _ParkedWebAgent:
 def live_flagship(monkeypatch):
     """The real flagship sidecar app on a local port, with a parked web agent."""
     uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("gaia_agent")
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    pytest.importorskip("gaiapy")
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     from gaia.daemon.sidecars.manager import find_free_port
 
@@ -722,8 +722,8 @@ def test_switching_off_mid_turn_stops_the_flagships_next_web_search(
 def test_switching_off_while_a_turn_starts_stops_the_flagships_web_search(
     relayed_db, running_relays, live_flagship, monkeypatch, flip_when
 ):
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     proxy, gate, agents = live_flagship
     session = relayed_db.create_session(agent_type="gaia")

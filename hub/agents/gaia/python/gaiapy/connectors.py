@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """The flagship's declared connector requirements.
 
-Separate from :mod:`gaia_agent.agent` so ``build_gaia()`` can publish the same
+Separate from :mod:`gaiapy.agent` so ``build_gaia()`` can publish the same
 literal the agent class declares without importing the heavy agent module at
 registry-discovery time.
 """

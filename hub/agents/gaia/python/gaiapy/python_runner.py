@@ -73,7 +73,7 @@ def is_frozen() -> bool:
 _SOURCE_LAUNCHER = (
     "import sys; "
     f"sys.path[0] = {os.path.dirname(os.path.dirname(os.path.abspath(__file__)))!r}; "
-    "from gaia_agent.python_runner import run_python_file; "
+    "from gaiapy.python_runner import run_python_file; "
     "sys.path.pop(0); "
     "sys.exit(run_python_file(sys.argv[1:]))"
 )

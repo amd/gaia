@@ -363,7 +363,7 @@ def _full_access_chat(*, watched: bool = True) -> SSEOutputHandler:
     declaring a person can answer. A sidecar session's own Full access lifts
     the gates (``test_full_access_runs_anything``).
     """
-    stdio = pytest.importorskip("gaia_agent.stdio")
+    stdio = pytest.importorskip("gaiapy.stdio")
     handler = SSEOutputHandler()
     stdio.PermissionState(full_access=True, lifts_shell_gates=False).attach(handler)
     handler.answers_confirmations = watched

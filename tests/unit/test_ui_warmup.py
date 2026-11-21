@@ -592,9 +592,9 @@ def _prefix(messages, tools):
 
 @pytest.fixture
 def ui_flagship(monkeypatch, tmp_path):
-    pytest.importorskip("gaia_agent")
-    pytest.importorskip("gaia_agent")
-    from gaia_agent.chat_agent import ChatAgent
+    pytest.importorskip("gaiapy")
+    pytest.importorskip("gaiapy")
+    from gaiapy.chat_agent import ChatAgent
 
     from gaia.agents.base.memory import MemoryMixin
     from gaia.agents.base.tools import _TOOL_REGISTRY

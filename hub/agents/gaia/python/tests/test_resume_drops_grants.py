@@ -14,9 +14,9 @@ from __future__ import annotations
 from unittest.mock import Mock
 
 import pytest
-from gaia_agent.chat_agent import ChatAgent
-from gaia_agent.interactive import interactive_mode
-from gaia_agent.session import SessionManager
+from gaiapy.chat_agent import ChatAgent
+from gaiapy.interactive import interactive_mode
+from gaiapy.session import SessionManager
 
 from gaia.agents.base.console import AgentConsole
 

@@ -12,12 +12,12 @@ import io
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 import uvicorn  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import stdio as stdio_mod  # noqa: E402
-from gaia_agent.agent import (  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import stdio as stdio_mod  # noqa: E402
+from gaiapy.agent import (  # noqa: E402
     SKILL_SET_ENV,
     GaiaAgent,
     GaiaAgentConfig,

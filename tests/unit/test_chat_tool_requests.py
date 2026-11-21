@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.tool_requests import requested_tools  # noqa: E402
+from gaiapy.tool_requests import requested_tools  # noqa: E402
 
 REGISTRY = {
     "run_shell_command",

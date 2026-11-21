@@ -20,10 +20,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.agent import GaiaAgent  # noqa: E402
-from gaia_agent.chat_agent import ChatAgent  # noqa: E402
+from gaiapy.agent import GaiaAgent  # noqa: E402
+from gaiapy.chat_agent import ChatAgent  # noqa: E402
 
 
 def _manager(stop=None):

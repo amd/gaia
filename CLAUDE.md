@@ -634,7 +634,7 @@ gaia/
 │   ├── fixtures/       # Shared test fixtures/data
 │   └── test_*.py       # Top-level feature tests (sdk, api, chat, code, rag, eval…)
 ├── hub/                # Packages GAIA ships — agents/<id>/{npm,python}/, skills/, components/
-│   └── agents/gaia/python/  # gaiapy: the Python harness (package gaia_agent, binary gaia-agent)
+│   └── agents/gaia/python/  # gaiapy: the Python harness (package gaiapy, binary gaia-agent)
 ├── cpp/                # C++17 agent framework (CMake project gaia-cpp)
 │   ├── agents/gaiacpp/ # gaiacpp: the native harness (binary gaiacpp)
 │   └── examples/       # Single-file demo agents (health, wifi, process, vlm…)
@@ -658,7 +658,7 @@ Agent UI and the TUI drive either one.
 
 | Harness | What it is | Source | Binary |
 |---------|------------|--------|--------|
-| `gaiapy` | The Python harness: every tool and feature, the default | `hub/agents/gaia/python/gaia_agent/` on the framework in `src/gaia/` | `gaia-agent` |
+| `gaiapy` | The Python harness: every tool and feature, the default | `hub/agents/gaia/python/gaiapy/` on the framework in `src/gaia/` | `gaia-agent` (also `gaiapy` from a pip install) |
 | `gaiacpp` | The native C++ harness: fast and light, fewer features, beta | `cpp/agents/gaiacpp/` on the framework in `cpp/` | `gaiacpp` |
 
 `flagship_agent` in `~/.gaia/config.json` (`gaiapy` or `gaiacpp`) picks one;
@@ -709,7 +709,7 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 | Agent | Description |
 |-------|-------------|
 | **GaiaAgent** | The flagship — conversation, documents, data, web, memory, skills — hub (`gaia/`) |
-| **ChatAgent** | The flagship's base class, in the flagship package (`gaia/`, `gaia_agent.chat_agent`). Its old `chat`/`doc`/`file` ids resolve to `gaia`; the `gaia-agent-chat` re-export shim was removed in #6103 |
+| **ChatAgent** | The flagship's base class, in the flagship package (`gaia/`, `gaiapy.chat_agent`). Its old `chat`/`doc`/`file` ids resolve to `gaia`; the `gaia-agent-chat` re-export shim was removed in #6103 |
 
 Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
 docker, blender, sd, emr, routing) were **deleted**. Most of their capability is now the flagship's
@@ -875,7 +875,7 @@ adaptive memory/skills/recovery, desktop-installer, browser-use, eval-hillclimbi
 Browse the directory rather than a partial list here.
 
 **Key architectural decisions (April 2026):**
-- **GaiaAgent** rename (#696) landed, but resolved differently than planned: rather than renaming `ChatAgent`, `GaiaAgent` became the flagship (`hub/agents/gaia/python/gaia_agent/agent.py`) and `ChatAgent` (`hub/agents/gaia/python/gaia_agent/chat_agent.py`, folded into the flagship package in #6099) was kept as its base class — see [Agent Implementations](#agent-implementations)
+- **GaiaAgent** rename (#696) landed, but resolved differently than planned: rather than renaming `ChatAgent`, `GaiaAgent` became the flagship (`hub/agents/gaia/python/gaiapy/agent.py`) and `ChatAgent` (`hub/agents/gaia/python/gaiapy/chat_agent.py`, folded into the flagship package in #6099) was kept as its base class — see [Agent Implementations](#agent-implementations)
 - Voice-first is P0 enabling technology (#702)
 - No context compaction — memory + RAG handles long conversations
 - Configuration dashboard + Observability dashboard as separate Agent UI panels

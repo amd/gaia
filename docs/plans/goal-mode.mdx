@@ -110,7 +110,7 @@ path they exercise:
 
 | Surface | Path (*exists today*) | Who loops |
 |---|---|---|
-| TUI, subprocess transport | flagship over stdio, `gaia_agent/stdio.py` | stdio host: one stdin query = one goal; per-round `goal_round` / `goal_verdict` events, then one terminal event |
+| TUI, subprocess transport | flagship over stdio, `gaiapy/stdio.py` | stdio host: one stdin query = one goal; per-round `goal_round` / `goal_verdict` events, then one terminal event |
 | TUI, daemon transport | relay through the daemon (`tui/internal/client/factory.go` picks by install state) | the sidecar, as for the Agent UI |
 | Agent UI, binary install | sidecar `POST /v1/gaia/query` | Agent UI backend: one relay per round |
 | Agent UI, wheel/dev install | in-process `GaiaAgent` (`ui/_chat_helpers.py`), the path `gaia eval agent` uses | Agent UI backend: one `process_query` per round |

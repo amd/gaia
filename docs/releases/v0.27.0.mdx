@@ -20,6 +20,8 @@ description: "Several mail accounts per provider, a browser pane in GAIA desktop
 - **The standalone email agent is removed** — `gaia email`, the `gaia-agent-email` and `@amd-gaia/agent-email` packages, the `/v1/email` routes and the `email` setup profile are gone. Ask GAIA about your mail in `gaia chat` or the Agent UI; see the [Email guide](/guides/email). Upgrading removes the old install and names any email it had scheduled, which won't be sent. (PR [#7108](https://github.com/amd/gaia/pull/7108))
 - **`gaia agent list` and `gaia eval benchmark` are removed** — `gaia agent list` now says what replaced it. (PR [#7108](https://github.com/amd/gaia/pull/7108))
 - **`gaia.ui.email_sidecar` is renamed `gaia.ui.sidecar`** — update the import. (PR [#7108](https://github.com/amd/gaia/pull/7108))
+- **The Python harness package is renamed `gaiapy`** — `import gaia_agent` still works and returns the same modules, and a `gaiapy` command starts the harness beside `gaia-agent`. This core needs the matching flagship: if you installed the flagship package (`gaia-agent-gaia`) with pip, upgrade it together with the core. (PR [#8711](https://github.com/amd/gaia/pull/8711))
+- **The `gaia-bash` C++ agent is removed** — `gaiacpp` runs the same shell tools. The `gaia-bash` binary and the `GAIA_BUILD_BASH_AGENT` CMake option are gone. (PR [#8706](https://github.com/amd/gaia/pull/8706))
 
 ## What's New
 

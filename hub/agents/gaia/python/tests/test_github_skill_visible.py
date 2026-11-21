@@ -11,7 +11,7 @@ When it did load the skill, the same kind of task passed in 15 steps.
 from __future__ import annotations
 
 import pytest
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 

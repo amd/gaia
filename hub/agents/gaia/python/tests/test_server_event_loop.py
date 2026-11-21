@@ -16,13 +16,13 @@ import uuid
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 import httpx  # noqa: E402
 import uvicorn  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import session_registry as sr  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import session_registry as sr  # noqa: E402
 
 _HEARTBEAT_S = 0.1
 _SLOW_SETUP_S = 1.5

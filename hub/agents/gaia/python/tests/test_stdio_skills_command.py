@@ -6,7 +6,7 @@ import io
 import json
 
 import pytest
-from gaia_agent import stdio
+from gaiapy import stdio
 
 from gaia.skills import link
 

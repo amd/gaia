@@ -1878,7 +1878,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		// refusal) is the only line that belongs in the transcript. Still
 		// rides the real query channel (startTurn/Send), not the
 		// fire-and-forget control one /full-access uses — see
-		// gaia_agent.stdio.run_model_command for why.
+		// gaiapy.stdio.run_model_command for why.
 		m.awaitingModelSwitch = true
 		m.switchTarget = modelCommandArg(query)
 		m.switchedTo = savedChoice{}

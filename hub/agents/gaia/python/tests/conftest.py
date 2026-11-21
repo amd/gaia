@@ -67,8 +67,8 @@ def make_flagship(monkeypatch, tmp_path):
     import json
 
     import numpy as np
-    from gaia_agent.agent import GaiaAgent
-    from gaia_agent.chat_agent import ChatAgent
+    from gaiapy.agent import GaiaAgent
+    from gaiapy.chat_agent import ChatAgent
 
     from gaia.agents.base.history import SessionHistory
     from gaia.agents.base.memory import MemoryMixin

@@ -413,13 +413,13 @@ to defer and simply loads.
 ### Bundled skills: code trusted by provenance
 
 A skill that ships **inside GAIA** — the flagship's starter pack in
-`hub/skills/<name>/` and its own `gaia_agent/skills/` — needs no promote. It
+`hub/skills/<name>/` and its own `gaiapy/skills/` — needs no promote. It
 loads from the `agent-bundled` root, which has no `skill-lock.json`, so its
 `tools.py` registers on the first `load_skill` and its `scripts/` are on disk
 beside it. In a checkout the flagship reads `hub/skills` in place, and only
 when it runs from that checkout's `hub/agents/gaia/python/`: an installed
 package never treats a folder beside it as bundled. The frozen binary carries
-the pack under `gaia_agent/skills`, and the build fails if any `.py` in a
+the pack under `gaiapy/skills`, and the build fails if any `.py` in a
 bundled skill imports a module the binary would not contain. An import inside a `try`
 that catches `ImportError`, or under `if TYPE_CHECKING:`, is optional: it is
 bundled when installed and never fails the build.

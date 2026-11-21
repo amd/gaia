@@ -105,7 +105,7 @@ def make_rag(
 def agent_query_tool(rag) -> Callable[[str], dict]:
     """The registered ``query_documents`` tool, bound to ``rag`` as the flagship binds it."""
     try:
-        from gaia_agent.agent import (  # pylint: disable=import-outside-toplevel
+        from gaiapy.agent import (  # pylint: disable=import-outside-toplevel
             GaiaAgent,
         )
     except ImportError as e:

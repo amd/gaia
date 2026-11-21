@@ -206,8 +206,8 @@ def test_a_shell_command_cannot_clear_the_marker():
 
 
 def test_a_python_tool_child_and_its_children_carry_the_marker(tmp_path):
-    pytest.importorskip("gaia_agent")
-    from gaia_agent.python_jobs import run_python_job
+    pytest.importorskip("gaiapy")
+    from gaiapy.python_jobs import run_python_job
 
     grandchild = (
         "import os, subprocess, sys\n"

@@ -29,7 +29,7 @@ TOOLS = {
 
 @pytest.fixture(scope="module")
 def flagship():
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     return GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
 
@@ -56,14 +56,14 @@ def test_loading_the_skill_registers_its_tools(flagship, tmp_path):
 
 def test_default_tool_count_is_unchanged_by_the_skill():
     """Skill tools are opt-in, so the documented default surface stays put."""
-    import gaia_agent
+    import gaiapy
 
     manifest = yaml.safe_load(
         (_REPO_ROOT / "hub/agents/gaia/python/gaia-agent.yaml").read_text(
             encoding="utf-8"
         )
     )
-    assert gaia_agent.build_gaia().tools_count == manifest["tools_count"]
+    assert gaiapy.build_gaia().tools_count == manifest["tools_count"]
     matrix = (_REPO_ROOT / "hub/agents/gaia/CAPABILITY_MATRIX.md").read_text(
         encoding="utf-8"
     )

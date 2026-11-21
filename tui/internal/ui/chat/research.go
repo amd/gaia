@@ -16,7 +16,7 @@ import (
 
 // Research mode. `/research <topic>` sends one research turn: the agent loads
 // its research-report skill and writes a report citing every page it read
-// (gaia_agent.research). A bare `/research` switches research mode on or off,
+// (gaiapy.research). A bare `/research` switches research mode on or off,
 // the TUI's form of the Agent UI's Research switch: while it is on, every
 // message is sent as `/research <message>`.
 

@@ -8,7 +8,7 @@ runs is decided here, and **nothing heavy is imported until the decision is
 made**.
 
 That last part is the whole reason this module exists rather than the dispatch
-living in :mod:`gaia_agent.server`. ``server`` imports FastAPI, Starlette and
+living in :mod:`gaiapy.server`. ``server`` imports FastAPI, Starlette and
 Pydantic at module scope and builds the ASGI app on import — and FastAPI is not
 a dependency of the base install, it ships in the ``[ui]``/``[api]`` extras. A
 console script pointing at ``server:main`` would therefore make the *stdio*
@@ -150,7 +150,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         else:
             install_daemon_keyring_from_env()
-        from gaia_agent.server import serve_http
+        from gaiapy.server import serve_http
 
         return serve_http(args)
 
@@ -168,13 +168,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     _configure_logging()
     route_console_logging_to_stderr()
 
-    from gaia_agent.stdio import main as stdio_main
+    from gaiapy.stdio import main as stdio_main
 
     return stdio_main(args)
 
 
 if __name__ == "__main__":  # pragma: no cover
-    # `python -m gaia_agent.entry` must behave exactly like the installed
+    # `python -m gaiapy.entry` must behave exactly like the installed
     # console script — that is how the CLI smoke test exercises an entry point
     # without depending on PATH, and a module that runs nothing under -m looks
     # like a binary that produces no output.
