@@ -772,6 +772,8 @@ class SkillLibraryToolsMixin:
         # Activation
         # ------------------------------------------------------------------
 
+        # A model not offered install_skill gets Agent._fit_load_skill_hint's
+        # ``name`` wording instead.
         @tool
         def load_skill(name: str) -> dict:
             """Activate an installed skill and show its full instructions now.
@@ -781,9 +783,8 @@ class SkillLibraryToolsMixin:
             load_skill again to bring them back.
 
             Args:
-                name: Skill name, as shown by list_skills. If it is not listed,
-                    install it with install_skill if you have that tool;
-                    otherwise tell the user it is not installed.
+                name: Skill name, as shown by list_skills. Install it first
+                    with install_skill if list_skills does not show it.
 
             Returns:
                 Tier, directory (resolve relative paths against it), tools
