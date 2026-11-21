@@ -2163,7 +2163,9 @@ def test_every_file_the_request_asks_to_change_is_owed(tmp_path):
 
 
 def test_the_input_an_edit_draws_on_stays_read_only(tmp_path):
-    query = "Fix config.py using the traceback in app.log and save a summary to notes.md"
+    query = (
+        "Fix config.py using the traceback in app.log and save a summary to notes.md"
+    )
     ledger = _fixed_and_noted(tmp_path, query)
     write(ledger, "config.py")
     read(ledger, "config.py")

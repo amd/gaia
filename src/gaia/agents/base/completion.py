@@ -818,10 +818,7 @@ class CompletionEvidence:
         # Files the request names but never asks to produce or change: what it reads.
         self.inputs = {
             self.request_key(path) for path in mentioned_paths(self.query)
-        } - {
-            self.request_key(path)
-            for path in self.outputs + edit_targets(self.query)
-        }
+        } - {self.request_key(path) for path in self.outputs + edit_targets(self.query)}
         # The paths the request names and their folders: where a bare output
         # ("also make tables.xlsx") lands.
         self.named_folders = list(
