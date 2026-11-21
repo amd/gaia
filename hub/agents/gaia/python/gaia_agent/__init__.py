@@ -24,6 +24,8 @@ class _OldNameFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     def find_spec(self, fullname, path=None, target=None):
         if not fullname.startswith(_OLD + "."):
             return None
+        if importlib.util.find_spec(_NEW + fullname[len(_OLD) :]) is None:
+            return None
         return importlib.util.spec_from_loader(fullname, self)
 
     def create_module(self, spec):

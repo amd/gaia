@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **The Python package is now `gaiapy`.** `import gaia_agent` and
+  `gaia_agent.<module>` still work and return the same modules, so code that
+  imports the old name keeps running. A `gaiapy` command now starts the harness
+  beside `gaia-agent`. A core that imports `gaiapy` needs this flagship or newer;
+  with an older one installed, `gaia chat` relays through the daemon until the
+  flagship is upgraded.
 - **A conversation can't read another conversation's documents.** Every
   document dragged into any chat sat in GAIA's documents folder, which every
   chat may use, so a chat could list and read the others'. Those copies now

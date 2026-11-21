@@ -3,6 +3,7 @@
 """``gaia_agent``, the package's old name, still imports and is ``gaiapy`` itself."""
 
 import importlib
+import importlib.util
 import subprocess
 import sys
 
@@ -29,7 +30,13 @@ def test_the_old_name_works_when_it_is_imported_first():
         "import gaia_agent.entry as old, gaiapy.entry as new, sys; "
         "sys.exit(0 if old is new and old.main is new.main else 1)"
     )
-    assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
+    done = subprocess.run([sys.executable, "-c", code], check=False, timeout=60)
+    assert done.returncode == 0
+
+
+def test_find_spec_does_not_invent_a_missing_submodule():
+    assert importlib.util.find_spec("gaia_agent.no_such_module") is None
+    assert importlib.util.find_spec("gaia_agent.tool_bundles") is not None
 
 
 def test_a_missing_submodule_still_raises_import_error():
