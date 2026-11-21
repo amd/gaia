@@ -14777,6 +14777,537 @@ Do NOT wrap conversational replies in JSON.
                 self.console.print_goal(goal)
         return None
 
+    def _run_native_tool_calls(self, turn: _TurnState) -> Optional[str]:
+        """Run the native tool calls the model sent, one after another.
+
+        Returns "break" or "continue" when the step loop must do that, else None.
+        """
+        if turn.parsed.get("tool_calls"):
+            tc_list = turn.parsed["tool_calls"]
+            any_error = False
+            turn.last_error = None
+            fanout_repeat_break = False
+            post_tool_messages = []
+
+            # One response's calls are one attempt to the failure breaker.
+            self._turn_scope.begin_batch()
+            for fan_idx, tc in enumerate(tc_list):
+                turn.tool_name = tc["name"]
+                turn.tool_args = tc["tool_args"]
+                tool_call_id = tc["id"]
+                logger.debug(
+                    "Tool call %d/%d: %s with args %s",
+                    fan_idx + 1,
+                    len(tc_list),
+                    turn.tool_name,
+                    turn.tool_args,
+                )
+
+                # Display the tool call in real-time
+                self.console.print_tool_usage(turn.tool_name)
+                # Sent even when empty: it is what releases the call to the wire.
+                self.console.pretty_print_json(turn.tool_args, "Arguments")
+                self.console.start_progress(f"Executing {turn.tool_name}")
+
+                # Loop detection — same shape as legacy path so
+                # repeated calls across iterations are still caught.
+                turn.current_call = self._loop_guard_key(turn.tool_name, turn.tool_args)
+                turn.tool_call_history.append(turn.current_call)
+                turn.tool_call_log.append((turn.tool_name, str(turn.tool_args)))
+                if len(turn.tool_call_history) > turn.loop_window:
+                    turn.tool_call_history.pop(0)
+                turn.consecutive_count = _repeat_count(turn.tool_call_history)
+                if turn.consecutive_count >= self.max_consecutive_repeats:
+                    self.console.stop_progress()
+                    self._close_unrun_tool_card()
+                    # NATIVE path appends results to ``previous_outputs``
+                    # (line 3387), not ``step_results``. Unwrap the
+                    # ``result`` field so the helper sees actual tool
+                    # results, not the wrapper dicts.
+                    turn.recent_results = [
+                        o.get("result") for o in turn.previous_outputs
+                    ]
+                    if turn.current_call not in turn.loop_corrected_calls:
+                        turn.loop_corrected_calls.add(turn.current_call)
+                        # Sent as this call's result so tool_call_id pairing holds.
+                        turn.messages.append(
+                            self._create_tool_message(
+                                turn.tool_name,
+                                self._loop_correction_result(
+                                    turn.tool_name,
+                                    turn.consecutive_count - 1,
+                                    turn.recent_results,
+                                ),
+                                tool_call_id=tool_call_id,
+                            )
+                        )
+                        continue
+                    self.console.print_repeated_tool_warning()
+                    turn.final_answer, turn.steps_taken = (
+                        self._answer_after_repeated_calls(
+                            turn.tool_name,
+                            turn.consecutive_count - 2,
+                            turn.recent_results,
+                            turn.messages,
+                            turn.conversation,
+                            turn.steps_taken,
+                        )
+                    )
+                    if turn.final_answer is None:
+                        turn.cancelled_by_console = True
+                    else:
+                        turn.loop_break_answer_unprinted = True
+                    fanout_repeat_break = True
+                    break
+
+                # Execute
+                turn.tool_result = self._execute_tool_timed(
+                    turn.tool_name, turn.tool_args
+                )
+                self.console.stop_progress()
+                if self._is_throttled_result(turn.tool_result):
+                    # Never ran, so not a repeat. Bounded: the shell
+                    # limiter's windows drain within a few capped waits.
+                    turn.tool_call_history.pop()
+                    self._wait_out_rate_limit(turn.tool_result)
+
+                # Result-based dedup for query family tools
+                turn._QUERY_TOOLS = (
+                    "query_documents",
+                    "query_specific_file",
+                )
+                if turn.tool_name in turn._QUERY_TOOLS:
+                    turn.result_key = f"{turn.tool_name}:{hash(str(turn.tool_result))}"
+                    turn.query_result_cache[turn.result_key] = (
+                        turn.query_result_cache.get(turn.result_key, 0) + 1
+                    )
+                    if turn.query_result_cache[turn.result_key] >= 2:
+                        logger.debug(
+                            "[DEDUP] Same query result returned %d times "
+                            "— injecting stop signal",
+                            turn.query_result_cache[turn.result_key],
+                        )
+                        turn.dedup_msg = (
+                            f"[SYSTEM] You have received this same result "
+                            f"from {turn.tool_name} "
+                            f"{turn.query_result_cache[turn.result_key]} times. "
+                            "Querying again will not yield new "
+                            "information. STOP querying and answer "
+                            "directly from what you have retrieved, "
+                            "OR check your prior turn responses for "
+                            "relevant data, OR state that the "
+                            "information was not found in the document."
+                        )
+                        post_tool_messages.append(
+                            {"role": "user", "content": turn.dedup_msg}
+                        )
+
+                # Input-based dedup for mutation tools: catch an
+                # identical mutation re-issue at the first repeat. Errored
+                # calls are skipped so a rejected retry isn't mistaken for
+                # an applied change.
+                self._dedup_mutation_call(
+                    turn.tool_name,
+                    turn.tool_args,
+                    turn.mutation_call_cache,
+                    post_tool_messages,
+                    turn.tool_result,
+                )
+
+                # Domain hooks. A returned plan switches the agent into
+                # STATE_EXECUTING_PLAN for prereq-style recovery. The
+                # base impl returns None but the hook's annotation is
+                # Optional[List[...]] — silence pylint's None-inference.
+                # pylint: disable-next=assignment-from-none
+                turn._next_plan = self._post_process_tool_result(
+                    turn.tool_name, turn.tool_args, turn.tool_result
+                )
+                if turn._next_plan is not None:
+                    self._inject_recovery_plan(turn._next_plan)
+
+                # Truncate large results before logging
+                turn.truncated_result = self._handle_large_tool_result(
+                    turn.tool_name,
+                    turn.tool_result,
+                    turn.conversation,
+                    turn.tool_args,
+                )
+
+                self.console.pretty_print_json(turn.tool_result, "Result")
+                self.console.print_tool_complete()
+
+                turn.previous_outputs.append(
+                    {
+                        "tool": turn.tool_name,
+                        "args": turn.tool_args,
+                        "result": turn.truncated_result,
+                    }
+                )
+
+                # Append the tool result message with the *real*
+                # tool_call_id from the originating call so the next
+                # LLM round can correlate this result with the right
+                # call in the prior assistant turn.
+                turn.messages.append(
+                    self._create_tool_message(
+                        turn.tool_name,
+                        turn.truncated_result,
+                        tool_call_id=tool_call_id,
+                    )
+                )
+
+                if self._turn_scope.turn_should_end:
+                    turn.final_answer, turn.steps_taken = self._end_turn_on_scope(
+                        turn.tool_name,
+                        turn.messages,
+                        turn.conversation,
+                        turn.steps_taken,
+                    )
+                    if turn.final_answer is None:
+                        turn.cancelled_by_console = True
+                    else:
+                        turn.loop_break_answer_unprinted = True
+                    fanout_repeat_break = True
+                    break
+
+                # Track errors but DON'T break early — drain all N
+                # tool calls first so conversation history reflects
+                # the full set.
+                turn.is_error = Agent._is_error_result(turn.tool_result)
+                if turn.is_error:
+                    turn.failed = tool_result_error_fields(turn.tool_result)
+                    turn.error_count += 1
+                    turn.last_error = (
+                        turn.failed.get("error_brief")
+                        or turn.failed.get("error")
+                        or turn.failed.get("stderr")
+                        or turn.failed.get("hint")
+                        or turn.failed.get("suggested_fix")
+                        or (
+                            "Command failed with return code "
+                            f"{turn.failed.get('return_code')}"
+                        )
+                    )
+                    logger.warning(
+                        "Tool execution error in parallel call "
+                        "%d/%d (count: %d): %s",
+                        fan_idx + 1,
+                        len(tc_list),
+                        turn.error_count,
+                        turn.last_error,
+                    )
+                    if not turn.failed.get("error_displayed"):
+                        # any_error below switches to STATE_ERROR_RECOVERY
+                        # and retries — not a fatal top-level failure
+                        # (the archive_message_batch repro).
+                        self.console.print_error(turn.last_error, recoverable=True)
+                    any_error = True
+            self._turn_scope.end_batch()
+
+            # Anthropic and other spec-strict providers require all native
+            # tool results to immediately follow the assistant tool-call
+            # turn. Dedup guidance belongs after the complete result group.
+            turn.messages.extend(post_tool_messages)
+
+            if fanout_repeat_break:
+                return "break"  # break outer while
+
+            if any_error:
+                # All N results have been appended. Now transition to
+                # error recovery so the next LLM round can react.
+                self.execution_state = self.STATE_ERROR_RECOVERY
+                self.console.print_state_info(
+                    "ERROR RECOVERY: Handling tool execution failure"
+                )
+                self._record_step_stats(
+                    turn.response_stats,
+                    turn.steps_taken,
+                    turn.step_timer,
+                    turn.conversation,
+                )
+                return "continue"
+        return None
+
+    def _run_embedded_tool_call(self, turn: _TurnState) -> Optional[str]:
+        """Run a tool call the model wrote inside its JSON reply.
+
+        Returns "break" or "continue" when the step loop must do that, else None.
+        """
+        if (
+            turn.parsed.get("tool")
+            and "tool_args" in turn.parsed
+            and not turn.parsed.get("tool_calls")
+        ):
+
+            # Display the current plan with the current step highlighted
+            if self.current_plan:
+                self.console.print_plan(self.current_plan, self.current_step)
+
+            # When both plan and tool are present, prioritize the plan execution
+            # If we have a plan, we should execute from the plan, not the standalone tool call
+            if (
+                "plan" in turn.parsed
+                and self.current_plan
+                and self.total_plan_steps > 0
+            ):
+                # Skip the standalone tool execution and let the plan execution handle it
+                # The plan execution logic will handle this in the next iteration
+                logger.debug(
+                    "Plan and tool both present - deferring to plan execution logic"
+                )
+                return "continue"  # Skip tool execution, let plan execution handle it
+
+            # If this was a single-step plan, mark as completed after tool execution
+            if self.total_plan_steps == 1:
+                logger.debug(
+                    "Single-step plan will be marked completed after tool execution"
+                )
+                self.execution_state = self.STATE_COMPLETION
+
+            turn.tool_name = turn.parsed["tool"]
+            turn.tool_args = turn.parsed["tool_args"]
+            logger.debug(
+                f"Tool call detected: {turn.tool_name} with args {turn.tool_args}"
+            )
+
+            # Display the tool call in real-time
+            self.console.print_tool_usage(turn.tool_name)
+
+            # Sent even when empty: it is what releases the call to the wire.
+            self.console.pretty_print_json(turn.tool_args, "Arguments")
+
+            # Start progress indicator for tool execution
+            self.console.start_progress(f"Executing {turn.tool_name}")
+
+            # Check for repeated tool calls (allow up to 3 identical calls)
+            turn.current_call = self._loop_guard_key(turn.tool_name, turn.tool_args)
+            turn.tool_call_history.append(turn.current_call)
+            turn.tool_call_log.append(
+                (turn.tool_name, str(turn.tool_args))
+            )  # Full unbounded log for workflow guards
+
+            # Enough recent calls to see a short cycle repeat to the limit
+            if len(turn.tool_call_history) > turn.loop_window:
+                turn.tool_call_history.pop(0)
+
+            # Back-to-back repeats of this call, or of the cycle it closes
+            turn.consecutive_count = _repeat_count(turn.tool_call_history)
+
+            # Stop after max_consecutive_repeats identical calls
+            if turn.consecutive_count >= self.max_consecutive_repeats:
+                # Stop progress indicator
+                self.console.stop_progress()
+                self._close_unrun_tool_card()
+
+                # Not ``step_results``: error recovery clears it before each retry.
+                turn.recent_results = [o.get("result") for o in turn.previous_outputs]
+                if turn.current_call not in turn.loop_corrected_calls:
+                    turn.loop_corrected_calls.add(turn.current_call)
+                    turn.messages.append(
+                        self._create_tool_message(
+                            turn.tool_name,
+                            self._loop_correction_result(
+                                turn.tool_name,
+                                turn.consecutive_count - 1,
+                                turn.recent_results,
+                            ),
+                        )
+                    )
+                    return "continue"
+
+                self.console.print_repeated_tool_warning()
+                turn.final_answer, turn.steps_taken = self._answer_after_repeated_calls(
+                    turn.tool_name,
+                    turn.consecutive_count - 2,
+                    turn.recent_results,
+                    turn.messages,
+                    turn.conversation,
+                    turn.steps_taken,
+                )
+                if turn.final_answer is None:
+                    turn.cancelled_by_console = True
+                else:
+                    turn.loop_break_answer_unprinted = True
+                return "break"
+
+            # Execute the tool
+            turn.tool_result = self._execute_tool_timed(turn.tool_name, turn.tool_args)
+
+            # Stop progress indicator
+            self.console.stop_progress()
+            if self._is_throttled_result(turn.tool_result):
+                # Never ran, so not a repeat. Bounded: the shell limiter's
+                # windows drain within a few capped waits.
+                turn.tool_call_history.pop()
+                self._wait_out_rate_limit(turn.tool_result)
+
+            if _is_image_tool(turn.tool_name):
+                turn.capability_tool_last_succeeded = not tool_result_failed(
+                    turn.tool_result, FAILED_STATUSES
+                )
+
+            # Mirror the plan-execution branch so
+            # ``step_results`` is consistent regardless of whether the
+            # LLM emitted a multi-step plan or a series of single-tool
+            # responses.  Downstream consumers (parse-error recovery
+            # prompt, give-up fallback) read ``step_results`` for the
+            # canonical ``image_path`` — without this append, the
+            # legacy single-tool path leaves them empty-handed.
+            turn.step_results.append(turn.tool_result)
+            if (
+                isinstance(turn.tool_result, dict)
+                and turn.tool_result.get("status") == "success"
+                and turn.tool_result.get("operation") == "edit_file"
+                and turn.tool_result.get("file_path")
+            ):
+                self._turn_file_edits.append(
+                    {
+                        "file_path": turn.tool_result["file_path"],
+                        "backup_path": turn.tool_result.get("backup_path"),
+                    }
+                )
+
+            # Result-based dedup: if this tool (query family) returns the same result
+            # it returned in a prior call, inject a correction so the agent stops looping.
+            turn._QUERY_TOOLS = (
+                "query_documents",
+                "query_specific_file",
+            )
+            if turn.tool_name in turn._QUERY_TOOLS:
+                turn.result_key = f"{turn.tool_name}:{hash(str(turn.tool_result))}"
+                turn.query_result_cache[turn.result_key] = (
+                    turn.query_result_cache.get(turn.result_key, 0) + 1
+                )
+                if turn.query_result_cache[turn.result_key] >= 2:
+                    logger.debug(
+                        "[DEDUP] Same query result returned %d times — injecting stop signal",
+                        turn.query_result_cache[turn.result_key],
+                    )
+                    turn.dedup_msg = (
+                        f"[SYSTEM] You have received this same result from {turn.tool_name} "
+                        f"{turn.query_result_cache[turn.result_key]} times. "
+                        "Querying again will not yield new information. "
+                        "STOP querying and answer directly from what you have retrieved, "
+                        "OR check your prior turn responses for relevant data, "
+                        "OR state that the information was not found in the document."
+                    )
+                    turn.messages.append({"role": "user", "content": turn.dedup_msg})
+
+            # Input-based dedup for mutation tools: catch an
+            # identical mutation re-issue at the first repeat. Errored calls
+            # are skipped so a rejected retry isn't mistaken for an applied
+            # change.
+            self._dedup_mutation_call(
+                turn.tool_name,
+                turn.tool_args,
+                turn.mutation_call_cache,
+                turn.messages,
+                turn.tool_result,
+            )
+
+            # Handle domain-specific post-processing.
+            # A returned plan switches into STATE_EXECUTING_PLAN. The
+            # base impl returns None but the hook's annotation is
+            # Optional[List[...]] — silence pylint's None-inference.
+            # pylint: disable-next=assignment-from-none
+            turn._next_plan = self._post_process_tool_result(
+                turn.tool_name, turn.tool_args, turn.tool_result
+            )
+            if turn._next_plan is not None:
+                self._inject_recovery_plan(turn._next_plan)
+
+            # Handle large tool results
+            turn.truncated_result = self._handle_large_tool_result(
+                turn.tool_name, turn.tool_result, turn.conversation, turn.tool_args
+            )
+
+            # Display the tool result in real-time (show full result to user).
+            # Emit result BEFORE complete so SSE latency is captured.
+            self.console.pretty_print_json(turn.tool_result, "Result")
+            self.console.print_tool_complete()
+
+            # Store the truncated output for future context
+            turn.previous_outputs.append(
+                {
+                    "tool": turn.tool_name,
+                    "args": turn.tool_args,
+                    "result": turn.truncated_result,
+                }
+            )
+
+            # Share tool output with subsequent LLM calls
+            turn.messages.append(
+                self._create_tool_message(turn.tool_name, turn.truncated_result)
+            )
+            self._recast_unpaired_tool_results(turn.messages)
+
+            if self._turn_scope.turn_should_end:
+                turn.final_answer, turn.steps_taken = self._end_turn_on_scope(
+                    turn.tool_name,
+                    turn.messages,
+                    turn.conversation,
+                    turn.steps_taken,
+                )
+                if turn.final_answer is None:
+                    turn.cancelled_by_console = True
+                else:
+                    turn.loop_break_answer_unprinted = True
+                return "break"
+
+            # For single-step plans, we still need to let the LLM process the result
+            # This is especially important for RAG queries where the LLM needs to
+            # synthesize the retrieved information into a coherent answer
+            if (
+                self.execution_state == self.STATE_COMPLETION
+                and self.total_plan_steps == 1
+            ):
+                logger.debug(
+                    "Single-step plan execution completed, requesting final answer from LLM"
+                )
+                # Don't break here - let the loop continue so the LLM can process the tool result
+                # The tool result has already been added to messages, so the next iteration
+                # will call the LLM with that result
+
+            # Check if tool execution resulted in an error (support multiple error formats)
+            turn.is_error = Agent._is_error_result(turn.tool_result)
+            if turn.is_error:
+                turn.failed = tool_result_error_fields(turn.tool_result)
+                turn.error_count += 1
+                # Prefer error_brief for logging (avoids duplicate formatted output)
+                turn.last_error = (
+                    turn.failed.get("error_brief")
+                    or turn.failed.get("error")
+                    or turn.failed.get("stderr")
+                    or turn.failed.get("hint")
+                    or turn.failed.get("suggested_fix")
+                    or f"Command failed with return code {turn.failed.get('return_code')}"
+                )
+                logger.warning(
+                    f"Tool execution error in plan (count: {turn.error_count}): {turn.last_error}"
+                )
+                # Only print if error wasn't already displayed by _execute_tool
+                if not turn.failed.get("error_displayed"):
+                    # STATE_ERROR_RECOVERY below retries this — not a
+                    # fatal top-level failure.
+                    self.console.print_error(turn.last_error, recoverable=True)
+
+                # Switch to error recovery state
+                self.execution_state = self.STATE_ERROR_RECOVERY
+                self.console.print_state_info(
+                    "ERROR RECOVERY: Handling tool execution failure"
+                )
+                # The step still made its model call and ran its tool.
+                self._record_step_stats(
+                    turn.response_stats,
+                    turn.steps_taken,
+                    turn.step_timer,
+                    turn.conversation,
+                )
+
+                # Break out of tool execution to trigger error recovery prompt
+                return "continue"
+        return None
+
     def _process_query_impl(
         self,
         user_input: str,
@@ -15385,254 +15916,11 @@ Do NOT wrap conversational replies in JSON.
             # JSON responses (no ``tool_calls`` field set) so that for
             # native single calls we still get proper ``tool_call_id``
             # linkage on the result message.
-            if turn.parsed.get("tool_calls"):
-                tc_list = turn.parsed["tool_calls"]
-                any_error = False
-                turn.last_error = None
-                fanout_repeat_break = False
-                post_tool_messages = []
-
-                # One response's calls are one attempt to the failure breaker.
-                self._turn_scope.begin_batch()
-                for fan_idx, tc in enumerate(tc_list):
-                    turn.tool_name = tc["name"]
-                    turn.tool_args = tc["tool_args"]
-                    tool_call_id = tc["id"]
-                    logger.debug(
-                        "Tool call %d/%d: %s with args %s",
-                        fan_idx + 1,
-                        len(tc_list),
-                        turn.tool_name,
-                        turn.tool_args,
-                    )
-
-                    # Display the tool call in real-time
-                    self.console.print_tool_usage(turn.tool_name)
-                    # Sent even when empty: it is what releases the call to the wire.
-                    self.console.pretty_print_json(turn.tool_args, "Arguments")
-                    self.console.start_progress(f"Executing {turn.tool_name}")
-
-                    # Loop detection — same shape as legacy path so
-                    # repeated calls across iterations are still caught.
-                    turn.current_call = self._loop_guard_key(
-                        turn.tool_name, turn.tool_args
-                    )
-                    turn.tool_call_history.append(turn.current_call)
-                    turn.tool_call_log.append((turn.tool_name, str(turn.tool_args)))
-                    if len(turn.tool_call_history) > turn.loop_window:
-                        turn.tool_call_history.pop(0)
-                    turn.consecutive_count = _repeat_count(turn.tool_call_history)
-                    if turn.consecutive_count >= self.max_consecutive_repeats:
-                        self.console.stop_progress()
-                        self._close_unrun_tool_card()
-                        # NATIVE path appends results to ``previous_outputs``
-                        # (line 3387), not ``step_results``. Unwrap the
-                        # ``result`` field so the helper sees actual tool
-                        # results, not the wrapper dicts.
-                        turn.recent_results = [
-                            o.get("result") for o in turn.previous_outputs
-                        ]
-                        if turn.current_call not in turn.loop_corrected_calls:
-                            turn.loop_corrected_calls.add(turn.current_call)
-                            # Sent as this call's result so tool_call_id pairing holds.
-                            turn.messages.append(
-                                self._create_tool_message(
-                                    turn.tool_name,
-                                    self._loop_correction_result(
-                                        turn.tool_name,
-                                        turn.consecutive_count - 1,
-                                        turn.recent_results,
-                                    ),
-                                    tool_call_id=tool_call_id,
-                                )
-                            )
-                            continue
-                        self.console.print_repeated_tool_warning()
-                        turn.final_answer, turn.steps_taken = (
-                            self._answer_after_repeated_calls(
-                                turn.tool_name,
-                                turn.consecutive_count - 2,
-                                turn.recent_results,
-                                turn.messages,
-                                turn.conversation,
-                                turn.steps_taken,
-                            )
-                        )
-                        if turn.final_answer is None:
-                            turn.cancelled_by_console = True
-                        else:
-                            turn.loop_break_answer_unprinted = True
-                        fanout_repeat_break = True
-                        break
-
-                    # Execute
-                    turn.tool_result = self._execute_tool_timed(
-                        turn.tool_name, turn.tool_args
-                    )
-                    self.console.stop_progress()
-                    if self._is_throttled_result(turn.tool_result):
-                        # Never ran, so not a repeat. Bounded: the shell
-                        # limiter's windows drain within a few capped waits.
-                        turn.tool_call_history.pop()
-                        self._wait_out_rate_limit(turn.tool_result)
-
-                    # Result-based dedup for query family tools
-                    turn._QUERY_TOOLS = (
-                        "query_documents",
-                        "query_specific_file",
-                    )
-                    if turn.tool_name in turn._QUERY_TOOLS:
-                        turn.result_key = (
-                            f"{turn.tool_name}:{hash(str(turn.tool_result))}"
-                        )
-                        turn.query_result_cache[turn.result_key] = (
-                            turn.query_result_cache.get(turn.result_key, 0) + 1
-                        )
-                        if turn.query_result_cache[turn.result_key] >= 2:
-                            logger.debug(
-                                "[DEDUP] Same query result returned %d times "
-                                "— injecting stop signal",
-                                turn.query_result_cache[turn.result_key],
-                            )
-                            turn.dedup_msg = (
-                                f"[SYSTEM] You have received this same result "
-                                f"from {turn.tool_name} "
-                                f"{turn.query_result_cache[turn.result_key]} times. "
-                                "Querying again will not yield new "
-                                "information. STOP querying and answer "
-                                "directly from what you have retrieved, "
-                                "OR check your prior turn responses for "
-                                "relevant data, OR state that the "
-                                "information was not found in the document."
-                            )
-                            post_tool_messages.append(
-                                {"role": "user", "content": turn.dedup_msg}
-                            )
-
-                    # Input-based dedup for mutation tools: catch an
-                    # identical mutation re-issue at the first repeat. Errored
-                    # calls are skipped so a rejected retry isn't mistaken for
-                    # an applied change.
-                    self._dedup_mutation_call(
-                        turn.tool_name,
-                        turn.tool_args,
-                        turn.mutation_call_cache,
-                        post_tool_messages,
-                        turn.tool_result,
-                    )
-
-                    # Domain hooks. A returned plan switches the agent into
-                    # STATE_EXECUTING_PLAN for prereq-style recovery. The
-                    # base impl returns None but the hook's annotation is
-                    # Optional[List[...]] — silence pylint's None-inference.
-                    # pylint: disable-next=assignment-from-none
-                    turn._next_plan = self._post_process_tool_result(
-                        turn.tool_name, turn.tool_args, turn.tool_result
-                    )
-                    if turn._next_plan is not None:
-                        self._inject_recovery_plan(turn._next_plan)
-
-                    # Truncate large results before logging
-                    turn.truncated_result = self._handle_large_tool_result(
-                        turn.tool_name,
-                        turn.tool_result,
-                        turn.conversation,
-                        turn.tool_args,
-                    )
-
-                    self.console.pretty_print_json(turn.tool_result, "Result")
-                    self.console.print_tool_complete()
-
-                    turn.previous_outputs.append(
-                        {
-                            "tool": turn.tool_name,
-                            "args": turn.tool_args,
-                            "result": turn.truncated_result,
-                        }
-                    )
-
-                    # Append the tool result message with the *real*
-                    # tool_call_id from the originating call so the next
-                    # LLM round can correlate this result with the right
-                    # call in the prior assistant turn.
-                    turn.messages.append(
-                        self._create_tool_message(
-                            turn.tool_name,
-                            turn.truncated_result,
-                            tool_call_id=tool_call_id,
-                        )
-                    )
-
-                    if self._turn_scope.turn_should_end:
-                        turn.final_answer, turn.steps_taken = self._end_turn_on_scope(
-                            turn.tool_name,
-                            turn.messages,
-                            turn.conversation,
-                            turn.steps_taken,
-                        )
-                        if turn.final_answer is None:
-                            turn.cancelled_by_console = True
-                        else:
-                            turn.loop_break_answer_unprinted = True
-                        fanout_repeat_break = True
-                        break
-
-                    # Track errors but DON'T break early — drain all N
-                    # tool calls first so conversation history reflects
-                    # the full set.
-                    turn.is_error = Agent._is_error_result(turn.tool_result)
-                    if turn.is_error:
-                        turn.failed = tool_result_error_fields(turn.tool_result)
-                        turn.error_count += 1
-                        turn.last_error = (
-                            turn.failed.get("error_brief")
-                            or turn.failed.get("error")
-                            or turn.failed.get("stderr")
-                            or turn.failed.get("hint")
-                            or turn.failed.get("suggested_fix")
-                            or (
-                                "Command failed with return code "
-                                f"{turn.failed.get('return_code')}"
-                            )
-                        )
-                        logger.warning(
-                            "Tool execution error in parallel call "
-                            "%d/%d (count: %d): %s",
-                            fan_idx + 1,
-                            len(tc_list),
-                            turn.error_count,
-                            turn.last_error,
-                        )
-                        if not turn.failed.get("error_displayed"):
-                            # any_error below switches to STATE_ERROR_RECOVERY
-                            # and retries — not a fatal top-level failure
-                            # (the archive_message_batch repro).
-                            self.console.print_error(turn.last_error, recoverable=True)
-                        any_error = True
-                self._turn_scope.end_batch()
-
-                # Anthropic and other spec-strict providers require all native
-                # tool results to immediately follow the assistant tool-call
-                # turn. Dedup guidance belongs after the complete result group.
-                turn.messages.extend(post_tool_messages)
-
-                if fanout_repeat_break:
-                    break  # break outer while
-
-                if any_error:
-                    # All N results have been appended. Now transition to
-                    # error recovery so the next LLM round can react.
-                    self.execution_state = self.STATE_ERROR_RECOVERY
-                    self.console.print_state_info(
-                        "ERROR RECOVERY: Handling tool execution failure"
-                    )
-                    self._record_step_stats(
-                        turn.response_stats,
-                        turn.steps_taken,
-                        turn.step_timer,
-                        turn.conversation,
-                    )
-                    continue
+            step_exit = self._run_native_tool_calls(turn)
+            if step_exit == "break":
+                break
+            if step_exit == "continue":
+                continue
 
                 # Otherwise fall through to stats / answer / next iter.
                 # The legacy ``if parsed.get("tool")`` branch below is
@@ -15642,287 +15930,11 @@ Do NOT wrap conversational replies in JSON.
             # If the response contains a tool call, execute it (legacy
             # embedded-JSON path). Skipped when ``tool_calls`` is set —
             # those have already been dispatched by the fan-out above.
-            if (
-                turn.parsed.get("tool")
-                and "tool_args" in turn.parsed
-                and not turn.parsed.get("tool_calls")
-            ):
-
-                # Display the current plan with the current step highlighted
-                if self.current_plan:
-                    self.console.print_plan(self.current_plan, self.current_step)
-
-                # When both plan and tool are present, prioritize the plan execution
-                # If we have a plan, we should execute from the plan, not the standalone tool call
-                if (
-                    "plan" in turn.parsed
-                    and self.current_plan
-                    and self.total_plan_steps > 0
-                ):
-                    # Skip the standalone tool execution and let the plan execution handle it
-                    # The plan execution logic will handle this in the next iteration
-                    logger.debug(
-                        "Plan and tool both present - deferring to plan execution logic"
-                    )
-                    continue  # Skip tool execution, let plan execution handle it
-
-                # If this was a single-step plan, mark as completed after tool execution
-                if self.total_plan_steps == 1:
-                    logger.debug(
-                        "Single-step plan will be marked completed after tool execution"
-                    )
-                    self.execution_state = self.STATE_COMPLETION
-
-                turn.tool_name = turn.parsed["tool"]
-                turn.tool_args = turn.parsed["tool_args"]
-                logger.debug(
-                    f"Tool call detected: {turn.tool_name} with args {turn.tool_args}"
-                )
-
-                # Display the tool call in real-time
-                self.console.print_tool_usage(turn.tool_name)
-
-                # Sent even when empty: it is what releases the call to the wire.
-                self.console.pretty_print_json(turn.tool_args, "Arguments")
-
-                # Start progress indicator for tool execution
-                self.console.start_progress(f"Executing {turn.tool_name}")
-
-                # Check for repeated tool calls (allow up to 3 identical calls)
-                turn.current_call = self._loop_guard_key(turn.tool_name, turn.tool_args)
-                turn.tool_call_history.append(turn.current_call)
-                turn.tool_call_log.append(
-                    (turn.tool_name, str(turn.tool_args))
-                )  # Full unbounded log for workflow guards
-
-                # Enough recent calls to see a short cycle repeat to the limit
-                if len(turn.tool_call_history) > turn.loop_window:
-                    turn.tool_call_history.pop(0)
-
-                # Back-to-back repeats of this call, or of the cycle it closes
-                turn.consecutive_count = _repeat_count(turn.tool_call_history)
-
-                # Stop after max_consecutive_repeats identical calls
-                if turn.consecutive_count >= self.max_consecutive_repeats:
-                    # Stop progress indicator
-                    self.console.stop_progress()
-                    self._close_unrun_tool_card()
-
-                    # Not ``step_results``: error recovery clears it before each retry.
-                    turn.recent_results = [
-                        o.get("result") for o in turn.previous_outputs
-                    ]
-                    if turn.current_call not in turn.loop_corrected_calls:
-                        turn.loop_corrected_calls.add(turn.current_call)
-                        turn.messages.append(
-                            self._create_tool_message(
-                                turn.tool_name,
-                                self._loop_correction_result(
-                                    turn.tool_name,
-                                    turn.consecutive_count - 1,
-                                    turn.recent_results,
-                                ),
-                            )
-                        )
-                        continue
-
-                    self.console.print_repeated_tool_warning()
-                    turn.final_answer, turn.steps_taken = (
-                        self._answer_after_repeated_calls(
-                            turn.tool_name,
-                            turn.consecutive_count - 2,
-                            turn.recent_results,
-                            turn.messages,
-                            turn.conversation,
-                            turn.steps_taken,
-                        )
-                    )
-                    if turn.final_answer is None:
-                        turn.cancelled_by_console = True
-                    else:
-                        turn.loop_break_answer_unprinted = True
-                    break
-
-                # Execute the tool
-                turn.tool_result = self._execute_tool_timed(
-                    turn.tool_name, turn.tool_args
-                )
-
-                # Stop progress indicator
-                self.console.stop_progress()
-                if self._is_throttled_result(turn.tool_result):
-                    # Never ran, so not a repeat. Bounded: the shell limiter's
-                    # windows drain within a few capped waits.
-                    turn.tool_call_history.pop()
-                    self._wait_out_rate_limit(turn.tool_result)
-
-                if _is_image_tool(turn.tool_name):
-                    turn.capability_tool_last_succeeded = not tool_result_failed(
-                        turn.tool_result, FAILED_STATUSES
-                    )
-
-                # Mirror the plan-execution branch so
-                # ``step_results`` is consistent regardless of whether the
-                # LLM emitted a multi-step plan or a series of single-tool
-                # responses.  Downstream consumers (parse-error recovery
-                # prompt, give-up fallback) read ``step_results`` for the
-                # canonical ``image_path`` — without this append, the
-                # legacy single-tool path leaves them empty-handed.
-                turn.step_results.append(turn.tool_result)
-                if (
-                    isinstance(turn.tool_result, dict)
-                    and turn.tool_result.get("status") == "success"
-                    and turn.tool_result.get("operation") == "edit_file"
-                    and turn.tool_result.get("file_path")
-                ):
-                    self._turn_file_edits.append(
-                        {
-                            "file_path": turn.tool_result["file_path"],
-                            "backup_path": turn.tool_result.get("backup_path"),
-                        }
-                    )
-
-                # Result-based dedup: if this tool (query family) returns the same result
-                # it returned in a prior call, inject a correction so the agent stops looping.
-                turn._QUERY_TOOLS = (
-                    "query_documents",
-                    "query_specific_file",
-                )
-                if turn.tool_name in turn._QUERY_TOOLS:
-                    turn.result_key = f"{turn.tool_name}:{hash(str(turn.tool_result))}"
-                    turn.query_result_cache[turn.result_key] = (
-                        turn.query_result_cache.get(turn.result_key, 0) + 1
-                    )
-                    if turn.query_result_cache[turn.result_key] >= 2:
-                        logger.debug(
-                            "[DEDUP] Same query result returned %d times — injecting stop signal",
-                            turn.query_result_cache[turn.result_key],
-                        )
-                        turn.dedup_msg = (
-                            f"[SYSTEM] You have received this same result from {turn.tool_name} "
-                            f"{turn.query_result_cache[turn.result_key]} times. "
-                            "Querying again will not yield new information. "
-                            "STOP querying and answer directly from what you have retrieved, "
-                            "OR check your prior turn responses for relevant data, "
-                            "OR state that the information was not found in the document."
-                        )
-                        turn.messages.append(
-                            {"role": "user", "content": turn.dedup_msg}
-                        )
-
-                # Input-based dedup for mutation tools: catch an
-                # identical mutation re-issue at the first repeat. Errored calls
-                # are skipped so a rejected retry isn't mistaken for an applied
-                # change.
-                self._dedup_mutation_call(
-                    turn.tool_name,
-                    turn.tool_args,
-                    turn.mutation_call_cache,
-                    turn.messages,
-                    turn.tool_result,
-                )
-
-                # Handle domain-specific post-processing.
-                # A returned plan switches into STATE_EXECUTING_PLAN. The
-                # base impl returns None but the hook's annotation is
-                # Optional[List[...]] — silence pylint's None-inference.
-                # pylint: disable-next=assignment-from-none
-                turn._next_plan = self._post_process_tool_result(
-                    turn.tool_name, turn.tool_args, turn.tool_result
-                )
-                if turn._next_plan is not None:
-                    self._inject_recovery_plan(turn._next_plan)
-
-                # Handle large tool results
-                turn.truncated_result = self._handle_large_tool_result(
-                    turn.tool_name, turn.tool_result, turn.conversation, turn.tool_args
-                )
-
-                # Display the tool result in real-time (show full result to user).
-                # Emit result BEFORE complete so SSE latency is captured.
-                self.console.pretty_print_json(turn.tool_result, "Result")
-                self.console.print_tool_complete()
-
-                # Store the truncated output for future context
-                turn.previous_outputs.append(
-                    {
-                        "tool": turn.tool_name,
-                        "args": turn.tool_args,
-                        "result": turn.truncated_result,
-                    }
-                )
-
-                # Share tool output with subsequent LLM calls
-                turn.messages.append(
-                    self._create_tool_message(turn.tool_name, turn.truncated_result)
-                )
-                self._recast_unpaired_tool_results(turn.messages)
-
-                if self._turn_scope.turn_should_end:
-                    turn.final_answer, turn.steps_taken = self._end_turn_on_scope(
-                        turn.tool_name,
-                        turn.messages,
-                        turn.conversation,
-                        turn.steps_taken,
-                    )
-                    if turn.final_answer is None:
-                        turn.cancelled_by_console = True
-                    else:
-                        turn.loop_break_answer_unprinted = True
-                    break
-
-                # For single-step plans, we still need to let the LLM process the result
-                # This is especially important for RAG queries where the LLM needs to
-                # synthesize the retrieved information into a coherent answer
-                if (
-                    self.execution_state == self.STATE_COMPLETION
-                    and self.total_plan_steps == 1
-                ):
-                    logger.debug(
-                        "Single-step plan execution completed, requesting final answer from LLM"
-                    )
-                    # Don't break here - let the loop continue so the LLM can process the tool result
-                    # The tool result has already been added to messages, so the next iteration
-                    # will call the LLM with that result
-
-                # Check if tool execution resulted in an error (support multiple error formats)
-                turn.is_error = Agent._is_error_result(turn.tool_result)
-                if turn.is_error:
-                    turn.failed = tool_result_error_fields(turn.tool_result)
-                    turn.error_count += 1
-                    # Prefer error_brief for logging (avoids duplicate formatted output)
-                    turn.last_error = (
-                        turn.failed.get("error_brief")
-                        or turn.failed.get("error")
-                        or turn.failed.get("stderr")
-                        or turn.failed.get("hint")
-                        or turn.failed.get("suggested_fix")
-                        or f"Command failed with return code {turn.failed.get('return_code')}"
-                    )
-                    logger.warning(
-                        f"Tool execution error in plan (count: {turn.error_count}): {turn.last_error}"
-                    )
-                    # Only print if error wasn't already displayed by _execute_tool
-                    if not turn.failed.get("error_displayed"):
-                        # STATE_ERROR_RECOVERY below retries this — not a
-                        # fatal top-level failure.
-                        self.console.print_error(turn.last_error, recoverable=True)
-
-                    # Switch to error recovery state
-                    self.execution_state = self.STATE_ERROR_RECOVERY
-                    self.console.print_state_info(
-                        "ERROR RECOVERY: Handling tool execution failure"
-                    )
-                    # The step still made its model call and ran its tool.
-                    self._record_step_stats(
-                        turn.response_stats,
-                        turn.steps_taken,
-                        turn.step_timer,
-                        turn.conversation,
-                    )
-
-                    # Break out of tool execution to trigger error recovery prompt
-                    continue
+            step_exit = self._run_embedded_tool_call(turn)
+            if step_exit == "break":
+                break
+            if step_exit == "continue":
+                continue
 
             # Collect and store performance stats for token tracking
             # Do this BEFORE checking for final answer so stats are always collected
