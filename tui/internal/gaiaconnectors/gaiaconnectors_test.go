@@ -442,3 +442,44 @@ func TestAccountChangesOutlastTheListProbesBound(t *testing.T) {
 		t.Fatalf("set-default: %v", err)
 	}
 }
+
+func TestRenderSaysWhichServersAreOffForGAIAAndHowToAllowThem(t *testing.T) {
+	rows, err := Parse([]byte(`[
+ {"id": "toy", "display_name": "toy", "type": "mcp_server", "configured": true, "custom": true,
+  "enabled": true, "activations": {"installed:gaia": true}},
+ {"id": "notes", "display_name": "notes", "type": "mcp_server", "configured": true, "custom": true,
+  "enabled": true, "activations": {"installed:gaia": false}},
+ {"id": "mcp-git", "display_name": "Git", "type": "mcp_server", "configured": true,
+  "enabled": true, "activations": {}},
+ {"id": "mcp-jira", "display_name": "Jira", "type": "mcp_server", "configured": false,
+  "enabled": true, "activations": {}}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := Render(rows)
+	for id, want := range map[string]string{
+		"toy":     "connected · GAIA can use it",
+		"notes":   "connected · off for GAIA",
+		"mcp-git": "connected · off for GAIA",
+	} {
+		if !strings.Contains(out, "("+id+")") || !strings.Contains(lineWith(out, "("+id+")"), want) {
+			t.Errorf("%s: want %q:\n%s", id, want, out)
+		}
+	}
+	// A server that is not connected has nothing to allow.
+	if strings.Contains(lineWith(out, "(mcp-jira)"), "GAIA") {
+		t.Errorf("an unconnected server must not mention GAIA's access:\n%s", out)
+	}
+	if !strings.Contains(out, "/connectors allow <id> (notes, mcp-git).") {
+		t.Errorf("the allow command must name exactly the servers that are off:\n%s", out)
+	}
+}
+
+func lineWith(out, part string) string {
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, part) {
+			return l
+		}
+	}
+	return ""
+}

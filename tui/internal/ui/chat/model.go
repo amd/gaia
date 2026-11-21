@@ -976,6 +976,9 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connectorsRevokedMsg:
 		return m.handleConnectorsRevoked(msg)
 
+	case connectorsAllowedMsg:
+		return m.handleConnectorsAllowed(msg)
+
 	case connectorsSignInMsg:
 		return m.handleConnectorsSignIn(msg)
 
