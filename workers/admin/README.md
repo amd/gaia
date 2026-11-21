@@ -9,8 +9,9 @@ The GAIA admin dashboard at `amd-gaia.ai/admin`, in five pages:
   beside Hermes Agent and other fast-growing AI-agent projects for context (`TARGETS` and
   `BENCHMARKS` in `src/growthpage.ts`).
 - **Developers** (`/admin/developers`): issues, pull requests, time to merge and close (median
-  and P90), commits, lines of code, contributors (with a filter to hide chosen people or
-  bots), stars and forks.
+  and P90), pending contributors (people with an issue or pull request still open, how long
+  they have waited, and who they are), commits, lines of code, contributors (with a filter to
+  hide chosen people or bots), stars and forks.
 - **CI** (`/admin/ci`): run outcomes, unit-test counts, where CI time goes, per-workflow health.
 - **Evals** (`/admin/evals`): agent-eval pass rate per run and tier, tied to the commit, tag
   or branch measured; per-category and per-scenario results with regressions; SWE-bench.
@@ -228,6 +229,10 @@ Source names with a space need `%20` in the URL, for example `only=code%20stats`
   whole calendar days through the last one fully collected. Charts span
   the whole range in whole days, weeks (Monday start, UTC) or months, and say where
   collection began when the range reaches further back.
+- A pending contributor is a person, never a bot, with at least one issue or pull request
+  still open at the last collection. The headline counts people outside the core team; the
+  **Everyone** switch adds the core team. It needs no extra collection: it is worked out
+  from the stored issues and pull requests, so its history goes back to the first one.
 - "Pass rate on main" counts push and nightly runs only: issue- and comment-triggered
   automation and manual dispatches on `main` are not build health.
 - Writes that must be all-or-nothing (a day's release snapshot, a day of workflow runs,
