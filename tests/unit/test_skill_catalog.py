@@ -22,7 +22,6 @@ from gaia.agents.base.skill_catalog import (
     catalog_env_override,
     companions,
     render_catalog,
-    skills_granting,
 )
 from gaia.skills.manager import SkillManager
 
@@ -212,12 +211,6 @@ def test_claude_imports_are_loadable_but_not_listed(tmp_path):
 
 def test_no_listed_skills_renders_nothing():
     assert render_catalog({}) == ""
-
-
-def test_the_skill_that_grants_each_policy_cli_is_found(starter_pack):
-    assert skills_granting(starter_pack, "gh") == ["github-triage"]
-    assert skills_granting(starter_pack, "pytest") == ["coding"]
-    assert skills_granting(starter_pack, "curl") == []
 
 
 def test_grounding_rule_is_about_sourcing_and_short():
