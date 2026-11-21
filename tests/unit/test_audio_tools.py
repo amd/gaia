@@ -109,7 +109,7 @@ class TestSystemPromptAgreesWithTheToolset:
     def _chat_agent_source(self):
         path = (
             Path(__file__).resolve().parents[2]
-            / "hub/agents/gaia/python/gaia_agent/chat_agent.py"
+            / "hub/agents/gaia/python/gaiapy/chat_agent.py"
         )
         if not path.is_file():
             pytest.skip(f"chat agent not present at {path}")
@@ -1391,7 +1391,7 @@ class TestTranscriptionStatus:
 def _repo_profiles():
     """Load this checkout's chat profiles by path.
 
-    ``import gaia_agent`` can resolve to a different checkout when the hub
+    ``import gaiapy`` can resolve to a different checkout when the hub
     packages are editable-installed elsewhere, which would silently test the
     wrong source.
     """
@@ -1399,7 +1399,7 @@ def _repo_profiles():
 
     path = (
         Path(__file__).resolve().parents[2]
-        / "hub/agents/gaia/python/gaia_agent/profiles.py"
+        / "hub/agents/gaia/python/gaiapy/profiles.py"
     )
     if not path.is_file():
         pytest.skip(f"chat profiles not present at {path}")

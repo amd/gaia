@@ -552,7 +552,7 @@ class SSEOutputHandler(OutputHandler):
     #: raises this — a person reading a prompt routinely takes longer than a
     #: minute — but must not set it to ``None``: an unanswerable question with
     #: no bound is a turn that never ends, which reads as a hang rather than as
-    #: the refusal it effectively is. See ``gaia_agent.stdio.PermissionState``,
+    #: the refusal it effectively is. See ``gaiapy.stdio.PermissionState``,
     #: whose backstop deliberately outlasts its client's own bound.
     #:
     #: Class-level so a handler built with ``__new__`` — which callers that only

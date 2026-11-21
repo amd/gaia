@@ -30,7 +30,7 @@ def list_skills() -> Dict[str, Any]:
     from gaia.skills.listing import skills_listing_for_agent
 
     try:
-        from gaia_agent.agent import ENGINEERING_SKILL, GaiaAgent
+        from gaiapy.agent import ENGINEERING_SKILL, GaiaAgent
     except ImportError:
         return _skills_from_agent()
     try:
@@ -176,7 +176,7 @@ def _preference_schema(name: str) -> Any:
     from gaia.skills.preferences import load_schema
 
     try:
-        from gaia_agent.agent import GaiaAgent
+        from gaiapy.agent import GaiaAgent
     except ImportError:
         return _preference_schema_beside_the_agent_binary(name)
     try:

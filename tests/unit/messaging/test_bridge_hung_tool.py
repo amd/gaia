@@ -6,7 +6,7 @@ The bridge never stops a turn while a tool runs: a running tool keeps the
 turn's idle clock fresh until its ``tool_result`` arrives. So the only thing
 that ends a hung tool is the agent's own per-tool limit
 (``GAIA_AGENT_TOOL_TIMEOUT``, 180 s by default). This drives the real
-``gaia_agent.stdio`` turn loop, with a real ``Agent`` and a scripted model,
+``gaiapy.stdio`` turn loop, with a real ``Agent`` and a scripted model,
 behind a real ``AgentChannel``, and checks the user still gets an answer.
 """
 
@@ -23,7 +23,7 @@ from gaia.messaging.bridge import CONTROL_KEY, AgentChannel, Turn
 from .test_bridge_turn_idle import FakeClock, _wait_for
 
 stdio = pytest.importorskip(
-    "gaia_agent.stdio",
+    "gaiapy.stdio",
     reason="the flagship agent package is not installed in this environment",
 )
 

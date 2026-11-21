@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-AGENT_INIT = REPO_ROOT / "hub/agents/gaia/python/gaia_agent/__init__.py"
+AGENT_INIT = REPO_ROOT / "hub/agents/gaia/python/gaiapy/__init__.py"
 AGENT_YAML = REPO_ROOT / "hub/agents/gaia/python/gaia-agent.yaml"
 
 RELEASE_MANIFEST_NAME = "gaia-agent-release.json"

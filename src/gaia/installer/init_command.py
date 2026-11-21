@@ -161,9 +161,9 @@ FLAGSHIP_AGENT_ID = "gaia"
 
 # Hub agent id -> the module a source/pip install of it makes importable. Every
 # `gaia-agent-<id>` distribution installs `gaia_agent_<id>` except the flagship:
-# `gaia-agent-gaia` ships plain `gaia_agent` (hub/agents/gaia/python's
+# `gaia-agent-gaia` ships plain `gaiapy` (hub/agents/gaia/python's
 # gaia-agent.yaml `entry_module`).
-_AGENT_IMPORT_NAMES = {"gaia": "gaia_agent"}
+_AGENT_IMPORT_NAMES = {"gaia": "gaiapy"}
 
 _NPU_ACTIVE_NOTE = (
     "The NPU model is now the default. To go back to the GPU, run: "
@@ -1453,7 +1453,7 @@ class InitCommand:
                 the local backend: the chat model would never be used, but
                 RAG/memory/code-index embeddings have no Claude equivalent and
                 still need Lemonade's embedder (see hub/agents/gaia/python/
-                gaia_agent/stdio.py). Ignored when skip_models is already set.
+                gaiapy/stdio.py). Ignored when skip_models is already set.
             progress_callback: Optional callback for progress updates
             lemonade_url: Use the Lemonade Server the user already runs at
                 this URL, and save that choice; GAIA installs no server.
@@ -3685,7 +3685,7 @@ class InitCommand:
         of them is importable. A wheel agent (``chat``) is there when
         ``gaia_agent_<id>`` imports -- the naming convention
         ``install_hints._AGENT_SOURCE_SUBDIRS`` and every ``gaia-agent-*``
-        wheel share, with the flagship's ``gaia_agent`` spelling read from
+        wheel share, with the flagship's ``gaiapy`` spelling read from
         ``_AGENT_IMPORT_NAMES``. The flagship itself publishes a native
         BINARY, which no import can ever see, so its install sentinel under
         ``~/.gaia/agents`` is the only evidence it is there. Probing the

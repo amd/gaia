@@ -8,7 +8,7 @@ folder (#8629)."""
 import os
 
 import pytest
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
 from gaia.agents.base.completion import CompletionEvidence
 from gaia.agents.base.tools import _TOOL_REGISTRY

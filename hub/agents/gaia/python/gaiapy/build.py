@@ -14,7 +14,7 @@ from setuptools.command.sdist import sdist as _sdist
 
 PACKAGE_SKILLS = Path(__file__).resolve().parent / "skills"
 
-#: build.py's parents[1..4] in a checkout: hub/agents/gaia/python/gaia_agent/.
+#: build.py's parents[1..4] in a checkout: hub/agents/gaia/python/gaiapy/.
 _CHECKOUT_LAYOUT = ("python", "gaia", "agents", "hub")
 
 _IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc")
@@ -89,7 +89,7 @@ class build_py(_build_py):
         if (project / "PKG-INFO").is_file():
             return
         copy_starter_skills(
-            checkout_starter_skills(), Path(self.build_lib) / "gaia_agent" / "skills"
+            checkout_starter_skills(), Path(self.build_lib) / "gaiapy" / "skills"
         )
 
 
@@ -99,7 +99,7 @@ class sdist(_sdist):
     def make_release_tree(self, base_dir, files) -> None:
         super().make_release_tree(base_dir, files)
         copy_starter_skills(
-            checkout_starter_skills(), Path(base_dir) / "gaia_agent" / "skills"
+            checkout_starter_skills(), Path(base_dir) / "gaiapy" / "skills"
         )
 
 

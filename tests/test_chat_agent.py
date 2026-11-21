@@ -12,9 +12,9 @@ import pytest
 
 # ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 
 class TestChatAgent:
@@ -628,7 +628,7 @@ class TestChatAgentHostAttributeContract:
         property — the read-time check added by #3316 must not probe
         speculatively (hasattr/getattr-with-default) at any point outside an
         actual tool call."""
-        from gaia_agent.chat_agent import _UNSET
+        from gaiapy.chat_agent import _UNSET
 
         config = ChatAgentConfig(
             silent_mode=True, max_steps=1, allowed_paths=[str(tmp_path)]

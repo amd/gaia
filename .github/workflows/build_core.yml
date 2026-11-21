@@ -249,7 +249,7 @@ jobs:
           ref: ${{ inputs.ref || inputs.tag || github.ref }}
           sparse-checkout: |
             util/gaiapy_rc_assets.py
-            hub/agents/gaia/python/gaia_agent/__init__.py
+            hub/agents/gaia/python/gaiapy/__init__.py
             hub/agents/gaia/python/gaia-agent.yaml
           sparse-checkout-cone-mode: false
 

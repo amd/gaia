@@ -1756,7 +1756,7 @@ class _Host(ShellToolsMixin):
     """A host whose console says how a prompt would be approved.
 
     ``full_access`` is the TUI's switch, which sets both attributes the way
-    ``gaia_agent.stdio.PermissionState`` does. ``auto_approve`` alone is an
+    ``gaiapy.stdio.PermissionState`` does. ``auto_approve`` alone is an
     SDK embedder's unattended opt-in.
     """
 

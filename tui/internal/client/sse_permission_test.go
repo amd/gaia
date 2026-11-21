@@ -58,7 +58,7 @@ func TestSSEClientImplementsTheLivePermissionInterfaces(t *testing.T) {
 }
 
 func TestTheWireWordsAreTheOnesTheAgentParses(t *testing.T) {
-	// Contract with gaia_agent.stdio's DECISION_* constants and the server's
+	// Contract with gaiapy.stdio's DECISION_* constants and the server's
 	// _TOOL_DECISIONS. The agent fails closed on anything else, so a drift here
 	// turns an approval into a silent denial.
 	for decision, want := range map[PermissionDecision]string{
