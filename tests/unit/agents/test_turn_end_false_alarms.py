@@ -384,6 +384,18 @@ def _read_record(path, text):
         # The negation is about realness, not about the invention.
         "10 fake orders in sales.csv, nothing real",
         "I don’t want real data, just fake numbers in sales.csv",
+        # First person that only owns the invented phrase or the purpose.
+        "put our fake numbers in sales.csv",
+        "make up fake numbers for our pitch deck in sales.csv",
+        "Fake data for my unit tests in sales.csv",
+        "give us fake customer data in sales.csv",
+        "we need dummy sales data in sales.csv",
+        "can you make up some numbers for us in sales.csv",
+        # A later clause that names no figures of its own.
+        "make up 10 orders, then save them to sales.csv",
+        "fake names, then put them in a table in sales.csv",
+        "fill in the table with fake numbers in sales.csv",
+        "fake orders but keep them under 100 dollars in sales.csv",
     ],
 )
 def test_invented_data_the_user_asked_for_is_not_reported(query):
@@ -469,6 +481,17 @@ def test_invented_data_the_user_asked_for_is_not_reported(query):
         "fake numbers aren't okay in sales.csv",
         "real numbers only, no fake data, in sales.csv",
         "run a test on the sales numbers and put the results in sales.csv",
+        # Invented names or layout, but the user's own figures.
+        "fake data is fine for names, but the prices must be correct in sales.csv",
+        "fake customer names but keep our sales amounts in sales.csv",
+        "placeholder names, but use our sales figures in sales.csv",
+        "mock invoices with the prices we charge in sales.csv",
+        "mock invoices using our price list in sales.csv",
+        "dummy data structure, then fill in my expenses in sales.csv",
+        "fake customer names but keep the amounts in sales.csv",
+        "dummy data of my expenses in sales.csv",
+        "fake invoices for our customers in sales.csv",
+        "mock invoices; the prices are accurate in sales.csv",
         # Not English: no exemption, so it warns.
         "datos de ejemplo en sales.csv",
         "Beispieldaten in sales.csv speichern",
@@ -477,6 +500,22 @@ def test_invented_data_the_user_asked_for_is_not_reported(query):
 def test_a_request_for_real_figures_is_still_reported(query):
     found = _sales(query)
     assert found and "12,500" in found[0].note
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "fake data is fine for names, but the prices must be correct in sales.csv",
+        "fake customer names but keep our sales amounts in sales.csv",
+        "placeholder names, but use our sales figures in sales.csv",
+        "mock invoices with the prices we charge in sales.csv",
+        "mock invoices using our price list in sales.csv",
+        "dummy data structure, then fill in my expenses in budget.xlsx",
+    ],
+)
+def test_the_users_own_figures_beside_invented_names_are_real(query):
+    written = {"budget.xlsx" if "budget" in query else "sales.csv"}
+    assert not asks_for_invented_data(query, written)
 
 
 def test_a_very_long_request_is_never_exempted():
