@@ -186,6 +186,9 @@ class RelayProfile:
     #: Contract version from which ``/query`` takes ``reasoning`` and streams the
     #: model's reasoning as ``reasoning`` events. ``None`` means the relay never asks.
     min_reasoning_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``mood`` and streams the
+    #: ``mood`` event. ``None`` means the agent never names a mood.
+    min_mood_api_version: Optional[Tuple[int, int]] = None
     #: Contract version from which ``GET /sessions/{id}/tools`` lists the tools
     #: the session's agent has. ``None`` means the agent has no such route.
     min_tools_api_version: Optional[Tuple[int, int]] = None
@@ -469,6 +472,8 @@ GAIA_PROFILE = RelayProfile(
     min_surface_api_version=(2, 20),
     # 2.22 added /query's reasoning field.
     min_reasoning_api_version=(2, 22),
+    # 2.31 added /query's mood field and the mood event.
+    min_mood_api_version=(2, 31),
     # 2.21 added /query's final.context.
     min_context_api_version=(2, 21),
     context_upgrade_message=(
@@ -684,6 +689,15 @@ def reasoning_supported(profile: RelayProfile, api_version: Optional[str]) -> bo
     Same evidence rule as :func:`api_version_supported`: no version, no claim.
     """
     floor = profile.min_reasoning_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def mood_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``mood`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_mood_api_version
     return floor is not None and _meets(api_version, floor)
 
 

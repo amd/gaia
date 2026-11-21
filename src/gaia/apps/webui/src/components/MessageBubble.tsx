@@ -24,6 +24,8 @@ import { AnswerStats, type TurnEnding } from './AnswerStats';
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
 import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { localizeLiveStatus } from '../utils/liveStatus';
+import { LONGEST_MOOD_MS, eyesPhase, messageMood } from '../utils/gaiaEyes';
+import { GaiaEyes } from './GaiaEyes';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
@@ -108,13 +110,29 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     const waitingOnModel = active && !awaitingUser && isModelWaitLabel(label);
     const modelWaitElapsed = useElapsedSeconds(waitingOnModel);
     const place = useInferencePlace();
+    const asked = useChatStore((s) => {
+        for (let i = s.messages.length - 1; i >= 0; i--) {
+            if (s.messages[i].role === 'user') return s.messages[i];
+        }
+        return undefined;
+    });
+    const gaiaMood = useChatStore((s) => s.gaiaMood);
+    // GAIA's own mood for this reply, once she names one; until then, how the user's message sounded.
+    const reaction = useMemo(() => {
+        if (gaiaMood) return { mood: gaiaMood.mood, key: `gaia|${gaiaMood.at}` };
+        const mood = asked ? messageMood(asked.content) : null;
+        return asked && mood ? { mood, key: `${asked.created_at}|${asked.content}` } : null;
+    }, [asked, gaiaMood]);
+    const moodPlaying = useUntil(gaiaMood ? gaiaMood.at + LONGEST_MOOD_MS : 0);
 
-    if (!active) return null;
+    // Her mood often arrives with the answer's first words: the eyes stay to play it, without the status text.
+    if (!active) return moodPlaying ? <span className="thinking-indicator"><GaiaEyes phase="wait" reaction={reaction} /></span> : null;
 
     const showModelWaitHint = waitingOnModel && modelWaitElapsed >= MODEL_WAIT_HINT_S;
 
     return (
         <span className={`thinking-indicator${!awaitingUser ? ' is-live' : ''}`}>
+            <GaiaEyes phase={eyesPhase(label, awaitingUser)} reaction={reaction} />
             <span className="thinking-indicator-text">{text}</span>
             {!awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
                 <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
@@ -126,6 +144,19 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     );
 }
 
+
+/** True until the clock reaches `deadline` (ms since epoch). */
+function useUntil(deadline: number): boolean {
+    const [, expire] = useState(0);
+    useEffect(() => {
+        const left = deadline - Date.now();
+        if (left <= 0) return;
+        // A little late, so the clock is past the deadline when this re-renders.
+        const timer = setTimeout(() => expire(deadline), left + 50);
+        return () => clearTimeout(timer);
+    }, [deadline]);
+    return Date.now() < deadline;
+}
 
 /** A phase shorter than this needs no clock; past it, the count shows GAIA is still working. */
 const PHASE_ELAPSED_MIN_S = 3;
