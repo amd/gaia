@@ -359,7 +359,7 @@ jobs:
       # and core/ (the frozen gaia). A staging directory that is absent
       # afterwards means "no installer for this platform".
       #
-      # fetch_sidecar.py verifies the sidecar against the digest COMMITTED in
+      # fetch_gaiapy.py verifies the sidecar against the digest COMMITTED in
       # hub/agents/gaia/npm/binaries.lock.json, never one served by the hub that
       # sent the bytes, and a placeholder digest is a hard stop.
       - name: Stage payloads
@@ -375,7 +375,7 @@ jobs:
             core="core-download/${CORE_PREFIX}gaia-core-${p}/gaia-core-${p}.tar.gz"
             if [ ! -f "${core}" ]; then
               # Only the best-effort Intel Mac freeze may be missing.
-              if python -c "import sys; sys.path.insert(0, 'util'); import flagship_rc_assets as f; sys.exit(0 if sys.argv[1] in f.OPTIONAL_PLATFORMS else 1)" "${p}"; then
+              if python -c "import sys; sys.path.insert(0, 'util'); import gaiapy_rc_assets as f; sys.exit(0 if sys.argv[1] in f.OPTIONAL_PLATFORMS else 1)" "${p}"; then
                 echo "::warning::no installer will be built for ${p} — this run froze no gaia core for it (best-effort platform)."
                 continue
               fi
@@ -401,7 +401,7 @@ jobs:
               # A best-effort platform whose leg did not upload gets no
               # installer, exactly as a lock with no entry for it does below.
               if ! ls flagship/*/"sidecar-${p}.meta.json" >/dev/null 2>&1; then
-                if python -c "import sys; sys.path.insert(0, 'util'); import flagship_rc_assets as f; sys.exit(0 if sys.argv[1] in f.OPTIONAL_PLATFORMS else 1)" "${p}"; then
+                if python -c "import sys; sys.path.insert(0, 'util'); import gaiapy_rc_assets as f; sys.exit(0 if sys.argv[1] in f.OPTIONAL_PLATFORMS else 1)" "${p}"; then
                   echo "::warning::no installer will be built for ${p} — this run froze no gaia-agent sidecar for it (best-effort platform)."
                   rm -rf "stage/${p}"
                   continue
@@ -409,13 +409,13 @@ jobs:
                 echo "::error::no gaia-agent sidecar was built for ${p}, a required platform."
                 exit 1
               fi
-              python util/flagship_rc_assets.py stage --artifacts flagship --platform "${p}" --out "stage/${p}"
+              python util/gaiapy_rc_assets.py stage --artifacts flagship --platform "${p}" --out "stage/${p}"
             else
               # Exit 3 is the ONE tolerated outcome: the lock carries no entry for
               # this platform, so the flagship publishes no sidecar for it. A
               # placeholder or mismatched digest still exits 1 and fails the leg.
               rc=0
-              python installer/tui/fetch_sidecar.py --platform "${p}" --out "stage/${p}" || rc=$?
+              python installer/tui/fetch_gaiapy.py --platform "${p}" --out "stage/${p}" || rc=$?
               if [ "${rc}" -eq 3 ]; then
                 echo "::warning::no installer will be built for ${p} — the flagship agent publishes no gaia-agent sidecar for it, so the setup would install the terminal hub with nothing behind it."
                 rm -rf "stage/${p}"

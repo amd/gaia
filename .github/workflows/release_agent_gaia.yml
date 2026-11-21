@@ -1289,7 +1289,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ── Stage 6: pin the published hashes on main ──────────────────────
-  # installer/tui/fetch_sidecar.py and util/check_flagship_release.py read the
+  # installer/tui/fetch_gaiapy.py and util/check_flagship_release.py read the
   # COMMITTED lock, so without this the installer build and the final core
   # release fail until someone pins the hashes by hand (#3949). Nothing pushes
   # to main directly: this opens a PR that the merge queue lands. Separate from

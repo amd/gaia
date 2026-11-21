@@ -6,7 +6,7 @@ The Agent Hub has no pre-release channel, so its ``gaia`` agent is whatever
 the last flagship release published -- often many commits older than a core
 release candidate. A release candidate therefore attaches a flagship frozen
 from its own commit to its GitHub pre-release (publish.yml's ``rc-flagship``,
-packaged by ``util/flagship_rc_assets.py``), and an RC core installs that one.
+packaged by ``util/gaiapy_rc_assets.py``), and an RC core installs that one.
 
 There is no fallback to the hub: if the pre-release has no flagship, the
 install fails and says where it looked. A tester silently running a stale
