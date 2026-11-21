@@ -16797,7 +16797,6 @@ Do NOT wrap conversational replies in JSON.
             if step_exit == "continue":
                 continue
 
-
             # If the response contains a tool call, execute it (legacy
             # embedded-JSON path). Skipped when ``tool_calls`` is set —
             # those have already been dispatched by the fan-out above.
