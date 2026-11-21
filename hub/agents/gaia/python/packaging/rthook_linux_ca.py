@@ -11,7 +11,9 @@ script would fail certificate verification. The agent itself routes through
 
 Runs before any other code in every launch of the binary, including the
 ``run_python`` re-launch. It changes nothing when the user set
-``SSL_CERT_FILE``/``SSL_CERT_DIR`` or the built-in default path exists. Names are
+``SSL_CERT_FILE``/``SSL_CERT_DIR``, when a built-in CA file exists, or when a
+built-in CA directory contains hashed CA links. It falls back to a bundled CA
+bundle only when that directory is empty or unreadable. Names are
 private because hooks share the entry script's ``__main__`` namespace.
 """
 
