@@ -49,7 +49,6 @@ from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
-    DEFAULT_MODEL_NAME,
     EMBED_MAX_CHARS,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
@@ -57,6 +56,7 @@ from gaia.llm.lemonade_client import (
     RERANKER_LLAMACPP_ARGS,
     resident_vision_model,
     resolve_default_vision_model,
+    resolve_local_chat_model,
     vision_off_reason,
 )
 from gaia.llm.vlm_client import VLMExtractionError
@@ -800,7 +800,8 @@ def _json_records(data, loader: JsonLoaderConfig, source: str) -> List[dict]:
 class RAGConfig:
     """Configuration for RAG SDK."""
 
-    model: str = DEFAULT_MODEL_NAME
+    # The PC's default from setup: a small PC never downloads Gemma.
+    model: str = field(default_factory=resolve_local_chat_model)
     max_tokens: int = 1024
     chunk_size: int = 500
     chunk_overlap: int = 100  # Increased to 20% overlap for better context preservation

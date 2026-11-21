@@ -19,11 +19,13 @@ import (
 )
 
 const (
-	qwen  = "Qwen3.6-35B-A3B-GGUF"
-	gemma = "Gemma-4-E4B-it-GGUF"
-	emb   = "user.embeddinggemma-300m-GGUF"
-	oss   = "gpt-oss-20b-GGUF"
-	flm   = "gemma4-it-e2b-FLM"
+	qwen   = "Qwen3.6-35B-A3B-GGUF"
+	gemma  = "Gemma-4-E4B-it-GGUF"
+	qwen4b = "Qwen3.5-4B-GGUF"
+	qwen2b = "Qwen3.5-2B-GGUF"
+	emb    = "user.embeddinggemma-300m-GGUF"
+	oss    = "gpt-oss-20b-GGUF"
+	flm    = "gemma4-it-e2b-FLM"
 )
 
 var (
@@ -60,7 +62,7 @@ func labelled(p setupapi.Plan) setupapi.Plan {
 	for i := range p.Catalog {
 		e := &p.Catalog[i]
 		switch e.ID {
-		case qwen, gemma, emb:
+		case qwen, gemma, emb, qwen4b, qwen2b:
 			e.Support = f.Str(setupapi.SupportVerified)
 		default:
 			e.Support = f.Str(setupapi.SupportUntested)
@@ -79,7 +81,8 @@ func warmPlan() setupapi.Plan {
 	return p
 }
 
-// small16 is a 16 GB PC: Gemma is the chat model and Qwen3.6 won't fit.
+// small16 is a PC with 16 GB for models (a 32 GB laptop): Gemma is the chat
+// model and Qwen3.6 won't fit.
 func small16() setupapi.Plan {
 	p := coldPlan()
 	rec := gemma
@@ -90,6 +93,30 @@ func small16() setupapi.Plan {
 		f.Entry(gemma, []string{setupapi.RoleChat, setupapi.RoleVision}, 5.97, false, true, true, f.Bool(true), 8.4, 16),
 		f.Entry(emb, embed, 0.33, false, true, true, f.Bool(true), 0.6, 16),
 		f.Entry(qwen, chat, 23.3, false, false, false, f.Bool(false), 27.1, 16),
+	}
+	return labelled(p)
+}
+
+// smallPC is a laptop with 16 GB of RAM: GAIA keeps ~10.7 GB for other apps,
+// so Qwen3.5 2B is the pick; the 4B and Gemma would load, but are tight.
+func smallPC() setupapi.Plan {
+	p := coldPlan()
+	rec := qwen2b
+	p.RecommendedModel = &rec
+	p.ChatModel.ID = qwen2b
+	p.CapacityGB = f.Float(10.7)
+	p.LeftForAppsGB = f.Float(13.1)
+	tight4b := f.Entry(qwen4b, chat, 3.58, false, false, false, f.Bool(true), 7.4, 10.7)
+	tight4b.Tight, tight4b.ReadsImages = true, true
+	tightGemma := f.Entry(gemma, vision, 5.97, false, false, false, f.Bool(true), 9.0, 10.7)
+	tightGemma.Tight = true
+	pick := f.Entry(qwen2b, []string{setupapi.RoleChat}, 2.01, false, true, true, f.Bool(true), 4.1, 10.7)
+	pick.ReadsImages = true
+	p.Catalog = []setupapi.CatalogEntry{
+		pick,
+		f.Entry(emb, embed, 0.33, false, true, true, f.Bool(true), 0.6, 10.7),
+		tight4b,
+		tightGemma,
 	}
 	return labelled(p)
 }

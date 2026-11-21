@@ -7,6 +7,7 @@ import (
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // ForAgentOptions configures the transport built by ForAgent.
@@ -168,11 +169,17 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			}
 			args = append(append([]string{}, args...), extra...)
 		}
-		if opts.Model != "" {
+		model := opts.Model
+		if model == "" && agent.Native && agent.ID == catalog.FlagshipID {
+			// gaiacpp reads no GAIA config: name GAIA's local chat model, which
+			// on a small PC is not the Gemma it would otherwise start on.
+			model = lemonade.LocalChatModel()
+		}
+		if model != "" {
 			if agent.ID != catalog.FlagshipID {
 				return nil, fmt.Errorf("model override is unsupported for subprocess agent %q", agent.ID)
 			}
-			args = append(append([]string{}, args...), "--model", opts.Model)
+			args = append(append([]string{}, args...), "--model", model)
 		}
 		// Before the session flags: gaiacpp doesn't take them and exits on an unknown argument.
 		if agent.Native {
