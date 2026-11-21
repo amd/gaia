@@ -96,6 +96,42 @@ def _run(agent, query):
     return out
 
 
+def test_settings_rebuild_warns_on_the_next_real_stdio_turn(monkeypatch):
+    from gaiapy import agent as agent_mod
+
+    from gaia.skills.errors import SkillUnavailableError
+
+    class SkilledAgent(_FakeAgent):
+        def load_skill(self, name):
+            if name == "broken":
+                raise SkillUnavailableError("synthetic private load error")
+            self.loaded_skills[name] = object()
+
+    old = SkilledAgent()
+    old.model_id = None
+    old.conversation_history = []
+    old.loaded_skills.update({"coding": object(), "broken": object()})
+    old.built_settings_changed = lambda: True
+    monkeypatch.setattr(agent_mod, "GaiaAgent", lambda **kw: SkilledAgent())
+    monkeypatch.setattr(agent_mod, "GaiaAgentConfig", lambda **kw: kw)
+
+    agent = stdio.follow_settings(old, {})
+    assert set(agent.loaded_skills) == {"coding"}
+    # A non-chat command has no chat turn on which to show the notice.
+    control = io.StringIO()
+    stdio.dispatch_query(agent, stdio.CLEAR_CONVERSATION_QUERY, control)
+    assert "was not restored" not in control.getvalue()
+    events = [json.loads(line) for line in _lines(_run(agent, "hello"))]
+    assert events[0] == {
+        "type": "status",
+        "level": "warning",
+        "message": "Skill 'broken' was not restored after settings changed: "
+        "the current model does not offer the tools it needs. Reload it if needed.",
+    }
+    assert events[-1]["type"] == "final"
+    assert "was not restored" not in _run(agent, "again").getvalue()
+
+
 # ---------------------------------------------------------------------------
 # What actually keeps the wire clean
 # ---------------------------------------------------------------------------

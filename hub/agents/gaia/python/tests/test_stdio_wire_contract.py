@@ -227,6 +227,7 @@ def _translated_events():
     translator = CanonicalTranslator(run_id=None, agent_id=stdio.AGENT_ID, debug=False)
     source = [
         {"type": "status", "message": "Searching files"},
+        {"type": "status", "status": "warning", "message": "A skill did not load"},
         {
             "type": "status",
             "message": "Reasoning — 40 words so far",
@@ -295,6 +296,7 @@ def test_every_field_the_tui_reads_is_emitted():
     assert set(emitted) == set(EVENTS), "an event type has no emitter"
     for etype, spec in EVENTS.items():
         expected = set(spec["fields"]) | set(spec.get("phase_extension", []))
+        expected |= set(spec.get("warning_extension", []))
         expected -= set(spec.get("not_sent_over_stdio", []))
         missing = expected - emitted[etype]
         assert not missing, f"{etype} no longer carries {sorted(missing)}"

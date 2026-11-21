@@ -33,6 +33,7 @@
         "skills"
       ],
       "phase_extension": ["phase", "words", "chars"],
+      "warning_extension": ["level"],
       "history_cut_extension": ["history_cut"],
       "plan_extension": ["plan"]
     },

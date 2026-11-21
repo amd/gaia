@@ -55,6 +55,7 @@ class _ScriptedAgent:
         self.closed = 0
         self.console = None
         self.conversation_history = []
+        self.loaded_skills = {}
         self._cancel_event = None
         self.saw_cancelled = None
         self.raise_on_query = False
@@ -183,6 +184,61 @@ def _events(response):
         if line.startswith("data: "):
             out.append(json.loads(line[len("data: ") :]))
     return out
+
+
+@pytest.mark.parametrize("early_cancel", [False, True])
+def test_failed_skill_reload_is_reported_once_in_chat(built, monkeypatch, early_cancel):
+    from gaia.skills.errors import SkillNotFoundError
+
+    client, agents = built
+    changed = False
+
+    def load_skill(self, name):
+        if name == "broken":
+            raise SkillNotFoundError("synthetic private path /example/private/SKILL.md")
+        self.loaded_skills[name] = object()
+
+    monkeypatch.setattr(
+        _ScriptedAgent, "built_settings_changed", lambda self: changed, raising=False
+    )
+    monkeypatch.setattr(_ScriptedAgent, "load_skill", load_skill, raising=False)
+
+    def turn(**kwargs):
+        response = client.post(
+            "/v1/gaia/query", json=_body(session_id="loaded", **kwargs)
+        )
+        assert response.status_code == 200, response.text
+        return _events(response)
+
+    def warnings(events):
+        return [e for e in events if e.get("level") == "warning"]
+
+    assert not warnings(turn())
+    agents[0].loaded_skills.update({"coding": object(), "broken": object()})
+    changed = True
+    if early_cancel:
+        run_id = str(uuid.uuid4())
+        client.post(f"/v1/gaia/query/{run_id}/cancel")
+        assert not warnings(turn(run_id=run_id))
+        assert agents[-1].saw_cancelled is True
+        assert len(agents) == 2
+        changed = False
+
+    events = turn()
+    assert len(agents) == 2
+    assert set(agents[-1].loaded_skills) == {"coding"}
+    assert warnings(events) == [
+        {
+            "type": "status",
+            "level": "warning",
+            "message": "Skill 'broken' was not restored after settings changed: "
+            "its files could not be found. Reload it if needed.",
+        }
+    ]
+    assert events[-1]["type"] == "final"
+    assert events[-1]["answer"] == "answered: hello"
+    changed = False
+    assert not warnings(turn())
 
 
 def _terminals(response):
