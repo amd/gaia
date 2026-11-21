@@ -502,6 +502,9 @@ def _run_scale(work: Path, opts: RunOptions, tiers: Sequence[int]) -> dict:
         slowest = sorted(
             bench.build_stats["per_document"], key=lambda d: -d["seconds"]
         )[:5]
+        if not results:
+            log(f"    scale-{tier}: no question scored, every label failed")
+            continue
         summary = _summarize(results)
         out["tiers"].append(
             {

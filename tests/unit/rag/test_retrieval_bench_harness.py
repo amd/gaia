@@ -394,7 +394,7 @@ def _bad_label(qid="bad", quote="text that is not there"):
 def no_agent(monkeypatch):
     """Skip the flagship's query_documents so these run without its wheel."""
     monkeypatch.setattr(
-        harness.BenchIndex, "agent_search", lambda self, query: ([], 0.0)
+        harness.BenchIndex, "agent_search", lambda self, query: ([], 0.001)
     )
 
 
@@ -459,3 +459,37 @@ def test_a_failure_that_is_not_a_label_error_still_stops_the_run(
     with pytest.raises(RuntimeError, match="query_documents failed"):
         runner._run_dataset(dataset, tmp_path / "work", opts, answers=False, judge=None)
     assert opts.label_errors == []
+
+
+def _scale_on(dataset, monkeypatch):
+    monkeypatch.setattr(runner, "load_labelled", lambda name, offline: dataset)
+    monkeypatch.setattr(runner, "wikipedia_distractors", lambda n, offline: [])
+
+
+def test_a_scale_tier_records_label_errors_and_scores_the_rest(
+    dataset, tmp_path, monkeypatch, no_agent
+):
+    dataset.questions.append(_bad_label())
+    _scale_on(dataset, monkeypatch)
+    opts = runner.RunOptions(
+        suite=runner.SUITES["pr"], out_dir=tmp_path / "out", log=lambda _m: None
+    )
+    out = runner._run_scale(tmp_path / "work", opts, [len(TOPICS)])
+    assert opts.label_errors == [opts.label_errors[0]]
+    assert opts.label_errors[0].startswith(f"scale-{len(TOPICS)}/bad: ")
+    assert out["tiers"][0]["retrieval"]["questions"] == len(TOPICS)
+
+
+def test_a_scale_tier_where_every_label_fails_reports_them_without_crashing(
+    dataset, tmp_path, monkeypatch, no_agent
+):
+    dataset.questions[:] = [_bad_label("b1"), _bad_label("b2", "also missing")]
+    _scale_on(dataset, monkeypatch)
+    logged = []
+    opts = runner.RunOptions(
+        suite=runner.SUITES["pr"], out_dir=tmp_path / "out", log=logged.append
+    )
+    out = runner._run_scale(tmp_path / "work", opts, [1])
+    assert out["tiers"] == []
+    assert len(opts.label_errors) == 2
+    assert any("no question scored" in m for m in logged)
