@@ -37,13 +37,18 @@ REFUSED_GIT_SUBCOMMANDS = {
 REFUSED_GIT_INVOCATIONS = (
     ("commit", "--amend"),
     ("reset", "--hard"),
+    ("checkout", "."),
+    ("checkout", "main", "--", "src/gaia/cli.py"),
+    ("checkout", "main", "src/gaia/cli.py"),
+    ("restore", "src/gaia/cli.py"),
+    ("restore", "--worktree", "src/gaia/cli.py"),
 )
 CONFIRM_GIT_INVOCATIONS = (
     ("add", "src/gaia/cli.py"),
     ("commit", "-m", "fix: thing"),
     ("checkout", "main"),
     ("switch", "main"),
-    ("restore", "src/gaia/cli.py"),
+    ("restore", "--staged", "src/gaia/cli.py"),
     ("stash", "push"),
     ("stash", "save"),
     ("stash", "apply"),
@@ -75,7 +80,7 @@ def _classify(argv: tuple[str, ...]) -> str:
 
 
 def test_coding_skill_bumps_for_the_changed_signed_skill():
-    assert "version: 0.2.2" in SKILL.read_text(encoding="utf-8")
+    assert "version: 0.2.3" in SKILL.read_text(encoding="utf-8")
 
 
 def test_coding_skill_documents_every_refused_git_command():

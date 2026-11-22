@@ -1730,6 +1730,71 @@ class TestRedirectionOnTheGrantedPath:
         assert not _is_lone_granted_segment([["gh", "issue", "list"]], frozenset())
 
 
+class TestGitCheckoutRestorePathOverwrites:
+    """Path-overwrite forms of `git checkout` / `git restore` are refused (#8227).
+
+    A plain branch checkout asks the user once; the file forms only needed
+    approval too, so an unattended run approved them automatically and an
+    uncommitted edit was gone before anyone saw it. Refused forms come back
+    as TIER_REFUSE (when the call also counts as destructive) or
+    TIER_CONFIRM_ONCE (the user may still run that exact line by hand): in
+    both tiers no grant ever runs them unasked.
+    """
+
+    @pytest.mark.parametrize(
+        "command,reason",
+        [
+            ("git checkout .", "names a path to restore"),
+            ("git checkout -- src/foo.py", "everything after it is a path"),
+            ("git checkout main -- src/foo.py", "everything after it is a path"),
+            ("git checkout main src/foo.py", "takes at most 1 operand"),
+            ("git checkout src/*.py", "names a path to restore"),
+            ("git checkout ./src/foo.py", "names a path to restore"),
+            ("git checkout :/src/foo.py", "names a path to restore"),
+            ("git restore src/gaia/cli.py", "operands need --staged or -S"),
+            ("git restore .", "operands need --staged or -S"),
+            (
+                "git restore --worktree src/gaia/cli.py",
+                "--worktree makes this overwrite",
+            ),
+            (
+                "git restore --staged --worktree src/gaia/cli.py",
+                "--worktree makes this overwrite",
+            ),
+            ("git restore -SW src/gaia/cli.py", "-W makes this overwrite"),
+            (
+                "git restore --staged --conflict=diff3 src/gaia/cli.py",
+                "--conflict makes this overwrite",
+            ),
+            (
+                "git restore --pathspec-from-file list.txt src/gaia/cli.py",
+                "reads the paths to overwrite from a file",
+            ),
+        ],
+    )
+    def test_a_path_overwrite_form_is_refused_not_prompted(self, command, reason):
+        error = check_granted(command, bypass=False, binaries=("git",))
+        assert error is not None, f"{command} should not reach a prompt"
+        assert error["tier"] in (TIER_REFUSE, TIER_CONFIRM_ONCE), error
+        assert reason in error["error"], error
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git checkout main",
+            "git checkout -b fix/discount",
+            "git checkout -b fix/discount main",
+            "git switch main",
+            "git switch --merge main",
+            "git restore --staged src/gaia/cli.py",
+            "git restore --staged --source HEAD src/gaia/cli.py",
+            "git restore file --staged",
+        ],
+    )
+    def test_branch_switches_and_unstaging_still_reach_a_prompt(self, command):
+        assert check_granted(command, bypass=False, binaries=("git",)) is None
+
+
 class TestGrantedRedirectReachesTheShell:
     def test_the_shell_performs_the_redirect(self, shell_tool, tmp_path, monkeypatch):
         records = []

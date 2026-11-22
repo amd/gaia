@@ -2,7 +2,7 @@
 name: coding
 description: Work on a codebase — read, search, edit and verify source files. Use when the user asks to fix a bug, add a feature, refactor, explain code, make a test pass, or change anything in a repository. Covers finding the right file, editing safely, and proving the change works before reporting it.
 license: MIT
-version: 0.2.2
+version: 0.2.3
 metadata:
   gaia:
     security_tier: community
@@ -144,6 +144,13 @@ change is the cheapest possible check that the diff is only what you meant.
 `add`, `commit`, `checkout`, `switch`, and `restore` require approval of the
 exact command before running. Write the commit message as if it is the only
 thing the reviewer reads, because for a squashed PR it is.
+
+Before switching branches, run `git status` and check for uncommitted edits.
+Carry them with `git switch --merge`, or stash them first. Never rebuild a
+discarded edit by hand: that can quietly revert the other branch's work. If a
+switch did discard something, report which files were lost instead of
+recreating them. Never use `checkout` or `restore` on files: `checkout`
+switches branches only, and `restore` unstages with `--staged` only.
 
 `stash list` and `stash show` are reads. `stash push`, `stash save`, `stash
 apply`, and `stash pop` require approval; bare `stash`, `stash drop`, and
