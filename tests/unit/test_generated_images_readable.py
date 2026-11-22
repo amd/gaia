@@ -399,6 +399,8 @@ class TestShellQuotedAndWindowsReads:
             "powershell -Command \"Get-Item '{p}'\"",
             "powershell -Command \"Get-FileHash -Algorithm SHA256 '{p}'\"",
             "powershell -Command \"Get-Content -LiteralPath '{p}' -Raw\"",
+            # A dot inside a path is not an invocation.
+            "powershell -Command \"Get-ChildItem '.'\"",
         ],
     )
     def test_a_powershell_read_runs(self, tree, validator, template):
@@ -423,6 +425,16 @@ class TestShellQuotedAndWindowsReads:
             "powershell -Command \"Get-Item '{p}' | & 'Remove-Item'\"",
             "powershell -Command \"& 'Remove-Item' '{p}'\"",
             "powershell -Command \"'Remove-Item {p}' | iex\"",
+            # Dot-invocation of a quoted name, away from the start of the line.
+            "powershell -Command \"Get-Item (. 'Out-File' '{p}')\"",
+            "powershell -Command \"Get-Item {{ . 'Out-File' '{p}' }}\"",
+            "powershell -Command \"Get-Item (.'Out-File' '{p}')\"",
+            "powershell -Command \"Get-Item (. ('Out-File') '{p}')\"",
+            "powershell -Command \"Get-Item -Path:.'Out-File'\"",
+            "powershell -Command \"Get-Item '{p}' | Select-Object (. 'Out-File')\"",
+            # A method named by a quoted string is still a method call.
+            "powershell -Command \"(Get-Item '{p}').'Delete'()\"",
+            'powershell -Command "(Get-Item \'{p}\').\\"Delete\\"()"',
         ],
     )
     def test_a_cmdlet_outside_single_quotes_is_still_seen(

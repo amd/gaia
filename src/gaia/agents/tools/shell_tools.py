@@ -1542,6 +1542,15 @@ _PS_BODY_ESCAPES = (
     (re.compile(r"::"), "static .NET member access ([Type]::Member)"),
     (re.compile(r"\.\s*[a-z_][a-z0-9_]*\s*\("), "method invocation (.Method(...))"),
     (re.compile(r"(?:^|\|)\s*\.\s+"), "dot-sourcing (. script.ps1)"),
+    # Anywhere in the body: single-quoted text is hidden from the cmdlet check.
+    (
+        re.compile(r"(?<![\w'\"\\/.])\.\s*['\"({]"),
+        "running a command named by a string (. 'name')",
+    ),
+    (
+        re.compile(r"\.\s*(?:'[^']*'|\"[^\"]*\")\s*\("),
+        "method invocation by a quoted name (.'Method'(...))",
+    ),
     # The two below fire in command position only — start of the body or just
     # after a pipe — so a path OPERAND (Get-Content C:/log.txt) is still a read.
     (
