@@ -735,19 +735,70 @@ def test_a_stale_agent_is_left_running_while_another_chat_answers(monkeypatch):
     assert any("takes over once" in e.get("message", "") for e in events), events
 
 
-def test_the_daemon_reports_a_stale_agent_instead_of_stopping_it(
-    fake_gaiacpp, monkeypatch
-):
-    from gaia.daemon.sidecars import registry as reg_mod
+def test_a_stale_agent_is_left_running_while_a_background_relay_runs(monkeypatch):
+    # A scheduled prompt or agent-loop tick isn't a chat session, but it is mid-answer.
+    _choose("gaiapy")
+    monkeypatch.setattr(_chat_helpers, "_relays_in_flight", 1)
+    events, acquired, stopped = _stale_dispatch(monkeypatch, busy=False)
+    assert stopped == [] and len(acquired) == 1
+    assert _chat_helpers._relays_in_flight == 1, "the turn's own count was released"
 
-    src = Path(reg_mod.__file__).read_text(encoding="utf-8")
-    assert (
-        'entry["stale_harness"] = getattr(manager, "uses_stale_harness", False)' in src
+
+def test_a_relay_is_counted_until_its_dispatch_returns(monkeypatch):
+    _choose("gaiapy")
+    seen = []
+    from gaia.ui.sidecar import relay
+
+    monkeypatch.setattr(
+        relay,
+        "relay_query",
+        lambda *a, **k: seen.append(_chat_helpers._relays_in_flight),
     )
-    assert (
-        "uses_stale_harness:"
-        not in src.split("def ensure", 1)[1].split("def _fire_started", 1)[0]
+    _relay_once(monkeypatch, "m")
+    assert seen in ([1], []), seen
+    assert _chat_helpers._relays_in_flight == 0
+
+
+def test_a_kept_stale_agent_keeps_its_own_model_rules(monkeypatch):
+    # Saved gaiacode, but the running gaiapy answers: no gaiacode model refusal.
+    from gaia.ui import run_manager as rm
+    from gaia.ui.sidecar import daemon_client, relay
+
+    monkeypatch.delenv("GAIA_MODEL_ID", raising=False)
+    monkeypatch.setenv("GAIA_UNPROVEN_HARNESS", "gaiacode")
+    _save_raw("gaiacode")
+    handle = daemon_client.SidecarHandle(
+        base_url="http://127.0.0.1:1",
+        token="t",
+        api_version="99.0",
+        agent_version="0.1.0",
+        mode="user",
+        pid=1,
+        agent_id="gaia",
+        stale_harness=True,
+        harness="gaiapy",
     )
+    monkeypatch.setattr(daemon_client, "acquire_handle", lambda agent_id: handle)
+    monkeypatch.setattr(rm.run_manager, "active_sessions", lambda: ["s1", "other"])
+    sent = {}
+    monkeypatch.setattr(
+        relay,
+        "relay_query",
+        lambda *a, **k: sent.setdefault("model", k.get("model_id")),
+    )
+    events = []
+
+    class _Handler:
+        def _emit(self, event):
+            events.append(event)
+
+    request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+    _chat_helpers._dispatch_sidecar_query(
+        _Handler(), request, [], "Gemma-4-E4B-it-GGUF", "gaia", session_id="s1"
+    )
+    # Past the model rules (the relay itself isn't faked here): none of gaiacode's refusals.
+    for e in events:
+        assert "gaiacode" not in str(e.get("content", "")), events
 
 
 def test_gaiacode_on_hybrid_starts_on_its_cheap_model(monkeypatch):

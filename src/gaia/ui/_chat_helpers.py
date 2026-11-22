@@ -2895,7 +2895,63 @@ def relay_one_prompt(
     return content
 
 
-def _dispatch_sidecar_query(
+# Relays between acquiring their agent and finishing, interactive and background alike.
+_RELAY_LOCK = threading.Lock()
+_relays_in_flight = 0
+_relay_held = threading.local()
+
+
+def _acquire_for_relay(daemon_client, agent_type: str, session_id, sse_handler):
+    """Acquire *agent_type*'s sidecar for one relay, restarting a stale one only when idle.
+
+    Counted as in flight from here until the dispatch returns, under one lock, so
+    no relay can start between the idle check and the restart.
+    """
+    global _relays_in_flight
+    from gaia.ui.run_manager import run_manager
+
+    with _RELAY_LOCK:
+        handle = daemon_client.acquire_handle(agent_type)
+        if getattr(handle, "stale_harness", False):
+            others = [s for s in run_manager.active_sessions() if s != session_id]
+            if others or _relays_in_flight:
+                # Restarting now would cut those answers off.
+                sse_handler._emit(
+                    {
+                        "type": "status",
+                        "status": "info",
+                        "message": (
+                            "The agent program was changed in another GAIA app. "
+                            "It takes over once the chats answering now finish."
+                        ),
+                    }
+                )
+            else:
+                logger.info(
+                    "chat: restarting the %s agent on the agent program now chosen",
+                    agent_type,
+                )
+                daemon_client.stop_sidecar(agent_type)
+                handle = daemon_client.acquire_handle(agent_type)
+        _relays_in_flight += 1
+        _relay_held.count = getattr(_relay_held, "count", 0) + 1
+    return handle
+
+
+def _dispatch_sidecar_query(*args, **kwargs) -> None:
+    """Relay one chat turn; see :func:`_dispatch_sidecar_query_unheld`."""
+    global _relays_in_flight
+    held_before = getattr(_relay_held, "count", 0)
+    try:
+        _dispatch_sidecar_query_unheld(*args, **kwargs)
+    finally:
+        with _RELAY_LOCK:
+            released = getattr(_relay_held, "count", 0) - held_before
+            _relays_in_flight -= released
+            _relay_held.count = held_before
+
+
+def _dispatch_sidecar_query_unheld(
     sse_handler,
     request: ChatRequest,
     history_pairs: list,
@@ -2982,30 +3038,7 @@ def _dispatch_sidecar_query(
     agent_type = profile.agent_id
 
     try:
-        handle = daemon_client.acquire_handle(agent_type)
-        if getattr(handle, "stale_harness", False):
-            from gaia.ui.run_manager import run_manager
-
-            others = [s for s in run_manager.active_sessions() if s != session_id]
-            if others:
-                # Restarting now would cut those answers off.
-                sse_handler._emit(
-                    {
-                        "type": "status",
-                        "status": "info",
-                        "message": (
-                            "The agent program was changed in another GAIA app. "
-                            "It takes over once the chats answering now finish."
-                        ),
-                    }
-                )
-            else:
-                logger.info(
-                    "chat: restarting the %s agent on the agent program now chosen",
-                    agent_type,
-                )
-                daemon_client.stop_sidecar(agent_type)
-                handle = daemon_client.acquire_handle(agent_type)
+        handle = _acquire_for_relay(daemon_client, agent_type, session_id, sse_handler)
     except SidecarError as exc:
         # The daemon's text names its internals and can carry a traceback.
         logger.error("chat: could not start the %s agent: %s", agent_type, exc)
@@ -3030,7 +3063,12 @@ def _dispatch_sidecar_query(
     from gaia.daemon.sidecars import fetch as _fetch
     from gaia.harnesses import NO_DEFAULT_MODEL, chosen_model
 
-    harness = _fetch.saved_flagship() if agent_type == FLAGSHIP_AGENT_ID else None
+    # A stale agent kept running answers as what it is, not as the new choice.
+    harness = (
+        (getattr(handle, "harness", None) or _fetch.saved_flagship())
+        if agent_type == FLAGSHIP_AGENT_ID
+        else None
+    )
     if harness in NO_DEFAULT_MODEL:
         # The session's model may be a filled-in default; this harness takes none.
         model_id = chosen_model()
