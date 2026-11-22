@@ -1177,6 +1177,20 @@ def _final_even_unattended(command: str) -> bool:
     return creates_a_link(command, cwd) or bool(_hard_target(command))
 
 
+_PYTHON_PROGRAMS = frozenset({"python", "python3", "py", "pythonw"})
+
+
+def _runs_python_script(command: str) -> bool:
+    """Whether *command* is ``python <script>.py ...``: a job for execute_python_file."""
+    words = _command_words(command)
+    if not words:
+        return False
+    program = os.path.basename(words[0]).lower().removesuffix(".exe")
+    return program in _PYTHON_PROGRAMS and any(
+        word.lower().endswith(".py") for word in words[1:3]
+    )
+
+
 def _changes_files(command: str) -> bool:
     """Whether *command* writes, creates, moves, copies or links a path."""
     # ``2>&1`` and ``2>nul`` only route errors; any other ``>`` writes a file.
@@ -6653,6 +6667,16 @@ class ShellToolsMixin:
             # With no console, a tool that asks can't run either.
             return name in tools and not (nobody and callable(asks) and asks(name))
 
+        if _runs_python_script(command) and runs("execute_python_file"):
+            # Small models otherwise fall back to reading the script and
+            # working the answer out by hand. Named here, so it must be callable.
+            loader = getattr(self, "tool_loader", None)
+            if loader is not None:
+                loader.admit_tools(["execute_python_file"], tools)
+            return (
+                "execute_python_file, passing the script's full path as "
+                "file_path and the rest of the command as args"
+            )
         if _changes_files(command):
             writers = [name for name in ("write_file", "edit_file") if runs(name)]
             if not writers:

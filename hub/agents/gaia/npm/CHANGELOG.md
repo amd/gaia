@@ -14,6 +14,12 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   prints the file's path). They used to mint nothing, which left the sidecar
   with its token check off. A sidecar started with no token now refuses to
   start; a developer running one by hand sets `GAIA_SIDECAR_ALLOW_NO_TOKEN=1`.
+- **Small models are held to what they actually did.** On a PC with 16 GB of
+  RAM or less the default is now Qwen3.5 2B (Qwen3.5 4B on an 8 GB GPU), and
+  their answers are checked: a memory save that never happened is named, a
+  garbled answer is retried once, and a skill folder the user asked to add is
+  captured when the model skips it (the approval prompt still applies). Both
+  models are on the `compact` feature tier, like Gemma 4 E4B.
 - **The Python package is now `gaiapy`.** `import gaia_agent` and
   `gaia_agent.<module>` still work and return the same modules, so code that
   imports the old name keeps running. A `gaiapy` command now starts the harness

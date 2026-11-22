@@ -28,7 +28,14 @@ type Entry struct {
 	// FitUnknown is set when the PC or the model's size could not be read,
 	// so the row is blocked without having been judged too big.
 	FitUnknown bool
+	// Tight: it fits, but leaves other apps less RAM than GAIA keeps for them.
+	// Still selectable.
+	Tight bool
 }
+
+// TightNote says what a Tight model costs, in the Agent UI's words
+// (setup.models.warn.tight).
+const TightNote = "Leaves your other apps little memory, so your PC may slow down while it runs."
 
 // NPUVerdict is what the setup plan says about this PC's Ryzen AI NPU, in the
 // four states that must stay distinct: ready, present but not ready, absent,
@@ -214,6 +221,10 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 			pool = npuMem
 		}
 		e.Fits, e.Reason = pool.Fit(size, kv)
+		if e.Fits && !e.OnNPU() && (e.Recommended == nil || !e.Recommended.Floor) {
+			roomy, _ := pool.WithAppHeadroom().Fit(size, kv)
+			e.Tight = !roomy
+		}
 	}
 
 	used := make([]bool, len(models))

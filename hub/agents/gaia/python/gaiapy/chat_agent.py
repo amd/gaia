@@ -518,6 +518,8 @@ FRESH_INTERPRETER = "new for this call: nothing is kept from earlier calls"
 
 #: Past this size a failed snippet is told how to fix it without sending it again.
 _COSTLY_TO_RESEND_CHARS = 2000
+#: argparse's "prog.py: error: ..." and click's "Error: Missing argument ...".
+_USAGE_ERROR = re.compile(r"^(?:\S+\.py: error: |Error: (?:Missing|No such|Invalid) )")
 
 
 def _fix_and_rerun_hint(
@@ -531,6 +533,13 @@ def _fix_and_rerun_hint(
     edit = "edit_file" if "edit_file" in tools else None
     save = "write_file" if "write_file" in tools else None
     lost_name = last_line.startswith("NameError")
+    if script is not None and _USAGE_ERROR.match(last_line):
+        # Told to edit, small models rewrote a working script instead.
+        return (
+            "The script rejected its arguments; the script itself is fine, so "
+            "don't edit it. Read its usage line in stderr and run it again with "
+            "the arguments it asks for"
+        )
     if script is not None:
         if edit is None:
             return None

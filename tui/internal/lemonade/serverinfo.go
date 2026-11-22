@@ -306,6 +306,17 @@ func (c *Client) ServerInfo(ctx context.Context) (ServerInfo, error) {
 	return describeServer(base, port, health, sys, GaiaChatModel()), nil
 }
 
+// LocalChatModel is GaiaChatModel when that is a model Lemonade runs on this
+// PC, else "": never a cloud, gateway, hybrid or Claude id. What a local-only
+// launch (gaiacpp) starts on, so a small PC gets the model setup chose for it.
+func LocalChatModel() string {
+	m := GaiaChatModel()
+	if m == "" || IsCloudID(m) || strings.HasPrefix(m, "claude-") {
+		return ""
+	}
+	return m
+}
+
 // GaiaChatModel is the model GAIA chats with, resolved as
 // gaia.llm.lemonade_client.resolve_chat_model does: config.json's last_model,
 // else default_model, else Gemma. A hybrid choice is its cheap model, the one

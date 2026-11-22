@@ -34,8 +34,7 @@ import { SetupRail, type RailStep } from './setup/SetupRail';
 import { TestStep } from './setup/TestStep';
 import {
     canCreateImages, cantRunHere, catalogOf, extraModels, initialSelection, isEmbedding, isNpu, isOptional, overallFromPlan,
-    pendingDownloads, resolveVision, savedVision, shortfall, skipChanges, toggle, tooBig, totals, type Selection,
-} from './setup/selection';
+    pendingDownloads, resolveVision, savedVision, shortfall, skipChanges, toggle, tooBig, totals, type Selection, onlyTight } from './setup/selection';
 import type {
     GpuMemoryStatus, LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCatalogEntry,
     SetupConfirm, SetupModelProgress, SetupPlan, SetupProblem, SetupRunStatus, SetupTest, StartCard, FlagshipAgent,
@@ -1331,6 +1330,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     </dl>
                                     <ul className="setup-reasons">
                                         {!selection.chatChosen && <li>{t('setup.plan.why.evaluated')}</li>}
+                                        {!selection.chatChosen && plan.left_for_apps_gb != null && <li>{t('setup.plan.why.headroom', { left: formatFitGb(plan.left_for_apps_gb) })}</li>}
                                         {chatEntry?.need_gb != null && chatEntry.capacity_gb != null && chatEntry.fits && (
                                             <li>{t('setup.plan.why.fits', { need: formatFitGb(chatEntry.need_gb), have: formatFitGb(chatEntry.capacity_gb) })}</li>
                                         )}
@@ -1723,10 +1723,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
 
             {confirm?.kind === 'no_fit' && (
                 <ConfirmSheet
-                    title={confirm.models.length === 1
-                        ? t('setup.confirm.noFitOne', { name: confirm.models[0].name })
-                        : t('setup.confirm.noFitMany')}
-                    confirmLabel={t('setup.confirm.downloadAnyway')}
+                    title={onlyTight(confirm.models) ? t('setup.confirm.tightOne', { name: confirm.models[0].name }) : confirm.models.length === 1 ? t('setup.confirm.noFitOne', { name: confirm.models[0].name }) : t('setup.confirm.noFitMany')}
+                    confirmLabel={onlyTight(confirm.models) ? t('setup.confirm.useAnyway') : t('setup.confirm.downloadAnyway')}
                     cancelLabel={t('setup.confirm.pickSmaller')}
                     onConfirm={() => { setConfirm(null); setNoFitAcked(true); void commit(ackDisk, true); }}
                     onCancel={() => setConfirm(null)}
