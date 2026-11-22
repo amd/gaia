@@ -29,6 +29,7 @@ from gaia.eval.retrieval.locate import (
     LabelError,
     chunk_hits,
     locate_chunks,
+    norm,
     resolve_evidence,
     token_overlap,
 )
@@ -302,7 +303,7 @@ class BenchIndex:
                 )
             hint = 0
             if ev.get("near"):
-                hint = doc.text.find(" ".join(ev["near"].split()))
+                hint = doc.text.find(norm(ev["near"]))
                 if hint < 0:
                     raise LabelError(
                         f"{q.id}: 'near' text is not in {ev['doc']} as indexed"

@@ -629,7 +629,6 @@ gaia/
 │   ├── installer/      # Installer / gaia init tests
 │   ├── hardware/       # Tests that need real AMD hardware (self-hosted runners)
 │   ├── setup_journey/  # Clean-PC setup journey tests
-│   ├── stress/         # Stress/load tests
 │   ├── electron/       # Electron app tests (Jest)
 │   ├── fixtures/       # Shared test fixtures/data
 │   └── test_*.py       # Top-level feature tests (sdk, api, chat, code, rag, eval…)

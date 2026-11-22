@@ -174,7 +174,7 @@ subcommand instead.
 |-------|---------|
 | `type` | Always `"result"` |
 | `is_error` | `true` when `status` is anything but `"success"` |
-| `status` | The agent's turn status (`"success"` on a completed answer) |
+| `status` | The agent's turn status (`"success"` on a completed answer; `"incomplete"` when the turn stopped short, including when it stopped because the same tool call kept failing) |
 | `result` | The answer text (`""` when there is none) |
 | `model` | The model the agent ran |
 | `num_steps` | Agent steps taken |
@@ -275,7 +275,7 @@ A model that writes its tool calls as JSON text can answer with a plan of severa
 
 For a request that needs three or more steps, a model that calls tools natively is asked to open its reply with a short plan. The plan is pinned above the message box, and the agent marks each step from the results of its tool calls: done once a call on the file or page the step names succeeded, failed while that action has failed. The model does not update the plan. If it answers while a step that needs a tool call is still to do, it is sent back once to finish. A request that asks only for a plan is answered with the plan, and nothing is tracked. Set `GAIA_AGENT_PLANS=0` to turn this off; the `update_tasks` tool, which is not offered otherwise, then lets the model keep the list itself.
 
-The same closing call, and the same write step for a missing requested file, run when an agent is stopped for repeating one tool call with identical arguments (`max_consecutive_repeats`, default **4**): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused get the same closing call, told what failed, and the failure is reported after the answer, so research done before the loop is kept. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
+The same closing call, and the same write step for a missing requested file, run when an agent is stopped for repeating one tool call with identical arguments, back to back or in any order as long as it keeps returning the same result (`max_consecutive_repeats`, default **4**; a wait resets the count): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused get the same closing call, told what failed, and the failure is reported after the answer, so research done before the loop is kept. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
 
 - **Per-invocation:** pass `--max-steps <n>` to `gaia chat` (e.g. `gaia chat --max-steps 80`).
 - **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.
@@ -2272,7 +2272,7 @@ When that server can't be reached, `gaia download` (with or without `--list` or
 `--clear-cache`) says so and exits `1`.
 
 **Available Agents:**
-chat, bash, talk, rag, vlm, minimal, mcp, sd
+chat, talk, rag, vlm, minimal, mcp, sd
 
 `gaia download --agent talk` also fetches the Kokoro voice model (`kokoro-v1`), which the GAIA agent's `text_to_speech` and `dictate_document` tools need and never download themselves.
 

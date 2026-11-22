@@ -2973,6 +2973,8 @@ export const enMessages = {
     'banner.download.progress': 'Download progress',
     'banner.download.starting': 'Starting download…',
     'banner.download.downloading': 'Downloading…',
+    'model.restore.done': 'Restored your last model.',
+    'model.restore.pick': 'Pick a model',
     // Start-up steps, keyed by the backend's init_tasks[].step; the banner adds animated dots.
     'banner.boot.check_server': 'Checking the model server',
     'banner.boot.load_libraries': 'Getting document search ready',
