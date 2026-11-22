@@ -51,6 +51,7 @@ const (
 // command IS the narration.
 var shellTools = map[string]bool{
 	"run_shell_command": true,
+	"bash_execute":      true,
 	"run_command":       true,
 	"execute_command":   true,
 	"shell":             true,
@@ -96,6 +97,34 @@ var toolPhrases = map[string]toolPhrase{
 	"get_file_preview": {With: "Previewing %s", Without: "Previewing a file", Arg: "file_path"},
 	"list_directory":   {With: "Listing %s", Without: "Listing the current folder", Arg: "directory"},
 	"search_file":      {With: "Looking for files matching %s", Without: "Looking for files", Arg: "pattern"},
+
+	// gaiacpp's names for its tools
+	"bash_execute":       {With: "%s", Without: "Running a command", Arg: "command"},
+	"file_read":          {With: "Reading %s", Without: "Reading a file", Arg: "path"},
+	"file_write":         {With: "Writing %s", Without: "Writing a file", Arg: "path"},
+	"file_edit":          {With: "Editing %s", Without: "Editing a file", Arg: "path"},
+	"file_search":        {With: "Looking for files matching %s", Without: "Looking for files", Arg: "pattern"},
+	"web_fetch":          {With: "Reading %s", Without: "Fetching a page", Arg: "url"},
+	"search_code":        {With: "Searching the code for %s", Without: "Searching the code", Arg: "query"},
+	"git_status":         {Without: "Checking git status"},
+	"git_diff":           {Without: "Reading the changes"},
+	"git_log":            {Without: "Reading the git history"},
+	"git_show":           {With: "Reading commit %s", Without: "Reading a commit", Arg: "ref"},
+	"env_inspect":        {Without: "Checking this machine"},
+	"delegate_task":      {Without: "Handing work to helpers"},
+	"remember":           {Without: "Saving to memory"},
+	"recall":             {With: "Checking memory for %s", Without: "Checking memory", Arg: "query"},
+	"update_memory":      {Without: "Updating memory"},
+	"forget":             {Without: "Deleting from memory"},
+	"take_screenshot":    {Without: "Taking a screenshot"},
+	"generate_image":     {With: "Creating an image of %s", Without: "Creating an image", Arg: "prompt"},
+	"analyze_image":      {With: "Looking at %s", Without: "Looking at an image", Arg: "path"},
+	"transcribe_audio":   {With: "Transcribing %s", Without: "Transcribing a recording", Arg: "path"},
+	"read_tool_output":   {Without: "Re-reading an earlier result"},
+	"list_mcp_prompts":   {Without: "Listing a connector's prompts"},
+	"get_mcp_prompt":     {With: "Reading the connector prompt %s", Without: "Reading a connector's prompt", Arg: "name"},
+	"list_mcp_resources": {Without: "Listing a connector's resources"},
+	"read_mcp_resource":  {With: "Reading the connector resource %s", Without: "Reading a connector's resource", Arg: "uri"},
 
 	// Web
 	"web_search":    {With: "Searching the web for %s", Without: "Searching the web", Arg: "query"},
@@ -252,6 +281,25 @@ func toolResultDetail(e event.CanonicalToolResultEvent) string {
 	return shortenPaths(resultDetail(e))
 }
 
+// echoesPayload reports a preview that is the result's own JSON, whole or cut
+// short, and not a line of output that happens to be JSON.
+func echoesPayload(preview string, data json.RawMessage) bool {
+	p := strings.TrimSuffix(strings.TrimSpace(preview), "…")
+	if !strings.HasPrefix(p, "{") || len(data) == 0 {
+		return false
+	}
+	var shown, sent any
+	if json.Unmarshal([]byte(p), &shown) == nil && json.Unmarshal(data, &sent) == nil {
+		if a, err := json.Marshal(shown); err == nil {
+			if b, err := json.Marshal(sent); err == nil && bytes.Equal(a, b) {
+				return true
+			}
+		}
+	}
+	var compact bytes.Buffer
+	return json.Compact(&compact, data) == nil && strings.HasPrefix(compact.String(), p)
+}
+
 func resultDetail(e event.CanonicalToolResultEvent) string {
 	// Classified FIRST, so every return below can carry the word. A preview that
 	// short-circuited ahead of this left a failed call marked in red and nothing
@@ -259,7 +307,8 @@ func resultDetail(e event.CanonicalToolResultEvent) string {
 	// rely on.
 	failed := !toolResultSucceeded(e.Data)
 
-	if p := clean(e.Preview); p != "" {
+	// A preview that is the payload itself is not a line for a person.
+	if p := clean(e.Preview); p != "" && !echoesPayload(e.Preview, e.Data) {
 		return markFailed(p, failed)
 	}
 

@@ -261,7 +261,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.30"`                  |
+| Contract version   | `API_VERSION = "2.31"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
