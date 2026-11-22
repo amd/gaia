@@ -457,7 +457,9 @@ export interface RetryResult {
 }
 
 /** GET /api/chat/context: the meter's numbers, or why there are none yet. */
-export type ContextUsageResult = ({ available: true } & ContextUsage) | { available: false; reason: string };
+export type ContextUsageResult =
+    | ({ available: true } & ContextUsage)
+    | { available: false; reason: string; reason_code?: string };
 
 /** POST /api/chat/retry-with/choose: which answer the chat now continues from. */
 export type RetryChoice = { kept: 'original' } | {

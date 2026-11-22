@@ -898,17 +898,21 @@ async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db))
         if relayed is not None and "usage" in relayed:
             return {"available": True, **relayed["usage"]}
         if relayed is not None:
-            return {"available": False, "reason": relayed["reason"]}
+            return {"available": False, **relayed}
         # Measuring needs the chat's agent, which lives in memory between turns.
-        answered = db.latest_message_id(session_id, role="assistant") is not None
+        if db.latest_message_id(session_id, role="assistant") is not None:
+            return {
+                "available": False,
+                "reason": (
+                    "Measured again with your next message: GAIA restarted or "
+                    "switched models since this chat's last answer."
+                ),
+                "reason_code": "remeasure_next_turn",
+            }
         return {
             "available": False,
-            "reason": (
-                "Measured again with your next message: GAIA restarted or "
-                "switched models since this chat's last answer."
-                if answered
-                else "Measured once GAIA has answered in this chat."
-            ),
+            "reason": "Measured once GAIA has answered in this chat.",
+            "reason_code": "not_answered_yet",
         }
     from gaia.agents.base.skill_budget import skill_budget_report
 
