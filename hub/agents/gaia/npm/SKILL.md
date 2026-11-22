@@ -167,7 +167,7 @@ Do not guess — ask the sidecar. `GET /v1/gaia/init` is a read-only preflight
 floor, and checks the model is present:
 
 ```bash
-curl -s http://127.0.0.1:8141/v1/gaia/init
+curl -s -H "authorization: Bearer $TOKEN" http://127.0.0.1:8141/v1/gaia/init
 ```
 
 It answers **200** when ready and **503** when not, with the **same body shape
@@ -224,26 +224,21 @@ await shutdown(proc);   // tree-kill; auto-cleanup also reaps on exit
   on `exit`, `SIGINT`/`SIGTERM`/`SIGHUP`, `uncaughtException`, and
   `unhandledRejection`. A `SIGKILL` of *your* process is the one case nothing
   in-process can catch.
-- **Mint a caller token, or you are running the sidecar unauthenticated.** The
-  sidecar requires `Authorization: Bearer <token>` on every `/v1/gaia/*`
-  request, and skips the check only when neither token env var is set — dev
-  mode, which is what `startSidecar` gives you, because this package mints
-  nothing. Loopback binding is not the boundary: this agent has shell and file
-  tools. Mint your own and pass it through the `env` option (`StartOptions`
-  extends `SpawnOptions`, so it merges over `process.env`):
+- **Every request needs the caller token.** The sidecar requires
+  `Authorization: Bearer <token>` on every `/v1/gaia/*` request and refuses to
+  start without a token. Loopback binding is not the boundary: this agent has
+  shell and file tools. `startSidecar` mints one per spawn, hands it to the
+  sidecar in a `0600` file, and returns it on the handle (pass `authToken` to
+  choose the value yourself):
 
   ```ts
-  import { randomBytes } from "node:crypto";
-  const token = randomBytes(32).toString("hex");
-  const proc = await startSidecar({
-    binaryPath: sidecar.binaryPath,
-    env: { GAIA_GAIA_SIDECAR_TOKEN: token },   // or ..._TOKEN_FILE, a 0600 path
-  });
+  const proc = await startSidecar({ binaryPath: sidecar.binaryPath });
+  const headers = { authorization: `Bearer ${proc.authToken}` };
   ```
 
-  Then send `authorization: "Bearer " + token` on every `/v1/gaia/*` call.
+  Send that header on every `/v1/gaia/*` call.
   `/health`, `/version`, and `/v1/gaia/version` are exempt, so `startSidecar`'s
-  own health-and-version handshake works either way. **If you did not spawn the
+  own health-and-version handshake needs no token. **If you did not spawn the
   sidecar** — you are talking to one the GAIA daemon started — the token is the
   daemon's, delivered to the sidecar as `GAIA_GAIA_SIDECAR_TOKEN_FILE` (a `0600`
   file path); read it from there, don't invent one. A 401 whose `detail` names
@@ -303,7 +298,7 @@ const res = await fetch(`${proc.baseUrl}/v1/gaia/query`, {
   headers: {
     "content-type": "application/json",
     accept: "text/event-stream",
-    authorization: `Bearer ${token}`,   // required unless the sidecar is in dev mode — §6
+    authorization: `Bearer ${proc.authToken}`,   // always required — §6
   },
   body: JSON.stringify({
     query: "Summarize the PDFs in ~/Documents/reports",
@@ -792,10 +787,8 @@ There is no silent null.
 - **A `401` from `/v1/gaia/*` is the caller-auth token, not a bug.** The sidecar
   requires `Authorization: Bearer <token>`; `/health`, `/version`, and
   `/v1/gaia/version` are exempt, which is why a green health check sits happily
-  in front of a 401 on `/query`. It skips the check only in dev mode — neither
-  token env var set — which is what `spawnSidecar` and `gaia serve` produce,
-  because this package mints nothing. Do not treat loopback binding as the
-  boundary; mint a token and pass it (§6).
+  in front of a 401 on `/query`. `startSidecar` returns the token as
+  `authToken`; `gaia serve` prints the file holding it (§6).
 - **`run_id` must be a UUID**, and unknown fields in the request body are a
   **422** — the model forbids extras. Typos don't get ignored.
 - **`gaia run` needs the *Python* `gaia` CLI on `PATH`** — the TUI shells out to
@@ -831,13 +824,15 @@ Against a lock that still carries `PENDING-…` hashes, `fetch` is *expected* to
 fail with a `PlatformError` before any download — that is the gate working, not a
 broken install. Only a published release has real hashes.
 
-Then, in another terminal:
+Then, in another terminal, with `TOKEN` read from the file `serve` printed:
 
 ```bash
+TOKEN=$(cat /path/printed/by/serve/launch-secret)
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
 curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.30","agentVersion":"0.3.6"}
-curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
+curl -s -H "authorization: Bearer $TOKEN"   http://127.0.0.1:8141/v1/gaia/init          # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
+  -H "authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
   -d '{"query":"What can you do?","run_id":"00000000-0000-4000-8000-000000000001","context":[],"can_answer_questions":false}'
 ```
@@ -846,10 +841,8 @@ A healthy run streams `status` / `token` events and ends with one `final`. If
 `/v1/gaia/init` is 503, fix what its `hint` names and retry — the rest of your
 integration is fine.
 
-That `/query` call carries no `Authorization` header because `gaia serve` starts
-the sidecar in dev mode. Against one started with a token, add
-`-H "authorization: Bearer $TOKEN"` — a **401** here and a green `/health` is
-that and nothing else (§6).
+A **401** here and a green `/health` means the token is missing or wrong, and
+nothing else (§6).
 
 **A 503 from `/query` itself is a different condition**: every retained
 session slot is busy and none is idle enough to evict (SPEC §5.2). Do NOT

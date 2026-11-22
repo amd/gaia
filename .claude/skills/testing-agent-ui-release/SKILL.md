@@ -115,10 +115,12 @@ so don't wait for approval unless something in the plan touches their own setup.
 python $SK/launch_isolated.py fetch v0.25.4-rc3 C:/gaia-test        # unpack only; needs 7-Zip or `pip install py7zr`
 python $SK/launch_isolated.py start --app C:/gaia-test/app-v0.25.4-rc3/gaia-desktop.exe --home C:/gaia-test/h-rc3
 export GAIA_UI_PORT=$(python $SK/launch_isolated.py port --home C:/gaia-test/h-rc3)   # waits for the backend
+export GAIA_UI_HOME=C:/gaia-test/h-rc3                                                 # its API token
 ```
 
 `app_state.py` and `pc_evals.py record` read `GAIA_UI_PORT` (or `--port`) and have no
 default, because the person's own app may be listening on 4200 and they'd read its chats.
+They read the backend's API token from `GAIA_UI_HOME` (or `--home`) the same way.
 
 - **An empty `--home` is a true first run.** Setup installs the backend and runs
   `gaia init`. That is the path new users hit, so test it at least once per pass, and

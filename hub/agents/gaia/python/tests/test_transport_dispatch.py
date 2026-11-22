@@ -38,6 +38,9 @@ from gaiapy import stdio as stdio_mod  # noqa: E402
 def served(monkeypatch):
     """Records ``(app, kwargs)`` for every uvicorn boot main() asks for."""
     calls = []
+    # Every real launcher passes a caller token; the sidecar refuses to start without.
+    monkeypatch.delenv("GAIA_GAIA_SIDECAR_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("GAIA_GAIA_SIDECAR_TOKEN", "launch-test-token")
     monkeypatch.setattr(
         uvicorn, "run", lambda app, **kwargs: calls.append((app, kwargs))
     )
@@ -151,6 +154,7 @@ def test_the_caller_auth_banner_still_reaches_the_http_startup(caplog, monkeypat
     """Moving it to the lifespan must not lose it: it is a security notice."""
     monkeypatch.delenv("GAIA_GAIA_SIDECAR_TOKEN", raising=False)
     monkeypatch.delenv("GAIA_GAIA_SIDECAR_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("GAIA_SIDECAR_ALLOW_NO_TOKEN", "1")
     with caplog.at_level(logging.WARNING):
         with TestClient(server_mod.build_app()):
             pass

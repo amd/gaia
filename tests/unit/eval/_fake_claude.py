@@ -22,9 +22,13 @@ HEADERS = {"X-Gaia-UI": "1"}
 
 
 def _backend(argv):
+    """The backend URL and its API token, as the MCP server would get them."""
     config_path = argv[argv.index("--mcp-config") + 1]
     with open(config_path, encoding="utf-8") as f:
-        args = json.load(f)["mcpServers"]["gaia-agent-ui"]["args"]
+        server = json.load(f)["mcpServers"]["gaia-agent-ui"]
+    args = server["args"]
+    with open(server["env"]["GAIA_UI_TOKEN_FILE"], encoding="utf-8") as f:
+        HEADERS["Authorization"] = f"Bearer {f.read().strip()}"
     return args[args.index("--backend") + 1]
 
 
