@@ -43,6 +43,11 @@ type modelSwitchRecorder interface {
 func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bool) {
 	switch e := evt.(type) {
 	case event.CanonicalStatusEvent:
+		if e.RetractsAnswer {
+			// Not narration: dropped, so the next tool call never files it as a note.
+			m.buffer = ""
+			m.markDirty()
+		}
 		if e.Skills != nil {
 			m.setReportedSkills(e.Skills)
 			if e.ModelID == "" && e.Message == "" {

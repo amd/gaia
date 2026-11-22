@@ -26,11 +26,16 @@ still does, the reply you get ends with:
 
 > I couldn't confirm the tests pass: no test run after the last change passed.
 
-Only a run of a test runner counts: the project's detected runner, or a command whose program
-is one (pytest, `go test`, `cargo test`, `npm test`, ctest and the like). Running a test file as
-a plain script (`python test_stats.py`) runs no tests, and `grep passed pytest.log` reads an old
-result, so neither counts. A shell command that changes files counts as an edit, so a test run
-before it doesn't back the claim either.
+Only a run of a test runner whose summary gaiacode can read counts: pytest, unittest, `go test`,
+`cargo test`, jest, vitest, mocha, rspec, phpunit, Maven and Gradle (JUnit), `dotnet test`,
+`swift test` and ctest. A run whose output has no summary it can read, or was too long to keep,
+backs nothing either way. Running a test file as a plain script (`python test_stats.py`) runs no
+tests, and `grep passed pytest.log` reads an old result, so neither counts.
+
+Any shell command that isn't a read counts as an edit, so a test run before it doesn't back the
+claim, except git commands that only record or share work (`git add`, `commit`, `push`, a new
+branch). A command that runs the tests and then writes, such as `pytest && black .`, counts as
+an edit.
 
 ## Running it
 

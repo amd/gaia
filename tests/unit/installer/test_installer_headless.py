@@ -376,6 +376,175 @@ class TestResolveReleaseRetries:
         assert resolve._retry_delay(_http_error(403, {"Retry-After": "600"}), 1) == 30.0
 
 
+class _Body:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def read(self, *args):
+        return self._body
+
+    def close(self):
+        pass
+
+
+def _limit_error(status, headers, message="", url=RETRY_URL):
+    body = json.dumps({"message": message}).encode() if message else b""
+    return urllib.error.HTTPError(url, status, "error", headers, _Body(body))
+
+
+class TestWaitRidesOutRateLimits:
+    """A rate-limited read during the asset wait is "not ready yet", not a failure."""
+
+    TAG = "v1.0.0"
+
+    @pytest.fixture(autouse=True)
+    def _clock(self, monkeypatch):
+        for name in ("GITHUB_FETCH_RETRIES", resolve.FIXTURE_ENV):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+        self.now = 0.0
+        self.sleeps = []
+
+        def sleep(seconds):
+            self.sleeps.append(seconds)
+            self.now += seconds
+
+        monkeypatch.setattr(resolve.time, "sleep", sleep)
+        monkeypatch.setattr(resolve.time, "monotonic", lambda: self.now)
+        monkeypatch.setattr(resolve, "list_releases", lambda: [])
+
+    def _complete(self):
+        names = resolve.expected_assets(self.TAG)
+        return {
+            names[i]: f"https://example/{names[i]}" for i in resolve.required(self.TAG)
+        }
+
+    def _reads(self, monkeypatch, *results):
+        pending = list(results)
+
+        def fake(tag):
+            item = pending.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+        monkeypatch.setattr(resolve, "release_assets", fake)
+        return pending
+
+    def _run(self, tmp_path, wait_minutes):
+        return resolve.main(
+            [
+                "--tag",
+                self.TAG,
+                "--wait-minutes",
+                str(wait_minutes),
+                "--out",
+                str(tmp_path / "r.json"),
+            ]
+        )
+
+    def test_secondary_limit_waits_then_succeeds(self, monkeypatch, tmp_path, capsys):
+        pending = self._reads(
+            monkeypatch,
+            None,
+            _limit_error(
+                403,
+                {"X-RateLimit-Remaining": "4000"},
+                "You have exceeded a secondary rate limit.",
+            ),
+            self._complete(),
+        )
+        assert self._run(tmp_path, 300) == 0
+        assert pending == []
+        assert self.sleeps == [60, 60.0]
+        assert "secondary rate limit" in capsys.readouterr().out
+
+    def test_exhausted_quota_waits_until_its_reset(self, monkeypatch, tmp_path):
+        reset = str(int(time.time()) + 1800)
+        self._reads(
+            monkeypatch,
+            _limit_error(
+                403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset}
+            ),
+            self._complete(),
+        )
+        assert self._run(tmp_path, 300) == 0
+        assert 1790 <= self.sleeps[0] <= 1802
+
+    def test_a_limit_wrapped_by_get_retries_is_still_recognised(
+        self, monkeypatch, tmp_path
+    ):
+        cause = _limit_error(429, {"Retry-After": "45"})
+        wrapped = RuntimeError("returned HTTP 429 after 2 attempt(s)")
+        wrapped.__cause__ = cause
+        self._reads(monkeypatch, wrapped, self._complete())
+        assert self._run(tmp_path, 300) == 0
+        assert self.sleeps == [45.0]
+
+    def test_a_limit_past_the_deadline_fails_loudly(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        reset = str(int(time.time()) + 3600)
+        self._reads(
+            monkeypatch,
+            _limit_error(
+                403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset}
+            ),
+        )
+        assert self._run(tmp_path, 10) == 1
+        out = capsys.readouterr().out
+        assert "rate-limiting" in out and "X-RateLimit-Remaining=0" in out
+        assert "Nothing was tested" in out
+        assert self.sleeps == []
+
+    def test_a_plain_forbidden_is_not_waited_on(self, monkeypatch, tmp_path, capsys):
+        error = _limit_error(
+            403,
+            {"X-RateLimit-Remaining": "4000"},
+            "Resource not accessible by integration",
+        )
+        self._reads(monkeypatch, error)
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            self._run(tmp_path, 300)
+        assert caught.value is error
+        assert self.sleeps == []
+        # GitHub's own reason is on record, so the next failure is diagnosable.
+        out = capsys.readouterr().out
+        assert "not a GitHub rate limit" in out
+        assert "Resource not accessible by integration" in out
+        assert "X-RateLimit-Remaining=4000" in out
+
+    def test_a_forbidden_hidden_behind_get_retries_is_still_explained(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        cause = _limit_error(403, {}, "Must have admin rights to Repository.")
+        wrapped = RuntimeError("returned HTTP 403 after 4 attempt(s)")
+        wrapped.__cause__ = cause
+        self._reads(monkeypatch, wrapped)
+        with pytest.raises(RuntimeError) as caught:
+            self._run(tmp_path, 300)
+        assert caught.value is wrapped
+        assert self.sleeps == []
+        assert "Must have admin rights" in capsys.readouterr().out
+
+    def test_a_404_still_means_not_published_yet(self, monkeypatch, tmp_path, capsys):
+        self._reads(monkeypatch, None, self._complete())
+        assert self._run(tmp_path, 300) == 0
+        assert "not a GitHub rate limit" not in capsys.readouterr().out
+
+    def test_a_server_error_is_not_waited_on(self, monkeypatch, tmp_path):
+        error = _limit_error(500, {"Retry-After": "5"})
+        self._reads(monkeypatch, error)
+        with pytest.raises(urllib.error.HTTPError):
+            self._run(tmp_path, 300)
+        assert self.sleeps == []
+
+    def test_an_unrelated_runtime_error_propagates(self, monkeypatch, tmp_path):
+        self._reads(monkeypatch, RuntimeError("boom"))
+        with pytest.raises(RuntimeError, match="boom"):
+            self._run(tmp_path, 300)
+
+
 # ── checked-in release fixture ────────────────────────────────────────────────
 
 

@@ -361,6 +361,24 @@ def test_plan_status_matches_the_fixture():
     assert set(event["plan"]) == {"steps", "current_step"}
 
 
+def test_answer_check_status_matches_the_fixture():
+    from gaia.ui.sse_translation import CanonicalTranslator
+
+    (event,) = CanonicalTranslator(run_id=None, agent_id="gaia").translate(
+        {
+            "type": "status",
+            "status": "working",
+            "phase": "answer_check",
+            "message": "Checking the answer",
+            "retracts_answer": True,
+        }
+    )
+
+    assert set(event) - {"type"} == set(EVENTS["status"]["fields"]) | {"phase"} | set(
+        EVENTS["status"]["retracts_answer_extension"]
+    )
+
+
 def test_context_usage_matches_the_fixture(tmp_path):
     from gaia.agents.base.history import SessionHistory
 

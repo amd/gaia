@@ -13,6 +13,7 @@ import json
 import pytest
 
 from gaia.eval import runner
+from gaia.ui.api_token import token_path
 
 
 class _Resp(io.BytesIO):
@@ -83,6 +84,32 @@ def test_memory_turned_off_fails_the_probe_with_the_command_that_fixes_it(
     assert "memory_enabled=False" in error
     assert '{"memory_enabled": true}' in error
     assert "X-Gaia-UI: 1" in error
+    assert f"Authorization: Bearer $(cat '{token_path()}')" in error
+
+
+def test_the_probe_presents_the_api_token(monkeypatch, settings_endpoint):
+    payload = settings_endpoint()
+    sent = []
+
+    def fake_urlopen(req, timeout=None):
+        sent.append(dict(req.header_items()))
+        return _Resp(json.dumps(payload).encode("utf-8"))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    assert runner._probe_memory_enabled("http://127.0.0.1:4200") is None
+    assert sent[0]["Authorization"] == "Bearer test-agent-ui-token"
+
+
+def test_a_missing_token_file_is_named(monkeypatch, tmp_path):
+    missing = tmp_path / "no-token"
+    monkeypatch.setenv("GAIA_UI_TOKEN_FILE", str(missing))
+
+    error = runner._probe_memory_enabled("http://127.0.0.1:4200")
+
+    assert str(missing) in error
+    assert "Open the GAIA desktop app" in error
+    assert "gaia chat --ui" not in error
 
 
 def test_backend_with_memory_on_passes_the_probe(monkeypatch, settings_endpoint):

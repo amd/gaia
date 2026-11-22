@@ -361,6 +361,31 @@ describe('mid-turn notes', () => {
         expect(screen.queryByText('The ledger bal')).not.toBeInTheDocument();
     });
 
+    it('shows one answer when a check replaces the first one (#8696)', async () => {
+        const draft = 'The command was declined, so nothing ran.';
+        const checked = 'junk2.txt is still there: the command was declined.';
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: draft } as StreamEvent);
+        });
+        await waitFor(() => expect(useChatStore.getState().streamingContent).toBe(draft));
+        act(() => {
+            emit({ type: 'status', status: 'working', phase: 'answer_check', message: 'Checking the answer', retracts_answer: true });
+            emit({ type: 'tool_start', tool: 'read_file', detail: 'junk2.txt' });
+        });
+        await waitFor(() => expect(useChatStore.getState().streamingContent).toBe(''));
+        expect(useChatStore.getState().liveStatus).not.toBe(null);
+        act(() => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: checked } as StreamEvent);
+        });
+
+        // The draft is gone for good: not the answer, not a note, not a "cut off" warning.
+        await waitFor(() => expect(useChatStore.getState().streamingContent).toBe(checked));
+        expect(screen.queryByText(draft)).not.toBeInTheDocument();
+        expect(document.querySelector('.flow-note')).toBeNull();
+        expect(document.querySelector('.flow-warning')).toBeNull();
+    });
+
     it('ends the reasoning once the answer starts streaming', async () => {
         await driveSend();
         act(() => {

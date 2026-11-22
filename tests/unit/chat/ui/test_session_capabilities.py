@@ -115,6 +115,7 @@ def test_lists_the_cached_agents_tools_with_a_category_each(client):
             },
         ],
         "skills": [],
+        "program": None,
     }
 
 
@@ -351,6 +352,23 @@ def test_extra_sidecar_fields_are_not_passed_through(client, sidecar):
     ]
     # A relayed agent doesn't report skills: null, never an empty list.
     assert r.json()["skills"] is None
+
+
+@pytest.mark.parametrize("chosen, program", [(None, "gaiapy"), ("gaiacpp", "gaiacpp")])
+def test_a_relayed_flagship_says_which_program_runs_it(
+    client, sidecar, chosen, program
+):
+    from gaia.config import GaiaConfig
+
+    if chosen:
+        GaiaConfig.save_key("flagship_agent", chosen)
+    sid, _ = _new_session(client, "gaia")
+    sidecar.proxy.answer = {"tools": []}
+
+    r = _get(client, sid)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["program"] == program
 
 
 def test_proxy_asks_the_sessions_tools_route():

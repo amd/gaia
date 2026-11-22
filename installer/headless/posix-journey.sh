@@ -308,8 +308,10 @@ wait_for_setup_run() {
   local port state="" deadline=$(( $(date +%s) + 120 ))
   port="$(grep -oE 'ui-port[ =]+[0-9]+' "${GAIA_HOME}/electron-main.log" | tail -n1 | grep -oE '[0-9]+$' || true)"
   [ -n "${port}" ] || die "no backend port in ${GAIA_HOME}/electron-main.log"
+  local token_file="${GAIA_UI_TOKEN_FILE:-${GAIA_HOME}/agent-ui-token}" token
   while [ "$(date +%s)" -lt "${deadline}" ]; do
-    state="$(curl -fsS --max-time 5 -H 'X-Gaia-UI: 1' "http://127.0.0.1:${port}/api/setup/status" 2>/dev/null \
+    token="$(cat "${token_file}" 2>/dev/null || true)"
+    state="$(curl -fsS --max-time 5 -H 'X-Gaia-UI: 1' -H "Authorization: Bearer ${token}" "http://127.0.0.1:${port}/api/setup/status" 2>/dev/null \
       | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin).get("state", ""))' 2>/dev/null || true)"
     case "${state}" in
       ''|idle) sleep 1 ;;
