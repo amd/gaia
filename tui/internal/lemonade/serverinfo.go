@@ -317,6 +317,31 @@ func LocalChatModel() string {
 	return m
 }
 
+// ChosenChatModel is the model the user chose for chat: GAIA_MODEL_ID, else
+// GaiaChatModel when config.json names one. "" when nothing was chosen, for a
+// harness with no proven model to fall back to (gaiacode).
+func ChosenChatModel() string {
+	if m := strings.TrimSpace(os.Getenv("GAIA_MODEL_ID")); m != "" {
+		return m
+	}
+	var doc struct {
+		Last    string `json:"last_model"`
+		Default string `json:"default_model"`
+	}
+	path := ConfigPathFrom(os.Getenv, os.UserHomeDir)
+	if path == "" {
+		return ""
+	}
+	raw, err := filelock.ReadFile(path)
+	if err != nil || json.Unmarshal(raw, &doc) != nil {
+		return ""
+	}
+	if strings.TrimSpace(doc.Last) == "" && strings.TrimSpace(doc.Default) == "" {
+		return ""
+	}
+	return GaiaChatModel()
+}
+
 // GaiaChatModel is the model GAIA chats with, resolved as
 // gaia.llm.lemonade_client.resolve_chat_model does: config.json's last_model,
 // else default_model, else Gemma. A hybrid choice is its cheap model, the one

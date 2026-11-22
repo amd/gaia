@@ -204,6 +204,7 @@ struct Session {
     std::set<std::string> roots;      // allowed folders and attached files
     std::set<std::string> builtWith;  // roots the agent was built with
     std::set<std::string> indexed;    // attached documents already indexed
+    std::set<std::string> announced;  // attached files already named to an agent with no index
     std::string workingDirectory;
     std::shared_ptr<ShellSession> shell;  // this chat's folder and exported variables
     std::string shellDir;                 // the working folder the shell was last put in
@@ -477,11 +478,14 @@ private:
         s.console = consolePtr;
         s.builtWith = s.roots;
         s.indexed.clear();  // a new agent has a new document index
+        s.announced.clear();
     }
 
     // Park the agent thread until the UI decides.
     ToolConfirmResult confirm(Session& s, const std::string& tool, const json& args) {
         if (s.bypass.load()) return ToolConfirmResult::ALLOW_ONCE;
+        // GitHub tools refuse by themselves while internet is off: don't ask about a write that can't happen.
+        if (s.internetOff->load() && tool.rfind("gh_", 0) == 0) return ToolConfirmResult::ALLOW_ONCE;
         std::shared_ptr<Run> run;
         {
             std::lock_guard<std::mutex> lock(s.currentMu);
@@ -971,9 +975,12 @@ private:
                 }
                 indexDocuments(*s, documents);
                 std::string asked = text;
-                if (!documents.empty() && !s->agent->tools().hasTool("index_document")) {
-                    asked += "\n\nAttached files (read them with your file tools):";
-                    for (const auto& d : documents) asked += "\n- " + d;
+                if (!s->agent->tools().hasTool("index_document")) {
+                    std::string fresh;
+                    for (const auto& d : documents) {
+                        if (s->announced.insert(d).second) fresh += "\n- " + d;
+                    }
+                    if (!fresh.empty()) asked += "\n\nAttached files (read them with your file tools):" + fresh;
                 }
                 AgentConfig cfg = s->agent->config();
                 if (!model.empty()) cfg.modelId = model;

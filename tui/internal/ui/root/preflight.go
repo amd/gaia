@@ -72,6 +72,7 @@ func (m FlagshipModel) localOptions(agent catalog.Agent) preflight.LocalOptions 
 	}
 	opts.Model = m.launchModel(agent)
 	opts.Native = agent.Native
+	opts.Harness = agent.Harness
 	opts.ClaudeMode = m.useClaude
 	// Only the flagship can switch where chat runs, so only it is asked.
 	opts.AskWhereChatRuns = agent.ID == catalog.FlagshipID

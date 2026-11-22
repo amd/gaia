@@ -327,6 +327,49 @@ TEST_F(GaiacodeSidecar, AGitHubWriteAsksAndADenialPostsNothing) {
     EXPECT_EQ(events[result]["data"].dump().find("\"html_url\""), std::string::npos) << events[result].dump();
 }
 
+TEST_F(GaiacodeSidecar, AttachedFilesAreNamedOncePerChat) {
+    mock_.pushResponse(answerReply("Read it."));
+    mock_.pushResponse(answerReply("Still read."));
+    ASSERT_NO_FATAL_FAILURE(start());
+    const fs::path file = work_ / "calc.py";
+    for (const char* run : {"run-a1", "run-a2"}) {
+        turn({{"query", "Look at the attached file"},
+              {"run_id", run},
+              {"context", json::array()},
+              {"session_id", "chat-once"},
+              {"documents", json::array({file.string()})}});
+    }
+    const auto sent = mock_.receivedBodies();
+    ASSERT_EQ(sent.size(), 2u);
+    const auto lastUser = [](const std::string& body) {
+        const json b = json::parse(body);
+        std::string text;
+        for (const auto& m : b["messages"]) {
+            if (m.value("role", "") == "user" && m["content"].is_string()) text = m["content"].get<std::string>();
+        }
+        return text;
+    };
+    EXPECT_NE(lastUser(sent[0]).find("Attached files"), std::string::npos) << lastUser(sent[0]);
+    EXPECT_EQ(lastUser(sent[1]).find("Attached files"), std::string::npos) << "named again: " << lastUser(sent[1]);
+}
+
+TEST_F(GaiacodeSidecar, InternetOffNeverAsksAboutAGitHubWrite) {
+    mock_.pushResponse(toolReply("gh_issue_comment", {{"number", 3}, {"body", "Fixed."}}));
+    mock_.pushResponse(answerReply("GitHub is off."));
+    ASSERT_NO_FATAL_FAILURE(start());
+    const auto events = turn({{"query", "Comment on issue 3"},
+                              {"run_id", "run-offwrite"},
+                              {"context", json::array()},
+                              {"session_id", "chat-offwrite"},
+                              {"internet_off", true},
+                              {"allowed_paths", json::array({work_.string()})}});
+    EXPECT_EQ(indexOf(events, "needs_confirmation"), -1) << dumpAll(events);
+    const int result = indexOf(events, "tool_result");
+    ASSERT_GE(result, 0) << dumpAll(events);
+    EXPECT_NE(events[result]["data"].dump().find("Internet access is off"), std::string::npos)
+        << events[result].dump();
+}
+
 // ---------------------------------------------------------------- the terminal UI's stdio child
 
 // Lines out, collected; a test waits for the turn's terminal event.

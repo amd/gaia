@@ -216,7 +216,7 @@ func (m FlagshipModel) nativeRefusal(next catalog.Agent) string {
 	name := programOf(next)
 	if m.useClaude {
 		return "Cannot switch to " + name + ": this session was started with --use-claude. " +
-			client.NativeClaudeUnavailable
+			client.NativeClaudeUnavailableFor(next.Harness)
 	}
 	if m.reopened {
 		return "Cannot switch to " + name + ": this is a reopened session (--resume or /sessions), and " +

@@ -154,6 +154,14 @@ func TestANativeAgentIsStillStoppedWhenItsModelCannotRun(t *testing.T) {
 			t.Errorf("the row does not name the model gaiacpp would start on: %q", row.Line)
 		}
 	})
+	t.Run("gaiacode with no model chosen is not started on a default", func(t *testing.T) {
+		t.Setenv("GAIA_MODEL_ID", "")
+		stubDownloadedLocalModels(t, nativeDefaultModel)
+		row := blockedOnModel(t, LocalOptions{Harness: "gaiacode"})
+		if !strings.Contains(row.Line, "no model chosen for gaiacode") {
+			t.Errorf("the row does not say gaiacode has no model: %q", row.Line)
+		}
+	})
 	t.Run("a cloud provider chosen but not connected", func(t *testing.T) {
 		rep := localRunner{opts: LocalOptions{Binary: bin, Native: true, ChatProvider: "fireworks"}}.
 			Check(context.Background(), localCfg())

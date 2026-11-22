@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/lemonade"
 )
@@ -319,6 +320,14 @@ func NewNativeSubprocessClient(path string, args []string, debug bool) *Subproce
 // Native reports whether the child is the C++ agent, so the UI can name it and
 // refuse what it cannot do before asking.
 func (s *SubprocessClient) Native() bool { return s.native }
+
+// NativeHarness names the native harness this client runs (gaiacpp, gaiacode), "" for none.
+func (s *SubprocessClient) NativeHarness() string {
+	if !s.native {
+		return ""
+	}
+	return catalog.NativeHarnessOf(s.path)
+}
 
 // processName is the child's program name, for a message that asks the user to
 // find it among their running processes.

@@ -115,7 +115,7 @@ func RunFlagship(dev bool, mockAgent string, agentChoice AgentChoice, ctrl *cont
 		WithLocalPreflight(preflight.LocalOptions{
 			// The gate has to answer about the binary this launch will actually
 			// spawn — with --mock that is the mock, not the name the seed carries.
-			Binary: agent.BinaryPath, ClaudeMode: useClaude, Native: agent.Native,
+			Binary: agent.BinaryPath, ClaudeMode: useClaude, Native: agent.Native, Harness: agent.Harness,
 		})
 	if resumed != nil {
 		m = m.WithResume(resumed.session, resumed.turns)
@@ -162,7 +162,7 @@ func checkClaudeSupported(agent catalog.Agent, useClaude bool) error {
 	}
 	return fmt.Errorf("--use-claude cannot be used here. %s Or run the Python agent, which has a "+
 		"Claude provider, by setting %s=%s. See %s",
-		client.NativeClaudeUnavailable, catalog.AgentEnv, catalog.PythonAgentBinary, catalog.AgentChoiceDocsURL)
+		client.NativeClaudeUnavailableFor(agent.Harness), catalog.AgentEnv, catalog.PythonAgentBinary, catalog.AgentChoiceDocsURL)
 }
 
 // RunChat launches the chat TUI directly with a subprocess agent (standalone mode).
@@ -449,7 +449,8 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 			rep = ReportReadiness(context.Background(), t, cfg, os.Stderr)
 		} else {
 			rep = ReportLocalReadiness(context.Background(),
-				preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: useClaude, Model: model, Native: agent.Native},
+				preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: useClaude, Model: model, Native: agent.Native,
+					Harness: agent.Harness},
 				cfg, os.Stderr)
 		}
 		// Every row, not just the blocker: a turn that answers nothing is
@@ -656,8 +657,12 @@ func resumeTarget(agent catalog.Agent, resume Resume) (*resumedSession, error) {
 			"this install runs %q over the %s transport, which keeps no sessions to reopen", agent.ID, agent.Transport)
 	}
 	if agent.Native {
-		return nil, fmt.Errorf("--resume needs the Python agent: gaiacpp, the native agent this launch would run, " +
-			"doesn't keep sessions yet. Start with GAIA_TUI_AGENT=gaia-agent (or --agent-program gaia-agent) to reopen one")
+		name := agent.Harness
+		if name == "" {
+			name = catalog.NativeAgentBinary
+		}
+		return nil, fmt.Errorf("--resume needs the Python agent: %s, the native agent this launch would run, "+
+			"doesn't keep sessions yet. Start with GAIA_TUI_AGENT=gaia-agent (or --agent-program gaia-agent) to reopen one", name)
 	}
 	if pinned := os.Getenv(client.HistoryFileEnv); pinned != "" {
 		return nil, fmt.Errorf("--resume cannot be used while %s=%s pins every launch to that "+
