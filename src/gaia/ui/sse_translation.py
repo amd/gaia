@@ -1204,13 +1204,15 @@ def render_invocation(args: Dict[str, Any]) -> str:
     blocks = []
     for key in sorted(args):
         value = args[key]
-        if isinstance(value, str) and "\n" in value.strip():
+        name = key in NAME_ARGS
+        # A name stays one line, its tab, CR and LF shown as codes.
+        if not name and isinstance(value, str) and "\n" in value.strip():
             blocks.append(_render_block(key, value))
             continue
         text = value if isinstance(value, str) else json.dumps(value, default=str)
-        text = " ".join(text.split())
-        # A name reads as exactly one name; other text keeps emoji and scripts.
-        text = visible_strict(text) if key in NAME_ARGS else visible_line(text)
+        # A name reads as exactly one name, coded before any whitespace is
+        # squashed; other text keeps emoji and scripts.
+        text = visible_strict(text) if name else visible_line(" ".join(text.split()))
         if len(text) > INVOCATION_VALUE_CHARS:
             hidden = len(text) - INVOCATION_VALUE_CHARS
             # Never a bare "…". A silent cut reads as the whole value, so the
@@ -1230,8 +1232,8 @@ def render_invocation(args: Dict[str, Any]) -> str:
 def _render_block(key: str, value: str) -> str:
     """Render a multi-line value as an indented block, so its lines stay lines."""
     lines = value.strip("\n").splitlines()
-    # A name or command split over lines is still a name; a body keeps its script.
-    shown_as = visible_strict if key in NAME_ARGS or key == "command" else visible
+    # A command's words get the name rule; a body keeps its script.
+    shown_as = visible_strict if key == "command" else visible
     shown = []
     for line in lines[:INVOCATION_BLOCK_LINES]:
         # Tabs as spaces so indentation survives; other controls shown, not obeyed.

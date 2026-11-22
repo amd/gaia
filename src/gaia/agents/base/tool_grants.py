@@ -293,6 +293,7 @@ NAME_ARGS = frozenset(
         "file_path",
         "folder",
         "working_directory",
+        "project_root",
         "output_path",
         "url",
         SITE_ARG,

@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Permission previews disclose when their combined arguments are truncated."""
 
+import pytest
+
 from gaia.ui.sse_translation import (
     INVOCATION_TOTAL_CHARS,
     CanonicalTranslator,
@@ -157,6 +159,35 @@ class TestLookAlikeNamesInTheTerminalCard:
             "fetch_page", url="https://exa\u200emple.com/a\ufe0f", note="ok"
         )
         assert "exa[U+200E]mple.com/a[U+FE0F]" in summary
+
+    @pytest.mark.parametrize(
+        "tool, key",
+        [
+            ("write_file", "file_path"),
+            ("fetch_page", "url"),
+            ("forget_memory", "id"),
+            ("open_project", "project_root"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "between, code",
+        [
+            (chr(9), "[U+0009]"),
+            (chr(13), "[U+000D]"),
+            (chr(10), "[U+000A]"),
+            (chr(13) + chr(10), "[U+000D][U+000A]"),
+        ],
+        ids=["tab", "cr", "lf", "crlf"],
+    )
+    def test_whitespace_in_a_name_shows_as_a_code_on_one_line(
+        self, tool, key, between, code
+    ):
+        summary = self._summary(tool, **{key: f"inv{self.ZWJ}oice.txt{between}b"})
+        assert f"inv[U+200D]oice.txt{code}b" in summary
+        assert self.ZWJ not in summary
+        assert chr(9) not in summary and chr(13) not in summary
+        # Not split into an indented block: the name stays on its own line.
+        assert f"\n{key}:\n" not in summary
 
     def test_a_path_access_question_codes_the_path(self):
         summary = self._summary(
