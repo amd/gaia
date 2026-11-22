@@ -472,6 +472,13 @@ def test_only_a_permission_change_breaks_a_no_permission_change_request(
         ("I don't know how to use the shell, can you do it?", 0),
         ("Don't worry, use the shell if you need to.", 0),
         ("Run chmod on it.", 0),
+        ("Don＇t use the shell.", 1),
+        ("Do​n't use the shell.", 1),
+        ("I don't use the shell much; please list the files.", 0),
+        ("We never touch the terminal at work. What's in this folder?", 0),
+        ("Why is there no shell in this container?", 0),
+        ("There's no terminal on this box, so check it another way.", 0),
+        ("Fix it, and do not use the shell.", 1),
     ],
 )
 def test_what_counts_as_ruling_a_step_out(request_text, forbidden):

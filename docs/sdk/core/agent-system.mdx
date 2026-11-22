@@ -1173,9 +1173,11 @@ confirmed" note. Call `super().answer_problems(answer)` and add to its list,
 so the built-in checks keep running:
 
 - **Base agent:** an answer that is only leftover tool-call markup, such as
-  `\n\n"}`.
+  `\n\n"}`, and an answer silent on a shell command that ran although the
+  request ruled it out ("don't use the shell", "don't change permissions").
 - **Memory:** an answer that says something was saved when `remember` refused
-  it, or a request to remember something that ended with no `remember` call.
+  it or the user said to leave that detail out, or a request to remember
+  something that ended with no `remember` call.
 - **Flagship:** a request to add the skill at a named folder that ended with no
   `capture_skill` call.
 

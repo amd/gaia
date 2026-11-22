@@ -14,6 +14,7 @@ permissions" in the request counts, and only a shell command that actually ran.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Dict, Iterable, List
 
 SHELL_TOOL = "run_shell_command"
@@ -57,13 +58,35 @@ _MAX_SHOWN = 3
 _MAX_COMMAND_CHARS = 80
 
 
+#: A word before the phrase that makes it a statement, not an instruction:
+#: "I don't use the shell much", "why is there no shell?".
+_STATEMENT_LEAD = frozenset(
+    "i we they he she there there's theres is was are were has have had got "
+    "who which".split()
+)
+
+
+def _normalised(text: str) -> str:
+    """*text* in NFKC with invisible format characters dropped."""
+    text = unicodedata.normalize("NFKC", text or "")
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+
+
+def _instructs(pattern: re.Pattern, text: str) -> bool:
+    for match in pattern.finditer(text):
+        before = re.search(r"([\w']+)\s+$", text[: match.start()])
+        if not before or before.group(1).lower() not in _STATEMENT_LEAD:
+            return True
+    return False
+
+
 def ruled_out(request: str) -> List[str]:
     """What *request* explicitly forbids, as phrases for a check message."""
-    text = request or ""
+    text = _normalised(request)
     found = []
-    if _NO_SHELL.search(text):
+    if _instructs(_NO_SHELL, text):
         found.append("not to use the shell")
-    if _NO_PERMISSION_CHANGE.search(text):
+    if _instructs(_NO_PERMISSION_CHANGE, text):
         found.append("not to change permissions")
     return found
 
