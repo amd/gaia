@@ -785,6 +785,32 @@ describe('NewChat when the chosen gaiacpp cannot start', () => {
         await waitFor(() => expect(screen.queryByText(/isn't on this PC/)).not.toBeInTheDocument());
     });
 
+    it("keeps gaiacpp chosen, and says why, when the Python agent isn't installed either", async () => {
+        const missing = programs();
+        missing.programs[0] = { ...missing.programs[0], installed: false };
+        vi.mocked(api.getAgentPrograms).mockResolvedValue(missing);
+        render(<NewChat onSend={vi.fn()} />);
+        await screen.findByText(/isn't on this PC/);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Use the Python agent' }));
+
+        expect(await screen.findByText(/Couldn't switch to the Python agent: it isn’t installed on this PC, so gaiacpp stays your agent/)).toBeInTheDocument();
+        expect(api.updateSettings).not.toHaveBeenCalled();
+        expect(screen.getByText(/isn't on this PC/)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Use the Python agent' })).toBeEnabled();
+    });
+
+    it('saves nothing when it cannot check the Python agent', async () => {
+        render(<NewChat onSend={vi.fn()} />);
+        await screen.findByText(/isn't on this PC/);
+        vi.mocked(api.getAgentPrograms).mockRejectedValue(new Error('the server is not answering'));
+
+        fireEvent.click(screen.getByRole('button', { name: 'Use the Python agent' }));
+
+        expect(await screen.findByText(/Couldn't switch to the Python agent: the server is not answering/)).toBeInTheDocument();
+        expect(api.updateSettings).not.toHaveBeenCalled();
+    });
+
     it('says so, and stays put, when the switch is refused', async () => {
         vi.mocked(api.updateSettings).mockRejectedValue(new Error('GAIA is answering in a chat'));
         render(<NewChat onSend={vi.fn()} />);
