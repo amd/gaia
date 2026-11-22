@@ -37,6 +37,44 @@ def pdf_parse_limits():
     return apply_configuration(array_maximum_element_count=PDF_MAX_ARRAY_ELEMENTS)
 
 
+def flatten_alpha_onto_white(img):
+    """*img* with any transparency composited onto white, else *img* itself."""
+    from PIL import Image
+
+    if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+        # The VLM drops alpha, so a transparent background would read as black.
+        rgba = img.convert("RGBA")
+        white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        img = Image.alpha_composite(white, rgba).convert("RGB")
+    return img
+
+
+# Only these formats can carry an alpha channel the model would drop.
+_ALPHA_CAPABLE_SIGNATURES = (b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a", b"RIFF")
+
+
+def flatten_transparent_image_bytes(image_bytes: bytes) -> bytes:
+    """PNG bytes of the image on white when it has transparency, else unchanged.
+
+    Raises ``PIL.UnidentifiedImageError`` when bytes that claim to be PNG, GIF
+    or WebP cannot be decoded.
+    """
+    if not image_bytes.startswith(_ALPHA_CAPABLE_SIGNATURES):
+        return image_bytes
+    if image_bytes.startswith(b"RIFF") and image_bytes[8:12] != b"WEBP":
+        return image_bytes
+
+    from PIL import Image
+
+    with Image.open(io.BytesIO(image_bytes)) as img:
+        flat = flatten_alpha_onto_white(img)
+        if flat is img:
+            return image_bytes
+        buffer = io.BytesIO()
+        flat.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+
 def prepare_image_for_vlm(image_bytes: bytes) -> dict:
     """Downscale and re-encode an image as the PNG or JPEG the VLM is sent.
 

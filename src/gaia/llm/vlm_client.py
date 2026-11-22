@@ -199,6 +199,11 @@ class VLMClient:
                 string — a caller that indexes the return value would otherwise
                 index the error as content (#3555).
         """
+        from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
+            flatten_transparent_image_bytes,
+        )
+
+        image_bytes = flatten_transparent_image_bytes(image_bytes)
         # Encode image as base64 and detect MIME type
         # Note: Image size optimization happens in pdf_utils.py during extraction
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
