@@ -39,7 +39,6 @@ NATIVE_TOOL_LABELS: Dict[str, str] = {
     "env_inspect": "Checking this machine",
     "delegate_task": "Handing work to helpers",
     "tasks": "Tracking progress",
-    "index_documents": "Indexing documents",
     "list_mcp_prompts": "Listing a connector's prompts",
     "get_mcp_prompt": "Reading a connector's prompt",
     "list_mcp_resources": "Listing a connector's resources",
@@ -56,6 +55,9 @@ def as_flagship_call(tool: str, args: Any) -> Tuple[str, Any]:
         return _file_search(args)
     twin = _TWINS.get(tool)
     if twin is None:
+        return tool, args
+    # The Python agent's own search_code is a pattern search, not the code index.
+    if tool == "search_code" and isinstance(args, dict) and "pattern" in args:
         return tool, args
     name, renames = twin
     if not isinstance(args, dict) or not renames:

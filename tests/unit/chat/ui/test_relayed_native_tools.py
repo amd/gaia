@@ -313,3 +313,13 @@ class TestEveryGaiacppToolHasWords:
     def test_no_translated_name_is_a_python_tool(self):
         """A name both agents use must not be rewritten under the Python one."""
         assert not NATIVE_TOOL_NAMES & set(GAIA_PROFILE.tool_labels)
+
+
+def test_only_gaiacpps_search_code_is_read_as_the_code_index():
+    """The Python agent's own search_code takes a pattern and keeps its name."""
+    assert as_flagship_call("search_code", {"query": "parse args"}) == (
+        "search_code_index",
+        {"query": "parse args"},
+    )
+    python_call = {"pattern": "TODO", "directory": "."}
+    assert as_flagship_call("search_code", python_call) == ("search_code", python_call)

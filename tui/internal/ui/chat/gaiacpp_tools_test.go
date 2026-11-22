@@ -88,4 +88,19 @@ func TestARawPayloadPreviewIsNotShownAsTheResultLine(t *testing.T) {
 	if line := toolResultDetail(event.CanonicalToolResultEvent{Tool: "file_edit", Preview: "Changed 1 place in inventory.py"}); line != "Changed 1 place in inventory.py" {
 		t.Errorf("result line = %q, want the agent's own preview", line)
 	}
+	long := `{"content_hash":"ab12","path":"proj/inventory.py","replacements":1,"success":true}`
+	if line := toolResultDetail(event.CanonicalToolResultEvent{Tool: "file_edit", Data: json.RawMessage(long), Preview: long[:40] + "…"}); strings.Contains(line, "content_hash") {
+		t.Errorf("result line = %q, want a cut payload hidden too", line)
+	}
+}
+
+func TestACommandWhoseOutputIsJSONStillShowsItsOutput(t *testing.T) {
+	for _, tool := range []string{"bash_execute", "run_shell_command"} {
+		data := `{"cwd":"/w","exit_code":0,"stderr":"","stdout":"{\"a\":1}
+","timed_out":false}`
+		line := toolResultDetail(event.CanonicalToolResultEvent{Tool: tool, Data: json.RawMessage(data), Preview: `{"a":1}`})
+		if line != `{"a":1}` {
+			t.Errorf("%s result line = %q, want the command's own output", tool, line)
+		}
+	}
 }

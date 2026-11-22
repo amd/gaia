@@ -281,6 +281,25 @@ func toolResultDetail(e event.CanonicalToolResultEvent) string {
 	return shortenPaths(resultDetail(e))
 }
 
+// echoesPayload reports a preview that is the result's own JSON, whole or cut
+// short, and not a line of output that happens to be JSON.
+func echoesPayload(preview string, data json.RawMessage) bool {
+	p := strings.TrimSuffix(strings.TrimSpace(preview), "…")
+	if !strings.HasPrefix(p, "{") || len(data) == 0 {
+		return false
+	}
+	var shown, sent any
+	if json.Unmarshal([]byte(p), &shown) == nil && json.Unmarshal(data, &sent) == nil {
+		if a, err := json.Marshal(shown); err == nil {
+			if b, err := json.Marshal(sent); err == nil && bytes.Equal(a, b) {
+				return true
+			}
+		}
+	}
+	var compact bytes.Buffer
+	return json.Compact(&compact, data) == nil && strings.HasPrefix(compact.String(), p)
+}
+
 func resultDetail(e event.CanonicalToolResultEvent) string {
 	// Classified FIRST, so every return below can carry the word. A preview that
 	// short-circuited ahead of this left a failed call marked in red and nothing
@@ -289,7 +308,7 @@ func resultDetail(e event.CanonicalToolResultEvent) string {
 	failed := !toolResultSucceeded(e.Data)
 
 	// A preview that is the payload itself is not a line for a person.
-	if p := clean(e.Preview); p != "" && !strings.HasPrefix(p, "{") {
+	if p := clean(e.Preview); p != "" && !echoesPayload(e.Preview, e.Data) {
 		return markFailed(p, failed)
 	}
 

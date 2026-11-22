@@ -786,6 +786,26 @@ TEST_F(GaiacppStdio, ALongWritePromptCountsTheLinesItLeavesOut) {
     ASSERT_TRUE(waitTerminal(1).is_object());
 }
 
+TEST_F(GaiacppStdio, AWritePromptShowsHiddenTextAsEscapesAndCountsACutLine) {
+    // An ESC sequence could repaint the card and a bidi override reorder it.
+    const std::string content = "ok\x1b[2Ksneaky\nabc\xE2\x80\xAE" "cba\n" + std::string(250, 'x') + "\n";
+    const fs::path out = work_ / "odd.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", out.string()}, {"content", content}}));
+    mock_.pushResponse(answer("Not written."));
+    start();
+    ask("write it");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    const std::string summary = prompt.value("summary", "");
+    EXPECT_EQ(summary.find('\x1b'), std::string::npos) << summary;
+    EXPECT_NE(summary.find("    ok\\x1b[2Ksneaky\n"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("abc\\u202ecba"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("    " + std::string(200, 'x') + "… [+50 more characters not shown]"), std::string::npos)
+        << summary;
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+}
+
 TEST_F(GaiacppStdio, DenyAndTimeoutLeaveTheToolUnrun) {
     for (const std::string decision : {"deny", "timeout"}) {
         const fs::path out = work_ / (decision + ".txt");

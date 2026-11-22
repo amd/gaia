@@ -163,6 +163,53 @@ std::string previewOf(const std::string& tool, const json& result) {
     return clip(dumps(result), 200);
 }
 
+// Cut to about n bytes and count what was left out: a bare "…" reads as the whole value.
+std::string clipCounted(const std::string& s, size_t n) {
+    if (s.size() <= n) return s;
+    size_t cut = n;
+    while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80) --cut;
+    long long hidden = 0;
+    for (size_t i = cut; i < s.size(); ++i) hidden += (static_cast<unsigned char>(s[i]) & 0xC0) != 0x80;
+    return s.substr(0, cut) + "… [+" + counted(hidden, "more character", "more characters") + " not shown]";
+}
+
+// Terminal controls and bidi overrides shown as escapes, so the text on the card
+// is the text the call carries; keepNewlines=false also shows a line break as \n.
+std::string visible(const std::string& s, bool keepNewlines = true) {
+    static const char* hex = "0123456789abcdef";
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        const auto c = static_cast<unsigned char>(s[i]);
+        const auto at = [&s](size_t k) { return k < s.size() ? static_cast<unsigned char>(s[k]) : 0; };
+        if (c == '\n' && keepNewlines) {
+            out += '\n';
+        } else if (c == '\n') {
+            out += "\\n";
+        } else if ((c < 0x20 && c != '\t') || c == 0x7f) {
+            out += "\\x";
+            out += hex[c >> 4];
+            out += hex[c & 0xF];
+        } else if (c == 0xC2 && at(i + 1) >= 0x80 && at(i + 1) <= 0x9F) {  // C1 controls
+            out += std::string("\\u00") + hex[at(i + 1) >> 4] + hex[at(i + 1) & 0xF];
+            ++i;
+        } else if (c == 0xD8 && at(i + 1) == 0x9C) {  // U+061C
+            out += "\\u061c";
+            ++i;
+        } else if (c == 0xE2 && ((at(i + 1) == 0x80 && ((at(i + 2) >= 0x8E && at(i + 2) <= 0x8F) ||
+                                                         (at(i + 2) >= 0xAA && at(i + 2) <= 0xAE))) ||
+                                 (at(i + 1) == 0x81 && at(i + 2) >= 0xA6 && at(i + 2) <= 0xA9))) {
+            const unsigned cp = ((c & 0x0Fu) << 12) | ((at(i + 1) & 0x3Fu) << 6) | (at(i + 2) & 0x3Fu);
+            out += "\\u";
+            for (int shift = 12; shift >= 0; shift -= 4) out += hex[(cp >> shift) & 0xF];
+            i += 2;
+        } else {
+            out += static_cast<char>(c);
+        }
+    }
+    return out;
+}
+
 // Up to 12 lines of text a call would write, indented, with the rest counted.
 std::string shownBlock(const std::string& text) {
     constexpr size_t kLines = 12;
@@ -173,7 +220,9 @@ std::string shownBlock(const std::string& text) {
         if (++lines <= kLines) {
             std::string line = text.substr(start, end - start);
             if (!line.empty() && line.back() == '\r') line.pop_back();
-            out += "    " + clip(line, 200) + "\n";
+            std::string spaced;
+            for (const char ch : line) spaced += ch == '\t' ? std::string("    ") : std::string(1, ch);
+            out += "    " + clipCounted(visible(spaced), 200) + "\n";
         }
         start = end + 1;
     }
@@ -185,28 +234,36 @@ std::string shownBlock(const std::string& text) {
 }
 
 // The body of an approval prompt: what the call will do, with no tool name or JSON.
+// The command keeps its line breaks; a path, URL or id is one line, so its
+// own text can't add a line that reads as part of the card.
 std::string promptSummary(const std::string& tool, const json& args) {
-    if (tool == "bash_execute") return argOf(args, "command");
+    const auto one = [&args](const char* key) { return visible(argOf(args, key), false); };
+    if (tool == "bash_execute") return visible(argOf(args, "command"));
     if (tool == "file_write") {
-        return argOf(args, "path") + "\n\nWhat will be saved:\n" + shownBlock(argOf(args, "content"));
+        return one("path") + "\n\nWhat will be saved:\n" + shownBlock(argOf(args, "content"));
     }
     if (tool == "file_edit") {
-        return argOf(args, "path") + "\n\nBefore:\n" + shownBlock(argOf(args, "old_string")) + "\n\nAfter:\n" +
+        return one("path") + "\n\nBefore:\n" + shownBlock(argOf(args, "old_string")) + "\n\nAfter:\n" +
                shownBlock(argOf(args, "new_string"));
     }
-    if (tool == "web_fetch") return argOf(args, "url");
-    if (tool == "forget") return "Memory " + argOf(args, "id");
+    if (tool == "web_fetch") return one("url");
+    if (tool == "forget") return "Memory " + one("id");
     if (tool == "take_screenshot") {
-        const std::string to = argOf(args, "output_path");
+        const std::string to = one("output_path");
         return to.empty() ? "The whole screen" : "The whole screen, saved to " + to;
     }
-    if (tool == "generate_image") return argOf(args, "prompt") + "\nSaved to " + argOf(args, "output_path");
+    if (tool == "generate_image") return clipCounted(one("prompt"), 600) + "\nSaved to " + one("output_path");
     std::string name = tool;
     std::replace(name.begin(), name.end(), '_', ' ');
     std::string out = "Use " + name;
     if (args.is_object()) {
         for (const auto& [key, value] : args.items()) {
-            out += "\n" + key + ": " + clip(value.is_string() ? value.get<std::string>() : dumps(value), 300);
+            if (value.is_string() && value.get<std::string>().find('\n') != std::string::npos) {
+                out += "\n" + visible(key, false) + ":\n" + shownBlock(value.get<std::string>());
+                continue;
+            }
+            const std::string text = value.is_string() ? value.get<std::string>() : dumps(value);
+            out += "\n" + visible(key, false) + ": " + clipCounted(visible(text, false), 300);
         }
     }
     return out;
