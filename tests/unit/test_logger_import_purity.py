@@ -49,6 +49,8 @@ def _child_env(tmp_path):
     # The suite moves GAIA's log file around; these tests are about import
     # purity and must not depend on (or write to) whichever path is current.
     env.pop(gaia_logger.LOG_FILE_ENV, None)
+    # So the default log file the child falls back to is not the real ~/.gaia one.
+    env["GAIA_HOME"] = str(tmp_path / "gaia-home")
     for key in ("TMP", "TEMP", "TMPDIR"):
         env[key] = str(tmp_path)
     env["PYTHONPATH"] = os.pathsep.join(

@@ -163,8 +163,9 @@ def test_tilde_gaia_home_expands_to_the_user_home(launch_dir, tmp_path, monkeypa
     assert "launch" not in seen["env"]["GAIA_HOME"]
 
 
-def test_blank_gaia_home_is_left_alone(launch_dir, tmp_path, monkeypatch):
+def test_blank_gaia_home_is_left_alone(launch_dir, tmp_path, monkeypatch, mock_home):
     """A blank GAIA_HOME means "unset" to every reader; it must not become cwd."""
+    # Unset, the host dir falls back to <home>/.gaia/host, which the spawn creates.
     monkeypatch.delenv(client.paths.HOME_ENV_VAR, raising=False)
     monkeypatch.setenv("GAIA_HOME", "  ")
     seen = _env_seen(monkeypatch, tmp_path)

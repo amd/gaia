@@ -160,9 +160,12 @@ class TestDebugEndpoint:
         assert resp.status_code == 404
 
     def test_debug_endpoint_returns_state_when_env_set(
-        self, ui_api_client, monkeypatch
+        self, ui_api_client, monkeypatch, tmp_path
     ):
         monkeypatch.setenv("GAIA_DEBUG", "1")
+        # Bound at import, so the Path.home patch misses it; the endpoint creates it.
+        grants_file = tmp_path / ".gaia" / "connectors" / "grants.json"
+        monkeypatch.setattr("gaia.ui.routers.connectors.GRANTS_FILE", grants_file)
         resp = ui_api_client.get("/api/connectors/_debug")
         assert resp.status_code == 200
         body = resp.json()

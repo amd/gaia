@@ -79,6 +79,8 @@ def test_terminate_server_spares_the_caller(tmp_path, background):
     result = subprocess.run(
         [sys.executable, str(script), background],
         cwd=tmp_path,
+        # A silent launch writes logs/lemonade.log under the GAIA home.
+        env={**os.environ, "GAIA_HOME": str(tmp_path / "gaia-home")},
         capture_output=True,
         text=True,
         timeout=60,

@@ -227,6 +227,66 @@ def _patch_default_gaia_home(mp, default_gaia_home) -> None:
     mp.setattr(config_mod, "default_gaia_home", default_gaia_home)
     # Bound at import; the connector lock is the one writer among those names.
     mp.setattr(_refresh_lock, "default_gaia_home", default_gaia_home)
+    _patch_ui_gaia_home(mp, default_gaia_home)
+
+
+def _patch_ui_gaia_home(mp, default_gaia_home) -> None:
+    """The Agent UI's uploads and documents folders resolve through its own
+    ``gaia_home`` (from ``gaia.llm.lemonade_embedded``), not ``gaia.home``."""
+    ui_utils = sys.modules.get("gaia.ui.utils")
+    if ui_utils is None:
+        return
+    original = getattr(ui_utils.gaia_home, "__wrapped__", ui_utils.gaia_home)
+
+    def gaia_home() -> Path:
+        if os.environ.get("GAIA_HOME"):
+            return original()
+        return default_gaia_home()
+
+    gaia_home.__wrapped__ = original
+    mp.setattr(ui_utils, "gaia_home", gaia_home)
+
+
+_REAL_GAIA_DIR = _RUN_HOME / ".gaia"
+#: Bound now: tests patch ``os.stat`` to fail, and the check runs inside their patch.
+_REAL_STAT = os.stat
+
+
+def _real_gaia_dir_exists() -> bool:
+    try:
+        _REAL_STAT(_REAL_GAIA_DIR)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+#: Whether the real ``~/.gaia`` existed before any test ran; collection writes none.
+_REAL_GAIA_DIR_EXISTED = _real_gaia_dir_exists()
+_REAL_GAIA_DIR_REPORTED = []
+
+
+@pytest.fixture(autouse=True)
+def _never_create_real_gaia_home(request):
+    """Fail the test that creates ``~/.gaia`` on a machine that had none.
+
+    Inert where ``~/.gaia`` already exists (a developer's own install), so it
+    bites on fresh CI runners. Reported once per process, not by every later test.
+    """
+    if _REAL_GAIA_DIR_EXISTED or _REAL_GAIA_DIR_REPORTED or _real_gaia_dir_exists():
+        yield
+        return
+    yield
+    if _real_gaia_dir_exists():
+        _REAL_GAIA_DIR_REPORTED.append(request.node.nodeid)
+        pytest.fail(
+            f"This test created {_REAL_GAIA_DIR}, the real GAIA home, which did "
+            "not exist when the run started. Point it at a tmp folder instead: "
+            "monkeypatch.setenv('GAIA_HOME', ...), the mock_home fixture, or for "
+            "a subprocess an env with GAIA_HOME set. Under pytest-xdist another "
+            "test running at the same time may be the one that wrote it; run "
+            "this file alone to confirm.",
+            pytrace=False,
+        )
 
 
 # Session scope: module- and class-scoped fixtures build agents (and their
