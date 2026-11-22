@@ -20,7 +20,11 @@ import pytest
 import gaia.config as gaia_config
 from gaia import security
 from gaia.agents.tools.path_access import read_access_error
-from gaia.agents.tools.shell_tools import ShellToolsMixin, _parse_line
+from gaia.agents.tools.shell_tools import (
+    ShellToolsMixin,
+    _parse_line,
+    _ps_code_outside_literals,
+)
 from gaia.security import PathValidator
 from gaia.vlm.mixin import VLMToolsMixin
 
@@ -320,3 +324,234 @@ class TestShell:
             host._path_traversal_refusal(steps[0], str(tree.work), frozenset())
             is not None
         )
+
+
+def _verdict_like_an_allowed_file(tree, validator, template):
+    """The image's verdict next to the same line on a PNG in an allowed folder."""
+    host = _ShellHost(validator)
+    mine = tree.work / "mine.png"
+    mine.write_bytes(PNG)
+    image = _shell_refusal(host, template.format(p=tree.png), tree.work)
+    allowed = _shell_refusal(host, template.format(p=mine), tree.work)
+    return image, allowed
+
+
+def _assert_read_like_an_allowed_file(tree, validator, template):
+    image, allowed = _verdict_like_an_allowed_file(tree, validator, template)
+    if allowed is None:
+        assert image is None, image
+        return
+    # Whatever the line needs (an approval, say), the image is not why.
+    assert image is not None
+    assert image.get("tier") == allowed.get("tier"), (image, allowed)
+    assert "forbidden path" not in image["error"], image
+    assert "Write blocked" not in image["error"], image
+
+
+class TestShellQuotedAndWindowsReads:
+    """Paths with spaces need quotes, so those are the forms a model uses (#8702)."""
+
+    @pytest.mark.parametrize(
+        "template",
+        ['cat "{p}"', 'ls -l "{p}"', 'wc -c "{p}"', 'file "{p}"'],
+    )
+    def test_a_quoted_read(self, tree, validator, template):
+        _assert_read_like_an_allowed_file(tree, validator, template)
+
+    @pytest.mark.skipif(os.name == "nt", reason="cmd.exe passes single quotes on")
+    def test_a_single_quoted_read(self, tree, validator):
+        _assert_read_like_an_allowed_file(tree, validator, "cat '{p}'")
+
+    @WINDOWS
+    def test_single_quotes_stay_closed_where_cmd_does_not_strip_them(
+        self, tree, validator
+    ):
+        # A program may split 'a -o b' where GAIA saw one word.
+        host = _ShellHost(validator)
+        assert _shell_refusal(host, f"cat '{tree.png}'", tree.work) is not None
+
+    @WINDOWS
+    @pytest.mark.parametrize(
+        "template",
+        [
+            "type {p}",
+            'type "{p}"',
+            'dir "{p}"',
+            'more "{p}"',
+            "certutil -hashfile {p} SHA256",
+            'certutil -hashfile "{p}" SHA256',
+            "powershell -Command \"(Get-Item '{p}').Length\"",
+            "powershell -Command \"Get-Item '{p}'\"",
+            "powershell -Command \"Get-Item -LiteralPath '{p}'\"",
+            "powershell -NoProfile -Command \"Get-FileHash '{p}'\"",
+            "powershell -Command \"Get-FileHash -Algorithm SHA256 -Path '{p}'\"",
+            "powershell -Command \"Test-Path '{p}'\"",
+            "powershell -Command \"(Get-ChildItem '{p}').Length\"",
+        ],
+    )
+    def test_a_windows_read(self, tree, validator, template):
+        _assert_read_like_an_allowed_file(tree, validator, template)
+
+    @WINDOWS
+    @pytest.mark.parametrize(
+        "template",
+        [
+            "powershell -Command \"Get-Item '{p}'\"",
+            "powershell -Command \"Get-FileHash -Algorithm SHA256 '{p}'\"",
+            "powershell -Command \"Get-Content -LiteralPath '{p}' -Raw\"",
+            # A dot inside a path is not an invocation.
+            "powershell -Command \"Get-ChildItem '.'\"",
+        ],
+    )
+    def test_a_powershell_read_runs(self, tree, validator, template):
+        """Every generated name holds 'SDXL-Turbo', read as a cmdlet until now."""
+        host = _ShellHost(validator)
+        command = template.format(p=tree.png)
+        assert _shell_refusal(host, command, tree.work) is None
+
+    @WINDOWS
+    @pytest.mark.parametrize(
+        "template",
+        [
+            "powershell -Command \"Get-Item '{p}' | Remove-Item\"",
+            "powershell -Command \"Get-Item 'a-b' | Set-Content x\"",
+            'powershell -Command "Get-Item \\"Remove-Item\\""',
+            # An apostrophe inside a double-quoted string opens no literal.
+            'powershell -Command "Get-Item \\"it\'s\\" | Remove-Item \'y\'"',
+            # PowerShell takes curly quotes as quotes too.
+            "powershell -Command \"Get-Item “it's” | Remove-Item 'y'\"",
+            "powershell -Command \"Get-Item 'a`' | Remove-Item 'y'\"",
+            # A string named as the command to run is still a command.
+            "powershell -Command \"Get-Item '{p}' | & 'Remove-Item'\"",
+            "powershell -Command \"& 'Remove-Item' '{p}'\"",
+            "powershell -Command \"'Remove-Item {p}' | iex\"",
+            # Dot-invocation of a quoted name, away from the start of the line.
+            "powershell -Command \"Get-Item (. 'Out-File' '{p}')\"",
+            "powershell -Command \"Get-Item {{ . 'Out-File' '{p}' }}\"",
+            "powershell -Command \"Get-Item (.'Out-File' '{p}')\"",
+            "powershell -Command \"Get-Item (. ('Out-File') '{p}')\"",
+            "powershell -Command \"Get-Item -Path:.'Out-File'\"",
+            "powershell -Command \"Get-Item '{p}' | Select-Object (. 'Out-File')\"",
+            # A method named by a quoted string is still a method call.
+            "powershell -Command \"(Get-Item '{p}').'Delete'()\"",
+            'powershell -Command "(Get-Item \'{p}\').\\"Delete\\"()"',
+        ],
+    )
+    def test_a_cmdlet_outside_single_quotes_is_still_seen(
+        self, tree, validator, template
+    ):
+        host = _ShellHost(validator)
+        command = template.format(p=tree.work / "mine.png")
+        assert _shell_refusal(host, command, tree.work) is not None, command
+
+    @WINDOWS
+    @pytest.mark.parametrize(
+        "template",
+        [
+            'del "{p}"',
+            'erase "{p}"',
+            'echo x > "{p}"',
+            'type "{w}" > "{p}"',
+            'copy "{w}" "{p}"',
+            'move "{w}" "{p}"',
+            'ren "{p}" other.png',
+            "powershell -Command \"Remove-Item '{p}'\"",
+            "powershell -Command \"Set-Content '{p}' x\"",
+            "powershell -Command \"Copy-Item '{w}' '{p}'\"",
+            "powershell -Command \"Get-Item '{p}'; Remove-Item '{p}'\"",
+            "powershell -Command \"Get-Item '{p}' | Remove-Item\"",
+            "powershell -Command \"(Get-Item '{p}').Delete()\"",
+            'powershell -Command "Get-Item \\"{p}\\"$(Remove-Item x)"',
+        ],
+    )
+    def test_a_windows_write_stays_refused(self, tree, validator, template):
+        source = tree.work / "w.png"
+        source.write_bytes(PNG)
+        host = _ShellHost(validator)
+        command = template.format(p=tree.png, w=source)
+        assert _shell_refusal(host, command, tree.work) is not None, command
+        assert tree.png.read_bytes() == PNG
+
+    @pytest.mark.parametrize("quote", ['"', "'"])
+    def test_a_quoted_read_still_cannot_reach_other_state_files(
+        self, tree, validator, quote
+    ):
+        host = _ShellHost(validator)
+        for target in (tree.state / "config.json", tree.state / "keys" / "signing.png"):
+            command = f"cat {quote}{target}{quote}"
+            assert _shell_refusal(host, command, tree.work) is not None, command
+
+    @WINDOWS
+    @pytest.mark.parametrize(
+        "template",
+        ['type "{t}"', "powershell -Command \"Get-Content '{t}'\""],
+    )
+    def test_a_windows_read_still_cannot_reach_other_state_files(
+        self, tree, validator, template
+    ):
+        host = _ShellHost(validator)
+        command = template.format(t=tree.state / "config.json")
+        assert _shell_refusal(host, command, tree.work) is not None, command
+
+
+class TestPowerShellLiterals:
+    """Only text PowerShell can never run is hidden from the cmdlet check."""
+
+    @pytest.mark.parametrize(
+        "body, code",
+        [
+            ("get-item 'c:\\a\\sdxl-turbo.png'", "get-item ''"),
+            ("get-item 'it''s-here.png'", "get-item ''"),
+            ("get-item 'a' 'b-c'", "get-item '' ''"),
+        ],
+    )
+    def test_a_single_quoted_string_is_blanked(self, body, code):
+        assert _ps_code_outside_literals(body) == code
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # A ' inside double quotes opens nothing: the cmdlet after it is code.
+            "get-item \"it's\" | out-host 'y'",
+            # Curly quotes, a backtick or an open quote: judge the whole text.
+            "get-item \u201cit's\u201d | out-host 'y'",
+            "get-item 'a`' | out-host 'y'",
+            "get-item 'a | out-host",
+            "get-item \"a | out-host 'y'",
+        ],
+    )
+    def test_nothing_that_may_run_is_hidden(self, body):
+        assert "out-host" in _ps_code_outside_literals(body)
+
+
+class TestARefusedReadNeverSaysWrite:
+    """A read refused for a protected folder was worded as a blocked write."""
+
+    def test_a_shell_read(self, tree, validator):
+        refusal = _shell_refusal(
+            _ShellHost(validator), f'cat "{tree.state / "config.json"}"', tree.work
+        )
+        assert refusal is not None
+        assert "Write blocked" not in refusal["error"]
+        assert "protected directory" in refusal["error"]
+
+    def test_a_tool_read(self, tree, validator):
+        allowed, reason = validator.validate_read(
+            str(tree.state / "config.json"), prompt_user=False
+        )
+        assert not allowed
+        assert "Write blocked" not in reason
+        assert "protected directory" in reason
+
+    @WINDOWS
+    def test_a_windows_system_file(self, tree, validator):
+        allowed, reason = validator.validate_read(
+            r"C:\Windows\win.ini", prompt_user=False
+        )
+        assert not allowed
+        assert "Write blocked" not in reason
+
+    def test_a_refused_write_still_says_write(self, tree, validator):
+        blocked, reason = validator.is_write_blocked(str(tree.state / "config.json"))
+        assert blocked
+        assert reason.startswith("Write blocked: ")
