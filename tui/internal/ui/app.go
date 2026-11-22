@@ -1,8 +1,8 @@
 package ui
 
 import (
-	"errors"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
