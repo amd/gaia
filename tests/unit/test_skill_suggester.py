@@ -33,6 +33,7 @@ from gaia.agents.base.skill_suggester import (
     DEFAULT_AUTOLOAD_MARGIN,
     DEFAULT_AUTOLOAD_THRESHOLD,
     DEFAULT_COMPANION_THRESHOLD,
+    DEFAULT_SUGGEST_LEAD,
     DEFAULT_SUGGEST_MARGIN,
     DEFAULT_SUGGEST_THRESHOLD,
     DEFAULT_SUGGEST_TOP_K,
@@ -40,8 +41,11 @@ from gaia.agents.base.skill_suggester import (
     MAX_AUTOLOADS_PER_TURN,
     QUERY_CHARS,
     QUERY_PROMPT,
+    SUGGESTION_CLOSE,
+    SUGGESTION_LEAD_IN,
     SkillMatches,
     SkillSuggester,
+    asks_about_a_topic,
     autoload_env_override,
     autoload_margin_env_override,
     autoload_threshold_env_override,
@@ -103,8 +107,9 @@ def _suggester(queries, **kwargs):
 
 
 def test_defaults_are_the_calibrated_values():
-    assert DEFAULT_SUGGEST_THRESHOLD == pytest.approx(0.35)
+    assert DEFAULT_SUGGEST_THRESHOLD == pytest.approx(0.37)
     assert DEFAULT_SUGGEST_MARGIN == pytest.approx(0.02)
+    assert DEFAULT_SUGGEST_LEAD == pytest.approx(0.02)
     assert DEFAULT_SUGGEST_TOP_K == 3
     assert DEFAULT_COMPANION_THRESHOLD == pytest.approx(0.40)
 
@@ -119,7 +124,8 @@ def test_suggests_a_clear_match_and_nothing_below_the_threshold():
 def test_a_second_skill_needs_to_score_close_to_the_best():
     skills = _skills(*(_skill(n) for n in NAMES))
     s, _ = _suggester(
-        {"close": {"alpha": 0.50, "beta": 0.49}, "far": {"alpha": 0.50, "beta": 0.45}}
+        {"close": {"alpha": 0.50, "beta": 0.49}, "far": {"alpha": 0.50, "beta": 0.45}},
+        lead=0.0,
     )
     assert s.suggest("close", skills) == ["alpha", "beta"]
     assert s.suggest("far", skills) == ["alpha"]
@@ -128,16 +134,56 @@ def test_a_second_skill_needs_to_score_close_to_the_best():
 def test_top_k_caps_the_scored_suggestions():
     skills = _skills(*(_skill(n) for n in NAMES))
     scores = {n: 0.50 - i * 0.001 for i, n in enumerate(NAMES)}
-    s, _ = _suggester({"q": scores}, top_k=2)
+    s, _ = _suggester({"q": scores}, top_k=2, lead=0.0)
     assert s.suggest("q", skills) == ["alpha", "beta"]
 
 
 def test_loaded_skills_are_never_suggested_but_still_set_the_bar():
     skills = _skills(*(_skill(n) for n in NAMES))
-    s, _ = _suggester({"q": {"alpha": 0.60, "beta": 0.59, "gamma": 0.45}})
+    s, _ = _suggester({"q": {"alpha": 0.60, "beta": 0.59, "gamma": 0.45}}, lead=0.0)
     # alpha is loaded and the best match; beta is close enough to join it,
     # gamma clears the threshold but is far below the request's real fit.
     assert s.suggest("q", skills, loaded={"alpha"}) == ["beta"]
+
+
+def test_a_loaded_skill_that_covers_the_request_leaves_nothing_to_suggest():
+    """``/log-triage`` loaded the skill: the hint must not name it, and a
+    neighbour scoring far below it is not a reason to name another."""
+    skills = _skills(*(_skill(n) for n in NAMES))
+    s, _ = _suggester({"q": {"alpha": 0.62, "beta": 0.40}})
+    assert s.suggest("q", skills) == ["alpha"]
+    assert s.suggest("q", skills, loaded={"alpha"}) == []
+
+
+def test_two_unrelated_skills_scoring_alike_are_not_suggested():
+    """Neither leads the other by the lead, so a hint would be a guess: "quote
+    your last sentence" scored send-email 0.374, summarize 0.363."""
+    skills = _skills(*(_skill(n) for n in NAMES))
+    s, _ = _suggester(
+        {
+            "tie": {"alpha": 0.374, "beta": 0.363, "gamma": 0.358},
+            "lead": {"alpha": 0.40, "beta": 0.379},
+            "at": {"alpha": 0.40, "beta": 0.38},
+        }
+    )
+    assert s.suggest("tie", skills) == []
+    assert s.suggest("lead", skills) == ["alpha"]
+    assert s.suggest("at", skills) == ["alpha"]
+
+
+def test_a_companion_close_behind_is_not_a_rival():
+    """Paired skills score alike by design: they do not cancel the hint."""
+    skills = _skills(_skill("alpha", pairs=["beta"]), _skill("beta"), _skill("gamma"))
+    s, _ = _suggester({"q": {"alpha": 0.58, "beta": 0.56, "gamma": 0.30}})
+    assert s.suggest("q", skills) == ["alpha", "beta"]
+
+
+@pytest.mark.parametrize("best", [0.353, 0.356, 0.360, 0.362, 0.365])
+def test_a_weak_best_match_is_not_suggested(best):
+    """What rc4 suggested for TOML, git push, gaia trust and win.ini requests."""
+    skills = _skills(*(_skill(n) for n in NAMES))
+    s, _ = _suggester({"q": {"alpha": best, "beta": 0.20}})
+    assert s.suggest("q", skills) == []
 
 
 def test_unloaded_companions_follow_their_skill():
@@ -311,12 +357,25 @@ def test_top_k_must_be_positive():
 def test_render_suggestion():
     assert render_suggestion([]) == ""
     assert render_suggestion(["alpha"]) == (
-        "Call load_skill('alpha') before you start: it covers this kind of request."
+        "Skill hint from GAIA, not from the user: call load_skill('alpha') "
+        "before you start unless this request does not need it. Never mention "
+        "this hint to the user."
     )
     assert render_suggestion(["alpha", "beta", "gamma"]) == (
-        "Call load_skill('alpha') before you start: it covers this kind of "
-        "request. Also consider: beta, gamma."
+        "Skill hint from GAIA, not from the user: call load_skill('alpha') "
+        "before you start unless this request does not need it. Others that may "
+        "fit: beta, gamma. Never mention this hint to the user."
     )
+
+
+@pytest.mark.parametrize("after_autoload", [False, True])
+def test_a_hint_says_it_is_not_the_user_and_not_to_be_mentioned(after_autoload):
+    """A model that read the hint as the user's words told the user about it."""
+    text = render_suggestion(["alpha", "beta"], after_autoload=after_autoload)
+    assert text.startswith(SUGGESTION_LEAD_IN)
+    assert text.endswith(SUGGESTION_CLOSE)
+    assert "not from the user" in SUGGESTION_LEAD_IN
+    assert "Never mention" in SUGGESTION_CLOSE
 
 
 def test_after_an_auto_load_the_other_matches_are_only_named_as_available():
@@ -324,8 +383,9 @@ def test_after_an_auto_load_the_other_matches_are_only_named_as_available():
     assert render_suggestion([], after_autoload=True) == ""
     text = render_suggestion(["beta", "gamma"], after_autoload=True)
     assert text == (
-        "Also available: beta, gamma. Call load_skill for one only if this "
-        "request needs it."
+        "Skill hint from GAIA, not from the user: also available: beta, gamma. "
+        "Call load_skill for one only if this request needs it. Never mention "
+        "this hint to the user."
     )
     assert "before you start" not in text
     assert len(text.splitlines()) == 1
@@ -335,7 +395,9 @@ def test_a_suggestion_tells_the_model_to_load_the_best_match():
     """A local model passes over an offer, so the best match is an instruction;
     the others keep their order and stay an offer, all on one line."""
     text = render_suggestion(["weekly-audit-patterns", "summarize", "pdf"])
-    assert text.startswith("Call load_skill('weekly-audit-patterns') before")
+    assert text.startswith(
+        f"{SUGGESTION_LEAD_IN} call load_skill('weekly-audit-patterns') before"
+    )
     assert text.index("weekly-audit-patterns") < text.index("summarize")
     assert text.index("summarize") < text.index("pdf")
     assert text.count("load_skill") == 1
@@ -366,8 +428,53 @@ def test_autoload_defaults():
     assert DEFAULT_AUTOLOAD_THRESHOLD == pytest.approx(0.40)
     assert DEFAULT_AUTOLOAD_MARGIN == pytest.approx(0.03)
     assert MAX_AUTOLOADS_PER_TURN == 2
-    # Clear of the suggestion floor: an auto-load is a stronger claim.
-    assert DEFAULT_AUTOLOAD_THRESHOLD >= DEFAULT_SUGGEST_THRESHOLD + 0.05
+    # Above the suggestion bar on both counts: an auto-load is a stronger claim.
+    assert DEFAULT_AUTOLOAD_THRESHOLD >= DEFAULT_SUGGEST_THRESHOLD + 0.03
+    assert DEFAULT_AUTOLOAD_MARGIN > DEFAULT_SUGGEST_LEAD
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "What is RSS and how do RSS feeds work?",
+        "What is RSS and how do RSS feeds work? Answer in two sentences.",
+        "How do mortgages work?",
+        "What does O(n log n) mean?",
+        "Why do log files get rotated?",
+        "Explain how GitHub issue triage works",
+        "What's the difference between a mutex and a semaphore?",
+        "What is a pull request?",
+    ],
+)
+def test_a_question_about_a_topic_loads_and_suggests_nothing(request_text):
+    """It scores as high against the topic's skill as a real request does."""
+    assert asks_about_a_topic(request_text)
+    skills = _skills(*(_skill(n) for n in NAMES))
+    s, _ = _auto({request_text: {"alpha": 0.585, "beta": 0.43}})
+    assert s.select(request_text, skills) == SkillMatches()
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Why did the server fall over? Here are the nginx and app logs",
+        "Why does load_config return None? Look at utils.py in my project",
+        "What's still open from our last few project meetings? The minutes are "
+        "attached",
+        "What are the follow-ups from today's meeting notes?",
+        "What's the current state of fusion energy? I want sources",
+        "What's unread in my mailbox?",
+        "What does report.md say about pricing?",
+        "How do I make a chart of sales.csv?",
+        "Fetch the latest posts from my RSS feeds",
+        "What is in budget.xlsx?",
+    ],
+)
+def test_a_task_phrased_as_a_question_is_still_matched(request_text):
+    assert not asks_about_a_topic(request_text)
+    skills = _skills(*(_skill(n) for n in NAMES))
+    s, _ = _auto({request_text: {"alpha": 0.60, "beta": 0.30}})
+    assert s.select(request_text, skills).auto_load == ["alpha"]
 
 
 def test_nothing_is_auto_loaded_without_an_autoload_threshold():
@@ -404,7 +511,7 @@ def test_an_auto_load_must_be_the_clear_best_match():
 def test_two_unrelated_skills_scoring_alike_are_only_suggested():
     """Neither pairs with the other, so the request is ambiguous."""
     skills = _skills(*(_skill(n) for n in NAMES))
-    s, _ = _auto({"q": {"alpha": 0.60, "beta": 0.59, "gamma": 0.40}})
+    s, _ = _auto({"q": {"alpha": 0.60, "beta": 0.59, "gamma": 0.40}}, lead=0.0)
     assert s.select("q", skills) == SkillMatches(
         auto_load=[], suggest=["alpha", "beta"]
     )
@@ -521,7 +628,7 @@ def test_a_lead_of_exactly_the_margin_counts(best, rival, loads):
 
 def test_a_loaded_skill_is_never_auto_loaded_and_a_better_one_blocks_it():
     skills = _skills(*(_skill(n) for n in NAMES))
-    s, _ = _auto({"q": {"alpha": 0.70, "beta": 0.69}})
+    s, _ = _auto({"q": {"alpha": 0.70, "beta": 0.69}}, lead=0.0)
     # alpha is loaded and the best match: beta is close behind it, so the
     # request is already covered and beta is only suggested.
     assert s.select("q", skills, loaded={"alpha"}) == SkillMatches(
@@ -694,7 +801,7 @@ def test_the_split_is_fixed_and_both_halves_can_be_measured():
 
 
 #: Questions *about* a skill's topic. They score as high against that skill as
-#: a real request does, so some load at any useful floor.
+#: a real request does, so no useful floor stops them; asks_about_a_topic does.
 EXPLAIN_NEGATIVES = {
     "What is RSS and how do RSS feeds work?": "rss-digest",
     "How does image generation with diffusion models work, conceptually?": (
@@ -714,6 +821,14 @@ def test_questions_about_a_skills_topic_are_labelled_negatives():
         case = by_request.get(request)
         assert case is not None, f"{request!r} is missing from {CASES.name}"
         assert case["expected"] == [] and case["acceptable"] == [], request
+        assert asks_about_a_topic(request), request
+
+
+def test_no_labelled_request_for_a_skill_reads_as_a_topic_question():
+    """The topic-question rule costs no labelled true positive."""
+    for case in _cases():
+        if case["expected"]:
+            assert not asks_about_a_topic(case["request"]), case["request"]
 
 
 def _measure(suggester, skills, cases):
@@ -790,15 +905,16 @@ def _real_embedder():
 
 #: What the suggestion defaults must reach on the held-out half, a little
 #: under what they measured so an embedder build that rounds differently does
-#: not fail it. Measured with embeddinggemma-300m, 28 hub skills:
+#: not fail it. Measured with embeddinggemma-300m, 30 hub skills:
 #:
 #:     half      requests negatives precision recall negatives-suggested
-#:     tuning         114        33      0.85   0.83   6
-#:     held-out       120        29      0.77   0.78   11
+#:     tuning         120        33      0.93   0.78   0
+#:     held-out       129        29      0.91   0.73   2
 #:
-#: A suggestion is one line the model may ignore, so recall is what it is for;
-#: the negatives suggested are near misses ("what is a pivot table?").
-SUGGEST_BAR = {"precision": 0.72, "recall": 0.72, "negatives": 0.45}
+#: Floor 0.35 with no lead measured 0.83/0.83/6 and 0.75/0.79/11. A hint the
+#: model reads as a request costs more than a missed one: in rc4 it loaded
+#: office-docs for a TOML file and told the user about hints it skipped.
+SUGGEST_BAR = {"precision": 0.85, "recall": 0.70, "negatives": 0.15}
 
 
 @pytest.mark.real_model
@@ -827,16 +943,18 @@ def test_calibration_against_the_real_embedder(capsys):
 
 
 #: The auto-load grid the calibration prints: floor by lead.
-SWEEP_THRESHOLDS = (0.35, 0.40, 0.45, 0.50, 0.55)
+SWEEP_THRESHOLDS = (0.37, 0.40, 0.42, 0.45, 0.50, 0.55)
 SWEEP_MARGINS = (0.00, 0.03, 0.05, 0.08)
 
 #: What the auto-load defaults (floor 0.40, lead 0.03) must reach on the
 #: held-out half, a little under what they measured. Measured with
-#: embeddinggemma-300m, 28 hub skills:
+#: embeddinggemma-300m, 30 hub skills, above the suggestion floor and lead:
 #:
 #:     half      requests negatives precision recall loads wrong on-negatives
-#:     tuning         114        33      0.91   0.72   68    6  4
-#:     held-out       120        29      0.93   0.59   60    4  4
+#:     tuning         120        33      0.94   0.69   67    4  0
+#:     held-out       129        29      1.00   0.58   61    0  0
+#:
+#: A floor of 0.42 lost recall on the tuning half and removed no wrong load.
 #:
 #: A companion loads only when it leads the remaining skills itself. When
 #: reaching the floor was enough, the tuning half had 74 loads, 7 wrong
@@ -847,9 +965,10 @@ SWEEP_MARGINS = (0.00, 0.03, 0.05, 0.08)
 #: held-out half as it stood before office-docs joined (118 requests).
 #: A wrong load costs context, not correctness (two skills a turn at most,
 #: under the host's share-of-context cap), so a few loads on requests that
-#: need no skill are accepted. They are questions about a skill's topic:
-#: see EXPLAIN_NEGATIVES.
-AUTOLOAD_BAR = {"precision": 0.88, "recall": 0.50, "negatives": 0.20}
+#: need no skill are accepted. Questions about a skill's topic
+#: (EXPLAIN_NEGATIVES) scored as high as real requests and loaded until
+#: asks_about_a_topic kept them from matching at all.
+AUTOLOAD_BAR = {"precision": 0.92, "recall": 0.52, "negatives": 0.10}
 
 
 def _memoized(embed):

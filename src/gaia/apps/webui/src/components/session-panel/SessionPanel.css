@@ -299,6 +299,14 @@
     overflow-wrap: anywhere;
 }
 
+.sp-agent-program {
+    margin-block-end: var(--sp-space-2);
+}
+
+.sp-agent-program .setup-choice-tag {
+    margin-inline-start: var(--sp-space-1);
+}
+
 .sp-error,
 .sp-ok {
     font-size: var(--sp-fs-sm);

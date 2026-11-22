@@ -221,9 +221,14 @@ def refuse_unstreamed_sidecar_chat(agent_type: str) -> None:
 
 
 def _native_flagship_chosen() -> bool:
+    """Whether the saved harness is anything but the Python one.
+
+    A harness this version can't run still relays, so the daemon's spawn reports
+    why instead of the Python agent quietly answering in its place.
+    """
     from gaia.daemon.sidecars import fetch
 
-    return fetch.chosen_flagship() == fetch.NATIVE_FLAGSHIP
+    return fetch.saved_flagship() != fetch.PYTHON_FLAGSHIP
 
 
 def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
@@ -248,7 +253,7 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     if profile is None:
         return False
     if agent_type == FLAGSHIP_AGENT_ID and _native_flagship_chosen():
-        # gaiacpp is a program of its own: it only ever runs behind the daemon.
+        # A native harness is a program of its own: it only ever runs behind the daemon.
         return True
     if registry is None:
         return True
@@ -4401,6 +4406,7 @@ async def _get_chat_response(
         refusal = spending.limit_refusal(db, model_id)
         if refusal:
             return refusal
+        _refuse_turn_on_stopped_users_server()
 
         # ── Agent cache ──────────────────────────────────────────────────────
         # Reuse what a running warm-up is caching rather than read it twice.

@@ -505,6 +505,13 @@ class OutputHandler(ABC):
         in its place, so the new reply never silently replaces it. Optional.
         """
 
+    def supersede_answer(self, message: str) -> None:
+        """The reply streamed so far was a draft; an answer check replaces it.
+
+        A front-end that drew the draft drops it when the next reply or tool
+        call starts, so a turn never shows two answers. Optional.
+        """
+
     def pause_progress(self):
         """Pause progress indicator, remembering state for later resume. Optional — default no-op."""
         ...

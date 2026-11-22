@@ -260,18 +260,28 @@ pre-commit gate. It exits 2 if a baseline scenario is missing or produced no
 measurement, as well as for measured regressions. Without this opt-in, incomplete
 measurements remain visible as warnings and the comparison judges measured results.
 
-### Compare only the same model
+### Compare only the same model and harness
 
-A scorecard records the local model the agent ran (`config.agent_model`) beside the
-Claude model that drove and judged it (`config.model`). `--compare` refuses to diff two
-scorecards that differ in either, because every delta would partly be the model swap. It
-reads the baseline's from the `meta.json` in its directory when there is one.
+A scorecard records the local model the agent ran (`config.agent_model`), the Claude
+model that drove and judged it (`config.model`), and the harness that answered as GAIA
+(`config.harness`: `gaiapy`, or `gaiacpp` when the backend's `flagship_agent` chose it).
+`--compare` refuses to diff two scorecards that differ in any of the three, because
+every delta would partly be the swap. It reads the baseline's from the `meta.json` in its
+directory when there is one; a baseline or scorecard that records no harness ran
+`gaiapy`, and one whose harness the backend couldn't report (`unknown`) compares with
+nothing.
+
+To score gaiacpp, run a lane on it; each category's GAIA home then runs it:
+
+```bash
+python util/run_eval_lane.py --lane <lane> --harness gaiacpp --harness-binary path/to/gaiacpp
+```
 
 | `--compare` exit | Meaning |
 |---|---|
 | 0 | No regression |
 | 2 | A regression (or, with `--require-complete`, a missing or unmeasured scenario) |
-| 3 | Not comparable: the baseline was measured with a different agent model or eval model (or, with `--require-same-fixtures`, on different fixtures or a different Lemonade build) |
+| 3 | Not comparable: the baseline was measured with a different agent model, eval model or harness (or, with `--require-same-fixtures`, on different fixtures or a different Lemonade build) |
 
 ### Same fixtures, same Lemonade
 

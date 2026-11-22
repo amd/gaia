@@ -1226,7 +1226,7 @@ def _flagship_agent_setting() -> tuple[str, bool]:
     """``(flagship_agent, gaiacpp_available)`` for the settings response."""
     from gaia.daemon.sidecars import fetch
 
-    return fetch.chosen_flagship(), fetch.native_flagship() is not None
+    return fetch.saved_flagship(), fetch.native_flagship() is not None
 
 
 def _set_flagship_agent(choice: str) -> None:

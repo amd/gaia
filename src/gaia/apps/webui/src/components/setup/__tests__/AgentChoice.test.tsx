@@ -52,6 +52,18 @@ describe('AgentChoice', () => {
         expect(screen.getByText('You can switch later in Settings › Agent & model.')).toBeVisible();
     });
 
+    it('selects nothing for a saved agent this version cannot run, and lets the user pick one', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiacode' });
+        render(<AgentChoice inSettings />);
+        const py = await radio(/gaiapy/);
+        expect(py).toHaveAttribute('aria-checked', 'false');
+        expect(await radio(/gaiacpp/)).toHaveAttribute('aria-checked', 'false');
+
+        fireEvent.click(py);
+        await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiapy' }));
+        await waitFor(() => expect(py).toHaveAttribute('aria-checked', 'true'));
+    });
+
     it('shows no size it could not read', async () => {
         mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, programs: AGENT_PROGRAMS.programs.map((p) => ({ ...p, size_bytes: null })) });
         render(<AgentChoice />);

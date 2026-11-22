@@ -971,9 +971,21 @@ class GaiaAgent(
         return suggester.suggest(
             user_input,
             self._catalog_skills(),
-            loaded=frozenset(self.loaded_skills),
+            loaded=self._skills_in_use(user_input),
             list_project=self._lists_project_skills(),
         )
+
+    def _skills_in_use(self, user_input: str) -> FrozenSet[str]:
+        """Loaded skills, plus one *user_input* runs as ``/<skill-name> ...``.
+
+        The command loads its skill after the turn's context is built, so
+        without it the hint would name the skill the user just typed.
+        """
+        from gaia.skills.command import parse_skill_command
+
+        command = parse_skill_command(user_input or "")
+        typed = {command.name} if command is not None else set()
+        return frozenset(self.loaded_skills) | typed
 
     def _select_skill_matches_for_turn(self, user_input: str) -> SkillMatches:
         """This turn's matches, split into auto-loads and suggestions.
@@ -991,7 +1003,7 @@ class GaiaAgent(
         return suggester.select(
             user_input,
             self._catalog_skills(),
-            loaded=frozenset(self.loaded_skills),
+            loaded=self._skills_in_use(user_input),
             list_project=self._lists_project_skills(),
         )
 

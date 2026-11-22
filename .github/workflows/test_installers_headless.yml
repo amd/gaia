@@ -146,9 +146,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
-          # Bounded, opt-in retries for live releases reads. They ride out a
-          # transient 403 but cannot refill the shared hourly quota that caused
-          # run 44443909497.
+          # Bounded, opt-in retries for live releases reads. A rate limit hit
+          # while waiting for a tag's assets is waited out until GitHub's reset,
+          # inside the WAIT window; the release burst exhausts the shared quota.
           GITHUB_FETCH_RETRIES: ${{ github.event_name != 'pull_request' && '3' || '' }}
           # PRs read the checked-in fixture so they do not spend that quota.
           # Tag and dispatch runs leave it empty and fetch live.
