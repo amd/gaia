@@ -666,6 +666,85 @@ _REFUSED_SECRET = (
 _NOTHING_SAVED = "Nothing was saved to memory."
 
 
+#: The longest message a forced save reads; anything longer is left to the model.
+_FORCED_SAVE_MAX_CHARS = 300
+#: Characters a forced fact may hold. No comma: one starts a second clause
+#: ("..., maar niet opslaan"), so a fact with one is left to the model.
+_FACT = r"(?P<fact>[A-Za-z0-9 '\"/:%$.\-]+?)"
+#: The only messages GAIA saves on its own, the whole message and nothing more:
+#: "(Please) remember (that) X." / "(Please) keep in mind (that) X." and
+#: "X. Please remember that." / "X. Please remember this."
+_FORCED_SAVE_SHAPES = (
+    re.compile(
+        r"(?:please\s+)?(?:remember|keep\s+in\s+mind)(?:\s+that)?\s+"
+        + _FACT
+        + r"[.!]?",
+        re.IGNORECASE,
+    ),
+    re.compile(_FACT + r"\.?\s+please\s+remember\s+(?:that|this)[.!]?", re.IGNORECASE),
+)
+#: A second sentence inside the fact: a stop, "!" or "?" before a space or the end.
+_SECOND_SENTENCE = re.compile(r"[.!?](?:\s|$)|[!?]")
+#: A second clause that may change or take back the first.
+_SECOND_CLAUSE = re.compile(
+    r"\b(?:but|then|except|unless|though|although|however|instead|actually|wait"
+    r"|also|jk|kidding|abort|strike|scrap|scratch|stop|cancel\w*|undo|forget\w*)\b",
+    re.IGNORECASE,
+)
+#: The words that ask to keep something in memory. A forced save needs exactly one.
+_MEMORY_ASK = re.compile(
+    r"\bremember\w*|\bmemori[sz]\w*|\bin\s+mind\b|\bmemor(?:y|ies)\b", re.IGNORECASE
+)
+#: A negation or decline anywhere in the message leaves the save to the model.
+#: Deliberately blunt: "remember that I'm not vegan" is left to the model too.
+_DECLINE_SIGNAL = re.compile(
+    r"\b(?:not|never|no|nah|nope|nevermind|cannot|forget\w*|skip\w*|cancel\w*"
+    r"|ignore|disregard|undo|delete|erase|remove|except|unless"
+    r"|nicht|nein|kein\w*|nunca|jamais|nada|non|niet|nie|inte|ikke|nej|ne|pas"
+    r"|nao|nem|nu)\b"
+    r"|n\s*'+\s*t\b"
+    r"|\b(?:do|does|did|wo|ca|could|would|should|must|need|is|are|was|were"
+    r"|has|have|had|ai|might)\s*n\s*t\b"
+    r"|\brather\s+(?:you|u)\b|\bprefer\s+(?:you|u|that\s+you)\b"
+    r"|\bhold\s+off\b|\bscratch\s+that\b|\bsecond\s+thoughts?\b"
+    r"|\bchanged?\s+my\s+mind\b",
+    re.IGNORECASE,
+)
+
+
+def fact_to_keep(request: str) -> str:
+    """The fact in *request* the user asked to remember, or "".
+
+    GAIA saves this itself when the model skips the save, so it only reads one
+    fixed shape: the whole message is a single plain-ASCII sentence such as
+    "Remember that my dog's name is Rex." or "My birthday is March 3. Please
+    remember that.", with no comma, no negation, no second clause and at most
+    300 characters. Every other request is left to the model.
+    """
+    text = _straight_apostrophes(request or "").strip()
+    if (
+        len(text) > _FORCED_SAVE_MAX_CHARS
+        or not all(" " <= ch <= "~" for ch in text)
+        or len(_MEMORY_ASK.findall(text)) != 1
+        or _DECLINE_SIGNAL.search(text)
+        or not asks_to_keep_in_memory(text)
+    ):
+        return ""
+    for shape in _FORCED_SAVE_SHAPES:
+        match = shape.fullmatch(text)
+        if match is None:
+            continue
+        fact = match.group("fact").strip()
+        if (
+            _SECOND_SENTENCE.search(fact)
+            or _SECOND_CLAUSE.search(fact)
+            or len(fact.split()) < 2
+        ):
+            return ""
+        return fact
+    return ""
+
+
 def claims_memory_save(answer: str) -> bool:
     """True when *answer* tells the user something was saved, with no denial beside it."""
     for sentence in re.split(r"(?<=[.!?])\s+|\n+", answer or ""):
@@ -4895,6 +4974,19 @@ class MemoryMixin(ProceduralMemoryMixin):
         if self._unsaved_memory_request(called):
             problems.append(_NOTHING_SAVED)
         return problems
+
+    def required_calls(self):
+        calls = list(super().required_calls())
+        saves = self._memory_saves_this_turn()
+        if saves:
+            return calls
+        called = {r.get("tool") for r in getattr(self, "_turn_tool_executions", [])}
+        if not self._unsaved_memory_request(called):
+            return calls
+        fact = fact_to_keep(getattr(self, "_original_user_input", None) or "")
+        if fact:
+            calls.append(("remember", {"fact": fact}))
+        return calls
 
     def answer_repair_prompt(self, problems):
         prompt = super().answer_repair_prompt(problems)
