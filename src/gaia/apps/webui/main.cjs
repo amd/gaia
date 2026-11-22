@@ -128,6 +128,7 @@ const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
 const { chromiumSwitches } = require("./services/chromium-switches.cjs");
 const { titleBarKind, titleBarOptions } = require("./services/window-frame.cjs");
+const { installBackendAuth } = require("./services/ui-token.cjs");
 const { resolveDevQaMode } = require("./services/dev-qa-mode.cjs");
 const { createBrowserPaneService, PANE_PARTITION } = require("./services/browser-pane/ipc.cjs");
 const { DevServerSupervisor } = require("./services/browser-pane/dev-servers.cjs");
@@ -266,6 +267,8 @@ let shutdownStarted = false;
 // Set once an update install starts quitting the app.
 let updateQuitStarted = false;
 let backendPort = DEFAULT_BACKEND_PORT;
+// The port of the backend this app spawned; only it is sent the API token.
+let spawnedBackendPort = null;
 let healthCheckUrl = `http://localhost:${backendPort}/api/health`;
 let backendStderrTail = [];
 let isIntentionalKill = false;
@@ -382,6 +385,8 @@ async function startBackend() {
   if (!devQa) await cleanupOrphanedBackend();
 
   console.log(`Starting backend: ${gaiaCmd} chat --ui --ui-port ${backendPort}`);
+  spawnedBackendPort = backendPort;
+  const childPort = backendPort;
 
   // Reset per-spawn state so a fresh crash dialog doesn't mix tails.
   backendStderrTail = [];
@@ -457,6 +462,8 @@ async function startBackend() {
       console.error(`Backend exited with code ${code} (signal=${signal}, pid=${child.pid})`);
     }
     if (backendProcess === child) backendProcess = null;
+    // Whatever binds the port next is not ours, so it gets no token.
+    if (spawnedBackendPort === childPort) spawnedBackendPort = null;
     if (trayManager && !isQuitting) trayManager.setBackendAlive(false);
 
     // Once restarts run out, the supervisor's onStopped shows the crash dialog.
@@ -1098,6 +1105,7 @@ app.whenReady().then(async () => {
   // The window, and the tray that keeps a closed one reachable, come before
   // anything that can take time, so an install runs in plain sight.
   titleDownloadSaveDialogs();
+  installBackendAuth(session.defaultSession, { getPort: () => spawnedBackendPort });
   // Before the window: the desktop ties a window to its launcher when it appears.
   if (app.isPackaged) {
     try {

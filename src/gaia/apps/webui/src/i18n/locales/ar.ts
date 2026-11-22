@@ -2957,6 +2957,9 @@ const messages: Messages = {
     'banner.restartStopped': 'توقّف مساعد GAIA ولم يتمكّن من إعادة التشغيل تلقائيًا.',
     'banner.restartStoppedHint': 'محادثاتك محفوظة. أعد تشغيل GAIA للمتابعة.',
     'banner.restartingShort': 'جارٍ إعادة التشغيل…',
+    // A browser without the API token's cookie
+    'auth.signIn.title': 'هذا المتصفح لم يسجّل الدخول إلى GAIA.',
+    'auth.signIn.hint': 'افتح الرابط الذي يطبعه الأمر {command}، أو استخدم تطبيق GAIA لسطح المكتب.',
     'banner.restartButton': 'إعادة تشغيل GAIA',
     'banner.restartFailed': 'تعذّر على GAIA إعادة تشغيل مساعده: {error}',
     'banner.pickLoad.loading': 'جارٍ تحميل {model}…',

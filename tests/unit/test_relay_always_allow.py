@@ -381,6 +381,7 @@ def live_gaia_sidecar(monkeypatch):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     monkeypatch.setattr(server_mod, "build_query_agent", _WritingAgent)
     monkeypatch.setattr(sr, "build_session_agent", _WritingAgent)
     monkeypatch.setattr(server_mod, "_warmup_blocking", lambda: None)

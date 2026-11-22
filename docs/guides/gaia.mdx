@@ -85,15 +85,14 @@ Inference runs locally by default. The sidecar's `/query` endpoint accepts `prov
 `GET /v1/gaia/init` is a read-only preflight: it probes Lemonade, compares its version against the 2026.44.1 floor, and confirms the model is downloaded. It never pulls or loads a model.
 
 ```bash
-curl -s http://127.0.0.1:8141/v1/gaia/init
+curl -s -H "authorization: Bearer $TOKEN" http://127.0.0.1:8141/v1/gaia/init
 ```
 
 It answers **200** when ready and **503** when not, with a `hint` naming the fix — Lemonade unreachable, Lemonade too old, or model not downloaded. Liveness alone is `GET /health`, which never touches the model server.
 
 <Note>
-  A **401** here means the sidecar wants a caller token — `/v1/gaia/*` requires one, while
-  `/health` and `/version` don't. That's the normal state for the sidecar the daemon
-  spawns. See [Authenticating your requests](#authenticating-your-requests).
+  A **401** here means the token is missing or wrong — `/v1/gaia/*` requires one, while
+  `/health` and `/version` don't. See [Authenticating your requests](#authenticating-your-requests).
 </Note>
 
 ## Tool surface
@@ -376,7 +375,7 @@ The programs the agent starts (shell commands, MCP servers, CLI installs and sig
 
 `GET /health`, `GET /version`, and `GET /v1/gaia/version` skip the token — they're the probes a host polls before any token is in play, and none of them exposes your data. `Host` and `Origin` still apply to them.
 
-If neither token variable is set, the sidecar starts with the token check off and says so loudly in its log; `Host` and `Origin` stay enforced. That's a **local development** convenience — a sidecar you started by hand — not something to build on. Full details, including how to supply a token when you spawn the sidecar yourself, are in the package's [SPEC.md §5.4](https://github.com/amd/gaia/blob/main/hub/agents/gaia/npm/SPEC.md).
+If neither token variable is set, the sidecar refuses to start and says which variables to set. The GAIA daemon and the npm package's `startSidecar` and `gaia serve` always mint a token for you. Only for a sidecar you run by hand while developing can you set `GAIA_SIDECAR_ALLOW_NO_TOKEN=1` to start it without one; it then logs a loud warning, and `Host` and `Origin` stay enforced. Full details, including how to read the token when you spawn the sidecar yourself, are in the package's [SPEC.md §5.4](https://github.com/amd/gaia/blob/main/hub/agents/gaia/npm/SPEC.md).
 
 ## Troubleshooting
 
