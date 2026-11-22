@@ -26,6 +26,7 @@ import pytest
 from gaia.llm.lemonade_client import LemonadeClientError
 from gaia.llm.surface_hints import VISION_DOWNLOAD_HINT
 from gaia.llm.vlm_client import VLMClient, VLMExtractionError
+from tests.unit.image_bytes import PNG
 
 
 @pytest.fixture
@@ -47,7 +48,7 @@ class TestTheThreeFailureSites:
         vlm.client.chat_completions.side_effect = LemonadeClientError("model not found")
 
         with pytest.raises(VLMExtractionError) as excinfo:
-            vlm.extract_from_image(b"fake-png", page_num=4, image_num=2)
+            vlm.extract_from_image(PNG, page_num=4, image_num=2)
 
         assert excinfo.value.page_num == 4
         assert excinfo.value.image_num == 2
@@ -56,7 +57,7 @@ class TestTheThreeFailureSites:
         vlm.client.chat_completions.return_value = {"error": "model exploded"}
 
         with pytest.raises(VLMExtractionError):
-            vlm.extract_from_image(b"fake-png")
+            vlm.extract_from_image(PNG)
 
     def test_a_cancelled_wait_for_the_model_is_a_stop_not_a_failed_page(self, vlm):
         from gaia.daemon.broker_client import LeaseWaitCancelled
@@ -64,13 +65,13 @@ class TestTheThreeFailureSites:
         vlm.client.chat_completions.side_effect = LeaseWaitCancelled("stopped")
 
         with pytest.raises(LeaseWaitCancelled):
-            vlm.extract_from_image(b"fake-png", page_num=2)
+            vlm.extract_from_image(PNG, page_num=2)
 
     def test_an_unexpected_exception_raises_with_the_cause_attached(self, vlm):
         vlm.client.chat_completions.side_effect = ConnectionError("refused")
 
         with pytest.raises(VLMExtractionError) as excinfo:
-            vlm.extract_from_image(b"fake-png")
+            vlm.extract_from_image(PNG)
 
         assert isinstance(excinfo.value.__cause__, ConnectionError)
 
@@ -78,14 +79,14 @@ class TestTheThreeFailureSites:
         vlm.client.chat_completions.side_effect = ConnectionError("refused")
 
         with pytest.raises(VLMExtractionError, match="page 9, image 3"):
-            vlm.extract_from_image(b"fake-png", page_num=9, image_num=3)
+            vlm.extract_from_image(PNG, page_num=9, image_num=3)
 
     def test_a_successful_extraction_still_returns_its_text(self, vlm):
         vlm.client.chat_completions.return_value = {
             "choices": [{"message": {"content": "# Real page text"}}]
         }
 
-        assert vlm.extract_from_image(b"fake-png") == "# Real page text"
+        assert vlm.extract_from_image(PNG) == "# Real page text"
 
 
 class TestModelLoading:
@@ -96,7 +97,7 @@ class TestModelLoading:
     def test_extraction_never_loads_without_a_context_size(self, vlm):
         vlm.client.chat_completions.return_value = self._OK
 
-        vlm.extract_from_image(b"fake-png")
+        vlm.extract_from_image(PNG)
 
         for call in vlm.client.load_model.call_args_list:
             assert call.kwargs.get("ctx_size"), f"load without ctx_size: {call}"
@@ -104,7 +105,7 @@ class TestModelLoading:
     def test_the_request_does_the_ctx_aware_load(self, vlm):
         vlm.client.chat_completions.return_value = self._OK
 
-        vlm.extract_from_image(b"fake-png")
+        vlm.extract_from_image(PNG)
 
         assert vlm.client.chat_completions.call_args.kwargs["auto_download"] is True
 
@@ -112,7 +113,7 @@ class TestModelLoading:
         vlm.auto_load = False
         vlm.client.chat_completions.return_value = self._OK
 
-        vlm.extract_from_image(b"fake-png")
+        vlm.extract_from_image(PNG)
 
         assert vlm.client.chat_completions.call_args.kwargs["auto_download"] is False
         vlm.client.load_model.assert_not_called()
@@ -121,8 +122,8 @@ class TestModelLoading:
         """A model evicted mid-batch is reloaded on the next page, not skipped."""
         vlm.client.chat_completions.return_value = self._OK
 
-        vlm.extract_from_image(b"a")
-        vlm.extract_from_image(b"b")
+        vlm.extract_from_image(PNG)
+        vlm.extract_from_image(PNG)
 
         calls = vlm.client.chat_completions.call_args_list
         assert [c.kwargs["auto_download"] for c in calls] == [True, True]
@@ -140,7 +141,7 @@ class TestModelLoading:
         vlm.client.chat_completions.side_effect = chat_completions
 
         with pytest.raises(VLMExtractionError, match="out of memory") as excinfo:
-            vlm.extract_from_image(b"fake-png")
+            vlm.extract_from_image(PNG)
 
         assert isinstance(excinfo.value.__cause__, LemonadeClientError)
 
@@ -151,7 +152,7 @@ class TestNothingReturnsAnErrorString:
     def test_a_failure_never_comes_back_as_a_return_value(self, vlm):
         vlm.client.chat_completions.side_effect = LemonadeClientError("model not found")
         try:
-            result = vlm.extract_from_image(b"fake-png")
+            result = vlm.extract_from_image(PNG)
         except VLMExtractionError:
             return
         pytest.fail(f"extraction returned {result!r} instead of raising")
@@ -351,7 +352,7 @@ class TestMissingVisionModelPreflight:
         )
 
         with pytest.raises(VLMExtractionError) as excinfo:
-            vlm.extract_from_image(b"fake-png", page_num=3, image_num=2)
+            vlm.extract_from_image(PNG, page_num=3, image_num=2)
 
         message = str(excinfo.value)
         assert "5.56 GB" in message
@@ -368,7 +369,7 @@ class TestMissingVisionModelPreflight:
         )
 
         with pytest.raises(VLMExtractionError) as excinfo:
-            vlm.extract_from_image(b"fake-png")
+            vlm.extract_from_image(PNG)
 
         assert VISION_DOWNLOAD_HINT in str(excinfo.value)
         assert "GB)" not in str(excinfo.value)
@@ -380,7 +381,7 @@ class TestMissingVisionModelPreflight:
         )
 
         with pytest.raises(VLMExtractionError):
-            vlm.extract_from_image(b"fake-png")
+            vlm.extract_from_image(PNG)
 
     @pytest.mark.parametrize(
         "catalog",
@@ -403,7 +404,7 @@ class TestMissingVisionModelPreflight:
         vlm.client.list_models.return_value = catalog
         vlm.client.chat_completions.return_value = _OK
 
-        assert vlm.extract_from_image(b"fake-png") == "text"
+        assert vlm.extract_from_image(PNG) == "text"
         vlm.client.chat_completions.assert_called_once()
 
     def test_a_cloud_model_is_never_blocked(self, vlm):
@@ -418,20 +419,20 @@ class TestMissingVisionModelPreflight:
         )
         vlm.client.chat_completions.return_value = _OK
 
-        assert vlm.extract_from_image(b"fake-png") == "text"
+        assert vlm.extract_from_image(PNG) == "text"
 
     def test_an_unreachable_catalog_leaves_the_request_authoritative(self, vlm):
         vlm.client.list_models.side_effect = LemonadeClientError("catalog unavailable")
         vlm.client.chat_completions.return_value = _OK
 
-        assert vlm.extract_from_image(b"fake-png") == "text"
+        assert vlm.extract_from_image(PNG) == "text"
         vlm.client.chat_completions.assert_called_once()
 
     def test_a_bug_in_the_check_is_not_swallowed(self, vlm):
         vlm.client.list_models.side_effect = AttributeError("broken")
 
         with pytest.raises(VLMExtractionError, match="broken"):
-            vlm.extract_from_image(b"fake-png")
+            vlm.extract_from_image(PNG)
         vlm.client.chat_completions.assert_not_called()
 
     def test_a_multi_image_document_reads_the_catalog_once(self, vlm):
@@ -441,7 +442,7 @@ class TestMissingVisionModelPreflight:
         vlm.client.chat_completions.return_value = _OK
 
         for page in range(1, 6):
-            vlm.extract_from_image(b"fake-png", page_num=page)
+            vlm.extract_from_image(PNG, page_num=page)
 
         vlm.client.list_models.assert_called_once()
         assert vlm.client.chat_completions.call_count == 5
@@ -454,6 +455,6 @@ class TestMissingVisionModelPreflight:
         vlm.client.chat_completions.return_value = _OK
 
         with pytest.raises(VLMExtractionError):
-            vlm.extract_from_image(b"fake-png")
-        assert vlm.extract_from_image(b"fake-png") == "text"
+            vlm.extract_from_image(PNG)
+        assert vlm.extract_from_image(PNG) == "text"
         assert vlm.client.list_models.call_count == 2
