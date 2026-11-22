@@ -1,6 +1,8 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""CLI for ``gaia agent-program {status|download}``: getting gaiacpp for the terminal UI.
+"""CLI for ``gaia agent-program status`` and ``gaia agent-program download``.
+
+Getting gaiacpp for the terminal UI.
 
 The terminal UI shells out here rather than repeating the release lookup, the
 checksum check and the install in Go; the Agent UI calls the same
