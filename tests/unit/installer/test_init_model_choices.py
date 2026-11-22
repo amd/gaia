@@ -681,6 +681,32 @@ def test_an_update_keeps_gemma_on_a_small_pc_that_already_has_it(
     assert "default_model" not in _config(home)
 
 
+def test_an_update_does_not_keep_a_gemma_that_cannot_fit(lemonade, home, monkeypatch):
+    """An 8 GB laptop has about 4 GB for models; Gemma needs 8.5, so it gets the 2B."""
+    from gaia.installer.init_command import resolve_init_chat_model
+    from gaia.llm.model_fit import MachineCapacity
+
+    laptop8 = MachineCapacity(
+        memory_gb=4.0,
+        memory_source="AMD iGPU",
+        disk_free_gb=500.0,
+        installed_ram_gb=8.0,
+        carve_out_gb=0.5,
+    )
+    monkeypatch.setattr(
+        lemonade_client,
+        "recommend_default_chat_model",
+        lambda client, judge_free_memory=True: (TINY_DEFAULT_MODEL_NAME, [], laptop8),
+    )
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+
+    assert choice.model_id == TINY_DEFAULT_MODEL_NAME
+    assert choice.kept_over is None
+
+
 def test_a_new_small_pc_gets_the_2b(lemonade, home, monkeypatch):
     from gaia.installer.init_command import check_setup_status, resolve_init_chat_model
 

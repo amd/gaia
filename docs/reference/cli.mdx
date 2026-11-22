@@ -614,7 +614,8 @@ that would leave other apps little memory, and setup asks before using one. A mo
 a Ryzen AI NPU, chosen with `--profile npu`, is judged against the NPU's own memory.
 
 A PC that set up before these smaller models existed and already has Gemma keeps it
-after an update: setup does not download a new default. Switch with
+after an update where Gemma fits its memory: setup does not download a new default. A PC
+too small for Gemma (about 8 GB of RAM) gets Qwen3.5 2B instead. Switch with
 `gaia init --use-model Qwen3.5-2B-GGUF` or in the model picker.
 
 <Note>
