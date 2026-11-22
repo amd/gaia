@@ -46,6 +46,13 @@ from gaia.config import GaiaConfig, GaiaConfigError
 from gaia.llm.lemonade_client import FULL_TOOLS_SLOT
 from gaia.skills.manager import SkillManager
 
+
+@pytest.fixture(autouse=True)
+def _jump_mode(monkeypatch):
+    """These pin the jump loader: one move to the whole registry, primed ahead."""
+    monkeypatch.setenv("GAIA_TOOL_LIST", "jump")
+
+
 _DIM = 768
 
 #: What the tests below hold the first turn to, in cl100k tokens.
@@ -130,6 +137,8 @@ def test_each_request_extends_the_previous_one(flagship):
     agent, model, doc = flagship
     # The fake embedder's word overlap is not a score a jump should act on.
     agent.tool_loader._threshold = 2.0
+    # On the list from the start, as a session that indexes documents has it.
+    agent.tool_loader.admit_tools(["index_document"], agent._tools_registry)
 
     _turn(agent, model, "Hi, I'm Sam and I work on the safety team.", ["Hi Sam."])
     # What background extraction does after a turn.

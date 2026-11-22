@@ -131,15 +131,10 @@ def test_skill_request_tools_exist_and_cost_the_jump(flagship_registry):
 def test_core_is_the_list_every_session_starts_on():
     """A change here moves the first-turn cost of every session."""
     assert FULL_CORE_TOOLS == {
-        "analyze_data_file",
         "browse_directory",
         "edit_file",
         "fetch_page",
-        "find_files",
-        "forget",
-        "forget_everything",
-        "index_document",
-        "list_files",
+        "list_skills",
         "load_skill",
         "query_documents",
         "query_specific_file",
@@ -151,14 +146,9 @@ def test_core_is_the_list_every_session_starts_on():
         "run_python",
         "run_shell_command",
         "search_file",
-        "search_file_content",
-        "search_past_conversations",
         "search_tools",
         "search_web",
         "set_loop_state",
-        "sleep",
-        "summarize_document",
-        "update_memory",
         "write_file",
     }
 
@@ -262,3 +252,39 @@ def test_trimming_actually_saves_most_of_the_tool_payload():
         f"the full thin list is {full} tokens against {everything} in full — a "
         "jump is meant to stay cheap."
     )
+
+
+def test_every_triggered_tool_is_registered(flagship_registry):
+    from gaiapy.tool_bundles import FULL_TRIGGERS
+
+    named = {n for _, names in FULL_TRIGGERS for n in names}
+    missing = named - set(flagship_registry) - FULL_OPTIONAL_TOOLS
+    assert not missing, f"FULL_TRIGGERS names unregistered tools: {sorted(missing)}"
+
+
+@pytest.mark.parametrize(
+    "request_text, expected",
+    [
+        (
+            "what does the sign in C:/media/bakery_sign.png say?",
+            "answer_question_about_image",
+        ),
+        ("total revenue per salesperson in sales_data_2025.csv", "analyze_data_file"),
+        ("what files are in my Downloads folder?", "list_files"),
+        ("summarize the lease for me", "summarize_document"),
+        ("remind me in 5 minutes", "sleep"),
+        ("forget that I live in Austin", "forget"),
+    ],
+)
+def test_a_request_triggers_the_tool_it_needs(request_text, expected):
+    from gaiapy.tool_bundles import FULL_TRIGGERS
+
+    added = {n for rx, names in FULL_TRIGGERS if rx.search(request_text) for n in names}
+    assert expected in added
+
+
+def test_small_talk_triggers_nothing():
+    from gaiapy.tool_bundles import FULL_TRIGGERS
+
+    for text in ("hi!", "thanks, that helps", "what is 15% of 200?"):
+        assert not [n for rx, names in FULL_TRIGGERS if rx.search(text) for n in names]

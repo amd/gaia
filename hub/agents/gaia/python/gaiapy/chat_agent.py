@@ -10,6 +10,7 @@ import errno
 import functools
 import hashlib
 import importlib.util
+import json
 import os
 import platform
 import re
@@ -105,9 +106,11 @@ from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 from gaia.agents.base.script_preview import changed_script_refusal
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
 from gaia.agents.base.tool_loader import (
+    RETRIEVE_TOP_K,
     ToolLoader,
     format_tool_docs,
     thin_tool_schema,
+    tool_list_mode,
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
@@ -1564,6 +1567,8 @@ class ChatAgent(
             optional_tools=profile_config.optional,
             embed_fn=self._embed_text,
             embed_batch_fn=self._embed_texts_batch,
+            mode=tool_list_mode(),
+            triggers=profile_config.triggers,
         )
 
     def _workspace_core_tools(self) -> FrozenSet[str]:
@@ -1657,7 +1662,11 @@ class ChatAgent(
         self._validate_tool_config()
         # A rebuilt agent can't know what this chat's list was, and its slot is
         # most likely gone: one re-read now beats a second one at the next tool.
-        if self.tool_loader.turns == 0 and getattr(self, "conversation_history", None):
+        if (
+            self.tool_loader.mode == "jump"
+            and self.tool_loader.turns == 0
+            and getattr(self, "conversation_history", None)
+        ):
             self.tool_loader.jump("resumed")
         from gaia.ui.session_environment import without_folder_note
 
@@ -1739,9 +1748,20 @@ class ChatAgent(
             or not self._uses_native_tool_calls()
         ):
             return super()._history_tool_schemas()
-        return [
+        schemas = [
             thin_tool_schema(schema) for schema in self._build_openai_tool_schemas()
         ]
+        if self.tool_loader.mode == "jump":
+            return schemas
+        # Retrieval adds at most a few a turn: budget for the largest of them.
+        offered = set(self.tool_loader.offered(self._tools_registry))
+        listed = [s for s in schemas if s["function"]["name"] in offered]
+        rest = sorted(
+            (s for s in schemas if s["function"]["name"] not in offered),
+            key=lambda s: len(json.dumps(s)),
+            reverse=True,
+        )
+        return listed + rest[:RETRIEVE_TOP_K]
 
     def _admit_skill_tools(self, names: List[str]) -> bool:
         """Put a just-loaded skill's tools on the list."""
@@ -1777,7 +1797,11 @@ class ChatAgent(
         Needs the third slot: anywhere else it would overwrite the prefix just
         primed, or a side job would overwrite it.
         """
-        if not self._dynamic_tools_active() or self.tool_loader.jumped:
+        if (
+            not self._dynamic_tools_active()
+            or self.tool_loader.jumped
+            or self.tool_loader.mode != "jump"
+        ):
             return
         backend = getattr(self.chat.llm_client, "_backend", None)
         slots = backend.slot_count(self.model_id) if backend is not None else 1
@@ -1851,7 +1875,10 @@ class ChatAgent(
             }
         current = self._active_tool_filter
         if current is not None and any(name not in current for name in tools):
-            loader.jump("search")
+            if loader.mode == "retrieval":
+                loader.admit_tools([n for n in tools if n not in current], registry)
+            else:
+                loader.jump("search")
             self._apply_tool_filter(loader.offered(registry))
         if not tools and not skills:
             return {

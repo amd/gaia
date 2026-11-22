@@ -317,27 +317,31 @@ print(result)
 `gaia config set dynamic_tools false`. Either applies to new chats.
 </Note>
 
-A local model has to read every tool's description before it can answer, which is most
-of the wait on a first reply. With dynamic tool loading a chat starts on the 29 tools people
-use most, in short form (name, one sentence, and parameters). On a Radeon 8060S with
-Qwen3.6-35B-A3B that cut what a cold first turn reads from about 21,300 tokens to about
-9,500, and roughly halved the time to read it.
+A local model has to read every tool's description before it can answer, and a long list
+both slows it down and makes it choose worse; small models most of all. With dynamic tool
+loading a chat starts on the 19 tools almost every request uses (reading, writing and
+searching files and documents, the shell, Python, the web, memory and skills), in short form
+(name, one sentence, and parameters).
 
-When a turn needs something else, the session moves to the full list once, and the list
-then stays put. The full list is kept ready beside the short one, so a first task starts
-as quickly as a first "hello". That move happens before the model is asked, when your
-message names a tool, a picture or a recording, when you paste a skill or ask to save,
-install, or correct one, when a recalled procedure needs a tool, or
-when a tool outside the list is
-a clearly better match than every tool on it. If the agent still lacks something, it calls
-`search_tools`, which finds tools and installed skills by what they do.
+Each turn then adds only what that request needs, and the list keeps them for the rest of
+the chat:
 
-A session that chats for a while and then needs a rare tool pays for one re-read of the
-conversation, and both apps show **Loading more tools** while it happens. A chat reopened
-after its agent was rebuilt starts on the full list. Loading a skill
-adds the tools it needs, and unloading it takes them away unless another loaded skill needs
-them. The agent gets a tool's full documentation from `search_tools`, or automatically if it
-calls a tool with the wrong arguments.
+- **Up to five tools that match the request,** scored by the same embedder memory uses.
+- **Tools the request's own words call for:** an image file adds the image tools, a
+  `.csv` or workbook adds `analyze_data_file`, "folder" adds the listing tools, and
+  "summarize", "forget", "remind me" or "last time" add theirs.
+- **Any tool your message names,** a recalled procedure needs, or a loaded skill uses.
+- **What `search_tools` finds** when the agent still lacks something.
+
+Replaying 535 recorded eval turns, this kept as many of the tools a turn called on the list
+as the previous loader did, with about 23 tools on offer instead of 57. A change to the list
+makes the model re-read the conversation once, and both apps show **Loading more tools**
+while it happens. Loading a skill adds the tools it needs, and unloading it takes them away
+unless another loaded skill needs them. The agent gets a tool's full documentation from
+`search_tools`, or automatically if it calls a tool with the wrong arguments.
+
+`GAIA_TOOL_LIST=jump` restores the previous loader, which moves a session to every tool the
+first time it needs one outside the start list.
 
 This applies to local models, where every token is read on your hardware. Cloud models
 keep every tool in full. If the embedder is unreachable, the session offers every tool

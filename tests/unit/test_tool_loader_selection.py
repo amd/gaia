@@ -694,3 +694,85 @@ def _session_payload(records: list[logging.LogRecord]) -> dict:
         if msg.startswith("TOOL_LOADER_SESSION {"):
             return json.loads(msg[len("TOOL_LOADER_SESSION ") :])
     raise AssertionError("no TOOL_LOADER_SESSION line captured")
+
+
+# ── retrieval mode ───────────────────────────────────────────────────────
+
+
+def _retrieval(tools, query_scores, core=(), triggers=()):
+    return _loader(tools, query_scores, core=core, mode="retrieval", triggers=triggers)
+
+
+def test_retrieval_adds_the_best_tools_above_the_floor_and_never_jumps():
+    from gaia.agents.base.tool_loader import RETRIEVE_FLOOR, RETRIEVE_TOP_K
+
+    tools = ["c1"] + [f"d{i}" for i in range(9)]
+    scores = {"c1": 0.1, **{f"d{i}": 0.9 - i / 20 for i in range(9)}}
+    loader, _ = _retrieval(tools, {"q": scores}, core={"c1"})
+    offered = loader.select("q", _registry(tools))
+    added = [n for n in offered if n != "c1"]
+    assert len(added) == RETRIEVE_TOP_K
+    assert all(scores[n] >= RETRIEVE_FLOOR for n in added)
+    assert added == sorted(added, key=lambda n: -scores[n])
+    assert loader.jumped is False
+
+
+def test_retrieval_adds_nothing_for_small_talk():
+    tools = ["c1", "d1", "d2"]
+    loader, _ = _retrieval(
+        tools, {"hi": {"c1": 0.1, "d1": 0.2, "d2": 0.3}}, core={"c1"}
+    )
+    assert loader.select("hi", _registry(tools)) == ["c1"]
+
+
+def test_a_trigger_adds_its_tools_whatever_they_score():
+    import re
+
+    tools = ["c1", "analyze_image", "other"]
+    triggers = [(re.compile(r"\.png\b"), frozenset({"analyze_image"}))]
+    q = "what does the sign in bakery.png say?"
+    loader, _ = _retrieval(tools, {q: {"c1": 0.1}}, core={"c1"}, triggers=triggers)
+    assert loader.select(q, _registry(tools)) == ["c1", "analyze_image"]
+
+
+def test_retrieval_adds_a_named_tool_and_keeps_what_it_added():
+    tools = ["c1", "asked", "d1"]
+    loader, _ = _retrieval(tools, {"q1": {"d1": 0.9}, "q2": {"d1": 0.0}}, core={"c1"})
+    reg = _registry(tools)
+    assert loader.select("q1", reg, requested_tools=["asked"]) == ["c1", "asked", "d1"]
+    assert loader.select("q2", reg) == ["c1", "asked", "d1"]
+
+
+def test_retrieval_with_a_dead_embedder_falls_back_to_everything():
+    def boom(_text):
+        raise ConnectionError("embedder down")
+
+    loader = ToolLoader(frozenset({"c1"}), [], boom, mode="retrieval")
+    assert loader.select("q", _registry(["c1", "d1"])) is None
+    assert loader.session_disabled is True
+
+
+def test_an_unknown_mode_is_refused():
+    with pytest.raises(ValueError, match="GAIA_TOOL_LIST"):
+        ToolLoader(frozenset(), [], lambda _t: None, mode="everything")
+
+
+@pytest.mark.parametrize(
+    "value, mode", [(None, "retrieval"), ("retrieval", "retrieval"), ("JUMP", "jump")]
+)
+def test_the_tool_list_mode_follows_gaia_tool_list(monkeypatch, value, mode):
+    from gaia.agents.base.tool_loader import tool_list_mode
+
+    if value is None:
+        monkeypatch.delenv("GAIA_TOOL_LIST", raising=False)
+    else:
+        monkeypatch.setenv("GAIA_TOOL_LIST", value)
+    assert tool_list_mode() == mode
+
+
+def test_a_bad_tool_list_mode_fails_loudly(monkeypatch):
+    from gaia.agents.base.tool_loader import tool_list_mode
+
+    monkeypatch.setenv("GAIA_TOOL_LIST", "all")
+    with pytest.raises(ValueError, match="retrieval"):
+        tool_list_mode()
