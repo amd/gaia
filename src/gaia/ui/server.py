@@ -1248,8 +1248,8 @@ def main():
                 f"{launch_url(server_app, args.host, args.port)}",
                 flush=True,
             )
-    except (UnsafeGaiaHomeError, AllowedPathsEnvError) as exc:
-        # A misconfigured GAIA_HOME or GAIA_ALLOWED_PATHS is the user's to fix,
+    except (UnsafeGaiaHomeError, AllowedPathsEnvError, api_token.UITokenError) as exc:
+        # A bad GAIA_HOME, GAIA_ALLOWED_PATHS or token file is the user's to fix,
         # so print the remedy rather than a traceback. 64 is EX_USAGE, as gaia
         # uninstall uses.
         print(f"Error: {exc}", file=sys.stderr)

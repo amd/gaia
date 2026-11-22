@@ -260,3 +260,57 @@ class TestTokenFile:
         headers = api_token.auth_headers()
         assert headers["X-Gaia-UI"] == "1"
         assert headers["Authorization"] == f"Bearer {api_token.read_token()}"
+
+
+class TestNoBypass:
+    def test_lookalikes_of_the_exempt_health_path_need_the_token(self, app):
+        c = _client(app, token=False)
+        for path in ("/api/health/", "/api//sessions", "/api/sessions/"):
+            assert c.get(path).status_code == 401, path
+        assert c.get("/api/health?probe=1").status_code == 200
+
+    def test_head_requests_need_the_token(self, app):
+        assert _client(app, token=False).head("/api/sessions").status_code == 401
+
+    def test_the_token_in_a_query_string_is_not_accepted(self, app):
+        token = app.state.ui_api_token
+        c = _client(app, token=False)
+        assert c.get(f"/api/sessions?token={token}").status_code == 401
+        assert c.get(f"/api/sessions?launch={token}").status_code == 401
+
+    def test_a_token_prefix_or_padded_token_is_refused(self, app):
+        token = app.state.ui_api_token
+        c = _client(app, token=False)
+        for value in (token[:-1], token + "x", token.upper()):
+            resp = c.get("/api/sessions", headers={"Authorization": f"Bearer {value}"})
+            assert resp.status_code == 401, value
+
+    def test_the_tunnel_token_is_refused_from_a_direct_local_caller(self, app):
+        tunnel = app.state.tunnel
+        tunnel._url, tunnel._token = "https://t.ngrok-free.app", "tunnel-secret"
+        tunnel._process = type("P", (), {"poll": lambda self: None})()
+        c = _client(app, token=False)
+        resp = c.get("/api/sessions", headers={"Authorization": "Bearer tunnel-secret"})
+        assert resp.status_code == 401
+
+
+def test_standalone_runner_prints_a_token_file_error_without_a_traceback(
+    tmp_path, monkeypatch, capsys
+):
+    from gaia.ui.server import main as server_main
+
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv(api_token.ENV_TOKEN_FILE, str(tmp_path / "missing"))
+    monkeypatch.setattr(
+        "sys.argv", ["gaia.ui.server", "--host", "127.0.0.1", "--port", "4200"]
+    )
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda *a, **k: pytest.fail("create_app() should have refused the token file"),
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        server_main()
+    assert exc_info.value.code == 64
+    err = capsys.readouterr().err
+    assert "Cannot read the Agent UI API token" in err
+    assert "Traceback" not in err
