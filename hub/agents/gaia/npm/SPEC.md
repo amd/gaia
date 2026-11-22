@@ -480,6 +480,12 @@ the daemon restarts the server, `status` lines carry `"phase":
 restart, and `extract_document_items` sends `"phase": "reading"` before each
 page's call ("Reading page 4 of 12…").
 
+An answer the end-of-turn check rewrites is taken back the same way: a
+`status` with `"phase": "answer_check"` and `"retracts_answer": true` comes
+before the new text or the check's next `tool_call`, and the client drops the
+`token` text since the last `tool_call`, so a turn shows one answer. A check
+that keeps the answer sends no retraction.
+
 ```json
 {
   "query": "What's in this directory?",
