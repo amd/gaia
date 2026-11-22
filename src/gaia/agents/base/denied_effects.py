@@ -2366,24 +2366,29 @@ class DeniedEffects:
 _ASCII_SPACE = re.compile(r"[ \t\r\n\f\v]+")
 #: A later message that asks for a declined call again.
 _ASKS_AGAIN = re.compile(
-    r"\b(?:try (?:it |that |this )?again|retry|re-?run|run (?:it|that|this)\b"
+    r"\b(?:again|retry|re-?run|run (?:it|that|this)\b"
     r"|go ahead|do it\b|allow it|approve)"
     r"|^\s*(?:yes|yeah|yep|ok|okay|sure)\b",
     re.IGNORECASE,
 )
 _NEGATED_ASK = re.compile(
-    r"\b(?:don'?t|do not|never|not)\s+(?:try|retry|re-?run|run|do|allow|approve|go)\b",
+    r"\b(?:don'?t|do not|never|not)\s+"
+    r"(?:try|retry|re-?run|run|do|allow|approve|go|again)\b",
     re.IGNORECASE,
 )
 
 
 def _spaced(value: Any) -> Any:
-    """*value* with runs of ASCII whitespace in its strings collapsed.
+    """*value* with runs of ASCII whitespace in its one-line strings collapsed.
 
-    ASCII only: a no-break or zero-width space makes another command.
+    ASCII only: a no-break or zero-width space makes another command. A
+    multi-line string keeps its spacing, since indentation can be content.
     """
     if isinstance(value, str):
-        return _ASCII_SPACE.sub(" ", value).strip()
+        text = value.strip(" \t\r\n\f\v")
+        if "\n" in text or "\r" in text:
+            return text
+        return _ASCII_SPACE.sub(" ", text)
     if isinstance(value, dict):
         return {str(k): _spaced(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):

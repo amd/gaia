@@ -224,6 +224,8 @@ def test_the_no_lasts_into_the_next_turn(tmp_path, monkeypatch):
         f"please run {ECHO} now",
         "No, I misclicked, run it again",
         f"no wait, please run {ECHO}",
+        "Run the shell command again",
+        "Why didn't that work? Please try running the same command again.",
     ],
 )
 def test_asking_again_puts_it_to_the_user_again(tmp_path, monkeypatch, asks_again):
@@ -241,7 +243,14 @@ def test_asking_again_puts_it_to_the_user_again(tmp_path, monkeypatch, asks_agai
 
 @pytest.mark.parametrize(
     "not_again",
-    ["don't run it", "No, leave it", "do not retry", "no", "No, don't run it again"],
+    [
+        "don't run it",
+        "No, leave it",
+        "do not retry",
+        "no",
+        "No, don't run it again",
+        "No, not again",
+    ],
 )
 def test_saying_not_to_does_not_lift_it(tmp_path, monkeypatch, not_again):
     monkeypatch.chdir(tmp_path)
@@ -275,3 +284,16 @@ def test_a_follow_up_during_the_turn_can_ask_again(tmp_path):
     agent._execute_tool("run_shell_command", _shell(ECHO))
 
     assert console.prompted == [ECHO, ECHO]
+
+
+def test_a_change_only_in_indentation_is_another_call():
+    declined = DeclinedCalls()
+    before = {"path": "a.py", "content": "if x:\n  y()\n"}
+    declined.record("write_file", before)
+
+    assert declined.declined("write_file", before) is not None
+    assert (
+        declined.declined("write_file", {**before, "content": "if x:\n    y()\n"})
+        is None
+    )
+    assert declined.declined("write_file", {**before, "content": "if x: y()"}) is None
