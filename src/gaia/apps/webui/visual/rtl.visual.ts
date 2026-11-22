@@ -1647,8 +1647,11 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
         if (locale === 'ar') expect(eyesBox.x).toBeGreaterThanOrEqual(textBox.x + textBox.width);
         else expect(eyesBox.x + eyesBox.width).toBeLessThanOrEqual(textBox.x);
         // In Arabic the eyes are mirrored, so they scan a line from right to left.
-        expect(await eyes.evaluate((el) => getComputedStyle(el).transform))
-            .toBe(locale === 'ar' ? 'matrix(-1, 0, 0, 1, 0, 0)' : 'none');
+        expect(await eyes.evaluate((el) => getComputedStyle(el).scale))
+            .toBe(locale === 'ar' ? '-1 1' : 'none');
+        // They sit in a fixed slot, the same as a step's icon, so the text beside them never moves.
+        const slot = (await line.locator('.step-glyph').boundingBox())!;
+        expect([slot.width, slot.height]).toEqual([16, 16]);
         await shot(page, `live-status-${locale}`);
         expect(await audit(page)).toEqual([]);
     });

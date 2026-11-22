@@ -74,11 +74,11 @@ describe("GAIA's eye sprite sheet", () => {
     });
 
     it('mirrors the eyes in right-to-left layouts, so they read the way the text runs', () => {
-        expect(eyesCss).toMatch(/:root\[dir="rtl"\] \.gaia-eyes\s*\{[^}]*transform:\s*scaleX\(-1\)/);
+        expect(eyesCss).toMatch(/:root\[dir="rtl"\] \.gaia-eyes\s*\{[^}]*scale:\s*-1 1/);
     });
 
     it('can reach every mood it draws from a message', () => {
-        const drawn = Object.keys(EYES_VARIANTS).filter((state) => !['think', 'read', 'tool', 'wait'].includes(state));
+        const drawn = Object.keys(EYES_VARIANTS).filter((state) => !['think', 'read', 'tool', 'wait', 'brain'].includes(state));
         expect([...MATCHED_MOODS].sort()).toEqual(drawn.sort());
     });
 

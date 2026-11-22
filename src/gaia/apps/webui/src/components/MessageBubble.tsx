@@ -24,8 +24,8 @@ import { AnswerStats, type TurnEnding } from './AnswerStats';
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
 import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { localizeLiveStatus } from '../utils/liveStatus';
-import { LONGEST_MOOD_MS, eyesPhase, messageMood } from '../utils/gaiaEyes';
-import { GaiaEyes, type EyesReaction } from './GaiaEyes';
+import { eyesPhase } from '../utils/gaiaEyes';
+import { LiveEyes, MoodEyes } from './StepGlyph';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
@@ -102,7 +102,7 @@ interface MessageBubbleProps {
  * "Reasoning — 38 words so far"), or "Thinking..." until the first one arrives.
  * One calm line in the UI font; the whole label shows at once.
  */
-function ThinkingIndicator({ active, label, awaitingUser = false, eyesOnly = false }: { active: boolean; label?: string | null; awaitingUser?: boolean; eyesOnly?: boolean }) {
+function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
     const t = useT();
     const text = awaitingUser ? t('activity.waiting') : (label ? localizeLiveStatus(t, label) : t('msg.thinking'));
     const elapsed = useElapsedSeconds(active, text);
@@ -110,34 +110,21 @@ function ThinkingIndicator({ active, label, awaitingUser = false, eyesOnly = fal
     const waitingOnModel = active && !awaitingUser && isModelWaitLabel(label);
     const modelWaitElapsed = useElapsedSeconds(waitingOnModel);
     const place = useInferencePlace();
-    const asked = useChatStore((s) => {
-        for (let i = s.messages.length - 1; i >= 0; i--) {
-            if (s.messages[i].role === 'user') return s.messages[i];
-        }
-        return undefined;
-    });
-    const gaiaMood = usePlayingMood();
-    // GAIA's own mood for this reply while it plays; otherwise how the user's message sounded.
-    const reaction = useMemo(() => {
-        if (gaiaMood) return gaiaMood;
-        const mood = asked ? messageMood(asked.content) : null;
-        return asked && mood ? { mood, key: `${asked.created_at}|${asked.content}` } : null;
-    }, [asked, gaiaMood]);
 
-    // Her mood often arrives with the answer's first words: the eyes stay to play it, without the status text.
+    // Her mood often arrives with the answer's first words: the eyes stay to play it, then fold away.
     if (!active) return <MoodEyes />;
 
     const showModelWaitHint = waitingOnModel && modelWaitElapsed >= MODEL_WAIT_HINT_S;
-    const eyes = <GaiaEyes phase={eyesPhase(label, awaitingUser)} reaction={reaction} />;
-    if (eyesOnly) return <span className="thinking-indicator is-live">{eyes}</span>;
 
     return (
         <span className={`thinking-indicator${!awaitingUser ? ' is-live' : ''}`}>
-            {eyes}
-            <span className="thinking-indicator-text">{text}</span>
-            {!awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
-                <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
-            )}
+            <span className="step-glyph is-live" aria-hidden="true"><LiveEyes phase={eyesPhase(label, awaitingUser)} /></span>
+            <span>
+                <span className="thinking-indicator-text">{text}</span>
+                {!awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
+                    <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
+                )}
+            </span>
             {showModelWaitHint && (
                 <span className="thinking-indicator-hint" role="status">{t(place?.remote === false ? 'live.localModelWaitHint' : 'live.modelWaitHint')}</span>
             )}
@@ -145,39 +132,6 @@ function ThinkingIndicator({ active, label, awaitingUser = false, eyesOnly = fal
     );
 }
 
-
-/** GAIA's own mood as a reaction for her eyes, for as long as it takes to play; null before and after. */
-function usePlayingMood(): EyesReaction | null {
-    const gaiaMood = useChatStore((s) => s.gaiaMood);
-    const playing = useUntil(gaiaMood ? gaiaMood.at + LONGEST_MOOD_MS : 0);
-    return useMemo(
-        () => (gaiaMood && playing ? { mood: gaiaMood.mood, key: `gaia|${gaiaMood.at}`, at: gaiaMood.at } : null),
-        [gaiaMood, playing],
-    );
-}
-
-/**
- * The eyes alone, playing GAIA's mood to its end. Her mood often arrives with the
- * answer's first words, and a short answer is finished before the eyes are.
- */
-function MoodEyes() {
-    const reaction = usePlayingMood();
-    if (!reaction) return null;
-    return <span className="thinking-indicator"><GaiaEyes phase="think" reaction={reaction} holdReaction /></span>;
-}
-
-/** True until the clock reaches `deadline` (ms since epoch). */
-function useUntil(deadline: number): boolean {
-    const [, expire] = useState(0);
-    useEffect(() => {
-        const left = deadline - Date.now();
-        if (left <= 0) return;
-        // A little late, so the clock is past the deadline when this re-renders.
-        const timer = setTimeout(() => expire(deadline), left + 50);
-        return () => clearTimeout(timer);
-    }, [deadline]);
-    return Date.now() < deadline;
-}
 
 /** A phase shorter than this needs no clock; past it, the count shows GAIA is still working. */
 const PHASE_ELAPSED_MIN_S = 3;
@@ -873,12 +827,10 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             liveLine={isStreaming && (
                                 <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
                             )}
-                            liveEyes={isStreaming && (
-                                <ThinkingIndicator active label={liveStatus} awaitingUser={awaitingUser} eyesOnly />
-                            )}
+                            moodHost={!!isStreaming || latest}
                         />
                     )}
-                    {message.role === 'assistant' && latest && !isStreaming && <MoodEyes />}
+                    {message.role === 'assistant' && latest && !isStreaming && !echo.steps?.some((s) => s.type === 'thinking' || s.type === 'tool') && <MoodEyes />}
                     {isError && (
                         <div className="error-banner">
                             <AlertTriangle size={14} />

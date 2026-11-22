@@ -6,13 +6,15 @@
 import { EYES_ANIMATIONS, EYES_VARIANTS, type EyesState } from '../components/gaiaEyesSheet';
 
 export type EyesPhase = 'think' | 'read' | 'tool' | 'wait';
-export type EyesMood = Exclude<EyesState, EyesPhase>;
+/** What the eyes settle into once GAIA has thought. */
+export type EyesGlyph = 'brain';
+export type EyesMood = Exclude<EyesState, EyesPhase | EyesGlyph>;
 
-const PHASES: readonly string[] = ['think', 'read', 'tool', 'wait'] satisfies EyesPhase[];
+const NOT_MOODS: readonly string[] = ['think', 'read', 'tool', 'wait', 'brain'] satisfies (EyesPhase | EyesGlyph)[];
 
 /** Every mood the eyes can draw. GAIA names one of these for her own reply (`MOODS` in agents/base/mood.py). */
 export const EYES_MOODS = (Object.keys(EYES_VARIANTS) as EyesState[]).filter(
-    (state): state is EyesMood => !PHASES.includes(state),
+    (state): state is EyesMood => !NOT_MOODS.includes(state),
 );
 
 /** `word` as a mood the eyes can draw, or null. */

@@ -47,6 +47,8 @@ import { tEn, useT, type Translate } from '../i18n/useT';
 import { localizeLiveStatus } from '../utils/liveStatus';
 import { ensureModel } from '../stores/modelNeededStore';
 import './AgentActivity.css';
+import { MoodHostContext, StepGlyph } from './StepGlyph';
+import { eyesPhase } from '../utils/gaiaEyes';
 import { visibleName, markStrayDirection } from './CalendarApproval';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -563,8 +565,8 @@ interface AgentActivityProps {
     awaitingUser?: boolean;
     /** What the model is doing between steps; drawn at the end of the timeline while no row is live. */
     liveLine?: React.ReactNode;
-    /** Shown in place of `liveLine` while a row is live: the row already says what is happening. */
-    liveEyes?: React.ReactNode;
+    /** This turn may show GAIA's mood (streaming, or the chat's latest answer): its last step plays it. */
+    moodHost?: boolean;
     /** What the running call's own model calls are doing (page progress, a server restart); shown on its row. */
     toolStatus?: string | null;
     /** The turn's answer, so a note it repeats is not shown twice. */
@@ -587,7 +589,7 @@ function VisionOffer() {
 }
 
 /** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
-export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, liveEyes, toolStatus = null, answer }: AgentActivityProps) {
+export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, moodHost = false, toolStatus = null, answer }: AgentActivityProps) {
     const t = useT();
     const [openGroups, setOpenGroups] = useState<Map<number, boolean>>(new Map());
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
@@ -602,6 +604,10 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
     // While the turn runs, the latest plan stays in view as a live checklist.
     const livePlan = running ? [...displaySteps].reverse().find((s) => s.type === 'plan' && s.planSteps?.length) : undefined;
     const liveRow = running && displaySteps.some((s) => s.active && s.type !== 'status');
+    // The turn's last step plays GAIA's mood for the reply before it settles.
+    const hostId = moodHost
+        ? [...displaySteps].reverse().find((s) => s.type === 'thinking' || s.type === 'tool')?.id
+        : undefined;
     const statusRowId = running && toolStatus
         ? [...displaySteps].reverse().find((s) => s.type === 'tool' && s.active)?.id
         : undefined;
@@ -628,7 +634,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
 
     const renderRow = (step: ActivityRow) => {
         if (step.type === 'thinking') {
-            return <FlowThought key={step.id} step={step} live={running && !!step.active} durationMs={durations.get(step.id)} now={now} />;
+            return <FlowThought key={step.id} step={step} live={running && !!step.active} durationMs={durations.get(step.id)} now={now} host={step.id === hostId} />;
         }
         if (step.type === 'tool') {
             return (
@@ -640,6 +646,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                     now={now}
                     awaitingUser={running && awaitingUser}
                     status={step.id === statusRowId ? toolStatus : null}
+                    host={step.id === hostId}
                     onToggle={() => toggleTool(step.id)}
                 />
             );
@@ -672,6 +679,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
     }, 0);
 
     return (
+        <MoodHostContext.Provider value={hostId !== undefined}>
         <div className={`agent-activity ${running ? 'active' : 'done'}`}>
             <div className="agent-timeline">
                 {timeline.map((item, i) => {
@@ -718,7 +726,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
             </div>
 
             {livePlan && <PlanChecklist step={livePlan} />}
-            {running && (liveRow ? liveEyes : liveLine) && <div className="flow-live-line">{liveRow ? liveEyes : liveLine}</div>}
+            {running && !liveRow && liveLine && <div className="flow-live-line">{liveLine}</div>}
 
             {/* Filter: after the steps, and only once there are enough open calls to sift */}
             {!running && openCalls >= FILTER_MIN_TOOL_ROWS && (
@@ -744,6 +752,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                 </div>
             )}
         </div>
+        </MoodHostContext.Provider>
     );
 }
 
@@ -807,7 +816,7 @@ export function thoughtLabel(live: boolean, durationMs?: number, t: Translate = 
 }
 
 /** Reasoning stays one line, live or done, until the user opens it. */
-function FlowThought({ step, live, durationMs, now }: { step: AgentStep; live: boolean; durationMs?: number; now: number }) {
+function FlowThought({ step, live, durationMs, now, host = false }: { step: AgentStep; live: boolean; durationMs?: number; now: number; host?: boolean }) {
     const t = useT();
     const text = (step.detail || '').trim();
     const [open, setOpen] = useState(false);
@@ -821,7 +830,7 @@ function FlowThought({ step, live, durationMs, now }: { step: AgentStep; live: b
                 onClick={() => setOpen((o) => !o)}
                 aria-expanded={open}
             >
-                {live ? <Loader2 size={13} className="flow-tool-spinner" /> : <Brain size={13} className="flow-tool-icon" />}
+                <StepGlyph live={live} phase="think" settled="brain" host={host} />
                 <span>{thoughtLabel(live, live ? now - step.timestamp : durationMs, t)}</span>
                 <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
             </button>
@@ -936,9 +945,11 @@ interface FlowToolCardProps {
     status?: string | null;
     /** How long the reasoning folded into this call ran. */
     thoughtMs?: number;
+    /** The turn's last step, which plays GAIA's mood before it settles. */
+    host?: boolean;
 }
 
-function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, status = null, thoughtMs }: FlowToolCardProps) {
+function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, status = null, thoughtMs, host = false }: FlowToolCardProps) {
     const t = useT();
     const Icon = getToolMeta(step.tool, step).icon;
     // A call held for the user's answer hasn't started, so it neither runs nor times.
@@ -970,15 +981,16 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
             >
                 <div className="flow-tool-left">
                     {/* What the step did, not whether it worked: only a running or failed step says otherwise. */}
-                    {step.active && !waiting ? (
-                        <Loader2 size={13} className="flow-tool-spinner" />
-                    ) : notRun ? (
-                        <Ban size={13} className="flow-tool-icon" />
-                    ) : step.success === false ? (
-                        <AlertCircle size={13} style={{ color: 'var(--danger)' }} />
-                    ) : (
-                        <Icon size={13} className="flow-tool-icon" />
-                    )}
+                    <StepGlyph
+                        live={!!step.active}
+                        phase={waiting ? 'wait' : eyesPhase(toolRowText(step), false)}
+                        host={host}
+                        settled={
+                            notRun ? <Ban size={13} className="flow-tool-icon is-muted" />
+                                : step.success === false ? <AlertCircle size={13} className="flow-tool-icon is-error" />
+                                : <Icon size={13} className="flow-tool-icon" />
+                        }
+                    />
                     {/* The model's narration is English in every UI language; it truncates at its own end. */}
                     <span className="flow-tool-label" dir="auto">{line}</span>
                     {count > 1 && (

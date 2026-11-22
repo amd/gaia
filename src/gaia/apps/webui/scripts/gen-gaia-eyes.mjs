@@ -88,11 +88,37 @@ const bubble = (x, y) => [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]];
 const ASLEEP = R(5, 1, 0, 3);
 const drop = (y) => [[15, y], [15, y + 1]];
 
+/** What the eyes become once GAIA has thought: a brain, two halves and their folds. */
+const BRAIN = [
+    '................',
+    '.....##.###.....',
+    '...####.#####...',
+    '..##..#.#..###..',
+    '.###.##.##.#.##.',
+    '.#.###..#.##..#.',
+    '##..#.#.##..####',
+    '#.###.#.#.###..#',
+    '##..###.##..#.##',
+    '.###..#.#.###.#.',
+    '.#.###..#.#..##.',
+    '..##..#.####.#..',
+    '...######.###...',
+    '........##......',
+    '.........##.....',
+    '................',
+];
+/** A frame with no eyes, only loose pixels. */
+const G = (px) => ({ eyes: [], px });
+/** The brain's pixels within `r` of either eye, moved `dy`: it grows out of the eyes. */
+const brainFrom = (r, dy = 0) => G(BRAIN.flatMap((row, y) => [...row].flatMap((ch, x) =>
+    ch === '#' && HOME.some(([cx, cy]) => Math.hypot(x - cx, y - cy) <= r) ? [[x, y + dy]] : [])));
+const BRAIN_FULL = brainFrom(99);
+
 /**
  * state -> { fps, loop, pose, variants }. Each variant is one way to play the
  * state; the component picks among them at random so a state rarely repeats
  * itself. `pose` is the frame of the first variant shown under reduced motion.
- * Working states loop while GAIA works; `wait` and the moods play once.
+ * Working states loop while GAIA works; `wait`, `brain` and the moods play once.
  *
  * Frames are drawn for left-to-right reading. In a right-to-left layout the
  * whole sheet is mirrored, so the eyes read, glance and write the other way and
@@ -348,6 +374,15 @@ export const STATES = {
             F(R(4, 6, 0, -2)), REST, F(R(3, 4, 0, 1)), F(R(3, 3, 0, 1)), F(R(4, 2, 0, 2)),
             ...hold(F(ASLEEP, undefined, [[11, 7]]), 3), ...hold(F(ASLEEP, undefined, [...bubble(12, 4), [10, 7]]), 3),
             ...hold(F(ASLEEP, undefined, [...bubble(13, 1), ...bubble(11, 4), [9, 7]]), 3),
+        ]],
+    },
+    brain: {
+        // The eyes widen, close, and the brain grows out of them, with a small settle.
+        fps: 16, loop: false, pose: -1,
+        variants: [[
+            REST, WIDE, F(R(4, 3)), F(R(3, 1)),
+            F(R(2, 1), undefined, brainFrom(2).px), F(R(1, 1), undefined, brainFrom(3.5).px),
+            brainFrom(5), brainFrom(6.5), brainFrom(8), brainFrom(99, -1), BRAIN_FULL,
         ]],
     },
 };

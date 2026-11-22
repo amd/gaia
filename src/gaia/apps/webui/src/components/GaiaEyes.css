@@ -4,22 +4,98 @@
 /* GAIA's pixel eyes: one frame of the sprite sheet, shown through a mask so the
    colour follows the theme. GaiaEyes.tsx moves the mask from frame to frame. */
 .gaia-eyes {
-    display: inline-block;
+    display: block;
     inline-size: 16px;
     block-size: 16px;
-    margin-inline-end: 6px;
-    vertical-align: -4px;
     background-color: var(--accent-cyan);
     -webkit-mask-image: url('../assets/gaia-eyes.png');
     mask-image: url('../assets/gaia-eyes.png');
     -webkit-mask-repeat: no-repeat;
     mask-repeat: no-repeat;
     image-rendering: pixelated;
+    transform-origin: 50% 60%;
 }
 
 /* Right-to-left layouts mirror the eyes: they read, glance and write the way the
    text runs, and the question mark becomes the Arabic one. Nothing on the sheet
-   is a letter, so every state survives the flip. */
+   is a letter, so every state survives the flip. `scale`, not `transform`, so the
+   motion below never undoes it. */
 :root[dir="rtl"] .gaia-eyes {
-    transform: scaleX(-1);
+    scale: -1 1;
+}
+
+/* A new expression arrives with a quick blink, so a change of state never cuts. */
+.gaia-eyes.is-swapping {
+    animation: eyesSwap var(--duration) var(--ease-spring);
+}
+
+@keyframes eyesSwap {
+    0% { transform: scaleY(1); }
+    35% { transform: scaleY(0.2); }
+    100% { transform: scaleY(1); }
+}
+
+/* The one place a step's icon lives: a fixed square, so nothing beside it moves
+   when the eyes come, go, or become the step's icon. */
+.step-glyph {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    flex-shrink: 0;
+    inline-size: 16px;
+    block-size: 16px;
+    color: var(--accent-cyan);
+}
+.step-glyph > * {
+    grid-area: 1 / 1;
+}
+
+/* While GAIA works the eyes drift a pixel, so they never look frozen between frames. */
+.step-glyph.is-live .gaia-eyes {
+    animation: eyesFloat var(--duration-pulse) var(--ease-in-out) infinite alternate;
+}
+.step-glyph.is-live .gaia-eyes.is-swapping {
+    animation: eyesSwap var(--duration) var(--ease-spring);
+}
+
+@keyframes eyesFloat {
+    from { transform: translateY(-0.5px); }
+    to { transform: translateY(1px); }
+}
+
+/* A finished step's icon pops in where the eyes were. */
+.step-glyph.is-settling > svg {
+    animation: glyphPop var(--duration-spring) var(--ease-spring) both;
+}
+
+@keyframes glyphPop {
+    0% { opacity: 0; transform: scale(0.4); }
+    60% { opacity: 1; transform: scale(1.15); }
+    100% { opacity: 1; transform: scale(1); }
+}
+
+/* The eyes' own line leaves by folding away, so the answer below glides up. */
+.mood-line {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows var(--duration-slow) var(--ease), opacity var(--duration-slow) var(--ease);
+}
+.mood-line > * {
+    min-block-size: 0;
+    overflow: hidden;
+}
+.mood-line.is-leaving {
+    grid-template-rows: 0fr;
+    opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gaia-eyes.is-swapping,
+    .step-glyph.is-live .gaia-eyes,
+    .step-glyph.is-settling > svg {
+        animation: none;
+    }
+    .mood-line {
+        transition: none;
+    }
 }

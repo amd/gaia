@@ -3,7 +3,7 @@
 
 import { useLayoutEffect, useRef, useState } from 'react';
 import { prefersReducedMotion } from '../utils/motion';
-import type { EyesMood, EyesPhase } from '../utils/gaiaEyes';
+import type { EyesGlyph, EyesMood, EyesPhase } from '../utils/gaiaEyes';
 import { EYES_ANIMATIONS, EYES_CELL, EYES_SHEET_HEIGHT, EYES_SHEET_WIDTH, EYES_VARIANTS, type EyesAnimation, type EyesState } from './gaiaEyesSheet';
 import './GaiaEyes.css';
 
@@ -35,18 +35,21 @@ function pickVariant(state: EyesState): EyesAnimation {
 const lengthMs = (name: EyesAnimation) => (EYES_ANIMATIONS[name].frames / EYES_ANIMATIONS[name].fps) * 1000;
 
 /**
- * GAIA's two pixel eyes, beside the live status line. They act out the work in
- * progress, after first playing a short reaction to how the user's message sounded.
- * Frames step from script at the sheet's own rate; under reduced motion each
- * state is one still.
+ * GAIA's two pixel eyes, in the icon slot of whatever step is live. They act out
+ * the work in progress, after first playing a short reaction to how the user's
+ * message sounded, and become a brain once GAIA has thought. Frames step from
+ * script at the sheet's own rate; under reduced motion each state is one still.
  */
-export function GaiaEyes({ phase, reaction = null, holdReaction = false }: {
-    phase: EyesPhase;
+export function GaiaEyes({ phase, reaction = null, holdReaction = false, still = false }: {
+    phase: EyesPhase | EyesGlyph;
     reaction?: EyesReaction | null;
     /** Show only the reaction, resting on its last frame, instead of going back to `phase`. */
     holdReaction?: boolean;
+    /** Show the state's resting frame without playing it: a step that finished before these eyes mounted. */
+    still?: boolean;
 }) {
     const ref = useRef<HTMLSpanElement>(null);
+    const shownState = useRef<EyesState | null>(null);
     const [reactingTo, setReactingTo] = useState<string | null>(null);
     const mood = reaction?.mood;
     const reactionKey = reaction?.key;
@@ -84,6 +87,21 @@ export function GaiaEyes({ phase, reaction = null, holdReaction = false }: {
         };
         const finish = () => { if (reacting && !holdReaction) setReactingTo(null); };
 
+        // A change of expression blinks; the first one shown just appears.
+        const changed = shownState.current !== null && shownState.current !== state;
+        shownState.current = state;
+        if (changed && !still) {
+            el.classList.remove('is-swapping');
+            void el.offsetWidth; // restart the blink when states change quickly
+            el.classList.add('is-swapping');
+        }
+
+        if (still) {
+            play(EYES_VARIANTS[state][0]);
+            show(anim!.pose);
+            return;
+        }
+
         if (prefersReducedMotion()) {
             play(EYES_VARIANTS[state][0]);
             show(anim!.pose);
@@ -117,7 +135,7 @@ export function GaiaEyes({ phase, reaction = null, holdReaction = false }: {
             show(frame);
         }, 1000 / anim!.fps);
         return () => window.clearInterval(timer);
-    }, [state, reacting, holdReaction, reactionKey]);
+    }, [state, reacting, holdReaction, reactionKey, still]);
 
     const size = `${EYES_SHEET_WIDTH}px ${EYES_SHEET_HEIGHT}px`;
     return (
@@ -127,6 +145,7 @@ export function GaiaEyes({ phase, reaction = null, holdReaction = false }: {
             data-eyes={state}
             aria-hidden="true"
             style={{ WebkitMaskSize: size, maskSize: size }}
+            onAnimationEnd={(e) => { if (e.animationName === 'eyesSwap') e.currentTarget.classList.remove('is-swapping'); }}
         />
     );
 }

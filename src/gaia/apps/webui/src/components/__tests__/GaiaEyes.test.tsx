@@ -199,6 +199,9 @@ describe('the eyes in the live status line', () => {
         expect(eyes(container).dataset.eyes).toBe('sad');
         expect(container.querySelector('.thinking-indicator-text')).toBeNull();
         act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS + 100); });
+        // Then the line folds away rather than vanishing, so the answer glides up.
+        expect(container.querySelector('.mood-line.is-leaving')).not.toBeNull();
+        act(() => { vi.advanceTimersByTime(400); });
         expect(container.querySelector('.thinking-indicator')).toBeNull();
     });
 
@@ -214,6 +217,7 @@ describe('the eyes in the live status line', () => {
         expect(eyes(container).dataset.eyes).toBe('sad');
         expect(shown(container)).toBe(at(variant(container), 5));
         act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS); });
+        act(() => { vi.advanceTimersByTime(400); });
         expect(container.querySelector('.gaia-eyes')).toBeNull();
     });
 
@@ -240,7 +244,9 @@ describe('the eyes in the live status line', () => {
     it('sit before the status text and follow what GAIA is doing', () => {
         const { container } = renderTurn('summarize this report', { liveStatus: 'Reading page 2 of 9…' });
         const line = container.querySelector('.thinking-indicator')!;
-        expect(line.firstElementChild).toBe(eyes(container));
+        // In a fixed slot, so the text beside it never moves.
+        expect(line.firstElementChild!.classList.contains('step-glyph')).toBe(true);
+        expect(line.firstElementChild!.querySelector('.gaia-eyes')).toBe(eyes(container));
         expect(eyes(container).dataset.eyes).toBe('read');
     });
 

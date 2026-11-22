@@ -7,7 +7,7 @@
 /** Pixels per frame, and the size of src/assets/gaia-eyes.png. */
 export const EYES_CELL = 16;
 export const EYES_SHEET_WIDTH = 720;
-export const EYES_SHEET_HEIGHT = 528;
+export const EYES_SHEET_HEIGHT = 544;
 
 /** Where each animation sits on the sheet: its row, frame count, speed, and the still shown under reduced motion. */
 export const EYES_ANIMATIONS = {
@@ -44,6 +44,7 @@ export const EYES_ANIMATIONS = {
     angry2: { row: 30, frames: 22, fps: 10, loop: false, pose: 3 },
     determined: { row: 31, frames: 17, fps: 10, loop: false, pose: 3 },
     sleepy: { row: 32, frames: 23, fps: 10, loop: false, pose: 3 },
+    brain: { row: 33, frames: 11, fps: 16, loop: false, pose: 10 },
 } as const;
 
 export type EyesAnimation = keyof typeof EYES_ANIMATIONS;
@@ -70,6 +71,7 @@ export const EYES_VARIANTS = {
     angry: ['angry', 'angry2'],
     determined: ['determined'],
     sleepy: ['sleepy'],
+    brain: ['brain'],
 } as const satisfies Record<string, readonly EyesAnimation[]>;
 
 export type EyesState = keyof typeof EYES_VARIANTS;

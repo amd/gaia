@@ -766,8 +766,13 @@
     }
 }
 
-/* Thinking indicator — inline next to GAIA name in header */
+/* The live line: GAIA's eyes in the same 16px slot as a step's icon, so the
+   text lines up with the rows above and never moves. */
 .thinking-indicator {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 7px;
     font-family: var(--font-sans);
     font-size: 12px;
     color: var(--text-muted);
@@ -776,6 +781,7 @@
 
 .thinking-indicator-hint {
     display: block;
+    flex-basis: 100%;
     margin-top: 4px;
     font-family: var(--font-sans);
     font-size: 12px;
