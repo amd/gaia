@@ -3638,7 +3638,7 @@ export const enMessages = {
     'mem.knowledge.filterEntity': 'Filter by entity',
     'mem.knowledge.allEntities': 'All entities',
     'mem.knowledge.search': 'Search memories',
-    'mem.knowledge.searchPlaceholder': 'Search memories...',
+    'mem.knowledge.searchPlaceholder': 'Search memories',
     'mem.knowledge.superseded': 'Superseded',
     'mem.knowledge.supersededTitle': 'Show entries that have been superseded by newer versions',
     'mem.knowledge.embedded': 'Embedded',
