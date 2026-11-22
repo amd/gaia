@@ -1,0 +1,77 @@
+---
+title: "gaiacode: the native coding agent"
+description: "gaiacode: GAIA's native coding agent, in development. It edits a repository, runs its tests, and won't say they pass unless a run after its last change did."
+icon: "code"
+---
+
+<Warning>
+  **In development.** gaiacode is not offered in the Agent UI or the TUI yet, and no model
+  is proven for it, so it has no default model. Today it is a headless command for trying it
+  out on your own repositories.
+</Warning>
+
+<Info>
+  **First time here?** Complete the [C++ Framework Setup](/cpp/setup) guide first.
+</Info>
+
+`gaiacode` is GAIA's coding agent as one native binary on the C++ framework. It reads a
+repository, edits it, runs its tests, and reports the test result it actually saw.
+
+## What it holds itself to
+
+When an answer says the tests (or the build) pass, gaiacode checks that a test run after its
+last edit in that turn passed. If none did, it sends the answer back to the model to run them,
+and once more if the next answer still makes the claim without a run. If the answer after that
+still does, the reply you get ends with:
+
+> I couldn't confirm the tests pass: no test run after the last change passed.
+
+Only a run of a test runner counts: the project's detected runner, or a command whose program
+is one (pytest, `go test`, `cargo test`, `npm test`, ctest and the like). Running a test file as
+a plain script (`python test_stats.py`) runs no tests, and `grep passed pytest.log` reads an old
+result, so neither counts. A shell command that changes files counts as an edit, so a test run
+before it doesn't back the claim either.
+
+## Running it
+
+```bash
+gaiacode -p "fix the failing test in stats.py" --model Qwen3.6-35B-A3B-GGUF \
+  --dangerously-skip-permissions --output-format json
+```
+
+| Option | What it does |
+|---|---|
+| `-p, --print [TASK]` | Run one task headless; the task comes from stdin when omitted |
+| `--prompt-file FILE` | Read the task from a file |
+| `-m, --model ID` | The model to run. Required: there is no default until a model is proven |
+| `--base-url URL` | OpenAI-compatible endpoint (default: Lemonade at `http://localhost:13305/api/v1`) |
+| `--api-key-env NAME` | Environment variable that holds the endpoint's API key |
+| `--native-tools MODE` | `auto` (default), `always` or `never`: whether to use OpenAI tool calls |
+| `--cwd DIR` | Work in `DIR` |
+| `--allow-dir DIR` | Let the tools also reach `DIR` (repeatable) |
+| `--full-access` | Let the tools reach any path |
+| `--output-format FMT` | `text` (default) or `json`, with the same field names as `gaiacpp -p` |
+| `--dangerously-skip-permissions` | Run tools that would ask: shell commands that change things, file writes, `run_checks` |
+| `--max-steps N` | Step limit for the run (default 200) |
+
+Exit codes: 0 when the run finished, 1 when it failed, 2 for a usage error.
+
+## Tools
+
+| Tool | Does |
+|---|---|
+| `file_read`, `file_write`, `file_edit`, `file_search` | Read, create, edit and find files, confined to the working folder and `--allow-dir` |
+| `git_status`, `git_diff`, `git_log`, `git_show` | Read the repository's state and history |
+| `bash_execute` | Run a shell command in a persistent shell; read-only commands inside the workspace don't ask |
+| `run_checks` | Run the project's tests and report passed, failed and skipped counts and the failing tests' names. With no command it finds the runner: pytest, `go test`, `cargo test`, an `npm test` script, or ctest in a CMake build |
+
+`run_checks` runs the repository's own code, so in a headless run it needs
+`--dangerously-skip-permissions`.
+
+## Building it
+
+gaiacode builds with the rest of the C++ framework (`GAIA_BUILD_GAIACODE`, on by default):
+
+```bash
+cmake -S cpp -B build && cmake --build build --target gaiacode
+```

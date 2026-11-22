@@ -1,0 +1,64 @@
+// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+//
+// CodeAgent: gaiacode's coding agent on gaia_core. It reads, edits and runs a
+// repository's code, and holds its answer to what the turn actually ran.
+
+#pragma once
+
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <gaia/agent.h>
+#include <gaia/process.h>
+#include <gaia/workspace.h>
+
+namespace gaia::code {
+
+/// What a tool call of the turn did, as the test-claim check needs it, in order.
+enum class TurnEvent { Edit, TestsPassed, TestsFailed };
+
+class CodeAgent : public Agent {
+public:
+    struct Options {
+        /// Folders the tools may touch; empty = the working directory. Ignored with fullAccess.
+        std::vector<std::string> workspaceRoots;
+        bool fullAccess = false;
+        /// The shell commands and checks run in; unset = one per process.
+        std::shared_ptr<ShellSession> shell;
+    };
+
+    CodeAgent(const AgentConfig& config, Options options);
+
+    /// Whether the answer says the tests (or the build) pass.
+    static bool claimsTestsPass(const std::string& answer);
+
+    /// The answer says the tests pass and no test run after the turn's last edit passed:
+    /// a note to send the answer back with; nullopt when the claim holds or none is made.
+    static std::optional<std::string> testClaimNote(const std::string& answer, const std::vector<TurnEvent>& events);
+
+    /// What a finished tool call did: an edit, a passing or failing test run, or nothing
+    /// (nullopt). Read from the tool's whole result as it returns, never a clipped copy.
+    static std::optional<TurnEvent> classify(const std::string& tool, const json& args, const json& result);
+
+protected:
+    void registerTools() override;
+    std::string getSystemPrompt() const override;
+    void onTurnStart() override;
+    std::optional<std::string> reviewFinalAnswer(const std::string& answer) override;
+    std::optional<std::string> unresolvedClaims(const std::string& answer) override;
+
+private:
+    /// `tool` with its callback reporting what it did to the turn's events.
+    ToolInfo observed(ToolInfo tool);
+    std::vector<TurnEvent> events() const;
+
+    Options options_;
+    mutable std::mutex eventsMu_;
+    std::vector<TurnEvent> events_;
+};
+
+}  // namespace gaia::code
