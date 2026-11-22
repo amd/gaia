@@ -290,7 +290,7 @@ describe('NewChat while the first prompt is being primed', () => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
         try {
             useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
-            vi.mocked(api.requestWarmUp).mockResolvedValue({ state: 'warming', elapsed_seconds: 1 });
+            vi.mocked(api.requestWarmUp).mockResolvedValue({ state: 'warming', elapsed_seconds: 2 });
             vi.mocked(api.getWarmUp).mockResolvedValue({ state: 'ready', elapsed_seconds: 3 });
             render(<NewChat onSend={vi.fn()} />);
 
@@ -300,6 +300,15 @@ describe('NewChat while the first prompt is being primed', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it('stays quiet while a warm-up is too short to mention', async () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        vi.mocked(api.requestWarmUp).mockResolvedValue({ state: 'warming', elapsed_seconds: 0.4 });
+        vi.mocked(api.getWarmUp).mockResolvedValue({ state: 'warming', elapsed_seconds: 1.2 });
+        render(<NewChat onSend={vi.fn()} />);
+        await waitFor(() => expect(api.requestWarmUp).toHaveBeenCalled());
+        expect(screen.queryByText(/Getting GAIA ready/)).toBeNull();
     });
 
     it('stays quiet when nothing needs priming', async () => {
