@@ -1101,7 +1101,7 @@ std::string passingTestClaim(const std::string& answer) {
         R"((?:(?:are|is|all|now|still|were|have|has|both|each|successfully)\s+)*(?:pass(?:es|ed|ing)?|green))"
         R"(|(?:test\s+)?suite\s+(?:is\s+)?(?:green|pass(?:es|ed|ing)?))"
         R"(|everything\s+pass(?:es|ed|ing)?)"
-        R"(|tests?\s+(?:were|was)\s+(?:run|executed)\b(?:[^.!?\n]|[.](?!\s)){0,80}?\band\s+(?:all\s+)?pass(?:ed)?)"
+        R"(|tests?\s+(?:were|was)\s+(?:run|executed)\b(?:[^.!?\n]|[.](?!\s)){0,80}?\band\s+(?:(?:they|all|both|each)\s+)*pass(?:ed)?)"
         R"(|(?:ran|running|run)\s+the\s+tests?\s+successfully))"
         R"(\b)",
         std::regex::icase);

@@ -338,6 +338,10 @@ TEST(GaiaAgentTest, ATestsPassClaimNeedsATestRunThatPassedAfterTheLastChange) {
                   "refactoring is correct.",
                   {edit("app/cart.py"), shellRun("python test_app.py", 0, "")})),
               none);
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "The tests were run afterward, and they passed successfully, confirming the refactoring.",
+                  {edit("app/cart.py"), shellRun("python test_app.py", 0, "")})),
+              none);
     EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("All 4 tests pass.", {})), none);
     // Refused or denied before it started: nothing ran.
     EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
