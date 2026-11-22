@@ -242,8 +242,18 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
     const std::string ext = lowerExt(path);
     std::vector<std::pair<int, std::string>> pages;
     if (ext == ".pdf") {
-        ProcessResult r = ProcessRunner::run("pdftotext -layout " + shellQuote(path) + " -", 120000,
-                                             "", {}, kMaxExtractBytes);
+#ifdef _WIN32
+        // By full path: cmd.exe would run a pdftotext.bat in the working folder first.
+        const std::string pdftotext = findProgramOnPath("pdftotext");
+        if (pdftotext.empty()) {
+            throw std::runtime_error("Can't read PDF " + path + ": pdftotext is not installed (install poppler)");
+        }
+        // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
+        const std::string extract = "\"\"" + pdftotext + "\" -layout " + shellQuote(path) + " -\"";
+#else
+        const std::string extract = "pdftotext -layout " + shellQuote(path) + " -";
+#endif
+        ProcessResult r = ProcessRunner::run(extract, 120000, "", {}, kMaxExtractBytes);
         if (r.stdout_output.size() >= kMaxExtractBytes) {
             throw std::runtime_error("PDF " + path + " has more than " +
                                      std::to_string(kMaxExtractBytes >> 20) +

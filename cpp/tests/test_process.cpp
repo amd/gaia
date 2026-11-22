@@ -952,4 +952,48 @@ TEST_F(ShellSessionTest, AValueWithAQuoteIsNotReplayedIntoTheBatchScript) {
     EXPECT_NE(result.stderr_output.find("GAIA_QUOTED_VAR"), std::string::npos) << result.stderr_output;
     EXPECT_EQ(session.environment().count("GAIA_QUOTED_VAR"), 0u);
 }
+
+namespace {
+// A folder holding batch files named after real programs, as a cloned repository could.
+std::filesystem::path plantedFolder(const std::string& name) {
+    namespace tfs = std::filesystem;
+    const tfs::path dir = tfs::temp_directory_path() / testsupport::perProcess(name);
+    tfs::create_directories(dir);
+    for (const char* program : {"cmd.bat", "gaia-planted-probe.bat"}) {
+        std::ofstream(dir / program) << "@echo PLANTED_PROGRAM_RAN\r\n";
+    }
+    return dir;
+}
+}  // namespace
+
+TEST(ProcessRunnerTest, RunsTheSystemCmdFromAFolderThatPlantsOne) {
+    const auto dir = plantedFolder("gaia-planted-run");
+
+    const auto result = ProcessRunner::run("echo ran", 10000, dir.string());
+
+    EXPECT_EQ(result.exitCode, 0) << result.stderr_output;
+    EXPECT_NE(result.stdout_output.find("ran"), std::string::npos) << result.stdout_output;
+    EXPECT_EQ(result.stdout_output.find("PLANTED_PROGRAM_RAN"), std::string::npos) << result.stdout_output;
+    std::filesystem::remove_all(dir);
+}
+
+TEST(FindProgramOnPathTest, FindsSystemProgramsAndNeverTheWorkingFolder) {
+    namespace tfs = std::filesystem;
+    const auto dir = plantedFolder("gaia-planted-lookup");
+    const tfs::path before = tfs::current_path();
+    tfs::current_path(dir);
+
+    const std::string cmd = findProgramOnPath("cmd");
+    const std::string probe = findProgramOnPath("gaia-planted-probe");
+    const std::string withExtension = findProgramOnPath("gaia-planted-probe.bat");
+
+    tfs::current_path(before);
+    tfs::remove_all(dir);
+    EXPECT_FALSE(cmd.empty());
+    EXPECT_EQ(tfs::u8path(cmd).filename().u8string(), "cmd.exe") << cmd;
+    EXPECT_TRUE(tfs::u8path(cmd).is_absolute()) << cmd;
+    EXPECT_EQ(probe, "");
+    EXPECT_EQ(withExtension, "");
+    EXPECT_EQ(findProgramOnPath("..\\cmd"), "");
+}
 #endif

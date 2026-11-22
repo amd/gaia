@@ -229,4 +229,12 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
+/// Windows: the full path of a bare program name found in an absolute PATH folder, trying
+/// .com, .exe, .bat and .cmd in each folder unless the name has an extension. Never the working
+/// folder, which may hold a planted copy. "" when absent, and always "" off Windows.
+GAIA_API std::string findProgramOnPath(const std::string& program);
+
+/// Every match findProgramOnPath would consider, in PATH order (one per folder). Empty off Windows.
+GAIA_API std::vector<std::string> findProgramsOnPath(const std::string& program);
+
 } // namespace gaia

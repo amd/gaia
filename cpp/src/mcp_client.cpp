@@ -3,6 +3,7 @@
 
 #include "gaia/mcp_client.h"
 #include "gaia/keyring.h"
+#include "gaia/process.h"
 
 #include <cctype>
 #include <chrono>
@@ -328,9 +329,9 @@ struct StdioTransport::Impl {
             return false;
         }
 
-        STARTUPINFOEXA six;
+        STARTUPINFOEXW six;
         ZeroMemory(&six, sizeof(six));
-        STARTUPINFOA& si = six.StartupInfo;
+        STARTUPINFOW& si = six.StartupInfo;
         si.cb = sizeof(six);
         si.hStdInput = childStdinRead;
         si.hStdOutput = childStdoutWrite;
@@ -379,7 +380,8 @@ struct StdioTransport::Impl {
             lpEnv = envBlock.empty() ? nullptr : static_cast<LPVOID>(&envBlock[0]);
         }
 
-        // CreateProcess only adds .exe, and npx, npm and yarn ship as .cmd files.
+        // A bare name is resolved on PATH only: CreateProcess would look in the working folder
+        // first, and it only adds .exe while npx, npm and yarn ship as .cmd files.
         std::string mutableCmd(cmdLine);
         {
             const bool quoted = !cmdLine.empty() && cmdLine[0] == '"';
@@ -388,20 +390,29 @@ struct StdioTransport::Impl {
                 cmdLine.substr(quoted ? 1 : 0, end == std::string::npos ? std::string::npos : end - (quoted ? 1 : 0));
             const std::string rest =
                 end == std::string::npos ? std::string() : cmdLine.substr(quoted ? end + 1 : end);
-            const bool bare = !program.empty() && program.find_first_of("\\/:.") == std::string::npos;
-            char found[MAX_PATH];
-            if (bare && SearchPathA(nullptr, program.c_str(), ".exe", MAX_PATH, found, nullptr) == 0) {
-                for (const char* ext : {".cmd", ".bat"}) {
-                    const DWORD n = SearchPathA(nullptr, program.c_str(), ext, MAX_PATH, found, nullptr);
-                    if (n == 0 || n >= MAX_PATH) continue;
-                    mutableCmd = "\"" + std::string(found, n) + "\"" + rest;
-                    break;
+            const bool bare = !program.empty() && program.find_first_of("\\/:") == std::string::npos;
+            if (bare) {
+                const std::string found = findProgramOnPath(program);
+                if (found.empty()) {
+                    DeleteProcThreadAttributeList(six.lpAttributeList);
+                    CloseHandle(childStdinRead);
+                    CloseHandle(childStdoutWrite);
+                    CloseHandle(childStderr);
+                    return false;
                 }
+                mutableCmd = "\"" + found + "\"" + rest;
             }
         }
-        BOOL ok = CreateProcessA(
+        // Wide: the command line and a resolved path (npm under C:\Users\Jürgen) are UTF-8, not the code page.
+        std::wstring wideCmd(
+            static_cast<size_t>(MultiByteToWideChar(CP_UTF8, 0, mutableCmd.data(),
+                                                    static_cast<int>(mutableCmd.size()), nullptr, 0)),
+            L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, mutableCmd.data(), static_cast<int>(mutableCmd.size()), wideCmd.data(),
+                            static_cast<int>(wideCmd.size()));
+        BOOL ok = CreateProcessW(
             nullptr,
-            mutableCmd.data(),
+            wideCmd.data(),
             nullptr, nullptr,
             TRUE, EXTENDED_STARTUPINFO_PRESENT,
             lpEnv, nullptr,

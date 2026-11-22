@@ -202,22 +202,8 @@ json BashTools::doEnvInspect(const json& /*args*/) {
 
 #ifdef _WIN32
 namespace {
-std::vector<std::string> whereAll(const std::string& name) {
-    std::vector<std::string> out;
-    ProcessResult r;
-    try {
-        r = ProcessRunner::run("where " + name + " 2>nul", 3000);
-    } catch (const std::exception&) {
-        return out;
-    }
-    if (r.exitCode != 0) return out;
-    std::istringstream lines(r.stdout_output);
-    for (std::string line; std::getline(lines, line);) {
-        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
-        if (!line.empty()) out.push_back(line);
-    }
-    return out;
-}
+// A PATH scan, not `where`: cmd.exe would run a where.bat in the working folder first.
+std::vector<std::string> whereAll(const std::string& name) { return findProgramsOnPath(name); }
 
 std::string lowered(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -275,10 +261,9 @@ bool BashTools::isToolAvailable(const std::string& toolName) {
     }
 
 #ifdef _WIN32
-    std::string cmd = "where " + toolName + " >nul 2>&1";
+    return !findProgramOnPath(toolName).empty();
 #else
     std::string cmd = "which " + toolName + " >/dev/null 2>&1";
-#endif
 
     try {
         ProcessResult result = ProcessRunner::run(cmd, 3000);
@@ -286,6 +271,7 @@ bool BashTools::isToolAvailable(const std::string& toolName) {
     } catch (...) {
         return false;
     }
+#endif
 }
 
 } // namespace gaia
