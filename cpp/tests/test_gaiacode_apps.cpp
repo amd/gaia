@@ -388,6 +388,27 @@ TEST_F(GaiacodeSidecar, InternetOffNeverAsksAboutAGitHubWrite) {
         << events[result].dump();
 }
 
+TEST_F(GaiacodeSidecar, InternetOffKeepsShellCommandsOffline) {
+    mock_.pushResponse(toolReply("bash_execute", {{"command", "git push origin main"}}));
+    mock_.pushResponse(toolReply("run_checks", {{"command", "pip install requests"}}));
+    mock_.pushResponse(answerReply("Offline."));
+    ASSERT_NO_FATAL_FAILURE(start());
+    const auto events = turn({{"query", "Push it"},
+                              {"run_id", "run-offshell"},
+                              {"context", json::array()},
+                              {"session_id", "chat-offshell"},
+                              {"internet_off", true},
+                              {"allowed_paths", json::array({work_.string()})}});
+    EXPECT_EQ(indexOf(events, "needs_confirmation"), -1) << "a refused command was offered for approval";
+    int refused = 0;
+    for (const auto& e : events) {
+        if (e.value("type", "") == "tool_result" && e["data"].dump().find("internet is off") != std::string::npos) {
+            ++refused;
+        }
+    }
+    EXPECT_EQ(refused, 2) << dumpAll(events);
+}
+
 // ---------------------------------------------------------------- the terminal UI's stdio child
 
 // Lines out, collected; a test waits for the turn's terminal event.

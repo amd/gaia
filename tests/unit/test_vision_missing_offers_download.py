@@ -21,6 +21,7 @@ from gaia.llm.vlm_client import VisionModelMissingError, VLMClient, VLMExtractio
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import SUMMARY_VIEW_KEYS
 from gaia.vlm.mixin import VLMToolsMixin
+from tests.unit.image_bytes import PNG
 
 GEMMA = lc.DEFAULT_MODEL_NAME
 
@@ -28,7 +29,7 @@ GEMMA = lc.DEFAULT_MODEL_NAME
 @pytest.fixture
 def host(tmp_path):
     image = tmp_path / "red_square.png"
-    image.write_bytes(b"png")
+    image.write_bytes(PNG)
     with patch("gaia.llm.lemonade_client.LemonadeClient"):
         client = VLMClient(vlm_model=GEMMA, base_url="http://127.0.0.1:59993/api/v1")
     client.client = MagicMock()

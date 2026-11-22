@@ -178,7 +178,7 @@ void printUsage() {
         "                            $XDG_CONFIG_HOME/gaiacpp/config.json or\n"
         "                            ~/.config/gaiacpp/config.json when present;\n"
         "                            %APPDATA%\\gaiacpp\\config.json on Windows)\n"
-        "  --no-web                  Leave out web_fetch\n"
+        "  --no-web                  No web access: leave out web_fetch and refuse shell fetches\n"
         "  --no-skills               Leave out installed SKILL.md skills\n"
         "  --no-memory               Don't remember or recall facts across sessions\n"
         "  --screenshots             Offer take_screenshot (off by default: privacy)\n"
@@ -564,6 +564,7 @@ gaia::GaiaAgent::Options agentOptions(const Cli& cli, const Settings& settings) 
     o.imageModel = settings.imageModel;
     o.visionModel = cli.visionModel;
     o.webTools = !cli.noWeb;
+    o.webOff = cli.noWeb;
     o.skills = !cli.noSkills;
     o.memory = !cli.noMemory;
     o.screenshots = cli.screenshots;

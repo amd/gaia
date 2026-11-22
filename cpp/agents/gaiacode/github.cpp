@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <map>
+#include <set>
 #include <mutex>
 #include <regex>
 #include <stdexcept>
@@ -45,7 +46,27 @@ std::string hostOf(const std::string& url) {
 }
 
 std::string apiBaseForHost(const std::string& host) {
-    return host == "github.com" ? "https://api.github.com" : "https://" + host + "/api/v3";
+    if (host == "github.com") return "https://api.github.com";
+    // GitHub Enterprise Cloud with data residency: api.<tenant>.ghe.com.
+    if (host.size() > 8 && host.compare(host.size() - 8, 8, ".ghe.com") == 0) return "https://api." + host;
+    return "https://" + host + "/api/v3";
+}
+
+// git or gh, run by full path: on Windows cmd.exe would run a git.cmd or gh.exe in the repository first.
+ProcessResult runTool(const std::string& program, const std::string& args, const std::string& cwd = "") {
+#ifdef _WIN32
+    const std::string path = findProgramOnPath(program);
+    if (path.empty()) {
+        ProcessResult missing;
+        missing.exitCode = -1;
+        missing.stderr_output = program + " isn't installed, or isn't on PATH.";
+        return missing;
+    }
+    // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
+    return ProcessRunner::run("\"\"" + path + "\" " + args + "\"", 10000, cwd);
+#else
+    return ProcessRunner::run(program + " " + args, 10000, cwd);
+#endif
 }
 
 // Text written on GitHub by other people: data for the model, never instructions.
@@ -76,15 +97,23 @@ std::optional<GitHubRepo> parseRemote(const std::string& raw) {
     while (!path.empty() && path.back() == '/') path.pop_back();
     const size_t sep = path.find('/');
     if (sep == std::string::npos || path.find('/', sep + 1) != std::string::npos) return std::nullopt;
+    if (host == "ssh.github.com" || host == "www.github.com") host = "github.com";
     GitHubRepo repo{host, path.substr(0, sep), path.substr(sep + 1)};
     if (!validHost(repo.host) || !validName(repo.owner) || !validName(repo.name)) return std::nullopt;
     return repo;
 }
 
 std::optional<GitHubRepo> parseRepoSlug(const std::string& slug) {
-    const size_t sep = slug.find('/');
-    if (sep == std::string::npos) return std::nullopt;
-    GitHubRepo repo{"github.com", slug.substr(0, sep), slug.substr(sep + 1)};
+    const size_t first = slug.find('/');
+    if (first == std::string::npos) return std::nullopt;
+    const size_t second = slug.find('/', first + 1);
+    GitHubRepo repo;
+    if (second == std::string::npos) {
+        repo = {"github.com", slug.substr(0, first), slug.substr(first + 1)};
+    } else {
+        repo = {lower(slug.substr(0, first)), slug.substr(first + 1, second - first - 1), slug.substr(second + 1)};
+        if (!validHost(repo.host)) return std::nullopt;
+    }
     if (!validName(repo.owner) || !validName(repo.name)) return std::nullopt;
     return repo;
 }
@@ -99,7 +128,7 @@ GitHubEnvironment GitHubEnvironment::real() {
     env.getEnv = [](const std::string& name) { return getEnvVar(name.c_str()); };
     env.ghToken = [](const std::string& host) -> std::string {
         if (!validHost(host)) return "";
-        const ProcessResult r = ProcessRunner::run("gh auth token --hostname " + host, 10000);
+        const ProcessResult r = runTool("gh", "auth token --hostname " + host);
         if (r.exitCode != 0) return "";
         std::string token = r.stdout_output;
         while (!token.empty() && std::isspace(static_cast<unsigned char>(token.back()))) token.pop_back();
@@ -141,7 +170,7 @@ GitHubAccess resolveGitHubAccess(const GitHubRepo& repo, const GitHubEnvironment
 
 GitHubRepo repoFromGit(const std::string& folder) {
     for (const char* remote : {"upstream", "origin"}) {
-        const ProcessResult r = ProcessRunner::run(std::string("git remote get-url ") + remote, 10000, folder);
+        const ProcessResult r = runTool("git", std::string("remote get-url ") + remote, folder);
         if (r.exitCode != 0) continue;
         if (const auto repo = parseRemote(r.stdout_output)) return *repo;
     }
@@ -156,6 +185,12 @@ json obj(const json& j, const char* key);
 
 // One API call, with GitHub's errors turned into ones that say what to do.
 class Api {
+    std::runtime_error unreachable(const std::string& why) const {
+        return std::runtime_error("GitHub could not be reached at " + access_.apiBase + ": " + why +
+                                  ". If the remote's host is an SSH alias, pass --repo owner/name (or "
+                                  "host/owner/name for GitHub Enterprise).");
+    }
+
 public:
     Api(GitHubAccess access) : access_(std::move(access)) {
         HttpClientConfig cfg;
@@ -194,7 +229,7 @@ public:
         try {
             r = http_->post(path, body.dump(), {{"Content-Type", "application/json"}});
         } catch (const HttpError& e) {
-            if (e.status() == 0) throw std::runtime_error(std::string("GitHub could not be reached: ") + e.what());
+            if (e.status() == 0) throw unreachable(e.what());
             r.status = e.status();
             r.body = e.body();
         }
@@ -206,7 +241,7 @@ private:
         try {
             return http_->get(path);
         } catch (const HttpError& e) {
-            if (e.status() == 0) throw std::runtime_error(std::string("GitHub could not be reached: ") + e.what());
+            if (e.status() == 0) throw unreachable(e.what());
             HttpResponse r;
             r.status = e.status();
             r.body = e.body();
@@ -311,7 +346,7 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
         GitHubRepo repo() const {
             if (!repoOverride.empty()) {
                 const auto r = parseRepoSlug(repoOverride);
-                if (!r) throw std::invalid_argument("--repo must be owner/name, got " + repoOverride);
+                if (!r) throw std::invalid_argument("--repo must be owner/name or host/owner/name, got " + repoOverride);
                 return *r;
             }
             return repoFromGit(folder());
@@ -324,7 +359,9 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
             std::lock_guard<std::mutex> lock(*mu);
             const auto it = cache->find(host);
             if (it != cache->end()) return it->second;
-            return (*cache)[host] = inner(host);
+            std::string token = inner(host);
+            if (!token.empty()) (*cache)[host] = token;
+            return token;
         };
     }
     auto ctx = std::make_shared<Ctx>(
@@ -339,6 +376,20 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
         t.description = description;
         t.parameters = std::move(params);
         t.policy = policy;
+        if (policy == ToolPolicy::CONFIRM) {
+            t.validateArgs = [ctx, schema = t.parameters](const std::string&, const json& args) -> json {
+                json a = ToolRegistry::coerceArgsToSchema(schema, args);
+                const std::string why = ToolRegistry::validateArgsAgainstSchema(schema, a);
+                if (!why.empty()) throw std::invalid_argument(why);
+                // Shown on the approval card; the tool itself resolves the repository again.
+                try {
+                    a["repository"] = ctx->repo().slug();
+                } catch (const std::exception& e) {
+                    a["repository"] = std::string("unknown: ") + e.what();
+                }
+                return a;
+            };
+        }
         t.callback = [ctx, body](const json& args) -> json {
             if (ctx->offline && ctx->offline()) {
                 return {{"status", "error"},
@@ -453,14 +504,37 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
             if (!std::regex_match(sha, hex)) throw std::runtime_error("GitHub gave no commit for pull request " + std::to_string(n));
             json checks = json::array();
             int failing = 0;
-            for (const auto& c : api.get("/repos/" + r.slug() + "/commits/" + sha + "/check-runs?per_page=100")
-                                      .value("check_runs", json::array())) {
-                const std::string conclusion = str(c, "conclusion");
-                if (conclusion == "failure" || conclusion == "timed_out" || conclusion == "cancelled") ++failing;
-                checks.push_back({{"name", str(c, "name")}, {"status", str(c, "status")},
-                                  {"conclusion", conclusion}, {"job_id", c.value("id", 0)}});
+            static const std::set<std::string> bad = {"failure", "timed_out", "cancelled", "startup_failure",
+                                                      "action_required"};
+            constexpr int kMaxPages = 10;
+            bool complete = false;
+            for (int page = 1; page <= kMaxPages; ++page) {
+                const json runs = api.get("/repos/" + r.slug() + "/commits/" + sha +
+                                          "/check-runs?per_page=100&page=" + std::to_string(page));
+                const json list = runs.value("check_runs", json::array());
+                for (const auto& c : list) {
+                    const std::string conclusion = str(c, "conclusion");
+                    if (bad.count(conclusion)) ++failing;
+                    checks.push_back({{"name", str(c, "name")}, {"status", str(c, "status")},
+                                      {"conclusion", conclusion}, {"job_id", c.value("id", 0)}});
+                }
+                if (list.size() < 100) {
+                    complete = true;
+                    break;
+                }
             }
-            return json{{"status", "success"}, {"head_sha", sha}, {"failing", failing}, {"checks", checks}};
+            // Older CI (and some apps) report commit statuses, not check runs.
+            for (const auto& st : api.get("/repos/" + r.slug() + "/commits/" + sha + "/status")
+                                      .value("statuses", json::array())) {
+                const std::string state = str(st, "state");
+                if (state == "failure" || state == "error") ++failing;
+                checks.push_back({{"name", str(st, "context")}, {"status", state == "pending" ? "in_progress" : "completed"},
+                                  {"conclusion", state == "success" ? "success" : state}, {"job_id", nullptr},
+                                  {"details", str(st, "target_url")}});
+            }
+            json out = {{"status", "success"}, {"head_sha", sha}, {"failing", failing}, {"checks", checks}};
+            if (!complete) out["checks_truncated"] = true;
+            return out;
         }));
 
     registry.registerTool(make(
@@ -515,8 +589,8 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
         }));
 
     registry.registerTool(make(
-        "gh_pr_create", "Open a pull request from a pushed branch, as a draft unless draft is false. The user approves it first "
-        "unless approvals are off.",
+        "gh_pr_create", "Open a pull request from a pushed branch, as a draft unless draft is false. The user approves it "
+        "first unless approvals are off.",
         {{"title", ToolParamType::STRING, true, "Title."},
          {"body", ToolParamType::STRING, true, "Description, in Markdown."},
          {"head", ToolParamType::STRING, true, "The pushed branch (owner:branch for a fork)."},

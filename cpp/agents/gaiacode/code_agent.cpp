@@ -79,15 +79,36 @@ void CodeAgent::registerTools() {
         reg.registerTool(observed(std::move(sh)));
     }
     reg.registerTool(observed(runChecksTool(options_.shell, ws)));
-    if (options_.github) {
-        reg.setPreCheck([off = options_.internetOff](const ToolInfo& tool, const json&) -> std::optional<json> {
-            if (off && off->load() && tool.name.rfind("gh_", 0) == 0) {
-                return json{{"status", "error"},
-                            {"error", "Internet access is off for this chat, so GitHub can't be reached. Turn it on "
-                                      "to use GitHub."}};
+    // One pre-check for every tool, before any approval card: what would be refused is never asked about.
+    reg.setPreCheck([ws, off = options_.internetOff](const ToolInfo& tool, const json& args) -> std::optional<json> {
+        auto refuse = [](const std::string& why) { return std::optional<json>(json{{"status", "error"}, {"error", why}}); };
+        const bool shellLike = tool.name == "bash_execute" || tool.name == "run_checks";
+        if (off && off->load()) {
+            if (tool.name.rfind("gh_", 0) == 0) {
+                return refuse("Internet access is off for this chat, so GitHub can't be reached. Turn it on to use "
+                              "GitHub.");
             }
-            return std::nullopt;
-        });
+            if (shellLike) {
+                // run_checks runs a shell command too: judge it the same way.
+                ToolInfo asShell;
+                asShell.name = "bash_execute";
+                const std::string why = internetRefusal(asShell, {{"command", args.value("command", "")}});
+                if (!why.empty()) return refuse(why);
+            }
+        }
+        if (!ws || !shellLike) return std::nullopt;
+        const bool posix = !BashTools::detectShell().empty();
+        std::string why;
+        if (args.contains("command") && args["command"].is_string()) {
+            why = ws->checkCommand(args["command"].get<std::string>(), posix);
+        }
+        if (why.empty() && tool.name == "run_checks" && args.contains("path") && args["path"].is_string() &&
+            fs::u8path(args["path"].get<std::string>()).is_absolute()) {
+            why = ws->checkPath(args["path"].get<std::string>());
+        }
+        return why.empty() ? std::nullopt : refuse(why);
+    });
+    if (options_.github) {
         const std::shared_ptr<ShellSession> shell = options_.shell;
         registerGitHubTools(
             reg, [shell] { return nativeFolder((shell ? *shell : BashTools::defaultSession()).cwd()); },
@@ -171,28 +192,78 @@ bool failedResult(const json& result) {
     return !result.is_object() || result.value("status", "") == "error" || result.contains("error");
 }
 
+// git commands that record or share work without changing the files the tests read.
+bool leavesTreeAlone(const std::vector<std::string>& argv) {
+    size_t i = 0;
+    while (i < argv.size() && argv[i].find('=') != std::string::npos && argv[i][0] != '-') ++i;
+    if (i + 1 >= argv.size()) return false;
+    std::string p = fs::u8path(argv[i]).filename().u8string();
+    if (p.size() > 4 && p.compare(p.size() - 4, 4, ".exe") == 0) p.resize(p.size() - 4);
+    if (p != "git") return false;
+    size_t k = i + 1;
+    while (k < argv.size() && argv[k].rfind("-", 0) == 0) k += (argv[k] == "-C" || argv[k] == "-c") ? 2 : 1;
+    if (k >= argv.size()) return false;
+    static const std::set<std::string> recordOnly = {"add", "commit", "push", "fetch", "branch", "tag", "remote",
+                                                     "config", "notes"};
+    if (recordOnly.count(argv[k])) return true;
+    // A new branch at the current commit: same files.
+    if ((argv[k] == "checkout" || argv[k] == "switch") && k + 3 == argv.size()) {
+        return argv[k + 1] == "-b" || argv[k + 1] == "-c";
+    }
+    return false;
+}
+
+// What a shell command did to the turn: a test run (passed or not), an edit, or nothing.
+std::optional<TurnEvent> shellEvent(const std::string& command, const json& result) {
+    const bool posix = !BashTools::detectShell().empty();
+    std::vector<std::vector<std::string>> segments;
+    if (!splitShellCommand(command, posix, segments)) return TurnEvent::Edit;
+    bool tested = false, changedAfter = false, changed = false;
+    for (const auto& seg : segments) {
+        std::string text;
+        for (const auto& w : seg) text += " " + w;
+        const bool test = looksLikeTestCommand(text);
+        const bool mutates = !test && !leavesTreeAlone(seg) && !isReadOnlyShellCommand(text + " ", posix);
+        if (test) tested = true;
+        if (mutates) {
+            changed = true;
+            if (tested) changedAfter = true;
+        }
+    }
+    // `pytest && black .`: whatever the tests saw, the files changed after them.
+    if (changedAfter) return TurnEvent::Edit;
+    if (tested) {
+        const std::string out = result.value("stdout", "") + "\n" + result.value("stderr", "");
+        // A clipped capture lost its summary at the end; the run backs nothing either way.
+        if (out.find("[output truncated at") != std::string::npos) return changed ? std::optional(TurnEvent::Edit)
+                                                                                    : std::nullopt;
+        CheckResult r;
+        r.exitCode = result.value("exit_code", -1);
+        r.timedOut = result.value("timed_out", false);
+        parseCheckOutput(out, r);
+        if (r.passed < 0 && r.exitCode == 0 && !r.timedOut) return std::nullopt;  // no summary to read
+        return r.green() ? TurnEvent::TestsPassed : TurnEvent::TestsFailed;
+    }
+    return changed ? std::optional(TurnEvent::Edit) : std::nullopt;
+}
+
 }  // namespace
 
 std::optional<TurnEvent> CodeAgent::classify(const std::string& tool, const json& args, const json& result) {
     if (failedResult(result)) return std::nullopt;
     if (tool == "file_edit" || tool == "file_write") return TurnEvent::Edit;
     if (tool == "run_checks") {
-        // A command that isn't a test run backs nothing either way.
-        if (!result.value("test_run", false)) return std::nullopt;
+        // A command that isn't a test run backs nothing, but may have written files (a formatter).
+        if (!result.value("test_run", false)) {
+            const std::string command = result.value("command", "");
+            return command.empty() || isReadOnlyShellCommand(" " + command + " ", !BashTools::detectShell().empty())
+                       ? std::nullopt
+                       : std::optional(TurnEvent::Edit);
+        }
+        if (result.value("passed", -1) < 0 && result.value("exit_code", -1) == 0) return std::nullopt;
         return result.value("green", false) ? TurnEvent::TestsPassed : TurnEvent::TestsFailed;
     }
-    if (tool == "bash_execute") {
-        const std::string command = args.value("command", "");
-        if (looksLikeTestCommand(command)) {
-            CheckResult r;
-            r.exitCode = result.value("exit_code", -1);
-            r.timedOut = result.value("timed_out", false);
-            parseCheckOutput(result.value("stdout", "") + "\n" + result.value("stderr", ""), r);
-            return r.green() ? TurnEvent::TestsPassed : TurnEvent::TestsFailed;
-        }
-        // sed -i, git apply, a script that writes files: anything that isn't a read may have edited.
-        if (!isReadOnlyShellCommand(" " + command + " ", !BashTools::detectShell().empty())) return TurnEvent::Edit;
-    }
+    if (tool == "bash_execute") return shellEvent(args.value("command", ""), result);
     return std::nullopt;
 }
 
@@ -200,8 +271,9 @@ bool CodeAgent::claimsTestsPass(const std::string& answer) {
     // The verb with no object after it: "the test passes a mock client" is no claim.
     static const std::string noObject = R"((?!\s+(a|an|the|its|my|our|your|this|that)\b))";
     static const std::vector<std::regex> claims = {
-        std::regex(R"(\b(tests?|test suite|specs?)\b[^.!?;\n]{0,40}?\b(pass|passes|passed|passing|are green|is green|all green)\b)" +
+        std::regex(R"((\b(tests?|test suite|specs?|checks?|run_checks|ci)\b|\btest_[\w.]*\w|\w+_test(\.\w+)?\b|[\w-]+\.(test|spec)\.\w+)[^.!?;\n]{0,40}?\b(pass|passes|passed|passing|are green|is green|all green)\b)" +
                    noObject),
+        std::regex(R"(\bci\b[^.!?;\n]{0,15}\b(is green|green|succeeds|succeeded)\b)"),
         std::regex(R"(\b(everything|it all)\b[^.!?;\n]{0,15}\b(passes|passed|is green)\b)" + noObject),
         std::regex(R"(\bbuild\b[^.!?;\n]{0,20}\b(succeeds|succeeded|passes|passed|is green)\b)"),
     };
@@ -227,11 +299,15 @@ bool CodeAgent::claimsTestsPass(const std::string& answer) {
         return std::regex_search(s, m, counted) && !std::regex_search(s, failures) &&
                !negatedNear(s, static_cast<size_t>(m.position()), static_cast<size_t>(m.length()));
     };
+    const std::string text = lower(answer);
     std::string sentence;
-    std::istringstream in(lower(answer));
-    for (char ch; in.get(ch);) {
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char ch = text[i];
         sentence += ch;
-        if (ch == '.' || ch == '!' || ch == '?' || ch == ';' || ch == '\n' || in.peek() == EOF) {
+        const bool last = i + 1 == text.size();
+        const bool stop = ch == '\n' || ((ch == '.' || ch == '!' || ch == '?' || ch == ';') &&
+                                         (last || std::isspace(static_cast<unsigned char>(text[i + 1]))));
+        if (stop || last) {
             if (check(sentence)) return true;
             sentence.clear();
         }

@@ -90,7 +90,7 @@ const char* kUsage =
     "  --output-format FMT          text (default) or json\n"
     "  --dangerously-skip-permissions  Run tools that would ask (shell, writes, run_checks)\n"
     "  --max-steps N                Step limit for the run\n"
-    "  --repo OWNER/NAME            GitHub repository to work on (default: the upstream, else origin, remote)\n"
+    "  --repo [HOST/]OWNER/NAME     GitHub repository to work on (default: the upstream, else origin, remote)\n"
     "  --allow-github-writes KINDS  GitHub writes this run may make: comment, pr (comma-separated)\n"
     "  --no-github                  No GitHub tools\n"
     "  --no-skills                  Load no skills\n"
