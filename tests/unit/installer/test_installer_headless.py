@@ -497,7 +497,7 @@ class TestWaitRidesOutRateLimits:
         assert "Nothing was tested" in out
         assert self.sleeps == []
 
-    def test_a_plain_forbidden_is_not_waited_on(self, monkeypatch, tmp_path):
+    def test_a_plain_forbidden_is_not_waited_on(self, monkeypatch, tmp_path, capsys):
         error = _limit_error(
             403,
             {"X-RateLimit-Remaining": "4000"},
@@ -508,6 +508,29 @@ class TestWaitRidesOutRateLimits:
             self._run(tmp_path, 300)
         assert caught.value is error
         assert self.sleeps == []
+        # GitHub's own reason is on record, so the next failure is diagnosable.
+        out = capsys.readouterr().out
+        assert "not a GitHub rate limit" in out
+        assert "Resource not accessible by integration" in out
+        assert "X-RateLimit-Remaining=4000" in out
+
+    def test_a_forbidden_hidden_behind_get_retries_is_still_explained(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        cause = _limit_error(403, {}, "Must have admin rights to Repository.")
+        wrapped = RuntimeError("returned HTTP 403 after 4 attempt(s)")
+        wrapped.__cause__ = cause
+        self._reads(monkeypatch, wrapped)
+        with pytest.raises(RuntimeError) as caught:
+            self._run(tmp_path, 300)
+        assert caught.value is wrapped
+        assert self.sleeps == []
+        assert "Must have admin rights" in capsys.readouterr().out
+
+    def test_a_404_still_means_not_published_yet(self, monkeypatch, tmp_path, capsys):
+        self._reads(monkeypatch, None, self._complete())
+        assert self._run(tmp_path, 300) == 0
+        assert "not a GitHub rate limit" not in capsys.readouterr().out
 
     def test_a_server_error_is_not_waited_on(self, monkeypatch, tmp_path):
         error = _limit_error(500, {"Retry-After": "5"})

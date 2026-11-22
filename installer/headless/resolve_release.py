@@ -338,6 +338,7 @@ def _rate_limit(exc: BaseException) -> Optional[Tuple[float, str]]:
         or "rate limit" in message.lower()
     )
     if not limited:
+        print(f"::error::not a GitHub rate limit, failing: {detail}", flush=True)
         return None
     wait = 60.0
     if retry_after:
