@@ -51,6 +51,8 @@ def _child_env(tmp_path):
     env.pop(gaia_logger.LOG_FILE_ENV, None)
     for key in ("TMP", "TEMP", "TMPDIR"):
         env[key] = str(tmp_path)
+    # So the default log lands in <tmp>/.gaia/gaia.log, not the real ~/.gaia.
+    env["HOME"] = env["USERPROFILE"] = str(tmp_path)
     env["PYTHONPATH"] = os.pathsep.join(
         filter(None, [str(REPO_ROOT / "src"), env.get("PYTHONPATH")])
     )

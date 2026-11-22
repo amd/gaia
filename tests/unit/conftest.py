@@ -216,6 +216,79 @@ def _forget_agent_registry():
 #: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
 _RUN_HOME = Path.home()
 
+#: The real ``~/.gaia``, which no unit test may create or write into.
+_REAL_GAIA_HOME = _RUN_HOME / ".gaia"
+_REAL_GAIA_PREFIXES = tuple({str(_REAL_GAIA_HOME), os.path.realpath(_REAL_GAIA_HOME)})
+#: Whether it existed, updated once a test is failed for creating it.
+_real_gaia_home_existed = [os.path.exists(_REAL_GAIA_HOME)]
+#: Bound now: a test may still have ``os.stat`` patched when the guard runs.
+_STAT = os.stat
+_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND
+#: Writes into the real ``~/.gaia`` seen in this process since the last check.
+_real_home_writes: list = []
+
+
+def _exists(path) -> bool:
+    try:
+        _STAT(path)
+    except OSError:
+        return False
+    return True
+
+
+def _in_real_gaia_home(path) -> bool:
+    try:
+        path = os.fsdecode(path)
+    except TypeError:  # a file descriptor
+        return False
+    return any(path == p or path.startswith(p + os.sep) for p in _REAL_GAIA_PREFIXES)
+
+
+def _audit_real_gaia_home(event, args):
+    # Called for every audit event in the process: keep the miss path cheap.
+    if event == "open":
+        path, mode, flags = args
+        if mode is not None and not any(c in mode for c in "wax+"):
+            return
+        if mode is None and not (flags or 0) & _WRITE_FLAGS:
+            return
+    elif event in ("os.mkdir", "os.rename", "os.replace"):
+        path = args[1] if event != "os.mkdir" else args[0]
+    else:
+        return
+    if _in_real_gaia_home(path):
+        _real_home_writes.append(f"{event} {os.fsdecode(path)}")
+
+
+sys.addaudithook(_audit_real_gaia_home)
+
+
+@pytest.fixture(autouse=True)
+def _guard_real_gaia_home_writes():
+    """Fail a test that writes into, or creates, the developer's real ``~/.gaia``.
+
+    The audit hook sees this process's writes; the existence check also
+    catches a ``gaia`` subprocess creating the folder on a machine without one.
+    """
+    _real_home_writes.clear()
+    yield
+    problems = list(dict.fromkeys(_real_home_writes))
+    _real_home_writes.clear()
+    if not _real_gaia_home_existed[0] and _exists(_REAL_GAIA_HOME):
+        _real_gaia_home_existed[0] = True  # report it once, not after every test
+        problems.append(
+            f"created {_REAL_GAIA_HOME} (a subprocess, or a test running in "
+            "parallel, may have done it)"
+        )
+    if problems:
+        pytest.fail(
+            f"This test wrote into the real GAIA home {_REAL_GAIA_HOME}:\n  "
+            + "\n  ".join(problems)
+            + "\nResolve the path through gaia_home() at call time, or point "
+            "the test at tmp_path (the mock_home fixture, or GAIA_HOME).",
+            pytrace=False,
+        )
+
 
 def _patch_default_gaia_home(mp, default_gaia_home) -> None:
     from gaia import config as config_mod
