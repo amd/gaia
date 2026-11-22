@@ -651,3 +651,82 @@ def test_the_ui_route_says_nothing_is_stored_for_every_provider(
     assert payload["revoked_remotely"] is False
     assert payload["nothing_stored"] is True
     assert payload["revoke_error"] is None
+
+
+@pytest.fixture
+def unconfigured(monkeypatch):
+    """A readable keyring and no OAuth client set up, as on a fresh install."""
+    from gaia.connectors import providers
+
+    monkeypatch.setattr(providers, "_registry", {})
+    for prefix in ("GAIA_GOOGLE", "GAIA_MICROSOFT", "GAIA_MICROSOFT_WORK"):
+        monkeypatch.delenv(f"{prefix}_CLIENT_ID", raising=False)
+        monkeypatch.delenv(f"{prefix}_CLIENT_SECRET", raising=False)
+    backend = StrongKeyring()
+    _activate(monkeypatch, backend)
+    assert store.keyring_read_refusal() is None
+    return backend
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("all_accounts", [False, True])
+def test_the_cli_says_nothing_stored_without_an_oauth_client(
+    provider, all_accounts, unconfigured, capsys
+):
+    from gaia.connectors.cli import _handle_disconnect
+
+    args = argparse.Namespace(
+        connector_id=provider, account=None, all_accounts=all_accounts
+    )
+    assert _handle_disconnect(args) == 0
+
+    out = capsys.readouterr().out
+    assert (
+        out
+        == f"Nothing stored for {provider}; there was nothing to disconnect or revoke.\n"
+    )
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_the_ui_route_says_nothing_stored_without_an_oauth_client(
+    provider, unconfigured, monkeypatch
+):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from gaia.ui.routers import connectors as router_mod
+
+    events = []
+
+    async def _emit(name, payload):
+        events.append((name, payload))
+
+    monkeypatch.setattr(router_mod._emitter, "emit", _emit)
+    app = FastAPI()
+    app.include_router(router_mod.router)
+
+    resp = TestClient(app).delete(f"{router_mod.router.prefix}/{provider}")
+
+    assert resp.status_code == 204, resp.text
+    (name, payload), *_ = events
+    assert name == "connector.disconnected"
+    assert payload["revoke_supported"] is (provider == "google")
+    assert payload["revoked_remotely"] is False
+    assert payload["nothing_stored"] is True
+    assert payload["revoke_error"] is None
+
+
+def test_an_unreadable_sign_in_without_an_oauth_client_is_not_nothing_stored(
+    unconfigured, monkeypatch
+):
+    items = _seed(monkeypatch, "google", ALICE)
+    _activate(monkeypatch, unconfigured)
+    unconfigured.items.update(items)
+    (acct,) = accounts.list_accounts("google")
+    store._kr_set(store._connection_username("google", acct.slot), "{not json")
+
+    result = asyncio.run(api.revoke_connection_async("google"))
+
+    assert result["nothing_stored"] is False
+    assert result["revoked_remotely"] is False
+    assert result["revoke_error"]
