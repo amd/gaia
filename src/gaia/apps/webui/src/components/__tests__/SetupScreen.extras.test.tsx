@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SetupScreen } from '../SetupScreen';
 import * as api from '../../services/api';
@@ -16,8 +16,21 @@ vi.mock('../../services/api', async (importOriginal) => {
 });
 const mockedApi = vi.mocked(api);
 
+const QUEUED_KEY = 'gaia.setup.queuedExtras';
+const running = runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: 1e8 })]);
+const ready: SetupRunStatus = { ...runStatus([progress({ id: QWEN.id, state: 'ready', bytes_done: 1e9 })]), state: 'ready' };
+/** The main run finished; the extra it handed off is downloading on its own. */
+const readyWhisperPulling: SetupRunStatus = {
+    ...runStatus([
+        progress({ id: QWEN.id, state: 'ready', bytes_done: 1e9 }),
+        progress({ id: WHISPER.id, roles: ['speech'], state: 'downloading', bytes_done: 2e8, bytes_total: 1.6e9 }),
+    ]),
+    state: 'ready',
+};
+
 beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.removeItem(QUEUED_KEY);
     mockedApi.getOnboardingPreflight.mockResolvedValue({ compatible: true, blockers: [] } as unknown as PreflightReport);
     mockedApi.getLemonadeTarget.mockResolvedValue({ offer: false, source: 'gaia' } as unknown as Awaited<ReturnType<typeof api.getLemonadeTarget>>);
     mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED, WHISPER]));
@@ -28,40 +41,103 @@ beforeEach(() => {
     mockedApi.getStartScreen.mockResolvedValue({ cards: [] } as unknown as Awaited<ReturnType<typeof api.getStartScreen>>);
 });
 
+const lowDisk = () => {
+    const detail = { code: 'low_disk', message: 'Needs 1.6 GB; only 1.0 GB free.', acknowledge: 'acknowledge_low_disk' };
+    return new api.ApiError(detail.message, 409, detail.message, null, [], detail);
+};
+
 describe('optional model added during the download', () => {
-    it('declining the low-disk sheet for it says on the Ready screen that it was not downloaded', async () => {
-        const running = runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: 1e8 })]);
-        const ready: SetupRunStatus = { ...runStatus([progress({ id: QWEN.id, state: 'ready', bytes_done: 1e9 })]), state: 'ready' };
+    it('is downloaded on its own once the run ends, so setup reaches Ready without re-checking the chat model', async () => {
         let now: SetupRunStatus = running;
         mockedApi.getSetupStatus.mockImplementation(async () => now);
-        const detail = { code: 'low_disk', message: 'Needs 1.6 GB; only 1.0 GB free.', acknowledge: 'acknowledge_low_disk' };
-        mockedApi.startSetup.mockRejectedValue(new api.ApiError(detail.message, 409, detail.message, null, [], detail));
+        mockedApi.downloadSetupModel.mockImplementation(async () => { now = readyWhisperPulling; return now; });
+
+        render(<SetupScreen onReady={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+        now = ready;
+        // A second `gaia init` run would load-check every model again after Whisper downloads.
+        expect(await screen.findByRole('button', { name: 'Start chatting' }, { timeout: 4000 })).toBeInTheDocument();
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+        expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(WHISPER.id, expect.objectContaining({ keepTrying: false }));
+        expect(screen.getByText(/Still downloading: Whisper/)).toBeInTheDocument();
+    });
+
+    it('reads Added, not Add, while it downloads', async () => {
+        mockedApi.getSetupStatus.mockResolvedValue(readyWhisperPulling);
+        render(<SetupScreen onReady={vi.fn()} />);
+        await screen.findByRole('button', { name: 'Start chatting' });
+        const rail = screen.getByRole('navigation', { name: 'Setup steps' });
+        fireEvent.click(within(rail).getByRole('button', { name: /Download/ }));
+        const box = await screen.findByRole('region', { name: 'Optional' });
+        expect(within(box).queryByRole('button', { name: 'Add' })).not.toBeInTheDocument();
+        expect(within(box).getByRole('button', { name: 'Added' })).toBeDisabled();
+    });
+
+    it('is still added after setup is closed and opened again', async () => {
+        mockedApi.getSetupStatus.mockResolvedValue(running);
+        const first = render(<SetupScreen onReady={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+        first.unmount();
+
+        render(<SetupScreen onReady={vi.fn()} />);
+        expect(await screen.findByRole('button', { name: 'Added' })).toBeInTheDocument();
+    });
+
+    it('declining the low-disk sheet for it says on the Ready screen that it was not downloaded', async () => {
+        let now: SetupRunStatus = running;
+        mockedApi.getSetupStatus.mockImplementation(async () => now);
+        mockedApi.downloadSetupModel.mockRejectedValue(lowDisk());
 
         render(<SetupScreen onReady={vi.fn()} />);
         fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
         now = ready;
         fireEvent.click(await screen.findByRole('button', { name: 'Change models' }, { timeout: 4000 }));
         await act(async () => {});
-        // Whisper was never fetched, yet the user lands on Ready with nothing said.
         expect(await screen.findByText(/Not downloaded: Whisper/)).toBeInTheDocument();
+        expect(localStorage.getItem(QUEUED_KEY)).toBeNull();
     });
 
     it('Download anyway on the low-disk sheet takes the extra off the not-downloaded line', async () => {
-        const running = runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: 1e8 })]);
-        const ready: SetupRunStatus = { ...runStatus([progress({ id: QWEN.id, state: 'ready', bytes_done: 1e9 }), progress({ id: WHISPER.id, state: 'ready', bytes_done: 1e9 })]), state: 'ready' };
         let now: SetupRunStatus = running;
         mockedApi.getSetupStatus.mockImplementation(async () => now);
-        const detail = { code: 'low_disk', message: 'Needs 1.6 GB; only 1.0 GB free.', acknowledge: 'acknowledge_low_disk' };
-        mockedApi.startSetup.mockRejectedValueOnce(new api.ApiError(detail.message, 409, detail.message, null, [], detail));
+        mockedApi.downloadSetupModel.mockRejectedValueOnce(lowDisk());
         render(<SetupScreen onReady={vi.fn()} />);
         fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
         now = ready;
-        mockedApi.startSetup.mockResolvedValue(ready);
+        mockedApi.downloadSetupModel.mockImplementation(async () => { now = readyWhisperPulling; return now; });
         fireEvent.click(await screen.findByRole('button', { name: 'Download anyway' }, { timeout: 4000 }));
         await act(async () => {});
-        await act(async () => { await new Promise((r) => setTimeout(r, 1500)); });
-        expect(mockedApi.startSetup).toHaveBeenCalledTimes(2);
-        expect(mockedApi.startSetup.mock.calls[1][2]).toMatchObject({ acknowledgeLowDisk: true });
+        expect(mockedApi.downloadSetupModel).toHaveBeenCalledTimes(2);
+        expect(mockedApi.downloadSetupModel.mock.calls[1][1]).toMatchObject({ acknowledgeLowDisk: true });
         expect(screen.queryByText(/Not downloaded: Whisper/)).not.toBeInTheDocument();
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+    });
+});
+
+describe('stopping with only the optional extras left', () => {
+    /** Cancel › Stop while Whisper downloads: the required models are on disk, unchecked. */
+    const stopped = runStatus([
+        progress({ id: EMBED.id, roles: ['embedding'], state: 'unchecked', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
+        progress({ id: QWEN.id, state: 'unchecked', bytes_done: 1e9, bytes_total: 1e9 }),
+        progress({ id: WHISPER.id, roles: ['speech'], state: 'cancelled', bytes_done: 5.6e8, bytes_total: 1.6e9 }),
+    ], { state: 'cancelled' });
+
+    it('offers to finish without them, and says on Ready they were not downloaded', async () => {
+        mockedApi.getSetupStatus.mockResolvedValue(stopped);
+        mockedApi.startSetup.mockResolvedValue(ready);
+        render(<SetupScreen onReady={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Finish without the extras' }));
+        expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
+        expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
+        expect(mockedApi.startSetup.mock.calls[0][2]?.extraModels ?? []).not.toContain(WHISPER.id);
+        expect(screen.getByText(/Not downloaded: Whisper/)).toBeInTheDocument();
+    });
+
+    it("doesn't mark the Download step as failed after the user's own Stop", async () => {
+        mockedApi.getSetupStatus.mockResolvedValue(stopped);
+        render(<SetupScreen onReady={vi.fn()} />);
+        await screen.findByRole('button', { name: 'Resume all' });
+        const rail = within(screen.getByRole('navigation', { name: 'Setup steps' }));
+        expect(rail.getByText('Download').closest('.setup-rail-step')).not.toHaveClass('is-failed');
     });
 });
