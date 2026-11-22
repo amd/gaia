@@ -663,6 +663,98 @@ bool fetchLeavesThisPc(const std::string& command, const std::string& bare) {
     return false;
 }
 
+// Programs and shell words that run the words after them as a command. c and k are cmd's /c and
+// /k read as a program name.
+const std::set<std::string>& commandWrappers() {
+    static const std::set<std::string> wrappers = {
+        "sudo", "doas", "env", "time", "nohup", "exec", "command", "xargs", "timeout", "nice", "ionice",
+        "stdbuf", "taskset", "chrt", "watch", "if", "elif", "then", "while", "until", "do", "else", "{", "!",
+        "cmd", "call", "start", "c", "k"};
+    return wrappers;
+}
+
+// True when `flag` makes `wrapper` read the next word as its value: sudo -u alice, nice -n 5.
+// "run" stands for uv run, poetry run, pipenv run and pdm run.
+bool wrapperFlagTakesValue(const std::string& wrapper, const std::string& flag) {
+    static const std::map<std::string, std::set<std::string>> valued = {
+        {"sudo", {"-u", "-g", "-h", "-p", "-C", "-U", "-r", "-t", "-D", "-R", "-T", "--user", "--group", "--host",
+                  "--prompt", "--chdir", "--role", "--type", "--other-user", "--close-from", "--command-timeout"}},
+        {"doas", {"-u", "-C"}},
+        {"env", {"-u", "-C", "--unset", "--chdir"}},
+        {"timeout", {"-s", "-k", "--signal", "--kill-after"}},
+        {"nice", {"-n", "--adjustment"}},
+        {"ionice", {"-c", "-n", "-p", "-P", "-u", "--class", "--classdata"}},
+        {"stdbuf", {"-i", "-o", "-e"}},
+        {"watch", {"-n", "--interval"}},
+        {"xargs", {"-I", "-n", "-P", "-L", "-d", "-E", "-s", "-a", "--max-args", "--max-procs", "--delimiter",
+                   "--arg-file"}},
+        {"time", {"-f", "-o", "--format", "--output"}},
+        {"exec", {"-a"}},
+        {"run", {"--with", "--with-requirements", "--python", "-p", "--package", "--directory", "--project",
+                 "--env-file", "--group", "--extra", "--index", "--from"}}};
+    const auto found = valued.find(wrapper);
+    return found != valued.end() && found->second.count(flag) > 0;
+}
+
+// A wrapper's bare number: timeout 10, timeout 5s, chrt 10, taskset 0x3.
+bool isWrapperNumber(const std::string& wrapper, const std::string& word) {
+    if (wrapper != "timeout" && wrapper != "taskset" && wrapper != "chrt" && wrapper != "nice" && wrapper != "ionice") {
+        return false;
+    }
+    return !word.empty() && word[0] >= '0' && word[0] <= '9' &&
+           word.find_first_not_of("0123456789abcdefABCDEFxX.,:-smh") == std::string::npos;
+}
+
+// Whether the next word of a command names the program that runs, past wrappers such as
+// sudo -u alice, timeout 10, nice -n 5, if, {, ! and uv run.
+class CommandStart {
+public:
+    bool at() const { return at_; }
+    void reset() { *this = CommandStart(); }
+    void stop() { at_ = false; }
+    // Reads a word at a command position that isn't a program being looked for. `name` is the
+    // word as a program name; `alsoWrappers` are more programs to see through.
+    void pass(const std::string& word, const std::string& name, const std::set<std::string>* alsoWrappers) {
+        if (skipValue_) {
+            skipValue_ = false;
+            return;
+        }
+        if (runner_) {
+            if (word[0] == '-') return;
+            runner_ = false;
+            at_ = name == "run";
+            if (at_) wrapper_ = "run";
+            return;
+        }
+        if (commandWrappers().count(name) || (alsoWrappers && alsoWrappers->count(name))) {
+            wrapper_ = name;
+            return;
+        }
+        if (name == "uv" || name == "poetry" || name == "pipenv" || name == "pdm") {
+            runner_ = true;
+            return;
+        }
+        // command -v and -V look a program up rather than run it.
+        if (wrapper_ == "command" && (word == "-v" || word == "-V")) {
+            at_ = false;
+            return;
+        }
+        // A word starting with / is a wrapper's switch (cmd /s /c); before any wrapper it is a program's path.
+        if (word[0] == '-' || (word[0] == '/' && !wrapper_.empty())) {
+            skipValue_ = wrapperFlagTakesValue(wrapper_, word);
+            return;
+        }
+        if (word.find('=') != std::string::npos || isWrapperNumber(wrapper_, word)) return;
+        at_ = false;
+    }
+
+private:
+    bool at_ = true;
+    bool runner_ = false;
+    bool skipValue_ = false;
+    std::string wrapper_;
+};
+
 // True when a web-request program is what a command runs, not a word handed to another
 // program: `grep curl notes.md` only searches for the name. `bare` is the command with quotes,
 // backslashes and ^ dropped, which is how a shell sees `bash -c "curl ..."`.
@@ -670,12 +762,10 @@ bool runsFetchProgram(const std::string& command, const std::string& bare) {
     static const std::set<std::string> fetchers = {"curl", "wget", "wget2", "iwr", "irm", "invoke-webrequest",
                                                    "invoke-restmethod", "http", "https", "xh", "xhs", "lynx",
                                                    "w3m", "links", "elinks"};
-    // Programs that run the words after them; c and k are cmd's /c and /k as programWords leaves them.
-    static const std::set<std::string> wrappers = {"sudo", "env", "time", "nohup", "exec", "command", "xargs",
-                                                   "bash", "sh", "zsh", "cmd", "powershell", "pwsh", "call",
-                                                   "start", "then", "do", "else", "c", "k"};
+    // With quotes dropped, a shell's command string is the words after it.
+    static const std::set<std::string> shells = {"bash", "sh", "zsh", "powershell", "pwsh"};
     const auto scan = [](const std::string& text) {
-        bool atCommand = true;
+        CommandStart start;
         std::string word;
         for (const char c : text + "\n") {
             const bool space = c == ' ' || c == '\t' || c == '\r';
@@ -683,7 +773,7 @@ bool runsFetchProgram(const std::string& command, const std::string& bare) {
                 word.push_back(c);
                 continue;
             }
-            if (!word.empty() && atCommand) {
+            if (!word.empty() && start.at()) {
                 std::string name = lowerAscii(word.substr(word.find_last_of("/\\") + 1));
                 for (const char* ext : {".exe", ".cmd", ".bat", ".com", ".ps1"}) {
                     const size_t n = std::strlen(ext);
@@ -693,11 +783,10 @@ bool runsFetchProgram(const std::string& command, const std::string& bare) {
                     }
                 }
                 if (fetchers.count(name)) return true;
-                atCommand = wrappers.count(name) || word[0] == '-' || word[0] == '/' ||
-                            word.find('=') != std::string::npos;
+                start.pass(word, name, &shells);
             }
             word.clear();
-            if (!space) atCommand = true;
+            if (!space) start.reset();
         }
         return false;
     };
@@ -705,23 +794,49 @@ bool runsFetchProgram(const std::string& command, const std::string& bare) {
 }
 
 // A command line split the way a shell reads it: quotes group a word and are dropped, cmd's ^
-// escape is dropped, and ; | & ( ) ` and a newline outside quotes end a command.
+// escape is dropped, and ; | & ( ) ` and a newline outside quotes end a command. A redirection
+// is a token of its own, and the lines of a heredoc are one token, kept as written.
 struct ShellToken {
     std::string text;
     bool separator = false;
+    bool redirect = false;   // <, >>, 2>&1, <<EOF, <<<
+    bool takesWord = false;  // a redirect the next word belongs to: a file, a delimiter or a here-string
+    bool body = false;       // a heredoc's lines
+    size_t bodyAt = std::string::npos;  // on a heredoc redirect, the index of its body
 };
+
+bool isHeredoc(const ShellToken& t) {
+    return t.redirect && t.text.find("<<") != std::string::npos && t.text.find("<<<") == std::string::npos;
+}
 
 std::vector<ShellToken> shellTokens(const std::string& line) {
     std::vector<ShellToken> out;
     std::string word;
     bool inWord = false;
     char quote = 0;
+    struct Pending {
+        std::string delimiter;
+        bool stripTabs;
+        size_t redirect;
+    };
+    std::vector<Pending> pending;
+    size_t heredocAt = std::string::npos;  // a heredoc redirect still waiting for its delimiter
     const auto flush = [&] {
-        if (inWord) out.push_back({word, false});
+        if (inWord) {
+            if (heredocAt != std::string::npos) {
+                pending.push_back({word, out[heredocAt].text.back() == '-', heredocAt});
+                heredocAt = std::string::npos;
+            }
+            ShellToken t;
+            t.text = word;
+            out.push_back(t);
+        }
         word.clear();
         inWord = false;
     };
-    for (const char c : line) {
+    for (size_t i = 0; i < line.size(); ++i) {
+        const char c = line[i];
+        const char next = i + 1 < line.size() ? line[i + 1] : '\0';
         if (quote != 0) {
             if (c == quote) {
                 quote = 0;
@@ -737,9 +852,74 @@ std::vector<ShellToken> shellTokens(const std::string& line) {
             inWord = true;
         } else if (c == ' ' || c == '\t' || c == '\r') {
             flush();
+        } else if (c == '<' || c == '>' || (c == '&' && next == '>')) {
+            ShellToken op;
+            op.redirect = true;
+            // A file descriptor written against the operator (2>) belongs to it.
+            if (inWord && !word.empty() && word.find_first_not_of("0123456789") == std::string::npos) {
+                op.text = word;
+                word.clear();
+                inWord = false;
+            } else {
+                flush();
+            }
+            size_t k = i;
+            if (line[k] == '&') op.text += line[k++];
+            const char dir = line[k];
+            size_t run = 0;
+            for (; k < line.size() && line[k] == dir && run < (dir == '<' ? 3u : 2u); ++run) op.text += line[k++];
+            if (dir == '<' && run == 2 && k < line.size() && line[k] == '-') {
+                op.text += line[k++];  // <<- strips leading tabs
+            } else if (k < line.size() && (line[k] == '|' || (dir == '<' && line[k] == '>'))) {
+                op.text += line[k++];  // >| and <>
+            }
+            bool duplicate = false;
+            if (k < line.size() && line[k] == '&') {  // 2>&1, <&0 and >&- duplicate; >&file names a file
+                op.text += line[k++];
+                while (k < line.size() && ((line[k] >= '0' && line[k] <= '9') || line[k] == '-')) {
+                    op.text += line[k++];
+                    duplicate = true;
+                }
+            }
+            op.takesWord = !duplicate;
+            i = k - 1;
+            out.push_back(op);
+            if (isHeredoc(op)) heredocAt = out.size() - 1;
         } else if (c == '\n' || std::strchr(";|&()`", c)) {
             flush();
-            out.push_back({std::string(1, c), true});
+            heredocAt = std::string::npos;
+            ShellToken sep;
+            sep.separator = true;
+            sep.text = std::string(1, c);
+            if ((c == '|' || c == '&') && next == c) {
+                sep.text += next;
+                ++i;
+            } else if (c == '|' && next == '&') {
+                sep.text += next;
+                ++i;
+            }
+            out.push_back(sep);
+            if (c != '\n' || pending.empty()) continue;
+            // Heredocs opened on this line take the lines after it, each up to its delimiter.
+            size_t pos = i + 1;
+            for (const Pending& p : pending) {
+                ShellToken body;
+                body.body = true;
+                while (pos < line.size()) {
+                    const size_t eol = (std::min)(line.find('\n', pos), line.size());
+                    std::string text = line.substr(pos, eol - pos);
+                    pos = eol + 1;
+                    if (!text.empty() && text.back() == '\r') text.pop_back();
+                    if (p.stripTabs) text.erase(0, text.find_first_not_of('\t'));
+                    if (text == p.delimiter) break;
+                    body.text += text + "\n";
+                }
+                out[p.redirect].bodyAt = out.size();
+                out.push_back(body);
+            }
+            pending.clear();
+            out.push_back(sep);
+            i = pos - 1;
         } else {
             word.push_back(c);
             inWord = true;
@@ -772,193 +952,445 @@ std::string interpreterLanguage(const std::string& name) {
     return "";
 }
 
-// True when code in `language` names a way to reach another computer.
-bool codeGoesOnline(const std::string& language, const std::string& code) {
+// True when code in `language` calls something that reaches another computer, or loads a network
+// library with a remote address in sight (`urlNearby`: a remote URL elsewhere on its command).
+// Loading a library alone connects to nothing: `import requests; print(requests.__version__)`.
+// With `anyWord`, PowerShell's web-request commands count anywhere, as in text piped into it;
+// otherwise only where a command starts, so `Select-String -Pattern curl` is a search.
+bool codeGoesOnline(const std::string& language, const std::string& code, bool urlNearby, bool anyWord = false) {
+    // Matched with quotes and whitespace dropped: requests.get ( url ) is requests.get(url.
+    static const std::map<std::string, std::vector<std::string>> calls = {
+        {"python", {"urlopen(", "urlretrieve(", "requests.get(", "requests.post(", "requests.put(", "requests.patch(",
+                    "requests.delete(", "requests.head(", "requests.options(", "requests.request(",
+                    "requests.session(", "httpx.get(", "httpx.post(", "httpx.put(", "httpx.patch(", "httpx.delete(",
+                    "httpx.head(", "httpx.stream(", "httpx.request(", "httpx.client(", "httpx.asyncclient(",
+                    "clientsession(", "httpconnection(", "httpsconnection(", "create_connection(", ".connect((",
+                    "pycurl.curl(", "ftplib.ftp(", "ftp_tls(", "smtplib.smtp(", "smtp_ssl(", "telnetlib.telnet(",
+                    "websockets.connect(", "poolmanager(", "urllib3.request("}},
+        {"node", {"fetch(", "http.get(", "https.get(", "http.request(", "https.request(", "net.connect(",
+                  "createconnection(", "tls.connect(", ").get(http", ").request(http", "axios(", "axios.get(",
+                  "axios.post(", "axios.request(", "websocket(", "xmlhttprequest(", "dgram.createsocket(",
+                  "deno.connect(", "undici.request(", "undici.fetch("}},
+        {"perl", {"getprint", "getstore", "lwp::simple::get(", "lwp::useragent->new", "http::tiny->new",
+                  "io::socket::inet->new", "io::socket::ip->new", "net::ftp->new", "net::http->new",
+                  "mojo::useragent->new", "www::mechanize->new"}},
+        {"ruby", {"net::http.get", "net::http.start", "net::http.new", "net::http.post", "uri.open", "open(http",
+                  "tcpsocket.new", "tcpsocket.open", "socket.tcp(", "httparty.get", "httparty.post", "faraday.get",
+                  "faraday.post", "faraday.new", "restclient.get", "restclient.post", "httpclient.new",
+                  "httpclient.get"}},
+        {"php", {"file_get_contents(http", "fopen(http", "readfile(http", "file(http", "copy(http", "fsockopen(",
+                 "curl_init(", "curl_exec(", "stream_socket_client(", "socket_connect(", "get_headers(",
+                 "simplexml_load_file(http"}},
+        {"powershell", {"net.webclient", "http.httpclient", "sockets.tcpclient", "sockets.udpclient",
+                        "downloadstring(", "downloadfile(", "downloaddata(", "uploadstring(", "uploadfile(",
+                        "uploaddata(", "openread(", "webrequest]::create", "httpwebrequest", "start-bitstransfer"}}};
+    // Network libraries: loading one counts only beside a remote address.
     static const std::map<std::string, std::vector<std::string>> libraries = {
-        {"python", {"socket", "urllib", "requests", "httpx", "aiohttp", "http.client", "httplib", "urlopen", "pycurl",
-                    "ftplib", "telnetlib", "smtplib", "websocket"}},
-        {"node", {"fetch(", "http.get", "https.get", "http.request", "https.request", "require(http",
-                  "require(https", "require(net", "node:http", "node:https", "node:net", "from http", "from https",
-                  "net.connect", "createconnection", "tls.connect", "axios", "undici", "websocket",
-                  "xmlhttprequest", "dgram", "deno.connect"}},
-        {"perl", {"lwp", "io::socket", "http::tiny", "net::http", "socket", "mojo::useragent", "www::mechanize",
-                  "net::ftp"}},
-        {"ruby", {"net::http", "net/http", "open-uri", "uri.open", "socket", "httparty", "faraday", "rest-client",
-                  "httpclient"}},
-        {"php", {"file_get_contents(http", "fopen(http", "fsockopen", "curl_init", "curl_exec",
-                 "stream_socket_client", "socket_create", "socket_connect", "get_headers("}},
-        {"powershell", {"webclient", "httpclient", "net.sockets", "tcpclient", "udpclient", "downloadstring",
-                        "downloadfile", "webrequest", "restmethod", "bitstransfer", "system.net.http"}}};
-    const auto found = libraries.find(language);
-    if (found == libraries.end()) return false;
-    std::string lower = lowerAscii(code);
-    lower.erase(std::remove_if(lower.begin(), lower.end(), [](char c) { return c == '\'' || c == '"'; }),
-                lower.end());
-    for (const auto& library : found->second) {
-        if (lower.find(library) != std::string::npos) return true;
+        {"python", {"requests", "httpx", "aiohttp", "urllib.request", "urllib2", "urllib3", "http.client", "httplib",
+                    "socket", "pycurl", "ftplib", "smtplib", "telnetlib", "websocket"}},
+        {"node", {"require(http", "require(net", "require(tls", "require(dgram", "require(axios", "require(undici",
+                  "require(node-fetch", "node:http", "node:net", "node:tls", "node:dgram", "from http", "from net",
+                  "from axios", "from undici", "from node-fetch"}},
+        {"perl", {"lwp", "io::socket", "http::tiny", "net::http", "mojo::useragent", "www::mechanize", "net::ftp",
+                  "socket"}},
+        {"ruby", {"net/http", "net::http", "open-uri", "socket", "httparty", "faraday", "rest-client", "httpclient"}}};
+    const auto found = calls.find(language);
+    if (found == calls.end()) return false;
+    std::string lower, squeezed;
+    for (const char c : code) {
+        if (c == '\'' || c == '"') continue;
+        const char l = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        lower.push_back(l);
+        if (l != ' ' && l != '\t' && l != '\r' && l != '\n') squeezed.push_back(l);
     }
-    if (language == "powershell") {
-        // A web request a script makes mid-line, where it isn't the program a shell runs.
-        static const std::regex cmdlet(R"((?:^|[^a-z0-9-])(?:iwr|irm|curl|wget)(?:[^a-z0-9-]|$))");
-        const std::string head = lowerAscii(code.substr(0, kMaxScannedLine));
-        if (std::regex_search(head, cmdlet)) return true;
+    for (const auto& call : found->second) {
+        if (squeezed.find(call) != std::string::npos) return true;
+    }
+    const auto libs = libraries.find(language);
+    if (libs != libraries.end()) {
+        for (const auto& library : libs->second) {
+            if (lower.find(library) != std::string::npos) return urlNearby || mentionsRemoteUrl(code);
+        }
+    }
+    if (language != "powershell") return false;
+    // A command starts at the line's start, after ; | { ( & = or $(, or as what iex, Start-Process
+    // or Invoke-Command runs (with at most one switch before it).
+    static const std::regex atStart(
+        R"((?:^|[;|{(&=]|\$\(|(?:^|[^a-z0-9-])(?:iex|invoke-expression|start-process|saps|start|invoke-command|icm))"
+        R"((?:\s+-[a-z]+)?\s)\s*(?:iwr|irm|curl|wget|invoke-webrequest|invoke-restmethod)(?:[^a-z0-9-]|$))");
+    static const std::regex anywhere(
+        R"((?:^|[^a-z0-9-])(?:iwr|irm|curl|wget|invoke-webrequest|invoke-restmethod)(?:[^a-z0-9-]|$))");
+    // One line at a time bounds the matcher's recursion; a line too long to read whole is not known
+    // to stay local.
+    for (size_t start = 0; start < lower.size();) {
+        const size_t end = (std::min)(lower.find('\n', start), lower.size());
+        if (end - start > kMaxScannedLine) return true;
+        if (std::regex_search(lower.substr(start, end - start), anyWord ? anywhere : atStart)) return true;
+        start = end + 1;
     }
     return false;
 }
 
-// What an interpreter does with one word of its options: run it as code, read code from it as a
-// file or module (so nothing inline follows), take it as an option's value, or read code from stdin.
-enum class InterpreterWord { Code, Unreadable, Script, TakesValue, Stdin, Option };
+// What an interpreter does with one word of its options: run it (or the next word) as code, read
+// code from a file or module, take the next word as a value, read code from stdin, or print
+// something and exit without running code.
+enum class InterpreterWord { Code, Script, TakesValue, Stdin, Exits, Option };
 
 InterpreterWord interpreterWord(const std::string& language, const std::string& word) {
-    // Flags are short; the head alone keeps std::regex from recursing through attached code.
+    if (word == "-") return InterpreterWord::Stdin;
+    if (word.empty() || word[0] != '-') return InterpreterWord::Script;
+    // Flags are short; the head alone is enough with code attached (python -c"...").
     const std::string w = lowerAscii(word.substr(0, 64));
-    if (w == "-") return InterpreterWord::Stdin;
-    if (w.empty() || w[0] != '-') return language == "powershell" ? InterpreterWord::Code : InterpreterWord::Script;
-    const auto prefixOf = [&w](const char* full, size_t shortest) {
-        return w.size() >= shortest && std::string(full).rfind(w, 0) == 0;
+    // Flags that take nothing, clustered before the one that does: python -uc, perl -ne.
+    const auto cluster = [&w](const char* plain, char last) {
+        size_t k = 1;
+        while (k < w.size() && w[k] != '\0' && std::strchr(plain, w[k])) ++k;
+        return k < w.size() && w[k] == last;
     };
     if (language == "python") {
-        static const std::regex code(R"(-[bdehiioqsuvr]*c.*)");
-        if (std::regex_match(w, code)) return InterpreterWord::Code;
+        if (word == "-V" || word == "-VV" || w == "--version" || w == "-h" || w == "--help" || w == "-?") {
+            return InterpreterWord::Exits;
+        }
+        if (cluster("bdehiioqsuvr", 'c')) return InterpreterWord::Code;
         if (w == "-w" || w == "-x") return InterpreterWord::TakesValue;
-        if (std::regex_match(w, std::regex(R"(-[bdehiioqsuvr]*m.*)"))) return InterpreterWord::Script;
+        if (cluster("bdehiioqsuvr", 'm')) return InterpreterWord::Script;
     } else if (language == "node") {
+        if (w == "-v" || w == "--version" || w == "-h" || w == "--help" || w == "--v8-options") {
+            return InterpreterWord::Exits;
+        }
         if (w == "-e" || w == "--eval" || w == "-p" || w == "--print" || w == "-pe") return InterpreterWord::Code;
         if (w == "-r" || w == "--require" || w == "--import" || w == "--loader" || w == "--experimental-loader" ||
             w == "--conditions") {
             return InterpreterWord::TakesValue;
         }
     } else if (language == "perl" || language == "ruby") {
-        static const std::regex code(R"(-[0-9a-df-z]*e.*)");
+        // ruby -v runs a script given after it; perl -v and -V only print.
+        if ((language == "perl" && (word == "-v" || word == "-V")) || w == "--version" || w == "-h" ||
+            w == "--help") {
+            return InterpreterWord::Exits;
+        }
         if (w.rfind("-m", 0) != 0 && w.rfind("-i", 0) != 0 && w.rfind("-r", 0) != 0 &&
-            std::regex_match(w, code)) {
+            cluster("0123456789abcdfghjklnopqstuvwxyz", 'e')) {
             return InterpreterWord::Code;
         }
         if (w == "-i" || w == "-r") return InterpreterWord::TakesValue;
     } else if (language == "php") {
         // Case matters: -r, -R, -B and -E run code, while lowercase -b and -e are unrelated options.
         if (word == "-r" || word == "-R" || word == "-B" || word == "-E") return InterpreterWord::Code;
+        if (word == "-v" || word == "-h" || word == "-i" || word == "-m" || w == "--version" || w == "--help" ||
+            w == "--info" || w == "--modules") {
+            return InterpreterWord::Exits;
+        }
         if (word == "-f") return InterpreterWord::Script;
         if (word == "-c" || word == "-d" || word == "-z") return InterpreterWord::TakesValue;
-    } else if (language == "powershell") {
-        if (w == "-e" || w == "-ec" || prefixOf("-encodedcommand", 4)) return InterpreterWord::Unreadable;
-        if (prefixOf("-file", 2)) return InterpreterWord::Script;
     }
     return InterpreterWord::Option;
 }
 
-// True when an interpreter is given code on its command line or on stdin that reaches another
-// computer: python -c, perl -MLWP -e, powershell's bare command, node <<EOF. Code in a script file
-// is not read. `whole` is the full command, where a heredoc or a pipe holds code read from stdin.
-bool inlineCodeGoesOnline(const std::string& line, const std::string& whole, int depth = 0) {
+// How powershell.exe and pwsh read one of their own switches.
+enum class PowerShellSwitch { NotSwitch, Encoded, Command, File, Stdin, Exits, TakesValue, Option };
+
+// PowerShell takes -, -- or / before a switch (a typographic dash too), in any case, and any
+// prefix of its name: -e, -en and -enc all mean -EncodedCommand, while -ex and -ep are
+// -ExecutionPolicy.
+PowerShellSwitch powershellSwitch(const std::string& word) {
+    const std::string w = word.substr(0, 64);
+    const auto dashAt = [&w](size_t at) -> size_t {
+        if (at < w.size() && w[at] == '-') return 1;
+        // En dash, em dash and horizontal bar in UTF-8.
+        if (at + 2 < w.size() && w[at] == '\xE2' && w[at + 1] == '\x80' &&
+            (w[at + 2] == '\x93' || w[at + 2] == '\x94' || w[at + 2] == '\x95')) {
+            return 3;
+        }
+        return 0;
+    };
+    size_t skip = dashAt(0);
+    if (skip == 0 && !w.empty() && w[0] == '/') skip = 1;
+    if (skip == 0) return PowerShellSwitch::NotSwitch;
+    skip += dashAt(skip);
+    std::string name = lowerAscii(w.substr(skip));
+    // -ExecutionPolicy:Bypass carries its value, so the next word is not it.
+    const bool valueAttached = name.find(':') != std::string::npos;
+    name = name.substr(0, name.find(':'));
+    if (name.empty()) return PowerShellSwitch::Stdin;
+    const auto abbreviates = [&name](const char* full, size_t shortest) {
+        return name.size() >= shortest && std::string(full).rfind(name, 0) == 0;
+    };
+    if (name == "ec" || abbreviates("encodedcommand", 1)) return PowerShellSwitch::Encoded;
+    if (abbreviates("command", 1)) return PowerShellSwitch::Command;
+    if (abbreviates("file", 1)) return PowerShellSwitch::File;
+    if (name == "?" || abbreviates("help", 1)) return PowerShellSwitch::Exits;
+    // -Version only prints in pwsh; Windows PowerShell 5.1 takes a version and goes on to run.
+    static const std::vector<std::pair<const char*, size_t>> valued = {
+        {"executionpolicy", 2}, {"ep", 2}, {"windowstyle", 1}, {"outputformat", 1}, {"of", 2},
+        {"inputformat", 3}, {"if", 2}, {"workingdirectory", 2}, {"wd", 2}, {"configurationname", 3},
+        {"configurationfile", 3}, {"psconsolefile", 2}, {"settingsfile", 2}, {"custompipename", 2},
+        {"encodedarguments", 8}, {"ea", 2}, {"version", 1}};
+    for (const auto& [full, shortest] : valued) {
+        if (abbreviates(full, shortest)) return valueAttached ? PowerShellSwitch::Option : PowerShellSwitch::TakesValue;
+    }
+    return PowerShellSwitch::Option;
+}
+
+// What a command's redirects feed its stdin: heredoc lines and here-strings, or a file.
+struct StdinFeed {
+    std::string code;
+    bool given = false;
+    bool fromFile = false;
+};
+
+bool isWordToken(const std::vector<ShellToken>& tokens, size_t at) {
+    return at < tokens.size() && !tokens[at].separator && !tokens[at].redirect && !tokens[at].body;
+}
+
+// Reads the redirect at tokens[j] into `feed` and moves j onto its target word, if it has one.
+void readRedirect(const std::vector<ShellToken>& tokens, size_t& j, StdinFeed& feed) {
+    const ShellToken& r = tokens[j];
+    const bool hasWord = r.takesWord && isWordToken(tokens, j + 1);
+    if (isHeredoc(r)) {
+        if (r.bodyAt < tokens.size()) {
+            feed.code += tokens[r.bodyAt].text + "\n";
+            feed.given = true;
+        }
+    } else if (r.text.find("<<<") != std::string::npos) {
+        if (hasWord) {
+            feed.code += tokens[j + 1].text + "\n";
+            feed.given = true;
+        }
+    } else if (r.takesWord && r.text.find('<') != std::string::npos) {
+        feed.fromFile = true;
+    }
+    if (hasWord) ++j;
+}
+
+// Shared by one check of a command line: the full line, and what reading all of it as one
+// language's code found, so many interpreters on a line don't each re-read it.
+struct CodeScan {
+    explicit CodeScan(const std::string& line) : whole(line) {}
+    bool wholeGoesOnline(const std::string& language) {
+        const auto seen = checked.find(language);
+        if (seen != checked.end()) return seen->second;
+        return checked[language] = codeGoesOnline(language, whole, false, true);
+    }
+    const std::string& whole;
+    std::map<std::string, bool> checked;
+};
+
+// True when a word from `from` up to the next separator names a URL that leaves this PC.
+bool urlInSegment(const std::vector<ShellToken>& tokens, size_t from) {
+    for (size_t k = from; k < tokens.size(); ++k) {
+        if (tokens[k].separator) break;
+        if (isWordToken(tokens, k) && mentionsRemoteUrl(tokens[k].text)) return true;
+    }
+    return false;
+}
+
+// True when an interpreter is given code that reaches another computer, on its command line or on
+// stdin: python -c, perl -MLWP -e, powershell's bare command, node <<EOF, python3 <<< "...", or code
+// piped in. Code in a script file is not read. `pipedIn` says the line's first command reads a pipe.
+bool inlineCodeGoesOnline(const std::string& line, CodeScan& scan, int depth, bool pipedIn) {
     if (depth > 4) return true;  // nested past any real use: not known to stay local
-    // c and k are cmd's /c and /k with the slash read as a folder.
-    static const std::set<std::string> wrappers = {"sudo", "env", "time", "nohup", "exec", "command", "xargs",
-                                                   "cmd", "call", "start", "then", "do", "else", "c", "k"};
-    const bool stdinFed = whole.find('|') != std::string::npos || whole.find('<') != std::string::npos;
     const std::vector<ShellToken> tokens = shellTokens(line);
-    bool atCommand = true;
+    CommandStart start;
+    bool piped = pipedIn;
+    size_t powershellCodeEnd = 0;  // tokens before this were read as a powershell's code
     for (size_t i = 0; i < tokens.size(); ++i) {
-        if (tokens[i].separator) {
-            atCommand = true;
+        const ShellToken& token = tokens[i];
+        if (token.separator) {
+            start.reset();
+            piped = token.text == "|" || token.text == "|&";
             continue;
         }
-        const std::string& word = tokens[i].text;
-        if (!atCommand || word.empty()) continue;
+        // A heredoc's lines may be commands (bash <<EOF) or data; read them as commands either way.
+        // Data such as C++'s `cout << x` reads as more heredocs, so past the depth limit a body is
+        // skipped rather than refused: only bash -c and bash <<EOF below run nested lines.
+        if (token.body) {
+            if (depth < 4 && inlineCodeGoesOnline(token.text, scan, depth + 1, false)) return true;
+            continue;
+        }
+        if (token.redirect) {
+            StdinFeed unused;
+            readRedirect(tokens, i, unused);
+            continue;
+        }
+        const std::string& word = token.text;
+        if (!start.at() || word.empty()) continue;
         const std::string name = programName(word);
-        // bash -c "python -c ..." runs the string as a command line of its own.
+        // bash -c "python -c ..." runs the string as a command line of its own, and so is a here-string.
         if (name == "bash" || name == "sh" || name == "zsh") {
-            for (size_t j = i + 1; j + 1 < tokens.size() && !tokens[j].separator && !tokens[j].text.empty() &&
-                                   tokens[j].text[0] == '-';
-                 ++j) {
-                if (tokens[j].text.find('c') != std::string::npos && !tokens[j + 1].separator) {
-                    if (inlineCodeGoesOnline(tokens[j + 1].text, whole, depth + 1)) return true;
-                    break;
+            StdinFeed feed;
+            bool flags = true;
+            size_t j = i + 1;
+            for (; j < tokens.size() && !tokens[j].separator; ++j) {
+                if (tokens[j].redirect) {
+                    readRedirect(tokens, j, feed);
+                    continue;
+                }
+                const std::string& arg = tokens[j].text;
+                if (!flags || tokens[j].body) continue;
+                if (arg.size() < 2 || arg[0] != '-' || arg[1] == '-') {
+                    flags = arg.size() > 1 && arg[0] == '-';
+                    continue;
+                }
+                if (arg.find('c') != std::string::npos && isWordToken(tokens, j + 1)) {
+                    if (inlineCodeGoesOnline(tokens[++j].text, scan, depth + 1, piped)) return true;
+                    flags = false;
                 }
             }
-            atCommand = false;
+            if (feed.given && inlineCodeGoesOnline(feed.code, scan, depth + 1, false)) return true;
+            start.stop();
+            i = j - 1;
             continue;
         }
         const std::string language = interpreterLanguage(name);
         if (language.empty()) {
-            atCommand = wrappers.count(name) > 0 || word[0] == '-' || word.find('=') != std::string::npos;
+            start.pass(word, name, nullptr);
             continue;
         }
-        atCommand = false;
-        if (language == "powershell") {
-            // Its command is the rest of the line, flag or not, ( ) and ; included; -File runs a script instead.
-            std::string rest;
-            bool inCommand = false, script = false;
-            size_t j = i + 1;
-            for (; j < tokens.size() && tokens[j].text != "\n"; ++j) {
-                const std::string& arg = tokens[j].text;
-                if (!inCommand && !tokens[j].separator && !arg.empty() && arg[0] == '-') {
-                    const InterpreterWord kind = interpreterWord(language, arg);
-                    if (kind == InterpreterWord::Unreadable) return true;
-                    if (kind == InterpreterWord::Script) script = true;
-                } else {
-                    inCommand = true;
-                }
-                rest += " " + arg;
-            }
-            if (!script && codeGoesOnline(language, rest)) return true;
-            if (!inCommand && !script && stdinFed && codeGoesOnline(language, whole)) return true;
-            i = j > i ? j - 1 : i;
-            continue;
-        }
-        std::string options;
-        bool decided = false;
+        start.stop();
+        StdinFeed feed;
+        bool readsStdin = false;
         size_t j = i + 1;
-        for (; j < tokens.size() && !tokens[j].separator; ++j) {
-            const std::string& arg = tokens[j].text;
-            if (arg.empty()) continue;
-            if (arg[0] == '<' || arg[0] == '>') continue;  // a redirection, not an argument
-            const InterpreterWord kind = interpreterWord(language, arg);
-            if (kind == InterpreterWord::Unreadable) return true;
-            if (kind == InterpreterWord::Code) {
-                // The code is the next word, or the rest of this one (python -c"...").
-                std::string code = options + " " + arg;
-                if (j + 1 < tokens.size() && !tokens[j + 1].separator) code += " " + tokens[j + 1].text;
-                if (codeGoesOnline(language, code)) return true;
-                decided = true;
-                break;
-            }
-            if (kind == InterpreterWord::Script) {
-                // deno eval <code> names its code with a word, not a flag.
-                if (name == "deno" && lowerAscii(arg) == "eval" && j + 1 < tokens.size() &&
-                    codeGoesOnline(language, tokens[j + 1].text)) {
-                    return true;
+        if (language == "powershell") {
+            // Its command runs on, flag or not, through ( ) and ; (cmd.exe passes ; along), up to a
+            // pipe, an & or the line's end; -File runs a script instead. Words a powershell before it
+            // already read as its code are read up to the next separator only, so a line of many
+            // powershells isn't read once per powershell.
+            const bool covered = i < powershellCodeEnd;
+            bool urlNearby = false;
+            std::string code;
+            bool inCommand = false, done = false, afterSeparator = false;
+            for (; j < tokens.size(); ++j) {
+                const ShellToken& t = tokens[j];
+                if (t.separator && (covered || t.text == "\n" || t.text.find_first_of("|&") != std::string::npos)) {
+                    break;
                 }
-                decided = true;
-                break;
+                if (t.body) continue;
+                if (t.redirect) {
+                    readRedirect(tokens, j, feed);
+                    continue;
+                }
+                if (!t.separator && !urlNearby && mentionsRemoteUrl(t.text)) urlNearby = true;
+                if (done) continue;
+                if (!inCommand && !t.separator) {
+                    switch (powershellSwitch(t.text)) {
+                        case PowerShellSwitch::Encoded:
+                            return true;  // can't be read
+                        case PowerShellSwitch::File:
+                            // -File - reads the script from stdin.
+                            if (isWordToken(tokens, j + 1) && tokens[j + 1].text == "-") readsStdin = true;
+                            done = true;
+                            continue;
+                        case PowerShellSwitch::Exits:
+                            done = true;
+                            continue;
+                        case PowerShellSwitch::Command:
+                            inCommand = true;
+                            continue;
+                        case PowerShellSwitch::Stdin:
+                            readsStdin = true;
+                            done = true;
+                            continue;
+                        case PowerShellSwitch::TakesValue:
+                            if (isWordToken(tokens, j + 1)) ++j;
+                            continue;
+                        case PowerShellSwitch::Option:
+                            continue;
+                        case PowerShellSwitch::NotSwitch:
+                            break;
+                    }
+                }
+                if (inCommand && code.empty() && t.text == "-") {
+                    readsStdin = true;  // -Command -
+                    done = true;
+                    continue;
+                }
+                inCommand = true;
+                // One space between words and none beside a separator, so the code is never longer than its line.
+                if (!code.empty() && !t.separator && !afterSeparator) code += ' ';
+                code += t.text;
+                afterSeparator = t.separator;
             }
-            if (kind == InterpreterWord::Stdin) {
-                if (codeGoesOnline(language, whole)) return true;
-                decided = true;
-                break;
+            if (!done || readsStdin) {
+                if (codeGoesOnline(language, code, urlNearby)) return true;
+                if (code.empty() || readsStdin) {
+                    if (feed.given) {
+                        if (codeGoesOnline(language, feed.code, urlNearby)) return true;
+                    } else if (!feed.fromFile && piped && scan.wholeGoesOnline(language)) {
+                        return true;
+                    }
+                }
             }
-            options += " " + arg;
-            if (kind == InterpreterWord::TakesValue && j + 1 < tokens.size() && !tokens[j + 1].separator) {
-                options += " " + tokens[++j].text;
+            powershellCodeEnd = (std::max)(powershellCodeEnd, j);
+            // Under bash a ; ends the powershell command, so what follows is judged as commands too.
+            while (i + 1 < tokens.size() && !tokens[i + 1].separator) ++i;
+            continue;
+        }
+        const bool urlNearby = urlInSegment(tokens, j);
+        std::string options, code;
+        bool decided = false;
+        for (; j < tokens.size() && !tokens[j].separator; ++j) {
+            if (tokens[j].body) continue;
+            if (tokens[j].redirect) {
+                readRedirect(tokens, j, feed);
+                continue;
+            }
+            const std::string& arg = tokens[j].text;
+            if (decided || arg.empty()) continue;
+            switch (interpreterWord(language, arg)) {
+                case InterpreterWord::Code:
+                    // The code is the next word, or the rest of this one (python -c"...").
+                    code = arg;
+                    if (isWordToken(tokens, j + 1)) code += " " + tokens[++j].text;
+                    decided = true;
+                    break;
+                case InterpreterWord::Script:
+                    // deno eval <code> names its code with a word, not a flag.
+                    if (name == "deno" && lowerAscii(arg) == "eval" && isWordToken(tokens, j + 1)) {
+                        code = tokens[++j].text;
+                    }
+                    decided = true;
+                    break;
+                case InterpreterWord::Exits:
+                    decided = true;
+                    break;
+                case InterpreterWord::Stdin:
+                    readsStdin = decided = true;
+                    break;
+                case InterpreterWord::TakesValue:
+                    options += " " + arg;
+                    if (isWordToken(tokens, j + 1)) options += " " + tokens[++j].text;
+                    break;
+                case InterpreterWord::Option:
+                    options += " " + arg;
+                    break;
             }
         }
         // perl -MLWP::Simple loads its library with an option.
-        if (codeGoesOnline(language, options)) return true;
-        // No code and no script: it reads its program from a pipe or a heredoc.
-        if (!decided && stdinFed && codeGoesOnline(language, whole)) return true;
-        i = j > i ? j - 1 : i;
+        if (codeGoesOnline(language, options + " " + code, urlNearby)) return true;
+        // No code and no script: it runs what stdin holds.
+        if (!decided || readsStdin) {
+            if (feed.given) {
+                if (codeGoesOnline(language, feed.code, urlNearby)) return true;
+            } else if (!feed.fromFile && piped && scan.wholeGoesOnline(language)) {
+                return true;
+            }
+        }
+        i = j - 1;
     }
     return false;
 }
 
 // True when git copies a repository from another computer named on the line.
-bool clonesRemoteRepository(const std::string& command) {
+bool clonesRemoteRepository(const std::string& command, int depth = 0) {
     const std::vector<ShellToken> tokens = shellTokens(command);
     for (size_t i = 0; i < tokens.size(); ++i) {
-        if (tokens[i].separator || programName(tokens[i].text) != "git") continue;
+        // Heredoc lines, read as commands; past a few levels they are data such as `cout << x`.
+        if (tokens[i].body && depth < 4 && clonesRemoteRepository(tokens[i].text, depth + 1)) return true;
+        if (!isWordToken(tokens, i) || programName(tokens[i].text) != "git") continue;
         bool cloning = false;
         for (size_t j = i + 1; j < tokens.size() && !tokens[j].separator; ++j) {
+            if (!isWordToken(tokens, j)) continue;
             const std::string& arg = tokens[j].text;
             if (arg == "clone" || arg == "submodule" || arg == "fetch" || arg == "pull" || arg == "ls-remote") {
                 cloning = true;
@@ -995,7 +1427,8 @@ std::string webFetchRefusal(const ToolInfo& tool, const json& args) {
     const bool download = std::regex_search(asked, downloader) || std::regex_search(bare, downloader);
     // Code handed to an interpreter that opens a connection. A library's name anywhere else is not
     // one: `pip install requests` and `pytest test_requests.py` stay allowed.
-    const bool script = inlineCodeGoesOnline(asked, asked);
+    CodeScan scan(asked);
+    const bool script = inlineCodeGoesOnline(asked, scan, 0, false);
     const bool fetch = runsFetchProgram(asked, bare) && (mentionsRemoteUrl(asked) || fetchLeavesThisPc(asked, bare));
     if (socketFile || download || script || fetch || clonesRemoteRepository(asked)) {
         return why + "`" + asked.substr(0, 80) + "`, which fetches from the web. Don't fetch it another way: "

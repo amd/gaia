@@ -66,8 +66,10 @@ GAIA_API std::string internetRefusal(const ToolInfo& tool, const json& args);
 
 /// Why a shell command must not run while web access is off for a run, or ""
 /// when it does not fetch from the web: curl, wget or a PowerShell web request
-/// to another host, a download tool, or a one-line script that opens a
-/// connection. Package installs and connectors are not judged here.
+/// to another host, a download tool, or interpreter code (inline, in a
+/// heredoc or here-string, or piped in) that makes a network call. Wrappers
+/// such as sudo, timeout and uv run are seen through. Package installs and
+/// connectors are not judged here.
 GAIA_API std::string webFetchRefusal(const ToolInfo& tool, const json& args);
 
 /// The folder GAIA keeps this user's files in: $GAIA_HOME when set, else
