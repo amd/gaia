@@ -624,6 +624,8 @@ TEST(GaiaAgentTest, PrintedSummariesCopiesAndMoreClaimWordingsAreRead) {
 namespace {
 const std::string kPytestOk = "....\n4 passed in 0.02s\n";
 const std::string kPytestFail = "F...\n=== 1 failed, 3 passed in 0.64s ===\n";
+const std::string kMasked =
+    "the test command hid the runner's exit status and its output has no summary, so it doesn't show a pass";
 GaiaAgent::CallSeen inProj(const std::string& command, int exitCode, const std::string& out) {
     return shellRunIn("/work/proj", command, exitCode, out);
 }
@@ -687,7 +689,7 @@ TEST(GaiaAgentTest, ARunPipedPastTheRunnerCountsOnlyByItsOwnSummary) {
               "`pytest` didn't pass when it last ran");
     // On its own it shows no pass.
     EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(all, {changed, inProj("pytest | head -3", 0, "....\n")})),
-              "the test output was cut off before its summary, so it doesn't show a pass");
+              kMasked);
     // Its own summary still decides when it survives the pipe, and pipefail's exit code counts.
     EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
         all, {changed, inProj("pytest", 1, kPytestFail), inProj("pytest | head -30", 0, kPytestOk)}));
@@ -697,13 +699,92 @@ TEST(GaiaAgentTest, ARunPipedPastTheRunnerCountsOnlyByItsOwnSummary) {
                   all, {changed, inProj("pytest", 1, kPytestFail), inProj("pytest | tail -5", 0, kPytestFail)})),
               failed);
     EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(all, {changed, inProj("pytest | head -3", 1, "F..\n")})), failed);
-    // A redirect keeps the runner's own exit code, and a later trimmed run doesn't undo a pass.
-    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
-        all, {changed, inProj("pytest", 1, kPytestFail), inProj("pytest > out.txt", 0, "")}));
+    // A redirect sends the summary away, so it doesn't replace the failure; a later trimmed run doesn't undo a pass.
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  all, {changed, inProj("pytest", 1, kPytestFail), inProj("pytest > out.txt", 0, "")})),
+              failed);
     EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
         all, {changed, inProj("pytest", 0, kPytestOk), inProj("pytest | tee test_output.txt", 0, "")}));
     // Input piped into the runner leaves its exit code alone.
     EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(all, {changed, inProj("echo y | pytest", 0, "")}));
+}
+
+TEST(GaiaAgentTest, OnlyAnExplicitStatementThatATestStillFailsExcusesAFailedRun) {
+    const auto changed = edit("/work/proj/stats.py");
+    const std::vector<GaiaAgent::CallSeen> hidden = {changed, inProj("pytest", 1, kPytestFail),
+                                                     inProj("pytest -k 'not median'", 0, kPytestOk)};
+    const std::vector<GaiaAgent::CallSeen> onlyFailed = {changed, inProj("pytest", 1, kPytestFail)};
+    // Negated, past, fixed or about the code's behaviour: none says a test fails now.
+    for (const char* answer :
+         {"All tests pass. test_median doesn't fail anymore.", "All tests pass. test_median does not fail now.",
+          "All tests pass. Neither test fails now.", "All tests pass. test_median should not fail any more.",
+          "All tests pass. test_median won't fail again.", "All tests pass. median() can't fail on an empty list.",
+          "All tests pass. parse() fails fast on bad input.", "All tests pass. 2 tests failed, so I fixed them.",
+          "All tests pass. test_mode didn't pass before the fix.", "All tests pass. test_mode fails no more.",
+          "All tests pass. None of the tests are failing.", "All tests pass. The loader fails loudly on a bad path."}) {
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(answer, hidden)), "`pytest` didn't pass when it last ran")
+            << answer;
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(answer, onlyFailed)), "the tests run this turn didn't pass")
+            << answer;
+    }
+    // Honest reports of a failure still standing are left alone.
+    for (const char* answer :
+         {"The median tests pass. 2 tests still fail; the rest pass.", "The median tests pass. 1 failed: test_x.",
+          "The median tests pass. 2 tests are failing.", "The median tests pass. test_mode is not passing.",
+          "The median tests pass. test_mode remains failing.", "The median tests pass. One test fails: test_mode.",
+          "The median tests pass. Two tests still fail after the fix.",
+          "The other tests pass. test_mode still fails even though I fixed median().",
+          "The median tests pass. test_mode doesn't pass yet.", "The median tests pass. test_mode still fails, as before.",
+          "Ran 4 tests: 3 pass and 1 failed."}) {
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(answer, hidden)) << answer;
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(answer, onlyFailed)) << answer;
+    }
+}
+
+TEST(GaiaAgentTest, ARunWhoseExitStatusIsMaskedCountsOnlyByItsOwnSummary) {
+    const auto changed = edit("/work/proj/stats.py");
+    const std::string all = "All tests pass.";
+    const std::string failed = "the tests run this turn didn't pass";
+    struct Masked {
+        const char* command;
+        const char* output;
+    };
+    // The runner's exit status can't reach the shell's, and its summary isn't in the output.
+    const std::vector<Masked> masked = {
+        {"pytest > out.txt || true", ""},
+        {"pytest > /dev/null || true", ""},
+        {"pytest > out.txt; echo $?", "0\n"},
+        {"pytest -q > /dev/null; echo $?", "0\n"},
+        {"pytest > out.txt; head -1 out.txt", "============================= test session starts =============\n"},
+        {"pytest & echo started", "started\n"},
+        {"pytest || true", "F...\n"},
+        {"! pytest", ""},
+        {"pytest; true", "....\n"},
+        {"python -m pytest -q &> pytest.log", ""},
+        {"cd tests && pytest 2>&1 > out.txt", ""},
+        {"python -m pytest -q 2>/dev/null && echo done", "done\n"},
+    };
+    for (const auto& m : masked) {
+        // It doesn't replace an earlier failure...
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(all, {changed, inProj("pytest", 1, kPytestFail),
+                                                            inProj(m.command, 0, m.output)})),
+                  failed)
+            << m.command;
+        // ...and on its own it backs nothing.
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(all, {changed, inProj(m.command, 0, m.output)})), kMasked)
+            << m.command;
+    }
+    // Its own passing summary still counts, and a failing one is a failure.
+    for (const char* shown : {"pytest > out.txt; cat out.txt", "pytest -q || true", "pytest 2>&1 | tee out.txt",
+                              "pytest; echo $?", "pytest & wait"}) {
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(all, {changed, inProj(shown, 0, kPytestOk + "0\n")})) << shown;
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(all, {changed, inProj(shown, 0, kPytestFail)})), failed) << shown;
+    }
+    // `&&`, `2>&1`, input piped in and a semicolon in quotes leave the runner's exit status as the result.
+    for (const char* kept : {"pytest && echo ok", "cd tests && pytest", "pytest 2>&1", "echo y | pytest",
+                             "pytest -k 'a;b'", "pytest;"}) {
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(all, {changed, inProj(kept, 0, "ok\n")})) << kept;
+    }
 }
 
 TEST(GaiaAgentTest, AFailingWiderRunIsNotHiddenByAnyNarrowerPass) {
