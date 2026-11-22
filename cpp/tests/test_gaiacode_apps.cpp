@@ -331,6 +331,7 @@ TEST_F(GaiacodeSidecar, AttachedFilesAreNamedUnlessTheConversationAlreadyHasThem
     mock_.pushResponse(answerReply("Read it."));
     mock_.pushResponse(answerReply("Still read."));
     mock_.pushResponse(answerReply("Again."));
+    mock_.pushResponse(answerReply("Once more."));
     ASSERT_NO_FATAL_FAILURE(start());
     const fs::path file = work_ / "calc.py";
     const auto ask = [&](const char* run, const json& context) {
@@ -344,12 +345,18 @@ TEST_F(GaiacodeSidecar, AttachedFilesAreNamedUnlessTheConversationAlreadyHasThem
     // A retry, a trimmed history, or the UI's own copy of turn 1: the path isn't in it.
     ask("run-n2", json::array({{{"role", "user"}, {"content", "Look at the attached file"}},
                                {{"role", "assistant"}, {"content", "Read it."}}}));
-    // Turn 1 as the model saw it: the path is there already.
-    ask("run-n3", json::array({{{"role", "user"}, {"content", "Look at the attached file\n\nAttached files: "
-                                                              "\n- " + file.string()}},
+    // Turn 1 as the model saw it: the sidecar's own list names the path already.
+    ask("run-n3", json::array({{{"role", "user"}, {"content", "Look at the attached file\n\nAttached files (read them "
+                                                              "with your file tools):\n- " + file.string()}},
+                               {{"role", "assistant"}, {"content", "Read it."}}}));
+    // The path only inside an error note, or as part of a longer name: still named.
+    ask("run-n4", json::array({{{"role", "user"}, {"content", "TOOL EXECUTION FAILED!\n\nError: " + file.string() +
+                                                              " is outside the allowed folders"}},
+                               {{"role", "user"}, {"content", "x\n\nAttached files (read them with your file tools):"
+                                                              "\n- " + file.string() + ".orig"}},
                                {{"role", "assistant"}, {"content", "Read it."}}}));
     const auto sent = mock_.receivedBodies();
-    ASSERT_EQ(sent.size(), 3u);
+    ASSERT_EQ(sent.size(), 4u);
     const auto lastUser = [](const std::string& body) {
         std::string text;
         const json parsed = json::parse(body);
@@ -361,6 +368,7 @@ TEST_F(GaiacodeSidecar, AttachedFilesAreNamedUnlessTheConversationAlreadyHasThem
     EXPECT_NE(lastUser(sent[0]).find("Attached files"), std::string::npos) << lastUser(sent[0]);
     EXPECT_NE(lastUser(sent[1]).find("Attached files"), std::string::npos) << "lost: " << lastUser(sent[1]);
     EXPECT_EQ(lastUser(sent[2]).find("Attached files ("), std::string::npos) << "repeated: " << lastUser(sent[2]);
+    EXPECT_NE(lastUser(sent[3]).find("Attached files ("), std::string::npos) << "lost: " << lastUser(sent[3]);
 }
 
 TEST_F(GaiacodeSidecar, InternetOffNeverAsksAboutAGitHubWrite) {

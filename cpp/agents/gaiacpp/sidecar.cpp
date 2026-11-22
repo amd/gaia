@@ -32,6 +32,23 @@
 
 namespace fs = std::filesystem;
 
+namespace {
+// Heads the list of attached files the sidecar adds for an agent with no document index.
+constexpr const char* kAttachedHeader = "\n\nAttached files (read them with your file tools):";
+
+// Whether an earlier user message is the sidecar's own list naming `path` on a line of its own.
+bool listsAttachedFile(const std::string& message, const std::string& path) {
+    const size_t header = message.find(kAttachedHeader);
+    if (header == std::string::npos) return false;
+    const std::string line = "\n- " + path;
+    for (size_t at = message.find(line, header); at != std::string::npos; at = message.find(line, at + 1)) {
+        const size_t end = at + line.size();
+        if (end == message.size() || message[end] == '\n') return true;
+    }
+    return false;
+}
+}  // namespace
+
 namespace gaia {
 
 namespace {
@@ -977,11 +994,11 @@ private:
                     std::string fresh;
                     for (const auto& d : documents) {
                         const bool named = std::any_of(history.begin(), history.end(), [&](const Message& m) {
-                            return m.role == MessageRole::USER && m.content.find(d) != std::string::npos;
+                            return m.role == MessageRole::USER && listsAttachedFile(m.content, d);
                         });
                         if (!named) fresh += "\n- " + d;
                     }
-                    if (!fresh.empty()) asked += "\n\nAttached files (read them with your file tools):" + fresh;
+                    if (!fresh.empty()) asked += kAttachedHeader + fresh;
                 }
                 AgentConfig cfg = s->agent->config();
                 if (!model.empty()) cfg.modelId = model;
