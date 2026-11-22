@@ -953,7 +953,7 @@ the Google or Microsoft connector connected and granted to the agent. Drafting
 and sending come from the bundled `send-email` skill, whose tools join the
 list as `send-email/<tool>` once it loads; each send, and each change to a
 saved draft, raises a `needs_confirmation` first. A model on the `compact`
-feature tier (Gemma 4 E4B) is offered neither. Setup:
+feature tier (Gemma 4 E4B, Qwen3.5 4B and 2B) is offered neither. Setup:
 [Email guide](https://amd-gaia.ai/docs/guides/email).
 
 ## 6. Process ownership

@@ -3727,7 +3727,12 @@ def _turn_summary(
             location=(
                 _agent_location(agent) if agent is not None else relayed_location
             ),
-            written_files=evidence.written_files() if evidence is not None else (),
+            # The ledger's keys are case-folded on Windows; realpath restores the name on disk.
+            written_files=(
+                [os.path.realpath(key) for key in evidence.written_files()]
+                if evidence is not None
+                else ()
+            ),
             display_names=upload_display_names(message),
             usage=answer_event,
         )

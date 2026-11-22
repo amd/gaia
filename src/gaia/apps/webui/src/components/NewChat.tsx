@@ -53,6 +53,9 @@ interface NewChatProps {
 /** How often the start screen is asked for again while the assistant is unavailable. */
 export const START_RETRY_MS = 15_000;
 
+/** A warm-up shorter than this finishes unseen, rather than flashing "0s". */
+export const WARM_UP_SHOWN_AFTER_S = 2;
+
 export function greeting(now: Date = new Date(), t: Translate = tEn): string {
     const h = now.getHours();
     const part = h < 5 ? 'evening' : h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
@@ -374,7 +377,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                     {folder && <FolderChip folder={folder} disabled={starting || sending} />}
                 </div>
                 <LibraryDocuments />
-                {warming !== null && !starting && (
+                {warming !== null && !starting && warming.seconds >= WARM_UP_SHOWN_AFTER_S && (
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming, t)}</p>
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}

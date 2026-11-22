@@ -151,7 +151,9 @@ does not install. Required before any query succeeds:
 2. The machine's default chat model downloaded — run `gaia init`. It picks
    `Qwen3.6-35B-A3B-GGUF` where a GPU holds it (~27 GB for models,
    weights plus context cache — a 64 GB+ Strix Halo or a 32 GB GPU) and
-   `Gemma-4-E4B-it-GGUF` everywhere else, CPU-only PCs included, and records the pick as
+   `Gemma-4-E4B-it-GGUF` on 24 GB+ PCs and 10–24 GB GPUs, `Qwen3.5-4B-GGUF` on an
+   8 GB GPU, and `Qwen3.5-2B-GGUF` on PCs with 16 GB of RAM or less (CPU-only
+   included), and records the pick as
    `default_model` in `~/.gaia/config.json`. On 128 GB-class PCs the user may
    switch to the multimodal `user.Qwen3.8-Flash-Next-GGUF` with `gaia config set
    default_model`. `model.id` below names whichever this machine uses.

@@ -38,25 +38,38 @@ def friendly_name(model_id: str) -> str:
     if req is not None and req.display_name:
         # MODELS names carry a capability note, "(Multimodal)"; the list shows that elsewhere.
         return re.sub(r"\s*\([^)]*\)\s*$", "", req.display_name)
-    name = model_id[5:] if model_id.startswith("user.") else model_id
+    builtin = model_id.startswith("builtin.")
+    name = (
+        model_id.split(".", 1)[1]
+        if builtin or model_id.startswith("user.")
+        else model_id
+    )
     words = []
     for word in re.split(r"[-_\s]+", name):
         low = word.lower()
         # Format and tuning tags, and the date stamp a user-registered build carries.
         if low in _NAME_NOISE or re.fullmatch(r"\d{8}", word):
             continue
-        # Sizes read as sizes: 27b -> 27B, e2b -> E2B, a3b -> A3B.
-        words.append(
-            word.upper() if re.fullmatch(r"[a-z]?\d+(\.\d+)?[bkm]", low) else word
-        )
+        # Sizes read as sizes: 27b -> 27B, e2b -> E2B, a3b -> A3B; so do quantizations.
+        sized = re.fullmatch(r"[a-z]?\d+(\.\d+)?[bkm]", low) or low in _QUANT_TAGS
+        words.append(word.upper() if sized else word)
     if not words:
         return model_id
-    words[0] = words[0][:1].upper() + words[0][1:]
-    return " ".join(words)
+    if [w.lower() for w in words[:2]] == ["gpt", "oss"]:
+        # The model's own name is lower-case and hyphenated.
+        words[:2] = ["gpt-oss"]
+    else:
+        words[0] = words[0][:1].upper() + words[0][1:]
+    label = " ".join(words)
+    # A built-in copy can sit beside a downloaded one of the same model.
+    return f"{label} (built-in)" if builtin else label
 
 
 #: Words in a model id that say how it is packaged or tuned, not what it is.
 _NAME_NOISE = {"gguf", "flm", "onnx", "oga", "it", "instruct"}
+
+#: Quantization tags, kept in the name but written as they are published.
+_QUANT_TAGS = {"mxfp4", "fp8", "fp16", "bf16", "int4", "int8"}
 
 
 def measured_speeds(stats: Iterable[Dict[str, Any]]) -> Dict[str, float]:
@@ -114,6 +127,29 @@ def _fit(model: Dict[str, Any], size_gb: Optional[float], capacity) -> Optional[
     )
 
 
+def _tight(model: Dict[str, Any], size_gb: Optional[float], capacity) -> bool:
+    """The model fits, but would leave other apps less RAM than GAIA keeps for
+    them (``model_fit.with_app_headroom``). Never for an NPU model, nor for the
+    ladder's floor, which has no smaller model to suggest instead."""
+    from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_LADDER,
+        _model_ids_match,
+        find_model_requirement,
+        runs_on_npu,
+    )
+    from gaia.llm.model_fit import kv_cache_gb, required_memory_gb, with_app_headroom
+
+    if capacity is None or size_gb is None:
+        return False
+    if runs_on_npu(model["id"]) or model.get("recipe") == "flm":
+        return False
+    if _model_ids_match(model["id"], DEFAULT_MODEL_LADDER[-1]):
+        return False
+    req = find_model_requirement(model["id"])
+    kv = kv_cache_gb(req.kv_bytes_per_token, req.min_ctx_size) if req else 0.0
+    return required_memory_gb(size_gb, kv) > with_app_headroom(capacity).memory_gb
+
+
 def annotate_local_models(
     models: List[Dict[str, Any]],
     *,
@@ -168,6 +204,7 @@ def annotate_local_models(
                 ),
                 "size_gb": round(size, 1) if size else None,
                 "fits": None if fit_reason is None else fit_reason == "",
+                "tight": fit_reason == "" and _tight(m, size, capacity),
                 "available": unavailable is None,
                 "unavailable_reason": unavailable,
                 # The same reasons, for the UI to say in its own language.

@@ -46,6 +46,7 @@ import sqlite3
 import sys
 import threading
 import time
+import unicodedata
 import weakref
 from collections import deque
 from contextlib import nullcontext
@@ -461,6 +462,28 @@ def _forget_text(item: Dict) -> Tuple[str, ...]:
     return fact_words(str(item.get("content", "")))
 
 
+#: Phones type "don’t": the memory guards match a straight apostrophe.
+_APOSTROPHES = str.maketrans(
+    dict.fromkeys(
+        "\u2018\u2019\u201b\u02b9\u02bb\u02bc\u02c8\u2032\u2035\uff07`\u00b4", "'"
+    )
+)
+
+
+def _straight_apostrophes(text: str) -> str:
+    """*text* with each apostrophe look-alike made "'", so its length is unchanged."""
+    return text.translate(_APOSTROPHES)
+
+
+def _normalised(text: str) -> str:
+    """*text* in NFKC, with no invisible format characters and straight apostrophes."""
+    # The acute accent first: NFKC turns it into a space and a combining mark.
+    text = unicodedata.normalize("NFKC", _straight_apostrophes(text))
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf").translate(
+        _APOSTROPHES
+    )
+
+
 _FORGET_SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
 _FORGET_VERB = re.compile(r"\b(?:forget|erase|delete|remove)\b", re.IGNORECASE)
 #: "Could you forget X?" asks for it; "Did you forget X?" doesn't.
@@ -485,7 +508,7 @@ _FORGET_WHAT_END = re.compile(
 
 def _forget_requests(user_input: str) -> List[str]:
     """What *user_input* asks to forget, one entry per request."""
-    text = user_input.replace("\u2019", "'")
+    text = _straight_apostrophes(user_input)
     asked = []
     for sentence in _FORGET_SENTENCE.findall(text):
         sentence = sentence.strip()
@@ -620,6 +643,115 @@ SAVE_WHEN_ASKED_PROMPT = (
     "your answer."
 )
 
+#: A sentence telling the user something was kept in memory.
+_SAVE_CLAIM = re.compile(
+    r"\bi(?:'ve|\s+have|'ll|\s+will)?\s+(?:now\s+|also\s+)?"
+    r"(?:saved|stored|remembered|noted|save|store|remember|note)\b"
+    r"|\b(?:is|was|has\s+been|have\s+been)\s+(?:now\s+)?"
+    r"(?:saved|stored|remembered|noted)\b"
+    r"|^\W*(?:saved|stored|remembered|noted)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NOT_SAVED = re.compile(
+    r"\b(?:not|never|no|nothing|none|cannot|unable|refus\w*|block\w*|\w+n't)\b",
+    re.IGNORECASE,
+)
+
+
+#: Answer-check problems, also shown to the user when the repair doesn't take.
+_REFUSED_SAVE = "This was not saved to memory."
+_REFUSED_SECRET = (
+    "This was not saved to memory: GAIA does not keep passwords or other secrets."
+)
+_NOTHING_SAVED = "Nothing was saved to memory."
+
+
+#: The longest message a forced save reads; anything longer is left to the model.
+_FORCED_SAVE_MAX_CHARS = 300
+#: Characters a forced fact may hold. No comma: one starts a second clause
+#: ("..., maar niet opslaan"), so a fact with one is left to the model.
+_FACT = r"(?P<fact>[A-Za-z0-9 '\"/:%$.\-]+?)"
+#: The only messages GAIA saves on its own, the whole message and nothing more:
+#: "(Please) remember (that) X." / "(Please) keep in mind (that) X." and
+#: "X. Please remember that." / "X. Please remember this."
+_FORCED_SAVE_SHAPES = (
+    re.compile(
+        r"(?:please\s+)?(?:remember|keep\s+in\s+mind)(?:\s+that)?\s+"
+        + _FACT
+        + r"[.!]?",
+        re.IGNORECASE,
+    ),
+    re.compile(_FACT + r"\.?\s+please\s+remember\s+(?:that|this)[.!]?", re.IGNORECASE),
+)
+#: A second sentence inside the fact: a stop, "!" or "?" before a space or the end.
+_SECOND_SENTENCE = re.compile(r"[.!?](?:\s|$)|[!?]")
+#: A second clause that may change or take back the first.
+_SECOND_CLAUSE = re.compile(
+    r"\b(?:but|then|except|unless|though|although|however|instead|actually|wait"
+    r"|also|jk|kidding|abort|strike|scrap|scratch|stop|cancel\w*|undo|forget\w*)\b",
+    re.IGNORECASE,
+)
+#: The words that ask to keep something in memory. A forced save needs exactly one.
+_MEMORY_ASK = re.compile(
+    r"\bremember\w*|\bmemori[sz]\w*|\bin\s+mind\b|\bmemor(?:y|ies)\b", re.IGNORECASE
+)
+#: A negation or decline anywhere in the message leaves the save to the model.
+#: Deliberately blunt: "remember that I'm not vegan" is left to the model too.
+_DECLINE_SIGNAL = re.compile(
+    r"\b(?:not|never|no|nah|nope|nevermind|cannot|forget\w*|skip\w*|cancel\w*"
+    r"|ignore|disregard|undo|delete|erase|remove|except|unless"
+    r"|nicht|nein|kein\w*|nunca|jamais|nada|non|niet|nie|inte|ikke|nej|ne|pas"
+    r"|nao|nem|nu)\b"
+    r"|n\s*'+\s*t\b"
+    r"|\b(?:do|does|did|wo|ca|could|would|should|must|need|is|are|was|were"
+    r"|has|have|had|ai|might)\s*n\s*t\b"
+    r"|\brather\s+(?:you|u)\b|\bprefer\s+(?:you|u|that\s+you)\b"
+    r"|\bhold\s+off\b|\bscratch\s+that\b|\bsecond\s+thoughts?\b"
+    r"|\bchanged?\s+my\s+mind\b",
+    re.IGNORECASE,
+)
+
+
+def fact_to_keep(request: str) -> str:
+    """The fact in *request* the user asked to remember, or "".
+
+    GAIA saves this itself when the model skips the save, so it only reads one
+    fixed shape: the whole message is a single plain-ASCII sentence such as
+    "Remember that my dog's name is Rex." or "My birthday is March 3. Please
+    remember that.", with no comma, no negation, no second clause and at most
+    300 characters. Every other request is left to the model.
+    """
+    text = _straight_apostrophes(request or "").strip()
+    if (
+        len(text) > _FORCED_SAVE_MAX_CHARS
+        or not all(" " <= ch <= "~" for ch in text)
+        or len(_MEMORY_ASK.findall(text)) != 1
+        or _DECLINE_SIGNAL.search(text)
+        or not asks_to_keep_in_memory(text)
+    ):
+        return ""
+    for shape in _FORCED_SAVE_SHAPES:
+        match = shape.fullmatch(text)
+        if match is None:
+            continue
+        fact = match.group("fact").strip()
+        if (
+            _SECOND_SENTENCE.search(fact)
+            or _SECOND_CLAUSE.search(fact)
+            or len(fact.split()) < 2
+        ):
+            return ""
+        return fact
+    return ""
+
+
+def claims_memory_save(answer: str) -> bool:
+    """True when *answer* tells the user something was saved, with no denial beside it."""
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", answer or ""):
+        if _SAVE_CLAIM.search(sentence) and not _NOT_SAVED.search(sentence):
+            return True
+    return False
+
 
 def _saved_despite(ignored: Dict[str, str], knowledge_id: str) -> str:
     """What remember tells the model after saving without a bad optional argument.
@@ -659,6 +791,16 @@ def _own_words(text: str) -> List[str]:
 
 
 _SENTENCE_END = re.compile(r"[.?!\n]|$")
+#: A negation before the verb withholds the request: "I don't want you to remember".
+_HELD_BACK = re.compile(
+    r"\b(?:don'?t|do\s+not|doesn'?t|never|no\s+need|not|shouldn'?t|won'?t)\b",
+    re.IGNORECASE,
+)
+
+
+def _clause_before(part: str, start: int) -> str:
+    """The words of *part*'s clause that come before *start*."""
+    return re.split(r"[.?!,;\n]", part[:start])[-1]
 
 
 def _is_material(part: str, start: int) -> bool:
@@ -675,7 +817,7 @@ def _is_material(part: str, start: int) -> bool:
 
 def asks_to_keep_in_memory(text: str) -> bool:
     """True when *text* asks the agent to remember something it says."""
-    for part in _own_words(text or ""):
+    for part in _own_words(_normalised(text or "")):
         for request in _STORAGE_REQUEST.finditer(part):
             end = _SENTENCE_END.search(part, request.end())
             verb = _KEEP_IN_MEMORY.search(part, request.start())
@@ -684,6 +826,7 @@ def asks_to_keep_in_memory(text: str) -> bool:
                 and verb.start() < request.end()
                 and not _is_material(part, request.start())
                 and not _NOT_A_FACT.match(part, verb.end())
+                and not _HELD_BACK.search(_clause_before(part, verb.start()))
                 # "Can you remember my dog's name?" asks; "…remember that I…?" tells.
                 and (
                     part[end.start() : end.end()] != "?"
@@ -4790,6 +4933,74 @@ class MemoryMixin(ProceduralMemoryMixin):
         if not asks_to_keep_in_memory(text) or self._looks_like_credential(text):
             return None
         return SAVE_WHEN_ASKED_PROMPT
+
+    def _memory_saves_this_turn(self) -> List[Dict[str, Any]]:
+        """This turn's remember / update_memory results, oldest first."""
+        turn = getattr(self, "_turn_tool_executions", None)
+        if getattr(self, "_memory_saves_turn", None) is not turn:
+            self._memory_saves_turn = turn
+            self._memory_saves = []
+        return self._memory_saves
+
+    def _execute_tool_timed(self, tool_name, tool_args):
+        result = super()._execute_tool_timed(tool_name, tool_args)
+        name = str(tool_name or "").strip().removesuffix("()").replace("-", "_")
+        if name.lower() in ("remember", "update_memory"):
+            self._memory_saves_this_turn().append(
+                result if isinstance(result, dict) else {"status": "error"}
+            )
+        return result
+
+    def answer_problems(self, answer):
+        """Adds what the answer says about memory that this turn's saves don't back.
+
+        Small models repeat "Stored" over a refusal, or say "got it" and never
+        call remember; a nudge alone did not stop either.
+        """
+        problems = super().answer_problems(answer)
+        saves = self._memory_saves_this_turn()
+        if any(s.get("status") in ("stored", "updated") for s in saves):
+            return problems
+        # Only a turn the user asked to remember: "saved" elsewhere is a file.
+        request = getattr(self, "_original_user_input", None) or ""
+        if not asks_to_keep_in_memory(request):
+            return problems
+        refused = [s for s in saves if s.get("status") == "skipped"]
+        if refused and claims_memory_save(answer):
+            secret = _CREDENTIAL_NOT_STORED in str(refused[-1].get("message") or "")
+            problems.append(_REFUSED_SECRET if secret else _REFUSED_SAVE)
+            return problems
+        called = {r.get("tool") for r in getattr(self, "_turn_tool_executions", [])}
+        if self._unsaved_memory_request(called):
+            problems.append(_NOTHING_SAVED)
+        return problems
+
+    def required_calls(self):
+        calls = list(super().required_calls())
+        saves = self._memory_saves_this_turn()
+        if saves:
+            return calls
+        called = {r.get("tool") for r in getattr(self, "_turn_tool_executions", [])}
+        if not self._unsaved_memory_request(called):
+            return calls
+        fact = fact_to_keep(getattr(self, "_original_user_input", None) or "")
+        if fact:
+            calls.append(("remember", {"fact": fact}))
+        return calls
+
+    def answer_repair_prompt(self, problems):
+        prompt = super().answer_repair_prompt(problems)
+        if _REFUSED_SAVE in problems or _REFUSED_SECRET in problems:
+            prompt += (
+                " Your answer says it was saved; remember refused it. Say plainly "
+                "that it was not saved, and why. Do not call remember again."
+            )
+        if _NOTHING_SAVED in problems:
+            prompt += (
+                " Call remember now with what the user asked you to keep, then "
+                "give your answer."
+            )
+        return prompt
 
     @classmethod
     def _looks_like_credential(cls, text: str) -> bool:

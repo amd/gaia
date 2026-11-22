@@ -5,7 +5,8 @@
 # and Wikipedia distractors, with answer generation and the 10/100/1000-document
 # scale tiers. Too slow for pull requests; the offline `pr` subset gates those
 # from test_rag.yml. This run reports rather than gates: it fails only when the
-# run itself errors (a hard case crashing, a corpus checksum mismatch). Compare a
+# run itself errors (a hard case crashing, a corpus checksum mismatch, a question
+# label that no longer matches the extracted text). Compare a
 # run to the committed full-suite baseline with `--gate`, and replace that
 # baseline only with a results.json artifact from this workflow.
 

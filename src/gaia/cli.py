@@ -31,6 +31,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     _get_lemonade_config,
     resolve_lemonade_base_url,
+    resolve_local_chat_model,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
@@ -778,7 +779,7 @@ async def async_main(action, **kwargs):
                 "logging_level", "INFO"
             ),  # Back to INFO now that issues are fixed
             # LLM backend selection (#124)
-            model=kwargs.get("model") or DEFAULT_MODEL_NAME,
+            model=kwargs.get("model") or resolve_local_chat_model(),
             max_tokens=kwargs.get("max_tokens", 512),
             use_claude=kwargs.get("use_claude", False),
             claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
@@ -4245,7 +4246,7 @@ def _handle_eval_retrieval(args):
     print((opts.out_dir / "report.md").read_text(encoding="utf-8"))
     print(f"[OUTPUT] {(opts.out_dir / 'results.json').resolve()}")
 
-    failed = bool(opts.errors)
+    failed = bool(opts.errors or opts.label_errors)
     if args.gate:
         baseline = json.loads(Path(args.gate).read_text(encoding="utf-8"))
         passed, lines = runner.compare(baseline, results, args.tolerance)
@@ -4256,6 +4257,12 @@ def _handle_eval_retrieval(args):
         failed |= not passed
     if opts.errors:
         print(f"[ERROR] {len(opts.errors)} hard case(s) crashed: {opts.errors}")
+    if opts.label_errors:
+        print(
+            f"[ERROR] {len(opts.label_errors)} question label(s) do not match the "
+            "extracted text, so those questions were not scored. Fix them in "
+            f"eval/retrieval/datasets/: {opts.label_errors}"
+        )
     if failed:
         sys.exit(1)
 

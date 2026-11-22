@@ -460,6 +460,23 @@ describe('SetupScreen: the recommendation', () => {
         expect(await planScreen()).toHaveTextContent(`${QWEN.name} is a bigger model that answers better, but it needs about 27.1 GB of memory and this PC has 16.0 GB.`);
     });
 
+    it('says how much memory the pick leaves for other apps', async () => {
+        const small = { ...GEMMA_CHAT, chat_choice: true };
+        mockedApi.getSetupPlan.mockResolvedValue(plan([small, EMBED], { left_for_apps_gb: 13.1, chat_model: { id: GEMMA.id, user_set: false, size_gb: 5.97, downloaded: false } }));
+        await open();
+        expect(await planScreen()).toHaveTextContent('Leaves 13.1 GB of memory for your other apps, so your PC stays quick while GAIA runs.');
+    });
+
+    it('gives no headroom reason on a discrete GPU or for a pick the user made', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED], { left_for_apps_gb: null }));
+        await open();
+        expect(await planScreen()).not.toHaveTextContent('for your other apps');
+        cleanup();
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED], { left_for_apps_gb: 13.1, chat_model: { id: QWEN.id, user_set: true, size_gb: 23.3, downloaded: false } }));
+        await open();
+        expect(await planScreen()).not.toHaveTextContent('for your other apps');
+    });
+
     it("calls no model this PC can't run a bigger model", async () => {
         const npu = { ...QWEN, fits: false as const, fit_code: 'npu' as const, need_gb: 27.1, capacity_gb: 16, planned: false, selected: false, recommended: false };
         const small = { ...GEMMA_CHAT, chat_choice: true };
