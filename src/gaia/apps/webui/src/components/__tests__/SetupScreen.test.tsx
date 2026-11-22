@@ -373,10 +373,10 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
         mockedApi.startSetup.mockResolvedValueOnce({
             state: 'failed', server_only: true, steps: [], error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true },
+            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: "The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.", use_gaia: true },
         }).mockResolvedValueOnce(SERVER_RUNNING);
         renderSetup();
-        expect(await screen.findByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
+        expect(await screen.findByText("The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: /Use GAIA.s own instead/ }));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, true, { serverOnly: true }));
     });
@@ -475,6 +475,24 @@ describe('SetupScreen: the recommendation', () => {
         mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED], { left_for_apps_gb: 13.1, chat_model: { id: QWEN.id, user_set: true, size_gb: 23.3, downloaded: false } }));
         await open();
         expect(await planScreen()).not.toHaveTextContent('for your other apps');
+    });
+
+    it('warns about a kept model that leaves other apps little memory, instead of calling it a fit', async () => {
+        const big = { ...QWEN, fits: false as const, fit_code: 'memory' as const, need_gb: 27.1, capacity_gb: 9.7, planned: false, selected: false, recommended: false };
+        const tight = { ...GEMMA_CHAT, chat_choice: true, fits: true as const, tight: true, need_gb: 8.5, capacity_gb: 9.7 };
+        mockedApi.getSetupPlan.mockResolvedValue(plan([tight, big, EMBED], { chat_model: { id: GEMMA.id, user_set: true, size_gb: 0, downloaded: true } }));
+        await open();
+        const card = await planScreen();
+        expect(card).toHaveTextContent('Leaves your other apps little memory, so your PC may slow down while it runs.');
+        expect(card).not.toHaveTextContent('Fits this PC');
+        expect(card).not.toHaveTextContent('is a bigger model');
+    });
+
+    it("says a chosen model that doesn't fit may fail to load", async () => {
+        const noFit = { ...GEMMA_CHAT, chat_choice: true, fits: false as const, fit_code: 'memory' as const, need_gb: 8.5, capacity_gb: 4.3 };
+        mockedApi.getSetupPlan.mockResolvedValue(plan([noFit, EMBED], { chat_model: { id: GEMMA.id, user_set: true, size_gb: 0, downloaded: true } }));
+        await open();
+        expect(await planScreen()).toHaveTextContent('Needs about 8.5 GB; this PC has 4.3 GB. It may be very slow or fail to load.');
     });
 
     it("calls no model this PC can't run a bigger model", async () => {
@@ -1245,12 +1263,12 @@ describe('SetupScreen: downloading', () => {
         ], {
             state: 'failed',
             error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true },
+            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: "The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.", use_gaia: true },
         });
         mockedApi.startSetup.mockResolvedValue(stopped);
         await startLocal();
         expect(await screen.findByRole('button', { name: /Finish setup/ })).toBeInTheDocument();
-        expect(screen.getByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
+        expect(screen.getByText("The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
     });
 
     it('deletes and re-downloads a model that failed its load check only after the user confirms', async () => {
@@ -1965,7 +1983,7 @@ describe("SetupScreen: the user's server isn't answering", () => {
         problem: {
             kind: 'server_unreachable',
             message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-            start: 'Start Lemonade Server from the Lemonade tray icon.',
+            start: "The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.",
             use_gaia: true,
         },
         command: 'gaia init --profile gaia',
@@ -1981,7 +1999,7 @@ describe("SetupScreen: the user's server isn't answering", () => {
         expect(await screen.findByRole('button', { name: /Use GAIA.s own instead/ })).toBeInTheDocument();
         expect(screen.queryByText(/set outside the app/)).not.toBeInTheDocument();
         expect(await screen.findByRole('alert')).toHaveTextContent("Your Lemonade Server at 127.0.0.1:9 isn't answering.");
-        expect(screen.getByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
+        expect(screen.getByText("The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
         expect(screen.queryByText(/HTTPConnectionPool/)).not.toBeInTheDocument();
         // A failed step opens "Having trouble?" by itself.
         expect(screen.getByRole('button', { name: 'Having trouble?' })).toHaveAttribute('aria-expanded', 'true');

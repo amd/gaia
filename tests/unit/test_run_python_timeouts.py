@@ -430,3 +430,19 @@ def test_a_python_run_is_cut_to_the_time_the_turn_has_left(agent_tools):
     # The limit ended it, so asking for a larger timeout is not on offer.
     assert "time limit cut this run short" in result["error"]
     assert "larger timeout" not in result["error"]
+
+
+def test_a_timed_out_run_is_offered_only_the_time_the_turn_has_left(agent_tools):
+    """In a 60 s turn, "pass a larger timeout (max 1800)" can't be followed."""
+    agent, tools = agent_tools
+    agent.time_limit_s = 60
+    agent._turn_started_at = time.monotonic()
+    try:
+        result = tools["run_python"]["function"](
+            code="import time; time.sleep(30)", timeout=2
+        )
+    finally:
+        agent.time_limit_s = None
+    assert result["status"] == "error"
+    assert "max 1800" not in result["error"]
+    assert "what this turn has left" in result["error"]

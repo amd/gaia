@@ -220,7 +220,7 @@ const SERVER_FAILED = {
     error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
     problem: {
         kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-        start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true,
+        start: "The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.", use_gaia: true,
     },
 };
 
