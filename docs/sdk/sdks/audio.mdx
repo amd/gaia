@@ -176,6 +176,8 @@ built on top; see [Transcription & Meeting Notes](/guides/transcription#how-spea
 
 **Import:** `from gaia.audio.kokoro_tts import KokoroTTS`
 
+On macOS, where GAIA hasn't verified its local voice yet, `KokoroTTS()` raises `SpeechUnavailableError`. On every platform, speech that comes back far shorter than its text needs raises `LemonadeTTSError` instead of being returned. Both are in `gaia.audio.lemonade_tts`, and `SpeechUnavailableError` is a subclass of `LemonadeTTSError`.
+
 ```python
 import queue
 

@@ -68,3 +68,12 @@ def test_search_tools_lists_dictation_only_where_speech_is_offered(platform, lis
         found = agent._search_tools("dictate this document to an mp3")
         assert found["status"] == "success"
         assert ("dictation" in {s["name"] for s in found["skills"]}) is listed
+
+
+def test_a_mac_still_reports_a_tool_that_is_really_missing():
+    with _agent("darwin", dynamic_tools=True) as agent:
+        agent._tools_registry.pop("read_clipboard")
+        with pytest.raises(ValueError, match="read_clipboard") as missing:
+            agent._validate_tool_config()
+        assert not any(name in str(missing.value) for name in SPEECH_OUTPUT_TOOLS)
+        assert not agent._dynamic_tools_validated
