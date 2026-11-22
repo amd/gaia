@@ -184,7 +184,7 @@ def _describe(exc: BaseException) -> str:
     Any other type, its subclasses (a JSON or Unicode decode error) included,
     is unexpected, and its class name helps a bug report.
     """
-    if type(exc) is ValueError and str(exc):
+    if exc.__class__ is ValueError and str(exc):
         return str(exc)
     return f"{type(exc).__name__}: {exc}"
 
