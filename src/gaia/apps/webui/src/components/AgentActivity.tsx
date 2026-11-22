@@ -563,6 +563,8 @@ interface AgentActivityProps {
     awaitingUser?: boolean;
     /** What the model is doing between steps; drawn at the end of the timeline while no row is live. */
     liveLine?: React.ReactNode;
+    /** Shown in place of `liveLine` while a row is live: the row already says what is happening. */
+    liveEyes?: React.ReactNode;
     /** What the running call's own model calls are doing (page progress, a server restart); shown on its row. */
     toolStatus?: string | null;
     /** The turn's answer, so a note it repeats is not shown twice. */
@@ -585,7 +587,7 @@ function VisionOffer() {
 }
 
 /** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
-export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, toolStatus = null, answer }: AgentActivityProps) {
+export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, liveEyes, toolStatus = null, answer }: AgentActivityProps) {
     const t = useT();
     const [openGroups, setOpenGroups] = useState<Map<number, boolean>>(new Map());
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
@@ -716,7 +718,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
             </div>
 
             {livePlan && <PlanChecklist step={livePlan} />}
-            {running && !liveRow && liveLine && <div className="flow-live-line">{liveLine}</div>}
+            {running && (liveRow ? liveEyes : liveLine) && <div className="flow-live-line">{liveRow ? liveEyes : liveLine}</div>}
 
             {/* Filter: after the steps, and only once there are enough open calls to sift */}
             {!running && openCalls >= FILTER_MIN_TOOL_ROWS && (

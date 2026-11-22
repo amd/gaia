@@ -184,6 +184,16 @@ describe('plain step lines', () => {
         expect(screen.queryByText('Thinking')).toBeNull();
     });
 
+    it('keeps the eyes, without words, beside a running call', () => {
+        const running = call(1, 'Reading file: notes.txt', { active: true, success: undefined, result: undefined });
+        const { container } = render(
+            <AgentActivity steps={[running]} isActive running liveLine={<span>Thinking</span>} liveEyes={<span className="eyes">o o</span>} />,
+        );
+
+        expect(screen.queryByText('Thinking')).toBeNull();
+        expect(container.querySelector('.agent-activity')!.lastElementChild!.querySelector('.eyes')).not.toBeNull();
+    });
+
     it('shows the live line between steps, where the next one will appear', () => {
         const { container } = render(
             <AgentActivity steps={[call(1, 'Reading file: notes.txt')]} isActive={false} running liveLine={<span>Thinking</span>} />,

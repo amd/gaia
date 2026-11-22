@@ -102,7 +102,7 @@ interface MessageBubbleProps {
  * "Reasoning — 38 words so far"), or "Thinking..." until the first one arrives.
  * One calm line in the UI font; the whole label shows at once.
  */
-function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
+function ThinkingIndicator({ active, label, awaitingUser = false, eyesOnly = false }: { active: boolean; label?: string | null; awaitingUser?: boolean; eyesOnly?: boolean }) {
     const t = useT();
     const text = awaitingUser ? t('activity.waiting') : (label ? localizeLiveStatus(t, label) : t('msg.thinking'));
     const elapsed = useElapsedSeconds(active, text);
@@ -128,10 +128,12 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     if (!active) return <MoodEyes />;
 
     const showModelWaitHint = waitingOnModel && modelWaitElapsed >= MODEL_WAIT_HINT_S;
+    const eyes = <GaiaEyes phase={eyesPhase(label, awaitingUser)} reaction={reaction} />;
+    if (eyesOnly) return <span className="thinking-indicator is-live">{eyes}</span>;
 
     return (
         <span className={`thinking-indicator${!awaitingUser ? ' is-live' : ''}`}>
-            <GaiaEyes phase={eyesPhase(label, awaitingUser)} reaction={reaction} />
+            {eyes}
             <span className="thinking-indicator-text">{text}</span>
             {!awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
                 <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
@@ -870,6 +872,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             answer={isStreaming ? undefined : cleanedContent}
                             liveLine={isStreaming && (
                                 <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
+                            )}
+                            liveEyes={isStreaming && (
+                                <ThinkingIndicator active label={liveStatus} awaitingUser={awaitingUser} eyesOnly />
                             )}
                         />
                     )}

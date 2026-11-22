@@ -50,6 +50,22 @@ describe('messageMood', () => {
         ['are you sure about that number', 'skeptical'],
         ['I wonder how tides work', 'curious'],
         ["ok let's try again", 'determined'],
+        // The messages the app was checked with end to end, one per mood.
+        ['thank you so much, that finally fixed it!', 'happy'],
+        ['my dog died this morning', 'sad'],
+        ['our cat is dying', 'sad'],
+        ['you are a useless piece of junk', 'angry'],
+        ["I got the job!!! I can't wait to start", 'excited'],
+        ["lol that's hilarious, tell me a joke", 'laugh'],
+        ["I love you GAIA, you're the best", 'love'],
+        ["I'm so proud of myself, I fixed it on my own", 'proud'],
+        ["are you sure? that doesn't sound right", 'skeptical'],
+        ['I wonder how black holes form. Two sentences please.', 'curious'],
+        ["let's do this, one more try", 'determined'],
+        ["I'm confused, I don't understand what you mean", 'confused'],
+        ["I'm so stressed and anxious about my exam tomorrow", 'worried'],
+        ["that's wrong, you made a mistake", 'embarrassed'],
+        ["good night, I'm so tired", 'sleepy'],
     ] as const)('%s -> %s', (text, mood) => {
         expect(messageMood(text)).toBe(mood);
     });

@@ -225,6 +225,25 @@ def test_a_stray_backtick_hides_a_tag_no_further_than_its_line(sizes):
     assert heard == ["determined"]
 
 
+@pytest.mark.parametrize("sizes", [[1], [3], [1000]])
+@pytest.mark.parametrize(
+    "text, shown, mood",
+    [
+        ("[curious] When a star dies...", "When a star dies...", "curious"),
+        ("\n[ Worried ]\nThat's real.", "\nThat's real.", "worried"),
+        # Short forms are only a mood at the start of the reply, and only mood words.
+        ("Say [happy] to me.", "Say [happy] to me.", None),
+        ("[docs](https://x.io) say so", "[docs](https://x.io) say so", None),
+        ("[1] First point", "[1] First point", None),
+        ("[calm] Sure.", "[calm] Sure.", None),
+    ],
+)
+def test_the_short_form_at_the_start_of_a_reply_is_a_mood_too(text, shown, mood, sizes):
+    out, heard = _stream(text, sizes)
+    assert out == shown
+    assert heard == ([mood] if mood else [])
+
+
 def test_only_the_first_mood_of_a_reply_is_reported():
     shown, heard = _stream("[mood:happy] Yes! [mood:excited] Really.", [5])
     assert shown == "Yes! Really."
@@ -313,3 +332,23 @@ def test_an_agent_that_does_not_ask_for_a_mood_leaves_the_text_alone():
     result = agent.process_query("say it")
     assert result["result"] == "[mood:happy] literal"
     assert heard == []
+
+
+def test_each_request_reminds_the_model_but_history_never_keeps_it():
+    from gaia.agents.base.mood import MOOD_REMINDER
+
+    agent, _ = _mood_agent(["[mood:happy] Hi!"])
+    result = agent.process_query("hello")
+
+    sent = agent.chat.send_messages.call_args.kwargs["messages"]
+    assert any(m.get("content") == MOOD_REMINDER for m in sent)
+    assert MOOD_REMINDER not in json.dumps(result.get("model_messages"))
+
+
+def test_an_agent_that_does_not_ask_sends_no_reminder():
+    from gaia.agents.base.mood import MOOD_REMINDER
+
+    agent, _ = _mood_agent(["Hi!"], expresses_mood=False)
+    agent.process_query("hello")
+
+    assert MOOD_REMINDER not in json.dumps(agent.chat.send_messages.call_args.kwargs)

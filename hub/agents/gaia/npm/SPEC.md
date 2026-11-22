@@ -468,8 +468,10 @@ happy, excited, love, laugh, playful, proud, curious, surprised, confused,
 skeptical, worried, sad, embarrassed, angry, determined and sleepy. The event
 is not terminal, a reply without a tag sends none, and a client may ignore
 it. The field is part of the prompt, so send the same value on every turn of
-a session. Without it there is no mood line in the prompt and no event, and
-pre-2.31 binaries `422` it.
+a session. Each turn's request also carries a one-line reminder to name the
+mood, which is never saved to the session's history. Without the field there
+is no mood line in the prompt, no reminder and no event, and pre-2.31
+binaries `422` it.
 
 `reasoning` (contract ≥ 2.22), when `true`, streams the model's reasoning as
 `reasoning` events, `{ "type": "reasoning", "delta": "…" }`, so a client can

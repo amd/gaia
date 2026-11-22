@@ -133,7 +133,12 @@ from gaia.agents.base.model_features import (
     features_for_model,
     withheld_tools,
 )
-from gaia.agents.base.mood import strip_mood, with_text, without_mood
+from gaia.agents.base.mood import (
+    MOOD_REMINDER,
+    strip_mood,
+    with_text,
+    without_mood,
+)
 from gaia.agents.base.planted_instructions import (
     acted_after,
     flag_tool_result,
@@ -11119,6 +11124,13 @@ Do NOT wrap conversational replies in JSON.
         if hook is not None:
             hook(mood)
 
+    def _remind_mood(self, messages) -> None:
+        """Ask for this turn's mood in its request only, never in saved history."""
+        if self.expresses_mood:
+            getattr(messages, "append_transient", messages.append)(
+                {"role": "user", "content": MOOD_REMINDER}
+            )
+
     def _mood_stream(self, stream):
         """*stream* with the reply's mood tag taken out and sent to the console."""
         if not self.expresses_mood:
@@ -13738,6 +13750,7 @@ Do NOT wrap conversational replies in JSON.
         )
         self._tell_no_one_to_ask(messages)
         self._tell_time_budget(messages)
+        self._remind_mood(messages)
 
         # Use provided max_steps or fall back to class default
         steps_limit = max_steps if max_steps is not None else self.max_steps

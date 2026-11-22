@@ -111,7 +111,9 @@ async function driveSend() {
 /** A running tool is named once, on its own row, with no live line repeating it. */
 async function runningRow(text: string) {
     await waitFor(() => expect(document.querySelector('.flow-tool.active .flow-tool-label')?.textContent).toBe(text));
-    expect(document.querySelector('.thinking-indicator')).toBeNull();
+    // The row is the one readout; GAIA's eyes stay at the end of the timeline, without words.
+    expect(document.querySelector('.thinking-indicator-text')).toBeNull();
+    expect(document.querySelector('.flow-live-line .gaia-eyes')).not.toBeNull();
 }
 
 /** The live line at the end of the timeline, saying what the model is doing between steps. */

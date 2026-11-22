@@ -43,12 +43,23 @@ MOOD_PROMPT = (
     "when you feel nothing in particular."
 )
 
+#: Sent with each turn, never saved: earlier replies reach the model without
+#: their tags, so without it the model stops naming a mood a few turns in.
+MOOD_REMINDER = (
+    "(Note from GAIA, not the user: open your reply with your `[mood:WORD]` tag, "
+    "as your instructions say.)"
+)
+
 _TAG_RE = re.compile(r"\[mood:\s{0,3}([a-z]{1,20})\s{0,3}\]", re.IGNORECASE)
 # Text that could still grow into a tag, so it is held until the next chunk.
 _PARTIAL_RE = re.compile(
     r"\[(?:m(?:o(?:o(?:d(?::(?:\s{0,3}(?:[a-z]{1,20}\s{0,3})?)?)?)?)?)?)?\Z",
     re.IGNORECASE,
 )
+# Models also open a reply with the short form, `[curious]`. Only taken at the
+# very start of a reply, and only for a mood word, so bracketed text is kept.
+_BARE_RE = re.compile(r"\[\s{0,3}([a-z]{1,20})\s{0,3}\]", re.IGNORECASE)
+_BARE_PARTIAL_RE = re.compile(r"\[\s{0,3}[a-z]{0,20}\s{0,3}\Z", re.IGNORECASE)
 _SPECIAL_RE = re.compile(r"[\[<`]")
 # The provider streams reasoning inline between these.
 _THINK_MARKERS = ("<think>", "</think>")
@@ -132,6 +143,15 @@ class MoodFilter:
                     self._saw(tag.group(1).lower())
                     start = tag.end()
                     continue
+                if not self._shown_text:
+                    bare = _BARE_RE.match(buffer, at)
+                    if bare and bare.group(1).lower() in MOODS:
+                        self._saw(bare.group(1).lower())
+                        start = bare.end()
+                        continue
+                    if _BARE_PARTIAL_RE.match(buffer, at):
+                        self._held = buffer[at:]
+                        break
                 if _PARTIAL_RE.match(buffer, at):
                     self._held = buffer[at:]
                     break
