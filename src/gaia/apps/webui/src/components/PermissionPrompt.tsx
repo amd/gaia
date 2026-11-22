@@ -42,6 +42,21 @@ function shownField(key: string, text: string): { shown: string; coded: boolean 
     return { shown: visibleStrict(text), coded: unseenStrict(text) };
 }
 
+/** Keys the card reads as a name or a command — `summarize`'s list, an id, and the folder a risk note names. */
+const NAME_LIKE_ARGS = new Set(['command', 'file_path', 'path', 'url', '_site', 'name', 'id', 'working_directory']);
+
+/**
+ * Argument values as the main field shows them: each name-like one marked with that
+ * field's rule, so the expanded view reads like the card above it. The rest — code,
+ * prose, the approved-exact text — stay as written for the prose pass over the JSON.
+ */
+function shownArgs(args: Record<string, unknown>): Record<string, unknown> {
+    return Object.fromEntries(Object.entries(args).map(([key, value]) => [
+        key,
+        NAME_LIKE_ARGS.has(key) && typeof value === 'string' ? shownField(key, value).shown : value,
+    ]));
+}
+
 /** Tools whose relayed summary is a command and its risk note (`COMMAND_SUMMARY_TOOLS` in sse_translation.py). */
 const COMMAND_SUMMARY_TOOLS = new Set(['run_shell_command', 'wait_for_condition']);
 
@@ -404,7 +419,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                         <ChevronRight size={13} className={showArgs ? 'is-open' : ''} aria-hidden="true" />
                         {t(fileChange(args) ? 'prompt.technicalDetails' : 'prompt.details')}
                     </button>
-                    {showArgs && <pre dir="ltr" className="perm-card-pre">{visibleText(JSON.stringify(detailArgs, null, 2), true)}</pre>}
+                    {showArgs && <pre dir="ltr" className="perm-card-pre">{visibleText(JSON.stringify(shownArgs(detailArgs), null, 2), true)}</pre>}
                 </div>
             )}
             {suggestAlways && !expired && (

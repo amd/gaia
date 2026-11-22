@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionPrompt } from '../PermissionPrompt';
 import { visibleCommand, visibleStrict, visibleText } from '../CalendarApproval';
@@ -86,5 +86,32 @@ describe('a name on an approval card shows every character that could pass it of
 describe('the name rule matches the Python agent', () => {
     it.each(parity.map((c) => [JSON.stringify(c.input), c] as const))('shows %s as visible_strict does', (_label, { input, shown }) => {
         expect(visibleStrict(input)).toBe(shown);
+    });
+});
+
+describe('the expanded arguments view marks name-like args like the main field', () => {
+    it('codes a joiner in a file path, while prose stays as written', () => {
+        const prose = '\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645';
+        useNotificationStore.getState().addNotification(request({
+            tool: 'write_file',
+            toolArgs: { file_path: '/home/u/inv\u200doice.txt', content: prose },
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        const main = document.querySelector('.perm-card-detail code')?.textContent;
+        expect(main).toBe('/home/u/inv[U+200D]oice.txt');
+        fireEvent.click(screen.getByRole('button', { name: 'Technical details' }));
+        const shown = document.querySelector('.perm-card-args pre')?.textContent ?? '';
+        expect(shown).toContain('/home/u/inv[U+200D]oice.txt');
+        expect(shown).toContain(prose);
+    });
+
+    it('codes a joiner in a command, while its line breaks and tabs keep their layout', () => {
+        useNotificationStore.getState().addNotification(request({
+            toolArgs: { command: 'echo a\n\tgi\u200ct log' },
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+        const shown = document.querySelector('.perm-card-args pre')?.textContent ?? '';
+        expect(shown).toContain('echo a\\n\\tgi[U+200C]t log');
     });
 });
