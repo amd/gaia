@@ -254,6 +254,8 @@ def agent(tmp_path, monkeypatch):
     agent.write_fails = False
     agent.streaming = False
     agent._tool_requires_confirmation = lambda *a, **kw: False
+    # The provider label has its own tests (test_model_service_label.py).
+    agent._model_service_label = lambda: None
     agent.console = MagicMock()
     agent.console.cancelled = None
     yield agent
