@@ -1064,6 +1064,259 @@ std::optional<std::string> GaiaAgent::announcedStepNote(const std::string& answe
     return std::nullopt;
 }
 
+namespace {
+const std::regex& testFailureWords() {
+    // A count of failures, a failure verb, or "do not pass"; not "the failing test" (what was fixed).
+    static const std::regex r(
+        R"(\b\d+\s+(?:[\w-]+\s+){0,2}?(?:fail(?:s|ed|ing|ures?)?|errors?|errored|broken)\b)"
+        R"(|\bfail(?:s|ed)?\b)"
+        R"(|\bfailing\b(?!\s+(?:[\w-]+\s+)?(?:tests?|cases?|specs?|checks?|ones?|assertions?|suites?)\b))"
+        R"(|\b(?:do|does|did|is|are|was|were)\s*(?:not|n't|\s+not)\s+(?:(?:yet|still|all|even)\s+)*pass(?:es|ed|ing)?\b)"
+        R"(|\bnot\s+(?:(?:yet|all)\s+)?pass(?:ing|ed)?\b)",
+        std::regex::icase);
+    return r;
+}
+
+// "52 passed, 0 failed" and "no failures" belong to a pass report.
+std::string withoutZeroFailures(const std::string& text) {
+    static const std::regex zero(
+        R"(\b(?:0|no|zero|none|nothing)\s+(?:[\w-]+\s+)?(?:fail(?:s|ed|ures?)?|errors?|errored)\b)"
+        R"(|\bnone\s+of\s+(?:the\s+)?(?:[\w-]+\s+){0,2}?fail(?:s|ed|ing)?\b|\bwithout\s+(?:any\s+)?(?:failures?|errors?)\b)",
+        std::regex::icase);
+    return std::regex_replace(text, zero, " ");
+}
+
+bool reportsTestFailure(const std::string& text) {
+    return std::regex_search(withoutZeroFailures(text), testFailureWords());
+}
+
+// The words of the answer's first report that tests ran and passed, or "" when it makes none.
+// Sentence by sentence and clause by clause, as the Python agent reads it: a negation or a
+// piece of advice ("run pytest to confirm the tests pass") only covers its own clause, and a
+// sentence that also reports a failure is an honest mixed report.
+std::string passingTestClaim(const std::string& answer) {
+    static const std::regex claim(
+        R"(\b(?:\d+\s+(?:(?:sub)?tests?\s+pass(?:es|ed|ing)?|pass(?:ed|ing)))"
+        R"(|(?:sub)?tests?(?:\s+(?:in|for|of)\s+\S+)?\s+(?:suite\s+)?)"
+        R"((?:(?:are|is|all|now|still|were|have|has|both|each|successfully)\s+)*(?:pass(?:es|ed|ing)?|green))"
+        R"(|(?:test\s+)?suite\s+(?:is\s+)?(?:green|pass(?:es|ed|ing)?))"
+        R"(|everything\s+pass(?:es|ed|ing)?)"
+        R"(|tests?\s+(?:were|was)\s+run\s+and\s+pass(?:ed)?)"
+        R"(|(?:ran|running|run)\s+the\s+tests?\s+successfully))"
+        R"(\b)",
+        std::regex::icase);
+    static const std::regex negation(
+        R"(n't\b|n’t\b|\b(?:not|never|unable|could ?not|fail(?:s|ed|ing)?|except|unverified|did ?not|without running|but)\b)",
+        std::regex::icase);
+    static const std::regex advice(
+        R"(\b(?:should|would|could|must|please|recommend|suggests?|consider|expect|try|once|if|before|need to|)"
+        R"(make sure|ensure|to (?:confirm|verify|check|ensure|see))\b)",
+        std::regex::icase);
+    static const std::regex sentenceBreak(R"((?:[.!?](?:\s+|$))|\n+)");
+    static const std::regex contrast(R"(;|\s(?:—|–|-)\s|\b(?:but|however|though|whereas)\b)", std::regex::icase);
+    for (std::sregex_token_iterator s(answer.begin(), answer.end(), sentenceBreak, -1), end; s != end; ++s) {
+        const std::string sentence = *s;
+        if (reportsTestFailure(sentence)) continue;
+        const std::string cleaned = withoutZeroFailures(sentence);
+        for (std::sregex_token_iterator c(cleaned.begin(), cleaned.end(), contrast, -1); c != end; ++c) {
+            const std::string clause = *c;
+            std::smatch m;
+            if (!std::regex_search(clause, m, claim) || std::regex_search(clause, negation)) continue;
+            // Advice is judged on the part of the clause the claim sits in: "Ensure the suite is green: all tests pass".
+            const std::string before = clause.substr(0, static_cast<size_t>(m.position(0)));
+            std::string part = clause.substr(static_cast<size_t>(m.position(0)));
+            const size_t brk = before.find_last_of(":;");
+            const std::string lead = brk == std::string::npos ? before : before.substr(brk + 1);
+            const size_t tail = part.find_first_of(":;");
+            if (tail != std::string::npos) part.resize(tail);
+            if (std::regex_search(lead + part, advice)) continue;
+            return m.str(0);
+        }
+    }
+    return "";
+}
+
+struct ShellRun {
+    std::optional<int> exitCode;
+    bool timedOut = false;
+    bool ran = false;  // false: refused or denied before it started
+    std::string text;  // stdout then stderr
+};
+
+ShellRun readShellRun(const std::string& output) {
+    ShellRun r;
+    const json j = json::parse(output, nullptr, false);
+    if (j.is_object()) {
+        if (j.contains("exit_code") && j["exit_code"].is_number_integer()) r.exitCode = j["exit_code"].get<int>();
+        r.timedOut = j.value("timed_out", false) == true || j.value("cancelled", false) == true;
+        // A call refused or denied before it started has no exit code.
+        r.ran = r.exitCode.has_value() && !(j.contains("executed") && j["executed"] == false);
+        for (const char* key : {"stdout", "stderr", "output", "error"}) {
+            if (j.contains(key) && j[key].is_string()) r.text += j[key].get<std::string>() + "\n";
+        }
+        return r;
+    }
+    // Clipped past the end of the JSON: the sorted keys put exit_code before the output.
+    static const std::regex exitCode(R"("exit_code":(-?\d+))");
+    std::smatch m;
+    if (std::regex_search(output, m, exitCode)) r.exitCode = std::stoi(m[1].str());
+    r.timedOut = output.find("\"timed_out\":true") != std::string::npos;
+    r.ran = r.exitCode.has_value() && output.find("\"executed\":false") == std::string::npos;
+    for (size_t i = 0; i < output.size(); ++i) {
+        if (output[i] == '\\' && i + 1 < output.size() && output[i + 1] == 'n') {
+            r.text += '\n';
+            ++i;
+        } else {
+            r.text += output[i];
+        }
+    }
+    return r;
+}
+
+// What a test runner's own summary lines say: whether any test ran, and whether any failed.
+struct RunnerSummary {
+    bool found = false;
+    bool ran = false;
+    bool failed = false;
+};
+
+RunnerSummary readRunnerSummary(const std::string& text) {
+    static const std::regex ansi("\x1b\\[[0-9;]*m");
+    static const std::regex pytest(
+        R"(=*[ \t]*(?:\d+ (?:subtests? )?(?:passed|failed|error|errors|skipped|deselected|xfailed|xpassed|warning|warnings)(?:, )?)+ in \d+(?:\.\d+)?s(?: \(.*\))?[ \t]*=*)");
+    static const std::regex pytestRan(R"(\b[1-9]\d* (?:subtests? )?(?:passed|failed|error|errors|xfailed|xpassed)\b)");
+    static const std::regex unittestRan(R"(Ran (\d+) tests? in \d+(?:\.\d+)?s)");
+    static const std::regex unittestVerdict(R"((?:OK(?: \(.*\))?|FAILED \(.*\)))");
+    static const std::regex jest(R"([ \t]*Tests:[ \t]+(?:\d+ (?:failed|passed|skipped|todo|total)(?:, )?)+[ \t]*)");
+    static const std::regex vitest(R"([ \t]*Tests[ \t]+(?:\d+ (?:failed|passed|skipped|todo)(?: \| )?)+ \(\d+\)[ \t]*)");
+    static const std::regex mocha(R"([ \t]*(\d+) (passing|failing)(?: \(\d+(?:\.\d+)?m?s\))?[ \t]*)");
+    static const std::regex go(
+        R"((ok|FAIL)[ \t]+\S+(?:[ \t]+(?:\(cached\)|\d+(?:\.\d+)?s)(?:[ \t]+\[[^\]\n]*\])?|[ \t]+\[[^\]\n]*\])(?:[ \t]+coverage:.*)?[ \t]*)");
+    static const std::regex cargo(
+        R"(test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; \d+ ignored; \d+ measured; \d+ filtered out(?:; finished in \d+(?:\.\d+)?s)?[ \t]*)");
+    static const std::regex counted(R"(\b[1-9]\d* (?:passed|failed|passing|failing)\b)");
+    static const std::regex failure(R"(\b[1-9]\d* (?:subtests? )?(?:failed|error|errors|failing)\b|\bFAILED \()");
+
+    std::vector<std::string> lines;
+    {
+        std::istringstream in(std::regex_replace(text, ansi, ""));
+        for (std::string l; std::getline(in, l);) {
+            if (!l.empty() && l.back() == '\r') l.pop_back();
+            lines.push_back(l);
+        }
+    }
+    RunnerSummary s;
+    auto note = [&s](bool ran, bool failed) {
+        s.found = true;
+        s.ran = s.ran || ran;
+        s.failed = s.failed || failed;
+    };
+    std::smatch m;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const std::string& line = lines[i];
+        if (line.size() > 2000) continue;  // a summary is one short line
+        if (std::regex_match(line, pytest)) {
+            note(std::regex_search(line, pytestRan), std::regex_search(line, failure));
+        } else if (std::regex_match(line, m, unittestRan)) {
+            size_t next = i + 1;
+            while (next < lines.size() && lines[next].find_first_not_of(" \t") == std::string::npos) ++next;
+            if (next < lines.size() && std::regex_match(lines[next], unittestVerdict)) {
+                note(m[1].str() != "0", lines[next].rfind("FAILED", 0) == 0);
+            } else if (m[1].str() == "0") {
+                note(false, false);
+            }
+        } else if (std::regex_match(line, jest) || std::regex_match(line, vitest)) {
+            note(std::regex_search(line, counted), std::regex_search(line, failure));
+        } else if (std::regex_match(line, m, mocha)) {
+            note(m[1].str() != "0", m[2].str() == "failing" && m[1].str() != "0");
+        } else if (std::regex_match(line, m, go)) {
+            note(line.find("[no tests to run]") == std::string::npos, m[1].str() == "FAIL");
+        } else if (std::regex_match(line, m, cargo)) {
+            note(m[1].str() != "0" || m[2].str() != "0", m[2].str() != "0");
+        }
+    }
+    // A runner that found nothing to run says so in its own words.
+    static const std::regex nothing(
+        R"(no tests ran|collected 0 items|Ran 0 tests|\[no test files\]|No tests found|no test specified|0 passing)",
+        std::regex::icase);
+    if (!s.ran && std::regex_search(text, nothing)) s.found = true;
+    return s;
+}
+
+// A command that starts a test runner: pytest, python -m unittest, npm test, go test, ctest...
+bool namesTestRunner(const std::string& command) {
+    static const std::regex runner(
+        R"((?:^|[\s;&|(`/\\])(?:pytest|py\.test|tox|nox|ctest|jest|vitest|mocha|nose2|phpunit|rspec)(?:\.exe|\.cmd)?(?=[\s;&|)`]|$))"
+        R"(|(?:^|[\s;&|(`/\\])(?:python[0-9.]*|py)(?:\.exe)?\s+(?:-\S+\s+)*-m\s*(?:pytest|unittest)\b)"
+        R"(|\b(?:npm|yarn|pnpm|bun)(?:\.cmd)?\s+(?:run\s+)?test\b|\bnpx\s+(?:jest|vitest|mocha)\b)"
+        R"(|\b(?:go|cargo|dotnet|deno|swift)\s+test\b|\b(?:mvn|mvnw)\s+(?:\S+\s+)*(?:test|verify)\b)"
+        R"(|\bgradlew?(?:\.bat)?\s+(?:\S+\s+)*(?:test|check)\b|\bmake\s+(?:test|check)\b)"
+        R"(|\b(?:uv|poetry|pipenv|hatch|pdm)\s+run\s+(?:\S+\s+)*?(?:pytest|python\s+-m\s+(?:pytest|unittest))\b)",
+        std::regex::icase);
+    return std::regex_search(command, runner);
+}
+
+// A write a test run could depend on; docs and notes leave an earlier run standing.
+bool changesCode(const GaiaAgent::CallSeen& c) {
+    if ((c.name != "file_write" && c.name != "file_edit") || !c.succeeded) return false;
+    if (!c.args.is_object() || !c.args.contains("path") || !c.args["path"].is_string()) return true;
+    static const std::regex doc(R"((?:^|[/\\])(?:README|CHANGELOG|LICENSE)[^/\\]*$|\.(?:md|mdx|rst|txt)$)",
+                                std::regex::icase);
+    return !std::regex_search(c.args["path"].get<std::string>(), doc);
+}
+}  // namespace
+
+std::optional<std::pair<std::string, std::string>> GaiaAgent::unsupportedTestClaim(const std::string& answer,
+                                                                                    const std::vector<CallSeen>& calls) {
+    const std::string claim = passingTestClaim(answer);
+    if (claim.empty()) return std::nullopt;
+    struct Run {
+        size_t at;
+        bool passed;
+    };
+    std::vector<std::pair<std::string, Run>> latest;  // by command: a rerun replaces the run before it
+    size_t lastChange = 0;
+    bool changed = false;
+    for (size_t i = 0; i < calls.size(); ++i) {
+        const CallSeen& c = calls[i];
+        if (changesCode(c)) {
+            lastChange = i;
+            changed = true;
+        }
+        if (c.name != "bash_execute" || !c.args.is_object() || !c.args.contains("command") ||
+            !c.args["command"].is_string()) {
+            continue;
+        }
+        const ShellRun run = readShellRun(c.output);
+        if (!run.ran) continue;
+        const std::string command = c.args["command"].get<std::string>();
+        const RunnerSummary summary = readRunnerSummary(run.text);
+        // `python test_x.py` with no main block exits 0 and prints nothing: not a test run.
+        if (!namesTestRunner(command) && !(summary.found && summary.ran)) continue;
+        const bool passed = c.succeeded && run.exitCode.value_or(0) == 0 && !run.timedOut && !summary.failed &&
+                            (!summary.found || summary.ran);
+        auto same = std::find_if(latest.begin(), latest.end(), [&](const auto& e) { return e.first == command; });
+        if (same != latest.end()) same->second = {i, passed};
+        else latest.push_back({command, {i, passed}});
+    }
+    if (latest.empty()) return std::make_pair(claim, std::string("no tests were run this turn"));
+    bool anyPassed = false, passedAfterChange = false;
+    for (const auto& [command, run] : latest) {
+        if (!run.passed) continue;
+        anyPassed = true;
+        if (!changed || run.at > lastChange) passedAfterChange = true;
+    }
+    if (!anyPassed) {
+        // "52 tests pass. 3 fail." after a failed run is the run reported honestly.
+        if (reportsTestFailure(answer)) return std::nullopt;
+        return std::make_pair(claim, std::string("the tests run this turn didn't pass"));
+    }
+    if (!passedAfterChange) {
+        return std::make_pair(claim, std::string("the tests ran before the last change, so they don't cover it"));
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> GaiaAgent::failedScriptNote(const std::string& answer, const std::vector<CallSeen>& calls) {
     static const std::regex missingModule(R"(ModuleNotFoundError|No module named|ImportError)");
     static const std::regex input(R"(\.(?:csv|tsv|json|xlsx?|py)\b)", std::regex::icase);
@@ -1694,6 +1947,16 @@ std::optional<std::string> GaiaAgent::unresolvedClaims(const std::string& answer
     return reviewAnswer(reviewedPart(answer), true);
 }
 
+std::optional<std::string> GaiaAgent::unconfirmedClaims(const std::string& answer) {
+    std::vector<CallSeen> seen;
+    for (const auto& c : turnToolCalls()) seen.push_back({c.name, c.args, c.output, c.succeeded});
+    const auto test = unsupportedTestClaim(reviewedPart(answer), seen);
+    if (!test) return std::nullopt;
+    std::string why = test->second;
+    why[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(why[0])));
+    return "I couldn't confirm all of this:\n\n- " + why + ".";
+}
+
 std::optional<std::string> GaiaAgent::announcedStepNote(const std::string& answer) {
     if (asksForNoAction(turnRequest())) return std::nullopt;
     std::vector<CallSeen> seen;
@@ -1845,11 +2108,19 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         });
     };
 
+    std::vector<CallSeen> seen;
+    for (const auto& c : calls) seen.push_back({c.name, c.args, c.output, c.succeeded});
+    const auto testClaim = unsupportedTestClaim(answer, seen);
+    if (testClaim) {
+        notes.push_back("Your answer says \"" + testClaim->first + "\", but " + testClaim->second +
+                        ". Either run the tests now with the project's test runner (for example `python -m "
+                        "pytest`), or drop the claim. Then give your complete answer again: it replaces the one "
+                        "above, which the user will not see.");
+    }
     static const std::regex ranClaim(
-        R"(\b(I ran|I've run|I have run|ran the (tests?|script|command|program|code)|executed the|)"
-        R"(tests? (all )?pass(ed|es)?|all \d+ tests pass))",
+        R"(\b(I ran|I've run|I have run|ran the (tests?|script|command|program|code)|executed the))",
         std::regex::icase);
-    if (std::regex_search(answer, ranClaim) && !called({"bash_execute"}, true)) {
+    if (!testClaim && std::regex_search(answer, ranClaim) && !called({"bash_execute"}, true)) {
         notes.push_back("Your answer says a command or the tests ran, but no command ran "
                         "successfully in this request. Run it, or say it wasn't run.");
     }

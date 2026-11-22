@@ -233,6 +233,20 @@ TEST_F(GaiacppCli, ATurnThatRanOutOfStepsWithAnAnswerIsIncompleteAndExitsOne) {
     EXPECT_EQ(out["result"], "all read");
 }
 
+TEST_F(GaiacppCli, ATestsPassClaimNoTestRunBacksIsCaveatedAndTheRunIsIncomplete) {
+    bench::MockLlmServer mock;
+    // The command runs, but it is no test run: what Gemma-4-E4B did with `python test_stats.py`.
+    mock.pushResponse(withUsage(toolCall("bash_execute", R"({"command":"echo checked"})"), 100, 0, 5));
+    mock.pushResponse(withUsage(finalAnswer("Fixed it. All 4 tests pass."), 120, 0, 9));
+    mock.pushResponse(withUsage(finalAnswer("Fixed it. All 4 tests pass."), 140, 0, 9));
+    const gaia::ProcessResult r = run(mock, "", " --dangerously-skip-permissions");
+    EXPECT_EQ(r.exitCode, 1) << r.stderr_output;
+    const json out = json::parse(r.stdout_output);
+    EXPECT_EQ(out["status"], "incomplete") << out.dump();
+    EXPECT_EQ(out["result"], "Fixed it. All 4 tests pass.\n\nI couldn't confirm all of this:\n\n- No tests were run this turn.");
+    ASSERT_EQ(mock.requestCount(), 3) << "sent back once, then caveated";
+}
+
 TEST_F(GaiacppCli, ALoopTheModelThenAnswersFromIsASuccessAndExitsZero) {
     bench::MockLlmServer mock;
     for (int i = 0; i < 8; ++i) {

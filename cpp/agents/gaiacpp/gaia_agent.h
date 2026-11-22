@@ -77,6 +77,7 @@ protected:
     /// Sends an answer back once when it says a file was saved that doesn't exist.
     std::optional<std::string> reviewFinalAnswer(const std::string& answer) override;
     std::optional<std::string> unresolvedClaims(const std::string& answer) override;
+    std::optional<std::string> unconfirmedClaims(const std::string& answer) override;
     std::optional<std::string> announcedStepNote(const std::string& answer) override;
 
     /// Lists the working folder once, so every model call of the turn shows it as it began.
@@ -96,7 +97,16 @@ public:
         std::string name;
         json args;
         std::string output;  // what the tool returned, clipped
+        bool succeeded = true;
     };
+
+    /// Why the turn's record doesn't back the answer's report that tests passed: no test
+    /// ran, the latest run of each failed, or every passing run came before a file change.
+    /// `first` is the claim as worded, `second` the reason. nullopt when there is no such
+    /// claim, or a test run passed after the last change. A command counts as a test run
+    /// when it names a runner or its output holds a runner's summary.
+    static std::optional<std::pair<std::string, std::string>> unsupportedTestClaim(
+        const std::string& answer, const std::vector<CallSeen>& calls);
 
     /// A file or page the turn read holds text addressed to an AI assistant, and
     /// the answer doesn't tell the user about it.
