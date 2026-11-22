@@ -7,6 +7,12 @@ Server. GAIA records the microphone, sends each utterance to
 `/api/v1/audio/transcriptions`, and plays what `/api/v1/audio/speech` returns.
 There is no local speech model and no fallback to one.
 
+Voice output is offered only on the platforms in
+`GaiaConfig.TESTED_SPEECH_OUTPUT_PLATFORMS` (Windows and Linux); elsewhere
+every speech call raises `SpeechUnavailableError` before reaching Lemonade, so
+use `gaia talk --no-tts`. Speech under a quarter of the time its text needs at
+3 words a second is refused as cut off (`check_speech_length`).
+
 ## Quick Diagnostics
 
 ### Test Live Transcription

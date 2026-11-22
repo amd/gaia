@@ -68,14 +68,14 @@ class QueryOutcome:
     usage: Optional[Dict[str, Any]] = None
     # The turn's model messages; the agent sends them only when ``turns`` was sent.
     model_messages: Optional[List[Dict[str, Any]]] = None
-    # The run's time limit stopped the turn (contract >= 2.31).
+    # The run's time limit stopped the turn (contract >= 2.32).
     time_limit_reached: bool = False
-    # Tools the run's restrictions withheld (contract >= 2.31).
+    # Tools the run's restrictions withheld (contract >= 2.32).
     withheld_tools: Optional[List[str]] = None
 
 
 #: The flagship contract that applies the one-shot run fields below.
-RUN_SCOPED_MIN_API = (2, 31)
+RUN_SCOPED_MIN_API = (2, 32)
 
 #: ``run_query`` keyword -> the ``gaia -p`` flag that asks for it.
 RUN_SCOPED_FLAGS = {
@@ -402,7 +402,7 @@ def run_query(
 
     ``time_limit``, ``disallowed_tools``, ``no_web``, ``no_skills``,
     ``skip_permissions`` and ``full_access`` are the ``gaia -p`` flags, applied
-    by the agent to this one run (contract >= 2.31). They need a one-shot run
+    by the agent to this one run (contract >= 2.32). They need a one-shot run
     (no ``session_id``), and an agent that predates them is refused with a
     :class:`DaemonError` before the turn starts, never run without them.
 

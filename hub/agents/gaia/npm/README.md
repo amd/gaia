@@ -254,7 +254,7 @@ turn. Post it only once `/query` has answered: before then the turn's own
 `internet_off` replaces it, so re-read the switch at that point and post it if
 it changed. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
-**A scripted one-shot run? It takes the `gaia -p` flags** (contract ≥ 2.31):
+**A scripted one-shot run? It takes the `gaia -p` flags** (contract ≥ 2.32):
 `time_limit`, `disallowed_tools`, `no_web`, `no_skills`, `skip_permissions`
 and `full_access`, on a request with no `session_id`. They apply to that run
 only and are a `422` beside a `session_id`, so no chat inherits them; the two

@@ -254,5 +254,5 @@ def test_an_agent_too_old_for_the_flags_is_refused_before_the_turn(service, caps
     code = print_mode.run("q", model="m", time_limit=30)
     err = capsys.readouterr().err
     assert code == 1
-    assert "--time-limit" in err and "2.31" in err and "2.27" in err
+    assert "--time-limit" in err and "2.32" in err and "2.27" in err
     assert service.sent == []

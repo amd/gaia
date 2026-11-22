@@ -86,7 +86,7 @@ def _stub_daemon(monkeypatch, api_version):
 
 
 def test_run_scoped_flags_reach_the_request_on_a_new_enough_agent(monkeypatch):
-    sent = _stub_daemon(monkeypatch, "2.31")
+    sent = _stub_daemon(monkeypatch, "2.32")
     agent_query.run_query(
         "gaia",
         "q",
@@ -115,6 +115,23 @@ def test_an_agent_older_than_the_flags_is_refused_not_run_unrestricted(monkeypat
     assert sent == []
 
 
+@pytest.mark.parametrize("version", ["2.31", "2.3", "1.99", "garbage", ""])
+def test_an_agent_one_contract_short_is_refused(monkeypatch, version):
+    # 2.31 is session_created only; a 2.31 agent would ignore the flags.
+    sent = _stub_daemon(monkeypatch, version)
+    with pytest.raises(DaemonError, match="2.32"):
+        agent_query.run_query("gaia", "q", full_access=True)
+    assert sent == []
+
+
+@pytest.mark.parametrize("version", ["2.32", "2.40", "3.0"])
+def test_a_newer_agent_takes_the_flags(monkeypatch, version):
+    sent = _stub_daemon(monkeypatch, version)
+    agent_query.run_query("gaia", "q", time_limit=10)
+    [payload] = sent
+    assert payload["time_limit"] == 10
+
+
 def test_no_run_scoped_flag_means_no_version_check(monkeypatch):
     sent = _stub_daemon(monkeypatch, "2.27")
     agent_query.run_query("gaia", "q")
@@ -123,7 +140,7 @@ def test_no_run_scoped_flag_means_no_version_check(monkeypatch):
 
 
 def test_run_scoped_flags_are_refused_with_a_session(monkeypatch):
-    sent = _stub_daemon(monkeypatch, "2.31")
+    sent = _stub_daemon(monkeypatch, "2.32")
     with pytest.raises(ValueError, match="one run only"):
         agent_query.run_query("gaia", "q", session_id="chat-1", full_access=True)
     assert sent == []

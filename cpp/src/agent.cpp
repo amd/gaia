@@ -2060,13 +2060,22 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     };
     // The answer after a send-back is final; what it still gets wrong is told to the user.
     auto withUnresolved = [&](std::string answer) {
-        if (!answerSentBack) return answer;
-        const std::optional<std::string> still = unresolvedClaims(answer);
-        if (!still || still->empty()) return answer;
-        if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"unresolved", *still}});
+        std::string notes;
+        if (answerSentBack) {
+            const std::optional<std::string> still = unresolvedClaims(answer);
+            if (still && !still->empty()) notes = *still;
+        }
+        const std::optional<std::string> unconfirmed = unconfirmedClaims(answer);
+        if (unconfirmed && !unconfirmed->empty()) {
+            notes += (notes.empty() ? "" : "\n\n") + *unconfirmed;
+            // A result the turn never showed is not a finished task.
+            incomplete = true;
+        }
+        if (notes.empty()) return answer;
+        if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"unresolved", notes}});
         // Streamed text is already on screen; otherwise the note prints with the answer.
-        if (cfg.streaming && !cfg.structuredEvents) console_->printWarning(*still);
-        return answer + "\n\n" + *still;
+        if (cfg.streaming && !cfg.structuredEvents) console_->printWarning(notes);
+        return answer + "\n\n" + notes;
     };
 
     while (stepsTaken < stepsLimit && finalAnswer.empty()) {

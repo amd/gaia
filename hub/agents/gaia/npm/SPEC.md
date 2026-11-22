@@ -261,7 +261,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.31"`                  |
+| Contract version   | `API_VERSION = "2.32"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -315,7 +315,9 @@ the conversation's `search_web`, `fetch_page` and `download_file` results (a
 PDF counts once its downloaded file is read): a link that was never fetched, or that appears in
 no result at all, is sent back to the model once to fetch or drop. Links still
 unbacked after that are listed in the `final` answer under "I couldn't confirm
-all of this".
+all of this". An answer that cites nothing is sent back only when that turn
+fetched pages of its own, so a follow-up in a research chat that does a task
+(drafts a memo) answers with its own result.
 The agent needs `search_web` and `fetch_page` for it; a profile without them
 ends the turn with an `error` naming the missing tools. Any other `query` runs
 unchanged.
@@ -437,7 +439,7 @@ TUI. With `"cli"`, a gated tool refused on a run nobody can answer names the
 `gaia -p` flag that allows it (`--dangerously-skip-permissions`, or
 `--full-access` for a path outside the run's scope).
 
-**One-shot run fields** (contract ≥ 2.31) are the `gaia -p` flags, for a
+**One-shot run fields** (contract ≥ 2.32) are the `gaia -p` flags, for a
 request with no `session_id`; with one they are a `422`, so none of them can
 outlive the run or reach a chat. `time_limit` (seconds, ≥ 1) gives the turn a
 wall-clock budget: the agent wraps up before it, a stop ends the turn at it,
@@ -450,7 +452,7 @@ the shell guardrails still on and out-of-scope paths still refused;
 `full_access` also lifts the guardrails and grants out-of-scope paths. Both need
 an authenticated caller (§5.4, a `403` otherwise), apply to this run's handler
 only, and are logged. A chat's full access is the session bypass route.
-Pre-2.31 binaries `422` the fields; the native harness ignores them, so check
+Pre-2.32 binaries `422` the fields; the native harness ignores them, so check
 `/version` and refuse the run on an older one rather than run it unrestricted.
 
 `turns` (contract ≥ 2.25) is the conversation so far as the model saw it,
@@ -618,7 +620,7 @@ server, not the provider. Offer to start the server. Older binaries never send
 A one-shot run's `final` carries `time_limit_reached: true` when its
 `time_limit` stopped the turn (treat the answer as incomplete), and
 `withheld_tools` when `disallowed_tools`, `no_web` or `no_skills` withheld any
-(contract ≥ 2.31).
+(contract ≥ 2.32).
 
 #### The "not confirmed" note on `final.answer`
 
@@ -917,7 +919,8 @@ conditions and several lines all run. No working folder, `cd`, path argument,
 link, credential file, package install or address is refused, the shell rate
 limit is dropped, and `run_python` / `execute_python_file` run their code
 unchecked. A refusal GAIA made by itself is not kept against later calls. What
-still holds: a call the user declined stays declined for that request, calendar
+still holds: a call the user declined stays declined (that exact call for the
+rest of the chat, another route to it for that request), calendar
 changes and outgoing mail wait for a person, and a program that is not
 installed fails with the shell's own error. Without full access those commands
 ask the user once, or are refused on a run nobody can answer.

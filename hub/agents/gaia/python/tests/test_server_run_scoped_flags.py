@@ -1,6 +1,6 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""``/query``'s run-scoped fields (contract 2.31): the ``gaia -p`` flags.
+"""``/query``'s run-scoped fields (contract 2.32): the ``gaia -p`` flags.
 
 On an installed GAIA, ``gaia -p`` runs its turn on this sidecar. These drive
 the real app with a scripted agent and check each flag's effect on the run, not
@@ -162,7 +162,7 @@ _WRITE = ("write_file", {"file_path": "/tmp/greeting.txt", "content": "hi"})
 
 def test_the_contract_advertises_the_run_scoped_fields():
     major, minor = (int(x) for x in server_mod.API_VERSION.split(".")[:2])
-    assert (major, minor) >= (2, 31)
+    assert (major, minor) >= (2, 32)
     for field in server_mod.RUN_SCOPED_FIELDS:
         assert field in server_mod.QueryRequest.model_fields
 

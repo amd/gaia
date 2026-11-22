@@ -112,10 +112,12 @@ AGENT_ID = "gaia"
 #: ``turns``: the turn's first call is measured before the answer streams.
 #: 2.29 added ``final.route``: the model a ``hybrid`` session's turn ran on.
 #: 2.30 added ``DELETE /sessions/{id}``: end a session and stop its MCP servers.
-#: 2.31 added ``/query``'s one-shot ``time_limit``, ``disallowed_tools``,
+#: 2.31 added ``session_created`` on ``final``/``error``: the sidecar rebuilt
+#: this turn's agent (eviction, restart, or first use).
+#: 2.32 added ``/query``'s one-shot ``time_limit``, ``disallowed_tools``,
 #: ``no_web``, ``no_skills``, ``skip_permissions`` and ``full_access`` (the
 #: ``gaia -p`` flags), and ``final.time_limit_reached`` / ``withheld_tools``.
-API_VERSION = "2.31"
+API_VERSION = "2.32"
 
 #: ``/query`` fields that apply to one run only, so a request with a
 #: ``session_id`` may not carry them: they must never outlive that run.
@@ -410,7 +412,7 @@ class QueryRequest(_Strict):
         default=None,
         ge=1,
         description=(
-            "Seconds this one-shot run may take (contract >= 2.31), as `gaia -p "
+            "Seconds this one-shot run may take (contract >= 2.32), as `gaia -p "
             "--time-limit`: the agent wraps up before it, a stop ends the turn "
             "at it, and a model call still running a few seconds later is "
             "abandoned. `final.time_limit_reached` is true when it stopped the "
@@ -421,7 +423,7 @@ class QueryRequest(_Strict):
         default=None,
         description=(
             "Tool-name globs this one-shot run never offers or runs (contract "
-            ">= 2.31), as `gaia -p --disallowed-tools`. A glob that matches no "
+            ">= 2.32), as `gaia -p --disallowed-tools`. A glob that matches no "
             "tool is a 400. `final.withheld_tools` lists what was withheld. "
             "Needs a request with no session_id."
         ),
@@ -431,14 +433,14 @@ class QueryRequest(_Strict):
         description=(
             "Withhold GAIA's web search, fetch, browser and download tools for "
             "this one-shot run and tell the model web access is off (contract "
-            ">= 2.31), as `gaia -p --no-web`. Needs a request with no session_id."
+            ">= 2.32), as `gaia -p --no-web`. Needs a request with no session_id."
         ),
     )
     no_skills: bool = Field(
         default=False,
         description=(
             "Run this one-shot with no skills: none suggested, found, loaded or "
-            "learned (contract >= 2.31), as `gaia -p --no-skills`. Needs a "
+            "learned (contract >= 2.32), as `gaia -p --no-skills`. Needs a "
             "request with no session_id."
         ),
     )
@@ -446,7 +448,7 @@ class QueryRequest(_Strict):
         default=False,
         description=(
             "Run confirmation-gated tools in this one-shot run without asking "
-            "(contract >= 2.31), as `gaia -p --dangerously-skip-permissions`. "
+            "(contract >= 2.32), as `gaia -p --dangerously-skip-permissions`. "
             "The shell guardrails stay on and paths outside the run's scope are "
             "still refused. Applies to this run only; needs a request with no "
             "session_id."
@@ -455,7 +457,7 @@ class QueryRequest(_Strict):
     full_access: bool = Field(
         default=False,
         description=(
-            "Full access for this one-shot run (contract >= 2.31), as `gaia -p "
+            "Full access for this one-shot run (contract >= 2.32), as `gaia -p "
             "--full-access`: gated tools run without asking, the shell "
             "guardrails are off, and paths outside the run's scope are granted. "
             "Applies to this run only; needs a request with no session_id. A "
@@ -480,7 +482,7 @@ class QueryRequest(_Strict):
             raise ValueError(
                 f"{', '.join(sent)} apply to one run only, so they need a one-shot "
                 "request: drop session_id. A chat's full access is "
-                "/sessions/{id}/bypass (contract >= 2.31)."
+                "/sessions/{id}/bypass (contract >= 2.32)."
             )
         return self
 
@@ -1394,7 +1396,7 @@ def _abandoned_final(run: "_QueryRun") -> Dict[str, Any]:
 async def _with_run_limits(
     final: Dict[str, Any], run: "_QueryRun", thread: threading.Thread, timed: bool
 ) -> Dict[str, Any]:
-    """*final* saying what this run's flags did (contract >= 2.31)."""
+    """*final* saying what this run's flags did (contract >= 2.32)."""
     if final.get("type") != "final":
         return final
     if run.withheld:
@@ -2019,6 +2021,10 @@ async def query(request: QueryRequest):
     # one-shot run's own skip_permissions/full_access, applied below, lift it.
     handler.full_access = False
     session = None
+    #: Whether this turn's session handle was just built fresh (eviction,
+    #: restart, or first use) rather than found live. Carried on ``final``
+    #: so the client drops any state it kept past the old agent's lifetime.
+    session_created = False
     #: Set only on the one-shot path. A session agent belongs to the registry
     #: and must never be closed here.
     one_shot_agent: Optional[Any] = None
@@ -2147,6 +2153,10 @@ async def query(request: QueryRequest):
             # fresh per turn, so without this both reset at every turn boundary
             # and the user is re-asked for a call they already approved.
             session.permissions.attach(handler)
+            if session.freshly_built:
+                # Consume once, same reason as reclaimed_after_eviction below.
+                session.freshly_built = False
+                session_created = True
             if session.reclaimed_after_eviction:
                 # Consume once: reset before the warning reaches the caller so
                 # a later turn on this same still-live session isn't re-warned.
@@ -2415,6 +2425,10 @@ async def query(request: QueryRequest):
 
     async def _with_context(final: Dict[str, Any]) -> Dict[str, Any]:
         """``final`` carrying the turn's context measurement (>= 2.21), timings and route."""
+        if session_created:
+            # On every terminal type, not just a successful final: the agent
+            # was built fresh for this turn regardless of how the turn ended.
+            final = {**final, "session_created": True}
         if final.get("type") != "final":
             return final
         final = await _with_run_limits(

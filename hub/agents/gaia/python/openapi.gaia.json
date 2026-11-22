@@ -276,7 +276,7 @@
                 "type": "null"
               }
             ],
-            "description": "Tool-name globs this one-shot run never offers or runs (contract >= 2.31), as `gaia -p --disallowed-tools`. A glob that matches no tool is a 400. `final.withheld_tools` lists what was withheld. Needs a request with no session_id.",
+            "description": "Tool-name globs this one-shot run never offers or runs (contract >= 2.32), as `gaia -p --disallowed-tools`. A glob that matches no tool is a 400. `final.withheld_tools` lists what was withheld. Needs a request with no session_id.",
             "title": "Disallowed Tools"
           },
           "documents": {
@@ -296,7 +296,7 @@
           },
           "full_access": {
             "default": false,
-            "description": "Full access for this one-shot run (contract >= 2.31), as `gaia -p --full-access`: gated tools run without asking, the shell guardrails are off, and paths outside the run's scope are granted. Applies to this run only; needs a request with no session_id. A chat's full access is /sessions/{id}/bypass.",
+            "description": "Full access for this one-shot run (contract >= 2.32), as `gaia -p --full-access`: gated tools run without asking, the shell guardrails are off, and paths outside the run's scope are granted. Applies to this run only; needs a request with no session_id. A chat's full access is /sessions/{id}/bypass.",
             "title": "Full Access",
             "type": "boolean"
           },
@@ -356,13 +356,13 @@
           },
           "no_skills": {
             "default": false,
-            "description": "Run this one-shot with no skills: none suggested, found, loaded or learned (contract >= 2.31), as `gaia -p --no-skills`. Needs a request with no session_id.",
+            "description": "Run this one-shot with no skills: none suggested, found, loaded or learned (contract >= 2.32), as `gaia -p --no-skills`. Needs a request with no session_id.",
             "title": "No Skills",
             "type": "boolean"
           },
           "no_web": {
             "default": false,
-            "description": "Withhold GAIA's web search, fetch, browser and download tools for this one-shot run and tell the model web access is off (contract >= 2.31), as `gaia -p --no-web`. Needs a request with no session_id.",
+            "description": "Withhold GAIA's web search, fetch, browser and download tools for this one-shot run and tell the model web access is off (contract >= 2.32), as `gaia -p --no-web`. Needs a request with no session_id.",
             "title": "No Web",
             "type": "boolean"
           },
@@ -409,7 +409,7 @@
           },
           "skip_permissions": {
             "default": false,
-            "description": "Run confirmation-gated tools in this one-shot run without asking (contract >= 2.31), as `gaia -p --dangerously-skip-permissions`. The shell guardrails stay on and paths outside the run's scope are still refused. Applies to this run only; needs a request with no session_id.",
+            "description": "Run confirmation-gated tools in this one-shot run without asking (contract >= 2.32), as `gaia -p --dangerously-skip-permissions`. The shell guardrails stay on and paths outside the run's scope are still refused. Applies to this run only; needs a request with no session_id.",
             "title": "Skip Permissions",
             "type": "boolean"
           },
@@ -440,7 +440,7 @@
                 "type": "null"
               }
             ],
-            "description": "Seconds this one-shot run may take (contract >= 2.31), as `gaia -p --time-limit`: the agent wraps up before it, a stop ends the turn at it, and a model call still running a few seconds later is abandoned. `final.time_limit_reached` is true when it stopped the turn. Needs a request with no session_id.",
+            "description": "Seconds this one-shot run may take (contract >= 2.32), as `gaia -p --time-limit`: the agent wraps up before it, a stop ends the turn at it, and a model call still running a few seconds later is abandoned. `final.time_limit_reached` is true when it stopped the turn. Needs a request with no session_id.",
             "title": "Time Limit"
           },
           "turns": {
@@ -720,7 +720,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.31"
+    "version": "2.32"
   },
   "openapi": "3.1.0",
   "paths": {
