@@ -37,21 +37,33 @@ function summarize(n: GaiaNotification): { key: string; text: string } {
 
 /** A command keeps its layout, a search query reads as prose, and anything else is a name. */
 function shownField(key: string, text: string): { shown: string; coded: boolean } {
-    if (key === 'command') return { shown: visibleCommand(text), coded: unseenCommand(text) };
+    if (COMMAND_ARG.test(key)) return { shown: visibleCommand(text), coded: unseenCommand(text) };
     if (key === 'query') return { shown: visibleText(text, true), coded: unseen(text) };
     return { shown: visibleStrict(text), coded: unseenStrict(text) };
 }
 
+/** Keys that hold a command, read with the command rule wherever they show. */
+const COMMAND_ARG = /^(command|cmd|argv)$/;
+
 /**
  * Keys read as a name or a command: `summarize`'s list less `query` (prose), plus any key
- * shaped like a path, folder, file, URL, name or id, so a tool's `output_path` or an MCP
- * server's `target_dir` gets the name rule without being listed by hand.
+ * shaped like a path, folder, file, URL, name, id or move end, so a tool's `output_path`
+ * or an MCP server's `destination` gets the name rule without being listed by hand.
  */
-const NAME_LIKE_ARG = /^(command|_site|uri)$|(^|_)(files?|urls?|ids?|cwds?)$|(paths?|dirs?|director(y|ies)|folders?|names?)$/;
+const NAME_LIKE_ARG = new RegExp(
+    '^(command|cmd|argv|_site|to|from|href)$'
+    + '|(^|_)(files?|urls?|uris?|ids?|guids?|uuids?|cwds?|src|dest|source|destination|target|location|branch|repo)$'
+    + '|(paths?|dirs?|director(y|ies)|folders?|names?)(_hint)?$',
+);
 
-/** Whether a key, snake_case or camelCase, names a thing rather than holding prose. */
+/** Whether a key, snake_case or camelCase (`baseURI`, `HTTPUrl`, `path2`), names a thing rather than holding prose. */
 function nameLikeArg(key: string): boolean {
-    return NAME_LIKE_ARG.test(key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase());
+    const snake = key
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .replace(/([A-Z])([A-Z][a-z])/g, '$1_$2')
+        .toLowerCase()
+        .replace(/\d+$/, '');
+    return NAME_LIKE_ARG.test(snake);
 }
 
 /**

@@ -135,6 +135,20 @@ describe('the expanded view finds name-like args by their key shape', () => {
         expect(expanded({ [key]: 'inv\u200doice.txt' })).toContain('inv[U+200D]oice.txt');
     });
 
+    it.each([
+        ['source'], ['destination'], ['target'], ['dest'], ['src'], ['to'], ['from'], ['href'], ['location'],
+        ['branch'], ['repo'], ['guid'], ['uuid'], ['path2'], ['baseURI'], ['HTTPUrl'], ['filename_hint'],
+    ])('codes a joiner in %s too', (key) => {
+        expect(expanded({ [key]: 'inv\u200doice.txt' })).toContain('inv[U+200D]oice.txt');
+    });
+
+    it.each([['cmd'], ['argv']])('reads %s with the command rule, keeping its layout', (key) => {
+        const value = key === 'argv' ? ['echo', 'a\n\tgi\u200ct'] : 'echo a\n\tgi\u200ct log';
+        const shown = expanded({ [key]: value });
+        expect(shown).toContain('a\\n\\tgi[U+200C]t');
+        expect(shown).not.toContain('[U+000A]');
+    });
+
     it('codes each entry of a list of paths', () => {
         const shown = expanded({ file_paths: ['a\u200d.txt', 'b\u200e.txt'], watch_directories: ['c\u200c'] });
         expect(shown).toContain('a[U+200D].txt');
