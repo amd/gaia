@@ -104,11 +104,7 @@ from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 # so the UI settings router shares it without depending on this wheel (#1102).
 from gaia.agents.base.script_preview import changed_script_refusal
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
-from gaia.agents.base.tool_loader import (
-    ToolLoader,
-    format_tool_docs,
-    thin_tool_schema,
-)
+from gaia.agents.base.tool_loader import ToolLoader, thin_tool_schema
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
@@ -150,11 +146,9 @@ from gaia.agents.tools.workspace_paths import (
     _workspace_target,
 )
 from gaia.env import child_env
-from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
 from gaia.llm.lemonade_client import (
     CONVERSATION_SLOT,
     FULL_TOOLS_SLOT,
-    _endpoint_label,
     configured_lemonade_url,
     resolve_default_chat_model,
     resolve_default_vision_model,
@@ -1142,7 +1136,6 @@ class ChatAgent(
         # fns are injected so the loader never imports MemoryMixin; they resolve
         # lazily, by which point init_memory() has probed the embedder.
         self._dynamic_tools_validated = False
-        self._tool_docs_sent: Set[str] = set()
         self._tool_searches = 0
         self.tool_loader = self._maybe_build_tool_loader()
 
@@ -1610,12 +1603,6 @@ class ChatAgent(
             getattr(self, "tool_loader", None) is not None and not self._hosted_model()
         )
 
-    def _tool_docs(self, names: List[str]) -> str:
-        """Render *names* as ``[Tool docs: ...]`` blocks and note them as sent."""
-        self._tool_docs_sent.update(names)
-        schemas = self._build_openai_tool_schemas(filter_to=names)
-        return "\n\n".join(format_tool_docs(schema) for schema in schemas)
-
     def _dynamic_tools_active(self) -> bool:
         """True when the tool list is the loader's to decide this turn.
 
@@ -1882,28 +1869,12 @@ class ChatAgent(
         }
 
     def _on_task_start(self, user_input: str) -> None:
-        """Docs go again each turn: a history trim may have dropped them."""
+        """The tool-search cap resets each turn; a new chat frees its slots."""
         super()._on_task_start(user_input)
-        self._tool_docs_sent.clear()
         self._tool_searches = 0
         if not getattr(self, "conversation_history", None):
             self._released_slots = frozenset()
             self._model_called = False
-
-    def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
-        """Answer a malformed call with the tool's full docs, once a turn.
-
-        The thin list carries parameter names but not how to fill them in.
-        """
-        result = super()._execute_tool(tool_name, tool_args)
-        if (
-            self._thin_tool_schemas()
-            and isinstance(result, dict)
-            and result.get("error_type") == "invalid_arguments"
-            and tool_name not in self._tool_docs_sent
-        ):
-            result = {**result, "tool_docs": self._tool_docs([tool_name])}
-        return result
 
     def _build_tool_selection_query(self, user_input: str) -> str:
         """Build the selection query: previous user message + current, last 4K chars.
@@ -1982,43 +1953,6 @@ class ChatAgent(
         origins = getattr(self, "_mixin_prompt_origins", {})
         return [p for p in prompts if origins.get(p) != "get_sd_system_prompt"]
 
-    def _inference_location(self) -> InferenceLocation:
-        """Where this session's chat turns are actually answered (#3674).
-
-        Reads the live client when there is one. During ``__init__`` the prompt
-        can be composed before ``AgentSDK`` exists (MCP registration rebuilds
-        it), and the same backend choice is already on the agent itself by
-        then; every later rebuild — including the one every model switch runs —
-        sees the client.
-        """
-        chat = getattr(self, "chat", None)
-        if chat is not None:
-            # The live client classifies better than the id prefix can: it
-            # holds the catalog metadata, so a cloud provider discovered at
-            # runtime is recognised too.
-            lookup = getattr(
-                getattr(chat, "llm_client", None), "cloud_model_provider", None
-            )
-            return resolve_inference_location(
-                chat.effective_model,
-                use_claude=bool(chat.config.use_claude),
-                cloud_provider_lookup=lookup if callable(lookup) else None,
-            )
-        # Pre-client: read the config the client is about to be built from —
-        # it carries the same three answers, including the Claude model id,
-        # which ``model_id`` does not.
-        config = getattr(self, "config", None)
-        use_claude = bool(getattr(config, "use_claude", False))
-        model = (
-            getattr(config, "claude_model", None)
-            if use_claude
-            else getattr(config, "model_id", None)
-        )
-        return resolve_inference_location(
-            model or resolve_default_chat_model(),
-            use_claude=use_claude,
-        )
-
     def _no_documents_message(self) -> str:
         # An Agent UI chat searches only its own attachments, not the library.
         if getattr(getattr(self, "config", None), "ui_session_id", None):
@@ -2030,24 +1964,6 @@ class ChatAgent(
                 "icon), or index a file they name by its path."
             )
         return super()._no_documents_message()
-
-    def _model_service_label(self) -> Optional[str]:
-        """Names the provider in a failed turn's message: "Fireworks AI: …"."""
-        location = self._inference_location()
-        if location.provider != "lemonade" or configured_lemonade_url() is None:
-            return location.display
-        # A base URL the user chose may be any OpenAI-compatible server.
-        live = getattr(
-            getattr(getattr(self, "chat", None), "llm_client", None),
-            "current_base_url",
-            None,
-        )
-        label = _endpoint_label(
-            live() if callable(live) else resolve_lemonade_base_url()
-        )
-        if not label:
-            return "The configured model server"
-        return f"The model server at {label}"
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
@@ -4558,6 +4474,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         except Exception as e:
             logger.error(f"Error saving session: {e}")
             return False
+
+    def close(self) -> None:
+        """Release watchers, HTTP sessions and SQLite handles now, then the base's."""
+        self.__del__()
+        super().close()
 
     def __del__(self):
         """Cleanup when agent is destroyed.

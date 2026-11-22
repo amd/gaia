@@ -42,6 +42,7 @@ from typing import (
     MutableMapping,
     Optional,
     Sequence,
+    Set,
     Tuple,
     Union,
 )
@@ -269,8 +270,9 @@ from gaia.utils.terminal import stdin_is_interactive
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
-    from gaia.agents.base.history import TurnMessages
+    from gaia.agents.base.history import SessionHistory, TurnMessages
     from gaia.connectors.providers.base import ConnectorRequirement
+    from gaia.llm.inference_location import InferenceLocation
     from gaia.skills import Skill, SkillManager, SkillSetResolution, SkillSets
     from gaia.skills.binaries import BinaryGrants
 
@@ -3504,6 +3506,94 @@ def _resolve_output_handles(agent, value):
     return value
 
 
+HOSTED_MODELS_DOCS = "https://amd-gaia.ai/docs/sdk/core/agent-system#hosted-models"
+
+_HOSTED_PROVIDER_REMEDY = {
+    "fireworks": (
+        "Set FIREWORKS_API_KEY before starting the agent (GAIA hands it to the "
+        "Lemonade it runs), or set LEMONADE_FIREWORKS_API_KEY where your own "
+        "Lemonade runs and restart it"
+    ),
+    "amd": "Connect the AMD LLM gateway with /gateway in the TUI",
+}
+
+
+class HostedProviderError(RuntimeError):
+    """A hosted model's provider can't serve this agent, with what to do about it."""
+
+
+def resolve_agent_provider(
+    provider: Optional[str], use_claude: bool, model_id: Optional[str]
+) -> Tuple[bool, Optional[str], Optional[str]]:
+    """``(use_claude, model_id, cloud_provider)`` for an ``Agent(provider=...)``.
+
+    *cloud_provider* is set only for a Lemonade-routed provider, and *model_id*
+    then carries its ``<provider>.`` prefix. Raises ``ValueError`` for an unknown
+    provider, a contradiction with *use_claude*, or a cloud provider with no model.
+    """
+    if provider is None:
+        return use_claude, model_id, None
+    from gaia.llm.cloud_keys import PROVIDERS as CLOUD_PROVIDERS
+    from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
+
+    name = str(provider).strip().lower()
+    if name in {"openai", "litellm"}:
+        raise ValueError(REMOVED_PROVIDER_MESSAGE)
+    if name == "claude":
+        return True, model_id, None
+    known = ("lemonade", "claude", *CLOUD_PROVIDERS)
+    if name not in known:
+        raise ValueError(
+            f"Unknown provider {provider!r}. Use one of: {', '.join(known)}. "
+            f"See {HOSTED_MODELS_DOCS}"
+        )
+    if use_claude:
+        raise ValueError(
+            f"provider={provider!r} contradicts use_claude=True. Pass "
+            "provider='claude' (or use_claude=True alone) for the Claude API."
+        )
+    if name == "lemonade":
+        return False, model_id, None
+    if not model_id:
+        raise ValueError(
+            f"provider={name!r} needs model_id, the model to run on {name} "
+            f"(for example model_id='{name}.<model>'). See {HOSTED_MODELS_DOCS}"
+        )
+    prefix, dot, rest = model_id.partition(".")
+    if dot and rest and prefix in CLOUD_PROVIDERS:
+        if prefix != name:
+            raise ValueError(
+                f"model_id {model_id!r} names provider {prefix!r}, but "
+                f"provider={name!r} was passed. Drop one of them."
+            )
+        return False, model_id, name
+    return False, f"{name}.{model_id}", name
+
+
+def connect_hosted_provider(provider: str, model_id: str, client: Any) -> None:
+    """Make sure Lemonade can run *model_id* on *provider*, or raise.
+
+    Registers and keys the provider when GAIA holds a key for it (see
+    :func:`gaia.llm.cloud_keys.reconnect_provider`). Raises
+    ``HostedProviderError`` naming the provider, the server and the fix.
+    """
+    from gaia.llm.cloud_keys import CloudKeyError, reconnect_provider
+
+    remedy = _HOSTED_PROVIDER_REMEDY.get(provider, "Connect the provider in Lemonade")
+    try:
+        usable = reconnect_provider(provider, client)
+    except CloudKeyError as e:
+        raise HostedProviderError(
+            f"Could not connect {provider} to run {model_id!r}: {e} "
+            f"See {HOSTED_MODELS_DOCS}"
+        ) from e
+    if not usable:
+        raise HostedProviderError(
+            f"{provider} has no working key on the Lemonade server, so "
+            f"{model_id!r} cannot run. {remedy}. See {HOSTED_MODELS_DOCS}"
+        )
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -3862,11 +3952,22 @@ Do NOT wrap conversational replies in JSON.
         context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS,
         context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS,
         tool_scope: Optional[Sequence[str]] = None,
+        provider: Optional[str] = None,
     ):
         """
         Initialize the Agent with LLM client.
 
         Args:
+            provider: Who serves the chat model. ``None`` (default) keeps the
+                          ``use_claude`` switch. ``"lemonade"`` is a local model,
+                          ``"claude"`` the Claude API (same as ``use_claude=True``),
+                          and a Lemonade cloud provider (``"fireworks"``, or
+                          ``"amd"`` for the AMD LLM gateway) runs ``model_id`` on
+                          that provider through Lemonade's cloud routing; the id
+                          gets the ``<provider>.`` prefix when it lacks one. A
+                          cloud provider that Lemonade can't use (no key, not
+                          registered, local-only mode on) raises
+                          ``HostedProviderError`` here, never a fallback.
             use_claude: If True, uses Claude API (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
             base_url: Base URL for local LLM server (default: ``resolve_lemonade_base_url()`` — LEMONADE_BASE_URL, else GAIA's own server)
@@ -3930,6 +4031,9 @@ Do NOT wrap conversational replies in JSON.
 
         Note: Uses local LLM server by default unless use_claude is True.
         """
+        use_claude, model_id, hosted_provider = resolve_agent_provider(
+            provider, use_claude, model_id
+        )
         if max_output_tokens is not None and (
             isinstance(max_output_tokens, bool)
             or not isinstance(max_output_tokens, int)
@@ -4017,6 +4121,10 @@ Do NOT wrap conversational replies in JSON.
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
+        # Set by start_session_history: process_query then records each turn.
+        self._owned_history: Optional[SessionHistory] = None
+        # Tools whose full docs went to the model this turn (thin schemas).
+        self._tool_docs_sent: Set[str] = set()
         # User messages and tool results, for skill tools that check facts (note_seen).
         self._seen_sources: List[Tuple[str, Dict[str, Any], str]] = []
         self.max_steps = max_steps if max_steps is not None else default_max_steps()
@@ -4120,6 +4228,10 @@ Do NOT wrap conversational replies in JSON.
                 probe_client.current_base_url()
                 if resolve_after_start:
                     base_url = probe_client.base_url
+                if hosted_provider:
+                    # Keyed before the probe, which learns tool calling from it.
+                    connect_hosted_provider(hosted_provider, model_id, probe_client)
+                    hosted_provider = None
                 try:
                     probe_client.health_check()
                 except LemonadeUnresponsiveError:
@@ -4146,6 +4258,15 @@ Do NOT wrap conversational replies in JSON.
                 # Starting GAIA's own server picks its port, so follow it.
                 if resolve_after_start:
                     base_url = resolve_lemonade_base_url()
+        if hosted_provider:
+            # skip_lemonade: the server is the caller's, but it still routes the call.
+            from gaia.llm.lemonade_client import LemonadeClient
+
+            connect_hosted_provider(
+                hosted_provider,
+                model_id,
+                LemonadeClient(base_url=base_url, verbose=False),
+            )
 
         # Initialize state management
         self.execution_state = self.STATE_PLANNING
@@ -4192,6 +4313,7 @@ Do NOT wrap conversational replies in JSON.
         # Claude always speaks native tool_calls, whatever model_id says — the
         # two tool-capability gates below read this alongside model_id.
         self._use_claude = use_claude
+        self._claude_model = claude_model
 
         # Initialised here (not lazy via getattr) so subclass tests that drive
         # the parsing helpers outside the standard query lifecycle don't see
@@ -5594,11 +5716,14 @@ Do NOT wrap conversational replies in JSON.
     ) -> None:
         """Hook run at the top of every turn, before the prompt is composed.
 
-        Default: no-op. Mixins that orient the agent in its environment — the
-        project map (#3379) is the first — override this and must call
+        Default: forgets which tools' docs were sent. Mixins that orient the
+        agent in its environment — the project map (#3379) is the first —
+        override this and must call
         ``super()._on_task_start(user_input)``. Anything expensive belongs
         behind a once-per-session guard inside the override, not here.
         """
+        # Docs go again each turn: a history trim may have dropped them.
+        self._tool_docs_sent = set()
 
     def _admit_skill_tools(  # pylint: disable=unused-argument
         self, names: List[str]
@@ -9320,6 +9445,31 @@ Do NOT wrap conversational replies in JSON.
         return restored + list(getattr(self, "_seen_sources", []))
 
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
+        """Run a tool call; a malformed one gets the tool's full docs back.
+
+        With thin schemas the model has parameter names but not how to fill
+        them in, so the first invalid call to a tool each turn carries its
+        ``[Tool docs: ...]`` block under ``tool_docs``.
+        """
+        result = self._dispatch_tool(tool_name, tool_args)
+        if (
+            self._thin_tool_schemas()
+            and isinstance(result, dict)
+            and result.get("error_type") == "invalid_arguments"
+            and tool_name not in self._tool_docs_sent
+        ):
+            result = {**result, "tool_docs": self._tool_docs([tool_name])}
+        return result
+
+    def _tool_docs(self, names: List[str]) -> str:
+        """Render *names* as ``[Tool docs: ...]`` blocks and note them as sent."""
+        from gaia.agents.base.tool_loader import format_tool_docs
+
+        self._tool_docs_sent.update(names)
+        schemas = self._build_openai_tool_schemas(filter_to=names)
+        return "\n\n".join(format_tool_docs(schema) for schema in schemas)
+
+    def _dispatch_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
 
@@ -11188,12 +11338,59 @@ Do NOT wrap conversational replies in JSON.
             record_id=record_id,
         )
 
-    def _model_service_label(self) -> Optional[str]:
-        """Who serves the chat model ("Fireworks AI"), for failure messages.
+    def _inference_location(self) -> "InferenceLocation":
+        """Where this agent's chat turns are actually answered.
 
-        ``None`` when this agent cannot tell; subclasses that know override it.
+        Reads the live client when there is one: it holds the catalog, so a
+        cloud provider discovered at runtime is recognised too. Before the
+        client exists (a prompt composed during ``__init__``) it reads the
+        backend choice already stored on the agent.
         """
-        return None
+        from gaia.llm.inference_location import resolve_inference_location
+
+        chat = getattr(self, "chat", None)
+        if chat is not None:
+            lookup = getattr(
+                getattr(chat, "llm_client", None), "cloud_model_provider", None
+            )
+            return resolve_inference_location(
+                chat.effective_model,
+                use_claude=bool(chat.config.use_claude),
+                cloud_provider_lookup=lookup if callable(lookup) else None,
+            )
+        use_claude = bool(getattr(self, "_use_claude", False))
+        model = (
+            getattr(self, "_claude_model", None)
+            if use_claude
+            else getattr(self, "model_id", None)
+        )
+        return resolve_inference_location(
+            model or resolve_default_chat_model(), use_claude=use_claude
+        )
+
+    def _model_service_label(self) -> Optional[str]:
+        """Names the provider in a failed turn's message: "Fireworks AI: …"."""
+        from gaia.llm.lemonade_client import (
+            _endpoint_label,
+            configured_lemonade_url,
+            resolve_lemonade_base_url,
+        )
+
+        location = self._inference_location()
+        if location.provider != "lemonade" or configured_lemonade_url() is None:
+            return location.display
+        # A base URL the user chose may be any OpenAI-compatible server.
+        live = getattr(
+            getattr(getattr(self, "chat", None), "llm_client", None),
+            "current_base_url",
+            None,
+        )
+        label = _endpoint_label(
+            live() if callable(live) else resolve_lemonade_base_url()
+        )
+        if not label:
+            return "The configured model server"
+        return f"The model server at {label}"
 
     def _save_failure_record(self, exc: BaseException) -> Optional[str]:
         """Save a local fault record for *exc*; its id, or None when not one.
@@ -12984,8 +13181,35 @@ Do NOT wrap conversational replies in JSON.
                     self._console_cancelled if stoppable else None,
                 ),
             ):
-                user_input = self._expand_skill_command(user_input)
-                return self._process_query_impl(user_input, max_steps, trace, filename)
+                history = self._recording_history(user_input)
+                if history is not None:
+                    history.prepare(self, str(user_input))
+                    history.begin([{"role": "user", "content": str(user_input)}])
+                try:
+                    expanded = self._expand_skill_command(user_input)
+                    result = self._process_query_impl(
+                        expanded, max_steps, trace, filename
+                    )
+                except BaseException:
+                    if history is not None:
+                        history.discard_pending()
+                    raise
+                if history is not None:
+                    messages = (
+                        result.get("model_messages")
+                        if isinstance(result, dict)
+                        else None
+                    )
+                    if messages is None:
+                        answer = (
+                            result.get("result") if isinstance(result, dict) else ""
+                        )
+                        messages = [
+                            {"role": "user", "content": str(user_input)},
+                            {"role": "assistant", "content": str(answer or "")},
+                        ]
+                    history.record(messages)
+                return result
         finally:
             # The impl re-raises on purpose (the wrong-ctx reload its caller
             # retries). A recorder left attached would fold the next turn's
@@ -12997,6 +13221,71 @@ Do NOT wrap conversational replies in JSON.
             # backdate the next one.
             self._pre_turn_spans = None
             self._run_turn_end_hooks()
+
+    def start_session_history(
+        self, path: Optional[Union[str, os.PathLike]] = None
+    ) -> "SessionHistory":
+        """Give this agent a conversation of its own, recorded turn by turn.
+
+        From here on each ``process_query`` sends the earlier turns that fit
+        the model's window (tool calls included) and records the finished turn;
+        a turn that raises leaves no trace. *path* keeps the transcript in a
+        SQLite file, so a later agent passing the same path resumes it; ``None``
+        keeps it in memory. One agent per conversation keeps conversations
+        apart. Calling it again starts a new history and closes the one this
+        method started before; ``close()`` closes it.
+        """
+        from gaia.agents.base.history import SessionHistory
+
+        history = SessionHistory(path)
+        previous = getattr(self, "_owned_history", None)
+        self._owned_history = history
+        self.conversation_history = history
+        if previous is not None:
+            previous.close()
+        history.prepare(self, "")
+        return history
+
+    @property
+    def cancel_event(self) -> Optional[threading.Event]:
+        """The event that stops a running turn at its next step boundary.
+
+        Set it from another thread to stop ``process_query``; a ``TurnCancel``
+        also sets the answer the turn ends with. ``None`` (default): no stop.
+        """
+        return self._cancel_event
+
+    @cancel_event.setter
+    def cancel_event(self, event: Optional[threading.Event]) -> None:
+        self._cancel_event = event
+
+    def _recording_history(self, user_input: Any) -> Optional["SessionHistory"]:
+        """The history ``start_session_history`` gave this agent, while it's in use."""
+        history = getattr(self, "_owned_history", None)
+        if history is None or self.conversation_history is not history:
+            return None
+        return history if str(user_input).strip() else None
+
+    def close(self) -> None:
+        """Release what this agent holds. Safe to call more than once.
+
+        The base closes the history ``start_session_history`` opened.
+        Subclasses that hold more (watchers, database handles, MCP servers)
+        extend this and call ``super().close()``.
+        """
+        history = getattr(self, "_owned_history", None)
+        if history is None:
+            return
+        self._owned_history = None
+        if self.conversation_history is history:
+            self.conversation_history = []
+        history.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()
 
     def _expand_skill_command(self, user_input: Any) -> Any:
         """Run ``/<skill-name> request`` on that skill, as Claude Code does.

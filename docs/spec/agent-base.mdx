@@ -93,7 +93,7 @@ class Agent(ABC):
 def __init__(
     self,
     use_claude: bool = False,
-    claude_model: str = "claude-sonnet-4-20250514",
+    claude_model: str = "claude-sonnet-5",
     base_url: Optional[str] = None,
     model_id: str = None,
     max_steps: Optional[int] = None,
@@ -112,6 +112,8 @@ def __init__(
     device: Optional[str] = None,
     resend_reasoning_across_requests: bool = False,
     max_output_tokens: Optional[int] = None,
+    tool_scope: Optional[Sequence[str]] = None,
+    provider: Optional[str] = None,
 ) -> None:
     """
     Initialize the Agent.
@@ -148,6 +150,19 @@ def __init__(
             sent back on its assistant message as `reasoning_content` (default: False)
         max_output_tokens: Output-token cap per LLM reply, thinking included (default: None —
             32768 for a Lemonade cloud model such as fireworks.*, 8192 otherwise)
+        tool_scope: Tool names allowed to run (default: None = every registered tool;
+            an empty sequence allows none). Other names are refused and left out of
+            "did you mean" suggestions
+        provider: Who serves the model (default: None keeps use_claude). "lemonade",
+            "claude" (same as use_claude=True), or a Lemonade cloud provider
+            ("fireworks", "amd") that runs model_id through Lemonade's cloud routing;
+            the id gets the "<provider>." prefix when it lacks one
+
+    Raises:
+        ValueError: Unknown provider, provider contradicting use_claude=True, or a
+            cloud provider without model_id
+        HostedProviderError: The cloud provider has no working key on the Lemonade
+            server (or local-only mode is on); the message names the fix
     """
 ```
 
@@ -265,7 +280,39 @@ def list_tools(self, verbose: bool = True) -> None:
         verbose: Show full descriptions (default: True)
     """
     pass
+
+def start_session_history(self, path: Optional[Union[str, os.PathLike]] = None) -> SessionHistory:
+    """
+    Give this agent a conversation of its own. Each process_query then sends the
+    earlier turns that fit the model's window (tool calls included) and records
+    the finished turn; a turn that raises is not recorded. A path keeps the
+    transcript in SQLite so a later agent resumes it; None keeps it in memory.
+    Calling it again closes the history it started before. A host that assigns
+    conversation_history itself keeps recording to itself.
+    """
+    pass
+
+def close(self) -> None:
+    """
+    Release what the agent holds (the history start_session_history opened).
+    Idempotent; the agent is also a context manager that calls it on exit.
+    Subclasses that own more extend it and call super().close().
+    """
+    pass
+
+cancel_event: Optional[threading.Event]
+    # Set from another thread to stop the running turn at its next step
+    # boundary. A TurnCancel also sets the answer the turn ends with.
 ```
+
+When a model calls a tool with invalid arguments, `_execute_tool` returns an
+`error_type: "invalid_arguments"` result. An agent that sends thin tool schemas
+(`_thin_tool_schemas()` true) also gets the tool's full `[Tool docs: ...]` block
+under `tool_docs`, once per tool per turn.
+
+A failed model call's answer opens with who serves the model: the provider
+(`Fireworks AI`, `Anthropic Claude`, `Lemonade on this machine`), or the address
+of a model server the user configured.
 
 ### Helper Methods
 

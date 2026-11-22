@@ -1087,6 +1087,8 @@ class _ExecutingAgent(_Gated):
     internet_off = _Base.internet_off
     _policy_refusal = _Base._policy_refusal
     _execute_tool = _Base._execute_tool
+    _dispatch_tool = _Base._dispatch_tool
+    _thin_tool_schemas = _Base._thin_tool_schemas
     _write_target_outside_scope = _Base._write_target_outside_scope
     _read_validator = _Base._read_validator
     _path_access_without_asking = _Base._path_access_without_asking
