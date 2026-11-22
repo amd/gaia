@@ -17,14 +17,14 @@ from gaia.skills.errors import SkillUnavailableError
 
 
 @contextlib.contextmanager
-def _agent(platform):
+def _agent(platform, dynamic_tools=False):
     saved = dict(_TOOL_REGISTRY)
     _TOOL_REGISTRY.clear()
     try:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(gaia.config, "_current_platform", lambda: platform)
             mp.setenv("GAIA_MEMORY_DISABLED", "1")
-            mp.setenv("GAIA_DYNAMIC_TOOLS", "0")
+            mp.setenv("GAIA_DYNAMIC_TOOLS", "1" if dynamic_tools else "0")
             mp.delenv("GAIA_FAST", raising=False)
             mp.delenv(TIER_ENV, raising=False)
             yield GaiaAgent(
@@ -50,3 +50,21 @@ def test_a_mac_is_offered_no_speech_tools_and_no_dictation_skill():
         with pytest.raises(SkillUnavailableError, match="aren't offered on macOS"):
             agent.load_skill("dictation")
         assert "dictation" not in agent.loaded_skills
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_dynamic_tools_validate_without_a_drift_error(platform):
+    with _agent(platform, dynamic_tools=True) as agent:
+        assert agent.tool_loader is not None
+        # A tool withheld on this PC is absent on purpose, not registry drift.
+        agent._validate_tool_config()
+        assert agent._dynamic_tools_validated
+
+
+@pytest.mark.parametrize("platform, listed", [("darwin", False), ("linux", True)])
+def test_search_tools_lists_dictation_only_where_speech_is_offered(platform, listed):
+    with _agent(platform, dynamic_tools=True) as agent:
+        agent.tool_loader.rank = lambda query, docs, n: [(k, 1.0) for k in docs]
+        found = agent._search_tools("dictate this document to an mp3")
+        assert found["status"] == "success"
+        assert ("dictation" in {s["name"] for s in found["skills"]}) is listed
