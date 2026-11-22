@@ -14,6 +14,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
 import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
+import { translateBare } from '../src/i18n/registry';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -519,6 +520,18 @@ for (const [title, locale, name] of [
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`a browser without the API token is told how to sign in (${locale})`, async ({ page }, info) => {
+        await open(page, '', locale, (p) => p.route('**/api/**', (route) =>
+            route.fulfill({ status: 401, json: { detail: 'Sign in with the link gaia chat --ui prints.', code: 'ui_token_required' } })));
+        const notice = page.getByRole('alert');
+        await expect(notice).toContainText(translateBare(locale, 'auth.signIn.title'));
+        await expect(notice).toContainText('gaia chat --ui');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`sign-in-${locale}.png`) });
+    });
+}
+
 test('new chat', async ({ page }) => {
     await open(page);
     await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
@@ -675,6 +688,37 @@ for (const locale of ['en', 'ar']) {
         await shot(page, `new-chat-add-folder-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
+}
+
+const GAIACPP_MISSING_START = {
+    cards: [],
+    working_folder: { path: '/home/you/projects/gaia', name: 'gaia', gaia_folder: false, choosable: false },
+    skills_error: "the daemon refused to ensure the 'gaia' sidecar: Cannot start the GAIA agent: gaiacpp is chosen as the agent but it is not installed on this PC",
+    agent_problem: {
+        code: 'gaiacpp_missing',
+        detail: 'gaiacpp is chosen as the agent but it is not installed on this PC (looked in: /home/you/.gaia/bin/gaiacpp).',
+    },
+};
+
+for (const locale of ['en', 'ar']) {
+    for (const gaiacpp of ['downloadable', 'unavailable'] as const) {
+        test(`a chosen gaiacpp that isn't here offers its two fixes (${gaiacpp}, ${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => {
+                await p.route('**/api/onboarding/start', (route) => route.fulfill({ json: GAIACPP_MISSING_START }));
+                await withAgentPrograms(p, { gaiacpp });
+            });
+            const panel = page.locator('.agent-recovery');
+            await expect(panel).toBeVisible();
+            await expect(panel.locator('.agent-recovery-actions button')).toHaveCount(gaiacpp === 'downloadable' ? 2 : 1);
+            await expect(panel.locator('.new-chat-details-text')).toHaveCount(0);
+            await shot(page, `new-chat-gaiacpp-missing-${gaiacpp}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+            await panel.locator('.new-chat-details').click();
+            await expect(panel.locator('.new-chat-details-text')).toBeVisible();
+            await shot(page, `new-chat-gaiacpp-missing-${gaiacpp}-details-${locale}`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
 }
 
 for (const locale of ['en', 'ar']) {

@@ -18,6 +18,7 @@
 #include <gaia/git_tools.h>
 #include <gaia/media_tools.h>
 #include <gaia/model_registry.h>
+#include <gaia/process.h>
 #include <gaia/security.h>
 #include <gaia/web_tools.h>
 #include <gaia/workspace.h>
@@ -294,6 +295,10 @@ std::optional<json> GaiaAgent::switchRefusal(const ToolInfo& tool, const json& a
         const std::string why = internetRefusal(tool, args);
         if (!why.empty()) return refuse(why);
     }
+    if (options_.webOff) {
+        const std::string why = webFetchRefusal(tool, args);
+        if (!why.empty()) return refuse(why);
+    }
     static const std::set<std::string> reads = {"recall"};
     static const std::set<std::string> writes = {"remember", "update_memory", "forget"};
     if (memoryOff() && (reads.count(tool.name) || writes.count(tool.name))) {
@@ -392,8 +397,17 @@ const std::string& pythonCommand() {
         const char* const candidates[] = {"python"};
 #endif
         for (const char* candidate : candidates) {
+#ifdef _WIN32
+            // By full path: cmd.exe would run a python3.bat in the working folder first.
+            const std::string program = findProgramOnPath(candidate);
+            if (program.empty()) continue;
+            // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
+            const std::string probe = "\"\"" + program + "\" --version\"";
+#else
+            const std::string probe = std::string(candidate) + " --version";
+#endif
             try {
-                const ProcessResult r = ProcessRunner::run(std::string(candidate) + " --version", 5000);
+                const ProcessResult r = ProcessRunner::run(probe, 5000);
                 if (r.exitCode == 0 && (r.stdout_output + r.stderr_output).find("Python 3") != std::string::npos) {
                     return std::string(candidate);
                 }
@@ -530,6 +544,10 @@ std::string GaiaAgent::systemContext() const {
         for (const auto& r : options_.workspaceRoots) out << " " << r;
         out << ". Tools refuse other locations, so don't search the whole disk or the home "
                "folder. If a file the user needs isn't in these folders, say so.\n";
+    }
+    if (options_.webOff) {
+        out << "- Web access is off for this run. Do not search the web or fetch pages, repositories or "
+               "answers through the shell or a script either. Installing a package the task needs is fine.\n";
     }
     if (pythonCommand().empty()) {
         out << "- Python: none found on PATH. Don't plan around it; say so if a task needs it.\n";

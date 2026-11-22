@@ -55,6 +55,7 @@ Memory is on by default, in the terminal UI and the Agent UI alike. Turning it o
 
 ```bash
 curl -X PUT http://localhost:4200/api/memory/settings \
+  -H "Authorization: Bearer $(cat ~/.gaia/agent-ui-token)" \
   -H "Content-Type: application/json" \
   -H "X-Gaia-UI: 1" \
   -d '{"memory_enabled": false}'
@@ -63,7 +64,7 @@ curl -X PUT http://localhost:4200/api/memory/settings \
 Verify it stuck:
 
 ```bash
-curl http://localhost:4200/api/memory/settings
+curl -H "Authorization: Bearer $(cat ~/.gaia/agent-ui-token)" http://localhost:4200/api/memory/settings
 # → {"memory_enabled": false, ...}
 ```
 

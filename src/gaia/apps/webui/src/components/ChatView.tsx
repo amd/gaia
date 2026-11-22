@@ -81,6 +81,8 @@ import { getT, useT } from '../i18n/useT';
 /** Events that only come after the agent got past a permission prompt. */
 const RESOLVES_PROMPTS = new Set(['tool_start', 'tool_end', 'tool_result']);
 const RECONNECTING_PREFIX = 'Connection lost. Reconnecting';
+/** Same as ANSWER_CHECK_PHASE in sse_handler.py: a check's reply replaces the draft answer. */
+const ANSWER_CHECK_PHASE = 'answer_check';
 
 /** How long Stop waits for the server's closing `done` before the client closes the turn itself. */
 export const STOP_GRACE_MS = 15_000;
@@ -924,6 +926,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     toolOccurredRef.current = false;
                     streamBufferRef.current = '';
                     setStreamContent('');
+                    // An answer check is replacing a draft answer: not a fault, so no warning.
+                    if (event.type === 'status' && event.phase === ANSWER_CHECK_PHASE) {
+                        applyStatusEvent({ ...event, message: getT()('live.answerChecking') }, stepIdRef);
+                        return;
+                    }
                     if (event.type === 'status') {
                         const step = agentEventToStep(
                             { type: 'status', status: 'warning', message: getT()('live.answerRestarted') } as StreamEvent,

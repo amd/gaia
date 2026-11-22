@@ -14,6 +14,7 @@ from typing import Optional
 
 from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.env import load_env
+from gaia.utils.image_alpha import UnreadableImageError, flatten_image_bytes
 
 # Load environment variables from .env file
 load_env()
@@ -186,7 +187,8 @@ class VLMClient:
         Extract text from an image using VLM.
 
         Args:
-            image_bytes: Image as PNG/JPEG bytes
+            image_bytes: Image as PNG/JPEG bytes. Transparency is flattened
+                onto white first; an opaque image is sent unchanged.
             image_num: Image number on page (for logging)
             page_num: Page number (for logging)
             prompt: Custom extraction prompt (optional)
@@ -199,7 +201,12 @@ class VLMClient:
                 string — a caller that indexes the return value would otherwise
                 index the error as content (#3555).
         """
-        # Encode image as base64 and detect MIME type
+        try:
+            image_bytes = flatten_image_bytes(image_bytes)
+        except UnreadableImageError as e:
+            logger.error(f"Unreadable image {image_num} on page {page_num}: {e}")
+            raise VLMExtractionError(str(e), page_num, image_num) from e
+
         # Note: Image size optimization happens in pdf_utils.py during extraction
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
         mime_type = detect_image_mime_type(image_bytes)

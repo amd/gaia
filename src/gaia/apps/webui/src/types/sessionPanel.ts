@@ -74,6 +74,8 @@ export interface AgentCapabilities {
     tools: AgentTool[];
     /** Loaded skills, in load order; null when the agent runs elsewhere and doesn't report them. */
     skills?: ActiveSkill[] | null;
+    /** The program running the relayed GAIA agent; null for any other agent. */
+    program?: 'gaiapy' | 'gaiacpp' | null;
 }
 
 export interface ChatFileChange {

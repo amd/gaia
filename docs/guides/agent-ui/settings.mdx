@@ -43,6 +43,10 @@ The model in use, context size, the models on this PC, cloud providers and keys,
 
 **Agent**, at the top, picks the program that runs GAIA, each shown with its download size: **gaiapy**, the full-featured Python agent (the default), or **gaiacpp**, the fast and light native C++ agent (beta). **Compare the two** opens their strengths and trade-offs. A gaiacpp that isn't on this PC has a **Download** button on its row; its row can't be picked until then. Download shows a progress bar in the card and switches to gaiacpp when it's in; a failed download says so in the card with **Retry**, and the agent stays as it was. A switch applies from the next message in every chat; GAIA restarts the agent for it. Where this release offers no gaiacpp, its row says **Not installed** and the reason is shown under it. While GAIA is answering in a chat, a switch waits: finish or stop the answer first.
 
+While gaiacpp is the agent, the chat panel's **Agent info** says **Runs on gaiacpp** with a **Beta** tag, the same tag this card shows.
+
+If gaiacpp is the chosen agent and can't start, because its file is missing or fails its check, the new-chat screen says so and offers two buttons: **Download gaiacpp again**, with the same progress bar, and **Use the Python agent**, which saves gaiapy as your choice. GAIA never switches agents by itself, and a message you had typed stays in the box. Where this release has no gaiacpp to download, the screen gives that reason in place of the download button.
+
 ### Image creation
 
 The model GAIA makes pictures with, the size and the number of steps (more

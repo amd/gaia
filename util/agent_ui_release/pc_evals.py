@@ -10,8 +10,8 @@ kwengine/ and tools/run_eval.py).
     pc_evals.py check                                    # version, clean copy, grading set up?
     pc_evals.py prepare RUN_DIR --suite smoke            # build task folders; prints folder + prompt file
     #   ...drive the app: new chat, folder chip -> task folder, paste the prompt, wait for the answer...
-    pc_evals.py record RUN_DIR kw-00-smoke --port P      # answer + timing from the backend -> kwengine record
-    pc_evals.py drive RUN_DIR --cdp 9333 --port P        # or: every task over DevTools, approvals logged
+    pc_evals.py record RUN_DIR kw-00-smoke --port P --home H   # answer + timing from the backend -> kwengine record
+    pc_evals.py drive RUN_DIR --cdp 9333 --port P --home H     # or: every task over DevTools, approvals logged
     pc_evals.py grade RUN_DIR                            # close the app first; prints the grader's summary.md
 
 Scores come only from the package's grader. If grading cannot run (no answers
@@ -32,8 +32,10 @@ import sys
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from app_state import HEADERS, add_token  # noqa: E402
+
 LEG = "gaia-agent-ui"
-HEADERS = {"X-Gaia-UI": "1", "Accept": "application/json"}
 PYTHON = (
     sys.executable
 )  # --python overrides: the interpreter with the package's requirements
@@ -245,7 +247,6 @@ def cmd_drive(a) -> None:
     """Run every prepared task through the window over DevTools, one chat each, then record it."""
     import time
 
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
     import cdp
 
     prep = json.loads((bench_dir(a.run) / "prepared.json").read_text(encoding="utf-8"))
@@ -387,6 +388,11 @@ def main() -> None:
         help="The test app's backend port (or GAIA_UI_PORT); never the person's own app",
     )
     sp.add_argument(
+        "--home",
+        default=os.environ.get("GAIA_UI_HOME"),
+        help="The test app's --home, for its API token (or GAIA_UI_HOME)",
+    )
+    sp.add_argument(
         "--session", help="Chat id (default: the most recently updated chat)"
     )
     sp.add_argument(
@@ -414,6 +420,11 @@ def main() -> None:
         help="The test app's backend port (or GAIA_UI_PORT)",
     )
     sp.add_argument(
+        "--home",
+        default=os.environ.get("GAIA_UI_HOME"),
+        help="The test app's --home, for its API token (or GAIA_UI_HOME)",
+    )
+    sp.add_argument(
         "--force", action="store_true", help="Replace results already recorded"
     )
     sp.set_defaults(fn=cmd_drive)
@@ -423,6 +434,8 @@ def main() -> None:
     a = ap.parse_args()
     global PYTHON
     PYTHON = a.python
+    if a.cmd in ("record", "drive"):
+        add_token(a.home)
     a.fn(a)
 
 

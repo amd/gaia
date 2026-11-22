@@ -661,7 +661,13 @@ Agent UI and the TUI drive either one.
 | `gaiacpp` | The native C++ harness: fast and light, fewer features, beta | `cpp/agents/gaiacpp/` on the framework in `cpp/` | `gaiacpp` |
 
 `flagship_agent` in `~/.gaia/config.json` (`gaiapy` or `gaiacpp`) picks one;
-unset, the Python harness runs.
+unset, the Python harness runs. The list lives in one table,
+[`src/gaia/harnesses.py`](src/gaia/harnesses.py), mirrored for the TUI in
+`tui/internal/catalog/harnesses.json` under a drift test. It also names
+`gaiacode`, a native coding harness in development: known but not yet runnable,
+so it can't be chosen. A name this version can't run still loads from
+`config.json` (a newer GAIA may have written it) and fails only when the agent
+is launched, never at config load and never by quietly running another harness.
 
 ### Console Script Entry Points
 

@@ -337,7 +337,8 @@ class SettingsResponse(BaseModel):
     # reflects the effective value and disables (no silent no-op).
     dynamic_tools_locked: bool = False
     # The program that is the GAIA agent; ~/.gaia/config.json, shared with the terminal UI.
-    flagship_agent: Literal["gaiapy", "gaiacpp"] = "gaiapy"
+    # A plain string: a harness a newer GAIA saved still shows, so Settings can change it.
+    flagship_agent: str = "gaiapy"
     # False when gaiacpp is not installed on this PC, so it cannot be chosen.
     gaiacpp_available: bool = False
     # The shared policy file, not the Agent UI database. Local only clears

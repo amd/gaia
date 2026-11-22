@@ -66,7 +66,10 @@ Three things are wider on purpose:
   and image files saved directly in `~/.gaia/cache/sd/images` (not links or
   hard links), so a follow-up can summarize a transcript or edit, upscale or
   describe a generated image. Both are read-only to file tools, and a session
-  confined by `GAIA_ALLOWED_PATHS` does not get them.
+  confined by `GAIA_ALLOWED_PATHS` does not get them. A shell line that only
+  reads may name a generated image too, quoted or not, including `type` and a
+  single PowerShell read such as `Get-Item '<path>'`; any line that could write
+  to it is refused.
 - `capture_skill` may copy a local skill folder from anywhere, because every
   capture asks the user first with the source shown.
 
@@ -184,6 +187,19 @@ try:
 except ValueError as e:
     print(f"File too large: {e}")
 ```
+
+---
+
+## Local services require a token
+
+Binding loopback is not access control, so GAIA's local HTTP services ask
+every caller for a secret, including callers on the same PC:
+
+- **Agent UI backend** — a per-install token in `~/.gaia/agent-ui-token` on
+  every `/api` and `/v1` route. See [Agent UI security](/sdk/sdks/agent-ui#security).
+- **Agent sidecars** — a per-launch bearer token the launcher writes to an
+  owner-only file and passes by path. A sidecar started without one refuses to
+  start unless `GAIA_SIDECAR_ALLOW_NO_TOKEN=1` is set, for local development only.
 
 ---
 

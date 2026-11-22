@@ -28,6 +28,7 @@ const { createServer } = require("http");
 const { readFile } = require("fs/promises");
 
 const installer = require("../services/backend-installer.cjs");
+const uiToken = require("../services/ui-token.cjs");
 
 const ROOT_DIR = path.join(__dirname, "..");
 
@@ -119,6 +120,48 @@ async function waitForServer(url, timeoutMs = 30000) {
     await new Promise((r) => setTimeout(r, 500));
   }
   return false;
+}
+
+/**
+ * A single-use link that signs a browser in to the backend at `port`: the
+ * backend refuses the UI's API calls from a browser without its cookie.
+ */
+async function signInUrl(port, { fetchImpl = fetch, reader = uiToken.defaultReader } = {}) {
+  const base = `http://localhost:${port}`;
+  const token = reader.get();
+  if (!token) {
+    throw new Error(
+      `GAIA's API token file ${reader.path()} does not exist, so no browser can sign in. ` +
+        "The backend creates it at startup: check the [backend] lines above for why it didn't."
+    );
+  }
+  let resp;
+  try {
+    resp = await fetchImpl(`${base}/api/auth/launch-code`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "X-Gaia-UI": "1" },
+    });
+  } catch (err) {
+    throw new Error(`Could not ask GAIA at ${base} for a sign-in link: ${err.message}`, { cause: err });
+  }
+  const body = await resp.text();
+  if (!resp.ok) {
+    const hint =
+      resp.status === 401
+        ? ` The token in ${reader.path()} is not the one this backend uses; is another GAIA (with a different GAIA_HOME or GAIA_UI_TOKEN_FILE) on port ${port}?`
+        : "";
+    throw new Error(`GAIA refused a sign-in link (HTTP ${resp.status}: ${body.slice(0, 200)}).${hint}`);
+  }
+  let reply;
+  try {
+    reply = JSON.parse(body);
+  } catch (err) {
+    throw new Error(`GAIA sent an unreadable sign-in reply: ${body.slice(0, 200)}`, { cause: err });
+  }
+  if (typeof reply.path !== "string" || !reply.path.startsWith("/")) {
+    throw new Error(`GAIA's sign-in reply has no link path: ${body.slice(0, 200)}`);
+  }
+  return `${base}${reply.path}`;
 }
 
 /**
@@ -352,13 +395,24 @@ async function main() {
     );
 
     if (ready) {
+      let url;
+      try {
+        url = await signInUrl(PORT);
+      } catch (err) {
+        console.error("");
+        console.error(`Could not sign the browser in to GAIA: ${err.message}`);
+        shuttingDown = true;
+        backendProcess.kill("SIGTERM");
+        process.exit(1);
+      }
       console.log("Backend is ready!");
       console.log("");
-      console.log(`  Open: http://localhost:${PORT}`);
+      console.log(`  Open: ${url}`);
+      console.log("  (The link works once, within 10 minutes. Run gaia-ui again for a new one.)");
       console.log("");
 
       if (OPEN_BROWSER) {
-        openBrowser(`http://localhost:${PORT}`);
+        openBrowser(url);
       }
     } else {
       console.log("WARNING: Backend did not respond within 30 seconds.");
@@ -397,4 +451,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { npmDistTag, helpText, startBackend, browserCommand, openBrowser };
+module.exports = { npmDistTag, helpText, startBackend, browserCommand, openBrowser, signInUrl };
