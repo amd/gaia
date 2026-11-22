@@ -97,6 +97,40 @@ describe('optional model added during the download', () => {
         expect(localStorage.getItem(QUEUED_KEY)).toBeNull();
     });
 
+    it('failing after Ready moves it from the still-downloading line to the not-downloaded one', async () => {
+        let now: SetupRunStatus = readyWhisperPulling;
+        mockedApi.getSetupStatus.mockImplementation(async () => now);
+        render(<SetupScreen onReady={vi.fn()} />);
+        await screen.findByRole('button', { name: 'Start chatting' });
+        expect(screen.getByText(/Still downloading: Whisper/)).toBeInTheDocument();
+        expect(screen.queryByText(/Not downloaded: Whisper/)).not.toBeInTheDocument();
+
+        now = {
+            ...readyWhisperPulling,
+            models: (readyWhisperPulling.models ?? []).map((m) => (m.id === WHISPER.id ? { ...m, state: 'failed' } : m)),
+        };
+        expect(await screen.findByText(/Not downloaded: Whisper/, undefined, { timeout: 4000 })).toBeInTheDocument();
+        expect(screen.queryByText(/Still downloading: Whisper/)).not.toBeInTheDocument();
+        // The chat model that is on disk is never listed.
+        expect(screen.queryByText(new RegExp(`Not downloaded:.*${QWEN.name}`))).not.toBeInTheDocument();
+    });
+
+    it('a failed extra is listed once, even when its hand-off was also refused', async () => {
+        let now: SetupRunStatus = running;
+        mockedApi.getSetupStatus.mockImplementation(async () => now);
+        mockedApi.downloadSetupModel.mockRejectedValue(lowDisk());
+        render(<SetupScreen onReady={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+        now = {
+            ...ready,
+            models: [...(ready.models ?? []), progress({ id: WHISPER.id, roles: ['speech'], state: 'failed', bytes_done: 0, bytes_total: 1.6e9 })],
+        };
+        fireEvent.click(await screen.findByRole('button', { name: 'Change models' }, { timeout: 4000 }));
+        await act(async () => {});
+        const line = await screen.findByText(/Not downloaded: Whisper/);
+        expect(line.textContent?.match(/Whisper/g)).toHaveLength(1);
+    });
+
     it('Download anyway on the low-disk sheet takes the extra off the not-downloaded line', async () => {
         let now: SetupRunStatus = running;
         mockedApi.getSetupStatus.mockImplementation(async () => now);

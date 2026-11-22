@@ -1274,6 +1274,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const fetching = (fullRun?.models ?? []).filter((m) => m.state !== 'skipped').map((m) => m.id);
     // Extras handed off once setup was ready; chat needn't wait for them.
     const stillFetching = installed ? (fullRun?.models ?? []).filter((m) => m.state === 'downloading' || m.state === 'queued').map((m) => m.id) : [];
+    // A handed-off extra whose download failed after Ready must not just drop off the line above.
+    const notDownloaded = [...new Set([...notFetched, ...(installed ? (fullRun?.models ?? []).filter((m) => m.state === 'failed').map((m) => m.id) : [])])];
     const optional = selection && !cloud ? catalog.filter((e) => isOptional(e) && !selection.ticked.has(e.id) && !e.downloaded
         && (canCreateImages(chatEntry) || !e.roles.includes('image_creation'))) : [];
     const biggerOption = catalog.find((e) => e.fit_code === 'memory' && e.chat_choice && e.support === 'verified');
@@ -1761,9 +1763,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         {t('setup.ready.extraDownloading', { names: stillFetching.map((id) => names[id] ?? id).join(', ') })}
                                     </p>
                                 )}
-                                {notFetched.length > 0 && !confirm && (
+                                {notDownloaded.length > 0 && !confirm && (
                                     <p className="setup-failed-extra" role="alert">
-                                        {t('setup.ready.extraNotFetched', { names: notFetched.map((id) => names[id] ?? id).join(', ') })}
+                                        {t('setup.ready.extraNotFetched', { names: notDownloaded.map((id) => names[id] ?? id).join(', ') })}
                                     </p>
                                 )}
                                 {readyTasks.length > 0 && (
