@@ -80,6 +80,35 @@ func TestThePythonAgentRunsOnlyWhenPickedAndIsThenSaved(t *testing.T) {
 	}
 }
 
+// A Python agent that can't start must not replace the saved gaiacpp choice.
+func TestAPythonAgentThatCannotStartIsNotSaved(t *testing.T) {
+	saved, _ := recoveryRig(t, agentrecovery.UsePython)
+	noPython := &catalog.MissingProgramError{Binary: catalog.PythonAgentBinary}
+	flagshipCatalog = func(string) (*catalog.Catalog, string, error) { return nil, "", noPython }
+	_, _, err := recoverSavedAgent("why", "detail", missingNative, false, nil)
+	if !errors.Is(err, error(noPython)) || !errors.Is(err, error(missingNative)) {
+		t.Fatalf("err = %v, want both the gaiacpp and the Python agent errors", err)
+	}
+	if len(*saved) != 0 {
+		t.Fatalf("saved %v although the Python agent could not start", *saved)
+	}
+}
+
+// A failed download leaves nothing to launch: no catalog, no save, the error stands.
+func TestAFailedRecoveryScreenLaunchesNothing(t *testing.T) {
+	saved, asked := recoveryRig(t, agentrecovery.Downloaded)
+	boom := errors.New("screen failed")
+	askRecovery = func(string, string, bool, *control.Options) (agentrecovery.Choice, error) {
+		return agentrecovery.Downloaded, boom
+	}
+	if _, _, err := recoverSavedAgent("why", "detail", missingNative, false, nil); !errors.Is(err, boom) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(*saved)+len(*asked) != 0 {
+		t.Fatalf("saved %v, launched %v after the screen failed", *saved, *asked)
+	}
+}
+
 func TestADownloadRelaunchesOnGaiacppAndSavesNothing(t *testing.T) {
 	saved, asked := recoveryRig(t, agentrecovery.Downloaded)
 	if _, _, err := recoverSavedAgent("why", "detail", missingNative, false, nil); err != nil {

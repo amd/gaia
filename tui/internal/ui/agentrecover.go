@@ -69,13 +69,14 @@ func recoverSavedAgent(why, detail string, loadErr error, dev bool, ctrl *contro
 	case agentrecovery.Downloaded:
 		return flagshipCatalog(catalog.NativeAgentBinary)
 	case agentrecovery.UsePython:
+		// Found before anything is saved, as /agent does: a Python agent that can't start keeps gaiacpp saved.
+		cat, notice, err := flagshipCatalog(catalog.PythonAgentBinary)
+		if err != nil {
+			return nil, "", errors.Join(loadErr, err)
+		}
 		path, err := saveFlagshipAgent(preflight.FlagshipAgentPython)
 		if err != nil {
 			return nil, "", fmt.Errorf("could not save the Python agent as your agent program: %w", err)
-		}
-		cat, notice, err := flagshipCatalog(catalog.PythonAgentBinary)
-		if err != nil {
-			return nil, "", err
 		}
 		return cat, joinNotices(fmt.Sprintf(
 			"You chose the Python agent because %s could not start. It is saved as your agent program (%s); /agent %s switches back.",

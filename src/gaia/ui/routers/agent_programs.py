@@ -208,7 +208,9 @@ def _listing() -> Dict[str, Any]:
                 "unavailable_reason": (
                     native_reason if native_path is None or broken else None
                 ),
-                "unavailable_code": None if native_path is not None else native_code,
+                "unavailable_code": (
+                    native_code if native_path is None or broken else None
+                ),
             },
         ],
         "download": _job_view(),
