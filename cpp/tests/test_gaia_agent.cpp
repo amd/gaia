@@ -332,6 +332,12 @@ TEST(GaiaAgentTest, ATestsPassClaimNeedsATestRunThatPassedAfterTheLastChange) {
                   "The tests were run and passed, confirming the refactoring.",
                   {edit("app/cart.py"), shellRun("python test_app.py", 0, "")})),
               none);
+    // Its reworded claim after the send-back, on the rename task.
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "The tests were run using `python test_app.py` and passed successfully, confirming the "
+                  "refactoring is correct.",
+                  {edit("app/cart.py"), shellRun("python test_app.py", 0, "")})),
+              none);
     EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("All 4 tests pass.", {})), none);
     // Refused or denied before it started: nothing ran.
     EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
