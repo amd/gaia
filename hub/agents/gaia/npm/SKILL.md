@@ -264,7 +264,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package: call it with plain `fetch`. Contract version **2.30**; the stream is
+package: call it with plain `fetch`. Contract version **2.31**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -829,7 +829,7 @@ Then, in another terminal, with `TOKEN` read from the file `serve` printed:
 ```bash
 TOKEN=$(cat /path/printed/by/serve/launch-secret)
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.30","agentVersion":"0.3.6"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.31","agentVersion":"0.3.6"}
 curl -s -H "authorization: Bearer $TOKEN"   http://127.0.0.1:8141/v1/gaia/init          # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H "authorization: Bearer $TOKEN" \
