@@ -7,7 +7,7 @@
 /** Pixels per frame, and the size of src/assets/gaia-eyes.png. */
 export const EYES_CELL = 16;
 export const EYES_SHEET_WIDTH = 720;
-export const EYES_SHEET_HEIGHT = 864;
+export const EYES_SHEET_HEIGHT = 1056;
 
 /** Where each animation sits on the sheet: its row, frame count, speed, and the still shown under reduced motion. */
 export const EYES_ANIMATIONS = {
@@ -65,6 +65,18 @@ export const EYES_ANIMATIONS = {
     wink: { row: 51, frames: 11, fps: 10, loop: false, pose: 2 },
     eyeroll: { row: 52, frames: 15, fps: 10, loop: false, pose: 6 },
     brain: { row: 53, frames: 11, fps: 16, loop: false, pose: 10 },
+    heart: { row: 54, frames: 11, fps: 16, loop: false, pose: 10 },
+    question: { row: 55, frames: 11, fps: 16, loop: false, pose: 10 },
+    exclaim: { row: 56, frames: 11, fps: 16, loop: false, pose: 10 },
+    star: { row: 57, frames: 11, fps: 16, loop: false, pose: 10 },
+    sun: { row: 58, frames: 11, fps: 16, loop: false, pose: 10 },
+    note: { row: 59, frames: 11, fps: 16, loop: false, pose: 10 },
+    tear: { row: 60, frames: 11, fps: 16, loop: false, pose: 10 },
+    bolt: { row: 61, frames: 11, fps: 16, loop: false, pose: 10 },
+    cloud: { row: 62, frames: 11, fps: 16, loop: false, pose: 10 },
+    sprout: { row: 63, frames: 11, fps: 16, loop: false, pose: 10 },
+    moon: { row: 64, frames: 11, fps: 16, loop: false, pose: 10 },
+    check: { row: 65, frames: 11, fps: 16, loop: false, pose: 10 },
 } as const;
 
 export type EyesAnimation = keyof typeof EYES_ANIMATIONS;
@@ -110,6 +122,18 @@ export const EYES_VARIANTS = {
     wink: ['wink'],
     eyeroll: ['eyeroll'],
     brain: ['brain'],
+    heart: ['heart'],
+    question: ['question'],
+    exclaim: ['exclaim'],
+    star: ['star'],
+    sun: ['sun'],
+    note: ['note'],
+    tear: ['tear'],
+    bolt: ['bolt'],
+    cloud: ['cloud'],
+    sprout: ['sprout'],
+    moon: ['moon'],
+    check: ['check'],
 } as const satisfies Record<string, readonly EyesAnimation[]>;
 
 export type EyesState = keyof typeof EYES_VARIANTS;

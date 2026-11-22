@@ -1037,6 +1037,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         historyNotice,
                         libraryNotices: event.library_notices,
                         failure: event.failed ? event.failure : undefined,
+                        mood: useChatStore.getState().gaiaMood?.mood,
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     settledIdsRef.current.add(assistantMsg.id);

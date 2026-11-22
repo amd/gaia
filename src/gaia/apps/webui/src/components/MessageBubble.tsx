@@ -14,7 +14,7 @@ import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
 import { normalizeMathDelimiters } from '../utils/mathDelimiters';
 import { remarkNumericColumns } from '../utils/remarkNumericColumns';
-import { AgentActivity } from './AgentActivity';
+import { AgentActivity, timelineShowsFinalGlyph } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
@@ -24,7 +24,7 @@ import { AnswerStats, type TurnEnding } from './AnswerStats';
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
 import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { localizeLiveStatus } from '../utils/liveStatus';
-import { eyesPhase } from '../utils/gaiaEyes';
+import { eyesPhase, finalGlyph, type EyesGlyph } from '../utils/gaiaEyes';
 import { LiveEyes, MoodEyes } from './StepGlyph';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
@@ -102,7 +102,7 @@ interface MessageBubbleProps {
  * "Reasoning — 38 words so far"), or "Thinking..." until the first one arrives.
  * One calm line in the UI font; the whole label shows at once.
  */
-function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
+function ThinkingIndicator({ active, label, awaitingUser = false, glyph = 'brain' }: { active: boolean; label?: string | null; awaitingUser?: boolean; glyph?: EyesGlyph }) {
     const t = useT();
     const text = awaitingUser ? t('activity.waiting') : (label ? localizeLiveStatus(t, label) : t('msg.thinking'));
     const elapsed = useElapsedSeconds(active, text);
@@ -112,7 +112,7 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     const place = useInferencePlace();
 
     // Her mood often arrives with the answer's first words: the eyes stay to play it, then fold away.
-    if (!active) return <MoodEyes />;
+    if (!active) return <MoodEyes glyph={glyph} />;
 
     const showModelWaitHint = waitingOnModel && modelWaitElapsed >= MODEL_WAIT_HINT_S;
 
@@ -654,6 +654,12 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         },
         [message.content, userParts, isStreaming, cutOff, endedBy],
     );
+    // What GAIA's eyes settle on: a strong reaction's icon, or, once the reply is
+    // done and ends on a question, a question mark; otherwise the brain.
+    const liveMood = useChatStore((s) => (isStreaming ? s.gaiaMood?.mood : undefined));
+    const final = message.role === 'assistant' && !isError
+        ? finalGlyph(isStreaming ? liveMood : message.mood, isStreaming ? '' : cleanedContent)
+        : 'brain';
     const hasAnswerText = Boolean(cleanedContent.trim()) && !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT);
     const summaryFiles = message.turnSummary?.files;
     const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
@@ -825,13 +831,16 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             toolStatus={isStreaming ? toolStatus : null}
                             answer={isStreaming ? undefined : cleanedContent}
                             liveLine={isStreaming && (
-                                <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
+                                <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} glyph={final} />
                             )}
                             // Only once the live line is gone: while it shows, it has the eyes.
                             moodHost={isStreaming ? !agentStepsActive && !!cleanedContent : latest}
+                            finalGlyph={final}
                         />
                     )}
-                    {message.role === 'assistant' && latest && !isStreaming && !echo.steps?.some((s) => s.type === 'thinking' || s.type === 'tool') && <MoodEyes />}
+                    {message.role === 'assistant' && !isStreaming && !timelineShowsFinalGlyph(echo.steps ?? [], cleanedContent) && (
+                        <MoodEyes glyph={final} playMood={latest} />
+                    )}
                     {isError && (
                         <div className="error-banner">
                             <AlertTriangle size={14} />

@@ -841,6 +841,8 @@ class MessageResponse(BaseModel):
     stopped: bool = False
     # A model failure ended this reply's turn; its content says why.
     failed: bool = False
+    # The reaction GAIA named for this reply, which picks its final icon.
+    mood: Optional[str] = None
 
 
 class MessageListResponse(BaseModel):

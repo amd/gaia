@@ -78,8 +78,7 @@ describe("GAIA's eye sprite sheet", () => {
     });
 
     it('can reach every mood it draws from a message', () => {
-        const drawn = Object.keys(EYES_VARIANTS).filter((state) => !['think', 'read', 'tool', 'wait', 'brain'].includes(state));
-        expect([...MATCHED_MOODS].sort()).toEqual(drawn.sort());
+        expect([...new Set(MATCHED_MOODS)].sort()).toEqual([...EYES_MOODS].sort());
     });
 
     it('draws exactly the moods the agent lets GAIA name for her own reply', () => {

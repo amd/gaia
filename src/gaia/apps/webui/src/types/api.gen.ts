@@ -1020,6 +1020,7 @@ export interface MessageResponse {
   failed?: boolean;
   id: number;
   library_notices?: string[] | null;
+  mood?: string | null;
   page_elements?: PageElement[] | null;
   rag_sources?: SourceInfo[] | null;
   role: string;

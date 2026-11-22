@@ -5235,6 +5235,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         full_response = ""
         answer_event = None
         fatal_error = None
+        gaia_mood = None
         captured_steps = []  # Collect agent steps for DB persistence
         persisted_policy_block_msg_id = None
         persisted_policy_block_content = None
@@ -5373,6 +5374,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 elif event_type == "agent_error" and event.get("fatal"):
                     # A relayed sidecar's terminal error: the turn ends here.
                     fatal_error = event.get("content") or ""
+                elif event_type == "mood":
+                    # The last one named is the reply's: earlier ones went with steps.
+                    gaia_mood = event.get("mood") or gaia_mood
 
                 # Capture agent steps for persistence
                 if event_type == "thinking":
@@ -5935,6 +5939,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 stopped=turn_cancelled,
                 # As on `done`: a Stop wins over the failure it cut short.
                 failed=turn_failed and not turn_cancelled,
+                mood=gaia_mood,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)

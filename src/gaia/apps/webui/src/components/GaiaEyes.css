@@ -24,6 +24,11 @@
     scale: -1 1;
 }
 
+/* A check mark and a music note read the same in either direction, so they never flip. */
+:root[dir="rtl"] .gaia-eyes:is([data-eyes="check"], [data-eyes="note"]) {
+    scale: none;
+}
+
 /* A new expression arrives with a quick blink, so a change of state never cuts. */
 .gaia-eyes.is-swapping {
     animation: eyesSwap var(--duration) var(--ease-spring);

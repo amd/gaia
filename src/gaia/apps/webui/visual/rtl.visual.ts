@@ -1754,6 +1754,63 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    for (const [mood, reply, glyph] of [
+        ['love', 'Right back at you. Talking with you is the best part of my day.', 'heart'],
+        ['happy', 'Happy to help!\n\nWhere are you leaving from?', 'question'],
+        ['relieved', 'Phew, all good. The backup finished.', 'check'],
+    ] as const) {
+        test(`GAIA's eyes settle on the ${glyph} once she answers (${locale})`, async ({ page }, testInfo) => {
+            const theme = testInfo.project.name === 'dark' ? 'dark' : 'light';
+            await page.addInitScript(({ mood, reply }) => {
+                const real = window.fetch;
+                window.fetch = (input, init) => {
+                    if (!String(input).includes('/chat/send')) return real(input, init);
+                    const events = [
+                        { type: 'mood', mood },
+                        { type: 'chunk', content: reply },
+                        { type: 'done', message_id: 77, content: reply },
+                    ];
+                    const body = events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('');
+                    return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+                };
+            }, { mood, reply });
+            await open(page, `#${ANSWER_SESSION}`, locale, undefined, theme);
+            const saved = {
+                messages: [
+                    ...MESSAGES.messages,
+                    { id: 76, session_id: ANSWER_SESSION, role: 'user', content: 'Hello', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 77, session_id: ANSWER_SESSION, role: 'assistant', content: reply, mood, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: MESSAGES.messages.length + 2,
+            };
+            await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({ json: saved }));
+            const box = page.getByRole('textbox').first();
+            await box.fill('Hello');
+            await box.press('Enter');
+            // GAIA starts her mood while the reply streams; wait for the reply to finish.
+            await expect(page.locator(`.gaia-eyes[data-eyes="${mood}"]`)).toHaveCount(1);
+            await expect(page.locator('.composer-send.is-stop')).toHaveCount(0);
+            // The streamed bubble hands over to the saved reply; one copy stays.
+            await expect(page.getByText(reply.split('\n')[0])).toHaveCount(1);
+            // The page clock is frozen; move it past the mood so the icon settles.
+            await page.clock.setFixedTime(NOW.getTime() + 10_000);
+            const icon = page.locator('.msg-assistant').last().locator(`.final-glyph[data-glyph="${glyph}"]`);
+            // The mood's own timer runs on real time, up to the longest mood.
+            await expect(icon).toBeVisible({ timeout: 15_000 });
+            await expect(icon).toHaveAttribute('aria-label', /.+/);
+            const b = (await icon.boundingBox())!;
+            expect([b.width, b.height]).toEqual([16, 16]);
+            await expect(page.locator('.gaia-eyes:not([data-eyes="brain"])')).toHaveCount(1);
+            // In Arabic the question mark flips into the Arabic one; a check mark never flips.
+            const flip = await page.locator(`.gaia-eyes[data-eyes="${glyph}"]`).evaluate((el) => getComputedStyle(el).scale);
+            expect(flip).toBe(locale === 'ar' && glyph !== 'check' ? '-1 1' : 'none');
+            await shot(page, `final-glyph-${glyph}-${theme}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
+}
+
 const QUESTION_EVENTS = [
     {
         type: 'needs_input', request_id: 'q-1', question: 'Which colour do you prefer?',

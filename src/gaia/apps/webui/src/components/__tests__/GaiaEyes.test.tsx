@@ -199,7 +199,20 @@ describe('the eyes in the live status line', () => {
         expect(eyes(container).dataset.eyes).toBe('sad');
         expect(container.querySelector('.thinking-indicator-text')).toBeNull();
         act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS + 100); });
-        // Then the line folds away rather than vanishing, so the answer glides up.
+        // A strong reaction leaves its icon: the eyes become a tear that stays, and says why.
+        const icon = container.querySelector('.final-glyph')!;
+        expect(icon.getAttribute('data-glyph')).toBe('tear');
+        expect(icon.getAttribute('aria-label')).toBe('GAIA is sad');
+        act(() => { vi.advanceTimersByTime(5000); });
+        expect(container.querySelector('.mood-line.is-leaving')).toBeNull();
+        expect(container.querySelector('.final-glyph')).not.toBeNull();
+    });
+
+    it('fold their line away after a reaction with no icon of its own', () => {
+        const { container } = renderTurn('summarize this report', { answer: 'Here it is.' });
+        act(() => { useChatStore.getState().setGaiaMood('skeptical'); });
+        expect(eyes(container).dataset.eyes).toBe('skeptical');
+        act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS + 100); });
         expect(container.querySelector('.mood-line.is-leaving')).not.toBeNull();
         act(() => { vi.advanceTimersByTime(400); });
         expect(container.querySelector('.thinking-indicator')).toBeNull();

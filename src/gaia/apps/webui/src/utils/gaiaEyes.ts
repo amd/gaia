@@ -6,11 +6,64 @@
 import { EYES_ANIMATIONS, EYES_VARIANTS, type EyesState } from '../components/gaiaEyesSheet';
 
 export type EyesPhase = 'think' | 'read' | 'tool' | 'wait';
-/** What the eyes settle into once GAIA has thought. */
-export type EyesGlyph = 'brain';
+/** What the eyes become once GAIA has answered: the brain, or an icon for a strong reaction. */
+export const EYES_GLYPHS = [
+    'brain', 'heart', 'question', 'exclaim', 'star', 'sun', 'note', 'tear', 'bolt', 'cloud', 'sprout', 'moon', 'check',
+] as const satisfies readonly EyesState[];
+export type EyesGlyph = (typeof EYES_GLYPHS)[number];
 export type EyesMood = Exclude<EyesState, EyesPhase | EyesGlyph>;
 
-const NOT_MOODS: readonly string[] = ['think', 'read', 'tool', 'wait', 'brain'] satisfies (EyesPhase | EyesGlyph)[];
+const NOT_MOODS: readonly string[] = ['think', 'read', 'tool', 'wait', ...EYES_GLYPHS];
+
+/**
+ * The icon each strong reaction settles on. Reactions not listed settle on the
+ * brain, unless GAIA ended by asking the user something.
+ */
+const GLYPH_FOR: Partial<Record<EyesMood, EyesGlyph>> = {
+    love: 'heart', grateful: 'heart',
+    confused: 'question',
+    surprised: 'exclaim', scared: 'exclaim',
+    impressed: 'star', proud: 'star', excited: 'star',
+    happy: 'sun', greet: 'sun', laugh: 'sun',
+    playful: 'note', wink: 'note',
+    sad: 'tear', disappointed: 'tear', apologetic: 'tear',
+    angry: 'bolt',
+    worried: 'cloud', disgusted: 'cloud', embarrassed: 'cloud',
+    hopeful: 'sprout',
+    calm: 'moon', sleepy: 'moon', goodbye: 'moon',
+    relieved: 'check', nod: 'check',
+};
+
+/**
+ * True when a reply leaves the user something to answer: its last paragraph
+ * asks a question, or it lists questions, one per line.
+ */
+export function asksUser(answer: string): boolean {
+    const text = answer.trim();
+    const last = text.split(/\n\s*\n/).pop() ?? '';
+    if (/[?؟]/.test(last)) return true;
+    return text.split('\n').filter((line) => /[?؟]["'”’)\]*_\s]*$/.test(line.trim())).length >= 2;
+}
+
+/** Reactions too strong for a closing question to replace: what she felt is the message. */
+const INTENSE: ReadonlySet<EyesMood> = new Set<EyesMood>([
+    'love', 'grateful', 'sad', 'disappointed', 'apologetic', 'angry', 'scared', 'surprised',
+    'excited', 'impressed', 'proud', 'worried', 'disgusted',
+]);
+
+/**
+ * What GAIA's eyes settle on for a finished reply. An intense reaction keeps its
+ * own icon; otherwise a reply that asks the user something shows a question
+ * mark, so they see it is their turn; then a milder reaction's icon; else the
+ * brain.
+ */
+export function finalGlyph(mood: string | null | undefined, answer: string): EyesGlyph {
+    const known = asEyesMood(mood);
+    const icon = known ? GLYPH_FOR[known] : undefined;
+    if (icon && INTENSE.has(known!)) return icon;
+    if (asksUser(answer)) return 'question';
+    return icon ?? 'brain';
+}
 
 /** Every mood the eyes can draw. GAIA names one of these for her own reply (`MOODS` in agents/base/mood.py). */
 export const EYES_MOODS = (Object.keys(EYES_VARIANTS) as EyesState[]).filter(

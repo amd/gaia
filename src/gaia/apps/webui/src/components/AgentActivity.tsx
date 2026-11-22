@@ -48,7 +48,7 @@ import { localizeLiveStatus } from '../utils/liveStatus';
 import { ensureModel } from '../stores/modelNeededStore';
 import './AgentActivity.css';
 import { MoodHostContext, StepGlyph } from './StepGlyph';
-import { eyesPhase } from '../utils/gaiaEyes';
+import { eyesPhase, type EyesGlyph } from '../utils/gaiaEyes';
 import { visibleName, markStrayDirection } from './CalendarApproval';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -510,6 +510,37 @@ export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
 }
 
 /** A failed call the agent recovered from stays folded; a turn-level error never hides behind a click. */
+/** The rows a finished timeline group shows, as the component draws them. */
+function doneRows(rows: ActivityRow[]): ActivityRow[] {
+    return foldThoughts(rows.filter((r) => shownWhenDone(r) || isWarning(r) || isKept(r)));
+}
+
+/**
+ * Where a turn's final icon shows: on the row of the thought that led to the
+ * answer, or, once the turn is done and that thought is folded away, on its
+ * group's summary line. Nowhere when the turn ended on something else.
+ */
+export function finalGlyphSpot(rows: ActivityRow[], timeline: TimelineItem[], running: boolean): { rowId?: number; summary?: boolean } {
+    const last = [...rows].reverse().find((r) => r.type === 'thinking' || r.type === 'tool');
+    if (!last || last.type !== 'thinking') return {};
+    if (running) return { rowId: last.id };
+    const item = timeline[timeline.length - 1];
+    if (!item || item.kind !== 'steps') return {};
+    const visible = doneRows(item.rows);
+    const end = visible[visible.length - 1];
+    if (!end || end.type !== 'thinking') return {};
+    if (visible.length === 1) return { rowId: end.id };
+    const quiet = !visible.some(isTurnError) && !visible.some((r) => r.type === 'tool' && (r.declined || r.refused || r.autoDeclined));
+    return quiet ? { summary: true } : {};
+}
+
+/** Whether a finished turn's timeline shows its final icon, so no line of its own is needed. */
+export function timelineShowsFinalGlyph(steps: AgentStep[], answer = ''): boolean {
+    const rows = consolidateSteps(steps, false);
+    const spot = finalGlyphSpot(rows, toTimeline(rows, answer), false);
+    return spot.rowId !== undefined || !!spot.summary;
+}
+
 function isTurnError(row: ActivityRow): boolean {
     return row.type === 'error' || row.type === 'policy_alert';
 }
@@ -567,6 +598,8 @@ interface AgentActivityProps {
     liveLine?: React.ReactNode;
     /** This turn may show GAIA's mood (streaming, or the chat's latest answer): its last step plays it. */
     moodHost?: boolean;
+    /** What GAIA's eyes settle on for this reply, shown where the thought that led to it is. */
+    finalGlyph?: EyesGlyph;
     /** What the running call's own model calls are doing (page progress, a server restart); shown on its row. */
     toolStatus?: string | null;
     /** The turn's answer, so a note it repeats is not shown twice. */
@@ -589,7 +622,7 @@ function VisionOffer() {
 }
 
 /** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
-export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, moodHost = false, toolStatus = null, answer }: AgentActivityProps) {
+export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, moodHost = false, finalGlyph = 'brain', toolStatus = null, answer }: AgentActivityProps) {
     const t = useT();
     const [openGroups, setOpenGroups] = useState<Map<number, boolean>>(new Map());
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
@@ -634,7 +667,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
 
     const renderRow = (step: ActivityRow) => {
         if (step.type === 'thinking') {
-            return <FlowThought key={step.id} step={step} live={running && !!step.active} durationMs={durations.get(step.id)} now={now} host={step.id === hostId} />;
+            return <FlowThought key={step.id} step={step} live={running && !!step.active} durationMs={durations.get(step.id)} now={now} host={step.id === hostId} settled={step.id === spot.rowId ? finalGlyph : 'brain'} />;
         }
         if (step.type === 'tool') {
             return (
@@ -668,6 +701,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
     const lastIndex = timeline.length - 1;
     const visibleRows = (rows: ActivityRow[]) =>
         foldThoughts(rows.filter((r) => (shownWhenDone(r) || isWarning(r) || isKept(r)) && !isPlanShownLive(r, livePlan)));
+    const spot = finalGlyphSpot(displaySteps, timeline, running);
     // Calls in the runs that are open; folded runs and lone rows have nothing to sift.
     const openCalls = timeline.reduce((n, item, i) => {
         if (item.kind !== 'steps') return n;
@@ -710,7 +744,9 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                                         ? <AlertCircle size={13} className="agent-icon-error" />
                                         : visible.some((r) => r.type === 'tool' && (r.declined || r.refused || r.autoDeclined))
                                             ? <Ban size={13} className="flow-steps-done" />
-                                            : <CheckCircle2 size={13} className="flow-steps-done" />}
+                                            : i === lastIndex && spot.summary && finalGlyph !== 'brain'
+                                                ? <StepGlyph live={false} phase="think" settled={finalGlyph} />
+                                                : <CheckCircle2 size={13} className="flow-steps-done" />}
                                     <span className="flow-steps-text">{stepsSummary(visible, t)}</span>
                                     <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
                                 </button>
@@ -816,7 +852,7 @@ export function thoughtLabel(live: boolean, durationMs?: number, t: Translate = 
 }
 
 /** Reasoning stays one line, live or done, until the user opens it. */
-function FlowThought({ step, live, durationMs, now, host = false }: { step: AgentStep; live: boolean; durationMs?: number; now: number; host?: boolean }) {
+function FlowThought({ step, live, durationMs, now, host = false, settled = 'brain' }: { step: AgentStep; live: boolean; durationMs?: number; now: number; host?: boolean; settled?: EyesGlyph }) {
     const t = useT();
     const text = (step.detail || '').trim();
     const [open, setOpen] = useState(false);
@@ -830,7 +866,7 @@ function FlowThought({ step, live, durationMs, now, host = false }: { step: Agen
                 onClick={() => setOpen((o) => !o)}
                 aria-expanded={open}
             >
-                <StepGlyph live={live} phase="think" settled="brain" host={host} />
+                <StepGlyph live={live} phase="think" settled={settled} host={host} />
                 <span>{thoughtLabel(live, live ? now - step.timestamp : durationMs, t)}</span>
                 <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
             </button>

@@ -3451,6 +3451,17 @@
         ],
         "title": "Library Notices"
       },
+      "mood": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mood"
+      },
       "page_elements": {
         "anyOf": [
           {

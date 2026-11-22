@@ -278,6 +278,7 @@ _CHAT_SCHEMA_COLUMNS = {
         "inference_stats",
         "library_notices",
         "model_messages",
+        "mood",
         "page_elements",
         "search_text",
         "stopped",
@@ -511,6 +512,8 @@ class ChatDatabase:
         self._add_column("messages", "stopped", "INTEGER NOT NULL DEFAULT 0")
         # 1 when a model failure ended this reply's turn; old rows read as not failed.
         self._add_column("messages", "failed", "INTEGER NOT NULL DEFAULT 0")
+        # The reaction GAIA named for this reply (mood.MOODS); NULL when none.
+        self._add_column("messages", "mood", "TEXT")
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
@@ -990,6 +993,7 @@ class ChatDatabase:
         ends_turn: bool = False,
         stopped: bool = False,
         failed: bool = False,
+        mood: str | None = None,
     ) -> int:
         """Add a message to a session. Returns message ID.
 
@@ -1008,8 +1012,8 @@ class ChatDatabase:
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary, library_notices, stopped, failed)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, library_notices, stopped, failed, mood)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -1025,6 +1029,7 @@ class ChatDatabase:
                     notices_json,
                     int(stopped),
                     int(failed),
+                    mood,
                 ),
             )
 
@@ -1056,6 +1061,7 @@ class ChatDatabase:
         ends_turn: bool = False,
         stopped: bool = False,
         failed: bool = False,
+        mood: str | None = None,
     ) -> int:
         """Atomically replace a message with a fresh row. Returns the new ID.
 
@@ -1086,8 +1092,8 @@ class ChatDatabase:
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary, library_notices, stopped, failed)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, library_notices, stopped, failed, mood)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -1103,6 +1109,7 @@ class ChatDatabase:
                     notices_json,
                     int(stopped),
                     int(failed),
+                    mood,
                 ),
             )
 
