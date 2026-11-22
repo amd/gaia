@@ -2372,8 +2372,7 @@ _ASKS_AGAIN = re.compile(
     re.IGNORECASE,
 )
 _NEGATED_ASK = re.compile(
-    r"\b(?:don'?t|do not|never|not)\s+(?:try|retry|re-?run|run|do|allow|approve|go)\b"
-    r"|^\s*no\b",
+    r"\b(?:don'?t|do not|never|not)\s+(?:try|retry|re-?run|run|do|allow|approve|go)\b",
     re.IGNORECASE,
 )
 

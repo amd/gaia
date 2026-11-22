@@ -216,7 +216,15 @@ def test_the_no_lasts_into_the_next_turn(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     "asks_again",
-    ["run it again", "OK, try again", "go ahead", "yes", f"please run {ECHO} now"],
+    [
+        "run it again",
+        "OK, try again",
+        "go ahead",
+        "yes",
+        f"please run {ECHO} now",
+        "No, I misclicked, run it again",
+        f"no wait, please run {ECHO}",
+    ],
 )
 def test_asking_again_puts_it_to_the_user_again(tmp_path, monkeypatch, asks_again):
     monkeypatch.chdir(tmp_path)
@@ -231,7 +239,10 @@ def test_asking_again_puts_it_to_the_user_again(tmp_path, monkeypatch, asks_agai
     assert console.prompted == [ECHO, ECHO]
 
 
-@pytest.mark.parametrize("not_again", ["don't run it", "No, leave it", "do not retry"])
+@pytest.mark.parametrize(
+    "not_again",
+    ["don't run it", "No, leave it", "do not retry", "no", "No, don't run it again"],
+)
 def test_saying_not_to_does_not_lift_it(tmp_path, monkeypatch, not_again):
     monkeypatch.chdir(tmp_path)
     console = _DenyShellConsole()
