@@ -10,14 +10,21 @@ UI; ``tests/unit/test_harnesses.py`` fails if they drift.
 start yet. Its name still loads from ``config.json``, so a config written by a
 newer GAIA never stops this one from starting; choosing or launching it is an
 error that says why.
+
+``GAIA_UNPROVEN_HARNESS`` names one known harness that may run anyway. Only the
+eval lanes and tests set it, to measure a harness before it is offered; no
+setting writes it.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
 DEFAULT_HARNESS = "gaiapy"
+
+UNPROVEN_HARNESS_ENV = "GAIA_UNPROVEN_HARNESS"
 
 
 @dataclass(frozen=True)
@@ -77,6 +84,9 @@ def unavailable_reason(name: str) -> str:
 def require_runnable(name: str) -> str:
     """``name`` when this version can run it; else raise naming the fix."""
     known = harness(name)
+    if known is not None and not known.runnable:
+        if os.environ.get(UNPROVEN_HARNESS_ENV, "").strip() == name:
+            return name
     if known is None or not known.runnable:
         raise HarnessUnavailableError(unavailable_reason(name))
     return name

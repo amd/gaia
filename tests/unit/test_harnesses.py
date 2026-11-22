@@ -59,3 +59,17 @@ def test_a_harness_that_cannot_run_names_the_fix(name):
     with pytest.raises(HarnessUnavailableError) as e:
         require_runnable(name)
     assert name in str(e.value) and "Settings" in str(e.value)
+
+
+def test_the_eval_override_runs_only_the_harness_it_names(monkeypatch):
+    monkeypatch.setenv("GAIA_UNPROVEN_HARNESS", "gaiacode")
+    assert require_runnable("gaiacode") == "gaiacode"
+    # It never makes an unknown name runnable.
+    with pytest.raises(HarnessUnavailableError):
+        require_runnable("rust")
+
+
+def test_without_the_override_a_saved_gaiacode_still_refuses(monkeypatch):
+    monkeypatch.delenv("GAIA_UNPROVEN_HARNESS", raising=False)
+    with pytest.raises(HarnessUnavailableError):
+        require_runnable("gaiacode")
