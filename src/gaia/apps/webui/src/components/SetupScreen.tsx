@@ -1331,12 +1331,16 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <ul className="setup-reasons">
                                         {!selection.chatChosen && <li>{t('setup.plan.why.evaluated')}</li>}
                                         {!selection.chatChosen && plan.left_for_apps_gb != null && <li>{t('setup.plan.why.headroom', { left: formatFitGb(plan.left_for_apps_gb) })}</li>}
-                                        {chatEntry?.need_gb != null && chatEntry.capacity_gb != null && chatEntry.fits && (
+                                        {chatEntry && (chatEntry.fits === false || (chatEntry.fits === true && chatEntry.tight)) && (
+                                            <li role="note">{tooBigText(chatEntry, t)}</li>
+                                        )}
+                                        {chatEntry?.need_gb != null && chatEntry.capacity_gb != null && chatEntry.fits && !chatEntry.tight && (
                                             <li>{t('setup.plan.why.fits', { need: formatFitGb(chatEntry.need_gb), have: formatFitGb(chatEntry.capacity_gb) })}</li>
                                         )}
                                         <li>{t('setup.plan.why.private')}</li>
                                         {chatEntry && isNpu(chatEntry) && <li>{t('setup.plan.why.noImagesNpu')}</li>}
-                                        {biggerOption && biggerOption.id !== chatEntry?.id && biggerOption.need_gb != null && biggerOption.capacity_gb != null && (
+                                        {/* A model already short of room is no place to pitch a bigger one. */}
+                                        {biggerOption && biggerOption.id !== chatEntry?.id && biggerOption.need_gb != null && biggerOption.capacity_gb != null && chatEntry?.fits !== false && !chatEntry?.tight && (
                                             <li>{t('setup.plan.why.bigger', { name: biggerOption.name, need: formatFitGb(biggerOption.need_gb), have: formatFitGb(biggerOption.capacity_gb) })}</li>
                                         )}
                                     </ul>
