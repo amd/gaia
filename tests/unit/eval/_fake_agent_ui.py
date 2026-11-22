@@ -25,6 +25,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
+from gaia.ui.api_token import read_token
+
 
 class _Run:
     def __init__(self, session_id: str) -> None:
@@ -68,6 +70,7 @@ class FakeAgentUI:
         self.cancels: List[str] = []
         self.answers: List[Dict[str, Any]] = []
         self.busy_rejections = 0
+        self.token = read_token()
         self._server: Optional[ThreadingHTTPServer] = None
 
     # ── lifecycle ──
@@ -222,6 +225,13 @@ class _Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             return  # the run carries on without this subscriber
 
+    def _refused(self) -> bool:
+        """Answer 401, as the real backend does, unless the API token came along."""
+        if self.headers.get("Authorization") == f"Bearer {self.backend.token}":
+            return False
+        self._json(401, {"detail": "Agent UI API token required"})
+        return True
+
     # ── routes ──
 
     def do_GET(self) -> None:  # noqa: N802 - http.server naming
@@ -230,6 +240,8 @@ class _Handler(BaseHTTPRequestHandler):
         parts = url.path.strip("/").split("/")
         if url.path == "/api/health":
             return self._json(200, {"status": "ok"})
+        if self._refused():
+            return
         if url.path == "/api/chat/active":
             return self._json(200, {"session_ids": b.active()})
         if url.path == "/api/chat/attach":
@@ -259,6 +271,8 @@ class _Handler(BaseHTTPRequestHandler):
         b = self.backend
         path = urlparse(self.path).path
         body = self._body()
+        if self._refused():
+            return
         if path == "/api/sessions":
             sid = uuid.uuid4().hex
             session = {"id": sid, "title": body.get("title", "New Chat")}

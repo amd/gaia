@@ -2953,6 +2953,9 @@ export const enMessages = {
     'banner.restartStopped': 'GAIA’s assistant stopped and couldn’t restart on its own.',
     'banner.restartStoppedHint': 'Your chats are saved. Restart GAIA to continue.',
     'banner.restartingShort': 'Restarting…',
+    // A browser without the API token's cookie
+    'auth.signIn.title': "This browser isn't signed in to GAIA.",
+    'auth.signIn.hint': 'Open the link {command} prints, or use the GAIA desktop app.',
     'banner.restartButton': 'Restart GAIA',
     'banner.restartFailed': 'GAIA couldn’t restart its assistant: {error}',
     'banner.pickLoad.loading': 'Loading {model}…',

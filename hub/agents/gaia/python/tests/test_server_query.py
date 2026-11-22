@@ -1255,6 +1255,7 @@ def test_full_access_is_refused_on_a_sidecar_without_caller_auth(built, monkeypa
     client, agents = built
     client.post("/v1/gaia/query", json=_body(session_id="s-1"))
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     caller_auth.reset()
     open_client = TestClient(server_mod.build_app(), base_url=_BASE_URL)
 
