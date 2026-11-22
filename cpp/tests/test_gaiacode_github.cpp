@@ -62,6 +62,10 @@ public:
                         json(res, {{"check_runs", gaia::json::array({{{"name", "tests"}, {"status", "completed"},
                                                                        {"conclusion", "failure"}, {"id", 9}}})}});
                     });
+        server_.Get("/repos/o/r/commits/abc1234def/status", [json](const httplib::Request&, httplib::Response& res) {
+            json(res, {{"statuses", gaia::json::array({{{"context", "legacy/ci"}, {"state", "error"},
+                                                        {"target_url", "https://ci.example/1"}}})}});
+        });
         server_.Get("/repos/o/r/actions/jobs/9/logs", [this](const httplib::Request& req, httplib::Response& res) {
             note(req);
             res.status = 302;
@@ -95,6 +99,9 @@ public:
         server_.Get("/repos/o/nulls/commits/fedcba9876/check-runs", [json](const httplib::Request&, httplib::Response& res) {
             json(res, {{"check_runs", gaia::json::array({{{"name", "tests"}, {"status", "in_progress"},
                                                           {"conclusion", nullptr}, {"id", 5}}})}});
+        });
+        server_.Get("/repos/o/nulls/commits/fedcba9876/status", [json](const httplib::Request&, httplib::Response& res) {
+            json(res, {{"statuses", gaia::json::array()}});
         });
         // A renamed repository answers with a redirect.
         server_.Get("/repos/o/moved/issues/1", [](const httplib::Request&, httplib::Response& res) {
@@ -228,8 +235,9 @@ TEST(GaiacodeGitHub, ReadsAPullRequestAndItsFailingChecks) {
     EXPECT_EQ(pr["files"][0]["patch"], "@@ -1 +1 @@");
     const json checks = tools.call("gh_pr_checks", {{"number", 3}});
     ASSERT_EQ(checks.value("status", ""), "success") << checks.dump();
-    EXPECT_EQ(checks["failing"], 1);
+    EXPECT_EQ(checks["failing"], 2) << "a failing check run and a failing commit status";
     EXPECT_EQ(checks["checks"][0]["job_id"], 9);
+    EXPECT_EQ(checks["checks"][1]["name"], "legacy/ci");
 }
 
 TEST(GaiacodeGitHub, AJobLogIsFetchedWithoutTheTokenAfterARedirect) {
@@ -308,4 +316,31 @@ TEST(GaiacodeGitHub, GitHubActionsOwnApiUrlIsNotAnOverride) {
         resolveGitHubAccess(repo, envWith({{"GITHUB_API_URL", "https://api.github.com/"}, {"GITHUB_TOKEN", "t"}}));
     EXPECT_EQ(access.apiBase, "https://api.github.com");
     EXPECT_EQ(access.token, "t");
+}
+
+TEST(GaiacodeGitHub, MoreRemoteShapesNameTheRightApi) {
+    auto ssh443 = parseRemote("ssh://git@ssh.github.com:443/o/r.git");
+    ASSERT_TRUE(ssh443);
+    EXPECT_EQ(ssh443->host, "github.com");
+    auto ghe = parseRepoSlug("acme.ghe.com/team/svc");
+    ASSERT_TRUE(ghe);
+    EXPECT_EQ(ghe->host, "acme.ghe.com");
+    EXPECT_EQ(ghe->slug(), "team/svc");
+    EXPECT_EQ(resolveGitHubAccess(*ghe, envWith({})).apiBase, "https://api.acme.ghe.com");
+    auto plain = parseRepoSlug("o/r");
+    ASSERT_TRUE(plain);
+    EXPECT_EQ(plain->host, "github.com");
+    EXPECT_FALSE(parseRepoSlug("bad host!/o/r"));
+}
+
+TEST(GaiacodeGitHub, TheApprovalCardNamesTheRepository) {
+    FakeGitHub gh;
+    Tools tools(gh, "o/r", {"comment"});
+    const ToolInfo* t = tools.registry.findTool("gh_issue_comment");
+    ASSERT_NE(t, nullptr);
+    ASSERT_TRUE(t->validateArgs.has_value());
+    const json shown = (*t->validateArgs)("gh_issue_comment", {{"number", "3"}, {"body", "hi"}});
+    EXPECT_EQ(shown["repository"], "o/r");
+    EXPECT_EQ(shown["number"], 3) << "arguments are still coerced to their types";
+    EXPECT_THROW((*t->validateArgs)("gh_issue_comment", {{"body", "hi"}}), std::invalid_argument);
 }

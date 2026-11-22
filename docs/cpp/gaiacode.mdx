@@ -58,7 +58,7 @@ gaiacode -p "fix the failing test in stats.py" --model Qwen3.6-35B-A3B-GGUF \
 | `--output-format FMT` | `text` (default) or `json`, with the same field names as `gaiacpp -p` |
 | `--dangerously-skip-permissions` | Run tools that would ask: shell commands that change things, file writes, `run_checks` |
 | `--max-steps N` | Step limit for the run (default 200) |
-| `--repo OWNER/NAME` | GitHub repository to work on; default: the `upstream` remote, else `origin` |
+| `--repo [HOST/]OWNER/NAME` | GitHub repository to work on (HOST for GitHub Enterprise); default: the `upstream` remote, else `origin` |
 | `--allow-github-writes KINDS` | GitHub writes this run may make: `comment`, `pr` (comma-separated) |
 | `--no-github` | No GitHub tools |
 | `--no-skills` | Load no skills |
@@ -85,7 +85,7 @@ gaiacode reads and writes GitHub itself over its REST API; the `gh` CLI isn't ne
 |---|---|
 | `gh_issue_view`, `gh_issue_list`, `gh_search` | Read an issue with its comments, list issues, search issues and pull requests |
 | `gh_pr_view` | A pull request's title, body, branches and changed files, with their patches when asked |
-| `gh_pr_checks` | The CI checks on a pull request's latest commit, with the job ids of failing ones |
+| `gh_pr_checks` | The CI checks and commit statuses on a pull request's latest commit, each check run with its job id |
 | `gh_run_log` | The end of a CI job's log, where the failure usually is |
 | `gh_issue_comment` | Post a comment on an issue or pull request |
 | `gh_pr_create` | Open a pull request from a pushed branch, as a draft unless told otherwise |
