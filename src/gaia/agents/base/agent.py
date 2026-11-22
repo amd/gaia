@@ -4070,6 +4070,7 @@ Do NOT wrap conversational replies in JSON.
             )
         self.max_consecutive_repeats = max_consecutive_repeats
         self._turn_scope = TurnScopeGuard(max_consecutive_repeats)
+        self._stopped_on_failing_repeats = False
         self._task_lessons = TaskLessons()
         self._current_query: Optional[str] = (
             None  # Store current query for error context
@@ -13547,6 +13548,7 @@ Do NOT wrap conversational replies in JSON.
             os.getcwd(),
             scratch=getattr(self._read_validator(), "scratch_dir", None),
         )
+        self._stopped_on_failing_repeats = False
         if getattr(self, "_task_lessons", None) is None:
             self._task_lessons = TaskLessons()
         self._task_lessons.begin_turn()
@@ -16980,6 +16982,7 @@ Do NOT wrap conversational replies in JSON.
                     "success"
                     if has_valid_answer
                     and not blocking_gaps(completion_gaps)
+                    and not getattr(self, "_stopped_on_failing_repeats", False)
                     and not max_steps_reached
                     and not time_limit_reached
                     else "incomplete"
@@ -17245,6 +17248,10 @@ Do NOT wrap conversational replies in JSON.
             tool_name, executed_count, recent_results
         )
         failed = self._repeats_carry_a_failure(recent_results)
+        # A turn stopped by a call that kept failing did not finish, whatever it says.
+        self._stopped_on_failing_repeats = (
+            getattr(self, "_stopped_on_failing_repeats", False) or failed
+        )
 
         steps_taken = self._write_deliverables_before_stop(
             messages,
