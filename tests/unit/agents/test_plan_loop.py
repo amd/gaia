@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.plan_tracker import PLAN_REMINDER
+from gaia.agents.base.plan_tracker import PLAN_HINT, PLAN_REMINDER
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.tools.task_list_tools import (
     COMPLETED,
@@ -581,4 +581,62 @@ def test_a_streamed_answer_that_opens_with_a_plan_is_shown_whole():
     result = agent.process_query("how would you merge the action items?")
     assert "1. Read notes.txt" in result["result"]
     assert "Shall I go ahead?" in result["result"]
+    assert _lists(events) == []
+
+
+# -- the hint with each request, and a plan that opens a final answer ----------
+
+
+def test_the_hint_goes_with_the_request_but_not_into_the_saved_history():
+    agent, _ = _agent()
+    sent = _script(agent, [_calls(READ), "It says hello."])
+    agent.process_query("what is in notes.txt?")
+    assert PLAN_HINT in sent[0][-1]["content"]
+    saved = [m for m in agent.conversation_history if m.get("role") == "user"]
+    assert all(PLAN_HINT not in str(m.get("content")) for m in saved)
+
+
+def test_no_hint_when_plans_are_off_or_only_a_plan_was_asked_for(monkeypatch):
+    agent, _ = _agent()
+    reply = PLAN + "Tell me when to start."
+    sent = _script(agent, [reply, reply, reply, reply])
+    agent.process_query("Don't do anything yet, just give me a plan.")
+    assert PLAN_HINT not in _texts(sent)
+
+    monkeypatch.setenv("GAIA_AGENT_PLANS", "0")
+    agent, _ = _agent()
+    sent = _script(agent, [_calls(READ), "It says hello."])
+    agent.process_query("what is in notes.txt?")
+    assert PLAN_HINT not in _texts(sent)
+
+
+def test_a_plan_that_opens_the_final_answer_becomes_the_list():
+    agent, events = _agent(streaming=True)
+    sent = _script(
+        agent,
+        [
+            _calls(READ),
+            _calls(WRITE),
+            PLAN + "The merged list is in actions.md.",
+        ],
+    )
+    result = agent.process_query("merge the action items into actions.md")
+    assert len(sent) == 3
+    assert _statuses(agent) == [COMPLETED, COMPLETED, COMPLETED]
+    assert "1. Read notes.txt" not in result["result"]
+    assert "actions.md" in result["result"]
+    shown = "".join(
+        str(e.get("content") or e.get("text") or "")
+        for e in events
+        if e.get("type") in ("chunk", "commentary", "answer")
+    )
+    assert "1. Read notes.txt" not in shown
+
+
+def test_a_plan_the_user_asked_for_after_some_work_stays_in_the_answer():
+    agent, events = _agent()
+    week = "Plan:\n1. Monday: review the notes\n2. Tuesday: write the draft\n3. Wednesday: ship it\n"
+    _script(agent, [_calls(READ), week, week])
+    result = agent.process_query("read notes.txt and make me a plan for the week")
+    assert "Monday: review the notes" in result["result"]
     assert _lists(events) == []

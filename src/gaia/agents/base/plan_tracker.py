@@ -36,6 +36,8 @@ MAX_STEPS = 12
 MAX_STEP_CHARS = 120
 #: A line longer than this is never a plan heading or step, and is not scanned.
 _MAX_LINE = 400
+#: A whole plan on one line is longer than any heading or step line.
+_MAX_INLINE = 2000
 
 PLAN_INSTRUCTION = (
     "==== PLANS ====\n"
@@ -57,6 +59,11 @@ SEND_BACK = (
     "Carry them out now with your tools. If one is not needed, say so. Then "
     "give your complete answer again: it replaces the one you just gave."
 )
+#: Sent with each request, where a model attends more than to its system prompt.
+PLAN_HINT = (
+    "\n\n(If this takes three or more steps, open your reply with the Plan: list.)"
+)
+_ASKS_FOR_PLAN = re.compile(r"\bplan(?:s|ning)?\b", re.I)
 #: Tool calls into a request, with no plan, before the one reminder.
 REMIND_AFTER_CALLS = 2
 #: Bookkeeping tools: they neither count toward the reminder nor tick a step.
@@ -67,6 +74,8 @@ CONTENT_ARGS = frozenset(
 )
 
 _PLAN_HEAD = re.compile(r"^\W{0,8}plan\W{0,8}$", re.I)
+_INLINE_HEAD = re.compile(r"^\W{0,8}plan\W{0,3}:\W{0,3}(?=1[.)][ \t])", re.I)
+_INLINE_NUMBER = re.compile(r"(?:^|(?<=\s))(\d{1,2})[.)][ \t]+")
 _NUMBERED = re.compile(r"^ {0,3}\d{1,2}[.)][ \t]+(\S.*?)\s*$")
 _BULLET = re.compile(r"^ ?[-*•][ \t]+(\S.*?)\s*$")
 _STATUS_SUFFIX = re.compile(
@@ -104,6 +113,11 @@ def plans_enabled() -> bool:
         f"GAIA_AGENT_PLANS must be a boolean (1/0, true/false, on/off), "
         f"got {raw!r}. Unset it to keep plans on."
     )
+
+
+def asks_for_plan(request: str) -> bool:
+    """Whether the user's own words ask for a plan, which is then theirs to read."""
+    return bool(_ASKS_FOR_PLAN.search(request or ""))
 
 
 def _host(netloc: str) -> str:
@@ -152,6 +166,38 @@ def _is_head(line: str) -> bool:
     return len(line) <= _MAX_LINE and bool(_PLAN_HEAD.match(line.strip()))
 
 
+def _inline(line: str) -> Optional[List[str]]:
+    """The steps of a plan written on one line, ``Plan: 1. a 2. b 3. c``.
+
+    Only numbers counting up from 1 split it, so a number inside a step
+    ("Keep 2. versions") stays part of that step.
+    """
+    line = line.strip()
+    if len(line) > _MAX_INLINE:
+        return None
+    head = _INLINE_HEAD.match(line)
+    if head is None:
+        return None
+    rest = line[head.end() :]
+    cuts = []
+    for m in _INLINE_NUMBER.finditer(rest):
+        if int(m.group(1)) == len(cuts) + 1:
+            cuts.append(m)
+    items = [
+        rest[m.end() : nxt.start() if nxt is not None else len(rest)].strip()
+        for m, nxt in zip(cuts, cuts[1:] + [None])
+    ]
+    return [item for item in items if item] or None
+
+
+def _plan_at(lines: Sequence[str], i: int) -> "tuple[List[str], int]":
+    """The plan that starts at line *i*, and the index after it; no plan is ``[]``."""
+    if _is_head(lines[i]):
+        return _block(lines, i)
+    inline = _inline(lines[i])
+    return (inline, i + 1) if inline else ([], i + 1)
+
+
 def _block(lines: Sequence[str], start: int) -> "tuple[List[str], int]":
     """The list under the heading at *start*: its items and the index after it.
 
@@ -181,11 +227,10 @@ def _block(lines: Sequence[str], start: int) -> "tuple[List[str], int]":
 def parse_plan(text: Optional[str]) -> Optional[List[str]]:
     """The list under a ``Plan:`` line, or ``None`` when there is none."""
     lines = (text or "").splitlines()
-    for i, line in enumerate(lines):
-        if _is_head(line):
-            items, _ = _block(lines, i)
-            if len(items) >= MIN_STEPS:
-                return items[:MAX_STEPS]
+    for i in range(len(lines)):
+        items, _ = _plan_at(lines, i)
+        if len(items) >= MIN_STEPS:
+            return items[:MAX_STEPS]
     return None
 
 
@@ -219,10 +264,8 @@ def strip_plan(text: str, only: Optional[Sequence[str]] = None) -> str:
     """
     lines = text.splitlines(keepends=True)
     bare = [line.rstrip("\r\n") for line in lines]
-    for i, line in enumerate(bare):
-        if not _is_head(line):
-            continue
-        items, end = _block(bare, i)
+    for i in range(len(bare)):
+        items, end = _plan_at(bare, i)
         if len(items) < MIN_STEPS:
             continue
         if only is not None and [" ".join(x.split()) for x in items[:MAX_STEPS]] != [
@@ -251,9 +294,12 @@ class PlanTextFilter:
             return chunk
         self._held += chunk
         first = self._held.lstrip("\r\n")
-        if "\n" not in first and len(first) <= _MAX_LINE:
-            return ""
-        if _is_head(first.split("\n", 1)[0]):
+        line = first.split("\n", 1)[0]
+        if "\n" not in first and len(first) <= _MAX_INLINE:
+            # Still the first line: wait while it could be a plan heading.
+            if len(first) <= _MAX_LINE or _INLINE_HEAD.match(first.strip()):
+                return ""
+        if _is_head(line) or _INLINE_HEAD.match(line.strip()):
             return ""
         self._passing = True
         out, self._held = self._held, ""

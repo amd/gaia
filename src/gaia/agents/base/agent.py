@@ -134,11 +134,13 @@ from gaia.agents.base.model_features import (
     withheld_tools,
 )
 from gaia.agents.base.plan_tracker import (
+    PLAN_HINT,
     PLAN_INSTRUCTION,
     PLAN_REMINDER,
     SEND_BACK,
     PlanTextFilter,
     PlanTracker,
+    asks_for_plan,
     parse_plan,
     plan_from_thinking,
     plans_enabled,
@@ -3698,6 +3700,8 @@ class Agent(abc.ABC):
     _plan_tracker_obj: Optional[PlanTracker] = None
     #: Whether plans apply this turn; ``None`` until worked out.
     _plans_active: Optional[bool] = None
+    #: The user's own words this turn ask for a plan.
+    _plan_asked = False
     _plan_stream_filter: Optional[PlanTextFilter] = None
 
     STATE_PLANNING = "PLANNING"
@@ -5685,7 +5689,14 @@ Do NOT wrap conversational replies in JSON.
         if tracker is None:
             return
         if not parsed.get("tool_calls"):
-            # A reply with no tool call is an answer; a plan in it is the user's to read.
+            if not self._plan_opens_answer_after_work():
+                # A plan in an answer is the user's to read.
+                return
+            items = parse_plan(parsed.get("answer"))
+            if items and tracker.set_steps(items):
+                # The work is done; there is nothing left to send it back for.
+                tracker.sent_back = True
+                self._publish_plan(tracker)
             return
         text = parsed.get("content")
         items = parse_plan(text if isinstance(text, str) else None)
@@ -5702,6 +5713,27 @@ Do NOT wrap conversational replies in JSON.
         args = tool_args if isinstance(tool_args, dict) else None
         if tracker.on_tool_result(tool_name, args, ok) and tracker.steps:
             self._publish_plan(tracker)
+
+    def _plan_opens_answer_after_work(self) -> bool:
+        """Whether a plan in this answer recaps work the request already did.
+
+        Then it is the task list, not something the user asked to read.
+        """
+        tracker = self._plan_tracker()
+        return (
+            tracker is not None
+            and tracker.tool_calls > 0
+            and not tracker.planned_this_request
+            and not self._plan_asked
+        )
+
+    def _tell_plan_hint(self, messages: List[Dict]) -> None:
+        """Remind the model of the plan with its request; the saved history keeps the user's words."""
+        if self._plan_tracker() is None:
+            return
+        request = messages[-1]
+        if isinstance(request.get("content"), str):
+            request["content"] += PLAN_HINT
 
     def _without_plan(self, text: Any) -> Any:
         """*text* as the user sees it: the task list already shows the plan."""
@@ -5727,7 +5759,8 @@ Do NOT wrap conversational replies in JSON.
     def _end_streamed(self, reply: str) -> None:
         held, self._plan_stream_filter = self._plan_stream_filter, None
         is_answer = not reply.lstrip().startswith('{"__tool_calls__"')
-        tail = held.flush(keep_plan=is_answer) if held is not None else ""
+        keep = is_answer and not self._plan_opens_answer_after_work()
+        tail = held.flush(keep_plan=keep) if held is not None else ""
         if tail:
             self.console.print_streaming_text(tail)
         self.console.print_streaming_text("", end_of_stream=True)
@@ -13743,6 +13776,7 @@ Do NOT wrap conversational replies in JSON.
         # "Do not run anything, answer only with a plan": no nudge to act.
         request_text = self._request_text(user_input)
         no_action_requested = _asks_for_no_action(request_text)
+        self._plan_asked = asks_for_plan(request_text)
         if no_action_requested:
             # Asked for a plan and nothing else: it is the answer, not a to-do list.
             self._plans_active = False
@@ -13902,6 +13936,7 @@ Do NOT wrap conversational replies in JSON.
         )
         self._tell_no_one_to_ask(messages)
         self._tell_time_budget(messages)
+        self._tell_plan_hint(messages)
 
         # Use provided max_steps or fall back to class default
         steps_limit = max_steps if max_steps is not None else self.max_steps

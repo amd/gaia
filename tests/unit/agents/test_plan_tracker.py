@@ -528,3 +528,36 @@ def test_ticks_always_have_evidence_from_this_request_under_random_use():
             elif s["change"]:
                 nameless_changes_done += 1
         assert nameless_changes_done <= loose_writes, f"seed {seed}: {t.snapshot()}"
+
+
+# -- a plan written on one line -----------------------------------------------
+
+
+def test_a_plan_on_one_line_is_read():
+    text = "Plan: 1. Read both files (done). 2. Extract and deduplicate action items. 3. Write the merged list to Documents/actions.md.\n\nHere is the list."
+    assert parse_plan(text) == [
+        "Read both files (done).",
+        "Extract and deduplicate action items.",
+        "Write the merged list to Documents/actions.md.",
+    ]
+    assert strip_plan(text).strip() == "Here is the list."
+
+
+def test_a_number_that_does_not_count_up_stays_in_its_step():
+    text = "Plan: 1. Read chapter 5. of the book 2. Summarize it 3. Save notes.md"
+    assert parse_plan(text) == [
+        "Read chapter 5. of the book",
+        "Summarize it",
+        "Save notes.md",
+    ]
+
+
+def test_a_sentence_mentioning_a_plan_is_not_one():
+    assert parse_plan("Plan: I will read the files first. 1. Then merge.") is None
+    assert parse_plan("The plan: 1. one 2. two") is None
+
+
+@pytest.mark.parametrize("size", [1, 5, 1000])
+def test_filter_holds_a_one_line_plan(size):
+    text = "Plan: 1. Read a.txt 2. Merge them 3. Save b.md\n\nReading now."
+    assert _stream(text, size).strip() == "Reading now."
