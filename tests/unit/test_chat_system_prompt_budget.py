@@ -88,8 +88,8 @@ if _stubbed_modules:
 _BUDGET_CHARS = {
     # profile + indexed-doc count -> max chars
     # Windows environment block + #5977's SLIDES/DECKS rule + #6434's
-    # LOCKED FILES rule (Windows: 13,080).
-    ("full", 0): 13_100,
+    # LOCKED FILES rule + #8803's ruled-out-step rule (Windows: 13,233).
+    ("full", 0): 13_250,
     ("full", 1): 14_000,
     ("full", 5): 14_500,
     # Large-N budget — pins the scaling property so a regression that
