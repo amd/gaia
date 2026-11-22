@@ -102,6 +102,23 @@ def test_the_step_budget_bounds_model_calls(agent, reply, max_steps):
     assert isinstance(result.get("result"), str)
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [
+        '{"thought": "x", "plan": "look it up"}',
+        '{"goal": "y", "plan": "search, then summarize"}',
+    ],
+)
+def test_an_agent_reply_with_a_sentence_plan_is_corrected_not_shown(agent, reply):
+    chat = _always(agent, reply)
+
+    result = agent.process_query(_QUERY, max_steps=50)
+
+    assert chat.calls <= 3
+    assert reply not in result["result"]
+    assert "trouble formatting my plan" in result["result"]
+
+
 def test_a_plan_with_bad_steps_is_corrected_a_bounded_number_of_times(agent):
     chat = _always(agent, '{"plan": [{"description": "buy milk"}]}')
 

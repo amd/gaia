@@ -7844,10 +7844,13 @@ Do NOT wrap conversational replies in JSON.
     def _is_data_not_a_plan(self, parsed: Dict[str, Any]) -> bool:
         """Whether *parsed* only looks like a plan: nothing in it can be run.
 
-        Its ``plan`` is not a list and its ``tool``, if any, names no tool this
+        Its ``plan`` is not a list, it has no ``thought`` or ``goal`` (those mark
+        the agent's own reply), and its ``tool``, if any, names no tool this
         agent has, so the object is the data the user asked for.
         """
         if "plan" not in parsed or isinstance(parsed["plan"], list):
+            return False
+        if parsed.get("thought") or parsed.get("goal"):
             return False
         if parsed.get("tool_calls") or parsed.get("needs_plan"):
             return False
@@ -13608,6 +13611,7 @@ Do NOT wrap conversational replies in JSON.
         parse_failures = 0
         plan_corrections = 0
         # Every request to the model, so no reply stream outruns the step budget.
+        # A turn this stops is reported as a step-limit stop, with fewer tool steps.
         model_calls = 0
         markup_retries = 0
         tool_call_history = []  # Recent tool calls, for loop detection
