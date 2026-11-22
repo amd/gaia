@@ -13,8 +13,9 @@ import json
 import re
 from typing import Callable, Iterable, Iterator, Optional, Tuple
 
-#: The moods a front-end can show. The Agent UI draws one animation per word
-#: (``EyesMood`` in ``src/gaia/apps/webui/src/utils/gaiaEyes.ts``).
+#: The words a front-end can show: feelings, then the gestures of a
+#: conversation. The Agent UI draws one animation per word (``EyesMood`` in
+#: ``src/gaia/apps/webui/src/utils/gaiaEyes.ts``).
 MOODS: Tuple[str, ...] = (
     "happy",
     "excited",
@@ -32,22 +33,47 @@ MOODS: Tuple[str, ...] = (
     "angry",
     "determined",
     "sleepy",
+    "scared",
+    "disgusted",
+    "relieved",
+    "calm",
+    "hopeful",
+    "disappointed",
+    "greet",
+    "goodbye",
+    "nod",
+    "shake",
+    "shrug",
+    "grateful",
+    "apologetic",
+    "listening",
+    "focused",
+    "impressed",
+    "wink",
+    "eyeroll",
 )
+_FEELINGS = MOODS[: MOODS.index("greet")]
+_GESTURES = MOODS[MOODS.index("greet") :]
 
 MOOD_PROMPT = (
-    "**YOUR MOOD:** Two small eyes on screen show how you feel. Start a reply "
-    "with one tag, `[mood:WORD]`, then the reply. WORD is your honest reaction: "
-    + ", ".join(MOODS)
-    + ". E.g. `[mood:sad]` at bad news, `[mood:proud]` after hard work. The tag "
-    "is removed before the user reads the reply, so never mention it. Skip it "
-    "when you feel nothing in particular."
+    "**YOUR MOOD:** Two small eyes on screen show your reaction. Start a reply "
+    "with one tag, `[mood:WORD]`, then the reply. WORD is how YOU react to the "
+    "message, never a mirror of the user: if they are confused you are "
+    "determined to explain, if they doubt you, focused; if they are tired, calm. "
+    "Feelings: "
+    + ", ".join(_FEELINGS)
+    + ". Gestures: "
+    + ", ".join(_GESTURES)
+    + ". E.g. `[mood:sad]` at bad news, `[mood:nod]` when you agree, "
+    "`[mood:greet]` at a hello. The tag is removed before the user reads the "
+    "reply, so never mention it. Skip it when nothing fits."
 )
 
 #: Sent with each turn, never saved: earlier replies reach the model without
 #: their tags, so without it the model stops naming a mood a few turns in.
 MOOD_REMINDER = (
     "(Note from GAIA, not the user: open your reply with your `[mood:WORD]` tag, "
-    "as your instructions say.)"
+    "your own reaction to this message.)"
 )
 
 _TAG_RE = re.compile(r"\[mood:\s{0,3}([a-z]{1,20})\s{0,3}\]", re.IGNORECASE)

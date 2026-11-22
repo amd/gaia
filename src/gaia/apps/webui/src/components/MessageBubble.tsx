@@ -827,7 +827,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             liveLine={isStreaming && (
                                 <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
                             )}
-                            moodHost={!!isStreaming || latest}
+                            // Only once the live line is gone: while it shows, it has the eyes.
+                            moodHost={isStreaming ? !agentStepsActive && !!cleanedContent : latest}
                         />
                     )}
                     {message.role === 'assistant' && latest && !isStreaming && !echo.steps?.some((s) => s.type === 'thinking' || s.type === 'tool') && <MoodEyes />}

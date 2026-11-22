@@ -178,7 +178,7 @@ describe('the eyes in the live status line', () => {
 
     it("play GAIA's own mood when she names one, over the reaction to the message", () => {
         const { container } = renderTurn('thank you so much, that fixed it');
-        expect(eyes(container).dataset.eyes).toBe('happy');
+        expect(eyes(container).dataset.eyes).toBe('relieved');
         act(() => { useChatStore.getState().setGaiaMood('proud'); });
         expect(eyes(container).dataset.eyes).toBe('proud');
         act(() => { vi.advanceTimersByTime(longestMs('proud') + 1); });
@@ -187,7 +187,7 @@ describe('the eyes in the live status line', () => {
 
     it('ignore a mood word they cannot draw', () => {
         const { container } = renderTurn('summarize this report');
-        act(() => { useChatStore.getState().setGaiaMood('calm'); });
+        act(() => { useChatStore.getState().setGaiaMood('bored'); });
         expect(useChatStore.getState().gaiaMood).toBeNull();
         expect(eyes(container).dataset.eyes).toBe('think');
     });
@@ -221,6 +221,32 @@ describe('the eyes in the live status line', () => {
         expect(container.querySelector('.gaia-eyes')).toBeNull();
     });
 
+    it('show one pair of eyes at a time: a finished step lets go as the live line takes over', () => {
+        useChatStore.setState({ messages: [message({ content: 'read the notes' })] });
+        const call = (active: boolean) => ({
+            id: 1, type: 'tool' as const, label: 'read_file', tool: 'read_file', detail: 'Reading file: notes.txt',
+            active, success: active ? undefined : true, timestamp: Date.now(),
+        });
+        const bubble = (active: boolean, status: string) => (
+            <MessageBubble message={streaming} isStreaming agentSteps={[call(active)]} agentStepsActive liveStatus={status} />
+        );
+        const { container, rerender } = render(bubble(true, 'Reading file: notes.txt'));
+        rerender(bubble(false, 'Reading the tool results'));
+        expect(container.querySelectorAll('.step-glyph.is-live')).toHaveLength(1);
+        expect(container.querySelector('.flow-live-line .step-glyph.is-live')).not.toBeNull();
+    });
+
+    it("keep one pair when GAIA's mood arrives with the answer while steps are still running", () => {
+        useChatStore.setState({ messages: [message({ content: 'read the notes' })] });
+        const done = { id: 1, type: 'tool' as const, label: 'read_file', tool: 'read_file', detail: 'Reading file: notes.txt', active: false, success: true, timestamp: Date.now() };
+        const { container } = render(
+            <MessageBubble message={{ ...streaming, content: 'The notes say' }} isStreaming agentSteps={[done]} agentStepsActive liveStatus="Writing the answer" />,
+        );
+        act(() => { useChatStore.getState().setGaiaMood('nod'); });
+        expect(container.querySelectorAll('.step-glyph.is-live')).toHaveLength(1);
+        expect(container.querySelector('.step-glyph.is-live .gaia-eyes')?.getAttribute('data-eyes')).toBe('nod');
+    });
+
     it('show no eyes beside an older answer', () => {
         act(() => { useChatStore.getState().setGaiaMood('sad'); });
         const { container } = render(
@@ -233,7 +259,7 @@ describe('the eyes in the live status line', () => {
         act(() => { useChatStore.getState().setGaiaMood('sad'); });
         act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS + 100); });
         const { container } = renderTurn('thank you so much, that fixed it');
-        expect(eyes(container).dataset.eyes).toBe('happy');
+        expect(eyes(container).dataset.eyes).toBe('relieved');
     });
 
     it('react at once to bad news about a pet', () => {
@@ -257,8 +283,8 @@ describe('the eyes in the live status line', () => {
 
     it('react to how the message sounded before showing the work', () => {
         const { container } = renderTurn('thank you so much, that fixed it');
-        expect(eyes(container).dataset.eyes).toBe('happy');
-        act(() => { vi.advanceTimersByTime(longestMs('happy') + 1); });
+        expect(eyes(container).dataset.eyes).toBe('relieved');
+        act(() => { vi.advanceTimersByTime(longestMs('relieved') + 1); });
         expect(eyes(container).dataset.eyes).toBe('think');
     });
 });

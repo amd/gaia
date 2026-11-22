@@ -7,7 +7,7 @@
 /** Pixels per frame, and the size of src/assets/gaia-eyes.png. */
 export const EYES_CELL = 16;
 export const EYES_SHEET_WIDTH = 720;
-export const EYES_SHEET_HEIGHT = 544;
+export const EYES_SHEET_HEIGHT = 864;
 
 /** Where each animation sits on the sheet: its row, frame count, speed, and the still shown under reduced motion. */
 export const EYES_ANIMATIONS = {
@@ -44,7 +44,27 @@ export const EYES_ANIMATIONS = {
     angry2: { row: 30, frames: 22, fps: 10, loop: false, pose: 3 },
     determined: { row: 31, frames: 17, fps: 10, loop: false, pose: 3 },
     sleepy: { row: 32, frames: 23, fps: 10, loop: false, pose: 3 },
-    brain: { row: 33, frames: 11, fps: 16, loop: false, pose: 10 },
+    scared: { row: 33, frames: 24, fps: 12, loop: false, pose: 6 },
+    scared2: { row: 34, frames: 25, fps: 12, loop: false, pose: 6 },
+    disgusted: { row: 35, frames: 20, fps: 10, loop: false, pose: 6 },
+    relieved: { row: 36, frames: 19, fps: 10, loop: false, pose: 16 },
+    calm: { row: 37, frames: 18, fps: 8, loop: false, pose: 14 },
+    hopeful: { row: 38, frames: 18, fps: 10, loop: false, pose: 12 },
+    disappointed: { row: 39, frames: 19, fps: 10, loop: false, pose: 18 },
+    greet: { row: 40, frames: 16, fps: 10, loop: false, pose: 6 },
+    greet2: { row: 41, frames: 16, fps: 10, loop: false, pose: 6 },
+    goodbye: { row: 42, frames: 17, fps: 10, loop: false, pose: 6 },
+    nod: { row: 43, frames: 18, fps: 12, loop: false, pose: 0 },
+    shake: { row: 44, frames: 19, fps: 12, loop: false, pose: 1 },
+    shrug: { row: 45, frames: 17, fps: 10, loop: false, pose: 9 },
+    grateful: { row: 46, frames: 18, fps: 10, loop: false, pose: 3 },
+    apologetic: { row: 47, frames: 17, fps: 10, loop: false, pose: 6 },
+    listening: { row: 48, frames: 17, fps: 8, loop: false, pose: 4 },
+    focused: { row: 49, frames: 19, fps: 8, loop: false, pose: 3 },
+    impressed: { row: 50, frames: 17, fps: 10, loop: false, pose: 3 },
+    wink: { row: 51, frames: 11, fps: 10, loop: false, pose: 2 },
+    eyeroll: { row: 52, frames: 15, fps: 10, loop: false, pose: 6 },
+    brain: { row: 53, frames: 11, fps: 16, loop: false, pose: 10 },
 } as const;
 
 export type EyesAnimation = keyof typeof EYES_ANIMATIONS;
@@ -71,6 +91,24 @@ export const EYES_VARIANTS = {
     angry: ['angry', 'angry2'],
     determined: ['determined'],
     sleepy: ['sleepy'],
+    scared: ['scared', 'scared2'],
+    disgusted: ['disgusted'],
+    relieved: ['relieved'],
+    calm: ['calm'],
+    hopeful: ['hopeful'],
+    disappointed: ['disappointed'],
+    greet: ['greet', 'greet2'],
+    goodbye: ['goodbye'],
+    nod: ['nod'],
+    shake: ['shake'],
+    shrug: ['shrug'],
+    grateful: ['grateful'],
+    apologetic: ['apologetic'],
+    listening: ['listening'],
+    focused: ['focused'],
+    impressed: ['impressed'],
+    wink: ['wink'],
+    eyeroll: ['eyeroll'],
     brain: ['brain'],
 } as const satisfies Record<string, readonly EyesAnimation[]>;
 

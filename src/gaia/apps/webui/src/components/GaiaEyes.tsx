@@ -32,6 +32,9 @@ function pickVariant(state: EyesState): EyesAnimation {
     return picked;
 }
 
+/** A state shown for less than this is replaced without a blink: it was never really seen. */
+const BLINK_AFTER_MS = 150;
+
 const lengthMs = (name: EyesAnimation) => (EYES_ANIMATIONS[name].frames / EYES_ANIMATIONS[name].fps) * 1000;
 
 /**
@@ -50,6 +53,7 @@ export function GaiaEyes({ phase, reaction = null, holdReaction = false, still =
 }) {
     const ref = useRef<HTMLSpanElement>(null);
     const shownState = useRef<EyesState | null>(null);
+    const shownSince = useRef(0);
     const [reactingTo, setReactingTo] = useState<string | null>(null);
     const mood = reaction?.mood;
     const reactionKey = reaction?.key;
@@ -87,8 +91,11 @@ export function GaiaEyes({ phase, reaction = null, holdReaction = false, still =
         };
         const finish = () => { if (reacting && !holdReaction) setReactingTo(null); };
 
-        // A change of expression blinks; the first one shown just appears.
-        const changed = shownState.current !== null && shownState.current !== state;
+        // A change of expression blinks; the first one shown just appears, and so
+        // does one replacing a state that was barely on screen.
+        const changed = shownState.current !== null && shownState.current !== state
+            && Date.now() - shownSince.current >= BLINK_AFTER_MS;
+        if (shownState.current !== state) shownSince.current = Date.now();
         shownState.current = state;
         if (changed && !still) {
             el.classList.remove('is-swapping');

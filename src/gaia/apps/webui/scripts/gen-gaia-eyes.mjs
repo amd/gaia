@@ -35,8 +35,11 @@ const SHAPES = {
     angsL: ['#...', '###.', '####'],
     sadL: ['...#', '..##', '.###', '####', '####'],
     worL: ['..#', '.##', '###', '###', '###', '###'],
+    disL: ['###.', '..##'],
+    star: ['..#..', '.###.', '#####', '.###.', '#.#.#'],
+    starS: ['.#.', '###', '.#.'],
 };
-for (const name of ['ang', 'angs', 'sad', 'wor']) {
+for (const name of ['ang', 'angs', 'sad', 'wor', 'dis']) {
     SHAPES[`${name}R`] = SHAPES[`${name}L`].map((row) => [...row].reverse().join(''));
 }
 
@@ -87,6 +90,13 @@ const shy = (dx, dy) => F(R(3, 3, dx, dy), undefined, BLUSH);
 const bubble = (x, y) => [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]];
 const ASLEEP = R(5, 1, 0, 3);
 const drop = (y) => [[15, y], [15, y + 1]];
+/** A small four-pointed twinkle centred on x, y; the same mirrored, so it survives right-to-left. */
+const twinkle = (x, y) => [[x, y], [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]];
+const SCARED = F(R(2, 6, 0, -1));
+const DISGUST = P('dis', 0, 1);
+const HALF = F(R(3, 3, 0, 1));
+const UPWARD = F(R(3, 5, 0, -2));
+const FLAT = F(R(4, 2, 0, 3));
 
 /** What the eyes become once GAIA has thought: a brain, two halves and their folds. */
 const BRAIN = [
@@ -374,6 +384,152 @@ export const STATES = {
             F(R(4, 6, 0, -2)), REST, F(R(3, 4, 0, 1)), F(R(3, 3, 0, 1)), F(R(4, 2, 0, 2)),
             ...hold(F(ASLEEP, undefined, [[11, 7]]), 3), ...hold(F(ASLEEP, undefined, [...bubble(12, 4), [10, 7]]), 3),
             ...hold(F(ASLEEP, undefined, [...bubble(13, 1), ...bubble(11, 4), [9, 7]]), 3),
+        ]],
+    },
+    scared: {
+        fps: 12, loop: false, pose: 6,
+        variants: [
+            [
+                REST, WIDE, ...hold(SCARED, 2), ...cycle([F(R(2, 6, 1, -1)), F(R(2, 6, -1, -1))], 5), ...hold(SCARED, 2),
+                ...[3, 5, 7, 9].map((y, i) => F(R(2, 6, i % 2 ? 1 : -1, -1), undefined, drop(y))), ...hold(SCARED, 4),
+            ],
+            // Tiny pupils darting, then a shiver.
+            [
+                REST, ...hold(WIDE, 2), ...hold(F(R(2, 2, -3, 0)), 3), ...hold(F(R(2, 2, 3, 0)), 3), ...hold(F(R(2, 2, -3, 0)), 2),
+                ...hold(F(R(2, 2)), 2), ...cycle([F(R(2, 6, 1, -1)), F(R(2, 6, -1, -1))], 4), ...hold(SCARED, 4),
+            ],
+        ],
+    },
+    disgusted: {
+        fps: 10, loop: false, pose: 6,
+        variants: [[
+            REST, F(R(4, 3, 0, 1)), ...hold(DISGUST, 2), ...hold(P('dis', 0, 2), 2), ...cycle([P('dis', -2, 1), P('dis', 2, 1)], 3),
+            ...hold(DISGUST, 3), F(R(5, 1, 0, 2)), ...hold(DISGUST, 4),
+        ]],
+    },
+    relieved: {
+        fps: 10, loop: false, pose: 16,
+        variants: [[
+            ...hold(WIDE, 3), F(R(4, 3)), BLINK, ...hold(B('happyw', 0, 1), 3), ...hold(B('happyw', 0, 2), 4),
+            ...hold(B('happyw', 0, 3), 3), ...hold(B('happyw', 0, 1), 4),
+        ]],
+    },
+    calm: {
+        fps: 8, loop: false, pose: 14,
+        variants: [[
+            ...hold(REST, 3), F(R(3, 4, 0, 1)), ...hold(HALF, 3), ...hold(F(R(5, 1, 0, 1)), 2), ...hold(HALF, 3),
+            ...hold(B('happyw', 0, 1), 6),
+        ]],
+    },
+    hopeful: {
+        fps: 10, loop: false, pose: 12,
+        variants: [[
+            REST, F(R(3, 5, 0, -1)), ...hold(UPWARD, 2), ...cycle([
+                F(R(3, 5, 0, -2), undefined, [...twinkle(1, 2), [14, 1]]),
+                F(R(3, 5, 0, -2), undefined, [[1, 2], ...twinkle(14, 1)]),
+            ], 3), ...hold(F(R(3, 6, 0, -3), undefined, [...twinkle(1, 2), ...twinkle(14, 1)]), 4), BLINK,
+            ...hold(F(R(3, 5, 0, -2), undefined, twinkle(14, 1)), 3),
+        ]],
+    },
+    disappointed: {
+        fps: 10, loop: false, pose: 18,
+        variants: [[
+            REST, F(R(3, 5, 0, 1)), F(R(3, 3, 0, 2)), ...hold(FLAT, 3), ...hold(F(R(4, 2, -2, 3)), 3), F(R(5, 1, -2, 4)),
+            ...hold(F(R(4, 2, -2, 3)), 2), ...hold(FLAT, 2), F(R(5, 1, 0, 4)), ...hold(FLAT, 4),
+        ]],
+    },
+    // Communication: what the eyes do while GAIA talks, not only how she feels.
+    greet: {
+        fps: 10, loop: false, pose: 6,
+        variants: [
+            [
+                REST, WIDE, ...hold(B('happyw', 0, -1), 2), ...cycle([B('happyw', 0, -2), B('happyw')], 2),
+                ...hold(B('happyw'), 2), ...hold(F(S('happy'), R(3, 5)), 3), ...hold(B('happyw'), 3),
+            ],
+            // Brows up, a double blink, a smile.
+            [
+                REST, ...hold(F(R(3, 6, 0, -2)), 3), BLINK, F(R(3, 6, 0, -2)), BLINK, ...hold(F(R(3, 6, 0, -2)), 2),
+                ...hold(B('happy'), 4), ...hold(B('happyw'), 3),
+            ],
+        ],
+    },
+    goodbye: {
+        fps: 10, loop: false, pose: 6,
+        variants: [[
+            REST, ...hold(F(S('happy'), R(3, 5)), 3), BLINK, ...hold(B('happyw'), 3), ...hold(B('happyw', 0, 1), 2),
+            F(R(5, 1, 0, 1)), ...hold(B('happyw', 0, 1), 2), ...hold(F(R(5, 1, 0, 2)), 4),
+        ]],
+    },
+    nod: {
+        fps: 12, loop: false, pose: 0,
+        variants: [[
+            REST, ...cycle([F(R(3, 5, 0, 1)), F(R(3, 4, 0, 3)), F(R(3, 5, 0, 1)), REST, F(R(3, 5, 0, -1)), REST], 2),
+            ...hold(B('happy'), 4), REST,
+        ]],
+    },
+    shake: {
+        fps: 12, loop: false, pose: 1,
+        variants: [[
+            REST, F(R(3, 4)), ...cycle([F(R(3, 4, -2)), F(R(3, 4)), F(R(3, 4, 2)), F(R(3, 4))], 3),
+            ...hold(F(R(4, 2, 0, 1)), 4), REST,
+        ]],
+    },
+    shrug: {
+        fps: 10, loop: false, pose: 9,
+        variants: [[
+            REST, ...hold(UP_LEFT, 3), ...hold(UP_RIGHT, 3), F(R(3, 5, 0, -2)), ...hold(F(R(4, 2, 0, -1)), 3),
+            ...hold(F(R(4, 2, 0, 1)), 2), BLINK, ...hold(F(R(4, 2, 0, 1)), 3),
+        ]],
+    },
+    grateful: {
+        // A small bow: "my pleasure".
+        fps: 10, loop: false, pose: 3,
+        variants: [[
+            REST, ...hold(B('happyw'), 2), ...hold(B('happyw', 0, 2), 2), ...hold(B('happyw', 0, 4), 4),
+            ...hold(B('happyw', 0, 2), 2), ...hold(B('happyw'), 4), ...hold(B('happy'), 3),
+        ]],
+    },
+    apologetic: {
+        fps: 10, loop: false, pose: 6,
+        variants: [[
+            REST, F(R(3, 4, 0, 1)), ...hold(P('sad', 0, 2), 3), ...hold(P('sad', 0, 2, BLUSH), 3),
+            ...hold(P('sad', -2, 2, BLUSH), 3), ...hold(P('sad', 0, 2, BLUSH), 2), F(R(5, 1, 0, 3), undefined, BLUSH),
+            ...hold(P('sad', 0, 2, BLUSH), 3),
+        ]],
+    },
+    listening: {
+        fps: 8, loop: false, pose: 4,
+        variants: [[
+            REST, F(R(3, 6, 0, -1)), ...hold(F(R(3, 6, 0, -2), R(3, 6, 0, 0)), 4), ...hold(F(R(3, 6, 0, -1)), 2),
+            F(R(3, 4, 0, 1)), ...hold(F(R(3, 6, 0, -1)), 3), F(R(5, 1)), ...hold(F(R(3, 6, 0, -2), R(3, 6, 0, 0)), 4),
+        ]],
+    },
+    focused: {
+        fps: 8, loop: false, pose: 3,
+        variants: [[
+            REST, F(R(4, 3)), ...hold(F(R(4, 2)), 4), ...hold(F(R(4, 2, 1)), 3), ...hold(F(R(4, 2, -1)), 3),
+            ...hold(F(R(4, 2)), 3), F(R(5, 1)), ...hold(F(R(4, 2)), 3),
+        ]],
+    },
+    impressed: {
+        fps: 10, loop: false, pose: 3,
+        variants: [[
+            REST, WIDE, ...hold(B('star'), 2), ...cycle([B('starS'), B('star')], 3), ...hold(B('star'), 4),
+            ...hold(B('happyw'), 3),
+        ]],
+    },
+    wink: {
+        fps: 10, loop: false, pose: 2,
+        variants: [[
+            REST, F(R(3, 5), R(3, 3, 0, 1)), ...hold(F(R(3, 5), R(4, 1, 0, 1)), 4), F(R(3, 5), R(3, 3, 0, 1)),
+            ...hold(F(R(3, 5), S('happy')), 3), REST,
+        ]],
+    },
+    eyeroll: {
+        fps: 10, loop: false, pose: 6,
+        variants: [[
+            REST, F(R(3, 3, -2, -2)), F(R(3, 3, -1, -4)), F(R(3, 3, 1, -4)), F(R(3, 3, 2, -2)), ...hold(F(R(3, 3, 2, -2)), 2),
+            ...hold(F(R(4, 2, 0, 1)), 3), BLINK, ...hold(F(R(4, 2, 0, 1)), 4),
         ]],
     },
     brain: {

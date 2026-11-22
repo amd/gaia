@@ -93,7 +93,8 @@ describe("GAIA's eye sprite sheet", () => {
     it('accepts only a mood it can draw', () => {
         expect(asEyesMood('proud')).toBe('proud');
         expect(asEyesMood('think')).toBeNull();
-        expect(asEyesMood('calm')).toBeNull();
+        expect(asEyesMood('brain')).toBeNull();
+        expect(asEyesMood('bored')).toBeNull();
         expect(asEyesMood(undefined)).toBeNull();
     });
 });

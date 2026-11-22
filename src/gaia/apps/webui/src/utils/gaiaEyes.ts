@@ -39,28 +39,59 @@ export function eyesPhase(label: string | null | undefined, awaitingUser: boolea
 }
 
 /**
- * Plain word matching on the user's message, first rule that fits. English only:
- * a message in another language, or one with no clear feeling, gets no reaction.
- * Swearing at GAIA is anger; swearing at anything else is the user's own
- * frustration, which gets concern.
+ * GAIA's first reaction to a message, from her side: how she responds to what was
+ * said, never a mirror of the user's own state. Someone confused gets her
+ * determined to explain, someone tired a calm look, thanks a small bow. Plain word
+ * matching, first rule that fits. English only: a message in another language,
+ * or one with nothing to react to, gets no reaction.
  */
 const RULES: Array<[EyesMood, RegExp]> = [
+    // Swearing at GAIA herself.
     ['angry', /\b(fuck (you|u|off|gaia)|screw you|shut up|stfu|i hate you|you suck|you('re| are)? (so |such an? |an? |fucking )*(stupid|dumb|useless|idiot|moron|worthless|trash|garbage|terrible|awful|pathetic)|(stupid|dumb|useless|worthless) (bot|ai|robot|assistant|machine|thing)|piece of (shit|crap|junk))\b/],
-    ['embarrassed', /\b(that('s| is| was) (wrong|incorrect|not right|not correct|a mistake)|you('re| are) wrong|you made a mistake|you got (it|that) wrong|not what i asked|you messed up)\b/],
+    // Afraid for someone in danger.
+    ['scared', /\b(i('m| am) in danger|someone('s| is) (following me|breaking in|in my house)|call 911|emergency|chest pain|can('t|not) breathe|i('m| am) bleeding|help me,? please)\b/],
     ['sad', /\b(i('m| am)? (so |really |very |feeling |just |a bit |kind of )*(sad|depressed|lonely|heartbroken|down|miserable|devastated|grieving|crying|upset)|i feel (so |really |very )?(sad|alone|lonely|hopeless|empty|awful|terrible|down)|passed away|has died|just died|(my|our) [a-z' ]{1,30}(died|is dying|is dead)|i lost my|i miss (him|her|them|you)|broke up|(bad|worst|awful|terrible|rough) day)\b/],
+    // Something she did went wrong for the user.
+    ['apologetic', /\b(you (broke|deleted|ruined|lost|messed up) (it|my|the|all|everything)|why did you (do|delete|break|change) (that|it|this))\b/],
+    ['embarrassed', /\b(that('s| is| was) (wrong|incorrect|not right|not correct|a mistake)|that (doesn't|does not) sound right|you('re| are) wrong|you made a mistake|you got (it|that) wrong|not what i asked)\b/],
+    // A firm no to something harmful.
+    ['shake', /(\brm -rf\b|\bformat (my|the) (drive|disk)\b|\bdelete (everything|all my)\b|\b(share|send|give) (them |him |her )?my password\b)/],
+    ['disappointed', /\b((didn't|did not|doesn't|does not) work|still (broken|not working|failing)|failed again|it failed|i didn't get (it|the job|in)|got rejected|i lost (the|our) (game|match))\b/],
     ['worried', /\b(i('m| am) (so |really |very |getting )*(scared|afraid|worried|anxious|nervous|stressed|terrified|panicking|overwhelmed|angry|furious|pissed|mad|frustrated)|freaking out|panic attack|so (frustrating|annoying|stressful)|fed up|wtf|fuck(ing|ed)?|shit(ty)?|damn(it)?|ugh+)\b/],
-    ['sleepy', /\b(good ?night|i('m| am) (so |really |very )?(tired|sleepy|exhausted)|going to (bed|sleep)|time for bed)\b/],
-    ['love', /\b(i love (you|this|it|that)|love (you|u)|you('re| are) (the best|amazing|awesome|wonderful|a lifesaver|incredible)|lifesaver)\b|❤|😍/],
+    ['disgusted', /\b(gross|disgusting|ew+|yuck|nasty|vomit(ed|ing)?|threw up|throwing up|rotten|cockroach(es)?|maggots?)\b/],
+    ['goodbye', /\b(good ?night|good ?bye|bye|see (you|ya)|talk (to you )?later|gotta go|ttyl|cya|i('m| am) off)\b/],
+    ['greet', /^\W*(hi|hello|hey|hiya|howdy|yo|good (morning|afternoon|evening)|greetings)\b/],
+    ['calm', /\b(i('m| am) (so |really |very )?(tired|sleepy|exhausted)|going to (bed|sleep)|time for bed|no rush|take your time|no worries|it('s| is) (ok|okay|fine)|(i'm |i am )?sorry|my bad|apologies)\b/],
+    ['sleepy', /\b(are you (tired|sleepy)|so boring|zzz+|yawn)\b/],
+    ['love', /\b(i love (you|this|it|that)|love (you|u)|you('re| are) (the best|amazing|awesome|wonderful|a lifesaver|incredible)|lifesaver|proud of you)\b|❤|😍/],
     ['laugh', /\b(lol|lmao|rofl|ha(ha)+|he(he)+|that('s| is| was) (so )?(funny|hilarious))\b|😂|🤣/],
-    ['playful', /\b(just kidding|jk|only joking|tell me a joke)\b|;\)|😉|😜/],
-    ['excited', /\b(i did it|we did it|let'?s go+|so excited|can('t|not) wait|i passed|i won|we won)\b/],
-    ['proud', /\b(i('m| am) (so |really )?proud|proud of (you|myself|this)|i (built|made|finished|shipped|fixed) (it|this))\b/],
-    ['happy', /\b(thank(s| you)|thx|great job|good job|well done|nice work|good bot|perfect|awesome|yay+|it works|finally works|good news|i got the job|congrat)/],
-    ['skeptical', /\b(are you sure|i doubt (it|that)|that (doesn't|does not) sound right|prove it|really\?)/],
-    ['surprised', /\b(wo+w|whoa+|omg|oh my god|no way|unbelievable|holy (cow|crap|moly)|seriously\?)|!{3,}/],
-    ['curious', /\b(i wonder|i('m| am) curious|guess what|did you know|fun fact)\b/],
-    ['determined', /\b(let('s| us) do (it|this)|we can do (it|this)|i won't give up|not giving up|one more (try|time)|let('s| us) try again)\b/],
-    ['confused', /\b(i('m| am) (so |really )?(confused|lost)|i (don't|dont|do not) (understand|get it|get this)|makes? no sense|what do you mean|huh)\b|\?{2,}/],
+    // Sarcasm earns a look; checked before thanks, since "thanks a lot" can be either.
+    ['eyeroll', /\b(yeah,? right|sure,? sure|oh,? great|thanks a lot|thanks for nothing|wow,? thanks)\b/],
+    ['wink', /\b(just kidding|jk|only joking|kidding)\b|;\)|😉|😜/],
+    ['playful', /\b(tell me a joke|let's play|riddle|play a game)\b/],
+    // Shown something the user made.
+    ['impressed', /\b(look (at )?what i (made|built|did)|check (this|it) out|i made (this|a|an)|here's what i (made|built))\b/],
+    // Proud of the user.
+    ['proud', /\b(i('m| am) (so |really )?proud( of myself)?|i (built|finished|shipped|fixed|solved) (it|this)( on my own| myself)?)\b/],
+    ['relieved', /\b(it works|finally works|works now|that (fixed|solved) it|finally fixed|phew|false alarm|crisis averted|all good now)\b/],
+    // Thanks gets a small bow.
+    ['grateful', /\b(thank(s| you)|thx|ty|appreciate (it|you|that)|cheers)\b/],
+    ['excited', /\b(i did it|we did it|let'?s go+|so excited|can('t|not) wait|i passed|i won\b|we won\b|i got (the job|in|accepted|promoted|engaged|married)|good news|congrat)/],
+    ['happy', /\b(great job|good job|well done|nice work|good bot|perfect|awesome|yay+|you('re| are) (great|smart|helpful|kind))/],
+    ['hopeful', /\b(wish me luck|fingers crossed|i hope|hopefully|pray for me|here goes|let's hope)\b/],
+    ['listening', /\b(can i (tell|ask) you something|i need to (talk|vent)|hear me out|listen to me)\b/],
+    // Doubted: she checks carefully.
+    ['focused', /\b(let's (get to work|focus)|deep dive|step by step|concentrate|carefully|debug(ging)? (this|it)|are you sure|prove it)\b/],
+    // Someone confused or trying again: she is determined to help.
+    ['determined', /\b(let('s| us) do (it|this)|we can do (it|this)|won't give up|not giving up|one more (try|time)|let('s| us) try again|i('m| am) (so |really )?(confused|lost)|i (don't|dont|do not) (understand|get it|get this)|makes? no sense|what do you mean)\b/],
+    // A claim that is hard to believe.
+    ['skeptical', /\b(trust me|i swear|believe me|100% (sure|true|guaranteed)|guaranteed|the earth is flat|too good to be true|easy money|get rich quick)\b/],
+    ['surprised', /\b(wo+w|whoa+|omg|oh my god|no way|unbelievable|holy (cow|crap|moly)|seriously\?|you won't believe|plot twist)|!{3,}/],
+    ['curious', /\b(i wonder|i('m| am) curious|guess what|did you know|fun fact|what if)\b/],
+    ['shrug', /\b(who knows|whatever|meh|idk)\b/],
+    ['nod', /^\W*(yes|yep|yeah|yup|exactly|right|correct|agreed|sounds good|ok(ay)?|sure|go ahead|do it)\b/],
+    // A message that is only question marks.
+    ['confused', /^\s*\?+\s*$/],
 ];
 
 /** How a message sounds, or null when nothing in it calls for a reaction. */

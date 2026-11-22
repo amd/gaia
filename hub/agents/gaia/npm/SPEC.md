@@ -463,9 +463,13 @@ measured with the loaded model's own tokenizer when it can be.
 request may then be streamed `mood` events, `{ "type": "mood", "mood": "happy" }`.
 The session's prompt asks the model to open a reply with a `[mood:WORD]` tag
 naming its own reaction; the agent takes the tag out of the text, so it never appears in
-`token` or `final.answer`, and sends the word as this event. The words are
-happy, excited, love, laugh, playful, proud, curious, surprised, confused,
-skeptical, worried, sad, embarrassed, angry, determined and sleepy. The event
+`token` or `final.answer`, and sends the word as this event. The word is the
+model's own reaction to the message, never a mirror of the user's state. The
+feelings are happy, excited, love, laugh, playful, proud, curious, surprised,
+confused, skeptical, worried, sad, embarrassed, angry, determined, sleepy,
+scared, disgusted, relieved, calm, hopeful and disappointed; the gestures are
+greet, goodbye, nod, shake, shrug, grateful, apologetic, listening, focused,
+impressed, wink and eyeroll. The event
 is not terminal, a reply without a tag sends none, and a client may ignore
 it. The field is part of the prompt, so send the same value on every turn of
 a session. Each turn's request also carries a one-line reminder to name the

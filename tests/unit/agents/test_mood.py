@@ -73,7 +73,7 @@ def test_case_and_spacing_inside_the_tag_do_not_matter():
 
 
 def test_a_word_outside_the_list_is_removed_but_not_reported():
-    shown, heard = _stream("[mood:calm] Sure.", [3])
+    shown, heard = _stream("[mood:bored] Sure.", [3])
     assert shown == "Sure."
     assert heard == []
 
@@ -235,7 +235,7 @@ def test_a_stray_backtick_hides_a_tag_no_further_than_its_line(sizes):
         ("Say [happy] to me.", "Say [happy] to me.", None),
         ("[docs](https://x.io) say so", "[docs](https://x.io) say so", None),
         ("[1] First point", "[1] First point", None),
-        ("[calm] Sure.", "[calm] Sure.", None),
+        ("[bored] Sure.", "[bored] Sure.", None),
     ],
 )
 def test_the_short_form_at_the_start_of_a_reply_is_a_mood_too(text, shown, mood, sizes):
