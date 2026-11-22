@@ -309,9 +309,9 @@ _FORGET_FILLER = frozenset(
 )
 
 #: Size cap on the stable memory section, instructions included
-#: (4250 chars ≈ 1060 tokens). Grow it with the instructions, so they never
+#: (4460 chars ≈ 1115 tokens). Grow it with the instructions, so they never
 #: take room from the user's memories.
-STABLE_MEMORY_PROMPT_CHARS = 4250
+STABLE_MEMORY_PROMPT_CHARS = 4460
 #: Rows read per category when filling that section; the size cap decides
 #: how many are shown.
 STABLE_MEMORY_FETCH_LIMIT = 200
