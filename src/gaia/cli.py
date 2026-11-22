@@ -5722,7 +5722,14 @@ Let me know your answer!
             skip_count = 0
             fail_count = 0
 
+            from gaia.installer.model_choice import withheld_reason
+
             for model_id in model_ids:
+                withheld = withheld_reason(model_id)
+                if withheld:
+                    console.print_download_error(withheld, model_id)
+                    fail_count += 1
+                    continue
                 # Check if already available
                 if client.check_model_available(model_id):
                     console.print_download_skipped(model_id)

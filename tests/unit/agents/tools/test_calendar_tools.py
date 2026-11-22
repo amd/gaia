@@ -41,8 +41,10 @@ from gaia.agents.base.person_approval import (
     is_hidden,
     is_variation_selector,
     sendable_address,
+    strict_hidden,
     visible,
     visible_line,
+    visible_strict,
 )
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -2294,6 +2296,77 @@ def test_the_browser_parity_fixture_matches_python():
     """
     stored = json.loads(_PARITY_FIXTURE.read_text(encoding="utf-8"))
     assert stored == _parity_cases()
+
+
+_NAME_PARITY_FIXTURE = _PARITY_FIXTURE.with_name("approval-name-parity.json")
+
+
+def _name_parity_cases():
+    names = [
+        "inv\u200doice.txt",
+        "inv\u200coice.txt",
+        "report\u200e.txt",
+        "report\u200f.txt",
+        "\U0001f4c1\ufe0fnotes.txt",
+        "\u845b\U000e0100.txt",
+        "a\r\nb.txt",
+        "a\tb.txt",
+        "gi\u200dt status",
+    ]
+    return [
+        {"input": text, "shown": visible_strict(text)}
+        for text in _parity_inputs() + names
+    ]
+
+
+def test_the_browser_name_parity_fixture_matches_python():
+    """``visibleStrict`` in the UI test expects these exact strings.
+
+    After changing the rule, write ``_name_parity_cases()`` to the fixture as JSON.
+    """
+    stored = json.loads(_NAME_PARITY_FIXTURE.read_text(encoding="utf-8"))
+    assert stored == _name_parity_cases()
+
+
+class TestANameShowsEveryLookAlikeCharacter:
+    @pytest.mark.parametrize(
+        "name, shown",
+        [
+            ("inv\u200doice.txt", "inv[U+200D]oice.txt"),
+            ("inv\u200coice.txt", "inv[U+200C]oice.txt"),
+            ("C:/w/report\u200e.txt", "C:/w/report[U+200E].txt"),
+            ("C:/w/report\u200f.txt", "C:/w/report[U+200F].txt"),
+            ("\U0001f4c1\ufe0fnotes.txt", "\U0001f4c1[U+FE0F]notes.txt"),
+            ("\u845b\U000e0100.txt", "\u845b[U+E0100].txt"),
+            ("1\ufe0f\u20e3.txt", "1[U+FE0F]\u20e3.txt"),
+            ("a\r\nb.txt", "a[U+000D][U+000A]b.txt"),
+            ("a\tb.txt", "a[U+0009]b.txt"),
+            ("https://exa\u200dmple.com", "https://exa[U+200D]mple.com"),
+        ],
+    )
+    def test_each_shows_as_a_code(self, name, shown):
+        assert visible_strict(name) == shown
+
+    def test_ordinary_names_are_untouched(self):
+        for name in (
+            "notes.txt",
+            "C:\\Users\\me\\caf\u00e9.md",
+            "\u845b\u98fe\u533a.txt",
+        ):
+            assert visible_strict(name) == name
+
+    def test_an_address_is_refused_for_the_same_characters(self):
+        for char in ("\u200d", "\u200e", "\ufe0f", "\t"):
+            assert strict_hidden(char)
+            with pytest.raises(ValueError, match="invisible or control"):
+                sendable_address(f"da{char}na@example.com", "to")
+
+    def test_multi_line_content_keeps_emoji_joiners_as_written(self):
+        family = "\U0001f468\u200d\U0001f469\u200d\U0001f467"
+        body = (
+            f"family {family}\n\u2764\ufe0f and 1\ufe0f\u20e3\n\u0645\u06cc\u200c\u062e"
+        )
+        assert visible(body) == body and not has_hidden(body)
 
 
 @pytest.mark.usefixtures("no_env_preapproval")

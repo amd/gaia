@@ -1538,9 +1538,11 @@ export interface SpeechModel {
 }
 export interface SpeechSettings {
   auto: boolean;
+  available?: boolean;
   max_speed?: number;
   min_speed?: number;
   speed: number;
+  unavailable_reason?: string | null;
   voice: string;
   voices: Voice[];
 }

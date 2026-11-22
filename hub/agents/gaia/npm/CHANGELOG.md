@@ -8,6 +8,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **A call the user denied is not asked about again in that chat.** Retrying
+  the exact call, even one that changes nothing such as `echo`, is refused
+  without a new approval prompt, and the agent says it was declined. It is
+  asked about again once the user asks for it ("run it again", or naming the
+  command) or clears the conversation.
+- **A follow-up in a research chat answers with its own result.** With
+  research on, a later turn that did a task — writing a memo with
+  `/office-docs` — did the work, then answered with the earlier research
+  report: the citation check sent its short answer back for citing none of the
+  pages read, and the model re-sent the old report. An answer must now cite a
+  page only when its own turn read one; links it does cite are still checked
+  against every page read in the conversation.
 - **The session panel no longer keeps listing a file as approved after its
   agent is gone (contract 2.31).** A chat's "Files GAIA can reach" could
   keep showing a file as approved after the agent that held that approval —
@@ -21,6 +33,12 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   prints the file's path). They used to mint nothing, which left the sidecar
   with its token check off. A sidecar started with no token now refuses to
   start; a developer running one by hand sets `GAIA_SIDECAR_ALLOW_NO_TOKEN=1`.
+- **An "always allow" label can't pass one name off as another.** `always_scope`
+  and `always_label` now also write joiners, direction marks, tabs, line breaks
+  and variation selectors as `[U+XXXX]`, so `inv` + U+200D + `oice.txt` no longer
+  reads as `invoice.txt`. A `needs_confirmation` `summary` does the same for a
+  path, URL, id, folder or project root, and keeps such a value on one line
+  even when it holds a line break. Prose such as an event's description keeps them.
 - **Small models are held to what they actually did.** On a PC with 16 GB of
   RAM or less the default is now Qwen3.5 2B (Qwen3.5 4B on an 8 GB GPU), and
   their answers are checked: a memory save that never happened is named, a

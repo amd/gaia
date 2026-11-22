@@ -15,7 +15,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from gaia.config import GaiaConfig, gaia_home
 from gaia.utils.process_owner import current_owner, owner_is_gone
@@ -160,6 +160,15 @@ CREATE TABLE IF NOT EXISTS session_documents (
     PRIMARY KEY (session_id, document_id)
 );
 
+-- Files attached in a chat's composer that went into the library. The upload
+-- stays readable while a document with its content is attached to the chat.
+CREATE TABLE IF NOT EXISTS session_uploads (
+    session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+    upload_path TEXT NOT NULL,
+    file_hash TEXT NOT NULL,
+    PRIMARY KEY (session_id, upload_path)
+);
+
 -- Messages
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -258,6 +267,7 @@ _CHAT_SCHEMA_OBJECTS = frozenset(
         "scheduled_tasks",
         "session_documents",
         "session_environment",
+        "session_uploads",
         "sessions",
         "settings",
         "unfinished_turns",
@@ -1828,6 +1838,44 @@ class ChatDatabase:
             )
             detached = cursor.rowcount > 0
         return detached
+
+    def record_session_upload(
+        self, session_id: str, upload_path: str, file_hash: str
+    ) -> None:
+        """Note that the chat's upload *upload_path* went into the library."""
+        with self._transaction():
+            self._conn.execute(
+                """INSERT OR IGNORE INTO session_uploads
+                   (session_id, upload_path, file_hash) VALUES (?, ?, ?)""",
+                (session_id, upload_path, file_hash),
+            )
+
+    def session_upload_paths(self, session_id: str) -> Set[str]:
+        """The chat's uploads already put in the library, attached or not."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT upload_path FROM session_uploads WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        return {row["upload_path"] for row in rows}
+
+    def removed_session_uploads(self, session_id: str) -> Set[str]:
+        """The chat's uploads whose document the user took off the chat.
+
+        Matched by content: the library keeps one row per content, which may be
+        a document added before the upload.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT su.upload_path FROM session_uploads su
+                   WHERE su.session_id = ? AND NOT EXISTS (
+                       SELECT 1 FROM session_documents sd
+                       JOIN documents d ON d.id = sd.document_id
+                       WHERE sd.session_id = su.session_id
+                         AND d.file_hash = su.file_hash)""",
+                (session_id,),
+            ).fetchall()
+        return {row["upload_path"] for row in rows}
 
     def get_session_environment(self, session_id: str) -> Dict[str, Any]:
         """The chat's added and removed folders and its internet switch."""

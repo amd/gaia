@@ -791,8 +791,8 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
 | `/full-access never` | Stop it coming back on future launches |
 | `/image` | Show the model, size and steps GAIA creates images with, and the image models this Lemonade has, each with its sizes. `/image model Z-Image-Turbo`, `/image size 1280x720` (or `auto`) and `/image steps 12` (or `auto`) change them; saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui#settings). A created image prints as a link; `/image open` opens the latest in the PC's image viewer. Flagship only |
-| `/read-aloud` | Read the last reply aloud through Lemonade's voice model, played by the PC's own player. Run it again, or `/read-aloud stop`, to stop. Works while the agent is still answering. To turn a whole document into an MP3, type its path and ask ([Dictate a Document](/guides/dictation)); the audio card appears here and `Ctrl+F` plays it |
-| `/voice` | Show the read-aloud voice, speed and auto-read, and list the voices (American or British English, female or male). `/voice bm_george` picks one, `/voice speed 125` sets the speed in percent (50–200), `/voice auto on` reads each finished reply. Saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui/chat#read-aloud) |
+| `/read-aloud` | Read the last reply aloud through Lemonade's voice model, played by the PC's own player. Run it again, or `/read-aloud stop`, to stop. Works while the agent is still answering. To turn a whole document into an MP3, type its path and ask ([Dictate a Document](/guides/dictation)); the audio card appears here and `Ctrl+F` plays it. Not offered on macOS yet: it says why instead of reading |
+| `/voice` | Show the read-aloud voice, speed and auto-read, and list the voices (American or British English, female or male). `/voice bm_george` picks one, `/voice speed 125` sets the speed in percent (50–200), `/voice auto on` reads each finished reply (refused on macOS, where read aloud isn't offered yet). Saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui/chat#read-aloud) |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
 | `/context` | How full the model's context is, split into instructions, tool definitions, conversation, files and pages, and other tool calls and results |
 | `/cost help` | Where the rates come from, and how to set your own |
@@ -1094,7 +1094,9 @@ error — the agent is told you said no to that one action, doesn't do the same
 thing through another tool, and carries on with the task by other means. A no
 covers the command on what it named (`pip install pandas`, not every `pip
 install`), and a declined script's own new output files can still be produced
-another way. When nobody can answer — a
+another way. The exact call you denied isn't asked about again in that chat,
+even one that changes nothing such as `echo`, until you ask for it again or
+`/clear` the conversation. When nobody can answer — a
 scheduled or background run, or a prompt that expires — the command doesn't run.
 A command GAIA's own checks don't cover offers no `a`: it shows the exact line
 and a risk line, and runs once if you say yes (see

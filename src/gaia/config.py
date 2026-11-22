@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -68,6 +69,32 @@ def generated_images_dir() -> Path:
 # Read-aloud speed, as a percentage of Kokoro's normal speed.
 READ_ALOUD_MIN_SPEED = 50
 READ_ALOUD_MAX_SPEED = 200
+
+_PLATFORM_NAMES = {"darwin": "macOS", "win32": "Windows", "linux": "Linux"}
+
+
+def _current_platform() -> str:
+    return sys.platform
+
+
+def speech_output_unproven_reason(platform: Optional[str] = None) -> Optional[str]:
+    """Why GAIA doesn't offer its local voice on this platform, or None where it does.
+
+    The voice is read-aloud, dictation and ``text_to_speech``; *platform* is a
+    ``sys.platform`` value and defaults to this PC's.
+    """
+    platform = platform or _current_platform()
+    if platform in GaiaConfig.TESTED_SPEECH_OUTPUT_PLATFORMS:
+        return None
+    name = _PLATFORM_NAMES.get(platform, platform)
+    proven = " and ".join(
+        _PLATFORM_NAMES[p] for p in GaiaConfig.TESTED_SPEECH_OUTPUT_PLATFORMS
+    )
+    return (
+        f"Reading aloud and dictation aren't offered on {name} yet, because GAIA "
+        f"hasn't verified its local voice there. They work on {proven}; follow "
+        f"https://github.com/amd/gaia/issues/8831 for {name}."
+    )
 
 
 class GaiaConfigError(Exception):
@@ -485,6 +512,9 @@ class GaiaConfig:
     #: The ones GAIA's evals cover, and so the only ones a user may newly choose.
     #: A file saved with another still loads, so no install stops starting.
     TESTED_LLAMACPP_BACKENDS = ("vulkan",)
+    #: ``sys.platform`` values where the Kokoro voice is proven to speak whole
+    #: replies; elsewhere read-aloud, dictation and its setup offer are withheld.
+    TESTED_SPEECH_OUTPUT_PLATFORMS = ("win32", "linux")
 
     @classmethod
     def _check_llamacpp_backend(cls, value: Any, where: str) -> Optional[str]:
