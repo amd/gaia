@@ -1070,6 +1070,58 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** The backend's English notice for a call Full access approved without asking. */
+const FULL_ACCESS_NOTICE = "Full access is on, so GAIA didn't ask first. Writing file: notes.txt";
+
+/** A turn that wrote a file in Full access: the notice above the answer, the changed-files row under it. */
+async function withFullAccessWrite(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'اكتب ملاحظاتي في notes.txt', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'كتبت ملاحظاتك في الملف.', created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'status', label: FULL_ACCESS_NOTICE, active: false, success: false, timestamp: 1 },
+                            { id: 2, type: 'tool', label: 'Write file', tool: 'write_file', narration: 'Writing file: notes.txt', active: false, success: true, timestamp: 2 },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/changes`, (route) =>
+        route.fulfill({
+            json: {
+                turns: [{
+                    turn_id: 't1', session_id: ANSWER_SESSION, message_id: 2, started_at: NOW.toISOString(),
+                    finished_at: NOW.toISOString(), restored_at: null, incomplete: false, untracked: [],
+                    files: [{ path: 'C:\\Users\\me\\notes.txt', change: 'created', tool: 'write_file' }],
+                }],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the Full access notice and the changed-files row follow the UI language (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFullAccessWrite);
+        const answer = page.locator('.msg-assistant');
+        await expect(answer.locator('.turn-changes-row')).toBeVisible();
+        await expect(answer.locator('.flow-warning')).toBeVisible();
+        await shot(page, `full-access-write-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.msg-assistant')).toEqual([]);
+        await page.locator('.turn-changes-btn', { hasText: locale === 'en' ? 'Undo this turn' : 'التراجع عن هذا الدور' }).click();
+        await expect(answer.locator('.turn-changes-confirm')).toBeVisible();
+        await shot(page, `full-access-write-confirm-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.msg-assistant')).toEqual([]);
+    });
+}
+
 /** The server's crash notice is English; it ends a partial answer and repeats as the last error step. */
 const CRASH_NOTICE = 'GAIA stopped unexpectedly while answering. Anything it had already written is kept above. Send your message again.';
 
