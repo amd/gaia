@@ -424,10 +424,6 @@ def category_home(cat_home: Path, staged_home: Path) -> dict[str, str]:
     return env_for(cat_home)
 
 
-#: The variable each native harness's daemon lookup reads its program from.
-HARNESS_PATH_ENV = {"gaiacpp": "GAIA_GAIACPP_PATH"}
-
-
 def harness_setup(name: str | None, binary: Path | None) -> dict[str, str]:
     """The environment every category's backend needs to run harness *name*."""
     if not name:
@@ -435,6 +431,7 @@ def harness_setup(name: str | None, binary: Path | None) -> dict[str, str]:
             raise SystemExit("--harness-binary needs --harness naming its harness.")
         return {}
     sys.path.insert(0, str(REPO_ROOT / "src"))
+    from gaia.daemon.sidecars.fetch import NATIVE_HARNESS_PATH_ENV
     from gaia.harnesses import HARNESSES, UNPROVEN_HARNESS_ENV, harness
 
     known = harness(name)
@@ -450,17 +447,16 @@ def harness_setup(name: str | None, binary: Path | None) -> dict[str, str]:
         if binary is not None:
             raise SystemExit(f"{name} is not a native harness; drop --harness-binary.")
         return env
-    if name not in HARNESS_PATH_ENV:
+    if name not in NATIVE_HARNESS_PATH_ENV:
         raise SystemExit(
-            f"This checkout can't start {name} yet: the daemon has no way to find its "
-            "program. That comes with the routing for it."
+            f"This checkout can't start {name}: the daemon has no way to find its program."
         )
     if binary is None or not binary.is_file():
         raise SystemExit(
             f"--harness {name} needs --harness-binary pointing at its program"
             + (f" ({binary} is not a file)." if binary is not None else ".")
         )
-    env[HARNESS_PATH_ENV[name]] = str(binary.resolve())
+    env[NATIVE_HARNESS_PATH_ENV[name]] = str(binary.resolve())
     return env
 
 
@@ -544,7 +540,11 @@ def _run_category(category: str, env: dict, p: dict, args) -> int:
                     ),
                     *(
                         ["--scenario", ",".join(ids)]
-                        if (ids := getattr(args, "scenarios_by_category", {}).get(category))
+                        if (
+                            ids := getattr(args, "scenarios_by_category", {}).get(
+                                category
+                            )
+                        )
                         else []
                     ),
                     *p["extra_args"],

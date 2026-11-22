@@ -83,7 +83,8 @@ void CodeAgent::registerTools() {
         const std::shared_ptr<ShellSession> shell = options_.shell;
         registerGitHubTools(
             reg, [shell] { return nativeFolder((shell ? *shell : BashTools::defaultSession()).cwd()); },
-            options_.repo, options_.githubWrites);
+            options_.repo, options_.githubWrites, GitHubEnvironment::real(),
+            [off = options_.internetOff] { return off && off->load(); });
     }
     if (skills_ && !skills_->skills().empty()) skills_->registerTools(reg);
 }

@@ -18,7 +18,15 @@
 #include <gaia/memory_store.h>
 #include <gaia/workspace.h>
 
-#include "gaia_agent.h"
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <poll.h>
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -272,7 +280,7 @@ public:
             const size_t at = text.find(marker, i);
             if (at == std::string::npos) {
                 size_t keep = 0;
-                for (size_t k = std::min(marker.size() - 1, text.size() - i); k > 0; --k) {
+                for (size_t k = (std::min)(marker.size() - 1, text.size() - i); k > 0; --k) {
                     if (text.compare(text.size() - k, k, marker, 0, k) == 0) {
                         keep = k;
                         break;
@@ -378,7 +386,7 @@ const std::vector<std::string>& StdioServer::decisions() {
     return answers;
 }
 
-StdioServer::StdioServer(GaiaAgent& agent, std::istream& in, std::ostream& out, StdioOptions options)
+StdioServer::StdioServer(Agent& agent, std::istream& in, std::ostream& out, StdioOptions options)
     : agent_(agent),
       in_(in),
       out_(out),
@@ -399,7 +407,7 @@ void StdioServer::write(const json& event) {
     const std::string type = event.value("type", "");
     const auto& known = eventTypes();
     if (std::find(known.begin(), known.end(), type) == known.end()) {
-        throw std::logic_error("gaiacpp --stdio tried to write a '" + type + "' event, which the TUI can't read");
+        throw std::logic_error(options_.program + " --stdio tried to write a '" + type + "' event, which the TUI can't read");
     }
     if (hostGone_) return;
     bool failed = false;
@@ -420,7 +428,7 @@ void StdioServer::hostLeft(const std::string& why) {
     if (hostGone_.exchange(true)) return;
     {
         std::lock_guard<std::mutex> lock(logMutex_);
-        log() << "[gaiacpp] the host left (" << why << "): stopping" << std::endl;
+        log() << "[" << options_.program << "] the host left (" << why << "): stopping" << std::endl;
     }
     // A model call or a tool in flight can't be interrupted, and nobody is left to read its result.
     if (options_.exitWhenHostGone) std::_Exit(0);
@@ -463,7 +471,7 @@ json StdioServer::statusEvent() {
                   {"lemonade_base_url", base},
                   {"agent_version", options_.agentVersion},
                   {"gaia_version", options_.agentVersion},
-                  // What typing /<name> can run. Empty: gaiacpp doesn't start a skill that way yet, and a
+                  // What typing /<name> can run. Empty: a native harness doesn't start a skill that way yet, and a
                   // listed name would promise it does.
                   {"skills", json::array()}};
     // Its own short-lived client: a server that doesn't answer must not hold up the first line.
@@ -482,7 +490,7 @@ json StdioServer::statusEvent() {
         }
     } catch (const std::exception& e) {
         std::lock_guard<std::mutex> lock(logMutex_);
-        log() << "[gaiacpp] the model server at " << base << " did not answer: " << e.what() << std::endl;
+        log() << "[" << options_.program << "] the model server at " << base << " did not answer: " << e.what() << std::endl;
     }
     return event;
 }
@@ -493,7 +501,7 @@ void StdioServer::cancelInFlightLocked(const std::string& why) {
     agent_.requestCancel();
     decisionCv_.notify_all();
     std::lock_guard<std::mutex> lock(logMutex_);
-    log() << "[gaiacpp] stopping the running turn: " << why << std::endl;
+    log() << "[" << options_.program << "] stopping the running turn: " << why << std::endl;
 }
 
 void StdioServer::applyControl(const json& message) {
@@ -501,7 +509,7 @@ void StdioServer::applyControl(const json& message) {
     std::unique_lock<std::mutex> lock(mutex_);
     auto note = [this](const std::string& line) {
         std::lock_guard<std::mutex> logLock(logMutex_);
-        log() << "[gaiacpp] " << line << std::endl;
+        log() << "[" << options_.program << "] " << line << std::endl;
     };
     if (verb == "full_access") {
         fullAccess_ = controlFlag(message, "enabled");
@@ -580,7 +588,7 @@ void StdioServer::pumpStdin() {
                     applyControl(msg);
                 } catch (const std::exception& e) {
                     std::lock_guard<std::mutex> lock(logMutex_);
-                    log() << "[gaiacpp] rejected a control message: " << e.what() << std::endl;
+                    log() << "[" << options_.program << "] rejected a control message: " << e.what() << std::endl;
                 }
                 continue;
             }
@@ -616,7 +624,7 @@ ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args
     const bool acceptable = edit && editIsInside(argOf(args, "path"), options_.editRoots);
     auto note = [this](const std::string& line) {
         std::lock_guard<std::mutex> logLock(logMutex_);
-        log() << "[gaiacpp] " << line << std::endl;
+        log() << "[" << options_.program << "] " << line << std::endl;
     };
     std::unique_lock<std::mutex> lock(mutex_);
     if (fullAccess_) return ToolConfirmResult::ALLOW_ONCE;
@@ -883,7 +891,7 @@ int StdioServer::run() {
         agent_.setCancelCheck([this] { return cancelled_.load(); });
         if (options_.fullAccess) {
             std::lock_guard<std::mutex> lock(logMutex_);
-            log() << "[gaiacpp] full access ENABLED at launch: approval prompts are off" << std::endl;
+            log() << "[" << options_.program << "] full access ENABLED at launch: approval prompts are off" << std::endl;
         }
         write(statusEvent());
         reader_ = std::thread([this] { pumpStdin(); });
@@ -920,7 +928,7 @@ int StdioServer::run() {
         code = 1;
         {
             std::lock_guard<std::mutex> lock(logMutex_);
-            log() << "[gaiacpp] stopped on an internal error: " << failure << std::endl;
+            log() << "[" << options_.program << "] stopped on an internal error: " << failure << std::endl;
         }
         bool owed;
         {
@@ -931,10 +939,10 @@ int StdioServer::run() {
         // The query in flight still gets its one terminal event.
         if (owed) {
             try {
-                write({{"type", "error"}, {"detail", "gaiacpp stopped on an internal error: " + failure}});
+                write({{"type", "error"}, {"detail", options_.program + " stopped on an internal error: " + failure}});
             } catch (const std::exception& e) {
                 std::lock_guard<std::mutex> lock(logMutex_);
-                log() << "[gaiacpp] could not report it on stdout: " << e.what() << std::endl;
+                log() << "[" << options_.program << "] could not report it on stdout: " << e.what() << std::endl;
             }
         }
     }
@@ -947,6 +955,25 @@ int StdioServer::run() {
     // is left to the destructor and the caller decides whether to wait for it.
     if (code == 0 && !hostGone_ && reader_.joinable()) reader_.join();
     return code;
+}
+
+bool stdoutHasReader() {
+#ifdef _WIN32
+    const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out == nullptr || out == INVALID_HANDLE_VALUE) return false;
+    if (GetFileType(out) != FILE_TYPE_PIPE) return true;
+    // An empty write reaches no reader but still fails on a broken pipe.
+    DWORD written = 0;
+    if (WriteFile(out, "", 0, &written, nullptr)) return true;
+    const DWORD err = GetLastError();
+    return err != ERROR_BROKEN_PIPE && err != ERROR_NO_DATA;
+#else
+    struct pollfd p {};
+    p.fd = STDOUT_FILENO;
+    p.events = POLLOUT;
+    if (poll(&p, 1, 0) < 0) return true;
+    return (p.revents & (POLLERR | POLLHUP | POLLNVAL)) == 0;
+#endif
 }
 
 }  // namespace gaia

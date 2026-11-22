@@ -301,12 +301,13 @@ int positive(const json& args, const char* name) {
 }  // namespace
 
 void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> folder, std::string repoOverride,
-                         GitHubWriteKinds writes, GitHubEnvironment env) {
+                         GitHubWriteKinds writes, GitHubEnvironment env, std::function<bool()> offline) {
     struct Ctx {
         std::function<std::string()> folder;
         std::string repoOverride;
         GitHubWriteKinds writes;
         GitHubEnvironment env;
+        std::function<bool()> offline;
         GitHubRepo repo() const {
             if (!repoOverride.empty()) {
                 const auto r = parseRepoSlug(repoOverride);
@@ -326,7 +327,8 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
             return (*cache)[host] = inner(host);
         };
     }
-    auto ctx = std::make_shared<Ctx>(Ctx{std::move(folder), std::move(repoOverride), std::move(writes), std::move(env)});
+    auto ctx = std::make_shared<Ctx>(
+        Ctx{std::move(folder), std::move(repoOverride), std::move(writes), std::move(env), std::move(offline)});
 
     // Each tool body runs with its repository and API; any failure becomes a plain error the model can read.
     using Body = std::function<json(const GitHubRepo&, Api&, GitHubAccess&, const json&)>;
@@ -338,6 +340,11 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
         t.parameters = std::move(params);
         t.policy = policy;
         t.callback = [ctx, body](const json& args) -> json {
+            if (ctx->offline && ctx->offline()) {
+                return {{"status", "error"},
+                        {"error", "Internet access is off for this chat, so GitHub can't be reached. Turn it on "
+                                  "to use GitHub."}};
+            }
             try {
                 const GitHubRepo repo = ctx->repo();
                 GitHubAccess access = resolveGitHubAccess(repo, ctx->env);
@@ -495,7 +502,7 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
         }));
 
     registry.registerTool(make(
-        "gh_issue_comment", "Post a comment on an issue or pull request. Shown to the user before it is posted.",
+        "gh_issue_comment", "Post a comment on an issue or pull request. The user approves it first unless approvals are off.",
         {{"number", ToolParamType::INTEGER, true, "Issue or pull request number."},
          {"body", ToolParamType::STRING, true, "The comment, in Markdown."}},
         ToolPolicy::CONFIRM, [mayWrite](const GitHubRepo& r, Api& api, GitHubAccess& access, const json& a) {
@@ -508,7 +515,8 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
         }));
 
     registry.registerTool(make(
-        "gh_pr_create", "Open a pull request from a pushed branch, as a draft unless draft is false. Shown to the user first.",
+        "gh_pr_create", "Open a pull request from a pushed branch, as a draft unless draft is false. The user approves it first "
+        "unless approvals are off.",
         {{"title", ToolParamType::STRING, true, "Title."},
          {"body", ToolParamType::STRING, true, "Description, in Markdown."},
          {"head", ToolParamType::STRING, true, "The pushed branch (owner:branch for a fork)."},

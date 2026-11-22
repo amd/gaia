@@ -37,13 +37,14 @@ func (f FlagshipAgent) Program() string {
 	return FlagshipAgentProgram(f.Choice)
 }
 
-// FlagshipAgentProgram maps a saved choice to the program catalog selects by.
+// FlagshipAgentProgram maps a saved choice to the program catalog selects by,
+// or "" for one this build can't run.
 func FlagshipAgentProgram(choice string) string {
-	switch choice {
-	case FlagshipAgentPython:
+	switch {
+	case choice == FlagshipAgentPython:
 		return catalog.PythonAgentBinary
-	case FlagshipAgentNative:
-		return catalog.NativeAgentBinary
+	case catalog.NativeHarness(choice) && catalog.HarnessRunnable(choice):
+		return choice
 	}
 	return ""
 }

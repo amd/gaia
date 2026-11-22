@@ -293,11 +293,16 @@ def test_gaiacpp_is_found_where_the_daemon_looks_first(tmp_path):
     }
 
 
-def test_a_harness_not_yet_offered_is_named_for_the_eval_only():
-    # gaiacode can't run in this checkout yet, so the lane says so instead of
-    # quietly scoring another harness.
-    with pytest.raises(SystemExit, match="can't start gaiacode yet"):
+def test_a_harness_not_yet_offered_runs_only_in_the_lane(tmp_path):
+    # gaiacode isn't offered yet: the lane lets it run for the eval, from its own build.
+    with pytest.raises(SystemExit, match="--harness-binary"):
         run_eval_lane.harness_setup("gaiacode", None)
+    binary = tmp_path / "gaiacode"
+    binary.write_bytes(b"")
+    assert run_eval_lane.harness_setup("gaiacode", binary) == {
+        "GAIA_UNPROVEN_HARNESS": "gaiacode",
+        "GAIA_GAIACODE_PATH": str(binary.resolve()),
+    }
 
 
 def test_the_harness_is_written_beside_the_agent_model(tmp_path):

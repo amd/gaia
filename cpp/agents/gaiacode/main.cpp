@@ -4,9 +4,10 @@
 // gaiacode: GAIA's native coding agent.
 //
 //   gaiacode -p "task" [--output-format json]   One headless run (task from stdin when omitted)
+//   gaiacode --stdio                            The GAIA terminal UI's agent child (JSON Lines)
+//   gaiacode --host H --port P                  The GAIA daemon's "gaia" sidecar, for the Agent UI
 //
-// Only the headless run exists so far; the interactive, sidecar and stdio modes come
-// with the harness routing. No model is proven for coding yet, so one must be named.
+// No model is proven for coding yet, so a headless or stdio run must name one.
 
 #include <atomic>
 #include <chrono>
@@ -28,6 +29,8 @@
 #include <gaia/types.h>
 
 #include "../gaiacpp/bash_tools.h"
+#include "../gaiacpp/sidecar.h"
+#include "../gaiacpp/stdio_server.h"
 #include "code_agent.h"
 
 #ifndef GAIACODE_VERSION
@@ -41,6 +44,11 @@ namespace {
 struct Cli {
     std::optional<std::string> prompt;
     bool print = false;
+    bool stdio = false;
+    bool acceptEdits = false;
+    bool dev = false;
+    std::string host = "127.0.0.1";
+    int port = 0;
     std::string promptFile;
     std::string model;
     std::string baseUrl;
@@ -63,6 +71,9 @@ const char* kUsage =
     "\n"
     "Usage:\n"
     "  gaiacode -p [TASK] --model ID [options]   One headless run; TASK from stdin when omitted\n"
+    "  gaiacode --stdio --model ID [options]     Agent child of the GAIA terminal UI\n"
+    "  gaiacode --host H --port P                The GAIA daemon's sidecar for the Agent UI\n"
+    "                                            (started by the daemon, which passes its token)\n"
     "\n"
     "Options:\n"
     "  -p, --print [TASK]           Run TASK headless and print the answer\n"
@@ -73,7 +84,9 @@ const char* kUsage =
     "  --native-tools MODE          auto (default) | always | never (OpenAI tool calls)\n"
     "  --cwd DIR                    Work in DIR (default: the current folder)\n"
     "  --allow-dir DIR              Let the tools also reach DIR (repeatable)\n"
-    "  --full-access                Let the tools reach any path\n"
+    "  --full-access                Let the tools reach any path; with --stdio, approval prompts off\n"
+    "  --accept-edits               With --stdio: file edits in the folder run without asking\n"
+    "  --dev                        With --stdio: step-by-step status lines\n"
     "  --output-format FMT          text (default) or json\n"
     "  --dangerously-skip-permissions  Run tools that would ask (shell, writes, run_checks)\n"
     "  --max-steps N                Step limit for the run\n"
@@ -93,6 +106,12 @@ std::string need(int& i, int argc, char** argv, const std::string& flag) {
     return argv[++i];
 }
 
+// The daemon starts its "gaia" sidecar as `<binary> --host H --port P` with its token in the environment.
+bool sidecarLaunch() {
+    return !gaia::getEnvVar("GAIA_GAIA_SIDECAR_TOKEN_FILE").empty() ||
+           !gaia::getEnvVar("GAIA_GAIA_SIDECAR_TOKEN").empty();
+}
+
 Cli parse(int argc, char** argv) {
     Cli cli;
     for (int i = 1; i < argc; ++i) {
@@ -106,6 +125,22 @@ Cli parse(int argc, char** argv) {
         } else if (a == "-p" || a == "--print") {
             cli.print = true;
             if (i + 1 < argc && argv[i + 1][0] != '-') cli.prompt = argv[++i];
+        } else if (a == "--stdio") {
+            cli.stdio = true;
+        } else if (a == "--accept-edits") {
+            cli.acceptEdits = true;
+        } else if (a == "--dev") {
+            cli.dev = true;
+        } else if (a == "--host") {
+            cli.host = need(i, argc, argv, a);
+        } else if (a == "--port") {
+            const std::string v = need(i, argc, argv, a);
+            try {
+                cli.port = std::stoi(v);
+            } catch (const std::exception&) {
+                usageError("--port must be a whole number, got " + v);
+            }
+            if (cli.port < 0 || cli.port > 65535) usageError("--port must be between 0 (any free port) and 65535");
         } else if (a == "--prompt-file") {
             cli.print = true;
             cli.promptFile = need(i, argc, argv, a);
@@ -154,10 +189,16 @@ Cli parse(int argc, char** argv) {
         }
     }
     if (cli.outputFormat != "text" && cli.outputFormat != "json") usageError("--output-format must be text or json");
-    if (!cli.print) {
-        usageError("only the headless run (-p) exists so far; the interactive mode comes with the harness routing");
-    }
+    if (cli.print && cli.stdio) usageError("-p and --stdio are two different modes; pass one");
+    if (!cli.stdio && (cli.acceptEdits || cli.dev)) usageError("--accept-edits and --dev go with --stdio");
     if (cli.model.empty()) cli.model = gaia::getEnvVar("GAIA_MODEL_ID");
+    if (!cli.print && !cli.stdio) {
+        if (!sidecarLaunch()) {
+            usageError("gaiacode has no interactive mode of its own: pass -p for one run, or use it from GAIA's "
+                       "terminal UI or Agent UI");
+        }
+        return cli;  // the chat names its model
+    }
     if (cli.model.empty()) {
         usageError("name the model with --model (or GAIA_MODEL_ID): no model is proven for gaiacode yet, so "
                    "there is no default");
@@ -176,6 +217,99 @@ std::atomic<int> g_signals{0};
 extern "C" void onSignal(int) {
     if (g_signals.fetch_add(1) > 0) std::_Exit(130);
     if (auto* a = g_agent.load()) a->requestCancel();
+}
+
+// What every app-driven chat gets: approval prompts guard the shell, edits and GitHub writes.
+gaia::code::CodeAgent::Options appOptions(const Cli& cli, std::vector<std::string> roots,
+                                          std::shared_ptr<gaia::ShellSession> shell) {
+    gaia::code::CodeAgent::Options options;
+    options.workspaceRoots = std::move(roots);
+    options.shell = std::move(shell);
+    options.github = !cli.noGithub;
+    options.repo = cli.repo;
+    // The app's approval prompt guards each write; --allow-github-writes narrows which kinds exist.
+    options.githubWrites = cli.githubWrites.empty() ? std::set<std::string>{"comment", "pr"} : cli.githubWrites;
+    options.skills = !cli.noSkills;
+    return options;
+}
+
+int runSidecar(const Cli& cli) {
+    gaia::SidecarOptions so;
+    so.host = cli.host;
+    so.port = cli.port;
+    so.defaultModel = cli.model;
+    so.program = "gaiacode";
+    so.version = GAIACODE_VERSION;
+    so.makeAgent = [cli](const gaia::AgentConfig& cfg, const gaia::SidecarAgentSpec& spec) {
+        gaia::code::CodeAgent::Options options = appOptions(cli, spec.workspaceRoots, spec.shell);
+        options.internetOff = spec.internetOff;
+        return std::unique_ptr<gaia::Agent>(std::make_unique<gaia::code::CodeAgent>(cfg, options));
+    };
+    return gaia::runSidecar(so);
+}
+
+int runStdio(const Cli& cli) {
+#ifndef _WIN32
+    // A host that closed stdout shows up as a failed write, not as a signal that kills.
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
+    // stdout is the wire; anything else printed goes to stderr.
+    std::ostream wire(std::cout.rdbuf());
+    std::cout.rdbuf(std::cerr.rdbuf());
+    try {
+        std::error_code ec;
+        if (!cli.cwd.empty()) {
+            fs::current_path(fs::u8path(cli.cwd), ec);
+            if (ec) throw std::runtime_error("Cannot work in --cwd " + cli.cwd + ": " + ec.message());
+        }
+        gaia::AgentConfig cfg;
+        if (!cli.baseUrl.empty()) cfg.baseUrl = cli.baseUrl;
+        if (!cli.apiKeyEnv.empty()) cfg.apiKeyEnv = cli.apiKeyEnv;
+        if (!cli.nativeTools.empty()) cfg.nativeToolCalls = gaia::nativeToolCallsFromString(cli.nativeTools);
+        cfg.maxSteps = cli.maxSteps > 0 ? cli.maxSteps : 200;
+        cfg.silentMode = true;
+        cfg.debug = cli.dev;
+        const gaia::NativeToolCalls launchMode = cfg.nativeToolCalls;
+        gaia::applyStdioModel(cfg, cli.model, launchMode);
+
+        const std::string folder = gaia::workingFolderUtf8();
+        std::vector<std::string> roots = {folder};
+        for (const auto& d : cli.allowDirs) {
+            if (!fs::is_directory(fs::u8path(d), ec)) usageError("--allow-dir " + d + " is not a folder");
+            roots.push_back(fs::absolute(fs::u8path(d)).u8string());
+        }
+        // Here --full-access turns approval prompts off; it does not widen the folders.
+        gaia::code::CodeAgent agent(cfg, appOptions(cli, roots, gaia::BashTools::newSession(folder)));
+        agent.setConfig(cfg);  // flags beat the GAIA_* variables the constructor reads
+
+        gaia::StdioOptions so;
+        so.fullAccess = cli.fullAccess || cli.skipPermissions;
+        so.acceptEdits = cli.acceptEdits;
+        so.dev = cli.dev;
+        so.program = "gaiacode";
+        so.agentVersion = GAIACODE_VERSION;
+        so.editRoots = {folder};
+        so.memory = false;  // gaiacode keeps no memory
+        so.nativeTools = launchMode;
+        so.hostAlive = gaia::stdoutHasReader;
+        so.exitWhenHostGone = true;
+        gaia::StdioServer server(agent, std::cin, wire, so);
+        g_agent = &agent;
+        const int code = server.run();
+        g_agent = nullptr;
+        // The reader may still be blocked on stdin, which a normal exit would wait for.
+        if (code != 0 || server.hostGone()) {
+            std::cerr.flush();
+            std::_Exit(code);
+        }
+        return code;
+    } catch (const std::exception& e) {
+        // The UI reads the failure off the wire; main() prints it on stderr.
+        wire << gaia::json{{"type", "error"}, {"detail", std::string("gaiacode could not start: ") + e.what()}}
+                    .dump(-1, ' ', false, gaia::json::error_handler_t::replace)
+             << std::endl;
+        throw;
+    }
 }
 
 int run(const Cli& cli) {
@@ -277,9 +411,14 @@ int run(const Cli& cli) {
 
 int main(int argc, char** argv) {
     const Cli cli = parse(argc, argv);
-    std::signal(SIGINT, onSignal);
-    std::signal(SIGTERM, onSignal);
     try {
+        if (!cli.print && !cli.stdio) return runSidecar(cli);
+        std::signal(SIGINT, onSignal);
+        std::signal(SIGTERM, onSignal);
+#ifdef SIGBREAK
+        std::signal(SIGBREAK, onSignal);  // what a parent sends a console child on Windows
+#endif
+        if (cli.stdio) return runStdio(cli);
         return run(cli);
     } catch (const std::exception& e) {
         std::cerr << "gaiacode: " << e.what() << "\n";

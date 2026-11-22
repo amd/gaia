@@ -45,14 +45,18 @@ def fake_gaiacpp(tmp_path, monkeypatch):
     binary.write_bytes(b"not a real program")
     if sys.platform != "win32":
         binary.chmod(0o755)
-    monkeypatch.setattr(fetch, "native_flagship_candidates", lambda: [binary])
+    monkeypatch.setattr(
+        fetch, "native_flagship_candidates", lambda name="gaiacpp": [binary]
+    )
     return binary
 
 
 @pytest.fixture
 def no_gaiacpp(tmp_path, monkeypatch):
     missing = tmp_path / "nowhere" / fetch.native_flagship_executable_name()
-    monkeypatch.setattr(fetch, "native_flagship_candidates", lambda: [missing])
+    monkeypatch.setattr(
+        fetch, "native_flagship_candidates", lambda name="gaiacpp": [missing]
+    )
     return missing
 
 
@@ -154,7 +158,9 @@ def _flagship_manager():
 
 def test_the_daemon_starts_gaiacpp_when_it_is_chosen(fake_gaiacpp, monkeypatch):
     _choose("gaiacpp")
-    monkeypatch.setattr(fetch, "native_flagship_version", lambda binary: "0.1.0")
+    monkeypatch.setattr(
+        fetch, "native_flagship_version", lambda binary, name="gaiacpp": "0.1.0"
+    )
     m = _flagship_manager()
     argv, kwargs = m.build_spawn_command(port=45123)
     assert argv == [str(fake_gaiacpp), "--host", m.host, "--port", "45123"]
@@ -239,18 +245,56 @@ def test_the_daemon_refuses_to_start_a_harness_it_cannot_run():
     assert "gaiacode" in str(e.value) and "Settings" in str(e.value)
 
 
-def test_an_unproven_harness_with_no_launcher_is_not_run_as_the_python_agent(
-    monkeypatch,
-):
-    # The eval override makes gaiacode "runnable", but nothing here can start it.
-    _save_raw("gaiacode")
+def test_the_daemon_starts_gaiacode_under_the_eval_override(monkeypatch, tmp_path):
+    # Not offered yet: only the eval lanes' override lets it run, from a build of its own.
+    binary = tmp_path / "build" / fetch.native_flagship_executable_name("gaiacode")
+    binary.parent.mkdir()
+    binary.write_bytes(b"#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.setenv("GAIA_GAIACODE_PATH", str(binary))
     monkeypatch.setenv("GAIA_UNPROVEN_HARNESS", "gaiacode")
     monkeypatch.setattr(
         fetch, "fetch_binary", lambda **k: pytest.fail("ran the Python agent")
     )
+    seen = []
+    monkeypatch.setattr(
+        fetch,
+        "native_flagship_version",
+        lambda b, name="gaiacpp": seen.append(name) or "0.1.0",
+    )
+    _save_raw("gaiacode")
+    m = _flagship_manager()
+    argv, kwargs = m.build_spawn_command(port=45123)
+    assert argv == [str(binary), "--host", m.host, "--port", "45123"]
+    assert kwargs == {} and seen == ["gaiacode"]
+    assert m.resolved_mode == "user"
+
+
+def test_a_missing_gaiacode_names_its_variable_and_never_runs_python(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    monkeypatch.delenv("GAIA_GAIACODE_PATH", raising=False)
+    monkeypatch.setenv("GAIA_UNPROVEN_HARNESS", "gaiacode")
+    monkeypatch.setattr(
+        fetch, "fetch_binary", lambda **k: pytest.fail("ran the Python agent")
+    )
+    _save_raw("gaiacode")
     with pytest.raises(SidecarSpawnError) as e:
         _flagship_manager().build_spawn_command(port=45123)
-    assert "gaiacode" in str(e.value) and "Settings" in str(e.value)
+    text = str(e.value)
+    assert "gaiacode" in text and "GAIA_GAIACODE_PATH" in text and "Settings" in text
+
+
+def test_each_native_harness_looks_for_its_own_program(monkeypatch, tmp_path):
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    monkeypatch.delenv("GAIA_GAIACPP_PATH", raising=False)
+    monkeypatch.delenv("GAIA_GAIACODE_PATH", raising=False)
+    assert fetch.native_flagship_candidates("gaiacode")[0] == (
+        tmp_path / "bin" / fetch.native_flagship_executable_name("gaiacode")
+    )
+    with pytest.raises(ValueError):
+        fetch.native_flagship_candidates("gaiapy")
 
 
 # ---------------------------------------------------------------- settings API
@@ -434,7 +478,9 @@ def test_a_downloaded_gaiacpp_that_was_changed_afterwards_is_not_run(
         "sha256": hashlib.sha256(b"what was downloaded").hexdigest(),
     }
     (tmp_path / fetch.NATIVE_INSTALL_RECORD_NAME).write_text(json.dumps(record))
-    monkeypatch.setattr(fetch, "native_flagship_candidates", lambda: [binary])
+    monkeypatch.setattr(
+        fetch, "native_flagship_candidates", lambda name="gaiacpp": [binary]
+    )
     assert fetch.verified_native_flagship() == binary
 
     binary.write_bytes(b"something else")

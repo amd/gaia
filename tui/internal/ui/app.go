@@ -184,9 +184,9 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 	c := client.NewSubprocessClient(bin, argv[1:], dev)
 	if catalog.IsNativeAgentBinary(bin) {
 		if !hasArg(argv[1:], catalog.NativeStdioFlag) {
-			return fmt.Errorf("--subprocess %q starts gaiacpp without %s, so it would open its own "+
-				"interactive session instead of talking to the terminal UI. Add %s to the command",
-				subprocess, catalog.NativeStdioFlag, catalog.NativeStdioFlag)
+			return fmt.Errorf("--subprocess %q starts %s without %s, so it would not talk to the "+
+				"terminal UI. Add %s to the command",
+				subprocess, catalog.NativeHarnessOf(bin), catalog.NativeStdioFlag, catalog.NativeStdioFlag)
 		}
 		c = client.NewNativeSubprocessClient(bin, argv[1:], dev)
 	}

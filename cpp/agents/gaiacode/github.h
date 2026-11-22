@@ -71,6 +71,7 @@ GitHubRepo repoFromGit(const std::string& folder);
 /// `writes` lists the write kinds allowed; `folder` returns the shell's current folder.
 void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> folder,
                          std::string repoOverride, GitHubWriteKinds writes,
-                         GitHubEnvironment env = GitHubEnvironment::real());
+                         GitHubEnvironment env = GitHubEnvironment::real(),
+                         std::function<bool()> offline = nullptr);
 
 }  // namespace gaia::code

@@ -448,7 +448,7 @@ if(GAIA_BUILD_GAIA_AGENT)
 endif()
 
 # ---------------------------------------------------------------------------
-# gaiacode: the native coding agent (in development; headless run only)
+# gaiacode: the native coding agent (headless, the TUI's stdio child, the daemon's sidecar)
 # ---------------------------------------------------------------------------
 option(GAIA_BUILD_GAIACODE "Build the gaiacode agent" ON)
 if(GAIA_BUILD_GAIACODE)
@@ -458,6 +458,8 @@ if(GAIA_BUILD_GAIACODE)
         agents/gaiacode/check_runner.cpp
         agents/gaiacode/github.cpp
         agents/gaiacpp/bash_tools.cpp
+        agents/gaiacpp/sidecar.cpp
+        agents/gaiacpp/stdio_server.cpp
     )
     # Bundled skills sit beside the binary, where SkillLibrary looks first.
     add_custom_command(TARGET gaiacode POST_BUILD
@@ -466,6 +468,17 @@ if(GAIA_BUILD_GAIACODE)
     set(GAIACODE_VERSION "${PROJECT_VERSION}" CACHE STRING "Version gaiacode reports")
     target_compile_definitions(gaiacode PRIVATE GAIACODE_VERSION="${GAIACODE_VERSION}")
     target_link_libraries(gaiacode PRIVATE gaia::gaia_core)
+    if(httplib_FOUND)
+        target_link_libraries(gaiacode PRIVATE httplib::httplib)
+    else()
+        target_include_directories(gaiacode SYSTEM PRIVATE
+            $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+    # httplib's classes must match gaia_core's build of them (ODR).
+    if(OpenSSL_FOUND)
+        target_compile_definitions(gaiacode PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+        target_link_libraries(gaiacode PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
     if(WIN32)
         target_link_libraries(gaiacode PRIVATE psapi ws2_32)
         # The same UTF-8 code page manifest as gaiacpp, for paths outside the legacy code page.
@@ -601,10 +614,14 @@ if(GAIA_BUILD_TESTS)
             tests/test_gaiacode.cpp
             tests/test_gaiacode_cli.cpp
             tests/test_gaiacode_github.cpp
+            tests/test_gaiacode_apps.cpp
             agents/gaiacode/code_agent.cpp
             agents/gaiacode/check_runner.cpp
             agents/gaiacode/github.cpp
         )
+        if(NOT GAIA_BUILD_GAIA_AGENT)
+            target_sources(tests_mock PRIVATE agents/gaiacpp/stdio_server.cpp)
+        endif()
         target_compile_definitions(tests_mock PRIVATE GAIACODE_BIN="$<TARGET_FILE:gaiacode>")
         add_dependencies(tests_mock gaiacode)
     endif()

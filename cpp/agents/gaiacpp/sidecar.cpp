@@ -28,11 +28,6 @@
 #include <gaia/skill_library.h>
 
 #include "bash_tools.h"
-#include "gaia_agent.h"
-
-#ifndef GAIACPP_VERSION
-#define GAIACPP_VERSION "0.0.0-dev"
-#endif
 
 namespace fs = std::filesystem;
 
@@ -194,7 +189,7 @@ struct Session {
     std::string id;
     bool temporary = false;  // no session_id: dropped after its one turn
     std::mutex agentMu;      // held to swap `agent` and by readers on other threads
-    std::unique_ptr<GaiaAgent> agent;
+    std::unique_ptr<Agent> agent;
     std::unique_lock<std::timed_mutex>* turnLock = nullptr;  // the sidecar-wide turn lock while this chat holds it
     SidecarConsole* console = nullptr;  // owned by agent
     std::atomic<bool> busy{false};
@@ -269,11 +264,14 @@ struct BadRequest : std::runtime_error {
 
 class Sidecar {
 public:
-    explicit Sidecar(SidecarOptions opts) : opts_(std::move(opts)) {}
+    explicit Sidecar(SidecarOptions opts) : opts_(std::move(opts)) {
+        if (!opts_.makeAgent) throw std::logic_error("runSidecar needs SidecarOptions::makeAgent");
+        if (opts_.program.empty()) throw std::logic_error("runSidecar needs SidecarOptions::program");
+    }
 
     int run() {
         if (!loopbackName(opts_.host)) {
-            throw std::runtime_error("gaiacpp sidecar only listens on this PC: --host must be 127.0.0.1, localhost "
+            throw std::runtime_error(opts_.program + " sidecar only listens on this PC: --host must be 127.0.0.1, localhost "
                                      "or ::1, not " + opts_.host + ".");
         }
         token_ = loadToken();
@@ -307,14 +305,14 @@ public:
         int port = opts_.port;
         if (port > 0) {
             if (!server_.bind_to_port(opts_.host, port)) {
-                throw std::runtime_error("gaiacpp sidecar can't bind " + opts_.host + ":" + std::to_string(port) +
+                throw std::runtime_error(opts_.program + " sidecar can't bind " + opts_.host + ":" + std::to_string(port) +
                                          " (in use?). The daemon picks the port; to run by hand, pass a free --port.");
             }
         } else {
             port = server_.bind_to_any_port(opts_.host);
-            if (port <= 0) throw std::runtime_error("gaiacpp sidecar can't bind a port on " + opts_.host);
+            if (port <= 0) throw std::runtime_error(opts_.program + " sidecar can't bind a port on " + opts_.host);
         }
-        std::cerr << "gaiacpp " GAIACPP_VERSION " sidecar (api " << kApiVersion << ") on http://" << opts_.host
+        std::cerr << opts_.program << " " << opts_.version << " sidecar (api " << kApiVersion << ") on http://" << opts_.host
                   << ":" << port << std::endl;
         server_.listen_after_bind();
         return 0;
@@ -342,13 +340,13 @@ private:
         return env;
     }
 
-    // The daemon hands over a keychain secret file the agent must remove; gaiacpp doesn't use it.
-    static void dropKeychainSecret() {
+    // The daemon hands over a keychain secret file the agent must remove; a native harness doesn't use it.
+    void dropKeychainSecret() {
         const std::string f = getEnvVar("GAIA_HOST_KEYCHAIN_SECRET_FILE");
         if (!f.empty()) {
             std::error_code ec;
             fs::remove(f, ec);
-            if (ec) std::cerr << "gaiacpp: could not remove the keychain secret file " << f << ": " << ec.message() << std::endl;
+            if (ec) std::cerr << opts_.program << ": could not remove the keychain secret file " << f << ": " << ec.message() << std::endl;
         }
     }
 
@@ -433,7 +431,7 @@ private:
         if (s.agent && s.builtWith == s.roots) return;
         AgentConfig cfg;
         cfg.baseUrl = getEnvVar("LEMONADE_BASE_URL", defaultBaseUrl());
-        cfg.modelId = opts_.defaultModel.empty() ? "Gemma-4-E4B-it-GGUF" : opts_.defaultModel;
+        cfg.modelId = opts_.defaultModel.empty() ? opts_.fallbackModel : opts_.defaultModel;
         cfg.contextSize = 32768;
         cfg.maxTokens = 16384;
         cfg.temperature = 0.2;
@@ -442,8 +440,7 @@ private:
         cfg.maxHistoryMessages = 0;  // the UI fits history to the window
         cfg.responseMode = ResponseMode::Conversational;
         cfg.apiKey = lemonadeKey_;
-        GaiaAgent::Options o;
-        o.maxHelpers = opts_.maxHelpers;
+        SidecarAgentSpec o;
         if (s.roots.empty()) {
             // Roots are UTF-8; the environment's narrow strings are the code page on Windows.
 #ifdef _WIN32
@@ -461,7 +458,8 @@ private:
         o.memoryPrivate = s.memoryPrivate;
         if (!s.shell) s.shell = BashTools::newSession();
         o.shell = s.shell;
-        auto agent = std::make_unique<GaiaAgent>(cfg, o);
+        auto agent = opts_.makeAgent(cfg, o);
+        if (!agent) throw std::logic_error("SidecarOptions::makeAgent returned no agent");
         auto console = std::make_unique<SidecarConsole>();
         SidecarConsole* consolePtr = console.get();
         agent->setOutputHandler(std::move(console));
@@ -590,11 +588,11 @@ private:
         });
         server_.Get("/version", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, false)) return;
-            sendJson(res, 200, {{"apiVersion", kApiVersion}, {"agentVersion", GAIACPP_VERSION}});
+            sendJson(res, 200, {{"apiVersion", kApiVersion}, {"agentVersion", opts_.version}});
         });
         server_.Get("/v1/gaia/version", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, false)) return;
-            sendJson(res, 200, {{"apiVersion", kApiVersion}, {"version", GAIACPP_VERSION}, {"agent", "gaia"}});
+            sendJson(res, 200, {{"apiVersion", kApiVersion}, {"version", opts_.version}, {"agent", "gaia"}});
         });
         server_.Get("/v1/gaia/init", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
@@ -689,7 +687,7 @@ private:
             if (!admit(req, res, true)) return;
             const std::string id = req.matches[1];
             if (!findRun(id)) return sendDetail(res, 404, "No run " + id + " in flight");
-            sendDetail(res, 409, "gaiacpp takes messages between turns, not during one");
+            sendDetail(res, 409, opts_.program + " takes messages between turns, not during one");
         });
         server_.Post(R"(/v1/gaia/sessions/([^/]+)/bypass)", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
@@ -840,7 +838,7 @@ private:
         if (hasTurns && !body["context"].empty()) throw BadRequest(422, "send turns or context, not both");
         const std::string provider = body.value("provider", "");
         if (!provider.empty() && provider != "lemonade" && provider != "local") {
-            throw BadRequest(400, "gaiacpp runs models through Lemonade only; provider '" + provider + "' isn't supported");
+            throw BadRequest(400, opts_.program + " runs models through Lemonade only; provider '" + provider + "' isn't supported");
         }
         const std::string sid = body.contains("session_id") && body["session_id"].is_string()
                                     ? body["session_id"].get<std::string>() : "";
@@ -862,6 +860,9 @@ private:
         if (undoRequested && sid.empty()) throw BadRequest(422, "changes_turn_id needs a session_id");
         const bool reasoning = body.value("reasoning", false);
         const std::string model = body.value("model", "");
+        if (model.empty() && opts_.defaultModel.empty() && opts_.fallbackModel.empty()) {
+            throw BadRequest(400, opts_.program + " has no default model: choose a model for this chat.");
+        }
         const int maxSteps = body.value("max_steps", 0);
 
         // The UI sends the conversation every turn.
@@ -890,7 +891,7 @@ private:
             std::lock_guard<std::mutex> lock(runsMu_);
             if (runs_.count(runId)) throw BadRequest(409, "Duplicate run_id " + runId);
             if (runs_.size() >= kMaxOpenTurns) {
-                throw BadRequest(503, "gaiacpp already has " + std::to_string(kMaxOpenTurns) +
+                throw BadRequest(503, opts_.program + " already has " + std::to_string(kMaxOpenTurns) +
                                           " turns running or waiting. Send this again when one of them finishes.");
             }
             runs_[runId] = run;
@@ -966,9 +967,14 @@ private:
                 if (!folderProblem.empty()) throw std::runtime_error(folderProblem);
                 if (undoRequested) {
                     s->console->emit({{"type", "status"},
-                                      {"message", "Undo may not work for this turn: gaiacpp doesn't record file changes yet."}});
+                                      {"message", "Undo may not work for this turn: " + opts_.program + " doesn't record file changes yet."}});
                 }
                 indexDocuments(*s, documents);
+                std::string asked = text;
+                if (!documents.empty() && !s->agent->tools().hasTool("index_document")) {
+                    asked += "\n\nAttached files (read them with your file tools):";
+                    for (const auto& d : documents) asked += "\n- " + d;
+                }
                 AgentConfig cfg = s->agent->config();
                 if (!model.empty()) cfg.modelId = model;
                 // Cloud models behind Lemonade speak native tool calls.
@@ -979,7 +985,7 @@ private:
                 s->agent->setHistory(history);
                 const size_t before = s->agent->history().size();
                 if (run->cancelled) throw std::runtime_error("cancelled");
-                json r = s->agent->processQuery(text, maxSteps);
+                json r = s->agent->processQuery(asked, maxSteps);
                 const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
                 json usage = {{"steps", r.value("steps_taken", 0)}, {"tools_used", s->console->toolsUsed()},
                               {"elapsed", elapsed}};
@@ -1117,7 +1123,8 @@ private:
         for (const auto& d : documents) {
             if (!s.indexed.count(d)) pending.push_back(d);
         }
-        if (pending.empty()) return;
+        // An agent with no document index reads an attachment with its file tools.
+        if (pending.empty() || !s.agent->tools().hasTool("index_document")) return;
         json names = json::array();
         for (const auto& d : pending) names.push_back(fs::path(d).filename().string());
         s.console->emit({{"type", "tool_call"}, {"tool", "index_documents"}, {"args", {{"documents", names}}}});

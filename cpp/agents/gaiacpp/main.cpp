@@ -614,26 +614,6 @@ int runMcp(const Cli& cli) {
     return 0;
 }
 
-// False once stdout is a pipe nobody reads any more.
-bool stdoutHasReader() {
-#ifdef _WIN32
-    const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (out == nullptr || out == INVALID_HANDLE_VALUE) return false;
-    if (GetFileType(out) != FILE_TYPE_PIPE) return true;
-    // An empty write reaches no reader but still fails on a broken pipe.
-    DWORD written = 0;
-    if (WriteFile(out, "", 0, &written, nullptr)) return true;
-    const DWORD err = GetLastError();
-    return err != ERROR_BROKEN_PIPE && err != ERROR_NO_DATA;
-#else
-    struct pollfd p {};
-    p.fd = STDOUT_FILENO;
-    p.events = POLLOUT;
-    if (poll(&p, 1, 0) < 0) return true;
-    return (p.revents & (POLLERR | POLLHUP | POLLNVAL)) == 0;
-#endif
-}
-
 // The GAIA terminal UI's agent child: queries and controls on stdin, events on stdout.
 int runStdio(const Cli& cli) {
 #ifndef _WIN32
@@ -661,12 +641,13 @@ int runStdio(const Cli& cli) {
         so.fullAccess = cli.fullAccess || cli.skipPermissions;
         so.acceptEdits = cli.acceptEdits;
         so.dev = cli.dev;
+        so.program = "gaiacpp";
         so.agentVersion = GAIACPP_VERSION;
         // UTF-8, as the server reads it: workspaceRoots holds the code page's spelling.
         so.editRoots = {gaia::workingFolderUtf8()};
         so.memory = options.memory;
         so.nativeTools = launchMode;
-        so.hostAlive = stdoutHasReader;
+        so.hostAlive = gaia::stdoutHasReader;
         so.exitWhenHostGone = true;
         gaia::StdioServer server(agent, std::cin, wire, so);
         g_agent = &agent;
@@ -1008,7 +989,20 @@ int main(int argc, char** argv) {
             so.host = cli.host;
             so.port = cli.port;
             so.defaultModel = cli.model.empty() ? gaia::getEnvVar("GAIA_MODEL_ID") : cli.model;
-            so.maxHelpers = cli.maxHelpers >= 0 ? cli.maxHelpers : maxHelpersFromEnv();
+            so.program = "gaiacpp";
+            so.version = GAIACPP_VERSION;
+            so.fallbackModel = "Gemma-4-E4B-it-GGUF";
+            const int maxHelpers = cli.maxHelpers >= 0 ? cli.maxHelpers : maxHelpersFromEnv();
+            so.makeAgent = [maxHelpers](const gaia::AgentConfig& cfg, const gaia::SidecarAgentSpec& spec) {
+                gaia::GaiaAgent::Options o;
+                o.maxHelpers = maxHelpers;
+                o.workspaceRoots = spec.workspaceRoots;
+                o.internetOff = spec.internetOff;
+                o.memoryOff = spec.memoryOff;
+                o.memoryPrivate = spec.memoryPrivate;
+                o.shell = spec.shell;
+                return std::unique_ptr<gaia::Agent>(std::make_unique<gaia::GaiaAgent>(cfg, o));
+            };
             return gaia::runSidecar(so);
         }
         if (!cli.cwd.empty()) {

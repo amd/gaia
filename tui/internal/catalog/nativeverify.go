@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-// These two names are shared with the Agent UI's backend, which downloads
+// These names are shared with the Agent UI's backend, which downloads
 // gaiacpp (src/gaia/daemon/sidecars/fetch.py). A test pins them to that file.
 const (
 	// NativePathEnv names one particular gaiacpp file to run as the agent.
@@ -23,6 +23,16 @@ const (
 	// gaiacpp: its version, tag and SHA-256.
 	NativeInstallRecord = "gaiacpp.install.json"
 )
+
+// NativePathEnvs names, for each native harness, the variable that points at one
+// particular build of it (NATIVE_HARNESS_PATH_ENV in fetch.py).
+var NativePathEnvs = map[string]string{
+	NativeAgentBinary: NativePathEnv,
+	"gaiacode":        "GAIA_GAIACODE_PATH",
+}
+
+// nativeInstallRecordFor is the download record a native harness's download writes beside it.
+func nativeInstallRecordFor(name string) string { return name + ".install.json" }
 
 // NativeIntegrityError is a gaiacpp that must not be run: it no longer matches
 // its download record, or that record cannot be used to check it.
@@ -41,12 +51,12 @@ func (e *NativeIntegrityError) Error() string {
 		e.Binary, e.Reason, e.Record, PythonAgentChoice, PythonAgentBinary, AgentChoiceDocsURL)
 }
 
-// nativeExecutableName is the exact file name the Agent UI downloads to.
-func nativeExecutableName() string {
+// nativeExecutableName is the exact file name the Agent UI downloads harness name to.
+func nativeExecutableName(name string) string {
 	if runtime.GOOS == "windows" {
-		return NativeAgentBinary + ".exe"
+		return name + ".exe"
 	}
-	return NativeAgentBinary
+	return name
 }
 
 // VerifyNative checks the gaiacpp at binary against the download record beside
@@ -54,12 +64,16 @@ func nativeExecutableName() string {
 // check: a build of your own or an installer's copy has none. A record that is
 // there must be readable, carry a checksum, and match the file.
 func VerifyNative(binary string) error {
+	harness := NativeHarnessOf(binary)
+	if harness == "" {
+		return nil
+	}
 	name := filepath.Base(binary)
-	want := nativeExecutableName()
+	want := nativeExecutableName(harness)
 	if name != want && !(runtime.GOOS == "windows" && strings.EqualFold(name, want)) {
 		return nil
 	}
-	record := filepath.Join(filepath.Dir(binary), NativeInstallRecord)
+	record := filepath.Join(filepath.Dir(binary), nativeInstallRecordFor(harness))
 	raw, err := os.ReadFile(record)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -92,7 +106,7 @@ func VerifyNative(binary string) error {
 	}
 	if actual := hex.EncodeToString(sum.Sum(nil)); actual != expected {
 		return refuse(fmt.Sprintf(
-			"it does not match the gaiacpp that was downloaded (expected SHA-256 %s, actual %s)", expected, actual))
+			"it does not match the %s that was downloaded (expected SHA-256 %s, actual %s)", harness, expected, actual))
 	}
 	return nil
 }

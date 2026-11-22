@@ -229,41 +229,56 @@ def chosen_flagship() -> str:
     return require_runnable(saved_flagship())
 
 
-def native_flagship_executable_name() -> str:
-    return "gaiacpp.exe" if sys.platform == "win32" else "gaiacpp"
-
-
-#: A build of your own to run as the agent; a file path.
-NATIVE_FLAGSHIP_PATH_ENV = "GAIA_GAIACPP_PATH"
+#: A build of your own to run as each native harness; a file path.
+NATIVE_HARNESS_PATH_ENV = {
+    "gaiacpp": "GAIA_GAIACPP_PATH",
+    "gaiacode": "GAIA_GAIACODE_PATH",
+}
+NATIVE_FLAGSHIP_PATH_ENV = NATIVE_HARNESS_PATH_ENV[NATIVE_FLAGSHIP]
 NATIVE_INSTALL_RECORD_NAME = "gaiacpp.install.json"
 
 
-def native_flagship_candidates() -> "list[Path]":
-    """Where ``gaiacpp`` is looked for, in order.
+def native_flagship_executable_name(name: str = NATIVE_FLAGSHIP) -> str:
+    return f"{name}.exe" if sys.platform == "win32" else name
 
-    ``GAIA_GAIACPP_PATH`` when set, GAIA's bin dir, then beside a packaged
-    gaia and its PATH. A pip install's PATH is not trusted for it.
+
+def native_install_record_name(name: str = NATIVE_FLAGSHIP) -> str:
+    return f"{name}.install.json"
+
+
+def _native_name(name: str) -> str:
+    if name not in NATIVE_HARNESS_PATH_ENV:
+        raise ValueError(f"{name!r} is not a native harness GAIA can start")
+    return name
+
+
+def native_flagship_candidates(name: str = NATIVE_FLAGSHIP) -> "list[Path]":
+    """Where native harness *name* is looked for, in order.
+
+    Its path variable (``GAIA_GAIACPP_PATH``, ``GAIA_GAIACODE_PATH``) when set,
+    GAIA's bin dir, then beside a packaged gaia and its PATH. A pip install's
+    PATH is not trusted for it.
     """
     from gaia.frozen import is_frozen
     from gaia.home import gaia_home
 
-    name = native_flagship_executable_name()
+    exe = native_flagship_executable_name(_native_name(name))
     candidates = []
-    explicit = os.environ.get(NATIVE_FLAGSHIP_PATH_ENV, "").strip()
+    explicit = os.environ.get(NATIVE_HARNESS_PATH_ENV[name], "").strip()
     if explicit:
         candidates.append(Path(explicit))
-    candidates.append(gaia_home() / "bin" / name)
+    candidates.append(gaia_home() / "bin" / exe)
     if is_frozen():
-        candidates.append(Path(sys.executable).parent / name)
-        on_path = shutil.which("gaiacpp")
+        candidates.append(Path(sys.executable).parent / exe)
+        on_path = shutil.which(name)
         if on_path:
             candidates.append(Path(on_path))
     return candidates
 
 
-def native_flagship() -> Optional[Path]:
-    """The installed ``gaiacpp``, else ``None``. Says nothing about whether it is verified."""
-    for path in native_flagship_candidates():
+def native_flagship(name: str = NATIVE_FLAGSHIP) -> Optional[Path]:
+    """The installed native harness *name*, else ``None``. Says nothing about whether it is verified."""
+    for path in native_flagship_candidates(name):
         if not path.is_file():
             continue
         if sys.platform != "win32" and not os.access(path, os.X_OK):
@@ -272,49 +287,49 @@ def native_flagship() -> Optional[Path]:
     return None
 
 
-def native_install_record(binary: Path) -> Optional[dict]:
+def native_install_record(binary: Path, name: str = NATIVE_FLAGSHIP) -> Optional[dict]:
     """The record the in-app download wrote beside *binary*, else ``None``."""
-    record = binary.parent / NATIVE_INSTALL_RECORD_NAME
-    if binary.name != native_flagship_executable_name() or not record.is_file():
+    record = binary.parent / native_install_record_name(name)
+    if binary.name != native_flagship_executable_name(name) or not record.is_file():
         return None
     try:
         data = json.loads(record.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         raise IntegrityError(
-            f"the gaiacpp install record at {record} cannot be read: {e}. "
-            "Download gaiacpp again in Settings."
+            f"the {name} install record at {record} cannot be read: {e}. "
+            f"Download {name} again in Settings."
         ) from e
     if not isinstance(data, dict) or not isinstance(data.get("sha256"), str):
         raise IntegrityError(
-            f"the gaiacpp install record at {record} has no checksum. "
-            "Download gaiacpp again in Settings."
+            f"the {name} install record at {record} has no checksum. "
+            f"Download {name} again in Settings."
         )
     return data
 
 
-def verified_native_flagship() -> Optional[Path]:
-    """The ``gaiacpp`` to run, checked against its download record when it has one.
+def verified_native_flagship(name: str = NATIVE_FLAGSHIP) -> Optional[Path]:
+    """Native harness *name* to run, checked against its download record when it has one.
 
     Raises:
         IntegrityError: the file no longer matches what was downloaded.
     """
-    binary = native_flagship()
+    binary = native_flagship(name)
     if binary is None:
         return None
-    record = native_install_record(binary)
+    record = native_install_record(binary, name)
     if record is not None:
         actual = file_sha256(binary)
         if actual != record["sha256"].lower():
             raise IntegrityError(
-                f"{binary} does not match the gaiacpp that was downloaded:\n"
+                f"{binary} does not match the {name} that was downloaded:\n"
                 f"  expected {record['sha256']}\n  actual   {actual}\n"
-                "Refusing to run it. Download gaiacpp again in Settings."
+                f"Refusing to run it. Download {name} again in Settings."
             )
     return binary
 
 
-def native_flagship_stamp(binary: Path) -> str:
-    """The whole version ``gaiacpp --version`` prints, e.g. ``0.26.0-rc.3``."""
+def native_flagship_stamp(binary: Path, name: str = NATIVE_FLAGSHIP) -> str:
+    """The whole version ``<name> --version`` prints, e.g. ``0.26.0-rc.3``."""
     import subprocess
 
     from gaia.utils.terminal import windows_hidden_popen_kwargs
@@ -332,7 +347,9 @@ def native_flagship_stamp(binary: Path) -> str:
         raise PlatformError(
             f"could not run {binary} --version to read its version: {e}"
         ) from e
-    match = re.match(r"^gaiacpp (\d+\.\d+\.\d+(?:-rc\.\d+)?)\s*$", done.stdout or "")
+    match = re.match(
+        rf"^{re.escape(name)} (\d+\.\d+\.\d+(?:-rc\.\d+)?)\s*$", done.stdout or ""
+    )
     if done.returncode != 0 or not match:
         raise PlatformError(
             f"{binary} --version did not print a version (exit {done.returncode}): "
@@ -341,9 +358,9 @@ def native_flagship_stamp(binary: Path) -> str:
     return match.group(1)
 
 
-def native_flagship_version(binary: Path) -> str:
+def native_flagship_version(binary: Path, name: str = NATIVE_FLAGSHIP) -> str:
     """Its ``major.minor.patch``, e.g. ``0.26.0`` for ``0.26.0-rc.3``."""
-    return native_flagship_stamp(binary).split("-", 1)[0]
+    return native_flagship_stamp(binary, name).split("-", 1)[0]
 
 
 def flagship_executable_name() -> str:

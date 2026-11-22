@@ -185,9 +185,28 @@ func TestNativeNamesMatchTheBackend(t *testing.T) {
 		t.Fatalf("cannot read the backend's gaiacpp lookup at %s: %v", path, err)
 	}
 	pinned := []struct{ python, goValue string }{
-		{"NATIVE_FLAGSHIP_PATH_ENV", NativePathEnv},
 		{"NATIVE_INSTALL_RECORD_NAME", NativeInstallRecord},
 		{"NATIVE_FLAGSHIP", NativeAgentBinary},
+	}
+	// Each native harness's path variable, read off the backend's one map.
+	envMap := regexp.MustCompile(`(?m)^NATIVE_HARNESS_PATH_ENV\s*=\s*\{([^}]*)\}`).FindSubmatch(raw)
+	if envMap == nil {
+		t.Fatalf("NATIVE_HARNESS_PATH_ENV is no longer a one-line dict in %s; update this test with it", path)
+	}
+	backend := map[string]string{}
+	for _, kv := range regexp.MustCompile(`"([^"]+)":\s*"([^"]+)"`).FindAllSubmatch(envMap[1], -1) {
+		backend[string(kv[1])] = string(kv[2])
+	}
+	if len(backend) != len(NativePathEnvs) {
+		t.Errorf("the backend names path variables for %v, the terminal UI for %v", backend, NativePathEnvs)
+	}
+	for name, env := range NativePathEnvs {
+		if backend[name] != env {
+			t.Errorf("%s's path variable is %q in %s but %q in the terminal UI", name, backend[name], path, env)
+		}
+	}
+	if NativePathEnvs[NativeAgentBinary] != NativePathEnv {
+		t.Errorf("NativePathEnv %q is not gaiacpp's entry in NativePathEnvs", NativePathEnv)
 	}
 	for _, p := range pinned {
 		m := regexp.MustCompile(`(?m)^` + p.python + `\s*=\s*"([^"]+)"`).FindSubmatch(raw)

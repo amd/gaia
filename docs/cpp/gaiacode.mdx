@@ -6,8 +6,8 @@ icon: "code"
 
 <Warning>
   **In development.** gaiacode is not offered in the Agent UI or the TUI yet, and no model
-  is proven for it, so it has no default model. Today it is a headless command for trying it
-  out on your own repositories.
+  is proven for it, so it has no default model. It can already run behind both apps, but only
+  in GAIA's own evals, until it is proven there (see [In GAIA's apps](#in-gaias-apps)).
 </Warning>
 
 <Info>
@@ -49,7 +49,10 @@ gaiacode -p "fix the failing test in stats.py" --model Qwen3.6-35B-A3B-GGUF \
 | `--native-tools MODE` | `auto` (default), `always` or `never`: whether to use OpenAI tool calls |
 | `--cwd DIR` | Work in `DIR` |
 | `--allow-dir DIR` | Let the tools also reach `DIR` (repeatable) |
-| `--full-access` | Let the tools reach any path |
+| `--full-access` | Let the tools reach any path. With `--stdio`, turns approval prompts off instead |
+| `--stdio` | Run as the GAIA terminal UI's agent program (see below) |
+| `--accept-edits`, `--dev` | With `--stdio`: edits in the folder run without asking; step-by-step status lines |
+| `--host H`, `--port P` | The address the daemon starts its sidecar on (see below) |
 | `--output-format FMT` | `text` (default) or `json`, with the same field names as `gaiacpp -p` |
 | `--dangerously-skip-permissions` | Run tools that would ask: shell commands that change things, file writes, `run_checks` |
 | `--max-steps N` | Step limit for the run (default 200) |
@@ -71,6 +74,27 @@ Exit codes: 0 when the run finished, 1 when it failed, 2 for a usage error.
 
 `run_checks` runs the repository's own code, so in a headless run it needs
 `--dangerously-skip-permissions`.
+
+## In GAIA's apps
+
+gaiacode speaks the same two protocols as gaiacpp, so either app can run it as the GAIA agent
+program:
+
+- **Agent UI:** the GAIA daemon starts it as its `gaia` sidecar (`gaiacode --host 127.0.0.1 --port P`,
+  with the daemon's token), and each chat gets its own agent in the chat's folders. Turning internet
+  access off for a chat also turns its GitHub tools off.
+- **Terminal UI:** the TUI starts `gaiacode --stdio --model ID` as its agent program.
+
+In both, the shell, file edits and GitHub writes ask for approval in the app, so a comment or pull
+request is posted only once you approve it, unless you turn approvals off for the session. Starting
+it with `--allow-github-writes` limits which kinds of write it has at all. A chat with no model
+chosen is refused rather than run on a default, and attached files are named to the model, which
+reads them with its file tools (gaiacode has no document index).
+
+Until it is offered, only an eval run can choose it: the eval lanes set `GAIA_UNPROVEN_HARNESS=gaiacode`
+and point `GAIA_GAIACODE_PATH` at a build (`python util/run_eval_lane.py --harness gaiacode
+--harness-binary <path>`). A saved `flagship_agent: gaiacode` without that override is refused at
+launch with a message to choose another agent program, and the Python agent never answers in its place.
 
 ## GitHub
 

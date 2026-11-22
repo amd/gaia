@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -39,6 +40,8 @@ public:
         std::set<std::string> githubWrites;
         /// Load SKILL.md skills (bundled beside the binary, and the user's).
         bool skills = true;
+        /// Set while the chat has internet access off: GitHub refuses until it clears.
+        std::shared_ptr<std::atomic<bool>> internetOff;
     };
 
     CodeAgent(const AgentConfig& config, Options options);
