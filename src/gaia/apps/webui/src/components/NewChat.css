@@ -87,10 +87,16 @@
 }
 .new-chat-inner > :nth-child(2) { animation-delay: var(--stagger); }
 .new-chat-inner > :nth-child(n + 3) { animation-delay: calc(var(--stagger) * 2); }
+/* The box only fades: someone typing the moment the screen opens must not chase it. */
+.new-chat-inner > :has(> .composer) { animation-name: newChatFade; }
 
 @keyframes newChatRise {
     from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: none; }
+}
+@keyframes newChatFade {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 .new-chat-greeting {
