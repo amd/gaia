@@ -5776,7 +5776,8 @@ Do NOT wrap conversational replies in JSON.
         tracker = self._plan_tracker()
         if tracker is None or not tracker.planned_this_request:
             return None
-        if tracker.sent_back or tracker.has_failed():
+        if tracker.sent_back or tracker.has_failed() or tracker.failed_calls:
+            # After an error a model sent back tends to argue, not finish.
             return None
         if answer.rstrip().endswith("?"):
             # The model is asking the user something; that is theirs to answer.

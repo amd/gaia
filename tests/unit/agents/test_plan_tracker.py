@@ -561,3 +561,26 @@ def test_a_sentence_mentioning_a_plan_is_not_one():
 def test_filter_holds_a_one_line_plan(size):
     text = "Plan: 1. Read a.txt 2. Merge them 3. Save b.md\n\nReading now."
     assert _stream(text, size).strip() == "Reading now."
+
+
+def test_a_step_that_names_a_tool_is_done_when_that_tool_worked():
+    t = PlanTracker(
+        tool_names={"find_files", "write_file"}, change_tools={"write_file"}
+    )
+    t.set_steps(
+        [
+            "Use find_files to locate all Python files.",
+            "Look through each of them",
+            "Write the list to report.md",
+        ]
+    )
+    assert t.steps[0]["text"] == "Locate all Python files."
+    t.on_tool_result("find_files", {"query": "*.py"}, True)
+    assert t.steps[0]["status"] == DONE
+
+
+def test_failed_calls_are_counted_whatever_step_they_were_for():
+    t = tracker("Read notes.txt", "Think", "Write out.md")
+    t.on_tool_result("read_file", {"path": "log1.txt"}, False)
+    assert t.failed_calls == 1
+    assert not t.has_failed()

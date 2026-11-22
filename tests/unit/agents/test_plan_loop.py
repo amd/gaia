@@ -640,3 +640,21 @@ def test_a_plan_the_user_asked_for_after_some_work_stays_in_the_answer():
     result = agent.process_query("read notes.txt and make me a plan for the week")
     assert "Monday: review the notes" in result["result"]
     assert _lists(events) == []
+
+
+def test_no_send_back_after_a_tool_call_failed():
+    agent, _ = _agent()
+    sent = _script(
+        agent,
+        [
+            _calls(("read_file", {"file_path": "missing.txt"}), content=PLAN),
+            "I could not find the files you named.",
+            "I could not find the files you named.",
+        ],
+    )
+    agent._tools_registry["read_file"]["function"] = lambda file_path: {
+        "status": "error",
+        "error": f"File not found: {file_path}",
+    }
+    agent.process_query("merge the action items into actions.md")
+    assert "not done yet" not in _texts(sent)

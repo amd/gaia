@@ -338,6 +338,8 @@ class PlanTracker:
         self._last_change_failed: Optional[Set[str]] = None
         self._ok_verbs: Set[str] = set()
         self._ok_calls = 0
+        self._ok_tools: Set[str] = set()
+        self._failed_calls = 0
         self._tool_calls = 0
         self.reminded = False
         self.sent_back = False
@@ -354,6 +356,8 @@ class PlanTracker:
         self._last_change_failed = None
         self._ok_verbs = set()
         self._ok_calls = 0
+        self._ok_tools = set()
+        self._failed_calls = 0
         self._tool_calls = 0
         self.reminded = False
         self.sent_back = False
@@ -385,9 +389,11 @@ class PlanTracker:
             if len(text) > MAX_STEP_CHARS:
                 text = text[: MAX_STEP_CHARS - 1].rstrip() + "…"
             change = bool(self._change.search(full))
+            named = set(re.findall(r"\w+", str(item))) & self._tool_names
             steps.append(
                 {
                     "text": text,
+                    "tools": named,
                     # From the whole step: the cut for display must not cut a name.
                     "targets": targets_in(full),
                     "change": change,
@@ -418,6 +424,9 @@ class PlanTracker:
         text = re.sub(
             r"\s+(?:using|with|via)\s+`?(\w+)`?(?=[\s.,]|$)", tool_phrase, text
         )
+        lead = re.match(r"(?:use|call|run)\s+`?(\w+)`?\s+to\s+(\w)", text, re.I)
+        if lead and lead.group(1) in self._tool_names:
+            text = lead.group(2).upper() + text[lead.end() :]
         return text.replace("`", "").strip("* ").strip()
 
     # -- evidence -----------------------------------------------------------
@@ -437,11 +446,13 @@ class PlanTracker:
             self._failed -= keys
             self._ok_calls += 1
             self._ok_verbs.add(tool.split("_", 1)[0].lower())
+            self._ok_tools.add(tool)
             if change:
                 self._changes.append(keys)
                 self._last_change_failed = None
         else:
             self._failed |= keys
+            self._failed_calls += 1
             if change:
                 self._last_change_failed = keys
         # An earlier request's plan is history: only this request's plan is ticked.
@@ -511,6 +522,7 @@ class PlanTracker:
             )
             if (
                 verb_hit
+                or bool(s["tools"] & self._ok_tools)
                 or i < max(done_to, failed_to)
                 or (final and all_checked_done and clean and self._ok_calls)
             ):
@@ -536,6 +548,11 @@ class PlanTracker:
 
     def has_failed(self) -> bool:
         return any(s["status"] == FAILED for s in self.steps)
+
+    @property
+    def failed_calls(self) -> int:
+        """Tool calls of this request that failed, whatever step they were for."""
+        return self._failed_calls
 
     def needs_reminder(self) -> bool:
         """Whether the one plan reminder is due for this request."""
